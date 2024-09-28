@@ -1,4 +1,4 @@
-// lib/route_registry.dart
+// flutter_navigation_widgets/lib/route_registry.dart
 import 'package:flutter/material.dart';
 import 'models/menu_item.dart';
 
@@ -30,5 +30,22 @@ class RouteRegistry {
 
   void addStandardMenuItem(MenuItem menuItem) {
     standardMenuItems.add(menuItem);
+  }
+
+  // Method to retrieve all registered paths
+  List<String> getAllPaths() {
+    List<String> paths = [];
+    for (var item in standardMenuItems) {
+      paths.add(item.path);
+    }
+    for (var dropdown in dropdownMenuItems) {
+      paths.add(dropdown.path);
+      if (dropdown.children != null) {
+        for (var child in dropdown.children!) {
+          paths.add(child.path);
+        }
+      }
+    }
+    return paths;
   }
 }
