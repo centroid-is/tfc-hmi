@@ -1,9 +1,9 @@
-// lib/models/menu_item.dart
 import 'package:flutter/material.dart';
+import 'package:beamer/beamer.dart';
 
 class MenuItem {
   final String label;
-  final String path;
+  final Uri path;
   final IconData icon;
   final String hoverText;
   final List<MenuItem>? children;

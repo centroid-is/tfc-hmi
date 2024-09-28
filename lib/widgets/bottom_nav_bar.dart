@@ -5,61 +5,56 @@ import '../models/menu_item.dart';
 import '../app_colors.dart';
 import 'package:beamer/beamer.dart';
 
-class CustomBottomNavBar extends StatefulWidget {
+class BottomNavBar extends StatefulWidget {
   final int currentIndex;
-  final ValueChanged<int> onItemTapped;
-  final List<MenuItem> dropdownMenuItems;
-  final List<MenuItem> standardMenuItems;
+  final ValueChanged<MenuItem> onItemTapped;
+  final List<MenuItem> menuItems;
 
-  const CustomBottomNavBar({
-    Key? key,
+  BottomNavBar({
+    super.key,
     required this.currentIndex,
     required this.onItemTapped,
-    required this.dropdownMenuItems,
-    required this.standardMenuItems,
-  }) : super(key: key);
+    required this.menuItems,
+  });
 
   @override
-  State<CustomBottomNavBar> createState() => _CustomBottomNavBarState();
+  State<BottomNavBar> createState() => _BottomNavBarState();
 }
 
-class _CustomBottomNavBarState extends State<CustomBottomNavBar> {
+class _BottomNavBarState extends State<BottomNavBar> {
   @override
   Widget build(BuildContext context) {
     List<Widget> navItems = [];
 
-    // Add NavDropdown items
-    for (int i = 0; i < widget.dropdownMenuItems.length; i++) {
-      navItems.add(
-        NavDropdown(
-          menuItem: widget.dropdownMenuItems[i],
-          isSelected: widget.currentIndex == i,
-          onMenuItemSelected: () {
-            widget.onItemTapped(i);
-          },
-        ),
-      );
-    }
-
-    // Add standard IconButton items
-    for (int i = 0; i < widget.standardMenuItems.length; i++) {
-      int index = widget.dropdownMenuItems.length + i;
-      MenuItem menuItem = widget.standardMenuItems[i];
-      navItems.add(
-        IconButton(
-          icon: Icon(
-            menuItem.icon,
-            color: widget.currentIndex == index
-                ? AppColors.selectedItemColor
-                : AppColors.unselectedItemColor,
+    for (int i = 0; i < widget.menuItems.length; i++) {
+      MenuItem menuItem = widget.menuItems[i];
+      if (menuItem.children != null) {
+        navItems.add(
+          NavDropdown(
+            menuItem: menuItem,
+            isSelected: widget.currentIndex == i,
+            onMenuItemSelected: () {
+              widget.onItemTapped(menuItem);
+            },
           ),
-          tooltip: menuItem.hoverText,
-          onPressed: () {
-            Beamer.of(context).beamToNamed(menuItem.path);
-            widget.onItemTapped(index);
-          },
-        ),
-      );
+        );
+      } else {
+        navItems.add(
+          IconButton(
+            icon: Icon(
+              menuItem.icon,
+              color: widget.currentIndex == i
+                  ? AppColors.selectedItemColor
+                  : AppColors.unselectedItemColor,
+            ),
+            tooltip: menuItem.hoverText,
+            onPressed: () {
+              Beamer.of(context).beamToNamed(menuItem.path.toString());
+              widget.onItemTapped(menuItem);
+            },
+          ),
+        );
+      }
     }
 
     return BottomAppBar(

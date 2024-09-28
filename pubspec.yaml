@@ -11,7 +11,8 @@ dependencies:
   flutter:
     sdk: flutter
   beamer: ^1.6.2
-
+  flutter_svg: ^2.0.10
+  logger: ^2.4.0
 dev_dependencies:
   flutter_test:
     sdk: flutter
@@ -22,6 +23,8 @@ dev_dependencies:
 
 # The following section is specific to Flutter packages.
 flutter:
+  assets:
+    - assets/centroid.svg
 
   # To add assets to your package, add an assets section, like this:
   # assets:

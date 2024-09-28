@@ -1,63 +1,55 @@
-// example/lib/main.dart
 import 'package:flutter/material.dart';
 import 'package:beamer/beamer.dart';
 import 'package:tfc_hmi/route_registry.dart';
 import 'package:tfc_hmi/models/menu_item.dart';
-import 'package:tfc_hmi/auto_location.dart';
 import 'pages/pages.dart';
-// import 'pages/settings_page.dart';
-// import 'pages/profile_settings_page.dart';
-// import 'pages/privacy_page.dart';
-// import 'pages/controls_page.dart';
-// import 'pages/volume_page.dart';
-// import 'pages/brightness_page.dart';
 
 void main() {
   // Initialize the RouteRegistry
   final registry = RouteRegistry();
 
   // Register routes
-  registry.registerRoute('/', (context) => HomePage());
-  registry.registerRoute('/settings', (context) => SettingsPage());
-  registry.registerRoute(
-      '/settings/profile', (context) => ProfileSettingsPage());
-  registry.registerRoute('/settings/privacy', (context) => PrivacyPage());
-  registry.registerRoute('/controls', (context) => ControlsPage());
-  registry.registerRoute('/controls/volume', (context) => VolumePage());
-  registry.registerRoute('/controls/brightness', (context) => BrightnessPage());
+  // registry.registerRoute('/', (context) => HomePage());
+  // registry.registerRoute('/settings', (context) => SettingsPage());
+  // registry.registerRoute(
+  //     '/settings/profile', (context) => ProfileSettingsPage());
+  // registry.registerRoute('/settings/privacy', (context) => PrivacyPage());
+  // registry.registerRoute('/controls', (context) => ControlsPage());
+  // registry.registerRoute('/controls/volume', (context) => VolumePage());
+  // registry.registerRoute('/controls/brightness', (context) => BrightnessPage());
 
-  // Define navigation items
-  registry.addStandardMenuItem(MenuItem(
+  // this is a bit of duplication
+  registry.addMenuItem(MenuItem(
     label: 'Home',
-    path: '/',
+    path: Uri.parse('/'),
     icon: Icons.home,
     hoverText: 'Home',
   ));
 
-  registry.addDropdownMenuItem(MenuItem(
+  registry.addMenuItem(MenuItem(
     label: 'Settings',
-    path: '/settings',
+    path: Uri.parse('/settings'),
     icon: Icons.settings,
     hoverText: 'Settings',
     children: [
       MenuItem(
         label: 'Profile',
-        path: '/settings/profile',
+        path: Uri.parse('/settings/profile'),
         icon: Icons.person,
         hoverText: 'Profile Settings',
       ),
       MenuItem(
         label: 'Privacy',
-        path: '/settings/privacy',
+        path: Uri.parse('/settings/privacy'),
         icon: Icons.lock,
         hoverText: 'Privacy Settings',
       ),
     ],
   ));
 
-  registry.addStandardMenuItem(MenuItem(
+  registry.addMenuItem(MenuItem(
     label: 'Controls',
-    path: '/controls',
+    path: Uri.parse('/controls'),
     icon: Icons.tune,
     hoverText: 'Controls',
   ));
@@ -65,9 +57,34 @@ void main() {
   runApp(MyApp());
 }
 
+// todo this is a bit of duplication
+final simpleLocationBuilder = RoutesLocationBuilder(routes: {
+  '/': (context, state, args) => const BeamPage(
+        key: ValueKey('/'),
+        title: 'Home',
+        child: HomePage(),
+      ),
+  '/settings/profile': (context, state, args) => const BeamPage(
+        key: ValueKey('/settings/profile'),
+        title: 'Profile Settings',
+        child: ProfileSettingsPage(),
+      ),
+  '/settings/privacy': (context, state, args) => const BeamPage(
+        key: ValueKey('/settings/privacy'),
+        title: 'Privacy Settings',
+        child: PrivacyPage(),
+      ),
+  '/controls': (context, state, args) => const BeamPage(
+        key: ValueKey('/controls'),
+        title: 'Controls',
+        child: ControlsPage(),
+      ),
+});
+
 class MyApp extends StatelessWidget {
   final routerDelegate = BeamerDelegate(
-    locationBuilder: (routeInformation, _) => AutoLocation(),
+    locationBuilder: (routeInformation, context) =>
+        simpleLocationBuilder(routeInformation, context),
   );
 
   @override

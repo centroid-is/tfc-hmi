@@ -10,19 +10,14 @@ class NavDropdown extends StatelessWidget {
   final VoidCallback onMenuItemSelected;
 
   const NavDropdown({
-    Key? key,
+    super.key,
     required this.menuItem,
     required this.isSelected,
     required this.onMenuItemSelected,
-  }) : super(key: key);
+  });
 
   @override
   Widget build(BuildContext context) {
-    print('NavDropdown build');
-    print('isSelected: $isSelected');
-    print('menuItem: ${menuItem.label}');
-    print('children: ${menuItem.children?.map((e) => e.label).toList()}');
-
     return PopupMenuButton<MenuItem>(
       icon: Icon(
         menuItem.icon,
@@ -32,7 +27,7 @@ class NavDropdown extends StatelessWidget {
       ),
       tooltip: menuItem.hoverText,
       onSelected: (MenuItem selectedItem) {
-        Beamer.of(context).beamToNamed(selectedItem.path);
+        Beamer.of(context).beamToNamed(selectedItem.path.toString());
         onMenuItemSelected();
       },
       itemBuilder: (BuildContext context) {
@@ -44,7 +39,7 @@ class NavDropdown extends StatelessWidget {
                         Icon(child.icon, color: AppColors.primaryIconColor),
                     title: Text(
                       child.label,
-                      style: TextStyle(color: AppColors.primaryTextColor),
+                      style: const TextStyle(color: AppColors.primaryTextColor),
                     ),
                     children: child.children!.map((MenuItem grandChild) {
                       return ListTile(
@@ -52,10 +47,12 @@ class NavDropdown extends StatelessWidget {
                             color: AppColors.primaryIconColor),
                         title: Text(
                           grandChild.label,
-                          style: TextStyle(color: AppColors.primaryTextColor),
+                          style: const TextStyle(
+                              color: AppColors.primaryTextColor),
                         ),
                         onTap: () {
-                          Beamer.of(context).beamToNamed(grandChild.path);
+                          Beamer.of(context)
+                              .beamToNamed(grandChild.path.toString());
                           Navigator.pop(context); // Close the popup menu
                           onMenuItemSelected();
                         },
@@ -71,7 +68,7 @@ class NavDropdown extends StatelessWidget {
                         Icon(child.icon, color: AppColors.primaryIconColor),
                     title: Text(
                       child.label,
-                      style: TextStyle(color: AppColors.primaryTextColor),
+                      style: const TextStyle(color: AppColors.primaryTextColor),
                     ),
                   ),
                 );
