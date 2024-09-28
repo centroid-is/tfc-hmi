@@ -51,8 +51,7 @@ class NavDropdown extends StatelessWidget {
                               color: AppColors.primaryTextColor),
                         ),
                         onTap: () {
-                          Beamer.of(context)
-                              .beamToNamed(grandChild.path.toString());
+                          context.beamToNamed(grandChild.path.toString());
                           Navigator.pop(context); // Close the popup menu
                           onMenuItemSelected();
                         },

@@ -49,7 +49,7 @@ class _BottomNavBarState extends State<BottomNavBar> {
             ),
             tooltip: menuItem.hoverText,
             onPressed: () {
-              Beamer.of(context).beamToNamed(menuItem.path.toString());
+              context.beamToNamed(menuItem.path.toString());
               widget.onItemTapped(menuItem);
             },
           ),
