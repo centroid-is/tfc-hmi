@@ -1,45 +1,78 @@
+// lib/widgets/custom_bottom_nav_bar.dart
 import 'package:flutter/material.dart';
+import 'nav_dropdown.dart';
+import '../models/menu_item.dart';
 import '../app_colors.dart';
+import 'package:beamer/beamer.dart';
 
-class BottomNavBar extends StatelessWidget {
-  final ValueChanged<int> onItemTapped;
+class CustomBottomNavBar extends StatefulWidget {
   final int currentIndex;
+  final ValueChanged<int> onItemTapped;
+  final List<MenuItem> dropdownMenuItems;
+  final List<MenuItem> standardMenuItems;
 
-  const BottomNavBar({
+  const CustomBottomNavBar({
     Key? key,
-    required this.onItemTapped,
     required this.currentIndex,
+    required this.onItemTapped,
+    required this.dropdownMenuItems,
+    required this.standardMenuItems,
   }) : super(key: key);
 
   @override
+  State<CustomBottomNavBar> createState() => _CustomBottomNavBarState();
+}
+
+class _CustomBottomNavBarState extends State<CustomBottomNavBar> {
+  @override
   Widget build(BuildContext context) {
-    return BottomNavigationBar(
-      items: const <BottomNavigationBarItem>[
-        BottomNavigationBarItem(
-          icon: Icon(Icons.home),
-          label: 'Home',
+    List<Widget> navItems = [];
+
+    // Add NavDropdown items
+    for (int i = 0; i < widget.dropdownMenuItems.length; i++) {
+      navItems.add(
+        NavDropdown(
+          menuItem: widget.dropdownMenuItems[i],
+          isSelected: widget.currentIndex == i,
+          onMenuItemSelected: () {
+            widget.onItemTapped(i);
+          },
         ),
-        BottomNavigationBarItem(
-          icon: Icon(Icons.settings),
-          label: 'Settings',
+      );
+    }
+
+    // Add standard IconButton items
+    for (int i = 0; i < widget.standardMenuItems.length; i++) {
+      int index = widget.dropdownMenuItems.length + i;
+      MenuItem menuItem = widget.standardMenuItems[i];
+      navItems.add(
+        IconButton(
+          icon: Icon(
+            menuItem.icon,
+            color: widget.currentIndex == index
+                ? AppColors.selectedItemColor
+                : AppColors.unselectedItemColor,
+          ),
+          tooltip: menuItem.hoverText,
+          onPressed: () {
+            Beamer.of(context).beamToNamed(menuItem.path);
+            widget.onItemTapped(index);
+          },
         ),
-        BottomNavigationBarItem(
-          icon: Icon(Icons.tune),
-          label: 'Controls',
+      );
+    }
+
+    return BottomAppBar(
+      color: AppColors.backgroundColor,
+      elevation: 8.0,
+      shape: const CircularNotchedRectangle(),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8.0),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceAround,
+          children: navItems,
         ),
-        BottomNavigationBarItem(
-          icon: Icon(Icons.report),
-          label: 'Reports',
-        ),
-        BottomNavigationBarItem(
-          icon: Icon(Icons.info),
-          label: 'Info',
-        ),
-      ],
-      currentIndex: currentIndex,
-      selectedItemColor: AppColors.selectedItemColor,
-      unselectedItemColor: AppColors.unselectedItemColor,
-      onTap: onItemTapped,
+      ),
     );
   }
 }
