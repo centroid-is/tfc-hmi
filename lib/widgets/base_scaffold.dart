@@ -2,8 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:beamer/beamer.dart';
 import 'package:logger/logger.dart';
-import 'package:tfc_hmi/app_colors.dart';
 import 'bottom_nav_bar.dart';
+import '../app_colors.dart';
 import '../route_registry.dart';
 
 class BaseScaffold extends StatelessWidget {
@@ -35,6 +35,13 @@ class BaseScaffold extends StatelessWidget {
 
     return Scaffold(
       appBar: AppBar(
+        leading: context.canBeamBack
+            ? IconButton(
+                icon: const Icon(Icons.arrow_back,
+                    color: AppColors.primaryTextColor),
+                onPressed: () => context.beamBack(),
+              )
+            : null,
         title: SvgPicture.asset(
           'assets/centroid.svg',
           // width: 24,
