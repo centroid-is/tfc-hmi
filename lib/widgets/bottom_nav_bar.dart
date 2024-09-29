@@ -58,7 +58,7 @@ class _BottomNavBarState extends State<BottomNavBar> {
     }
 
     return BottomAppBar(
-      color: AppColors.backgroundColor,
+      color: AppColors.primaryColor,
       elevation: 8.0,
       shape: const CircularNotchedRectangle(),
       child: Padding(

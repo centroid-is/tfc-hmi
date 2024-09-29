@@ -37,8 +37,7 @@ class BaseScaffold extends StatelessWidget {
       appBar: AppBar(
         leading: context.canBeamBack
             ? IconButton(
-                icon: const Icon(Icons.arrow_back,
-                    color: AppColors.primaryTextColor),
+                icon: Icon(Icons.arrow_back, color: AppColors.primaryTextColor),
                 onPressed: () => context.beamBack(),
               )
             : null,
@@ -50,7 +49,8 @@ class BaseScaffold extends StatelessWidget {
         ),
         backgroundColor: AppColors.primaryColor,
       ),
-      body: Padding(
+      body: Container(
+        color: AppColors.backgroundColor,
         padding: const EdgeInsets.all(16),
         child: body,
       ),

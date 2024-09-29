@@ -30,6 +30,7 @@ class NavDropdown extends StatelessWidget {
         Beamer.of(context).beamToNamed(selectedItem.path.toString());
         onMenuItemSelected();
       },
+      color: AppColors.backgroundColor,
       itemBuilder: (BuildContext context) {
         return menuItem.children?.map((MenuItem child) {
               if (child.children != null && child.children!.isNotEmpty) {
@@ -39,7 +40,7 @@ class NavDropdown extends StatelessWidget {
                         Icon(child.icon, color: AppColors.primaryIconColor),
                     title: Text(
                       child.label,
-                      style: const TextStyle(color: AppColors.primaryTextColor),
+                      style: TextStyle(color: AppColors.primaryTextColor),
                     ),
                     children: child.children!.map((MenuItem grandChild) {
                       return ListTile(
@@ -47,8 +48,7 @@ class NavDropdown extends StatelessWidget {
                             color: AppColors.primaryIconColor),
                         title: Text(
                           grandChild.label,
-                          style: const TextStyle(
-                              color: AppColors.primaryTextColor),
+                          style: TextStyle(color: AppColors.primaryTextColor),
                         ),
                         onTap: () {
                           context.beamToNamed(grandChild.path.toString());
@@ -67,7 +67,7 @@ class NavDropdown extends StatelessWidget {
                         Icon(child.icon, color: AppColors.primaryIconColor),
                     title: Text(
                       child.label,
-                      style: const TextStyle(color: AppColors.primaryTextColor),
+                      style: TextStyle(color: AppColors.primaryTextColor),
                     ),
                   ),
                 );
