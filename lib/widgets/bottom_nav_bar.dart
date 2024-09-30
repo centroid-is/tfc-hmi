@@ -1,16 +1,16 @@
 // lib/widgets/custom_bottom_nav_bar.dart
 import 'package:flutter/material.dart';
+import 'package:beamer/beamer.dart';
 import 'nav_dropdown.dart';
 import '../models/menu_item.dart';
 import '../app_colors.dart';
-import 'package:beamer/beamer.dart';
 
 class BottomNavBar extends StatefulWidget {
   final int currentIndex;
   final ValueChanged<MenuItem> onItemTapped;
   final List<MenuItem> menuItems;
 
-  BottomNavBar({
+  const BottomNavBar({
     super.key,
     required this.currentIndex,
     required this.onItemTapped,
@@ -33,8 +33,9 @@ class _BottomNavBarState extends State<BottomNavBar> {
           NavDropdown(
             menuItem: menuItem,
             isSelected: widget.currentIndex == i,
-            onMenuItemSelected: () {
+            onMenuItemSelected: (MenuItem selectedItem) {
               widget.onItemTapped(menuItem);
+              context.beamToNamed(selectedItem.path.toString());
             },
           ),
         );

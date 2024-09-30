@@ -7,7 +7,7 @@ import '../app_colors.dart';
 class NavDropdown extends StatelessWidget {
   final MenuItem menuItem;
   final bool isSelected;
-  final VoidCallback onMenuItemSelected;
+  final Function(MenuItem) onMenuItemSelected;
 
   const NavDropdown({
     super.key,
@@ -27,8 +27,7 @@ class NavDropdown extends StatelessWidget {
       ),
       tooltip: menuItem.hoverText,
       onSelected: (MenuItem selectedItem) {
-        Beamer.of(context).beamToNamed(selectedItem.path.toString());
-        onMenuItemSelected();
+        onMenuItemSelected(selectedItem);
       },
       color: AppColors.backgroundColor,
       itemBuilder: (BuildContext context) {
@@ -51,9 +50,8 @@ class NavDropdown extends StatelessWidget {
                           style: TextStyle(color: AppColors.primaryTextColor),
                         ),
                         onTap: () {
-                          context.beamToNamed(grandChild.path.toString());
                           Navigator.pop(context); // Close the popup menu
-                          onMenuItemSelected();
+                          onMenuItemSelected(grandChild);
                         },
                       );
                     }).toList(),

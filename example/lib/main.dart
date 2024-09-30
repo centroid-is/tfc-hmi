@@ -2,21 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:beamer/beamer.dart';
 import 'package:tfc_hmi/route_registry.dart';
 import 'package:tfc_hmi/models/menu_item.dart';
+import 'package:tfc_hmi/transition_delegate.dart';
 import 'pages/pages.dart';
 
 void main() {
   // Initialize the RouteRegistry
   final registry = RouteRegistry();
-
-  // Register routes
-  // registry.registerRoute('/', (context) => HomePage());
-  // registry.registerRoute('/settings', (context) => SettingsPage());
-  // registry.registerRoute(
-  //     '/settings/profile', (context) => ProfileSettingsPage());
-  // registry.registerRoute('/settings/privacy', (context) => PrivacyPage());
-  // registry.registerRoute('/controls', (context) => ControlsPage());
-  // registry.registerRoute('/controls/volume', (context) => VolumePage());
-  // registry.registerRoute('/controls/brightness', (context) => BrightnessPage());
 
   // this is a bit of duplication
   registry.addMenuItem(MenuItem(
@@ -83,6 +74,7 @@ final simpleLocationBuilder = RoutesLocationBuilder(routes: {
 
 class MyApp extends StatelessWidget {
   final routerDelegate = BeamerDelegate(
+    transitionDelegate: const MyNoAnimationTransitionDelegate(),
     locationBuilder: (routeInformation, context) =>
         simpleLocationBuilder(routeInformation, context),
   );
