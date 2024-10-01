@@ -37,10 +37,18 @@ void main() {
         hoverText: 'Privacy Settings',
       ),
       MenuItem(
-        label: 'Connections',
-        path: Uri.parse('/settings/connections'),
-        icon: Icons.link,
-        hoverText: 'Connections',
+        label: 'Core',
+        path: Uri.parse('/settings/core'),
+        icon: Icons.settings_remote_outlined,
+        hoverText: 'Core Settings',
+        children: [
+          MenuItem(
+            label: 'Connections',
+            path: Uri.parse('/settings/core/connections'),
+            icon: Icons.link,
+            hoverText: 'Connections',
+          ),
+        ],
       ),
     ],
   ));
@@ -72,8 +80,8 @@ final simpleLocationBuilder = RoutesLocationBuilder(routes: {
         title: 'Privacy Settings',
         child: PrivacyPage(),
       ),
-  '/settings/connections': (context, state, args) => BeamPage(
-        key: const ValueKey('/settings/connections'),
+  '/settings/core/connections': (context, state, args) => BeamPage(
+        key: const ValueKey('/settings/core/connections'),
         title: 'Connections',
         child: ConnectionPage(),
       ),
