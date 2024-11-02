@@ -41,7 +41,7 @@ jobs:
 
       - name: Package Artifacts
         working-directory: example
-        run: tar -czvf example-elinux.tar.gz build/elinux/arm64/release/bundle/
+        run: tar -czvf example-elinux.tar.gz build/elinux/x64/release/bundle/
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v3
