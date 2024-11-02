@@ -1,0 +1,49 @@
+name: Build Flutter eLinux Artifacts
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-elinux:
+    runs-on: ubuntu-20.04
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            clang cmake ninja-build pkg-config libgtk-3-dev \
+            liblzma-dev curl unzip xz-utils zip libglu1-mesa
+
+      - name: Clone flutter-elinux
+        run: |
+          git clone https://github.com/sony/flutter-elinux.git $HOME/flutter-elinux
+          echo "$HOME/flutter-elinux/bin" >> $GITHUB_PATH
+
+      - name: Set up flutter-elinux
+        run: |
+          flutter-elinux --version
+          flutter-elinux precache
+          flutter-elinux doctor
+
+      - name: Get Flutter Packages
+        working-directory: example
+        run: flutter-elinux pub get
+
+      - name: Build for eLinux
+        working-directory: example
+        run: flutter-elinux build elinux --release
+
+      - name: Package Artifacts
+        run: tar -czvf example-elinux.tar.gz build/elinux/arm64/release/bundle/
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: example-elinux
+          path: example-elinux.tar.gz
