@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:nm/nm.dart'; // Import the nm.dart package
+import 'package:nm/nm.dart'; // Ensure nm.dart is correctly added in pubspec.yaml
+import '../widgets/base_scaffold.dart';
+import '../app_colors.dart'; // Import the AppColors class
 
 class IpSettingsPage extends StatefulWidget {
   @override
@@ -9,6 +11,8 @@ class IpSettingsPage extends StatefulWidget {
 class _IpSettingsPageState extends State<IpSettingsPage> {
   late NetworkManagerClient _nmClient;
   List<NetworkManagerDevice> _relevantDevices = [];
+  bool _isLoading = true;
+  String? _errorMessage;
 
   @override
   void initState() {
@@ -17,49 +21,102 @@ class _IpSettingsPageState extends State<IpSettingsPage> {
   }
 
   Future<void> _initNetworkManager() async {
-    _nmClient = NetworkManagerClient();
-    await _nmClient.connect();
-    List<NetworkManagerDevice> allDevices = _nmClient.devices;
-    List<NetworkManagerDevice> relevantDevices = [];
-    for (NetworkManagerDevice device in allDevices) {
-      if (device.wired != null) {
-        relevantDevices.add(device);
-      }
-      if (device.wireless != null) {
-        relevantDevices.add(device);
-      }
+    try {
+      _nmClient = NetworkManagerClient();
+      await _nmClient.connect();
+      List<NetworkManagerDevice> allDevices = _nmClient.devices;
+
+      List<NetworkManagerDevice> relevantDevices = allDevices.where((device) {
+        // Filter for wired and wireless devices
+        return device.wired != null || device.wireless != null;
+      }).toList();
+
+      setState(() {
+        _relevantDevices = relevantDevices;
+        _isLoading = false;
+      });
+    } catch (e) {
+      setState(() {
+        _errorMessage = 'Failed to connect to NetworkManager: $e';
+        _isLoading = false;
+      });
     }
-    setState(() {
-      _relevantDevices = relevantDevices;
-    });
+  }
+
+  @override
+  void dispose() {
+    _nmClient.close();
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-        appBar: AppBar(
-          title: Text('IP Settings'),
-        ),
-        body: _relevantDevices.isEmpty
-            ? Center(child: CircularProgressIndicator())
-            : ListView.builder(
-                itemCount: _relevantDevices.length,
-                itemBuilder: (context, index) {
-                  NetworkManagerDevice device = _relevantDevices[index];
-                  return ListTile(
-                    title: Text(device.interface),
-                    onTap: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (context) =>
-                              InterfaceSettingsPage(device: device),
-                        ),
-                      );
-                    },
-                  );
-                },
-              ));
+    return BaseScaffold(
+      title: 'IP Settings',
+      body: _isLoading
+          ? Center(
+              child: CircularProgressIndicator(
+                valueColor:
+                    AlwaysStoppedAnimation<Color>(AppColors.primaryColor),
+              ),
+            )
+          : _errorMessage != null
+              ? Center(
+                  child: Text(
+                    _errorMessage!,
+                    style: TextStyle(color: AppColors.primaryTextColor),
+                  ),
+                )
+              : _relevantDevices.isEmpty
+                  ? Center(
+                      child: Text(
+                        'No relevant network devices found.',
+                        style: TextStyle(color: AppColors.primaryTextColor),
+                      ),
+                    )
+                  : ListView.builder(
+                      itemCount: _relevantDevices.length,
+                      itemBuilder: (context, index) {
+                        NetworkManagerDevice device = _relevantDevices[index];
+                        String deviceType =
+                            device.wired != null ? 'Wired' : 'Wireless';
+                        return Card(
+                          color: AppColors.backgroundColor,
+                          margin: EdgeInsets.symmetric(
+                              horizontal: 8.0, vertical: 4.0),
+                          child: ListTile(
+                            leading: Icon(
+                              deviceType == 'Wired' ? Icons.cable : Icons.wifi,
+                              color: AppColors.primaryIconColor,
+                            ),
+                            title: Text(
+                              device.interface,
+                              style:
+                                  TextStyle(color: AppColors.primaryTextColor),
+                            ),
+                            subtitle: Text(
+                              deviceType,
+                              style: TextStyle(
+                                  color: AppColors.secondaryTextColor),
+                            ),
+                            trailing: Icon(
+                              Icons.arrow_forward_ios,
+                              color: AppColors.secondaryIconColor,
+                            ),
+                            onTap: () {
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (context) =>
+                                      InterfaceSettingsPage(device: device),
+                                ),
+                              );
+                            },
+                          ),
+                        );
+                      },
+                    ),
+    );
   }
 }
 
@@ -73,8 +130,7 @@ class InterfaceSettingsPage extends StatefulWidget {
 }
 
 class _InterfaceSettingsPageState extends State<InterfaceSettingsPage> {
-  late NetworkManagerActiveConnection _activeConnection;
-  // late NetworkManagerConnection _connection;
+  NetworkManagerActiveConnection? _activeConnection;
   bool _isDhcp = true;
   String _ipAddress = '';
   String _netmask = '';
@@ -85,6 +141,9 @@ class _InterfaceSettingsPageState extends State<InterfaceSettingsPage> {
   late TextEditingController _netmaskController;
   late TextEditingController _gatewayController;
   late TextEditingController _dnsController;
+
+  bool _isLoading = true;
+  String? _errorMessage;
 
   @override
   void initState() {
@@ -106,59 +165,43 @@ class _InterfaceSettingsPageState extends State<InterfaceSettingsPage> {
   }
 
   Future<void> _loadConnectionSettings() async {
-    // Get active connection
-    final activeConnection = widget.device.activeConnection;
+    try {
+      _activeConnection = widget.device.activeConnection;
+      if (_activeConnection == null) {
+        setState(() {
+          _errorMessage =
+              'No active connection found for device ${widget.device.interface}';
+          _isLoading = false;
+        });
+        return;
+      }
 
-    if (activeConnection == null) {
-      // log error
-      print('No active connection found for device ${widget.device.interface}');
-      return;
+      final ip4Setting = _activeConnection!.ip4Config;
+      final dhcp4Setting = _activeConnection!.dhcp4Config;
+
+      if (ip4Setting != null) {
+        _ipController.text = ip4Setting.addressData.first['address'];
+        _netmaskController.text = ip4Setting.addressData.first['prefix'];
+        _gatewayController.text = ip4Setting.gateway;
+        _dnsController.text =
+            ip4Setting.nameserverData.map((e) => e['address']).join(', ');
+      }
+
+      setState(() {
+        _isDhcp = dhcp4Setting != null;
+        _isLoading = false;
+      });
+    } catch (e) {
+      setState(() {
+        _errorMessage = 'Failed to load connection settings: $e';
+        _isLoading = false;
+      });
     }
-
-    _activeConnection = activeConnection;
-    // Get the connection settings
-    final connection = _activeConnection.connection;
-    if (connection == null) {
-      // log error
-      print('No connection found for device ${widget.device.interface}');
-      return;
-    }
-
-    // final ip4Setting = connection.;
-
-    // final method = await ip4Setting.method;
-    // setState(() {
-    //   _isDhcp = (method == 'auto');
-    // });
-
-    // if (!_isDhcp) {
-    //     // Get IP addresses, netmask, gateway, DNS
-    //     List<NMIP4Address> addresses = await ip4Setting.getAddresses();
-    //     if (addresses.isNotEmpty) {
-    //       NMIP4Address address = addresses[0];
-    //       _ipAddress = address.address;
-    //       _netmask = _prefixToNetmask(address.prefix);
-    //       _ipController.text = _ipAddress;
-    //       _netmaskController.text = _netmask;
-    //     }
-    //     _gateway = await ip4Setting.getGateway();
-    //     _gatewayController.text = _gateway;
-
-    //     List<String> dnsList = await ip4Setting.getDns();
-    //     if (dnsList.isNotEmpty) {
-    //       _dns = dnsList.join(', ');
-    //       _dnsController.text = _dns;
-    //     }
-    //   }
-    // } else {
-    //   // Handle the case when there's no active connection
-    // }
-    // setState(() {});
   }
 
   String _prefixToNetmask(int prefixLength) {
     // Convert prefix length to netmask string
-    int mask = 0xffffffff << (32 - prefixLength);
+    int mask = prefixLength == 0 ? 0 : 0xffffffff << (32 - prefixLength);
     return '${(mask >> 24) & 0xff}.${(mask >> 16) & 0xff}.${(mask >> 8) & 0xff}.${mask & 0xff}';
   }
 
@@ -169,88 +212,192 @@ class _InterfaceSettingsPageState extends State<InterfaceSettingsPage> {
     for (String part in parts) {
       mask = (mask << 8) + int.parse(part);
     }
-    return mask.toRadixString(2).replaceAll('0', '').length;
+    String binary = mask.toRadixString(2).padLeft(32, '0');
+    return binary.replaceAll('0', '').length;
   }
 
   Future<void> _saveSettings() async {
-    // if (_connection == null) return;
-    // NMSettingIP4 ip4Setting = await _connection.getSettingIP4();
-    // if (_isDhcp) {
-    //   await ip4Setting.setMethod('auto');
-    // } else {
-    //   await ip4Setting.setMethod('manual');
-    //   // Set the IP address, netmask, gateway, DNS
-    //   int prefix = _netmaskToPrefix(_netmaskController.text);
-    //   NMIP4Address address =
-    //       NMIP4Address(address: _ipController.text, prefix: prefix);
-    //   await ip4Setting.setAddresses([address]);
-    //   await ip4Setting.setGateway(_gatewayController.text);
-    //   List<String> dnsList =
-    //       _dnsController.text.split(',').map((s) => s.trim()).toList();
-    //   await ip4Setting.setDns(dnsList);
-    // }
-    // // Save the connection
-    // await _connection.save();
-    // // Restart the connection
-    // await _activeConnection.deactivate();
-    // await _nmClient.activateConnection(_connection, widget.device, null);
+    if (_activeConnection == null) return;
 
-    // Navigator.pop(context);
+    try {
+      //   NMSettingIP4? ip4Setting = _connection!.settingIP4;
+      //   if (ip4Setting == null) {
+      //     throw Exception('IPv4 settings not found.');
+      //   }
+
+      //   if (_isDhcp) {
+      //     ip4Setting.method = 'auto';
+      //     ip4Setting.addresses = [];
+      //     ip4Setting.gateway = null;
+      //     ip4Setting.dns = [];
+      //   } else {
+      //     ip4Setting.method = 'manual';
+      //     int prefix = _netmaskToPrefix(_netmaskController.text);
+      //     NMIP4Address address =
+      //         NMIP4Address(address: _ipController.text, prefix: prefix);
+      //     ip4Setting.addresses = [address];
+      //     ip4Setting.gateway = _gatewayController.text;
+      //     ip4Setting.dns = _dnsController.text
+      //         .split(',')
+      //         .map((s) => s.trim())
+      //         .where((s) => s.isNotEmpty)
+      //         .toList();
+      // }
+
+      //   // Save the updated connection
+      //   await _connection!.save();
+
+      //   // Restart the connection to apply changes
+      //   await _activeConnection!.deactivate();
+      //   await widget.device.activateConnection(_connection!, null);
+
+      // Show success message
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Settings saved successfully'),
+          backgroundColor: AppColors.backgroundColor,
+        ),
+      );
+
+      Navigator.pop(context);
+    } catch (e) {
+      // Show error message
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to save settings: $e'),
+          backgroundColor: AppColors.backgroundColor,
+        ),
+      );
+    }
   }
-
-  // NMClient get _nmClient => NMClient.instance; // Assuming singleton instance
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: Text('Settings - ${widget.device.interface}'),
-      ),
-      body: _activeConnection == null
-          ? Center(child: CircularProgressIndicator())
-          : SingleChildScrollView(
-              child: Padding(
-                padding: EdgeInsets.all(16.0),
-                child: Column(
-                  children: [
-                    SwitchListTile(
-                      title: Text('Use DHCP'),
-                      value: _isDhcp,
-                      onChanged: (value) {
-                        setState(() {
-                          _isDhcp = value;
-                        });
-                      },
-                    ),
-                    if (!_isDhcp) ...[
-                      TextField(
-                        decoration: InputDecoration(labelText: 'IP Address'),
-                        controller: _ipController,
-                      ),
-                      TextField(
-                        decoration: InputDecoration(labelText: 'Netmask'),
-                        controller: _netmaskController,
-                      ),
-                      TextField(
-                        decoration: InputDecoration(labelText: 'Gateway'),
-                        controller: _gatewayController,
-                      ),
-                      TextField(
-                        decoration: InputDecoration(labelText: 'DNS Servers'),
-                        controller: _dnsController,
-                        keyboardType: TextInputType.multiline,
-                        maxLines: null,
-                      ),
-                    ],
-                    SizedBox(height: 20),
-                    ElevatedButton(
-                      onPressed: _saveSettings,
-                      child: Text('Save'),
-                    ),
-                  ],
-                ),
+    return BaseScaffold(
+      title: 'Settings - ${widget.device.interface}',
+      body: _isLoading
+          ? Center(
+              child: CircularProgressIndicator(
+                valueColor:
+                    AlwaysStoppedAnimation<Color>(AppColors.primaryColor),
               ),
-            ),
+            )
+          : _errorMessage != null
+              ? Center(
+                  child: Text(
+                    _errorMessage!,
+                    style: TextStyle(color: AppColors.errorTextColor),
+                  ),
+                )
+              : SingleChildScrollView(
+                  child: Padding(
+                    padding: EdgeInsets.all(16.0),
+                    child: Column(
+                      children: [
+                        SwitchListTile(
+                          title: Text(
+                            'Use DHCP',
+                            style: TextStyle(color: AppColors.primaryTextColor),
+                          ),
+                          value: _isDhcp,
+                          activeColor: AppColors.primaryColor,
+                          onChanged: (value) {
+                            setState(() {
+                              _isDhcp = value;
+                            });
+                          },
+                        ),
+                        if (!_isDhcp) ...[
+                          TextField(
+                            decoration: InputDecoration(
+                              labelText: 'IP Address',
+                              labelStyle: TextStyle(
+                                  color: AppColors.secondaryTextColor),
+                              enabledBorder: OutlineInputBorder(
+                                borderSide:
+                                    BorderSide(color: AppColors.borderColor),
+                              ),
+                              focusedBorder: OutlineInputBorder(
+                                borderSide:
+                                    BorderSide(color: AppColors.primaryColor),
+                              ),
+                            ),
+                            controller: _ipController,
+                            style: TextStyle(color: AppColors.primaryTextColor),
+                            keyboardType: TextInputType.number,
+                          ),
+                          SizedBox(height: 10),
+                          TextField(
+                            decoration: InputDecoration(
+                              labelText: 'Netmask',
+                              labelStyle: TextStyle(
+                                  color: AppColors.secondaryTextColor),
+                              enabledBorder: OutlineInputBorder(
+                                borderSide:
+                                    BorderSide(color: AppColors.borderColor),
+                              ),
+                              focusedBorder: OutlineInputBorder(
+                                borderSide:
+                                    BorderSide(color: AppColors.primaryColor),
+                              ),
+                            ),
+                            controller: _netmaskController,
+                            style: TextStyle(color: AppColors.primaryTextColor),
+                            keyboardType: TextInputType.number,
+                          ),
+                          SizedBox(height: 10),
+                          TextField(
+                            decoration: InputDecoration(
+                              labelText: 'Gateway',
+                              labelStyle: TextStyle(
+                                  color: AppColors.secondaryTextColor),
+                              enabledBorder: OutlineInputBorder(
+                                borderSide:
+                                    BorderSide(color: AppColors.borderColor),
+                              ),
+                              focusedBorder: OutlineInputBorder(
+                                borderSide:
+                                    BorderSide(color: AppColors.primaryColor),
+                              ),
+                            ),
+                            controller: _gatewayController,
+                            style: TextStyle(color: AppColors.primaryTextColor),
+                            keyboardType: TextInputType.number,
+                          ),
+                          SizedBox(height: 10),
+                          TextField(
+                            decoration: InputDecoration(
+                              labelText: 'DNS Servers (comma separated)',
+                              labelStyle: TextStyle(
+                                  color: AppColors.secondaryTextColor),
+                              enabledBorder: OutlineInputBorder(
+                                borderSide:
+                                    BorderSide(color: AppColors.borderColor),
+                              ),
+                              focusedBorder: OutlineInputBorder(
+                                borderSide:
+                                    BorderSide(color: AppColors.primaryColor),
+                              ),
+                            ),
+                            controller: _dnsController,
+                            style: TextStyle(color: AppColors.primaryTextColor),
+                            keyboardType: TextInputType.multiline,
+                            maxLines: null,
+                          ),
+                        ],
+                        SizedBox(height: 20),
+                        ElevatedButton(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: AppColors.backgroundColor,
+                            foregroundColor: AppColors.primaryTextColor,
+                          ),
+                          onPressed: _saveSettings,
+                          child: Text('Save'),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
     );
   }
 }

@@ -24,6 +24,7 @@ class AppColors {
       _useDarkScheme ? Colors.white : Colors.black;
   static Color get secondaryTextColor =>
       _useDarkScheme ? Colors.grey[300]! : Colors.grey;
+  static Color get errorTextColor => Colors.red;
 
   // Navigation Colors
   static Color get selectedItemColor =>

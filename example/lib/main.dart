@@ -93,7 +93,7 @@ final simpleLocationBuilder = RoutesLocationBuilder(routes: {
         child: ConnectionPage(),
       ),
   '/settings/core/ip': (context, state, args) => BeamPage(
-        key: ValueKey('/settings/core/ip'),
+        key: const ValueKey('/settings/core/ip'),
         title: 'IP Settings',
         child: IpSettingsPage(),
       ),
