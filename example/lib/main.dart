@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:beamer/beamer.dart';
+import 'package:tfc_hmi/theme.dart';
 import 'package:tfc_hmi/route_registry.dart';
 import 'package:tfc_hmi/models/menu_item.dart';
 import 'package:tfc_hmi/transition_delegate.dart';
 import 'package:tfc_hmi/pages/connections.dart';
 import 'package:tfc_hmi/pages/ip_settings.dart';
+import 'package:tfc_hmi/pages/viewtheme.dart';
+import 'package:provider/provider.dart';
 import 'pages/pages.dart';
 
 void main() {
@@ -16,44 +19,42 @@ void main() {
     label: 'Home',
     path: Uri.parse('/'),
     icon: Icons.home,
-    hoverText: 'Home',
   ));
 
   registry.addMenuItem(MenuItem(
     label: 'Settings',
     path: Uri.parse('/settings'),
     icon: Icons.settings,
-    hoverText: 'Settings',
     children: [
       MenuItem(
         label: 'Profile',
         path: Uri.parse('/settings/profile'),
         icon: Icons.person,
-        hoverText: 'Profile Settings',
       ),
       MenuItem(
         label: 'Privacy',
         path: Uri.parse('/settings/privacy'),
         icon: Icons.lock,
-        hoverText: 'Privacy Settings',
       ),
       MenuItem(
         label: 'Core',
         path: Uri.parse('/settings/core'),
         icon: Icons.settings_remote_outlined,
-        hoverText: 'Core Settings',
         children: [
           MenuItem(
             label: 'Connections',
             path: Uri.parse('/settings/core/connections'),
             icon: Icons.link,
-            hoverText: 'Connections',
           ),
           MenuItem(
             label: 'IP Settings',
             path: Uri.parse('/settings/core/ip'),
             icon: Icons.network_cell_outlined,
-            hoverText: 'IP Settings',
+          ),
+          MenuItem(
+            label: 'IP Settings',
+            path: Uri.parse('/settings/core/ip'),
+            icon: Icons.network_cell_outlined,
           ),
         ],
       ),
@@ -61,13 +62,21 @@ void main() {
   ));
 
   registry.addMenuItem(MenuItem(
+    label: 'Theme',
+    path: Uri.parse('/theme'),
+    icon: Icons.photo,
+  ));
+
+  registry.addMenuItem(MenuItem(
     label: 'Controls',
     path: Uri.parse('/controls'),
     icon: Icons.tune,
-    hoverText: 'Controls',
   ));
 
-  runApp(MyApp());
+  runApp(ChangeNotifierProvider(
+    create: (_) => ThemeNotifier(),
+    child: MyApp(),
+  ));
 }
 
 // todo this is a bit of duplication
@@ -92,8 +101,8 @@ final simpleLocationBuilder = RoutesLocationBuilder(routes: {
         title: 'Connections',
         child: ConnectionPage(),
       ),
-  '/settings/core/ip': (context, state, args) => BeamPage(
-        key: const ValueKey('/settings/core/ip'),
+  '/settings/core/ip': (context, state, args) => const BeamPage(
+        key: ValueKey('/settings/core/ip'),
         title: 'IP Settings',
         child: IpSettingsPage(),
       ),
@@ -102,6 +111,8 @@ final simpleLocationBuilder = RoutesLocationBuilder(routes: {
         title: 'Controls',
         child: ControlsPage(),
       ),
+  '/theme': (context, state, args) => const BeamPage(
+      key: ValueKey('/theme'), title: 'Theme', child: ViewTheme())
 });
 
 class MyApp extends StatelessWidget {
@@ -111,15 +122,20 @@ class MyApp extends StatelessWidget {
         simpleLocationBuilder(routeInformation, context),
   );
 
+  MyApp({super.key});
+
   @override
   Widget build(BuildContext context) {
-    return MaterialApp.router(
-      title: 'Example App',
-      theme: ThemeData(
-        primarySwatch: Colors.blue,
-      ),
-      routerDelegate: routerDelegate,
-      routeInformationParser: BeamerParser(),
-    );
+    final (light, dark) = solarized();
+    return Consumer<ThemeNotifier>(builder: (context, themeNotifier, child) {
+      return MaterialApp.router(
+        title: 'Example App',
+        themeMode: themeNotifier.themeMode,
+        theme: light,
+        darkTheme: dark,
+        routerDelegate: routerDelegate,
+        routeInformationParser: BeamerParser(),
+      );
+    });
   }
 }

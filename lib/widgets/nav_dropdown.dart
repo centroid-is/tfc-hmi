@@ -1,7 +1,27 @@
 // lib/widgets/nav_dropdown.dart
 import 'package:flutter/material.dart';
 import '../models/menu_item.dart';
-import '../app_colors.dart';
+
+class TopLevelNavIndicator extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final bool active;
+  const TopLevelNavIndicator(this.icon, this.label, this.active, {super.key});
+  @override
+  Widget build(BuildContext context) {
+    final color = active
+        ? Theme.of(context).colorScheme.onPrimary
+        : Theme.of(context).colorScheme.onSecondary;
+    return Row(
+      children: [
+        Icon(icon, color: color),
+        Padding(
+            padding: const EdgeInsets.fromLTRB(8.0, 0, 0, 0),
+            child: Text(label, style: TextStyle(color: color)))
+      ],
+    );
+  }
+}
 
 class NavDropdown extends StatelessWidget {
   final MenuItem menuItem;
@@ -15,63 +35,51 @@ class NavDropdown extends StatelessWidget {
     required this.onMenuItemSelected,
   });
 
+  PopupMenuItem<MenuItem> buildMenu(MenuItem root, BuildContext context) {
+    final itemColor = Theme.of(context).colorScheme.onSecondary;
+    if (root.children != null && root.children!.isNotEmpty) {
+      // Allow each child to build it's own list
+      final children =
+          root.children!.map((child) => buildMenu(child, context)).toList();
+      return PopupMenuItem<MenuItem>(
+        child: ExpansionTile(
+          leading: Icon(root.icon, color: itemColor),
+          title: Text(
+            root.label,
+            style: TextStyle(color: itemColor),
+          ),
+          children: children,
+        ),
+      );
+    } else {
+      // Node has no children. Return simple listtile
+      return PopupMenuItem<MenuItem>(
+        value: root,
+        child: ListTile(
+          leading: Icon(root.icon, color: itemColor),
+          title: Text(
+            root.label,
+            style: TextStyle(color: itemColor),
+          ),
+        ),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return PopupMenuButton<MenuItem>(
-      icon: Icon(
-        menuItem.icon,
-        color: isSelected
-            ? AppColors.selectedItemColor
-            : AppColors.unselectedItemColor,
-      ),
-      tooltip: menuItem.hoverText,
       onSelected: (MenuItem selectedItem) {
         onMenuItemSelected(selectedItem);
       },
-      color: AppColors.backgroundColor,
+      color: Theme.of(context).colorScheme.surface,
+      tooltip: '',
       itemBuilder: (BuildContext context) {
-        return menuItem.children?.map((MenuItem child) {
-              if (child.children != null && child.children!.isNotEmpty) {
-                return PopupMenuItem<MenuItem>(
-                  child: ExpansionTile(
-                    leading:
-                        Icon(child.icon, color: AppColors.primaryIconColor),
-                    title: Text(
-                      child.label,
-                      style: TextStyle(color: AppColors.primaryTextColor),
-                    ),
-                    children: child.children!.map((MenuItem grandChild) {
-                      return ListTile(
-                        leading: Icon(grandChild.icon,
-                            color: AppColors.primaryIconColor),
-                        title: Text(
-                          grandChild.label,
-                          style: TextStyle(color: AppColors.primaryTextColor),
-                        ),
-                        onTap: () {
-                          Navigator.pop(context); // Close the popup menu
-                          onMenuItemSelected(grandChild);
-                        },
-                      );
-                    }).toList(),
-                  ),
-                );
-              } else {
-                return PopupMenuItem<MenuItem>(
-                  value: child,
-                  child: ListTile(
-                    leading:
-                        Icon(child.icon, color: AppColors.primaryIconColor),
-                    title: Text(
-                      child.label,
-                      style: TextStyle(color: AppColors.primaryTextColor),
-                    ),
-                  ),
-                );
-              }
-            }).toList() ??
-            [];
+        return menuItem.children!
+            .map((node) => buildMenu(node, context))
+            .toList();
       },
+      child: TopLevelNavIndicator(menuItem.icon, menuItem.label, isSelected),
     );
   }
 }

@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import 'package:beamer/beamer.dart';
 import 'nav_dropdown.dart';
 import '../models/menu_item.dart';
-import '../app_colors.dart';
 
 class BottomNavBar extends StatefulWidget {
   final int currentIndex;
@@ -41,25 +40,22 @@ class _BottomNavBarState extends State<BottomNavBar> {
         );
       } else {
         navItems.add(
-          IconButton(
-            icon: Icon(
-              menuItem.icon,
-              color: widget.currentIndex == i
-                  ? AppColors.selectedItemColor
-                  : AppColors.unselectedItemColor,
+          MouseRegion(
+            cursor: SystemMouseCursors.click,
+            child: Listener(
+              child: TopLevelNavIndicator(
+                  menuItem.icon, menuItem.label, widget.currentIndex == i),
+              onPointerDown: (PointerDownEvent _) {
+                context.beamToNamed(menuItem.path.toString());
+                widget.onItemTapped(menuItem);
+              },
             ),
-            tooltip: menuItem.hoverText,
-            onPressed: () {
-              context.beamToNamed(menuItem.path.toString());
-              widget.onItemTapped(menuItem);
-            },
           ),
         );
       }
     }
 
     return BottomAppBar(
-      color: AppColors.primaryColor,
       elevation: 8.0,
       shape: const CircularNotchedRectangle(),
       child: Padding(
