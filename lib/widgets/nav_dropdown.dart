@@ -1,6 +1,5 @@
 // lib/widgets/nav_dropdown.dart
 import 'package:flutter/material.dart';
-import 'package:beamer/beamer.dart';
 import '../models/menu_item.dart';
 import '../app_colors.dart';
 

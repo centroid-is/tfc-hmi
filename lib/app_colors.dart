@@ -18,6 +18,8 @@ class AppColors {
       _useDarkScheme ? const Color(0xFF121212) : const Color(0xFFF5F5F5);
   static Color get scaffoldBackgroundColor =>
       _useDarkScheme ? Colors.grey[900]! : Colors.white;
+  static Color get cardBackgroundColor =>
+      _useDarkScheme ? Colors.grey[800]! : Colors.white;
 
   // Text Colors
   static Color get primaryTextColor =>
@@ -25,6 +27,7 @@ class AppColors {
   static Color get secondaryTextColor =>
       _useDarkScheme ? Colors.grey[300]! : Colors.grey;
   static Color get errorTextColor => Colors.red;
+  static Color get successTextColor => Colors.green;
 
   // Navigation Colors
   static Color get selectedItemColor =>
