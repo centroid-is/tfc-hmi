@@ -53,7 +53,8 @@ class _IpSettingsPageState extends State<IpSettingsPage> {
   void _openInterfaceSettings(NetworkManagerDevice device) {
     showDialog(
       context: context,
-      builder: (context) => InterfaceSettingsDialog(device: device),
+      builder: (context) =>
+          InterfaceSettingsDialog(nmClient: _nmClient, device: device),
     );
   }
 
@@ -121,9 +122,10 @@ class _IpSettingsPageState extends State<IpSettingsPage> {
 }
 
 class InterfaceSettingsDialog extends StatefulWidget {
+  final NetworkManagerClient nmClient;
   final NetworkManagerDevice device;
 
-  InterfaceSettingsDialog({required this.device});
+  InterfaceSettingsDialog({required this.nmClient, required this.device});
 
   @override
   _InterfaceSettingsDialogState createState() =>
@@ -225,7 +227,6 @@ class _InterfaceSettingsDialogState extends State<InterfaceSettingsDialog> {
       if (ip4Config == null) {
         throw Exception('IP4 Config not found.');
       }
-      print(ip4Config.routeData);
       // Retrieve the associated settings connection
       final connection = _activeConnection!.connection;
       if (connection == null) {
@@ -274,52 +275,22 @@ class _InterfaceSettingsDialogState extends State<InterfaceSettingsDialog> {
         // Convert netmask to prefix
         int prefix = _netmaskToPrefix(netmask);
 
-        updatedSettings['ipv4']!['address-data'] =
-            DBusArray(DBusSignature('a{sv}'), [
-          DBusDict(DBusSignature('s'), DBusSignature('v'), {
-            const DBusString('address'): DBusVariant(DBusString(ip)),
-            const DBusString('prefix'): DBusVariant(DBusUint32(prefix)),
-          }),
-        ]);
-
-        updatedSettings['ipv4']!['gateway'] = DBusString(gateway);
-
-        updatedSettings['ipv4']!['method'] = const DBusString('manual');
-
-        updatedSettings['ipv4']!['route-data'] = DBusArray(
-            DBusSignature('a{sv}'),
-            ip4Config.routeData.map(
-                (route) => DBusDict(DBusSignature('s'), DBusSignature('v'), {
-                      const DBusString('dest'):
-                          DBusVariant(DBusString(route['dest'] ?? '')),
-                      const DBusString('prefix'):
-                          DBusVariant(DBusUint32(route['prefix'] ?? 0)),
-                      const DBusString('next-hop'):
-                          DBusVariant(DBusString(route['next-hop'] ?? '')),
-                      const DBusString('metric'):
-                          DBusVariant(DBusUint32(route['metric'] ?? 0)),
-                    })));
-        // updatedSettings['ipv4']!['route-data'] =
-        //     DBusArray(DBusSignature('a{sv}'), ip4Config.routeData);
-
-        // // // Build the DNS list
-        // List<DBusDict> dnsData = dnsServers
-        //     .map(
-        //       (dns) => DBusDict(DBusSignature('s'), DBusSignature('v'), {
-        //         const DBusString('address'): DBusVariant(DBusString(dns)),
-        //       }),
-        //     )
-        //     .toList();
-
-        // updatedSettings['ipv4']!['nameserver-data'] =
-        //     DBusArray(DBusSignature('a{sv}'), dnsData);
+        updatedSettings['ipv4'] = {
+          'method': const DBusString('manual'),
+          'address-data': DBusArray(DBusSignature('a{sv}'), [
+            DBusDict(DBusSignature('s'), DBusSignature('v'), {
+              const DBusString('address'): DBusVariant(DBusString(ip)),
+              const DBusString('prefix'): DBusVariant(DBusUint32(prefix)),
+            })
+          ]),
+          'dns-data': DBusArray(DBusSignature('s'),
+              dnsServers.map((dns) => DBusString(dns)).toList()),
+          'gateway': DBusString(gateway)
+        };
       }
 
-      // Update the connection settings
+      // Update the connection settings to persistent storage
       await connection.update(updatedSettings);
-
-      // Save the updated connection to persistent storage
-      await connection.save();
 
       // Show success message
       ScaffoldMessenger.of(context).showSnackBar(
