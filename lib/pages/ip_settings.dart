@@ -292,6 +292,10 @@ class _InterfaceSettingsDialogState extends State<InterfaceSettingsDialog> {
       // Update the connection settings to persistent storage
       await connection.update(updatedSettings);
 
+      await widget.nmClient.deactivateConnection(_activeConnection!);
+      await widget.nmClient
+          .activateConnection(device: widget.device, connection: connection);
+
       // Show success message
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
