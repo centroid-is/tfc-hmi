@@ -169,7 +169,7 @@ class _InterfaceSettingsDialogState extends State<InterfaceSettingsDialog> {
 
   Future<void> _loadConnectionSettings() async {
     try {
-      _activeConnection = await widget.device.activeConnection;
+      _activeConnection = widget.device.activeConnection;
       if (_activeConnection == null) {
         setState(() {
           _errorMessage =
@@ -241,9 +241,6 @@ class _InterfaceSettingsDialogState extends State<InterfaceSettingsDialog> {
         // Configure DHCP
         updatedSettings['ipv4'] = {
           'method': const DBusString('auto'),
-          'address-data': DBusArray(DBusSignature('a{sv}'), []),
-          'gateway': const DBusString(''),
-          // 'dns': DBusArray(DBusSignature('s'), []),
         };
       } else {
         // Configure Static IP
