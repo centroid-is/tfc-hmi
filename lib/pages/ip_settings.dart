@@ -5,11 +5,12 @@ import '../app_colors.dart'; // Import the AppColors class
 import 'package:dbus/dbus.dart';
 
 class IpSettingsPage extends StatefulWidget {
+  const IpSettingsPage({super.key});
   @override
-  _IpSettingsPageState createState() => _IpSettingsPageState();
+  IpSettingsPageState createState() => IpSettingsPageState();
 }
 
-class _IpSettingsPageState extends State<IpSettingsPage> {
+class IpSettingsPageState extends State<IpSettingsPage> {
   late NetworkManagerClient _nmClient;
   List<NetworkManagerDevice> _relevantDevices = [];
   bool _isLoading = true;
@@ -91,7 +92,7 @@ class _IpSettingsPageState extends State<IpSettingsPage> {
                             device.wired != null ? 'Wired' : 'Wireless';
                         return Card(
                           color: AppColors.cardBackgroundColor,
-                          margin: EdgeInsets.symmetric(
+                          margin: const EdgeInsets.symmetric(
                               horizontal: 8.0, vertical: 4.0),
                           child: ListTile(
                             leading: Icon(
@@ -125,10 +126,11 @@ class InterfaceSettingsDialog extends StatefulWidget {
   final NetworkManagerClient nmClient;
   final NetworkManagerDevice device;
 
-  InterfaceSettingsDialog({required this.nmClient, required this.device});
+  const InterfaceSettingsDialog(
+      {super.key, required this.nmClient, required this.device});
 
   @override
-  _InterfaceSettingsDialogState createState() =>
+  State<InterfaceSettingsDialog> createState() =>
       _InterfaceSettingsDialogState();
 }
 
@@ -173,7 +175,7 @@ class _InterfaceSettingsDialogState extends State<InterfaceSettingsDialog> {
       if (_activeConnection == null) {
         setState(() {
           _errorMessage =
-              'No active connection found for device ${widget.device.interface}';
+              'TODO: No active connection found for device ${widget.device.interface}';
           _isLoading = false;
         });
         return;
@@ -191,7 +193,7 @@ class _InterfaceSettingsDialogState extends State<InterfaceSettingsDialog> {
           _netmaskController.text = _netmask;
         }
 
-        _gateway = ip4Setting.gateway ?? '';
+        _gateway = ip4Setting.gateway;
         _gatewayController.text = _gateway;
 
         // Assuming nameserverData is a list of maps with 'address'
@@ -221,6 +223,9 @@ class _InterfaceSettingsDialogState extends State<InterfaceSettingsDialog> {
 
   Future<void> _saveSettings() async {
     if (_activeConnection == null) return;
+
+    final scaffoldMessenger = ScaffoldMessenger.of(context);
+    final navigator = Navigator.of(context);
 
     try {
       final ip4Config = widget.device.ip4Config;
@@ -289,12 +294,13 @@ class _InterfaceSettingsDialogState extends State<InterfaceSettingsDialog> {
       // Update the connection settings to persistent storage
       await connection.update(updatedSettings);
 
+      // Reload the updated config
       await widget.nmClient.deactivateConnection(_activeConnection!);
       await widget.nmClient
           .activateConnection(device: widget.device, connection: connection);
 
       // Show success message
-      ScaffoldMessenger.of(context).showSnackBar(
+      scaffoldMessenger.showSnackBar(
         SnackBar(
           content: Text(
             'Settings saved successfully',
@@ -305,11 +311,10 @@ class _InterfaceSettingsDialogState extends State<InterfaceSettingsDialog> {
       );
 
       // Close the dialog or navigate back
-      Navigator.pop(context);
+      navigator.pop();
     } catch (e) {
-      print('$e');
       // Show error message
-      ScaffoldMessenger.of(context).showSnackBar(
+      scaffoldMessenger.showSnackBar(
         SnackBar(
           content: Text(
             'Failed to save settings: $e',
@@ -349,9 +354,9 @@ class _InterfaceSettingsDialogState extends State<InterfaceSettingsDialog> {
   Widget build(BuildContext context) {
     return Dialog(
       backgroundColor: AppColors.backgroundColor,
-      insetPadding: EdgeInsets.all(16.0),
+      insetPadding: const EdgeInsets.all(16.0),
       child: _isLoading
-          ? Container(
+          ? SizedBox(
               height: 200,
               child: Center(
                 child: CircularProgressIndicator(
@@ -362,7 +367,7 @@ class _InterfaceSettingsDialogState extends State<InterfaceSettingsDialog> {
             )
           : _errorMessage != null
               ? Container(
-                  padding: EdgeInsets.all(16.0),
+                  padding: const EdgeInsets.all(16.0),
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
@@ -370,21 +375,21 @@ class _InterfaceSettingsDialogState extends State<InterfaceSettingsDialog> {
                         _errorMessage!,
                         style: TextStyle(color: AppColors.errorTextColor),
                       ),
-                      SizedBox(height: 20),
+                      const SizedBox(height: 20),
                       ElevatedButton(
                         style: ElevatedButton.styleFrom(
                           backgroundColor: AppColors.elevatedButtonColor,
                           foregroundColor: AppColors.elevatedButtonTextColor,
                         ),
                         onPressed: () => Navigator.pop(context),
-                        child: Text('Close'),
+                        child: const Text('Close'),
                       ),
                     ],
                   ),
                 )
               : SingleChildScrollView(
                   child: Padding(
-                    padding: EdgeInsets.all(16.0),
+                    padding: const EdgeInsets.all(16.0),
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
@@ -395,7 +400,7 @@ class _InterfaceSettingsDialogState extends State<InterfaceSettingsDialog> {
                               fontWeight: FontWeight.bold,
                               color: AppColors.primaryTextColor),
                         ),
-                        SizedBox(height: 20),
+                        const SizedBox(height: 20),
                         SwitchListTile(
                           title: Text(
                             'Use DHCP',
@@ -428,7 +433,7 @@ class _InterfaceSettingsDialogState extends State<InterfaceSettingsDialog> {
                             style: TextStyle(color: AppColors.primaryTextColor),
                             keyboardType: TextInputType.number,
                           ),
-                          SizedBox(height: 10),
+                          const SizedBox(height: 10),
                           TextField(
                             decoration: InputDecoration(
                               labelText: 'Netmask',
@@ -447,7 +452,7 @@ class _InterfaceSettingsDialogState extends State<InterfaceSettingsDialog> {
                             style: TextStyle(color: AppColors.primaryTextColor),
                             keyboardType: TextInputType.number,
                           ),
-                          SizedBox(height: 10),
+                          const SizedBox(height: 10),
                           TextField(
                             decoration: InputDecoration(
                               labelText: 'Gateway',
@@ -466,7 +471,7 @@ class _InterfaceSettingsDialogState extends State<InterfaceSettingsDialog> {
                             style: TextStyle(color: AppColors.primaryTextColor),
                             keyboardType: TextInputType.number,
                           ),
-                          SizedBox(height: 10),
+                          const SizedBox(height: 10),
                           TextField(
                             decoration: InputDecoration(
                               labelText: 'DNS Servers (comma separated)',
@@ -487,7 +492,7 @@ class _InterfaceSettingsDialogState extends State<InterfaceSettingsDialog> {
                             maxLines: null,
                           ),
                         ],
-                        SizedBox(height: 20),
+                        const SizedBox(height: 20),
                         Row(
                           mainAxisAlignment: MainAxisAlignment.end,
                           children: [
@@ -499,7 +504,7 @@ class _InterfaceSettingsDialogState extends State<InterfaceSettingsDialog> {
                                     color: AppColors.secondaryTextColor),
                               ),
                             ),
-                            SizedBox(width: 10),
+                            const SizedBox(width: 10),
                             ElevatedButton(
                               style: ElevatedButton.styleFrom(
                                 backgroundColor: AppColors.elevatedButtonColor,
@@ -507,7 +512,7 @@ class _InterfaceSettingsDialogState extends State<InterfaceSettingsDialog> {
                                     AppColors.elevatedButtonTextColor,
                               ),
                               onPressed: _saveSettings,
-                              child: Text('Save'),
+                              child: const Text('Save'),
                             ),
                           ],
                         ),
