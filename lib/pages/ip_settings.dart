@@ -12,9 +12,6 @@ class IpSettingsPage extends StatefulWidget {
 
 class IpSettingsPageState extends State<IpSettingsPage> {
   late NetworkManagerClient _nmClient;
-  List<NetworkManagerDevice> _relevantDevices = [];
-  bool _isLoading = true;
-  String? _errorMessage;
 
   @override
   void initState() {
@@ -23,26 +20,8 @@ class IpSettingsPageState extends State<IpSettingsPage> {
   }
 
   Future<void> _initNetworkManager() async {
-    try {
-      _nmClient = NetworkManagerClient();
-      await _nmClient.connect();
-      List<NetworkManagerDevice> allDevices = _nmClient.devices;
-
-      List<NetworkManagerDevice> relevantDevices = allDevices.where((device) {
-        // Filter for wired and wireless devices
-        return device.wired != null || device.wireless != null;
-      }).toList();
-
-      setState(() {
-        _relevantDevices = relevantDevices;
-        _isLoading = false;
-      });
-    } catch (e) {
-      setState(() {
-        _errorMessage = 'Failed to connect to NetworkManager: $e';
-        _isLoading = false;
-      });
-    }
+    _nmClient = NetworkManagerClient();
+    await _nmClient.connect();
   }
 
   @override
@@ -59,66 +38,95 @@ class IpSettingsPageState extends State<IpSettingsPage> {
     );
   }
 
+  IconData iconFromType(NetworkManagerDeviceType type) {
+    switch (type) {
+      case NetworkManagerDeviceType.ethernet:
+        return Icons.cable;
+      case NetworkManagerDeviceType.wifi:
+        return Icons.wifi;
+      default:
+        return Icons.question_mark;
+    }
+  }
+
+  bool supportedDeviceTypes(NetworkManagerDeviceType type) {
+    return type == NetworkManagerDeviceType.ethernet ||
+        type == NetworkManagerDeviceType.wifi;
+  }
+
   @override
   Widget build(BuildContext context) {
-    return BaseScaffold(
-      title: 'IP Settings',
-      body: _isLoading
-          ? Center(
+    return FutureBuilder(
+        future: _nmClient.connect(),
+        builder: (BuildContext context, AsyncSnapshot<void> snapshot) {
+          Widget body;
+          if (snapshot.connectionState == ConnectionState.done) {
+            List<NetworkManagerDevice> allDevices = _nmClient.devices;
+
+            List<NetworkManagerDevice> relevantDevices = allDevices
+                .where((device) => supportedDeviceTypes(device.deviceType))
+                .toList();
+
+            if (relevantDevices.isEmpty) {
+              body = Center(
+                child: Text(
+                  'No relevant network devices found.',
+                  style: TextStyle(color: AppColors.primaryTextColor),
+                ),
+              );
+            } else {
+
+            body = ListView.builder(
+              itemCount: relevantDevices.length,
+              itemBuilder: (context, index) {
+                NetworkManagerDevice device = relevantDevices[index];
+                return Card(
+                  color: AppColors.cardBackgroundColor,
+                  margin: const EdgeInsets.symmetric(
+                      horizontal: 8.0, vertical: 4.0),
+                  child: ListTile(
+                    leading: Icon(
+                      iconFromType(device.deviceType),
+                      color: AppColors.primaryIconColor,
+                    ),
+                    title: Text(
+                      device.interface,
+                      style: TextStyle(color: AppColors.primaryTextColor),
+                    ),
+                    subtitle: Text(
+                      device.deviceType.name,
+                      style: TextStyle(color: AppColors.secondaryTextColor),
+                    ),
+                    trailing: Icon(
+                      Icons.settings,
+                      color: AppColors.secondaryIconColor,
+                    ),
+                    onTap: () => _openInterfaceSettings(device),
+                  ),
+                );
+              },
+            );
+            }
+          } else if (snapshot.hasError) {
+            body = Center(
+              child: Text(
+                'Failed to connect to NetworkManager: ${snapshot.error.toString()}',
+                style: TextStyle(color: AppColors.errorTextColor),
+              ),
+            );
+          } else {
+            body = Center(
               child: CircularProgressIndicator(
                 valueColor:
                     AlwaysStoppedAnimation<Color>(AppColors.primaryColor),
               ),
-            )
-          : _errorMessage != null
-              ? Center(
-                  child: Text(
-                    _errorMessage!,
-                    style: TextStyle(color: AppColors.errorTextColor),
-                  ),
-                )
-              : _relevantDevices.isEmpty
-                  ? Center(
-                      child: Text(
-                        'No relevant network devices found.',
-                        style: TextStyle(color: AppColors.primaryTextColor),
-                      ),
-                    )
-                  : ListView.builder(
-                      itemCount: _relevantDevices.length,
-                      itemBuilder: (context, index) {
-                        NetworkManagerDevice device = _relevantDevices[index];
-                        String deviceType =
-                            device.wired != null ? 'Wired' : 'Wireless';
-                        return Card(
-                          color: AppColors.cardBackgroundColor,
-                          margin: const EdgeInsets.symmetric(
-                              horizontal: 8.0, vertical: 4.0),
-                          child: ListTile(
-                            leading: Icon(
-                              deviceType == 'Wired' ? Icons.cable : Icons.wifi,
-                              color: AppColors.primaryIconColor,
-                            ),
-                            title: Text(
-                              device.interface,
-                              style:
-                                  TextStyle(color: AppColors.primaryTextColor),
-                            ),
-                            subtitle: Text(
-                              deviceType,
-                              style: TextStyle(
-                                  color: AppColors.secondaryTextColor),
-                            ),
-                            trailing: Icon(
-                              Icons.settings,
-                              color: AppColors.secondaryIconColor,
-                            ),
-                            onTap: () => _openInterfaceSettings(device),
-                          ),
-                        );
-                      },
-                    ),
-    );
+            );
+          }
+          return BaseScaffold(
+            title: 'IP Settings',
+            body: body,
+          );
+        });
   }
 }
 
