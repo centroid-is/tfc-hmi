@@ -4,6 +4,7 @@ import 'package:tfc_hmi/route_registry.dart';
 import 'package:tfc_hmi/models/menu_item.dart';
 import 'package:tfc_hmi/transition_delegate.dart';
 import 'package:tfc_hmi/pages/connections.dart';
+import 'package:tfc_hmi/pages/ip_settings.dart';
 import 'pages/pages.dart';
 
 void main() {
@@ -48,6 +49,12 @@ void main() {
             icon: Icons.link,
             hoverText: 'Connections',
           ),
+          MenuItem(
+            label: 'IP Settings',
+            path: Uri.parse('/settings/core/ip'),
+            icon: Icons.network_cell_outlined,
+            hoverText: 'IP Settings',
+          ),
         ],
       ),
     ],
@@ -84,6 +91,11 @@ final simpleLocationBuilder = RoutesLocationBuilder(routes: {
         key: const ValueKey('/settings/core/connections'),
         title: 'Connections',
         child: ConnectionPage(),
+      ),
+  '/settings/core/ip': (context, state, args) => BeamPage(
+        key: const ValueKey('/settings/core/ip'),
+        title: 'IP Settings',
+        child: IpSettingsPage(),
       ),
   '/controls': (context, state, args) => const BeamPage(
         key: ValueKey('/controls'),
