@@ -6,19 +6,37 @@ class TopLevelNavIndicator extends StatelessWidget {
   final IconData icon;
   final String label;
   final bool active;
-  const TopLevelNavIndicator(this.icon, this.label, this.active, {super.key});
+  final Function() onPointerDown;
+  const TopLevelNavIndicator(
+      this.icon, this.label, this.active, this.onPointerDown,
+      {super.key});
   @override
   Widget build(BuildContext context) {
     final color = active
-        ? Theme.of(context).colorScheme.onPrimary
-        : Theme.of(context).colorScheme.onSecondary;
-    return Row(
-      children: [
-        Icon(icon, color: color),
-        Padding(
-            padding: const EdgeInsets.fromLTRB(8.0, 0, 0, 0),
-            child: Text(label, style: TextStyle(color: color)))
-      ],
+        ? Theme.of(context).colorScheme.primary
+        : Theme.of(context).colorScheme.onSurface;
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: Listener(
+        onPointerDown: (event) => onPointerDown(),
+        child: Container(
+          color: Colors.white,
+          width: 150,
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Icon(icon, color: color, size: 25),
+              Padding(
+                  padding: const EdgeInsets.fromLTRB(8.0, 0, 0, 0),
+                  child: Text(label,
+                      style: Theme.of(context)
+                          .textTheme
+                          .bodyLarge!
+                          .copyWith(color: color)))
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
@@ -79,7 +97,8 @@ class NavDropdown extends StatelessWidget {
             .map((node) => buildMenu(node, context))
             .toList();
       },
-      child: TopLevelNavIndicator(menuItem.icon, menuItem.label, isSelected),
+      child: TopLevelNavIndicator(
+          menuItem.icon, menuItem.label, isSelected, () => {}),
     );
   }
 }

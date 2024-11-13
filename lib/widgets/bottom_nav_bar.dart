@@ -40,16 +40,14 @@ class _BottomNavBarState extends State<BottomNavBar> {
         );
       } else {
         navItems.add(
-          MouseRegion(
-            cursor: SystemMouseCursors.click,
-            child: Listener(
-              child: TopLevelNavIndicator(
-                  menuItem.icon, menuItem.label, widget.currentIndex == i),
-              onPointerDown: (PointerDownEvent _) {
-                context.beamToNamed(menuItem.path.toString());
-                widget.onItemTapped(menuItem);
-              },
-            ),
+          TopLevelNavIndicator(
+            menuItem.icon,
+            menuItem.label,
+            widget.currentIndex == i,
+            () {
+              context.beamToNamed(menuItem.path.toString());
+              widget.onItemTapped(menuItem);
+            },
           ),
         );
       }
