@@ -1,7 +1,7 @@
+import 'dart:core';
 import 'package:flutter/material.dart';
 import 'package:nm/nm.dart'; // Ensure nm.dart is correctly added in pubspec.yaml
 import '../widgets/base_scaffold.dart';
-import '../app_colors.dart'; // Import the AppColors class
 import 'package:dbus/dbus.dart';
 
 class IpSettingsPage extends StatefulWidget {
@@ -11,37 +11,31 @@ class IpSettingsPage extends StatefulWidget {
 }
 
 class IpSettingsPageState extends State<IpSettingsPage> {
-  late NetworkManagerClient _nmClient;
-
+  final NetworkManagerClient client = NetworkManagerClient();
   @override
   void initState() {
     super.initState();
-    _initNetworkManager();
-  }
-
-  Future<void> _initNetworkManager() async {
-    _nmClient = NetworkManagerClient();
-    await _nmClient.connect();
   }
 
   @override
   void dispose() {
-    _nmClient.close();
     super.dispose();
+    client.close();
   }
 
-  void _openInterfaceSettings(NetworkManagerDevice device) {
+  void _openInterfaceSettings(
+      NetworkManagerClient client, NetworkManagerDevice device) {
     showDialog(
       context: context,
       builder: (context) =>
-          InterfaceSettingsDialog(nmClient: _nmClient, device: device),
+          InterfaceSettingsDialog(nmClient: client, device: device),
     );
   }
 
   IconData iconFromType(NetworkManagerDeviceType type) {
     switch (type) {
       case NetworkManagerDeviceType.ethernet:
-        return Icons.cable;
+        return Icons.settings_ethernet;
       case NetworkManagerDeviceType.wifi:
         return Icons.wifi;
       default:
@@ -54,71 +48,142 @@ class IpSettingsPageState extends State<IpSettingsPage> {
         type == NetworkManagerDeviceType.wifi;
   }
 
+  String connectivityStateToString(NetworkManagerConnectivityState state) {
+    switch (state) {
+      case NetworkManagerConnectivityState.full:
+        return 'Internet connected';
+      case NetworkManagerConnectivityState.limited:
+        return 'Internet connection limited';
+      case NetworkManagerConnectivityState.none:
+        return 'Internet disconnected';
+      default:
+        return 'Internet status unknown';
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return FutureBuilder(
-        future: _nmClient.connect(),
+        future: client.connect(),
         builder: (BuildContext context, AsyncSnapshot<void> snapshot) {
           Widget body;
           if (snapshot.connectionState == ConnectionState.done) {
-            List<NetworkManagerDevice> allDevices = _nmClient.devices;
-
-            List<NetworkManagerDevice> relevantDevices = allDevices
+            // Reload the page if devices are added or removed and are of supported type.
+            client.deviceAdded
+                .where((device) => supportedDeviceTypes(device.deviceType))
+                .listen((_) => setState(() {
+                      // Should reload
+                    }));
+            client.deviceRemoved
+                .where((device) => supportedDeviceTypes(device.deviceType))
+                .listen((_) => setState(() {
+                      // Should reload
+                    }));
+            List<NetworkManagerDevice> relevantDevices = client.devices
                 .where((device) => supportedDeviceTypes(device.deviceType))
                 .toList();
-
             if (relevantDevices.isEmpty) {
-              body = Center(
+              body = const Center(
                 child: Text(
                   'No relevant network devices found.',
-                  style: TextStyle(color: AppColors.primaryTextColor),
                 ),
               );
             } else {
-
-            body = ListView.builder(
-              itemCount: relevantDevices.length,
-              itemBuilder: (context, index) {
-                NetworkManagerDevice device = relevantDevices[index];
-                return Card(
-                  color: AppColors.cardBackgroundColor,
-                  margin: const EdgeInsets.symmetric(
-                      horizontal: 8.0, vertical: 4.0),
-                  child: ListTile(
-                    leading: Icon(
-                      iconFromType(device.deviceType),
-                      color: AppColors.primaryIconColor,
+              body = Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.all(8.0),
+                    child: Row(
+                      children: [
+                        Text(
+                          client.connectivityCheckEnabled
+                              ? connectivityStateToString(client.connectivity)
+                              : 'Connectivity check disabled',
+                          textAlign: TextAlign.left,
+                          style: Theme.of(context).textTheme.titleMedium,
+                        ),
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(20, 0, 0, 0),
+                          child: Text(
+                              'Connection tested to ${client.connectivityCheckUri}',
+                              style: Theme.of(context).textTheme.titleSmall),
+                        )
+                      ],
                     ),
-                    title: Text(
-                      device.interface,
-                      style: TextStyle(color: AppColors.primaryTextColor),
-                    ),
-                    subtitle: Text(
-                      device.deviceType.name,
-                      style: TextStyle(color: AppColors.secondaryTextColor),
-                    ),
-                    trailing: Icon(
-                      Icons.settings,
-                      color: AppColors.secondaryIconColor,
-                    ),
-                    onTap: () => _openInterfaceSettings(device),
                   ),
-                );
-              },
-            );
+                  Expanded(
+                    child: ListView.builder(
+                      itemCount: relevantDevices.length,
+                      itemBuilder: (context, index) {
+                        NetworkManagerDevice device = relevantDevices[index];
+                        return StreamBuilder<Object>(
+                            stream: device.propertiesChanged,
+                            builder: (context, snapshot) {
+                              final connectionActivated =
+                                  device.activeConnection != null &&
+                                      device.activeConnection!.state ==
+                                          NetworkManagerActiveConnectionState
+                                              .activated;
+                              final cardColor = connectionActivated
+                                  ? Theme.of(context).colorScheme.surface
+                                  : Theme.of(context).colorScheme.error;
+                              final itemColor = connectionActivated
+                                  ? Theme.of(context).colorScheme.onSurface
+                                  : Theme.of(context).colorScheme.onError;
+                              final tStyle = Theme.of(context)
+                                  .textTheme
+                                  .labelLarge!
+                                  .copyWith(color: itemColor);
+                              return Card(
+                                margin: const EdgeInsets.symmetric(
+                                    horizontal: 8.0, vertical: 4.0),
+                                child: ListTile(
+                                    leading: Icon(
+                                      iconFromType(device.deviceType),
+                                      color: itemColor,
+                                    ),
+                                    title: Text(
+                                      device.interface,
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .headlineSmall!
+                                          .copyWith(color: itemColor),
+                                    ),
+                                    subtitle: Text(
+                                      device.deviceType.name,
+                                      style: tStyle,
+                                    ),
+                                    trailing: Icon(
+                                      Icons.settings,
+                                      color: itemColor,
+                                    ),
+                                    onTap: () =>
+                                        _openInterfaceSettings(client, device),
+                                    tileColor: cardColor,
+                                    shape: RoundedRectangleBorder(
+                                        borderRadius:
+                                            BorderRadius.circular(5.0))),
+                              );
+                            });
+                      },
+                    ),
+                  ),
+                ],
+              );
             }
           } else if (snapshot.hasError) {
             body = Center(
               child: Text(
                 'Failed to connect to NetworkManager: ${snapshot.error.toString()}',
-                style: TextStyle(color: AppColors.errorTextColor),
+                style: TextStyle(color: Theme.of(context).colorScheme.onError),
               ),
             );
           } else {
             body = Center(
               child: CircularProgressIndicator(
-                valueColor:
-                    AlwaysStoppedAnimation<Color>(AppColors.primaryColor),
+                valueColor: AlwaysStoppedAnimation<Color>(
+                    Theme.of(context).colorScheme.onPrimary),
               ),
             );
           }
@@ -312,9 +377,7 @@ class _InterfaceSettingsDialogState extends State<InterfaceSettingsDialog> {
         SnackBar(
           content: Text(
             'Settings saved successfully',
-            style: TextStyle(color: AppColors.successTextColor),
           ),
-          backgroundColor: AppColors.backgroundColor,
         ),
       );
 
@@ -326,9 +389,7 @@ class _InterfaceSettingsDialogState extends State<InterfaceSettingsDialog> {
         SnackBar(
           content: Text(
             'Failed to save settings: $e',
-            style: TextStyle(color: AppColors.errorTextColor),
           ),
-          backgroundColor: AppColors.backgroundColor,
         ),
       );
     }
@@ -360,17 +421,14 @@ class _InterfaceSettingsDialogState extends State<InterfaceSettingsDialog> {
 
   @override
   Widget build(BuildContext context) {
+    _loadConnectionSettings();
     return Dialog(
-      backgroundColor: AppColors.backgroundColor,
       insetPadding: const EdgeInsets.all(16.0),
       child: _isLoading
           ? SizedBox(
               height: 200,
               child: Center(
-                child: CircularProgressIndicator(
-                  valueColor:
-                      AlwaysStoppedAnimation<Color>(AppColors.primaryColor),
-                ),
+                child: CircularProgressIndicator(),
               ),
             )
           : _errorMessage != null
@@ -381,14 +439,9 @@ class _InterfaceSettingsDialogState extends State<InterfaceSettingsDialog> {
                     children: [
                       Text(
                         _errorMessage!,
-                        style: TextStyle(color: AppColors.errorTextColor),
                       ),
                       const SizedBox(height: 20),
                       ElevatedButton(
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: AppColors.elevatedButtonColor,
-                          foregroundColor: AppColors.elevatedButtonTextColor,
-                        ),
                         onPressed: () => Navigator.pop(context),
                         child: const Text('Close'),
                       ),
@@ -403,19 +456,13 @@ class _InterfaceSettingsDialogState extends State<InterfaceSettingsDialog> {
                       children: [
                         Text(
                           'Settings - ${widget.device.interface}',
-                          style: TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.bold,
-                              color: AppColors.primaryTextColor),
                         ),
                         const SizedBox(height: 20),
                         SwitchListTile(
                           title: Text(
                             'Use DHCP',
-                            style: TextStyle(color: AppColors.primaryTextColor),
                           ),
                           value: _isDhcp,
-                          activeColor: AppColors.primaryColor,
                           onChanged: (value) {
                             setState(() {
                               _isDhcp = value;
@@ -426,76 +473,32 @@ class _InterfaceSettingsDialogState extends State<InterfaceSettingsDialog> {
                           TextField(
                             decoration: InputDecoration(
                               labelText: 'IP Address',
-                              labelStyle: TextStyle(
-                                  color: AppColors.secondaryTextColor),
-                              enabledBorder: OutlineInputBorder(
-                                borderSide:
-                                    BorderSide(color: AppColors.borderColor),
-                              ),
-                              focusedBorder: OutlineInputBorder(
-                                borderSide:
-                                    BorderSide(color: AppColors.primaryColor),
-                              ),
                             ),
                             controller: _ipController,
-                            style: TextStyle(color: AppColors.primaryTextColor),
                             keyboardType: TextInputType.number,
                           ),
                           const SizedBox(height: 10),
                           TextField(
                             decoration: InputDecoration(
                               labelText: 'Netmask',
-                              labelStyle: TextStyle(
-                                  color: AppColors.secondaryTextColor),
-                              enabledBorder: OutlineInputBorder(
-                                borderSide:
-                                    BorderSide(color: AppColors.borderColor),
-                              ),
-                              focusedBorder: OutlineInputBorder(
-                                borderSide:
-                                    BorderSide(color: AppColors.primaryColor),
-                              ),
                             ),
                             controller: _netmaskController,
-                            style: TextStyle(color: AppColors.primaryTextColor),
                             keyboardType: TextInputType.number,
                           ),
                           const SizedBox(height: 10),
                           TextField(
                             decoration: InputDecoration(
                               labelText: 'Gateway',
-                              labelStyle: TextStyle(
-                                  color: AppColors.secondaryTextColor),
-                              enabledBorder: OutlineInputBorder(
-                                borderSide:
-                                    BorderSide(color: AppColors.borderColor),
-                              ),
-                              focusedBorder: OutlineInputBorder(
-                                borderSide:
-                                    BorderSide(color: AppColors.primaryColor),
-                              ),
                             ),
                             controller: _gatewayController,
-                            style: TextStyle(color: AppColors.primaryTextColor),
                             keyboardType: TextInputType.number,
                           ),
                           const SizedBox(height: 10),
                           TextField(
                             decoration: InputDecoration(
                               labelText: 'DNS Servers (comma separated)',
-                              labelStyle: TextStyle(
-                                  color: AppColors.secondaryTextColor),
-                              enabledBorder: OutlineInputBorder(
-                                borderSide:
-                                    BorderSide(color: AppColors.borderColor),
-                              ),
-                              focusedBorder: OutlineInputBorder(
-                                borderSide:
-                                    BorderSide(color: AppColors.primaryColor),
-                              ),
                             ),
                             controller: _dnsController,
-                            style: TextStyle(color: AppColors.primaryTextColor),
                             keyboardType: TextInputType.multiline,
                             maxLines: null,
                           ),
@@ -504,21 +507,14 @@ class _InterfaceSettingsDialogState extends State<InterfaceSettingsDialog> {
                         Row(
                           mainAxisAlignment: MainAxisAlignment.end,
                           children: [
-                            TextButton(
+                            ElevatedButton(
                               onPressed: () => Navigator.pop(context),
                               child: Text(
                                 'Cancel',
-                                style: TextStyle(
-                                    color: AppColors.secondaryTextColor),
                               ),
                             ),
                             const SizedBox(width: 10),
                             ElevatedButton(
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: AppColors.elevatedButtonColor,
-                                foregroundColor:
-                                    AppColors.elevatedButtonTextColor,
-                              ),
                               onPressed: _saveSettings,
                               child: const Text('Save'),
                             ),
