@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:tfc_hmi/widgets/base_scaffold.dart';
-import 'package:tfc_hmi/app_colors.dart';
 
 class HomePage extends StatelessWidget {
   const HomePage({super.key});
@@ -10,13 +9,10 @@ class HomePage extends StatelessWidget {
     return BaseScaffold(
       title: 'Home Page',
       body: Container(
-          color: AppColors.backgroundColor,
           child: Center(
-            child: Text(
-              'Home Page',
-              style: TextStyle(color: AppColors.primaryTextColor),
-            ),
-          )),
+        child:
+            Text('Home Page', style: Theme.of(context).textTheme.displayLarge),
+      )),
     );
   }
 }
@@ -28,13 +24,9 @@ class SettingsPage extends StatelessWidget {
     return BaseScaffold(
       title: 'Settings Page',
       body: Container(
-        color: AppColors.backgroundColor,
         child: Center(
-          child: Text(
-            'Settings Page',
-            style: TextStyle(color: AppColors.primaryTextColor),
-          ),
-        ),
+            child: Text('Settings Page',
+                style: Theme.of(context).textTheme.displayLarge)),
       ),
     );
   }
@@ -47,11 +39,9 @@ class ProfileSettingsPage extends StatelessWidget {
     return BaseScaffold(
       title: 'Profile Settings Page',
       body: Container(
-        color: AppColors.backgroundColor,
         child: Center(
           child: Text(
             'Profile Settings Page',
-            style: TextStyle(color: AppColors.primaryTextColor),
           ),
         ),
       ),
@@ -66,11 +56,9 @@ class PrivacyPage extends StatelessWidget {
     return BaseScaffold(
       title: 'Privacy Page',
       body: Container(
-        color: AppColors.backgroundColor,
         child: Center(
           child: Text(
             'Privacy Page',
-            style: TextStyle(color: AppColors.primaryTextColor),
           ),
         ),
       ),
@@ -85,11 +73,9 @@ class ControlsPage extends StatelessWidget {
     return BaseScaffold(
       title: 'Controls Page',
       body: Container(
-        color: AppColors.backgroundColor,
         child: Center(
           child: Text(
             'Controls Page',
-            style: TextStyle(color: AppColors.primaryTextColor),
           ),
         ),
       ),
@@ -104,11 +90,9 @@ class VolumePage extends StatelessWidget {
     return BaseScaffold(
       title: 'Volume Page',
       body: Container(
-        color: AppColors.backgroundColor,
         child: Center(
           child: Text(
             'Volume Page',
-            style: TextStyle(color: AppColors.primaryTextColor),
           ),
         ),
       ),
@@ -123,11 +107,9 @@ class BrightnessPage extends StatelessWidget {
     return BaseScaffold(
       title: 'Brightness Page',
       body: Container(
-        color: AppColors.backgroundColor,
         child: Center(
           child: Text(
             'Brightness Page',
-            style: TextStyle(color: AppColors.primaryTextColor),
           ),
         ),
       ),
