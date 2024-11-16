@@ -6,7 +6,9 @@ import 'package:tfc_hmi/models/menu_item.dart';
 import 'package:tfc_hmi/transition_delegate.dart';
 import 'package:tfc_hmi/pages/connections.dart';
 import 'package:tfc_hmi/pages/ip_settings.dart';
+import 'package:tfc_hmi/pages/not_found.dart';
 import 'package:tfc_hmi/pages/viewtheme.dart';
+import 'package:tfc_hmi/pages/system.dart';
 import 'package:provider/provider.dart';
 import 'pages/pages.dart';
 
@@ -15,45 +17,40 @@ void main() {
   final registry = RouteRegistry();
 
   // this is a bit of duplication
-  registry.addMenuItem(MenuItem(
+  registry.addMenuItem(const MenuItem(
     label: 'Home',
-    path: Uri.parse('/'),
+    path: '/',
     icon: Icons.home,
   ));
 
-  registry.addMenuItem(MenuItem(
+  registry.addMenuItem(const MenuItem(
     label: 'Settings',
-    path: Uri.parse('/settings'),
+    path: null,
     icon: Icons.settings,
     children: [
       MenuItem(
         label: 'Profile',
-        path: Uri.parse('/settings/profile'),
+        path: '/settings/profile',
         icon: Icons.person,
       ),
       MenuItem(
         label: 'Privacy',
-        path: Uri.parse('/settings/privacy'),
+        path: '/settings/privacy',
         icon: Icons.lock,
       ),
       MenuItem(
         label: 'Core',
-        path: Uri.parse('/settings/core'),
+        path: '/settings/core',
         icon: Icons.settings_remote_outlined,
         children: [
           MenuItem(
             label: 'Connections',
-            path: Uri.parse('/settings/core/connections'),
+            path: '/settings/core/connections',
             icon: Icons.link,
           ),
           MenuItem(
             label: 'IP Settings',
-            path: Uri.parse('/settings/core/ip'),
-            icon: Icons.network_cell_outlined,
-          ),
-          MenuItem(
-            label: 'IP Settings',
-            path: Uri.parse('/settings/core/ip'),
+            path: '/settings/core/ip',
             icon: Icons.network_cell_outlined,
           ),
         ],
@@ -61,15 +58,15 @@ void main() {
     ],
   ));
 
-  registry.addMenuItem(MenuItem(
+  registry.addMenuItem(const MenuItem(
     label: 'Theme',
-    path: Uri.parse('/theme'),
+    path: '/theme',
     icon: Icons.photo,
   ));
 
-  registry.addMenuItem(MenuItem(
-    label: 'Controls',
-    path: Uri.parse('/controls'),
+  registry.addMenuItem(const MenuItem(
+    label: 'System',
+    path: '/system',
     icon: Icons.tune,
   ));
 
@@ -106,10 +103,10 @@ final simpleLocationBuilder = RoutesLocationBuilder(routes: {
         title: 'IP Settings',
         child: IpSettingsPage(),
       ),
-  '/controls': (context, state, args) => const BeamPage(
-        key: ValueKey('/controls'),
-        title: 'Controls',
-        child: ControlsPage(),
+  '/system': (context, state, args) => const BeamPage(
+        key: ValueKey('/system'),
+        title: 'System',
+        child: SystemsPage(),
       ),
   '/theme': (context, state, args) => const BeamPage(
       key: ValueKey('/theme'), title: 'Theme', child: ViewTheme())
@@ -117,6 +114,7 @@ final simpleLocationBuilder = RoutesLocationBuilder(routes: {
 
 class MyApp extends StatelessWidget {
   final routerDelegate = BeamerDelegate(
+    notFoundPage: const BeamPage(child: PageNotFound()),
     transitionDelegate: const MyNoAnimationTransitionDelegate(),
     locationBuilder: (routeInformation, context) =>
         simpleLocationBuilder(routeInformation, context),

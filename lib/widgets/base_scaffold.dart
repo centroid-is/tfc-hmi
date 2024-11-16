@@ -2,7 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:beamer/beamer.dart';
 import 'package:logger/logger.dart';
-import 'bottom_nav_bar.dart';
+import 'package:tfc_hmi/widgets/nav_dropdown.dart';
+import '../models/menu_item.dart';
 import '../route_registry.dart';
 import 'package:tfc_hmi/theme.dart';
 import 'package:provider/provider.dart';
@@ -13,39 +14,39 @@ class BaseScaffold extends StatelessWidget {
 
   const BaseScaffold({super.key, required this.body, required this.title});
 
+  findTopLevelIndexForBeamer(MenuItem node, int? base, String path) {
+    if (node.path != null) {
+      if (node.path! == path) {
+        return base ?? RouteRegistry().getNodeIndex(node);
+      }
+    }
+    final int? myBase = base ?? RouteRegistry().getNodeIndex(node);
+    for (final child in node.children) {
+      final int? index = findTopLevelIndexForBeamer(child, myBase, path);
+      if (index != null) return index;
+    }
+    return null;
+  }
+
+  final NavigationDestinationLabelBehavior labelBehavior =
+      NavigationDestinationLabelBehavior.alwaysShow;
+
   @override
   Widget build(BuildContext context) {
     final logger = Logger();
-    final beamer = Beamer.of(context);
-    int currentIndex = 0;
-    if (beamer.currentConfiguration != null) {
-      final currentPath = beamer.currentConfiguration?.uri;
-      if (currentPath != null) {
-        currentIndex = RouteRegistry().menuItems.indexWhere((item) {
-          if (item.path == currentPath) {
-            return true;
-          }
-          if (item.path.pathSegments.isEmpty ||
-              currentPath.pathSegments.isEmpty) {
-            return false;
-          }
-          return item.path.pathSegments.first == currentPath.pathSegments.first;
-        });
-      }
-    }
 
     return Scaffold(
       appBar: AppBar(
         leading: context.canBeamBack
             ? IconButton(
-                icon: Icon(Icons.arrow_back),
+                icon: const Icon(Icons.arrow_back),
                 onPressed: () => context.beamBack(),
               )
             : null,
         centerTitle: true,
         actions: [
           IconButton(
-            icon: Icon(Icons.brightness_6),
+            icon: const Icon(Icons.brightness_6),
             onPressed: () {
               ThemeNotifier themeNotifier =
                   Provider.of<ThemeNotifier>(context, listen: false);
@@ -101,16 +102,28 @@ class BaseScaffold extends StatelessWidget {
           ],
         ),
       ),
-      body: Container(
-        padding: const EdgeInsets.fromLTRB(0, 0, 0, 0),
-        child: body,
+      body: body,
+      bottomNavigationBar: NavigationBar(
+        labelBehavior: labelBehavior,
+        selectedIndex: findTopLevelIndexForBeamer(RouteRegistry().root, null,
+            (context.currentBeamLocation.state as BeamState).uri.path),
+        destinations: [
+          ...RouteRegistry().menuItems.map<Widget>((item) {
+            if (item.children.isEmpty) {
+              return NavigationDestination(
+                  icon: Icon(item.icon), label: item.label);
+            }
+            return NavDropdown(
+              menuItem: item,
+            );
+          }),
+        ],
+        onDestinationSelected: (int index) {
+          logger.d('Item tapped: $index');
+          final item = RouteRegistry().menuItems[index];
+          beamSafelyKids(context, item);
+        },
       ),
-      bottomNavigationBar: BottomNavBar(
-          onItemTapped: (item) {
-            logger.d('Item tapped: ${item.label}');
-          },
-          menuItems: RouteRegistry().menuItems,
-          currentIndex: currentIndex),
     );
   }
 }
