@@ -22,18 +22,35 @@ class RouteRegistry {
 
   Map<String, WidgetBuilder> get routes => _routes;
 
+  MenuItem get root {
+    return MenuItem(
+        label: 'ROOT, SHOULD NEVER BE SEEN',
+        icon: Icons.abc,
+        children: menuItems);
+  }
+
   void addMenuItem(MenuItem menuItem) {
     menuItems.add(menuItem);
   }
 
+  int? getNodeIndex(MenuItem nodeItem) {
+    final index = menuItems.indexOf(nodeItem);
+    if (index != -1) return index;
+    return null;
+  }
+
   // Method to retrieve all registered paths
-  List<Uri> getAllPaths() {
-    List<Uri> paths = [];
+  List<String> getAllPaths() {
+    List<String> paths = [];
     for (var dropdown in menuItems) {
-      paths.add(dropdown.path);
-      if (dropdown.children != null) {
-        for (var child in dropdown.children!) {
-          paths.add(child.path);
+      if (dropdown.path != null) {
+        paths.add(dropdown.path!);
+      }
+      if (dropdown.children.isNotEmpty) {
+        for (var child in dropdown.children) {
+          if (child.path != null) {
+            paths.add(child.path!);
+          }
         }
       }
     }

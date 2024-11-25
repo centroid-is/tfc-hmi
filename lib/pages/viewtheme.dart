@@ -24,7 +24,17 @@ class ViewTheme extends StatelessWidget {
                   padding: EdgeInsets.all(8.0),
                   child: TextField(
                     decoration: InputDecoration(
-                      labelText: 'What is this?',
+                      labelText: 'Outlined text field',
+                    ),
+                  ),
+                ),
+                const Padding(
+                  padding: EdgeInsets.all(8.0),
+                  child: TextField(
+                    decoration: InputDecoration(
+                      border: UnderlineInputBorder(),
+                      filled: true,
+                      labelText: 'Filled text field',
                     ),
                   ),
                 ),
@@ -37,10 +47,13 @@ class ViewTheme extends StatelessWidget {
                     enabled: false,
                   ),
                 ),
-                const Padding(
-                  padding: EdgeInsets.all(8.0),
+                Padding(
+                  padding: const EdgeInsets.all(8.0),
                   child: TextField(
-                    decoration: InputDecoration(
+                    maxLength: 1,
+                    controller: TextEditingController.fromValue(
+                        const TextEditingValue(text: 'ERROR!')),
+                    decoration: const InputDecoration(
                       labelText: 'This should be in error TODO',
                     ),
                   ),
@@ -52,13 +65,52 @@ class ViewTheme extends StatelessWidget {
                         style: Theme.of(context).textTheme.titleLarge),
                   ),
                 ),
-                ElevatedButton(
-                  onPressed: () {
-                    showDialog(
-                        context: context,
-                        builder: (context) => const Text("HEY!"));
-                  },
-                  child: const Text('ElevatedButton non primary'),
+                Padding(
+                  padding: const EdgeInsets.all(8.0),
+                  child: ElevatedButton(
+                    onPressed: () {
+                      showDialog(
+                          context: context,
+                          builder: (context) {
+                            return const Dialog.fullscreen(child: Text('hi'));
+                          });
+                    },
+                    child: const Text('ElevatedButton'),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.all(8.0),
+                  child: FilledButton(
+                    onPressed: () {
+                      showDialog(
+                          context: context,
+                          builder: (context) =>
+                              const AlertDialog(content: Text("HEY!")));
+                    },
+                    child: const Text('Filled Button'),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.all(8.0),
+                  child: OutlinedButton(
+                    onPressed: () {
+                      showDialog(
+                          context: context,
+                          builder: (context) => const Text("HEY!"));
+                    },
+                    child: const Text('Outlined Button'),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.all(8.0),
+                  child: TextButton(
+                    onPressed: () {
+                      showDialog(
+                          context: context,
+                          builder: (context) => const Text("HEY!"));
+                    },
+                    child: const Text('Text Button'),
+                  ),
                 ),
                 Padding(
                   padding: const EdgeInsets.all(8.0),
@@ -86,6 +138,40 @@ class ViewTheme extends StatelessWidget {
                 DisplayTextTheme(
                     Text('Display Medium', style: tt.displayMedium)),
                 DisplayTextTheme(Text('Display Large', style: tt.displayLarge)),
+                Padding(
+                  padding: const EdgeInsets.all(8.0),
+                  child: Center(
+                    child: Text('Cards',
+                        style: Theme.of(context).textTheme.titleLarge),
+                  ),
+                ),
+                const Padding(
+                  padding: EdgeInsets.all(8.0),
+                  child: Card.filled(
+                    child: Padding(
+                      padding: EdgeInsets.all(8.0),
+                      child: Text('Filled card'),
+                    ),
+                  ),
+                ),
+                const Padding(
+                  padding: EdgeInsets.all(8.0),
+                  child: Card(
+                    child: Padding(
+                      padding: EdgeInsets.all(8.0),
+                      child: Text('Elevated card'),
+                    ),
+                  ),
+                ),
+                const Padding(
+                  padding: EdgeInsets.all(8.0),
+                  child: Card.outlined(
+                    child: Padding(
+                      padding: EdgeInsets.all(8.0),
+                      child: Text('Outlined card'),
+                    ),
+                  ),
+                ),
               ]),
             ),
             Expanded(
@@ -140,36 +226,36 @@ class ViewTheme extends StatelessWidget {
                         style: Theme.of(context).textTheme.titleLarge),
                   ),
                 ),
-                ShowTextOnBackgrounds('Yellow', SolarizedColors().yellow,
-                    SolarizedColors().base03),
-                ShowTextOnBackgrounds(
-                    'Red', SolarizedColors().red, SolarizedColors().base03),
-                ShowTextOnBackgrounds(
-                    'Green', SolarizedColors().green, SolarizedColors().base03),
-                ShowTextOnBackgrounds(
-                    'Blue', SolarizedColors().blue, SolarizedColors().base03),
-                ShowTextOnBackgrounds('Orange', SolarizedColors().orange,
-                    SolarizedColors().base03),
-                ShowTextOnBackgrounds('Violet', SolarizedColors().violet,
-                    SolarizedColors().base03),
-                ShowTextOnBackgrounds('Magenta', SolarizedColors().magenta,
-                    SolarizedColors().base03),
-                ShowTextOnBackgrounds('Base 0', SolarizedColors().base0,
-                    SolarizedColors().base03),
-                ShowTextOnBackgrounds('Base 1', SolarizedColors().base1,
-                    SolarizedColors().base03),
-                ShowTextOnBackgrounds('Base 2', SolarizedColors().base2,
-                    SolarizedColors().base03),
-                ShowTextOnBackgrounds('Base 3', SolarizedColors().base3,
-                    SolarizedColors().base03),
-                ShowTextOnBackgrounds('Base 00', SolarizedColors().base00,
-                    SolarizedColors().base03),
-                ShowTextOnBackgrounds('Base 01', SolarizedColors().base01,
-                    SolarizedColors().base03),
-                ShowTextOnBackgrounds('Base 02', SolarizedColors().base02,
-                    SolarizedColors().base2),
-                ShowTextOnBackgrounds('Base 03', SolarizedColors().base03,
-                    SolarizedColors().base2),
+                const ShowTextOnBackgrounds(
+                    'Yellow', SolarizedColors.yellow, SolarizedColors.base03),
+                const ShowTextOnBackgrounds(
+                    'Red', SolarizedColors.red, SolarizedColors.base03),
+                const ShowTextOnBackgrounds(
+                    'Green', SolarizedColors.green, SolarizedColors.base03),
+                const ShowTextOnBackgrounds(
+                    'Blue', SolarizedColors.blue, SolarizedColors.base03),
+                const ShowTextOnBackgrounds(
+                    'Orange', SolarizedColors.orange, SolarizedColors.base03),
+                const ShowTextOnBackgrounds(
+                    'Violet', SolarizedColors.violet, SolarizedColors.base03),
+                const ShowTextOnBackgrounds(
+                    'Magenta', SolarizedColors.magenta, SolarizedColors.base03),
+                const ShowTextOnBackgrounds(
+                    'Base 0', SolarizedColors.base0, SolarizedColors.base03),
+                const ShowTextOnBackgrounds(
+                    'Base 1', SolarizedColors.base1, SolarizedColors.base03),
+                const ShowTextOnBackgrounds(
+                    'Base 2', SolarizedColors.base2, SolarizedColors.base03),
+                const ShowTextOnBackgrounds(
+                    'Base 3', SolarizedColors.base3, SolarizedColors.base03),
+                const ShowTextOnBackgrounds(
+                    'Base 00', SolarizedColors.base00, SolarizedColors.base03),
+                const ShowTextOnBackgrounds(
+                    'Base 01', SolarizedColors.base01, SolarizedColors.base03),
+                const ShowTextOnBackgrounds(
+                    'Base 02', SolarizedColors.base02, SolarizedColors.base2),
+                const ShowTextOnBackgrounds(
+                    'Base 03', SolarizedColors.base03, SolarizedColors.base2),
               ]),
             ),
           ],
@@ -187,7 +273,8 @@ class ContainerWPadding extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      width: 300,
+      width: 150,
+      height: 70,
       decoration:
           BoxDecoration(border: Border.all(color: color), color: background),
       child: Padding(
@@ -208,13 +295,24 @@ class ShowTextOnBackgrounds extends StatelessWidget {
       {this.container, this.onContainer, super.key});
   @override
   Widget build(BuildContext context) {
-    final textTheme = Theme.of(context).textTheme.titleLarge;
-    return Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-      ContainerWPadding(
-          oncolor, color, title, textTheme!.copyWith(color: color)),
-      ContainerWPadding(
-          color, oncolor, 'on$title', textTheme.copyWith(color: oncolor))
-    ]);
+    final textTheme = Theme.of(context).textTheme.labelLarge;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 0, 0),
+      child: Row(mainAxisAlignment: MainAxisAlignment.start, children: [
+        ContainerWPadding(
+            oncolor, color, title, textTheme!.copyWith(color: color)),
+        ContainerWPadding(
+            color, oncolor, 'on$title', textTheme.copyWith(color: oncolor)),
+        container != null
+            ? ContainerWPadding(oncolor, container!, '$title container',
+                textTheme.copyWith(color: oncolor))
+            : Container(),
+        onContainer != null
+            ? ContainerWPadding(color, onContainer!, '$title onContainer',
+                textTheme.copyWith(color: oncolor))
+            : Container(),
+      ]),
+    );
   }
 }
 

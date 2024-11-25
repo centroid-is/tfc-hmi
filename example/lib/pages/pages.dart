@@ -39,7 +39,7 @@ class ProfileSettingsPage extends StatelessWidget {
     return BaseScaffold(
       title: 'Profile Settings Page',
       body: Container(
-        child: Center(
+        child: const Center(
           child: Text(
             'Profile Settings Page',
           ),
@@ -56,26 +56,9 @@ class PrivacyPage extends StatelessWidget {
     return BaseScaffold(
       title: 'Privacy Page',
       body: Container(
-        child: Center(
+        child: const Center(
           child: Text(
             'Privacy Page',
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class ControlsPage extends StatelessWidget {
-  const ControlsPage({super.key});
-  @override
-  Widget build(BuildContext context) {
-    return BaseScaffold(
-      title: 'Controls Page',
-      body: Container(
-        child: Center(
-          child: Text(
-            'Controls Page',
           ),
         ),
       ),
@@ -90,7 +73,7 @@ class VolumePage extends StatelessWidget {
     return BaseScaffold(
       title: 'Volume Page',
       body: Container(
-        child: Center(
+        child: const Center(
           child: Text(
             'Volume Page',
           ),
@@ -107,7 +90,7 @@ class BrightnessPage extends StatelessWidget {
     return BaseScaffold(
       title: 'Brightness Page',
       body: Container(
-        child: Center(
+        child: const Center(
           child: Text(
             'Brightness Page',
           ),
