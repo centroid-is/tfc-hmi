@@ -374,7 +374,7 @@ class _InterfaceSettingsDialogState extends State<InterfaceSettingsDialog> {
 
       // Show success message
       scaffoldMessenger.showSnackBar(
-        SnackBar(
+        const SnackBar(
           content: Text(
             'Settings saved successfully',
           ),
@@ -421,11 +421,10 @@ class _InterfaceSettingsDialogState extends State<InterfaceSettingsDialog> {
 
   @override
   Widget build(BuildContext context) {
-    _loadConnectionSettings();
     return Dialog(
       insetPadding: const EdgeInsets.all(16.0),
       child: _isLoading
-          ? SizedBox(
+          ? const SizedBox(
               height: 200,
               child: Center(
                 child: CircularProgressIndicator(),
@@ -459,7 +458,7 @@ class _InterfaceSettingsDialogState extends State<InterfaceSettingsDialog> {
                         ),
                         const SizedBox(height: 20),
                         SwitchListTile(
-                          title: Text(
+                          title: const Text(
                             'Use DHCP',
                           ),
                           value: _isDhcp,
@@ -471,7 +470,7 @@ class _InterfaceSettingsDialogState extends State<InterfaceSettingsDialog> {
                         ),
                         if (!_isDhcp) ...[
                           TextField(
-                            decoration: InputDecoration(
+                            decoration: const InputDecoration(
                               labelText: 'IP Address',
                             ),
                             controller: _ipController,
@@ -479,7 +478,7 @@ class _InterfaceSettingsDialogState extends State<InterfaceSettingsDialog> {
                           ),
                           const SizedBox(height: 10),
                           TextField(
-                            decoration: InputDecoration(
+                            decoration: const InputDecoration(
                               labelText: 'Netmask',
                             ),
                             controller: _netmaskController,
@@ -487,7 +486,7 @@ class _InterfaceSettingsDialogState extends State<InterfaceSettingsDialog> {
                           ),
                           const SizedBox(height: 10),
                           TextField(
-                            decoration: InputDecoration(
+                            decoration: const InputDecoration(
                               labelText: 'Gateway',
                             ),
                             controller: _gatewayController,
@@ -495,7 +494,7 @@ class _InterfaceSettingsDialogState extends State<InterfaceSettingsDialog> {
                           ),
                           const SizedBox(height: 10),
                           TextField(
-                            decoration: InputDecoration(
+                            decoration: const InputDecoration(
                               labelText: 'DNS Servers (comma separated)',
                             ),
                             controller: _dnsController,
@@ -509,7 +508,7 @@ class _InterfaceSettingsDialogState extends State<InterfaceSettingsDialog> {
                           children: [
                             ElevatedButton(
                               onPressed: () => Navigator.pop(context),
-                              child: Text(
+                              child: const Text(
                                 'Cancel',
                               ),
                             ),
