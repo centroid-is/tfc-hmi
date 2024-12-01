@@ -421,6 +421,8 @@ class _InterfaceSettingsDialogState extends State<InterfaceSettingsDialog> {
 
   @override
   Widget build(BuildContext context) {
+    // Todo hot reload any external changes
+    // _loadConnectionSettings();
     return Dialog(
       insetPadding: const EdgeInsets.all(16.0),
       child: _isLoading
