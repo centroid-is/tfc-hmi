@@ -1,5 +1,5 @@
 {
-description = "Flutter 3.22.x";
+description = "Bleeding edge Flutter version supporting native assets";
 inputs = {
   nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
   flake-utils.url = "github:numtide/flake-utils";
