@@ -1,10 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:beamer/beamer.dart';
+import 'package:dbus/dbus.dart';
 import 'package:tfc_hmi/theme.dart';
 import 'package:tfc_hmi/route_registry.dart';
 import 'package:tfc_hmi/models/menu_item.dart';
 import 'package:tfc_hmi/transition_delegate.dart';
-import 'package:tfc_hmi/pages/connections.dart';
+import 'package:tfc_hmi/pages/ipc_connections.dart';
 import 'package:tfc_hmi/pages/ip_settings.dart';
 import 'package:tfc_hmi/pages/not_found.dart';
 import 'package:tfc_hmi/pages/viewtheme.dart';
@@ -70,10 +71,18 @@ void main() {
     icon: Icons.tune,
   ));
 
-  runApp(ChangeNotifierProvider(
-    create: (_) => ThemeNotifier(),
-    child: MyApp(),
-  ));
+  runApp(
+    MultiProvider(
+      providers: [
+        ChangeNotifierProvider(create: (_) => ThemeNotifier()),
+        Provider<DBusClient>(
+          create: (_) => DBusClient.system(),
+          dispose: (_, client) => client.close(),
+        ),
+      ],
+      child: MyApp(),
+    ),
+  );
 }
 
 // todo this is a bit of duplication
@@ -96,7 +105,7 @@ final simpleLocationBuilder = RoutesLocationBuilder(routes: {
   '/settings/core/connections': (context, state, args) => BeamPage(
         key: const ValueKey('/settings/core/connections'),
         title: 'Connections',
-        child: ConnectionPage(),
+        child: ConnectionsPage(dbusClient: context.read<DBusClient>()),
       ),
   '/settings/core/ip': (context, state, args) => const BeamPage(
         key: ValueKey('/settings/core/ip'),
