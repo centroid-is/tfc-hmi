@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:dbus/dbus.dart';
-import 'package:beamer/beamer.dart';
 import '../widgets/base_scaffold.dart';
+import 'config_edit.dart';
 
 class ConfigListPage extends StatefulWidget {
   final DBusClient dbusClient;
@@ -60,23 +60,22 @@ class _ConfigListPageState extends State<ConfigListPage> {
         }
 
         try {
-          // We do a top-level introspection to see if we can find subpaths.
-          // NOTE: In many real systems, you might need to introspect multiple subpaths.
           final result = await widget.dbusClient.callMethod(
-              destination: serviceName,
-              path: DBusObjectPath('/'),
-              interface: 'org.freedesktop.DBus.Introspectable',
-              name: 'Introspect',
-              replySignature: DBusSignature('s'));
-          // Parse the introspection XML into a node
+            destination: serviceName,
+            path: DBusObjectPath('/'),
+            interface: 'org.freedesktop.DBus.Introspectable',
+            name: 'Introspect',
+            replySignature: DBusSignature('s'),
+          );
           final node =
               parseDBusIntrospectXml(result.returnValues.first.asString());
-          // Recursively scan for subnodes that have the interface "is.centroid.Config"
           found.addAll(await _scanNodeForConfigInterfaces(
-              serviceName, DBusObjectPath('/'), node));
-        } catch (e) {
+            serviceName,
+            DBusObjectPath('/'),
+            node,
+          ));
+        } catch (_) {
           // Not all services can be introspected at "/"; skip or handle
-          continue;
         }
       }
 
@@ -92,8 +91,6 @@ class _ConfigListPageState extends State<ConfigListPage> {
     }
   }
 
-  /// Recursively look at a node’s interfaces; if it has "is.centroid.Config", add it.
-  /// Then also look at child nodes for the same interface.
   Future<List<_ConfigInterfaceInfo>> _scanNodeForConfigInterfaces(
     String serviceName,
     DBusObjectPath path,
@@ -104,8 +101,8 @@ class _ConfigListPageState extends State<ConfigListPage> {
     // If any interface matches "is.centroid.Config", add
     for (final iface in node.interfaces) {
       if (iface.name == 'is.centroid.Config') {
-        matches.add(_ConfigInterfaceInfo(serviceName, path.toString()));
-        break; // Found the interface on this path, no need to add duplicates
+        matches.add(_ConfigInterfaceInfo(serviceName, path.value));
+        break;
       }
     }
 
@@ -116,21 +113,21 @@ class _ConfigListPageState extends State<ConfigListPage> {
           : '${path.value}/${subnode.name}';
       try {
         final result = await widget.dbusClient.callMethod(
-            destination: serviceName,
-            path: DBusObjectPath(childPath),
-            interface: 'org.freedesktop.DBus.Introspectable',
-            name: 'Introspect',
-            replySignature: DBusSignature('s'));
-        final childIntrospection =
+          destination: serviceName,
+          path: DBusObjectPath(childPath),
+          interface: 'org.freedesktop.DBus.Introspectable',
+          name: 'Introspect',
+          replySignature: DBusSignature('s'),
+        );
+        final childNode =
             parseDBusIntrospectXml(result.returnValues.first.asString());
-        final childMatches = await _scanNodeForConfigInterfaces(
+        matches.addAll(await _scanNodeForConfigInterfaces(
           serviceName,
           DBusObjectPath(childPath),
-          childIntrospection,
-        );
-        matches.addAll(childMatches);
+          childNode,
+        ));
       } catch (_) {
-        // Could fail introspection on some child path; skip
+        // Could fail on some child path; skip
       }
     }
 
@@ -155,15 +152,15 @@ class _ConfigListPageState extends State<ConfigListPage> {
                           title:
                               Text('${info.serviceName} - ${info.objectPath}'),
                           onTap: () {
-                            // Navigate to config page via Beamer
-                            final encodedServiceName =
-                                Uri.encodeComponent(info.serviceName);
-                            final encodedPath =
-                                Uri.encodeComponent(info.objectPath);
-
-                            /// Example route: /system/configs/:serviceName/:objectPath
-                            Beamer.of(context).beamToNamed(
-                              '/system/configs/$encodedServiceName/$encodedPath',
+                            // Instead of beaming, open a dialog
+                            showDialog(
+                              context: context,
+                              barrierDismissible: false, // Force user to choose
+                              builder: (_) => ConfigEditDialog(
+                                dbusClient: widget.dbusClient,
+                                serviceName: info.serviceName,
+                                objectPath: info.objectPath,
+                              ),
                             );
                           },
                         );

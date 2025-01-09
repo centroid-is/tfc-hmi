@@ -3,12 +3,13 @@ import 'package:flutter/material.dart';
 import 'package:dbus/dbus.dart';
 import '../dbus/config.dart';
 
-class ConfigEditPage extends StatefulWidget {
+/// Dialog-based config editor that handles JSON schema with anyOf/oneOf, references, etc.
+class ConfigEditDialog extends StatefulWidget {
   final DBusClient dbusClient;
   final String serviceName;
   final String objectPath;
 
-  const ConfigEditPage({
+  const ConfigEditDialog({
     Key? key,
     required this.dbusClient,
     required this.serviceName,
@@ -16,18 +17,21 @@ class ConfigEditPage extends StatefulWidget {
   }) : super(key: key);
 
   @override
-  State<ConfigEditPage> createState() => _ConfigEditPageState();
+  State<ConfigEditDialog> createState() => _ConfigEditDialogState();
 }
 
-class _ConfigEditPageState extends State<ConfigEditPage> {
+class _ConfigEditDialogState extends State<ConfigEditDialog> {
   ConfigClient? _configClient;
   bool _isLoading = true;
   String _errorMessage = '';
 
+  /// The root schema for this config
   Map<String, dynamic>? _schema;
-  Map<String, dynamic> _configData = {};
 
-  // We might keep a global form key for validation, if desired
+  /// The current data (JSON) we are editing
+  dynamic _configData;
+
+  /// Form key for validation
   final _formKey = GlobalKey<FormState>();
 
   @override
@@ -50,6 +54,7 @@ class _ConfigEditPageState extends State<ConfigEditPage> {
         widget.serviceName,
       );
       _configClient = client;
+
       final schemaStr = await client.getSchema();
       final config = await client.getValueAsJson();
 
@@ -61,6 +66,7 @@ class _ConfigEditPageState extends State<ConfigEditPage> {
     } catch (e) {
       setState(() {
         _errorMessage = 'Failed to initialize config: $e';
+        print('Error: $e');
         _isLoading = false;
       });
     }
@@ -68,14 +74,13 @@ class _ConfigEditPageState extends State<ConfigEditPage> {
 
   Future<void> _saveConfig() async {
     if (_configClient == null) return;
-    // Optionally validate form if using Form widgets
     if (!_formKey.currentState!.validate()) {
-      // If validation fails, do not proceed
       return;
     }
     try {
       await _configClient!.setValueFromJson(_configData);
       if (mounted) {
+        Navigator.of(context).pop(); // close the dialog
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Config saved successfully!')),
         );
@@ -89,83 +94,129 @@ class _ConfigEditPageState extends State<ConfigEditPage> {
     }
   }
 
+  void _cancel() {
+    Navigator.of(context).pop(); // close dialog without saving
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_isLoading) {
-      return Scaffold(
-        appBar: AppBar(title: const Text('Loading Config...')),
-        body: const Center(child: CircularProgressIndicator()),
+      return AlertDialog(
+        title: const Text('Loading Config...'),
+        content: const SizedBox(
+          width: 200,
+          height: 100,
+          child: Center(child: CircularProgressIndicator()),
+        ),
+        actions: [
+          TextButton(
+            onPressed: _cancel,
+            child: const Text('Cancel'),
+          ),
+        ],
       );
     }
 
     if (_errorMessage.isNotEmpty) {
-      return Scaffold(
-        appBar: AppBar(title: const Text('Error')),
-        body: Center(child: Text(_errorMessage)),
+      return AlertDialog(
+        title: const Text('Error'),
+        content: Text(_errorMessage),
+        actions: [
+          TextButton(
+            onPressed: _cancel,
+            child: const Text('Close'),
+          )
+        ],
       );
     }
 
     if (_schema == null) {
-      return Scaffold(
-        appBar: AppBar(title: const Text('No Schema')),
-        body: const Center(child: Text('Schema not found or invalid.')),
+      return AlertDialog(
+        title: const Text('No Schema'),
+        content: const Text('Schema not found or invalid.'),
+        actions: [
+          TextButton(
+            onPressed: _cancel,
+            child: const Text('Close'),
+          )
+        ],
       );
     }
 
-    return Scaffold(
-      appBar: AppBar(title: const Text('Configuration Editor')),
-      body: Form(
+    // Normal case: show the dynamic form with Save & Cancel
+    return AlertDialog(
+      title: const Text('Configuration Editor'),
+      content: Form(
         key: _formKey,
         child: SingleChildScrollView(
-          padding: const EdgeInsets.all(16),
-          child: _buildSchemaForm(_schema!, _configData, (updated) {
-            setState(() {
-              // Root-level update
-              _configData = updated;
-            });
-          }),
+          // Optionally give some width/height constraints
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(
+              maxWidth: 500,
+              maxHeight: 600,
+            ),
+            child: _buildSchemaForm(_schema!, _configData, (updated) {
+              setState(() {
+                _configData = updated;
+              });
+            }),
+          ),
         ),
       ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _saveConfig,
-        child: const Icon(Icons.save),
-      ),
+      actions: [
+        TextButton(
+          onPressed: _cancel,
+          child: const Text('Cancel'),
+        ),
+        ElevatedButton(
+          onPressed: _saveConfig,
+          child: const Text('Save'),
+        ),
+      ],
     );
   }
 
-  // =========== SCHEMA FORM BUILDING ===========
+  // ===========================================================================
+  //                         SCHEMA FORM BUILDING (same logic)
+  // ===========================================================================
 
-  /// Entry point for building the entire form from the root schema object
   Widget _buildSchemaForm(
     Map<String, dynamic> schema,
-    Map<String, dynamic> data,
-    ValueChanged<Map<String, dynamic>> onChanged,
+    dynamic data,
+    ValueChanged<dynamic> onChanged,
   ) {
-    if (schema['type'] == 'object') {
-      return _buildObjectForm(schema, data, onChanged);
+    final type = _resolveType(schema);
+    if (type == 'object') {
+      if (data is! Map<String, dynamic>) {
+        data = <String, dynamic>{};
+      }
+      return _buildObjectForm(schema, data as Map<String, dynamic>, onChanged);
+    } else if (type == 'array') {
+      if (data is! List) {
+        data = <dynamic>[];
+      }
+      return _buildArrayField('root', schema, data as List, false, onChanged);
     } else {
-      return const Text('Root schema must be an object for this example.');
+      return Text('Root schema must be an object or array (found "$type").');
     }
   }
 
-  /// Build a form for an object schema (which has "properties").
   Widget _buildObjectForm(
     Map<String, dynamic> schema,
     Map<String, dynamic> data,
-    ValueChanged<Map<String, dynamic>> onChanged,
+    ValueChanged<dynamic> onChanged,
   ) {
-    final properties = schema['properties'] as Map<String, dynamic>? ?? {};
+    final props = schema['properties'] as Map<String, dynamic>? ?? {};
     final requiredFields =
         (schema['required'] as List<dynamic>? ?? []).cast<String>();
 
-    // For each property, build an appropriate widget
-    final fields = <Widget>[];
-    properties.forEach((propName, propSchemaRaw) {
-      final propSchema = propSchemaRaw as Map<String, dynamic>;
+    final children = <Widget>[];
+    props.forEach((propName, propSchemaRaw) {
+      final propSchema = _resolveRef(propSchemaRaw as Map<String, dynamic>);
       final value = data[propName];
       final isRequired = requiredFields.contains(propName);
 
-      fields.add(
+      children.add(
         _buildPropertyField(
           propName,
           propSchema,
@@ -181,11 +232,10 @@ class _ConfigEditPageState extends State<ConfigEditPage> {
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
-      children: fields,
+      children: children,
     );
   }
 
-  /// Decides how to build a specific property field, based on schema type, etc.
   Widget _buildPropertyField(
     String fieldName,
     Map<String, dynamic> schema,
@@ -193,64 +243,222 @@ class _ConfigEditPageState extends State<ConfigEditPage> {
     required bool isRequired,
     required ValueChanged<dynamic> onChanged,
   }) {
-    final readOnly = schema['readOnly'] == true;
-    final fieldType = schema['type'];
+    if (schema.containsKey('oneOf')) {
+      final oneOfList = schema['oneOf'] as List<dynamic>;
+      return _buildOneOfField(
+          fieldName, oneOfList, value, schema, isRequired, onChanged);
+    }
+    if (schema.containsKey('anyOf')) {
+      final anyOfList = schema['anyOf'] as List<dynamic>;
+      return _buildAnyOfField(
+          fieldName, anyOfList, value, schema, isRequired, onChanged);
+    }
+    return _buildTypedField(fieldName, schema, value, isRequired, onChanged);
+  }
 
-    // Handle multiple types if it's an array of possible types
-    if (fieldType is List) {
-      // For simplicity, pick the first or handle logic here
-      // This is a simplified approach (real logic might require "anyOf"/"oneOf").
-      return Text('$fieldName: multiple types not fully supported yet');
+  // --------------------------- oneOf Handling ---------------------------
+  Widget _buildOneOfField(
+    String fieldName,
+    List<dynamic> oneOfList,
+    dynamic value,
+    Map<String, dynamic> parentSchema,
+    bool isRequired,
+    ValueChanged<dynamic> onChanged,
+  ) {
+    // Resolve sub-schemas
+    final subSchemas = <Map<String, dynamic>>[];
+    for (var sub in oneOfList) {
+      if (sub is Map<String, dynamic>) {
+        subSchemas.add(_resolveRef(sub));
+      }
     }
 
-    switch (fieldType) {
+    final index = _determineOneOfIndex(subSchemas, value);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('$fieldName (oneOf)',
+            style: const TextStyle(fontWeight: FontWeight.bold)),
+        _buildOneOfSelector(
+          fieldName: fieldName,
+          subSchemas: subSchemas,
+          activeIndex: index,
+          onPick: (newIndex) {
+            final newSub = subSchemas[newIndex];
+            final newVal = _createDefaultValueForSchema(newSub);
+            onChanged(newVal);
+          },
+        ),
+        if (index >= 0 && index < subSchemas.length)
+          Padding(
+            padding: const EdgeInsets.only(left: 16.0),
+            child: _buildTypedField(
+                fieldName, subSchemas[index], value, isRequired, onChanged),
+          )
+      ],
+    );
+  }
+
+  Widget _buildOneOfSelector({
+    required String fieldName,
+    required List<Map<String, dynamic>> subSchemas,
+    required int activeIndex,
+    required ValueChanged<int> onPick,
+  }) {
+    return DropdownButton<int>(
+      value: activeIndex >= 0 ? activeIndex : null,
+      hint: Text('Pick sub-schema for $fieldName'),
+      items: List.generate(subSchemas.length, (i) {
+        final desc = subSchemas[i]['description']?.toString() ?? 'OneOf #$i';
+        return DropdownMenuItem<int>(
+          value: i,
+          child: Text(desc),
+        );
+      }),
+      onChanged: (val) {
+        if (val != null) onPick(val);
+      },
+    );
+  }
+
+  int _determineOneOfIndex(List<Map<String, dynamic>> subs, dynamic value) {
+    if (value is Map) {
+      // naive approach
+      for (int i = 0; i < subs.length; i++) {
+        if (subs[i]['properties'] is Map) {
+          final keys = (subs[i]['properties'] as Map).keys;
+          if (keys.any(value.containsKey)) return i;
+        }
+      }
+    } else if (value == null) {
+      // see if there's a "null" type
+      for (int i = 0; i < subs.length; i++) {
+        if (_resolveType(subs[i]) == 'null') return i;
+      }
+    }
+    return 0;
+  }
+
+  // --------------------------- anyOf Handling ---------------------------
+  Widget _buildAnyOfField(
+    String fieldName,
+    List<dynamic> anyOfList,
+    dynamic value,
+    Map<String, dynamic> parentSchema,
+    bool isRequired,
+    ValueChanged<dynamic> onChanged,
+  ) {
+    final subSchemas = <Map<String, dynamic>>[];
+    for (var sub in anyOfList) {
+      if (sub is Map<String, dynamic>) {
+        subSchemas.add(_resolveRef(sub));
+      }
+    }
+
+    // find which sub-schemas match, naive approach
+    final matches = _determineAnyOfMatches(subSchemas, value);
+
+    // pick an active index from matches or 0
+    final idx = matches.isEmpty ? 0 : matches.first;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('$fieldName (anyOf)',
+            style: const TextStyle(fontWeight: FontWeight.bold)),
+        if (subSchemas.length > 1)
+          DropdownButton<int>(
+            value: idx,
+            items: List.generate(subSchemas.length, (i) {
+              final desc =
+                  subSchemas[i]['description']?.toString() ?? 'AnyOf #$i';
+              return DropdownMenuItem<int>(
+                value: i,
+                child: Text(desc),
+              );
+            }),
+            onChanged: (val) {
+              if (val != null) {
+                final newSchema = subSchemas[val];
+                final newVal = _createDefaultValueForSchema(newSchema);
+                onChanged(newVal);
+              }
+            },
+          ),
+        Padding(
+          padding: const EdgeInsets.only(left: 16.0),
+          child: _buildTypedField(
+              fieldName, subSchemas[idx], value, isRequired, onChanged),
+        ),
+      ],
+    );
+  }
+
+  List<int> _determineAnyOfMatches(
+      List<Map<String, dynamic>> subs, dynamic value) {
+    final matches = <int>[];
+    for (int i = 0; i < subs.length; i++) {
+      final t = _resolveType(subs[i]);
+      if (t == 'object' && value is Map) {
+        matches.add(i);
+      } else if (t == 'array' && value is List) {
+        matches.add(i);
+      } else if (t == 'string' && value is String) {
+        matches.add(i);
+      } else if ((t == 'integer' || t == 'number') && value is num) {
+        matches.add(i);
+      } else if (t == 'boolean' && value is bool) {
+        matches.add(i);
+      } else if (t == 'null' && value == null) {
+        matches.add(i);
+      }
+    }
+    return matches;
+  }
+
+  // ------------------ Build typed field from a single type ------------------
+  Widget _buildTypedField(
+    String fieldName,
+    Map<String, dynamic> schema,
+    dynamic value,
+    bool isRequired,
+    ValueChanged<dynamic> onChanged,
+  ) {
+    final type = _resolveType(schema);
+    final readOnly = schema['readOnly'] == true;
+
+    switch (type) {
       case 'object':
-        // Nested object
         if (value is! Map<String, dynamic>) value = <String, dynamic>{};
         return ExpansionTile(
           title: Text(fieldName),
-          subtitle: Text(schema['description']?.toString() ?? '',
-              maxLines: 1, overflow: TextOverflow.ellipsis),
+          subtitle: Text(schema['description']?.toString() ?? ''),
           children: [
             Padding(
-              padding: const EdgeInsets.only(left: 16),
-              child: _buildObjectForm(
-                  schema, value, (newMap) => onChanged(newMap)),
+              padding: const EdgeInsets.only(left: 16.0),
+              child: _buildObjectForm(schema, value, onChanged),
             ),
           ],
         );
-
       case 'array':
-        // Array of items
         if (value is! List) value = <dynamic>[];
         return _buildArrayField(fieldName, schema, value, readOnly, onChanged);
-
       case 'string':
         return _buildStringField(
             fieldName, schema, value, isRequired, readOnly, onChanged);
-
       case 'boolean':
         return _buildBooleanField(
             fieldName, schema, value, readOnly, onChanged);
-
       case 'number':
       case 'integer':
-        return _buildNumberField(fieldName, schema, value, fieldType,
-            isRequired, readOnly, onChanged);
-
+        return _buildNumberField(
+            fieldName, schema, value, type, isRequired, readOnly, onChanged);
       case 'null':
-        // Rare; if your schema explicitly sets "type": "null" – basically read-only
-        return ListTile(
-          title: Text(fieldName),
-          subtitle: const Text('Value is null'),
-        );
-
+        return ListTile(title: Text(fieldName), subtitle: const Text('(null)'));
       default:
-        return Text('$fieldName: Unsupported type "$fieldType"');
+        return Text('$fieldName: Unsupported type "$type"');
     }
   }
-
-  // =========== ARRAY FIELD ===========
 
   Widget _buildArrayField(
     String fieldName,
@@ -262,7 +470,12 @@ class _ConfigEditPageState extends State<ConfigEditPage> {
     final minItems = schema['minItems'] as int? ?? 0;
     final maxItems = schema['maxItems'] as int?;
     final uniqueItems = schema['uniqueItems'] == true;
-    final itemsSchema = schema['items'] as Map<String, dynamic>?;
+
+    final itemsSchemaRaw = schema['items'];
+    Map<String, dynamic>? itemsSchema;
+    if (itemsSchemaRaw is Map<String, dynamic>) {
+      itemsSchema = _resolveRef(itemsSchemaRaw);
+    }
 
     Widget buildItem(int index, dynamic itemValue) {
       if (itemsSchema == null) {
@@ -280,35 +493,31 @@ class _ConfigEditPageState extends State<ConfigEditPage> {
       );
     }
 
-    // Validate uniqueness if `uniqueItems == true`
-    void _ensureUniqueItems() {
+    void ensureUnique() {
       if (uniqueItems) {
-        final unique = <dynamic>{};
+        final setVals = <dynamic>{};
         final duplicates = <int>[];
         for (int i = 0; i < value.length; i++) {
-          if (!unique.add(value[i])) {
-            duplicates.add(i);
-          }
+          if (!setVals.add(value[i])) duplicates.add(i);
         }
-        // Remove duplicates from the end so indexes remain stable
-        for (final dupIndex in duplicates.reversed) {
-          value.removeAt(dupIndex);
+        for (final idx in duplicates.reversed) {
+          value.removeAt(idx);
         }
       }
     }
 
-    _ensureUniqueItems();
+    ensureUnique();
 
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8.0),
+      padding: const EdgeInsets.symmetric(vertical: 8),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(fieldName, style: const TextStyle(fontWeight: FontWeight.bold)),
-          const SizedBox(height: 8),
+          const SizedBox(height: 6),
           for (int i = 0; i < value.length; i++)
             Card(
-              margin: const EdgeInsets.symmetric(vertical: 4),
+              margin: const EdgeInsets.symmetric(vertical: 2),
               child: Row(
                 children: [
                   Expanded(child: buildItem(i, value[i])),
@@ -323,36 +532,17 @@ class _ConfigEditPageState extends State<ConfigEditPage> {
                           onChanged(value);
                         }
                       },
-                    )
+                    ),
                 ],
               ),
             ),
           if (!readOnly && (maxItems == null || value.length < maxItems))
-            ElevatedButton.icon(
+            TextButton.icon(
               onPressed: () {
-                // We attempt to create a default item
-                dynamic newItem;
-                if (itemsSchema?['default'] != null) {
-                  newItem = itemsSchema!['default'];
-                } else {
-                  // type-based default
-                  final t = itemsSchema?['type'];
-                  if (t == 'string')
-                    newItem = '';
-                  else if (t == 'number' || t == 'integer')
-                    newItem = 0;
-                  else if (t == 'boolean')
-                    newItem = false;
-                  else if (t == 'object')
-                    newItem = <String, dynamic>{};
-                  else if (t == 'array')
-                    newItem = <dynamic>[];
-                  else
-                    newItem = null;
-                }
+                final newItem = _createDefaultValueForSchema(itemsSchema);
                 setState(() {
                   value.add(newItem);
-                  _ensureUniqueItems();
+                  ensureUnique();
                 });
                 onChanged(value);
               },
@@ -363,8 +553,6 @@ class _ConfigEditPageState extends State<ConfigEditPage> {
       ),
     );
   }
-
-  // =========== STRING FIELD ===========
 
   Widget _buildStringField(
     String fieldName,
@@ -382,29 +570,22 @@ class _ConfigEditPageState extends State<ConfigEditPage> {
 
     final description = schema['description']?.toString() ?? '';
 
-    // If the field is an enum, we might use a dropdown
+    // enum as dropdown
     if (enumList != null && enumList.isNotEmpty) {
-      // Ensure that the current value is in the enum; if not, pick the first
       if (!enumList.contains(value)) {
         value = enumList.first;
         onChanged(value);
       }
       return Padding(
-        padding: const EdgeInsets.symmetric(vertical: 8.0),
+        padding: const EdgeInsets.symmetric(vertical: 8),
         child: DropdownButtonFormField<String>(
           value: value as String?,
-          decoration: InputDecoration(
-            labelText: fieldName,
-            hintText: description,
-          ),
-          items: enumList.map((e) {
-            return DropdownMenuItem<String>(value: e, child: Text(e));
-          }).toList(),
-          onChanged: readOnly
-              ? null
-              : (newVal) {
-                  onChanged(newVal);
-                },
+          decoration:
+              InputDecoration(labelText: fieldName, hintText: description),
+          items: enumList
+              .map((e) => DropdownMenuItem(child: Text(e), value: e))
+              .toList(),
+          onChanged: readOnly ? null : (val) => onChanged(val),
           validator: (val) {
             if (isRequired && (val == null || val.isEmpty)) {
               return '$fieldName is required';
@@ -415,42 +596,38 @@ class _ConfigEditPageState extends State<ConfigEditPage> {
       );
     }
 
-    // Otherwise, treat it as a free text input
+    // normal text field
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8.0),
+      padding: const EdgeInsets.symmetric(vertical: 8),
       child: TextFormField(
         controller: controller,
         enabled: !readOnly,
         maxLength: maxLength,
-        decoration: InputDecoration(
-          labelText: fieldName,
-          hintText: description,
-        ),
+        decoration:
+            InputDecoration(labelText: fieldName, hintText: description),
         validator: (text) {
-          final length = text?.length ?? 0;
           if (isRequired && (text == null || text.isEmpty)) {
             return '$fieldName is required';
           }
+          final length = text?.length ?? 0;
           if (length < minLength) {
             return 'Minimum length is $minLength';
           }
           if (maxLength != null && length > maxLength) {
             return 'Maximum length is $maxLength';
           }
-          if (pattern != null) {
+          if (pattern != null && text != null) {
             final regExp = RegExp(pattern);
-            if (!regExp.hasMatch(text!)) {
+            if (!regExp.hasMatch(text)) {
               return 'Does not match pattern "$pattern"';
             }
           }
           return null;
         },
-        onChanged: (newVal) => onChanged(newVal),
+        onChanged: (val) => onChanged(val),
       ),
     );
   }
-
-  // =========== BOOLEAN FIELD ===========
 
   Widget _buildBooleanField(
     String fieldName,
@@ -462,113 +639,155 @@ class _ConfigEditPageState extends State<ConfigEditPage> {
     final boolVal = value == true;
     final description = schema['description']?.toString() ?? '';
 
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8.0),
-      child: Row(
-        children: [
-          Expanded(
-            child: Text(
-              '$fieldName${description.isNotEmpty ? ' ($description)' : ''}',
-            ),
+    return Row(
+      children: [
+        Expanded(
+          child: Text(
+            '$fieldName${description.isNotEmpty ? ' ($description)' : ''}',
           ),
-          Switch(
-            value: boolVal,
-            onChanged: readOnly ? null : (val) => onChanged(val),
-          ),
-        ],
-      ),
+        ),
+        Switch(
+          value: boolVal,
+          onChanged: readOnly ? null : (val) => onChanged(val),
+        ),
+      ],
     );
   }
-
-  // =========== NUMBER / INTEGER FIELD ===========
 
   Widget _buildNumberField(
     String fieldName,
     Map<String, dynamic> schema,
     dynamic value,
-    String fieldType, // 'number' or 'integer'
+    String fieldType,
     bool isRequired,
     bool readOnly,
     ValueChanged<dynamic> onChanged,
   ) {
     final controller = TextEditingController(text: value?.toString() ?? '');
-    final minimum = schema['minimum'] as num?;
-    final maximum = schema['maximum'] as num?;
-    final exclusiveMin = schema['exclusiveMinimum'] == true;
-    final exclusiveMax = schema['exclusiveMaximum'] == true;
-    final multipleOf = schema['multipleOf'] as num?;
     final description = schema['description']?.toString() ?? '';
 
+    final minimum = schema['minimum'];
+    final maximum = schema['maximum'];
+    final exclusiveMin = schema['exclusiveMinimum'] == true;
+    final exclusiveMax = schema['exclusiveMaximum'] == true;
+    final multipleOf = schema['multipleOf'];
+
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8.0),
+      padding: const EdgeInsets.symmetric(vertical: 8),
       child: TextFormField(
         controller: controller,
         enabled: !readOnly,
         keyboardType: TextInputType.number,
-        decoration: InputDecoration(
-          labelText: fieldName,
-          hintText: description,
-        ),
+        decoration:
+            InputDecoration(labelText: fieldName, hintText: description),
         validator: (text) {
           if (isRequired && (text == null || text.isEmpty)) {
             return '$fieldName is required';
           }
           if (text == null || text.isEmpty) {
-            return null; // not required or blank is okay if not required
+            return null;
           }
 
-          final parsed = (fieldType == 'integer')
-              ? int.tryParse(text)
-              : double.tryParse(text);
-          if (parsed == null) {
-            return 'Invalid $fieldType';
+          num? parsed;
+          if (fieldType == 'integer') {
+            parsed = int.tryParse(text);
+            if (parsed == null) return 'Invalid integer';
+          } else {
+            parsed = double.tryParse(text);
+            if (parsed == null) return 'Invalid number';
           }
 
-          if (minimum != null) {
-            if (exclusiveMin) {
-              if (parsed <= minimum) {
-                return 'Value must be > $minimum';
-              }
-            } else {
-              if (parsed < minimum) {
-                return 'Value must be >= $minimum';
-              }
+          if (minimum is num) {
+            if (exclusiveMin && parsed <= minimum) {
+              return 'Value must be > $minimum';
+            } else if (!exclusiveMin && parsed < minimum) {
+              return 'Value must be >= $minimum';
             }
           }
-
-          if (maximum != null) {
-            if (exclusiveMax) {
-              if (parsed >= maximum) {
-                return 'Value must be < $maximum';
-              }
-            } else {
-              if (parsed > maximum) {
-                return 'Value must be <= $maximum';
-              }
+          if (maximum is num) {
+            if (exclusiveMax && parsed >= maximum) {
+              return 'Value must be < $maximum';
+            } else if (!exclusiveMax && parsed > maximum) {
+              return 'Value must be <= $maximum';
             }
           }
-
-          if (multipleOf != null) {
-            // For floating usage, we might check with a tolerance
+          if (multipleOf is num) {
             final remainder = parsed % multipleOf;
-            // Because of floating precision, allow a small epsilon:
             if (remainder.abs() > 1e-10) {
-              return 'Value must be a multiple of $multipleOf';
+              return 'Value must be multiple of $multipleOf';
             }
           }
           return null;
         },
-        onChanged: (newVal) {
-          final parsed = (fieldType == 'integer')
-              ? int.tryParse(newVal)
-              : double.tryParse(newVal);
-          if (parsed != null) {
-            onChanged(parsed);
-          } else if (newVal.isEmpty) {
+        onChanged: (text) {
+          if (text.isEmpty) {
             onChanged(null);
+            return;
+          }
+          if (fieldType == 'integer') {
+            final p = int.tryParse(text);
+            onChanged(p ?? value);
+          } else {
+            final p = double.tryParse(text);
+            onChanged(p ?? value);
           }
         },
       ),
     );
+  }
+
+  // ===========================================================================
+  //                           $ref RESOLUTION
+  // ===========================================================================
+  Map<String, dynamic> _resolveRef(Map<String, dynamic> schema) {
+    if (schema.containsKey(r'$ref')) {
+      final refStr = schema[r'$ref'] as String;
+      if (refStr.startsWith('#/definitions/')) {
+        final key = refStr.substring('#/definitions/'.length);
+        final def = _schema?['definitions']?[key];
+        if (def is Map<String, dynamic>) {
+          // Merge definition with local schema
+          return {...def, ...schema}..remove(r'$ref');
+        }
+      }
+    }
+    return schema;
+  }
+
+  String _resolveType(Map<String, dynamic> schema) {
+    final rawType = schema['type'];
+    if (rawType is String) {
+      return rawType;
+    }
+    if (rawType is List && rawType.isNotEmpty) {
+      return rawType.first;
+    }
+    if (schema['properties'] != null) return 'object';
+    if (schema['items'] != null) return 'array';
+    return 'object';
+  }
+
+  dynamic _createDefaultValueForSchema(Map<String, dynamic>? schema) {
+    if (schema == null) return null;
+    final type = _resolveType(schema);
+    if (schema.containsKey('default')) return schema['default'];
+
+    switch (type) {
+      case 'object':
+        return <String, dynamic>{};
+      case 'array':
+        return <dynamic>[];
+      case 'string':
+        return '';
+      case 'boolean':
+        return false;
+      case 'integer':
+      case 'number':
+        return 0;
+      case 'null':
+        return null;
+      default:
+        return null;
+    }
   }
 }

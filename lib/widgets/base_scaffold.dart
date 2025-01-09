@@ -11,8 +11,14 @@ import 'package:provider/provider.dart';
 class BaseScaffold extends StatelessWidget {
   final Widget body;
   final String title;
+  final Widget? floatingActionButton;
 
-  const BaseScaffold({super.key, required this.body, required this.title});
+  const BaseScaffold({
+    super.key,
+    required this.body,
+    required this.title,
+    this.floatingActionButton,
+  });
 
   findTopLevelIndexForBeamer(MenuItem node, int? base, String path) {
     if (node.path != null) {
@@ -103,6 +109,7 @@ class BaseScaffold extends StatelessWidget {
         ),
       ),
       body: body,
+      floatingActionButton: floatingActionButton,
       bottomNavigationBar: NavigationBar(
         labelBehavior: labelBehavior,
         selectedIndex: findTopLevelIndexForBeamer(RouteRegistry().root, null,

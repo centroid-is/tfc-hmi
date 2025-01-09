@@ -41,7 +41,7 @@ class ConfigClient {
   }
 
   /// Get the config value as parsed JSON
-  Future<Map<String, dynamic>> getValueAsJson() async {
+  Future<dynamic> getValueAsJson() async {
     final value = await getValue();
     return json.decode(value);
   }
