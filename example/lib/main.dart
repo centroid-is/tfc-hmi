@@ -10,6 +10,8 @@ import 'package:tfc_hmi/pages/ip_settings.dart';
 import 'package:tfc_hmi/pages/not_found.dart';
 import 'package:tfc_hmi/pages/viewtheme.dart';
 import 'package:tfc_hmi/pages/system.dart';
+import 'package:tfc_hmi/pages/config_list.dart';
+import 'package:tfc_hmi/pages/config_edit.dart';
 import 'package:provider/provider.dart';
 import 'pages/pages.dart';
 
@@ -53,6 +55,11 @@ void main() {
             label: 'IP Settings',
             path: '/settings/core/ip',
             icon: Icons.network_cell_outlined,
+          ),
+          MenuItem(
+            label: 'Configs',
+            path: '/settings/core/configs',
+            icon: Icons.settings_outlined,
           ),
         ],
       ),
@@ -107,6 +114,27 @@ final simpleLocationBuilder = RoutesLocationBuilder(routes: {
         title: 'Connections',
         child: ConnectionsPage(dbusClient: context.read<DBusClient>()),
       ),
+  '/settings/core/configs': (context, state, data) => BeamPage(
+        key: const ValueKey('/settings/core/configs'),
+        title: 'All Configs',
+        child: ConfigListPage(
+          dbusClient: context.read<DBusClient>(),
+        ),
+      ),
+  '/settings/core/configs/:serviceName/:objectPath': (context, state, data) {
+    final serviceName =
+        Uri.decodeComponent(state.pathParameters['serviceName']!);
+    final objectPath = Uri.decodeComponent(state.pathParameters['objectPath']!);
+    return BeamPage(
+      key: ValueKey('/settings/core/configs/$serviceName/$objectPath'),
+      title: 'Config Editor',
+      child: ConfigEditPage(
+        dbusClient: context.read<DBusClient>(),
+        serviceName: serviceName,
+        objectPath: objectPath,
+      ),
+    );
+  },
   '/settings/core/ip': (context, state, args) => const BeamPage(
         key: ValueKey('/settings/core/ip'),
         title: 'IP Settings',
