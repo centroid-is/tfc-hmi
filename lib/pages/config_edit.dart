@@ -67,6 +67,7 @@ class _ConfigEditDialogState extends State<ConfigEditDialog> {
     } catch (e) {
       setState(() {
         _errorMessage = 'Failed to initialize config: $e';
+        print(_errorMessage);
         _isLoading = false;
       });
     }
@@ -87,6 +88,7 @@ class _ConfigEditDialogState extends State<ConfigEditDialog> {
       }
     } catch (err) {
       if (mounted) {
+        print('Failed to save config: $err');
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Failed to save config: $err')),
         );
@@ -281,6 +283,18 @@ class _ConfigEditDialogState extends State<ConfigEditDialog> {
 
     final activeIndex = _determineOneOfActiveIndex(resolvedSubSchemas, value);
 
+    // Preserve the structure when changing values
+    void wrappedOnChanged(dynamic newVal) {
+      if (value is List && value.isNotEmpty && value[0] is Map) {
+        final key = value[0].keys.first;
+        onChanged([
+          {key: newVal}
+        ]);
+      } else {
+        onChanged(newVal);
+      }
+    }
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -292,29 +306,15 @@ class _ConfigEditDialogState extends State<ConfigEditDialog> {
           items: List.generate(resolvedSubSchemas.length, (index) {
             final sub = resolvedSubSchemas[index];
             final subDesc = _guessSubSchemaLabel(sub, index);
-            return DropdownMenuItem<int>(
-              value: index,
-              child: Text(subDesc),
-            );
+            return DropdownMenuItem<int>(value: index, child: Text(subDesc));
           }),
           onChanged: (val) {
             if (val != null) {
               final newSchema = resolvedSubSchemas[val];
               final newValue = _createDefaultValueForSchema(newSchema);
-              if (value is List) {
-                final newList = List.from(value);
-                if (newList.isEmpty) {
-                  newList.add({});
-                }
-                newList[0] = {
-                  _guessSubSchemaLabel(resolvedSubSchemas[val], val): newValue
-                };
-                onChanged(newList);
-              } else {
-                onChanged([
-                  {_guessSubSchemaLabel(resolvedSubSchemas[val], val): newValue}
-                ]);
-              }
+              onChanged([
+                {_guessSubSchemaLabel(resolvedSubSchemas[val], val): newValue}
+              ]);
             }
           },
         ),
@@ -324,9 +324,11 @@ class _ConfigEditDialogState extends State<ConfigEditDialog> {
             child: _buildTypedField(
               fieldName,
               resolvedSubSchemas[activeIndex],
-              value,
+              value is List && value.isNotEmpty && value[0] is Map
+                  ? value[0].values.first
+                  : value,
               isRequired,
-              onChanged,
+              wrappedOnChanged,
             ),
           ),
       ],
@@ -334,18 +336,23 @@ class _ConfigEditDialogState extends State<ConfigEditDialog> {
   }
 
   String _guessSubSchemaLabel(Map<String, dynamic> subSchema, int index) {
-    if (subSchema['title'] is String) {
-      return subSchema['title'] as String;
-    }
-    // Try to get the type name from the schema
-    if (subSchema['type'] == 'object' && subSchema['properties'] != null) {
-      final properties = subSchema['properties'] as Map<String, dynamic>;
-      if (properties.isNotEmpty) {
-        return properties.values.first.toString();
+    // If it's a reference, resolve it first
+    final resolvedSchema = _resolveRef(subSchema);
+
+    // Look for the required property name in the schema
+    if (resolvedSchema['required'] is List) {
+      final required = resolvedSchema['required'] as List;
+      if (required.isNotEmpty) {
+        return required.first.toString();
       }
     }
-    // Otherwise fallback
-    return 'OneOf #$index';
+
+    // Fallback to title or index
+    if (resolvedSchema['title'] is String) {
+      return resolvedSchema['title'] as String;
+    }
+
+    return 'Option #$index';
   }
 
   int _determineOneOfActiveIndex(
@@ -443,35 +450,39 @@ class _ConfigEditDialogState extends State<ConfigEditDialog> {
     bool isRequired,
     ValueChanged<dynamic> onChanged,
   ) {
+    // Add wrapper to preserve the object structure for oneOf fields
+    void wrappedOnChanged(dynamic newVal) {
+      if (value is Map && value.containsKey(fieldName)) {
+        final updatedValue = Map<String, dynamic>.from(value);
+        updatedValue[fieldName] = newVal;
+        onChanged(updatedValue);
+      } else {
+        onChanged(newVal);
+      }
+    }
+
     final type = _resolveType(schema);
     final readOnly = schema['readOnly'] == true;
 
     switch (type) {
       case 'object':
         if (value is! Map<String, dynamic>) value = <String, dynamic>{};
-        return ExpansionTile(
-          title: Text(fieldName),
-          subtitle: Text(schema['description']?.toString() ?? ''),
-          children: [
-            Padding(
-              padding: const EdgeInsets.only(left: 16.0),
-              child: _buildObjectForm(schema, value, onChanged),
-            ),
-          ],
-        );
+        // Skip the expansion tile for objects, directly show properties
+        return _buildObjectForm(schema, value, wrappedOnChanged);
       case 'array':
         if (value is! List) value = <dynamic>[];
-        return _buildArrayField(fieldName, schema, value, readOnly, onChanged);
+        return _buildArrayField(
+            fieldName, schema, value, readOnly, wrappedOnChanged);
       case 'string':
         return _buildStringField(
-            fieldName, schema, value, isRequired, readOnly, onChanged);
+            fieldName, schema, value, isRequired, readOnly, wrappedOnChanged);
       case 'boolean':
         return _buildBooleanField(
-            fieldName, schema, value, readOnly, onChanged);
+            fieldName, schema, value, readOnly, wrappedOnChanged);
       case 'number':
       case 'integer':
-        return _buildNumberField(
-            fieldName, schema, value, type, isRequired, readOnly, onChanged);
+        return _buildNumberField(fieldName, schema, value, type, isRequired,
+            readOnly, wrappedOnChanged);
       case 'null':
         return ListTile(title: Text(fieldName), subtitle: const Text('(null)'));
       default:
@@ -488,88 +499,60 @@ class _ConfigEditDialogState extends State<ConfigEditDialog> {
   ) {
     final minItems = schema['minItems'] as int? ?? 0;
     final maxItems = schema['maxItems'] as int?;
-    final uniqueItems = schema['uniqueItems'] == true;
-
-    final itemsSchemaRaw = schema['items'];
-    Map<String, dynamic>? itemsSchema;
-    if (itemsSchemaRaw is Map<String, dynamic>) {
-      itemsSchema = _resolveRef(itemsSchemaRaw);
-    }
+    final itemsSchema =
+        _resolveRef(schema['items'] as Map<String, dynamic>? ?? {});
 
     Widget buildItem(int index, dynamic itemValue) {
-      if (itemsSchema == null) {
-        return Text('$fieldName[$index]: no "items" schema');
-      }
-      return _buildPropertyField(
-        '$fieldName[$index]',
-        itemsSchema,
-        itemValue,
-        isRequired: false,
-        onChanged: (newVal) {
-          value[index] = newVal;
-          onChanged(value);
-        },
+      return Card(
+        margin: const EdgeInsets.symmetric(vertical: 2),
+        child: Row(
+          children: [
+            Expanded(
+              child: _buildPropertyField(
+                '', // Remove the index label
+                itemsSchema,
+                itemValue,
+                isRequired: false,
+                onChanged: (newVal) {
+                  value[index] = newVal;
+                  onChanged(value);
+                },
+              ),
+            ),
+            if (!readOnly)
+              IconButton(
+                icon: const Icon(Icons.delete),
+                onPressed: () {
+                  if (value.length > minItems) {
+                    setState(() {
+                      value.removeAt(index);
+                    });
+                    onChanged(value);
+                  }
+                },
+              ),
+          ],
+        ),
       );
     }
 
-    void ensureUnique() {
-      if (uniqueItems) {
-        final setVals = <dynamic>{};
-        final duplicates = <int>[];
-        for (int i = 0; i < value.length; i++) {
-          if (!setVals.add(value[i])) duplicates.add(i);
-        }
-        for (final idx in duplicates.reversed) {
-          value.removeAt(idx);
-        }
-      }
-    }
-
-    ensureUnique();
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(fieldName, style: const TextStyle(fontWeight: FontWeight.bold)),
-          const SizedBox(height: 6),
-          for (int i = 0; i < value.length; i++)
-            Card(
-              margin: const EdgeInsets.symmetric(vertical: 2),
-              child: Row(
-                children: [
-                  Expanded(child: buildItem(i, value[i])),
-                  if (!readOnly)
-                    IconButton(
-                      icon: const Icon(Icons.delete),
-                      onPressed: () {
-                        if (value.length > minItems) {
-                          setState(() {
-                            value.removeAt(i);
-                          });
-                          onChanged(value);
-                        }
-                      },
-                    ),
-                ],
-              ),
-            ),
-          if (!readOnly && (maxItems == null || value.length < maxItems))
-            TextButton.icon(
-              onPressed: () {
-                final newItem = _createDefaultValueForSchema(itemsSchema);
-                setState(() {
-                  value.add(newItem);
-                  ensureUnique();
-                });
-                onChanged(value);
-              },
-              icon: const Icon(Icons.add),
-              label: const Text('Add Item'),
-            ),
-        ],
-      ),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        for (int i = 0; i < value.length; i++) buildItem(i, value[i]),
+        if (!readOnly && (maxItems == null || value.length < maxItems))
+          TextButton.icon(
+            onPressed: () {
+              final newItem = _createDefaultValueForSchema(itemsSchema);
+              setState(() {
+                value.add(newItem);
+              });
+              onChanged(value);
+            },
+            icon: const Icon(Icons.add),
+            label: const Text('Add Item'),
+          ),
+      ],
     );
   }
 

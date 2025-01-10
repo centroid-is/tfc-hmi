@@ -47,8 +47,9 @@ class ConfigClient {
   }
 
   /// Set a config value from a JSON object
-  Future<void> setValueFromJson(Map<String, dynamic> value) async {
-    await setValue(json.encode(value));
+  Future<void> setValueFromJson(dynamic value) async {
+    final jsonStr = json.encode(value);
+    await setValue(jsonStr);
   }
 
   /// Stream of property changes
