@@ -50,12 +50,36 @@ class _ConfigListPageState extends State<ConfigListPage> {
           .map((e) => (e as DBusString).value)
           .toList();
 
-      // 2) For each bus name, introspect and look for object paths that have "is.centroid.Config"
+      // 2) Create a map of unique names to their aliases
+      final nameOwners = <String, String>{};
+      for (final name in allNames) {
+        if (!name.startsWith(':')) continue; // Skip non-unique names
+        try {
+          final ownerReply = await widget.dbusClient.callMethod(
+            destination: 'org.freedesktop.DBus',
+            path: DBusObjectPath('/org/freedesktop/DBus'),
+            interface: 'org.freedesktop.DBus',
+            name: 'GetNameOwner',
+            values: [DBusString(name)],
+          );
+          final owner = (ownerReply.returnValues.first as DBusString).value;
+          nameOwners[name] = owner;
+        } catch (_) {
+          // Skip if we can't get the owner
+        }
+      }
+
+      // 3) For each bus name, introspect and look for object paths
       final List<_ConfigInterfaceInfo> found = [];
+      final seenPaths = <String>{}; // To track unique paths
 
       for (final serviceName in allNames) {
         if (serviceName.startsWith('org.freedesktop.')) {
-          // Usually skip well-known freedesktop services
+          continue;
+        }
+
+        // Skip if this is an alias of a service we've already processed
+        if (nameOwners.containsValue(serviceName)) {
           continue;
         }
 
@@ -69,11 +93,19 @@ class _ConfigListPageState extends State<ConfigListPage> {
           );
           final node =
               parseDBusIntrospectXml(result.returnValues.first.asString());
-          found.addAll(await _scanNodeForConfigInterfaces(
+
+          // Create a unique key for this service+path combination
+          for (final config in await _scanNodeForConfigInterfaces(
             serviceName,
             DBusObjectPath('/'),
             node,
-          ));
+          )) {
+            final pathKey = '${config.serviceName}:${config.objectPath}';
+            if (!seenPaths.contains(pathKey)) {
+              seenPaths.add(pathKey);
+              found.add(config);
+            }
+          }
         } catch (_) {
           // Not all services can be introspected at "/"; skip or handle
         }
@@ -97,6 +129,11 @@ class _ConfigListPageState extends State<ConfigListPage> {
     DBusIntrospectNode node,
   ) async {
     final List<_ConfigInterfaceInfo> matches = [];
+
+    // Skip paths containing "/Config/filters/"
+    if (path.value.contains('/Config/filters/')) {
+      return matches; // Return empty list for filtered paths
+    }
 
     // If any interface matches "is.centroid.Config", add
     for (final iface in node.interfaces) {
