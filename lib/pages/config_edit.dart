@@ -40,11 +40,12 @@ class _ConfigEditDialogState extends State<ConfigEditDialog> {
     _initConfigClient();
   }
 
-  @override
-  void dispose() {
-    _configClient?.close();
-    super.dispose();
-  }
+  // 1) REMOVE call to _configClient?.close() so we don't disconnect system bus
+  // @override
+  // void dispose() {
+  //   _configClient?.close(); // <--- remove this to avoid closing the system bus
+  //   super.dispose();
+  // }
 
   Future<void> _initConfigClient() async {
     try {
@@ -66,7 +67,6 @@ class _ConfigEditDialogState extends State<ConfigEditDialog> {
     } catch (e) {
       setState(() {
         _errorMessage = 'Failed to initialize config: $e';
-        print('Error: $e');
         _isLoading = false;
       });
     }
@@ -95,17 +95,19 @@ class _ConfigEditDialogState extends State<ConfigEditDialog> {
   }
 
   void _cancel() {
-    Navigator.of(context).pop(); // close dialog without saving
+    // Just close the dialog - do NOT close the DBus client
+    Navigator.of(context).pop();
   }
 
   @override
   Widget build(BuildContext context) {
     if (_isLoading) {
       return AlertDialog(
+        clipBehavior: Clip.none,
         title: const Text('Loading Config...'),
         content: const SizedBox(
-          width: 200,
-          height: 100,
+          width: 600,
+          height: 200,
           child: Center(child: CircularProgressIndicator()),
         ),
         actions: [
@@ -119,6 +121,7 @@ class _ConfigEditDialogState extends State<ConfigEditDialog> {
 
     if (_errorMessage.isNotEmpty) {
       return AlertDialog(
+        clipBehavior: Clip.none,
         title: const Text('Error'),
         content: Text(_errorMessage),
         actions: [
@@ -132,6 +135,7 @@ class _ConfigEditDialogState extends State<ConfigEditDialog> {
 
     if (_schema == null) {
       return AlertDialog(
+        clipBehavior: Clip.none,
         title: const Text('No Schema'),
         content: const Text('Schema not found or invalid.'),
         actions: [
@@ -143,18 +147,18 @@ class _ConfigEditDialogState extends State<ConfigEditDialog> {
       );
     }
 
-    // Normal case: show the dynamic form with Save & Cancel
+    // Normal case: show the dynamic form
     return AlertDialog(
+      clipBehavior: Clip.none,
       title: const Text('Configuration Editor'),
-      content: Form(
-        key: _formKey,
-        child: SingleChildScrollView(
-          // Optionally give some width/height constraints
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(
-              maxWidth: 500,
-              maxHeight: 600,
-            ),
+      content: SizedBox(
+        width: MediaQuery.of(context).size.width * 0.8,
+        height:
+            MediaQuery.of(context).size.height * 0.8, // 80% of screen height
+        child: Form(
+          key: _formKey,
+          child: SingleChildScrollView(
+            // Make content scrollable
             child: _buildSchemaForm(_schema!, _configData, (updated) {
               setState(() {
                 _configData = updated;
@@ -177,9 +181,8 @@ class _ConfigEditDialogState extends State<ConfigEditDialog> {
   }
 
   // ===========================================================================
-  //                         SCHEMA FORM BUILDING (same logic)
+  //                         SCHEMA FORM BUILDING
   // ===========================================================================
-
   Widget _buildSchemaForm(
     Map<String, dynamic> schema,
     dynamic data,
@@ -187,17 +190,15 @@ class _ConfigEditDialogState extends State<ConfigEditDialog> {
   ) {
     final type = _resolveType(schema);
     if (type == 'object') {
-      if (data is! Map<String, dynamic>) {
-        data = <String, dynamic>{};
-      }
-      return _buildObjectForm(schema, data as Map<String, dynamic>, onChanged);
+      if (data is! Map<String, dynamic>) data = <String, dynamic>{};
+      return _buildObjectForm(schema, data, onChanged);
     } else if (type == 'array') {
-      if (data is! List) {
-        data = <dynamic>[];
-      }
-      return _buildArrayField('root', schema, data as List, false, onChanged);
+      if (data is! List) data = <dynamic>[];
+      return _buildArrayField('root', schema, data, false, onChanged);
     } else {
-      return Text('Root schema must be an object or array (found "$type").');
+      return Text(
+        'Root schema must be an object or array (found "$type").',
+      );
     }
   }
 
@@ -209,6 +210,12 @@ class _ConfigEditDialogState extends State<ConfigEditDialog> {
     final props = schema['properties'] as Map<String, dynamic>? ?? {};
     final requiredFields =
         (schema['required'] as List<dynamic>? ?? []).cast<String>();
+
+    // Skip rendering if the object is empty and has no properties
+    if (data.isEmpty && props.isEmpty) {
+      return const SizedBox
+          .shrink(); // Return empty widget instead of showing empty form
+    }
 
     final children = <Widget>[];
     props.forEach((propName, propSchemaRaw) {
@@ -256,90 +263,105 @@ class _ConfigEditDialogState extends State<ConfigEditDialog> {
     return _buildTypedField(fieldName, schema, value, isRequired, onChanged);
   }
 
-  // --------------------------- oneOf Handling ---------------------------
+  // -------------- oneOf Handling --------------
   Widget _buildOneOfField(
     String fieldName,
     List<dynamic> oneOfList,
     dynamic value,
-    Map<String, dynamic> parentSchema,
+    Map<String, dynamic> schema,
     bool isRequired,
     ValueChanged<dynamic> onChanged,
   ) {
-    // Resolve sub-schemas
-    final subSchemas = <Map<String, dynamic>>[];
-    for (var sub in oneOfList) {
-      if (sub is Map<String, dynamic>) {
-        subSchemas.add(_resolveRef(sub));
-      }
+    final resolvedSubSchemas = <Map<String, dynamic>>[];
+    for (final item in oneOfList) {
+      final subMap =
+          (item is Map ? Map<String, dynamic>.from(item) : <String, dynamic>{});
+      resolvedSubSchemas.add(_resolveRef(subMap));
     }
 
-    final index = _determineOneOfIndex(subSchemas, value);
+    final activeIndex = _determineOneOfActiveIndex(resolvedSubSchemas, value);
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('$fieldName (oneOf)',
+        Text('$fieldName (oneOf):',
             style: const TextStyle(fontWeight: FontWeight.bold)),
-        _buildOneOfSelector(
-          fieldName: fieldName,
-          subSchemas: subSchemas,
-          activeIndex: index,
-          onPick: (newIndex) {
-            final newSub = subSchemas[newIndex];
-            final newVal = _createDefaultValueForSchema(newSub);
-            onChanged(newVal);
+        DropdownButton<int>(
+          value: activeIndex >= 0 ? activeIndex : 0,
+          isExpanded: true,
+          items: List.generate(resolvedSubSchemas.length, (index) {
+            final sub = resolvedSubSchemas[index];
+            final subDesc = _guessSubSchemaLabel(sub, index);
+            return DropdownMenuItem<int>(
+              value: index,
+              child: Text(subDesc),
+            );
+          }),
+          onChanged: (val) {
+            if (val != null) {
+              final newSchema = resolvedSubSchemas[val];
+              final newValue = _createDefaultValueForSchema(newSchema);
+              if (value is List) {
+                final newList = List.from(value);
+                if (newList.isEmpty) {
+                  newList.add({});
+                }
+                newList[0] = {
+                  _guessSubSchemaLabel(resolvedSubSchemas[val], val): newValue
+                };
+                onChanged(newList);
+              } else {
+                onChanged([
+                  {_guessSubSchemaLabel(resolvedSubSchemas[val], val): newValue}
+                ]);
+              }
+            }
           },
         ),
-        if (index >= 0 && index < subSchemas.length)
+        if (activeIndex >= 0 && activeIndex < resolvedSubSchemas.length)
           Padding(
             padding: const EdgeInsets.only(left: 16.0),
             child: _buildTypedField(
-                fieldName, subSchemas[index], value, isRequired, onChanged),
-          )
+              fieldName,
+              resolvedSubSchemas[activeIndex],
+              value,
+              isRequired,
+              onChanged,
+            ),
+          ),
       ],
     );
   }
 
-  Widget _buildOneOfSelector({
-    required String fieldName,
-    required List<Map<String, dynamic>> subSchemas,
-    required int activeIndex,
-    required ValueChanged<int> onPick,
-  }) {
-    return DropdownButton<int>(
-      value: activeIndex >= 0 ? activeIndex : null,
-      hint: Text('Pick sub-schema for $fieldName'),
-      items: List.generate(subSchemas.length, (i) {
-        final desc = subSchemas[i]['description']?.toString() ?? 'OneOf #$i';
-        return DropdownMenuItem<int>(
-          value: i,
-          child: Text(desc),
-        );
-      }),
-      onChanged: (val) {
-        if (val != null) onPick(val);
-      },
-    );
-  }
-
-  int _determineOneOfIndex(List<Map<String, dynamic>> subs, dynamic value) {
-    if (value is Map) {
-      // naive approach
-      for (int i = 0; i < subs.length; i++) {
-        if (subs[i]['properties'] is Map) {
-          final keys = (subs[i]['properties'] as Map).keys;
-          if (keys.any(value.containsKey)) return i;
-        }
-      }
-    } else if (value == null) {
-      // see if there's a "null" type
-      for (int i = 0; i < subs.length; i++) {
-        if (_resolveType(subs[i]) == 'null') return i;
+  String _guessSubSchemaLabel(Map<String, dynamic> subSchema, int index) {
+    if (subSchema['title'] is String) {
+      return subSchema['title'] as String;
+    }
+    // Try to get the type name from the schema
+    if (subSchema['type'] == 'object' && subSchema['properties'] != null) {
+      final properties = subSchema['properties'] as Map<String, dynamic>;
+      if (properties.isNotEmpty) {
+        return properties.values.first.toString();
       }
     }
-    return 0;
+    // Otherwise fallback
+    return 'OneOf #$index';
   }
 
-  // --------------------------- anyOf Handling ---------------------------
+  int _determineOneOfActiveIndex(
+      List<Map<String, dynamic>> subs, dynamic value) {
+    if (value is List && value.isNotEmpty && value[0] is Map) {
+      // Look for matching type in the first item's key
+      final firstItemKey = value[0].keys.first;
+      for (int i = 0; i < subs.length; i++) {
+        final label = _guessSubSchemaLabel(subs[i], i);
+        if (label == firstItemKey) return i;
+      }
+    }
+    return 0; // Default to first option if no match found
+  }
+
+  // -------------- anyOf Handling --------------
   Widget _buildAnyOfField(
     String fieldName,
     List<dynamic> anyOfList,
@@ -355,10 +377,7 @@ class _ConfigEditDialogState extends State<ConfigEditDialog> {
       }
     }
 
-    // find which sub-schemas match, naive approach
     final matches = _determineAnyOfMatches(subSchemas, value);
-
-    // pick an active index from matches or 0
     final idx = matches.isEmpty ? 0 : matches.first;
 
     return Column(
@@ -369,12 +388,12 @@ class _ConfigEditDialogState extends State<ConfigEditDialog> {
         if (subSchemas.length > 1)
           DropdownButton<int>(
             value: idx,
+            isExpanded: true, // expand dropdown
             items: List.generate(subSchemas.length, (i) {
-              final desc =
-                  subSchemas[i]['description']?.toString() ?? 'AnyOf #$i';
+              final label = _guessSubSchemaLabel(subSchemas[i], i);
               return DropdownMenuItem<int>(
                 value: i,
-                child: Text(desc),
+                child: Text(label),
               );
             }),
             onChanged: (val) {
@@ -570,7 +589,7 @@ class _ConfigEditDialogState extends State<ConfigEditDialog> {
 
     final description = schema['description']?.toString() ?? '';
 
-    // enum as dropdown
+    // If there's an enum, use a dropdown
     if (enumList != null && enumList.isNotEmpty) {
       if (!enumList.contains(value)) {
         value = enumList.first;
@@ -579,6 +598,7 @@ class _ConfigEditDialogState extends State<ConfigEditDialog> {
       return Padding(
         padding: const EdgeInsets.symmetric(vertical: 8),
         child: DropdownButtonFormField<String>(
+          isExpanded: true, // 3) helps avoid dropdown clipping
           value: value as String?,
           decoration:
               InputDecoration(labelText: fieldName, hintText: description),
@@ -596,7 +616,7 @@ class _ConfigEditDialogState extends State<ConfigEditDialog> {
       );
     }
 
-    // normal text field
+    // Otherwise, normal text
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 8),
       child: TextFormField(
@@ -643,8 +663,7 @@ class _ConfigEditDialogState extends State<ConfigEditDialog> {
       children: [
         Expanded(
           child: Text(
-            '$fieldName${description.isNotEmpty ? ' ($description)' : ''}',
-          ),
+              '$fieldName${description.isNotEmpty ? " ($description)" : ""}'),
         ),
         Switch(
           value: boolVal,
