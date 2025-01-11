@@ -212,14 +212,28 @@ class _ConfigEditDialogState extends State<ConfigEditDialog> {
     final props = schema['properties'] as Map<String, dynamic>? ?? {};
     final requiredFields =
         (schema['required'] as List<dynamic>? ?? []).cast<String>();
+    final description = schema['description']?.toString();
 
     // Skip rendering if the object is empty and has no properties
     if (data.isEmpty && props.isEmpty) {
-      return const SizedBox
-          .shrink(); // Return empty widget instead of showing empty form
+      return const SizedBox.shrink();
     }
 
     final children = <Widget>[];
+
+    // Add description row if present
+    if (description != null) {
+      children.add(
+        Row(
+          children: [
+            Expanded(child: Text('Object Properties')),
+            _buildInfoIcon(context, 'Object', description) ??
+                const SizedBox.shrink(),
+          ],
+        ),
+      );
+    }
+
     props.forEach((propName, propSchemaRaw) {
       final propSchema = _resolveRef(propSchemaRaw as Map<String, dynamic>);
       final value = data[propName];
@@ -232,8 +246,9 @@ class _ConfigEditDialogState extends State<ConfigEditDialog> {
           value,
           isRequired: isRequired,
           onChanged: (newVal) {
-            data[propName] = newVal;
-            onChanged(data);
+            final updatedData = Map<String, dynamic>.from(data);
+            updatedData[propName] = newVal;
+            onChanged(updatedData);
           },
         ),
       );
@@ -282,6 +297,7 @@ class _ConfigEditDialogState extends State<ConfigEditDialog> {
     }
 
     final activeIndex = _determineOneOfActiveIndex(resolvedSubSchemas, value);
+    final description = schema['description']?.toString();
 
     // Preserve the structure when changing values
     void wrappedOnChanged(dynamic newVal) {
@@ -298,8 +314,17 @@ class _ConfigEditDialogState extends State<ConfigEditDialog> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('$fieldName (oneOf):',
-            style: const TextStyle(fontWeight: FontWeight.bold)),
+        Row(
+          children: [
+            Expanded(
+              child: Text('$fieldName (oneOf):',
+                  style: const TextStyle(fontWeight: FontWeight.bold)),
+            ),
+            if (schema['description'] != null)
+              _buildInfoIcon(context, fieldName, description) ??
+                  const SizedBox.shrink(),
+          ],
+        ),
         DropdownButton<int>(
           value: activeIndex >= 0 ? activeIndex : 0,
           isExpanded: true,
@@ -389,16 +414,26 @@ class _ConfigEditDialogState extends State<ConfigEditDialog> {
 
     final matches = _determineAnyOfMatches(subSchemas, value);
     final idx = matches.isEmpty ? 0 : matches.first;
+    final description = parentSchema['description']?.toString();
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('$fieldName (anyOf)',
-            style: const TextStyle(fontWeight: FontWeight.bold)),
+        Row(
+          children: [
+            Expanded(
+              child: Text('$fieldName (anyOf)',
+                  style: const TextStyle(fontWeight: FontWeight.bold)),
+            ),
+            if (description != null)
+              _buildInfoIcon(context, fieldName, description) ??
+                  const SizedBox.shrink(),
+          ],
+        ),
         if (subSchemas.length > 1)
           DropdownButton<int>(
             value: idx,
-            isExpanded: true, // expand dropdown
+            isExpanded: true,
             items: List.generate(subSchemas.length, (i) {
               final label = _guessSubSchemaLabel(subSchemas[i], i);
               return DropdownMenuItem<int>(
@@ -504,6 +539,7 @@ class _ConfigEditDialogState extends State<ConfigEditDialog> {
     final maxItems = schema['maxItems'] as int?;
     final itemsSchema =
         _resolveRef(schema['items'] as Map<String, dynamic>? ?? {});
+    final description = schema['description']?.toString();
 
     Widget buildItem(int index, dynamic itemValue) {
       return Card(
@@ -542,6 +578,14 @@ class _ConfigEditDialogState extends State<ConfigEditDialog> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        if (schema['description'] != null)
+          Row(
+            children: [
+              Expanded(child: Text(fieldName)),
+              _buildInfoIcon(context, fieldName, description) ??
+                  const SizedBox.shrink(),
+            ],
+          ),
         for (int i = 0; i < value.length; i++) buildItem(i, value[i]),
         if (!readOnly && (maxItems == null || value.length < maxItems))
           TextButton.icon(
@@ -572,7 +616,6 @@ class _ConfigEditDialogState extends State<ConfigEditDialog> {
     final minLength = schema['minLength'] as int? ?? 0;
     final pattern = schema['pattern'] as String?;
     final enumList = (schema['enum'] as List<dynamic>?)?.cast<String>();
-
     final description = schema['description']?.toString() ?? '';
 
     // If there's an enum, use a dropdown
@@ -583,21 +626,49 @@ class _ConfigEditDialogState extends State<ConfigEditDialog> {
       }
       return Padding(
         padding: const EdgeInsets.symmetric(vertical: 8),
-        child: DropdownButtonFormField<String>(
-          isExpanded: true, // 3) helps avoid dropdown clipping
-          value: value as String?,
-          decoration:
-              InputDecoration(labelText: fieldName, hintText: description),
-          items: enumList
-              .map((e) => DropdownMenuItem(child: Text(e), value: e))
-              .toList(),
-          onChanged: readOnly ? null : (val) => onChanged(val),
-          validator: (val) {
-            if (isRequired && (val == null || val.isEmpty)) {
-              return '$fieldName is required';
-            }
-            return null;
-          },
+        child: Row(
+          children: [
+            Expanded(
+              child: DropdownButtonFormField<String>(
+                isExpanded: true,
+                value: value as String?,
+                decoration: InputDecoration(
+                  labelText: fieldName,
+                  hintText: description,
+                ),
+                items: enumList
+                    .map((e) => DropdownMenuItem(child: Text(e), value: e))
+                    .toList(),
+                onChanged: readOnly ? null : (val) => onChanged(val),
+                validator: (val) {
+                  if (isRequired && (val == null || val.isEmpty)) {
+                    return '$fieldName is required';
+                  }
+                  return null;
+                },
+              ),
+            ),
+            if (description != null && description.isNotEmpty)
+              IconButton(
+                icon: const Icon(Icons.info_outline),
+                onPressed: () {
+                  showDialog(
+                    context: context,
+                    builder: (context) => AlertDialog(
+                      title: Text(fieldName),
+                      content: Text(description),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.pop(context),
+                          child: const Text('Close'),
+                        ),
+                      ],
+                    ),
+                  );
+                },
+                tooltip: description,
+              ),
+          ],
         ),
       );
     }
@@ -643,14 +714,17 @@ class _ConfigEditDialogState extends State<ConfigEditDialog> {
     ValueChanged<dynamic> onChanged,
   ) {
     final boolVal = value == true;
-    final description = schema['description']?.toString() ?? '';
+    final description = schema['description']?.toString();
 
     return Row(
       children: [
         Expanded(
-          child: Text(
-              '$fieldName${description.isNotEmpty ? " ($description)" : ""}'),
+          child:
+              Text('$fieldName${description != null ? " ($description)" : ""}'),
         ),
+        if (description != null)
+          _buildInfoIcon(context, fieldName, description) ??
+              const SizedBox.shrink(),
         Switch(
           value: boolVal,
           onChanged: readOnly ? null : (val) => onChanged(val),
@@ -679,64 +753,72 @@ class _ConfigEditDialogState extends State<ConfigEditDialog> {
 
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 8),
-      child: TextFormField(
-        controller: controller,
-        enabled: !readOnly,
-        keyboardType: TextInputType.number,
-        decoration:
-            InputDecoration(labelText: fieldName, hintText: description),
-        validator: (text) {
-          if (isRequired && (text == null || text.isEmpty)) {
-            return '$fieldName is required';
-          }
-          if (text == null || text.isEmpty) {
-            return null;
-          }
+      child: Row(
+        children: [
+          Expanded(
+            child: TextFormField(
+              controller: controller,
+              enabled: !readOnly,
+              keyboardType: TextInputType.number,
+              decoration:
+                  InputDecoration(labelText: fieldName, hintText: description),
+              validator: (text) {
+                if (isRequired && (text == null || text.isEmpty)) {
+                  return '$fieldName is required';
+                }
+                if (text == null || text.isEmpty) {
+                  return null;
+                }
 
-          num? parsed;
-          if (fieldType == 'integer') {
-            parsed = int.tryParse(text);
-            if (parsed == null) return 'Invalid integer';
-          } else {
-            parsed = double.tryParse(text);
-            if (parsed == null) return 'Invalid number';
-          }
+                num? parsed;
+                if (fieldType == 'integer') {
+                  parsed = int.tryParse(text);
+                  if (parsed == null) return 'Invalid integer';
+                } else {
+                  parsed = double.tryParse(text);
+                  if (parsed == null) return 'Invalid number';
+                }
 
-          if (minimum is num) {
-            if (exclusiveMin && parsed <= minimum) {
-              return 'Value must be > $minimum';
-            } else if (!exclusiveMin && parsed < minimum) {
-              return 'Value must be >= $minimum';
-            }
-          }
-          if (maximum is num) {
-            if (exclusiveMax && parsed >= maximum) {
-              return 'Value must be < $maximum';
-            } else if (!exclusiveMax && parsed > maximum) {
-              return 'Value must be <= $maximum';
-            }
-          }
-          if (multipleOf is num) {
-            final remainder = parsed % multipleOf;
-            if (remainder.abs() > 1e-10) {
-              return 'Value must be multiple of $multipleOf';
-            }
-          }
-          return null;
-        },
-        onChanged: (text) {
-          if (text.isEmpty) {
-            onChanged(null);
-            return;
-          }
-          if (fieldType == 'integer') {
-            final p = int.tryParse(text);
-            onChanged(p ?? value);
-          } else {
-            final p = double.tryParse(text);
-            onChanged(p ?? value);
-          }
-        },
+                if (minimum is num) {
+                  if (exclusiveMin && parsed <= minimum) {
+                    return 'Value must be > $minimum';
+                  } else if (!exclusiveMin && parsed < minimum) {
+                    return 'Value must be >= $minimum';
+                  }
+                }
+                if (maximum is num) {
+                  if (exclusiveMax && parsed >= maximum) {
+                    return 'Value must be < $maximum';
+                  } else if (!exclusiveMax && parsed > maximum) {
+                    return 'Value must be <= $maximum';
+                  }
+                }
+                if (multipleOf is num) {
+                  final remainder = parsed % multipleOf;
+                  if (remainder.abs() > 1e-10) {
+                    return 'Value must be multiple of $multipleOf';
+                  }
+                }
+                return null;
+              },
+              onChanged: (text) {
+                if (text.isEmpty) {
+                  onChanged(null);
+                  return;
+                }
+                if (fieldType == 'integer') {
+                  final p = int.tryParse(text);
+                  onChanged(p ?? value);
+                } else {
+                  final p = double.tryParse(text);
+                  onChanged(p ?? value);
+                }
+              },
+            ),
+          ),
+          _buildInfoIcon(context, fieldName, description) ??
+              const SizedBox.shrink(),
+        ],
       ),
     );
   }
@@ -831,5 +913,30 @@ class _ConfigEditDialogState extends State<ConfigEditDialog> {
       default:
         return null;
     }
+  }
+
+  Widget? _buildInfoIcon(
+      BuildContext context, String fieldName, String? description) {
+    if (description == null || description.isEmpty) return null;
+
+    return IconButton(
+      icon: const Icon(Icons.info_outline),
+      onPressed: () {
+        showDialog(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: Text(fieldName),
+            content: Text(description),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Close'),
+              ),
+            ],
+          ),
+        );
+      },
+      tooltip: description, // Shows on hover
+    );
   }
 }
