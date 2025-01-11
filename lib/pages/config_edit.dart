@@ -312,9 +312,9 @@ class _ConfigEditDialogState extends State<ConfigEditDialog> {
             if (val != null) {
               final newSchema = resolvedSubSchemas[val];
               final newValue = _createDefaultValueForSchema(newSchema);
-              onChanged([
-                {_guessSubSchemaLabel(resolvedSubSchemas[val], val): newValue}
-              ]);
+              onChanged({
+                _guessSubSchemaLabel(resolvedSubSchemas[val], val): newValue
+              });
             }
           },
         ),
@@ -357,15 +357,18 @@ class _ConfigEditDialogState extends State<ConfigEditDialog> {
 
   int _determineOneOfActiveIndex(
       List<Map<String, dynamic>> subs, dynamic value) {
-    if (value is List && value.isNotEmpty && value[0] is Map) {
-      // Look for matching type in the first item's key
-      final firstItemKey = value[0].keys.first;
-      for (int i = 0; i < subs.length; i++) {
-        final label = _guessSubSchemaLabel(subs[i], i);
-        if (label == firstItemKey) return i;
+    if (value is Map) {
+      final firstKey = value.keys.isNotEmpty ? value.keys.first : null;
+      if (firstKey != null) {
+        // Check each sub-schema label
+        for (int i = 0; i < subs.length; i++) {
+          final label = _guessSubSchemaLabel(subs[i], i);
+          if (label == firstKey) return i;
+        }
       }
     }
-    return 0; // Default to first option if no match found
+    // If we didn't find a match, default to 0
+    return 0;
   }
 
   // -------------- anyOf Handling --------------
