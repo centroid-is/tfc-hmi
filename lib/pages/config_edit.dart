@@ -774,6 +774,43 @@ class _ConfigEditDialogState extends State<ConfigEditDialog> {
 
   dynamic _createDefaultValueForSchema(Map<String, dynamic>? schema) {
     if (schema == null) return null;
+
+    // If this schema has oneOf, let's default to the FIRST sub-schema
+    if (schema.containsKey('oneOf')) {
+      final oneOfList = schema['oneOf'] as List;
+      if (oneOfList.isNotEmpty) {
+        final firstSubRaw = oneOfList.first;
+        if (firstSubRaw is Map<String, dynamic>) {
+          final firstSubResolved = _resolveRef(firstSubRaw);
+          // 1) We guess a label from the required property or the title
+          final label = _guessSubSchemaLabel(firstSubResolved, 0);
+          // 2) We create the child’s default
+          final childVal = _createDefaultValueForSchema(firstSubResolved);
+
+          // So the default is { "NewState": {} }, for instance
+          return {label: childVal};
+        }
+      }
+      // If somehow empty, fallback to an object
+      return <String, dynamic>{};
+    }
+
+    // If this schema has anyOf, you can do similarly if you want.
+    if (schema.containsKey('anyOf')) {
+      final anyOfList = schema['anyOf'] as List;
+      if (anyOfList.isNotEmpty) {
+        final firstSubRaw = anyOfList.first;
+        if (firstSubRaw is Map<String, dynamic>) {
+          final firstSubResolved = _resolveRef(firstSubRaw);
+          final label = _guessSubSchemaLabel(firstSubResolved, 0);
+          final childVal = _createDefaultValueForSchema(firstSubResolved);
+          return {label: childVal};
+        }
+      }
+      return <String, dynamic>{};
+    }
+
+    // Otherwise fallback to the original logic
     final type = _resolveType(schema);
     if (schema.containsKey('default')) return schema['default'];
 
