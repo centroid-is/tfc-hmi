@@ -744,6 +744,7 @@ class _ConfigEditDialogState extends State<ConfigEditDialog> {
   ) {
     final controller = TextEditingController(text: value?.toString() ?? '');
     final description = schema['description']?.toString() ?? '';
+    final unit = schema['unit']?.toString(); // Add unit handling
 
     final minimum = schema['minimum'];
     final maximum = schema['maximum'];
@@ -760,8 +761,11 @@ class _ConfigEditDialogState extends State<ConfigEditDialog> {
               controller: controller,
               enabled: !readOnly,
               keyboardType: TextInputType.number,
-              decoration:
-                  InputDecoration(labelText: fieldName, hintText: description),
+              decoration: InputDecoration(
+                labelText: fieldName,
+                hintText: description,
+                suffixText: unit, // Add unit to suffix
+              ),
               validator: (text) {
                 if (isRequired && (text == null || text.isEmpty)) {
                   return '$fieldName is required';
