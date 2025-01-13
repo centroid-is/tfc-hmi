@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:dbus/dbus.dart';
+import 'dart:async';
 import '../dbus/ipc-ruler.dart';
 import '../widgets/base_scaffold.dart';
-import 'dart:async';
+import 'config_edit.dart';
 
 /// A map from typeId -> string. Matches the Rust backend's impl_type_identifier.
 const Map<int, String> _typeLabels = {
@@ -48,7 +49,10 @@ class ConnectionsPage extends StatelessWidget {
           );
         }
 
-        return _ConnectionsPageContent(client: snapshot.data!);
+        return _ConnectionsPageContent(
+          client: snapshot.data!,
+          dbusClient: dbusClient,
+        );
       },
     );
   }
@@ -56,9 +60,13 @@ class ConnectionsPage extends StatelessWidget {
 
 class _ConnectionsPageContent extends StatefulWidget {
   final IpcRulerClient client;
+  final DBusClient dbusClient;
 
-  const _ConnectionsPageContent({Key? key, required this.client})
-      : super(key: key);
+  const _ConnectionsPageContent({
+    Key? key,
+    required this.client,
+    required this.dbusClient,
+  }) : super(key: key);
 
   @override
   State<_ConnectionsPageContent> createState() =>
@@ -300,6 +308,10 @@ class _ConnectionsPageContentState extends State<_ConnectionsPageContent> {
                             // Connected Slots
                             if (connectedSlots.isNotEmpty)
                               ...connectedSlots.map((slot) {
+                                // Create config path from slot name
+                                final configPath =
+                                    '/is/centroid/Config/filters/${slot.name.split('.').sublist(2).join('/')}';
+
                                 return ListTile(
                                   dense: true,
                                   leading: Icon(Icons.input),
@@ -308,10 +320,33 @@ class _ConnectionsPageContentState extends State<_ConnectionsPageContent> {
                                     'Type: ${_typeLabels[slot.slotType] ?? slot.slotType}\n'
                                     '${slot.description}',
                                   ),
-                                  trailing: IconButton(
-                                    icon: Icon(Icons.link_off),
-                                    tooltip: 'Disconnect',
-                                    onPressed: () => _disconnectSlot(slot.name),
+                                  trailing: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      // Config button
+                                      if (slot.createdBy.isNotEmpty)
+                                        IconButton(
+                                          icon: Icon(Icons.settings),
+                                          tooltip: 'Configure',
+                                          onPressed: () {
+                                            showDialog(
+                                              context: context,
+                                              builder: (_) => ConfigEditDialog(
+                                                dbusClient: widget.dbusClient,
+                                                serviceName: slot.createdBy,
+                                                objectPath: configPath,
+                                              ),
+                                            );
+                                          },
+                                        ),
+                                      // Disconnect button
+                                      IconButton(
+                                        icon: Icon(Icons.link_off),
+                                        tooltip: 'Disconnect',
+                                        onPressed: () =>
+                                            _disconnectSlot(slot.name),
+                                      ),
+                                    ],
                                   ),
                                 );
                               }).toList(),
