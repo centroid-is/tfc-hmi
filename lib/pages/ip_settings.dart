@@ -5,16 +5,18 @@ import '../widgets/base_scaffold.dart';
 import 'package:dbus/dbus.dart';
 
 class IpSettingsPage extends StatefulWidget {
-  const IpSettingsPage({super.key});
+  final DBusClient dbusClient;
+  const IpSettingsPage({super.key, required this.dbusClient});
   @override
   IpSettingsPageState createState() => IpSettingsPageState();
 }
 
 class IpSettingsPageState extends State<IpSettingsPage> {
-  final NetworkManagerClient client = NetworkManagerClient();
+  late final NetworkManagerClient client;
   @override
   void initState() {
     super.initState();
+    client = NetworkManagerClient(bus: widget.dbusClient);
   }
 
   @override
