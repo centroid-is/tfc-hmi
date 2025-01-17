@@ -120,8 +120,8 @@ final simpleLocationBuilder = RoutesLocationBuilder(routes: {
           dbusClient: context.read<DBusClient>(),
         ),
       ),
-  '/settings/core/ip': (context, state, args) => const BeamPage(
-        key: ValueKey('/settings/core/ip'),
+  '/settings/core/ip': (context, state, args) => BeamPage(
+        key: const ValueKey('/settings/core/ip'),
         title: 'IP Settings',
         child: IpSettingsPage(
           dbusClient: context.read<DBusClient>(),
