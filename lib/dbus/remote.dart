@@ -25,12 +25,15 @@ Future<DBusClient> connectRemoteSystemBus({
   );
 
   // Start an SSH session that runs "systemd-stdio-bridge"
+  final uidSession = await client.execute('id -u');
+  final uid = String.fromCharCodes(await uidSession.stdout.first).trim();
   final session = await client.execute('systemd-stdio-bridge');
   print('SSH session started: systemd-stdio-bridge on $remoteHost');
 
   // 3) Create the DBusClient first
   final dbusAddress = DBusAddress.tcp('127.0.0.1', port: localPort);
-  final dbusClient = DBusClient(dbusAddress);
+  final dbusAuth = DBusAuthClient(uid: uid);
+  final dbusClient = DBusClient(dbusAddress, authClient: dbusAuth);
   print(
       'DBusClient created. Will connect to tcp:host=127.0.0.1,port=$localPort');
 
