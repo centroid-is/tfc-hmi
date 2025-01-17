@@ -39,8 +39,8 @@ dependencies:
   # The following adds the Cupertino Icons font to your application.
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8
-  dbus: ^0.7.10
-
+  dbus:
+    git: https://github.com/jbbjarnason/dbus.dart.git
 dev_dependencies:
   flutter_test:
     sdk: flutter
@@ -54,6 +54,10 @@ dev_dependencies:
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
+
+dependency_overrides:
+  dbus:
+    git: https://github.com/jbbjarnason/dbus.dart.git
 
 # The following section is specific to Flutter packages.
 flutter:
