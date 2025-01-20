@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:dbus/dbus.dart';
 import '../dbus/config.dart';
 
@@ -742,7 +743,6 @@ class _ConfigEditDialogState extends State<ConfigEditDialog> {
     bool readOnly,
     ValueChanged<dynamic> onChanged,
   ) {
-    final controller = TextEditingController(text: value?.toString() ?? '');
     final description = schema['description']?.toString() ?? '';
     final unit = schema['unit']?.toString(); // Add unit handling
 
@@ -758,9 +758,16 @@ class _ConfigEditDialogState extends State<ConfigEditDialog> {
         children: [
           Expanded(
             child: TextFormField(
-              controller: controller,
+              initialValue: value?.toString() ?? '',
               enabled: !readOnly,
-              keyboardType: TextInputType.number,
+              keyboardType: const TextInputType.numberWithOptions(
+                decimal: true,
+                signed: true,
+              ),
+              inputFormatters: [
+                // Only allow digits, decimal point, and minus sign
+                FilteringTextInputFormatter.allow(RegExp(r'^-?\d*\.?\d*')),
+              ],
               decoration: InputDecoration(
                 labelText: fieldName,
                 hintText: description,
@@ -870,7 +877,7 @@ class _ConfigEditDialogState extends State<ConfigEditDialog> {
           final firstSubResolved = _resolveRef(firstSubRaw);
           // 1) We guess a label from the required property or the title
           final label = _guessSubSchemaLabel(firstSubResolved, 0);
-          // 2) We create the child’s default
+          // 2) We create the child's default
           final childVal = _createDefaultValueForSchema(firstSubResolved);
 
           // So the default is { "NewState": {} }, for instance
