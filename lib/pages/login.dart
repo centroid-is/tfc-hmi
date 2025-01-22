@@ -27,14 +27,59 @@ class LoginCredentials {
     return 'LoginCredentials(type: $type, host: $host, username: $username, password: $maskedPassword, autoLogin: $autoLogin)';
   }
 
-  Future<DBusClient> connect() {
-    return type == ConnectionType.system
-        ? Future.value(DBusClient.system())
-        : connectRemoteSystemBus(
-            remoteHost: host!,
-            sshUser: username!,
-            sshPassword: password!,
-          );
+  Future<DBusClient> connect(BuildContext context) async {
+    try {
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => const Center(
+          child: Card(
+            child: Padding(
+              padding: EdgeInsets.all(16.0),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  CircularProgressIndicator(),
+                  SizedBox(height: 16),
+                  Text('Connecting...'),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+
+      final result = await (type == ConnectionType.system
+          ? Future.value(DBusClient.system())
+          : connectRemoteSystemBus(
+              remoteHost: host!,
+              sshUser: username!,
+              sshPassword: password!,
+            ));
+
+      if (context.mounted) {
+        Navigator.of(context).pop();
+      }
+      return result;
+    } catch (e) {
+      if (context.mounted) {
+        Navigator.of(context).pop(); // Close loading dialog
+        await showDialog(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('Connection Error'),
+            content: Text(e.toString()),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text('OK'),
+              ),
+            ],
+          ),
+        );
+      }
+      rethrow;
+    }
   }
 }
 
@@ -176,24 +221,10 @@ class _LoginPageState extends State<LoginPage> {
                   ),
                   const SizedBox(height: 20),
                   FutureBuilder<DBusClient>(
-                    future:
-                        credentials.autoLogin ? credentials.connect() : null,
+                    future: credentials.autoLogin
+                        ? credentials.connect(context)
+                        : null,
                     builder: (context, loginSnapshot) {
-                      print('Auto-login state: ${credentials.autoLogin}');
-                      print(
-                          'Login snapshot state: ${loginSnapshot.connectionState}');
-                      if (loginSnapshot.hasError) {
-                        print('Login error: ${loginSnapshot.error}');
-                        WidgetsBinding.instance.addPostFrameCallback((_) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                              content:
-                                  Text('Login failed: ${loginSnapshot.error}'),
-                            ),
-                          );
-                        });
-                      }
-
                       if (loginSnapshot.hasData) {
                         print('Login successful, calling onLoginSuccess');
                         WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -205,7 +236,7 @@ class _LoginPageState extends State<LoginPage> {
                         onPressed: loginSnapshot.connectionState ==
                                 ConnectionState.waiting
                             ? null
-                            : () {
+                            : () async {
                                 final creds = LoginCredentials(
                                   type: credentials.type,
                                   host: hostController.text,
@@ -214,7 +245,9 @@ class _LoginPageState extends State<LoginPage> {
                                   autoLogin: credentials.autoLogin,
                                 );
                                 _saveCredentials(creds); // Fire and forget
-                                creds.connect().then(widget.onLoginSuccess);
+
+                                final client = await creds.connect(context);
+                                widget.onLoginSuccess(client);
                               },
                         child: loginSnapshot.connectionState ==
                                 ConnectionState.waiting
