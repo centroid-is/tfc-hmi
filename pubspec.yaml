@@ -14,18 +14,13 @@ dependencies:
   flutter_svg: ^2.0.10
   logger: ^2.4.0
   nm: ^0.5.0
-  dbus:
-    git: https://github.com/jbbjarnason/dbus.dart.git
+  dbus: ^0.7.11
   provider: ^6.1.2
   dartssh2: ^2.11.0
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^4.0.0
-
-dependency_overrides:
-  dbus:
-    git: https://github.com/jbbjarnason/dbus.dart.git
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec

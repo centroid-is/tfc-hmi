@@ -92,12 +92,11 @@ packages:
   dbus:
     dependency: "direct main"
     description:
-      path: "."
-      ref: HEAD
-      resolved-ref: "4c002e627aee5cb1b8ef1d57849635562da9dda3"
-      url: "https://github.com/jbbjarnason/dbus.dart.git"
-    source: git
-    version: "0.7.10"
+      name: dbus
+      sha256: "79e0c23480ff85dc68de79e2cd6334add97e48f7f4865d17686dd6ea81a47e8c"
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.7.11"
   fake_async:
     dependency: transitive
     description:
