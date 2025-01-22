@@ -11,18 +11,26 @@ Future<DBusClient> connectRemoteSystemBus({
   int remotePort = 22,
   int localPort = 7272,
 }) async {
-  // 1) Start the TCP server that will accept a single D-Bus client connection
+  // 1) Set up the SSH session to run systemd-stdio-bridge on the remote
+  final sshSocket = await SSHSocket.connect(remoteHost, remotePort);
+
+  final SSHClient client;
+  try {
+    client = SSHClient(
+      sshSocket,
+      username: sshUser,
+      onPasswordRequest: () => sshPassword,
+      onVerifyHostKey: (host, key) => true, // WARNING: verify in production!
+    );
+    await client.authenticated; // Wait for authentication to complete
+  } catch (e) {
+    await sshSocket.close();
+    throw Exception('SSH connection failed: ${e.toString()}');
+  }
+
+  // 2) Start the TCP server that will accept a single D-Bus client connection
   final server = await ServerSocket.bind('127.0.0.1', localPort);
   print('Listening locally on ${server.address.address}:${server.port}');
-
-  // 2) Set up the SSH session to run systemd-stdio-bridge on the remote
-  final sshSocket = await SSHSocket.connect(remoteHost, remotePort);
-  final client = SSHClient(
-    sshSocket,
-    username: sshUser,
-    onPasswordRequest: () => sshPassword,
-    onVerifyHostKey: (host, key) => true, // WARNING: verify in production!
-  );
 
   // Start an SSH session that runs "systemd-stdio-bridge"
   final uidSession = await client.execute('id -u');

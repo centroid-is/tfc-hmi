@@ -7,11 +7,11 @@ import 'package:tfc_hmi/dbus/remote.dart';
 enum ConnectionType { system, remote }
 
 class LoginCredentials {
-  final ConnectionType type;
-  final String? host;
-  final String? username;
-  final String? password;
-  final bool autoLogin;
+  ConnectionType type;
+  String? host;
+  String? username;
+  String? password;
+  bool autoLogin;
 
   LoginCredentials({
     required this.type,
@@ -20,6 +20,12 @@ class LoginCredentials {
     this.password,
     this.autoLogin = false,
   });
+
+  @override
+  String toString() {
+    final maskedPassword = password?.replaceAll(RegExp(r'.'), '*');
+    return 'LoginCredentials(type: $type, host: $host, username: $username, password: $maskedPassword, autoLogin: $autoLogin)';
+  }
 
   Future<DBusClient> connect() {
     return type == ConnectionType.system
@@ -55,13 +61,20 @@ class LoginPage extends StatefulWidget {
 }
 
 class _LoginPageState extends State<LoginPage> {
-  Future<LoginCredentials>? _savedCredentialsFuture;
-  Future<DBusClient>? _loginFuture;
+  LoginCredentials? _currentCredentials;
 
-  @override
-  void initState() {
-    super.initState();
-    _savedCredentialsFuture = _loadSavedCredentials();
+  Future<void> _saveCredentials(LoginCredentials creds) async {
+    final prefs = await SharedPreferences.getInstance();
+    const secureStorage = FlutterSecureStorage();
+
+    await prefs.setString('connectionType', creds.type.name);
+    await prefs.setString('host', creds.host ?? '');
+    await prefs.setString('username', creds.username ?? '');
+    await prefs.setBool('autoLogin', creds.autoLogin);
+
+    if (creds.password != null) {
+      await secureStorage.write(key: 'password', value: creds.password);
+    }
   }
 
   Future<LoginCredentials> _loadSavedCredentials() async {
@@ -83,26 +96,8 @@ class _LoginPageState extends State<LoginPage> {
       autoLogin: autoLogin,
     );
 
-    // Attempt auto-login if enabled
-    if (autoLogin) {
-      _loginFuture = credentials.connect();
-    }
-
+    print('credentials: $credentials');
     return credentials;
-  }
-
-  Future<void> _saveCredentials(LoginCredentials creds) async {
-    final prefs = await SharedPreferences.getInstance();
-    const secureStorage = FlutterSecureStorage();
-
-    await prefs.setString('connectionType', creds.type.name);
-    await prefs.setBool('autoLogin', creds.autoLogin);
-
-    if (creds.type == ConnectionType.remote) {
-      await prefs.setString('host', creds.host ?? '');
-      await prefs.setString('username', creds.username ?? '');
-      await secureStorage.write(key: 'password', value: creds.password);
-    }
   }
 
   @override
@@ -112,10 +107,20 @@ class _LoginPageState extends State<LoginPage> {
         child: SizedBox(
           width: 300,
           child: FutureBuilder<LoginCredentials>(
-            future: _savedCredentialsFuture,
+            future: _loadSavedCredentials(),
             builder: (context, savedCredsSnapshot) {
-              final credentials = savedCredsSnapshot.data ??
-                  LoginCredentials(type: ConnectionType.remote);
+              // Wait for credentials to load
+              if (!savedCredsSnapshot.hasData) {
+                return const CircularProgressIndicator();
+              }
+
+              if (_currentCredentials == null) {
+                _currentCredentials = savedCredsSnapshot.data;
+              }
+
+              final credentials = _currentCredentials!;
+
+              print('Using credentials: $credentials'); // Debug print
 
               final hostController =
                   TextEditingController(text: credentials.host);
@@ -140,11 +145,9 @@ class _LoginPageState extends State<LoginPage> {
                     ],
                     selected: {credentials.type},
                     onSelectionChanged: (Set<ConnectionType> selection) {
-                      _savedCredentialsFuture = Future.value(LoginCredentials(
-                        type: selection.first,
-                        autoLogin: credentials.autoLogin,
-                      ));
-                      setState(() {});
+                      setState(() {
+                        credentials.type = selection.first;
+                      });
                     },
                   ),
                   if (credentials.type == ConnectionType.remote) ...[
@@ -162,11 +165,25 @@ class _LoginPageState extends State<LoginPage> {
                       obscureText: true,
                     ),
                   ],
+                  CheckboxListTile(
+                    title: const Text('Auto Login'),
+                    value: credentials.autoLogin,
+                    onChanged: (value) {
+                      setState(() {
+                        credentials.autoLogin = value!;
+                      });
+                    },
+                  ),
                   const SizedBox(height: 20),
                   FutureBuilder<DBusClient>(
-                    future: _loginFuture,
+                    future:
+                        credentials.autoLogin ? credentials.connect() : null,
                     builder: (context, loginSnapshot) {
+                      print('Auto-login state: ${credentials.autoLogin}');
+                      print(
+                          'Login snapshot state: ${loginSnapshot.connectionState}');
                       if (loginSnapshot.hasError) {
+                        print('Login error: ${loginSnapshot.error}');
                         WidgetsBinding.instance.addPostFrameCallback((_) {
                           ScaffoldMessenger.of(context).showSnackBar(
                             SnackBar(
@@ -178,6 +195,7 @@ class _LoginPageState extends State<LoginPage> {
                       }
 
                       if (loginSnapshot.hasData) {
+                        print('Login successful, calling onLoginSuccess');
                         WidgetsBinding.instance.addPostFrameCallback((_) {
                           widget.onLoginSuccess(loginSnapshot.data!);
                         });
@@ -187,7 +205,7 @@ class _LoginPageState extends State<LoginPage> {
                         onPressed: loginSnapshot.connectionState ==
                                 ConnectionState.waiting
                             ? null
-                            : () async {
+                            : () {
                                 final creds = LoginCredentials(
                                   type: credentials.type,
                                   host: hostController.text,
@@ -195,9 +213,8 @@ class _LoginPageState extends State<LoginPage> {
                                   password: passwordController.text,
                                   autoLogin: credentials.autoLogin,
                                 );
-                                await _saveCredentials(creds);
-                                final loginFuture = creds.connect();
-                                setState(() => _loginFuture = loginFuture);
+                                _saveCredentials(creds); // Fire and forget
+                                creds.connect().then(widget.onLoginSuccess);
                               },
                         child: loginSnapshot.connectionState ==
                                 ConnectionState.waiting
