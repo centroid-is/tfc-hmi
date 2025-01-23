@@ -11,10 +11,11 @@ import 'package:tfc_hmi/pages/not_found.dart';
 import 'package:tfc_hmi/pages/viewtheme.dart';
 import 'package:tfc_hmi/pages/system.dart';
 import 'package:tfc_hmi/pages/config_list.dart';
+import 'package:tfc_hmi/pages/login.dart';
 import 'package:provider/provider.dart';
 import 'pages/pages.dart';
 
-void main() {
+void main() async {
   // Initialize the RouteRegistry
   final registry = RouteRegistry();
 
@@ -77,16 +78,25 @@ void main() {
     icon: Icons.tune,
   ));
 
+  // Run the login flow first
+  final themeNotifier = await ThemeNotifier.create();
   runApp(
     MultiProvider(
       providers: [
-        ChangeNotifierProvider(create: (_) => ThemeNotifier()),
-        Provider<DBusClient>(
-          create: (_) => DBusClient.system(),
-          dispose: (_, client) => client.close(),
-        ),
+        ChangeNotifierProvider(create: (_) => themeNotifier),
       ],
-      child: MyApp(),
+      child: LoginApp(onLoginSuccess: (DBusClient client) {
+        // After successful login, run the main app
+        runApp(
+          MultiProvider(
+            providers: [
+              ChangeNotifierProvider(create: (_) => themeNotifier),
+              Provider<DBusClient>.value(value: client),
+            ],
+            child: MyApp(),
+          ),
+        );
+      }),
     ),
   );
 }

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 abstract final class SolarizedColors {
   static const Color base03 = Color.fromARGB(255, 0, 43, 54);
@@ -91,10 +92,36 @@ abstract final class SolarizedColors {
 }
 
 class ThemeNotifier with ChangeNotifier {
-  ThemeMode _themeMode = ThemeMode.system;
+  static const String _key = 'theme_mode';
+  ThemeMode _themeMode;
+
+  static Future<ThemeNotifier> create() async {
+    final prefs = await SharedPreferences.getInstance();
+    final String? themeName = prefs.getString(_key);
+    return ThemeNotifier._(themeName);
+  }
+
+  ThemeNotifier._(String? themeName)
+      : _themeMode = _themeStringToMode(themeName);
+
   ThemeMode get themeMode => _themeMode;
+
   void setTheme(ThemeMode mode) {
     _themeMode = mode;
+    SharedPreferences.getInstance().then((prefs) {
+      prefs.setString(_key, mode.name);
+    });
     notifyListeners();
+  }
+
+  static ThemeMode _themeStringToMode(String? themeName) {
+    switch (themeName) {
+      case 'light':
+        return ThemeMode.light;
+      case 'dark':
+        return ThemeMode.dark;
+      default:
+        return ThemeMode.system;
+    }
   }
 }
