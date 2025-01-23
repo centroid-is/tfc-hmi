@@ -79,17 +79,18 @@ void main() async {
   ));
 
   // Run the login flow first
+  final themeNotifier = await ThemeNotifier.create();
   runApp(
     MultiProvider(
       providers: [
-        ChangeNotifierProvider(create: (_) => ThemeNotifier()),
+        ChangeNotifierProvider(create: (_) => themeNotifier),
       ],
       child: LoginApp(onLoginSuccess: (DBusClient client) {
         // After successful login, run the main app
         runApp(
           MultiProvider(
             providers: [
-              ChangeNotifierProvider(create: (_) => ThemeNotifier()),
+              ChangeNotifierProvider(create: (_) => themeNotifier),
               Provider<DBusClient>.value(value: client),
             ],
             child: MyApp(),
