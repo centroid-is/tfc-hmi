@@ -19,6 +19,8 @@ outputs = { self, nixpkgs, flake-utils }:
         with pkgs; mkShell rec {
           buildInputs = [
             flutter
+            pkg-config
+            libsecret
           ];
         };
     });
