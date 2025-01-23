@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:dbus/dbus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:provider/provider.dart';
 import 'package:tfc_hmi/dbus/remote.dart';
+import 'package:tfc_hmi/theme.dart';
 
 enum ConnectionType { system, remote }
 
@@ -105,20 +107,29 @@ class LoginCredentials {
 }
 
 class LoginApp extends StatelessWidget {
-  final void Function(DBusClient client) onLoginSuccess;
+  final void Function(DBusClient) onLoginSuccess;
 
   const LoginApp({super.key, required this.onLoginSuccess});
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      home: LoginPage(onLoginSuccess: onLoginSuccess),
+    final (light, dark) = solarized();
+    return Consumer<ThemeNotifier>(
+      builder: (context, themeNotifier, child) {
+        return MaterialApp(
+          title: 'Login',
+          themeMode: themeNotifier.themeMode,
+          theme: light,
+          darkTheme: dark,
+          home: LoginPage(onLoginSuccess: onLoginSuccess),
+        );
+      },
     );
   }
 }
 
 class LoginPage extends StatefulWidget {
-  final void Function(DBusClient client) onLoginSuccess;
+  final void Function(DBusClient) onLoginSuccess;
 
   const LoginPage({super.key, required this.onLoginSuccess});
 

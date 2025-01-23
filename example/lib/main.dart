@@ -79,18 +79,25 @@ void main() async {
   ));
 
   // Run the login flow first
-  runApp(LoginApp(onLoginSuccess: (DBusClient client) {
-    // After successful login, run the main app
-    runApp(
-      MultiProvider(
-        providers: [
-          ChangeNotifierProvider(create: (_) => ThemeNotifier()),
-          Provider<DBusClient>.value(value: client),
-        ],
-        child: MyApp(),
-      ),
-    );
-  }));
+  runApp(
+    MultiProvider(
+      providers: [
+        ChangeNotifierProvider(create: (_) => ThemeNotifier()),
+      ],
+      child: LoginApp(onLoginSuccess: (DBusClient client) {
+        // After successful login, run the main app
+        runApp(
+          MultiProvider(
+            providers: [
+              ChangeNotifierProvider(create: (_) => ThemeNotifier()),
+              Provider<DBusClient>.value(value: client),
+            ],
+            child: MyApp(),
+          ),
+        );
+      }),
+    ),
+  );
 }
 
 // todo this is a bit of duplication
