@@ -6,6 +6,9 @@ import 'package:provider/provider.dart';
 import 'package:tfc_hmi/dbus/remote.dart';
 import 'package:tfc_hmi/theme.dart';
 import 'package:flutter_svg/flutter_svg.dart';
+import 'package:file_picker/file_picker.dart';
+import 'dart:io' show Platform;
+import 'package:path/path.dart' as path;
 
 enum ConnectionType { system, remote }
 
@@ -14,6 +17,7 @@ class LoginCredentials {
   String? host;
   String? username;
   String? password;
+  String? sshPrivateKeyPath;
   bool autoLogin;
 
   LoginCredentials({
@@ -21,6 +25,7 @@ class LoginCredentials {
     this.host,
     this.username,
     this.password,
+    this.sshPrivateKeyPath,
     this.autoLogin = false,
   });
 
@@ -29,6 +34,7 @@ class LoginCredentials {
     String? host,
     String? username,
     String? password,
+    String? sshPrivateKeyPath,
     bool? autoLogin,
   }) {
     return LoginCredentials(
@@ -36,6 +42,7 @@ class LoginCredentials {
       host: host ?? this.host,
       username: username ?? this.username,
       password: password ?? this.password,
+      sshPrivateKeyPath: sshPrivateKeyPath ?? this.sshPrivateKeyPath,
       autoLogin: autoLogin ?? this.autoLogin,
     );
   }
@@ -43,7 +50,7 @@ class LoginCredentials {
   @override
   String toString() {
     final maskedPassword = password?.replaceAll(RegExp(r'.'), '*');
-    return 'LoginCredentials(type: $type, host: $host, username: $username, password: $maskedPassword, autoLogin: $autoLogin)';
+    return 'LoginCredentials(type: $type, host: $host, username: $username, password: $maskedPassword, sshPrivateKeyPath: $sshPrivateKeyPath, autoLogin: $autoLogin)';
   }
 
   Future<DBusClient> connect(BuildContext context) async {
@@ -78,7 +85,10 @@ class LoginCredentials {
           : connectRemoteSystemBus(
               remoteHost: host!,
               sshUser: username!,
-              sshPassword: password!,
+              sshPassword: sshPrivateKeyPath == null ? password : null,
+              sshPrivateKeyPath: sshPrivateKeyPath,
+              sshPrivateKeyPassphrase:
+                  sshPrivateKeyPath != null ? password : null,
             ));
 
       if (context.mounted) {
@@ -149,10 +159,9 @@ class _LoginPageState extends State<LoginPage> {
     await prefs.setString('host', creds.host ?? '');
     await prefs.setString('username', creds.username ?? '');
     await prefs.setBool('autoLogin', creds.autoLogin);
+    await prefs.setString('sshPrivateKeyPath', creds.sshPrivateKeyPath ?? '');
 
-    if (creds.password != null) {
-      await secureStorage.write(key: 'password', value: creds.password);
-    }
+    await secureStorage.write(key: 'password', value: creds.password);
   }
 
   Future<LoginCredentials> _loadSavedCredentials() async {
@@ -165,16 +174,47 @@ class _LoginPageState extends State<LoginPage> {
     final username = prefs.getString('username');
     final password = await secureStorage.read(key: 'password');
     final autoLogin = prefs.getBool('autoLogin') ?? false;
+    final sshPrivateKeyPath = prefs.getString('sshPrivateKeyPath');
 
     final credentials = LoginCredentials(
       type: type,
       host: host,
       username: username,
       password: password,
+      sshPrivateKeyPath:
+          sshPrivateKeyPath?.isNotEmpty == true ? sshPrivateKeyPath : null,
       autoLogin: autoLogin,
     );
 
     return credentials;
+  }
+
+  Future<void> _pickPrivateKey() async {
+    String? sshDir;
+
+    if (!Platform.isAndroid && !Platform.isIOS) {
+      // Desktop platforms only
+      if (Platform.isWindows) {
+        final userProfile = Platform.environment['USERPROFILE'];
+        sshDir = userProfile != null ? path.join(userProfile, '.ssh') : null;
+      } else {
+        final home = Platform.environment['HOME'];
+        sshDir = home != null ? path.join(home, '.ssh') : null;
+      }
+    }
+
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.any,
+      allowMultiple: false,
+      initialDirectory: sshDir, // Will be ignored on mobile platforms
+    );
+
+    if (result != null) {
+      setState(() {
+        _currentCredentials = _currentCredentials!
+            .copyWith(sshPrivateKeyPath: result.files.single.path);
+      });
+    }
   }
 
   @override
@@ -246,9 +286,30 @@ class _LoginPageState extends State<LoginPage> {
                     const SizedBox(height: 16),
                     TextField(
                       controller: passwordController,
-                      decoration: const InputDecoration(labelText: 'Password'),
+                      decoration: const InputDecoration(
+                        labelText: 'Password',
+                      ),
                       obscureText: true,
                     ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        const Text('Or use private key'),
+                        const SizedBox(width: 8),
+                        IconButton(
+                          onPressed: _pickPrivateKey,
+                          icon: const Icon(Icons.key),
+                          tooltip: 'Select Private Key',
+                        ),
+                      ],
+                    ),
+                    if (credentials.sshPrivateKeyPath != null) ...[
+                      const SizedBox(height: 8),
+                      Text(
+                        'Selected key: ${credentials.sshPrivateKeyPath!.split('/').last}',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ],
                   ],
                   CheckboxListTile(
                     title: const Text('Auto Login'),
@@ -281,7 +342,11 @@ class _LoginPageState extends State<LoginPage> {
                                   type: credentials.type,
                                   host: hostController.text,
                                   username: userController.text,
-                                  password: passwordController.text,
+                                  password: passwordController.text.isNotEmpty
+                                      ? passwordController.text
+                                      : null,
+                                  sshPrivateKeyPath:
+                                      credentials.sshPrivateKeyPath,
                                   autoLogin: credentials.autoLogin,
                                 );
                                 _saveCredentials(creds); // Fire and forget
