@@ -5,6 +5,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:provider/provider.dart';
 import 'package:tfc_hmi/dbus/remote.dart';
 import 'package:tfc_hmi/theme.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 
 enum ConnectionType { system, remote }
 
@@ -204,6 +205,15 @@ class _LoginPageState extends State<LoginPage> {
               return Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
+                  SvgPicture.asset(
+                    'assets/centroid.svg',
+                    height: 50,
+                    package: 'tfc_hmi',
+                    colorFilter: ColorFilter.mode(
+                        Theme.of(context).colorScheme.onSurface,
+                        BlendMode.srcIn),
+                  ),
+                  const SizedBox(height: 32),
                   SegmentedButton<ConnectionType>(
                     segments: const [
                       ButtonSegment(
