@@ -233,14 +233,17 @@ class _LoginPageState extends State<LoginPage> {
                     },
                   ),
                   if (credentials.type == ConnectionType.remote) ...[
+                    const SizedBox(height: 16),
                     TextField(
                       controller: hostController,
                       decoration: const InputDecoration(labelText: 'Host'),
                     ),
+                    const SizedBox(height: 16),
                     TextField(
                       controller: userController,
                       decoration: const InputDecoration(labelText: 'Username'),
                     ),
+                    const SizedBox(height: 16),
                     TextField(
                       controller: passwordController,
                       decoration: const InputDecoration(labelText: 'Password'),
