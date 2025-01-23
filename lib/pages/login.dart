@@ -21,6 +21,22 @@ class LoginCredentials {
     this.autoLogin = false,
   });
 
+  LoginCredentials copyWith({
+    ConnectionType? type,
+    String? host,
+    String? username,
+    String? password,
+    bool? autoLogin,
+  }) {
+    return LoginCredentials(
+      type: type ?? this.type,
+      host: host ?? this.host,
+      username: username ?? this.username,
+      password: password ?? this.password,
+      autoLogin: autoLogin ?? this.autoLogin,
+    );
+  }
+
   @override
   String toString() {
     final maskedPassword = password?.replaceAll(RegExp(r'.'), '*');
@@ -29,25 +45,30 @@ class LoginCredentials {
 
   Future<DBusClient> connect(BuildContext context) async {
     try {
-      showDialog(
-        context: context,
-        barrierDismissible: false,
-        builder: (context) => const Center(
-          child: Card(
-            child: Padding(
-              padding: EdgeInsets.all(16.0),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  CircularProgressIndicator(),
-                  SizedBox(height: 16),
-                  Text('Connecting...'),
-                ],
+      // wait for build to finish creating widgets before showing loading dialog, can occur during auto login
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (context.mounted) {
+          showDialog(
+            context: context,
+            barrierDismissible: false,
+            builder: (context) => const Center(
+              child: Card(
+                child: Padding(
+                  padding: EdgeInsets.all(16.0),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      CircularProgressIndicator(),
+                      SizedBox(height: 16),
+                      Text('Connecting...'),
+                    ],
+                  ),
+                ),
               ),
             ),
-          ),
-        ),
-      );
+          );
+        }
+      });
 
       final result = await (type == ConnectionType.system
           ? Future.value(DBusClient.system())
@@ -109,6 +130,7 @@ class _LoginPageState extends State<LoginPage> {
   LoginCredentials? _currentCredentials;
 
   Future<void> _saveCredentials(LoginCredentials creds) async {
+    print('[DEBUG] _saveCredentials() called with: $creds');
     final prefs = await SharedPreferences.getInstance();
     const secureStorage = FlutterSecureStorage();
 
@@ -123,6 +145,7 @@ class _LoginPageState extends State<LoginPage> {
   }
 
   Future<LoginCredentials> _loadSavedCredentials() async {
+    print('[DEBUG] _loadSavedCredentials() called');
     final prefs = await SharedPreferences.getInstance();
     const secureStorage = FlutterSecureStorage();
 
@@ -141,7 +164,7 @@ class _LoginPageState extends State<LoginPage> {
       autoLogin: autoLogin,
     );
 
-    print('credentials: $credentials');
+    print('[DEBUG] _loadSavedCredentials() returning: $credentials');
     return credentials;
   }
 
@@ -159,9 +182,13 @@ class _LoginPageState extends State<LoginPage> {
                 return const CircularProgressIndicator();
               }
 
-              if (_currentCredentials == null) {
-                _currentCredentials = savedCredsSnapshot.data;
-              }
+              print(
+                  '[DEBUG] savedCredsSnapshot.data: ${savedCredsSnapshot.data}');
+              print('[DEBUG] _currentCredentials: $_currentCredentials');
+              final foo = savedCredsSnapshot.data!;
+              print('[DEBUG] foo: $foo');
+
+              _currentCredentials ??= savedCredsSnapshot.data?.copyWith();
 
               final credentials = _currentCredentials!;
 
@@ -221,7 +248,8 @@ class _LoginPageState extends State<LoginPage> {
                   ),
                   const SizedBox(height: 20),
                   FutureBuilder<DBusClient>(
-                    future: credentials.autoLogin
+                    future: credentials.autoLogin &&
+                            savedCredsSnapshot.data!.autoLogin
                         ? credentials.connect(context)
                         : null,
                     builder: (context, loginSnapshot) {
