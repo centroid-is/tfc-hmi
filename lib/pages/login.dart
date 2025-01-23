@@ -130,7 +130,6 @@ class _LoginPageState extends State<LoginPage> {
   LoginCredentials? _currentCredentials;
 
   Future<void> _saveCredentials(LoginCredentials creds) async {
-    print('[DEBUG] _saveCredentials() called with: $creds');
     final prefs = await SharedPreferences.getInstance();
     const secureStorage = FlutterSecureStorage();
 
@@ -145,7 +144,6 @@ class _LoginPageState extends State<LoginPage> {
   }
 
   Future<LoginCredentials> _loadSavedCredentials() async {
-    print('[DEBUG] _loadSavedCredentials() called');
     final prefs = await SharedPreferences.getInstance();
     const secureStorage = FlutterSecureStorage();
 
@@ -164,7 +162,6 @@ class _LoginPageState extends State<LoginPage> {
       autoLogin: autoLogin,
     );
 
-    print('[DEBUG] _loadSavedCredentials() returning: $credentials');
     return credentials;
   }
 
@@ -182,17 +179,9 @@ class _LoginPageState extends State<LoginPage> {
                 return const CircularProgressIndicator();
               }
 
-              print(
-                  '[DEBUG] savedCredsSnapshot.data: ${savedCredsSnapshot.data}');
-              print('[DEBUG] _currentCredentials: $_currentCredentials');
-              final foo = savedCredsSnapshot.data!;
-              print('[DEBUG] foo: $foo');
-
               _currentCredentials ??= savedCredsSnapshot.data?.copyWith();
 
               final credentials = _currentCredentials!;
-
-              print('Using credentials: $credentials'); // Debug print
 
               final hostController =
                   TextEditingController(text: credentials.host);
@@ -254,7 +243,6 @@ class _LoginPageState extends State<LoginPage> {
                         : null,
                     builder: (context, loginSnapshot) {
                       if (loginSnapshot.hasData) {
-                        print('Login successful, calling onLoginSuccess');
                         WidgetsBinding.instance.addPostFrameCallback((_) {
                           widget.onLoginSuccess(loginSnapshot.data!);
                         });
