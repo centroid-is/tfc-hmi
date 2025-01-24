@@ -3,12 +3,15 @@ import 'package:dbus/dbus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:provider/provider.dart';
+import 'package:logger/logger.dart';
 import 'package:tfc_hmi/dbus/remote.dart';
 import 'package:tfc_hmi/theme.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:file_picker/file_picker.dart';
 import 'dart:io' show Platform;
 import 'package:path/path.dart' as path;
+
+final logger = Logger();
 
 enum ConnectionType { system, remote }
 
@@ -54,6 +57,7 @@ class LoginCredentials {
   }
 
   Future<DBusClient> connect(BuildContext context) async {
+    logger.d('Connecting to: $this');
     try {
       // wait for build to finish creating widgets before showing loading dialog, can occur during auto login
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -96,6 +100,7 @@ class LoginCredentials {
       }
       return result;
     } catch (e) {
+      logger.e('Error connecting to bus: $e');
       if (context.mounted) {
         Navigator.of(context).pop(); // Close loading dialog
         await showDialog(
@@ -152,6 +157,7 @@ class _LoginPageState extends State<LoginPage> {
   LoginCredentials? _currentCredentials;
 
   Future<void> _saveCredentials(LoginCredentials creds) async {
+    logger.d('Saving credentials: $creds');
     final prefs = await SharedPreferences.getInstance();
     const secureStorage = FlutterSecureStorage();
 
@@ -162,9 +168,11 @@ class _LoginPageState extends State<LoginPage> {
     await prefs.setString('sshPrivateKeyPath', creds.sshPrivateKeyPath ?? '');
 
     await secureStorage.write(key: 'password', value: creds.password);
+    logger.d('Saved credentials: $creds');
   }
 
   Future<LoginCredentials> _loadSavedCredentials() async {
+    logger.d('Loading saved credentials');
     final prefs = await SharedPreferences.getInstance();
     const secureStorage = FlutterSecureStorage();
 
@@ -186,10 +194,12 @@ class _LoginPageState extends State<LoginPage> {
       autoLogin: autoLogin,
     );
 
+    logger.d('Loaded credentials: $credentials');
     return credentials;
   }
 
   Future<void> _pickPrivateKey() async {
+    logger.d('Picking private key');
     String? sshDir;
 
     if (!Platform.isAndroid && !Platform.isIOS) {
@@ -210,6 +220,7 @@ class _LoginPageState extends State<LoginPage> {
     );
 
     if (result != null) {
+      logger.d('Picked private key: ${result.files.single.path}');
       setState(() {
         _currentCredentials = _currentCredentials!
             .copyWith(sshPrivateKeyPath: result.files.single.path);
