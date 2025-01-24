@@ -174,15 +174,24 @@ class _LoginPageState extends State<LoginPage> {
   Future<LoginCredentials> _loadSavedCredentials() async {
     logger.d('Loading saved credentials');
     final prefs = await SharedPreferences.getInstance();
-    const secureStorage = FlutterSecureStorage();
 
+    logger.d('Loading saved credentials from prefs');
     final type = ConnectionType.values.byName(
         prefs.getString('connectionType') ?? ConnectionType.remote.name);
     final host = prefs.getString('host');
     final username = prefs.getString('username');
-    final password = await secureStorage.read(key: 'password');
     final autoLogin = prefs.getBool('autoLogin') ?? false;
     final sshPrivateKeyPath = prefs.getString('sshPrivateKeyPath');
+
+    // Currently read on FlutterSecureStorage is not working on eLinux
+    // It just hangs indefinitely.
+    String? password;
+    if (username != null && username.isNotEmpty) {
+      logger.d('Loading saved credentials from secure storage');
+      const secureStorage = FlutterSecureStorage();
+      logger.d('Reading password from secure storage');
+      password = await secureStorage.read(key: 'password');
+    }
 
     final credentials = LoginCredentials(
       type: type,
