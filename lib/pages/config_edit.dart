@@ -240,19 +240,27 @@ class _ConfigEditDialogState extends State<ConfigEditDialog> {
       final value = data[propName];
       final isRequired = requiredFields.contains(propName);
 
-      children.add(
-        _buildPropertyField(
-          propName,
-          propSchema,
-          value,
-          isRequired: isRequired,
-          onChanged: (newVal) {
-            final updatedData = Map<String, dynamic>.from(data);
-            updatedData[propName] = newVal;
-            onChanged(updatedData);
-          },
-        ),
+      final propertyWidget = _buildPropertyField(
+        propName,
+        propSchema,
+        value,
+        isRequired: isRequired,
+        onChanged: (newVal) {
+          final updatedData = Map<String, dynamic>.from(data);
+          updatedData[propName] = newVal;
+          onChanged(updatedData);
+        },
       );
+
+      // Only wrap object types in a Card
+      if (_resolveType(propSchema) == 'object') {
+        children.add(Card(
+          margin: const EdgeInsets.symmetric(vertical: 2),
+          child: propertyWidget,
+        ));
+      } else {
+        children.add(propertyWidget);
+      }
     });
 
     return Column(
@@ -838,6 +846,36 @@ class _ConfigEditDialogState extends State<ConfigEditDialog> {
   //                           $ref RESOLUTION
   // ===========================================================================
   Map<String, dynamic> _resolveRef(Map<String, dynamic> schema) {
+    // Handle allOf by merging schemas
+    if (schema.containsKey('allOf')) {
+      final allOf = schema['allOf'] as List;
+      // Start with the base schema without allOf
+      final mergedSchema = Map<String, dynamic>.from(schema)..remove('allOf');
+
+      // Merge each schema in allOf
+      for (final subSchema in allOf) {
+        if (subSchema is Map<String, dynamic>) {
+          // Handle $ref inside allOf
+          if (subSchema.containsKey(r'$ref')) {
+            final refStr = subSchema[r'$ref'] as String;
+            if (refStr.startsWith('#/definitions/')) {
+              final key = refStr.substring('#/definitions/'.length);
+              final def = _schema?['definitions']?[key];
+              if (def is Map<String, dynamic>) {
+                // Merge the definition into our schema
+                mergedSchema.addAll(def);
+              }
+            }
+          } else {
+            // Merge direct schema properties
+            mergedSchema.addAll(subSchema);
+          }
+        }
+      }
+      return mergedSchema;
+    }
+
+    // Handle direct $ref (existing logic)
     if (schema.containsKey(r'$ref')) {
       final refStr = schema[r'$ref'] as String;
       if (refStr.startsWith('#/definitions/')) {
