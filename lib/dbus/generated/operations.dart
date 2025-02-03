@@ -1,8 +1,11 @@
 // This file was generated using the following command and may be overwritten.
 // dart-dbus generate-remote-object operations.xml
 
+// modified slightly to get initial mode
+
 import 'dart:io';
 import 'package:dbus/dbus.dart';
+import 'package:rxdart/rxdart.dart';
 
 /// Signal data for is.centroid.OperationMode.Update.
 class IsCentroidOperationModeUpdate extends DBusSignal {
@@ -42,16 +45,28 @@ class IsCentroidOperationMode extends DBusRemoteObject {
   late final Stream<IsCentroidOperationModePropertiesChanged>
       customPropertiesChanged;
 
+  static const String _interface = 'is.centroid.OperationMode';
+
   IsCentroidOperationMode(
       DBusClient client, String destination, DBusObjectPath path)
       : super(client, name: destination, path: path) {
-    update = DBusRemoteObjectSignalStream(
-            object: this,
-            interface: 'is.centroid.OperationMode',
-            name: 'Update',
-            signature: DBusSignature('ss'))
-        .asBroadcastStream()
-        .map((signal) => IsCentroidOperationModeUpdate(signal));
+    // Combine initial mode with update stream
+    update = Stream.fromFuture(getMode())
+        .map((initialMode) => IsCentroidOperationModeUpdate(DBusSignal(
+              sender: name,
+              path: path,
+              interface: _interface,
+              name: 'Update',
+              values: [DBusString(initialMode), DBusString('')],
+            )))
+        .concatWith([
+      DBusRemoteObjectSignalStream(
+              object: this,
+              interface: _interface,
+              name: 'Update',
+              signature: DBusSignature('ss'))
+          .map((signal) => IsCentroidOperationModeUpdate(signal))
+    ]).asBroadcastStream();
 
     customPropertiesChanged = DBusRemoteObjectSignalStream(
             object: this,

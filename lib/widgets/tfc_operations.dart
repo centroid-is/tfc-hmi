@@ -5,7 +5,6 @@ import 'package:dbus/dbus.dart';
 
 class IndustrialAppBarLeftWidgetProvider
     extends GlobalAppBarLeftWidgetProvider {
-  bool _isRunning = false;
   late final IsCentroidOperationMode _operationMode;
 
   IndustrialAppBarLeftWidgetProvider(DBusClient client) {
@@ -13,28 +12,15 @@ class IndustrialAppBarLeftWidgetProvider
         client,
         'is.centroid.operations.def',
         DBusObjectPath('/is/centroid/OperationMode'));
-
-    // Listen for mode updates
-    _operationMode.update.listen((update) {
-      _isRunning = update.new_mode != 'stopped';
-      notifyListeners();
-    });
-
-    // Initialize current state
-    _operationMode.getMode().then((mode) {
-      _isRunning = mode != 'stopped';
-      notifyListeners();
-    });
   }
-
-  bool get isRunning => _isRunning;
 
   Future<void> toggleRunning() async {
     try {
-      if (_isRunning) {
-        await _operationMode.callSetMode('stopped');
-      } else {
+      final currentMode = await _operationMode.getMode();
+      if (currentMode == 'stopped') {
         await _operationMode.callSetMode('running');
+      } else {
+        await _operationMode.callSetMode('stopped');
       }
     } catch (e) {
       debugPrint('Failed to toggle operation mode: $e');
@@ -43,48 +29,72 @@ class IndustrialAppBarLeftWidgetProvider
 
   @override
   Widget buildAppBarLeftWidgets(BuildContext context) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        // Play / Stop toggle button.
-        IconButton(
-          icon: Icon(_isRunning ? Icons.stop : Icons.play_arrow),
-          tooltip: _isRunning ? 'Stop' : 'Start',
-          onPressed: () {
-            toggleRunning();
-          },
-        ),
-        // Cleaning icon button.
-        IconButton(
-          icon: const Icon(Icons.cleaning_services),
-          tooltip: 'Cleaning',
-          onPressed: () {
-            // Insert your cleaning logic here.
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Cleaning started')),
+    return FutureBuilder<String>(
+      future: _operationMode.getMode(),
+      builder: (context, snapshot) {
+        return StreamBuilder<IsCentroidOperationModeUpdate>(
+          stream: _operationMode.update, // Use directly from _operationMode
+          initialData: snapshot.hasData
+              ? IsCentroidOperationModeUpdate(DBusSignal(
+                  sender: _operationMode.name,
+                  path: _operationMode.path,
+                  interface: 'is.centroid.OperationMode',
+                  name: 'Update',
+                  values: [DBusString(snapshot.data!), DBusString('')],
+                ))
+              : null,
+          builder: (context, streamSnapshot) {
+            final mode =
+                streamSnapshot.data?.new_mode ?? snapshot.data ?? 'unknown';
+
+            return Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                IconButton(
+                  icon: Icon(mode == 'stopped' ? Icons.play_arrow : Icons.stop),
+                  tooltip: mode == 'stopped' ? 'Start' : 'Stop',
+                  onPressed: () {
+                    toggleRunning();
+                  },
+                ),
+                IconButton(
+                  icon: const Icon(Icons.cleaning_services),
+                  tooltip: 'Cleaning',
+                  onPressed: () async {
+                    try {
+                      await _operationMode.callSetMode('cleaning');
+                    } catch (e) {
+                      debugPrint('Failed to set cleaning mode: $e');
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text('Failed to start cleaning: $e')),
+                      );
+                    }
+                  },
+                ),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 8.0),
+                  child: Center(
+                    child: Text(
+                      mode.toUpperCase(),
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                            fontFamily: 'roboto-mono',
+                            fontSize: 16.0,
+                            fontWeight: FontWeight.w500,
+                            letterSpacing: 0.1,
+                            height: 1.5,
+                          ),
+                      overflow: TextOverflow.ellipsis,
+                      softWrap: true,
+                      maxLines: 1,
+                      locale: const Locale('en', 'US'),
+                    ),
+                  ),
+                ),
+              ],
             );
           },
-        ),
-        // Show current run state.
-        Flexible(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8.0),
-            child: Text(
-              _isRunning ? 'Running' : 'Stopped',
-              style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontFamily: 'roboto-mono',
-                    fontSize: 16.0,
-                    fontWeight: FontWeight.w500,
-                    letterSpacing: 0.1,
-                    height: 1.5,
-                  ),
-              overflow: TextOverflow.ellipsis,
-              maxLines: 1,
-              locale: const Locale('en', 'US'),
-            ),
-          ),
-        ),
-      ],
+        );
+      },
     );
   }
 }
