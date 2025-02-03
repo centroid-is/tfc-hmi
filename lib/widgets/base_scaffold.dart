@@ -7,6 +7,20 @@ import '../models/menu_item.dart';
 import '../route_registry.dart';
 import 'package:tfc_hmi/theme.dart';
 import 'package:provider/provider.dart';
+import 'dart:async';
+
+// ===================
+// Provider Abstraction
+// ===================
+
+abstract class GlobalAppBarLeftWidgetProvider with ChangeNotifier {
+  /// Build the custom left-side widget.
+  Widget buildAppBarLeftWidgets(BuildContext context);
+}
+
+// ===================
+// BaseScaffold Widget
+// ===================
 
 class BaseScaffold extends StatelessWidget {
   final Widget body;
@@ -34,86 +48,117 @@ class BaseScaffold extends StatelessWidget {
     return null;
   }
 
-  final NavigationDestinationLabelBehavior labelBehavior =
-      NavigationDestinationLabelBehavior.alwaysShow;
+  /// Attempt to get a global left widget provider.
+  GlobalAppBarLeftWidgetProvider? _tryGetGlobalAppBarLeftWidgetProvider(
+      BuildContext context) {
+    try {
+      return Provider.of<GlobalAppBarLeftWidgetProvider>(context,
+          listen: false);
+    } catch (e) {
+      return null;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     final logger = Logger();
+    // Retrieve the provider (if any)
+    final globalLeftProvider = _tryGetGlobalAppBarLeftWidgetProvider(context);
 
     return Scaffold(
       appBar: AppBar(
-        leading: context.canBeamBack
-            ? IconButton(
-                icon: const Icon(Icons.arrow_back),
-                onPressed: () => context.beamBack(),
-              )
-            : null,
-        centerTitle: true,
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.brightness_6),
-            onPressed: () {
-              ThemeNotifier themeNotifier =
-                  Provider.of<ThemeNotifier>(context, listen: false);
-              if (themeNotifier.themeMode == ThemeMode.light) {
-                themeNotifier.setTheme(ThemeMode.dark);
-              } else {
-                themeNotifier.setTheme(ThemeMode.light);
-              }
-            },
-          ),
-        ],
-        title: Stack(
-          children: [
-            Align(
-              alignment: Alignment.center,
-              child: StreamBuilder(
-                stream: Stream.periodic(const Duration(milliseconds: 250)),
-                builder: (context, snapshot) {
-                  final currentTime = DateTime.now();
-                  twoLetterMin(value) {
-                    if (value < 10) {
-                      return '0$value';
-                    }
-                    return value;
-                  }
-
-                  final day = twoLetterMin(currentTime.day);
-                  final month = twoLetterMin(currentTime.month);
-                  final year = currentTime.year;
-                  final hour = twoLetterMin(currentTime.hour);
-                  final minute = twoLetterMin(currentTime.minute);
-                  final second = twoLetterMin(currentTime.second);
-                  final dateFormated =
-                      '$day-$month-$year $hour:$minute:$second';
-                  return Text(dateFormated,
-                      style: Theme.of(context).textTheme.bodyMedium);
-                },
-              ),
-            ),
-            Align(
-              alignment: Alignment.centerRight,
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(0, 0, 16, 0),
-                child: SvgPicture.asset(
-                  'assets/centroid.svg',
-                  height: 50,
-                  package: 'tfc_hmi',
-                  colorFilter: ColorFilter.mode(
-                      Theme.of(context).colorScheme.onSurface, BlendMode.srcIn),
+        // Disable default leading so we can build our own.
+        automaticallyImplyLeading: false,
+        backgroundColor: Theme.of(context).appBarTheme.backgroundColor,
+        flexibleSpace: SafeArea(
+          child: Stack(
+            children: [
+              // CENTER: Always centered title widget.
+              Align(
+                alignment: Alignment.center,
+                child: StreamBuilder(
+                  stream: Stream.periodic(const Duration(milliseconds: 250)),
+                  builder: (context, snapshot) {
+                    final currentTime = DateTime.now();
+                    String twoLetter(int value) =>
+                        value < 10 ? '0$value' : '$value';
+                    final day = twoLetter(currentTime.day);
+                    final month = twoLetter(currentTime.month);
+                    final year = currentTime.year;
+                    final hour = twoLetter(currentTime.hour);
+                    final minute = twoLetter(currentTime.minute);
+                    final second = twoLetter(currentTime.second);
+                    final dateFormatted =
+                        '$day-$month-$year $hour:$minute:$second';
+                    return Text(
+                      dateFormatted,
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    );
+                  },
                 ),
               ),
-            ),
-          ],
+              // LEFT SIDE: Back arrow (if available) + injected custom widget.
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (context.canBeamBack)
+                      IconButton(
+                        icon: const Icon(Icons.arrow_back),
+                        onPressed: () => context.beamBack(),
+                      ),
+                    globalLeftProvider?.buildAppBarLeftWidgets(context) ??
+                        const SizedBox.shrink(),
+                  ],
+                ),
+              ),
+              // RIGHT SIDE: Theme toggle and SVG icon.
+              Align(
+                alignment: Alignment.centerRight,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.only(right: 16.0),
+                      child: SvgPicture.asset(
+                        'assets/centroid.svg',
+                        height: 50,
+                        package: 'tfc_hmi',
+                        colorFilter: ColorFilter.mode(
+                          Theme.of(context).colorScheme.onSurface,
+                          BlendMode.srcIn,
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.brightness_6),
+                      onPressed: () {
+                        ThemeNotifier themeNotifier =
+                            Provider.of<ThemeNotifier>(context, listen: false);
+                        if (themeNotifier.themeMode == ThemeMode.light) {
+                          themeNotifier.setTheme(ThemeMode.dark);
+                        } else {
+                          themeNotifier.setTheme(ThemeMode.light);
+                        }
+                      },
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
         ),
       ),
       body: body,
       floatingActionButton: floatingActionButton,
       bottomNavigationBar: NavigationBar(
-        labelBehavior: labelBehavior,
-        selectedIndex: findTopLevelIndexForBeamer(RouteRegistry().root, null,
-            (context.currentBeamLocation.state as BeamState).uri.path),
+        selectedIndex: findTopLevelIndexForBeamer(
+          RouteRegistry().root,
+          null,
+          (context.currentBeamLocation.state as BeamState).uri.path,
+        ),
+        labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
         destinations: [
           ...RouteRegistry().menuItems.map<Widget>((item) {
             if (item.children.isEmpty) {

@@ -13,6 +13,8 @@ import 'package:tfc_hmi/pages/system.dart';
 import 'package:tfc_hmi/pages/config_list.dart';
 import 'package:tfc_hmi/pages/login.dart';
 import 'package:provider/provider.dart';
+import 'package:tfc_hmi/widgets/tfc_operations.dart';
+import 'package:tfc_hmi/widgets/base_scaffold.dart';
 import 'pages/pages.dart';
 
 void main() async {
@@ -92,6 +94,13 @@ void main() async {
             providers: [
               ChangeNotifierProvider(create: (_) => themeNotifier),
               Provider<DBusClient>.value(value: client),
+              ChangeNotifierProxyProvider<DBusClient,
+                  GlobalAppBarLeftWidgetProvider>(
+                create: (context) =>
+                    OperationModeAppBarLeftWidgetProvider(client),
+                update: (context, client, previous) =>
+                    previous ?? OperationModeAppBarLeftWidgetProvider(client),
+              ),
             ],
             child: MyApp(),
           ),
