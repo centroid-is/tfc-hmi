@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:tfc_hmi/widgets/base_scaffold.dart';
 import 'package:tfc_hmi/dbus/generated/operations.dart';
 import 'package:dbus/dbus.dart';
+import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 
 class IndustrialAppBarLeftWidgetProvider
     extends GlobalAppBarLeftWidgetProvider {
@@ -51,14 +52,16 @@ class IndustrialAppBarLeftWidgetProvider
               mainAxisSize: MainAxisSize.min,
               children: [
                 IconButton(
-                  icon: Icon(mode == 'stopped' ? Icons.play_arrow : Icons.stop),
+                  icon: FaIcon(mode == 'stopped'
+                      ? FontAwesomeIcons.play
+                      : FontAwesomeIcons.stop),
                   tooltip: mode == 'stopped' ? 'Start' : 'Stop',
                   onPressed: () {
                     toggleRunning();
                   },
                 ),
                 IconButton(
-                  icon: const Icon(Icons.cleaning_services),
+                  icon: const FaIcon(FontAwesomeIcons.droplet),
                   tooltip: 'Cleaning',
                   onPressed: () async {
                     try {

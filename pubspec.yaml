@@ -21,6 +21,7 @@ dependencies:
   flutter_secure_storage: ^9.2.4
   file_picker: ^8.1.7
   rxdart: ^0.28.0
+  font_awesome_flutter: ^10.8.0
 dev_dependencies:
   flutter_test:
     sdk: flutter
