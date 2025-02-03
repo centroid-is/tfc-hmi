@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:dbus/dbus.dart';
+import 'package:logger/logger.dart';
+import 'dart:async';
 import '../widgets/base_scaffold.dart';
 import 'config_edit.dart';
 
@@ -19,6 +21,8 @@ class _ConfigListPageState extends State<ConfigListPage> {
   bool _isLoading = false;
   String _error = '';
   List<_ConfigInterfaceInfo> _foundConfigs = [];
+  final _logger = Logger();
+  static const timeout = Duration(seconds: 1);
 
   @override
   void initState() {
@@ -27,6 +31,7 @@ class _ConfigListPageState extends State<ConfigListPage> {
   }
 
   Future<void> _scanConfigs() async {
+    _logger.d('Starting config scan...');
     setState(() {
       _isLoading = true;
       _error = '';
@@ -35,91 +40,105 @@ class _ConfigListPageState extends State<ConfigListPage> {
 
     try {
       // 1) Get all bus names
+      _logger.d('Fetching bus names...');
       final reply = await widget.dbusClient.callMethod(
         destination: 'org.freedesktop.DBus',
         path: DBusObjectPath('/org/freedesktop/DBus'),
         interface: 'org.freedesktop.DBus',
         name: 'ListNames',
         values: <DBusValue>[],
-      );
+      ).timeout(timeout);
+
       if (reply.returnValues.isEmpty) {
         throw Exception('No bus names returned!');
       }
+
+      // Filter names early to reduce processing
       final allNames = (reply.returnValues.first as DBusArray)
           .children
           .map((e) => (e as DBusString).value)
+          .where((name) =>
+              !name.startsWith('org.freedesktop.') &&
+              !name.startsWith(
+                  ':')) // Skip both system services and unique names
           .toList();
 
-      // 2) Create a map of unique names to their aliases
-      final nameOwners = <String, String>{};
-      for (final name in allNames) {
-        if (!name.startsWith(':')) continue; // Skip non-unique names
-        try {
-          final ownerReply = await widget.dbusClient.callMethod(
-            destination: 'org.freedesktop.DBus',
-            path: DBusObjectPath('/org/freedesktop/DBus'),
-            interface: 'org.freedesktop.DBus',
-            name: 'GetNameOwner',
-            values: [DBusString(name)],
-          );
-          final owner = (ownerReply.returnValues.first as DBusString).value;
-          nameOwners[name] = owner;
-        } catch (_) {
-          // Skip if we can't get the owner
+      _logger.d('Found ${allNames.length} relevant bus names');
+
+      // 3) Scan services in parallel with a limit
+      final List<_ConfigInterfaceInfo> found = [];
+      final seenPaths = <String>{};
+
+      // Process services in batches to avoid overwhelming the system
+      const batchSize = 5;
+      for (var i = 0; i < allNames.length; i += batchSize) {
+        final batch = allNames.skip(i).take(batchSize);
+        final results = await Future.wait(
+          batch.map((serviceName) => _scanService(serviceName, seenPaths)),
+          eagerError: false, // Continue even if some fail
+        );
+
+        for (final configs in results) {
+          if (configs != null) {
+            // null means service scan failed
+            found.addAll(configs);
+          }
         }
       }
 
-      // 3) For each bus name, introspect and look for object paths
-      final List<_ConfigInterfaceInfo> found = [];
-      final seenPaths = <String>{}; // To track unique paths
+      _logger.i('Scan complete. Found ${found.length} total configs');
+      if (mounted) {
+        setState(() {
+          _foundConfigs = found;
+          _isLoading = false;
+        });
+      }
+    } catch (err) {
+      _logger.e('Scan failed with error: $err');
+      if (mounted) {
+        setState(() {
+          _error = err.toString();
+          _isLoading = false;
+        });
+      }
+    }
+  }
 
-      for (final serviceName in allNames) {
-        if (serviceName.startsWith('org.freedesktop.')) {
-          continue;
-        }
-
-        // Skip if this is an alias of a service we've already processed
-        if (nameOwners.containsValue(serviceName)) {
-          continue;
-        }
-
-        try {
-          final result = await widget.dbusClient.callMethod(
+  Future<List<_ConfigInterfaceInfo>?> _scanService(
+    String serviceName,
+    Set<String> seenPaths,
+  ) async {
+    _logger.d('Introspecting service: $serviceName');
+    try {
+      final result = await widget.dbusClient
+          .callMethod(
             destination: serviceName,
             path: DBusObjectPath('/'),
             interface: 'org.freedesktop.DBus.Introspectable',
             name: 'Introspect',
             replySignature: DBusSignature('s'),
-          );
-          final node =
-              parseDBusIntrospectXml(result.returnValues.first.asString());
+          )
+          .timeout(timeout);
 
-          // Create a unique key for this service+path combination
-          for (final config in await _scanNodeForConfigInterfaces(
-            serviceName,
-            DBusObjectPath('/'),
-            node,
-          )) {
-            final pathKey = '${config.serviceName}:${config.objectPath}';
-            if (!seenPaths.contains(pathKey)) {
-              seenPaths.add(pathKey);
-              found.add(config);
-            }
-          }
-        } catch (_) {
-          // Not all services can be introspected at "/"; skip or handle
-        }
-      }
+      final node = parseDBusIntrospectXml(result.returnValues.first.asString());
+      final configs = await _scanNodeForConfigInterfaces(
+        serviceName,
+        DBusObjectPath('/'),
+        node,
+      );
 
-      setState(() {
-        _foundConfigs = found;
-        _isLoading = false;
-      });
-    } catch (err) {
-      setState(() {
-        _error = err.toString();
-        _isLoading = false;
-      });
+      final uniqueConfigs = configs.where((config) {
+        final pathKey = '${config.serviceName}:${config.objectPath}';
+        if (seenPaths.contains(pathKey)) return false;
+        seenPaths.add(pathKey);
+        return true;
+      }).toList();
+
+      _logger.d('Found ${uniqueConfigs.length} configs in $serviceName');
+      return uniqueConfigs;
+    } catch (e) {
+      _logger.w('Failed to introspect $serviceName: $e');
+      return null;
     }
   }
 
@@ -130,44 +149,49 @@ class _ConfigListPageState extends State<ConfigListPage> {
   ) async {
     final List<_ConfigInterfaceInfo> matches = [];
 
-    // Skip paths containing "/Config/filters/"
+    // Skip filtered paths early
     if (path.value.contains('/Config/filters/')) {
-      return matches; // Return empty list for filtered paths
+      return matches;
     }
 
-    // If any interface matches "is.centroid.Config", add
-    for (final iface in node.interfaces) {
-      if (iface.name == 'is.centroid.Config') {
-        matches.add(_ConfigInterfaceInfo(serviceName, path.value));
-        break;
-      }
+    // Check for config interface
+    if (node.interfaces.any((iface) => iface.name == 'is.centroid.Config')) {
+      matches.add(_ConfigInterfaceInfo(serviceName, path.value));
     }
 
-    // Recurse into child nodes
-    for (final subnode in node.children) {
-      final childPath = path.value.endsWith('/')
-          ? '${path.value}${subnode.name}'
-          : '${path.value}/${subnode.name}';
-      try {
-        final result = await widget.dbusClient.callMethod(
-          destination: serviceName,
-          path: DBusObjectPath(childPath),
-          interface: 'org.freedesktop.DBus.Introspectable',
-          name: 'Introspect',
-          replySignature: DBusSignature('s'),
-        );
-        final childNode =
-            parseDBusIntrospectXml(result.returnValues.first.asString());
-        matches.addAll(await _scanNodeForConfigInterfaces(
-          serviceName,
-          DBusObjectPath(childPath),
-          childNode,
-        ));
-      } catch (_) {
-        // Could fail on some child path; skip
-      }
-    }
+    // Process child nodes in parallel
+    final childResults = await Future.wait(
+      node.children.map((subnode) async {
+        final childPath = path.value.endsWith('/')
+            ? '${path.value}${subnode.name}'
+            : '${path.value}/${subnode.name}';
+        try {
+          final result = await widget.dbusClient
+              .callMethod(
+                destination: serviceName,
+                path: DBusObjectPath(childPath),
+                interface: 'org.freedesktop.DBus.Introspectable',
+                name: 'Introspect',
+                replySignature: DBusSignature('s'),
+              )
+              .timeout(timeout);
 
+          final childNode =
+              parseDBusIntrospectXml(result.returnValues.first.asString());
+          return _scanNodeForConfigInterfaces(
+            serviceName,
+            DBusObjectPath(childPath),
+            childNode,
+          );
+        } catch (e) {
+          _logger.t('Failed to scan child path $childPath: $e');
+          return <_ConfigInterfaceInfo>[];
+        }
+      }),
+      eagerError: false,
+    );
+
+    matches.addAll(childResults.expand((x) => x));
     return matches;
   }
 
