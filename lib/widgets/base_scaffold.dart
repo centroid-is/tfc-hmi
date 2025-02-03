@@ -71,98 +71,82 @@ class BaseScaffold extends StatelessWidget {
         automaticallyImplyLeading: false,
         backgroundColor: Theme.of(context).appBarTheme.backgroundColor,
         flexibleSpace: SafeArea(
-          child: LayoutBuilder(
-            builder: (context, constraints) {
-              return Row(
-                children: [
-                  // LEFT SIDE: Back arrow (if available) + injected widget.
-                  Flexible(
-                    flex: 1,
-                    fit: FlexFit.loose,
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        if (context.canBeamBack)
-                          IconButton(
-                            icon: const Icon(Icons.arrow_back),
-                            onPressed: () => context.beamBack(),
-                          ),
-                        // The custom left-side widget.
-                        globalLeftProvider?.buildAppBarLeftWidgets(context) ??
-                            const SizedBox.shrink(),
-                      ],
-                    ),
-                  ),
-                  // CENTER: Centered title widget.
-                  Expanded(
-                    flex: 2,
-                    child: Center(
-                      child: StreamBuilder(
-                        stream:
-                            Stream.periodic(const Duration(milliseconds: 250)),
-                        builder: (context, snapshot) {
-                          final currentTime = DateTime.now();
-                          String twoLetter(int value) =>
-                              value < 10 ? '0$value' : '$value';
-                          final day = twoLetter(currentTime.day);
-                          final month = twoLetter(currentTime.month);
-                          final year = currentTime.year;
-                          final hour = twoLetter(currentTime.hour);
-                          final minute = twoLetter(currentTime.minute);
-                          final second = twoLetter(currentTime.second);
-                          final dateFormatted =
-                              '$day-$month-$year $hour:$minute:$second';
-                          return Text(
-                            dateFormatted,
-                            style: Theme.of(context).textTheme.bodyMedium,
-                          );
-                        },
+          child: Stack(
+            children: [
+              // CENTER: Always centered title widget.
+              Align(
+                alignment: Alignment.center,
+                child: StreamBuilder(
+                  stream: Stream.periodic(const Duration(milliseconds: 250)),
+                  builder: (context, snapshot) {
+                    final currentTime = DateTime.now();
+                    String twoLetter(int value) =>
+                        value < 10 ? '0$value' : '$value';
+                    final day = twoLetter(currentTime.day);
+                    final month = twoLetter(currentTime.month);
+                    final year = currentTime.year;
+                    final hour = twoLetter(currentTime.hour);
+                    final minute = twoLetter(currentTime.minute);
+                    final second = twoLetter(currentTime.second);
+                    final dateFormatted =
+                        '$day-$month-$year $hour:$minute:$second';
+                    return Text(
+                      dateFormatted,
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    );
+                  },
+                ),
+              ),
+              // LEFT SIDE: Back arrow (if available) + injected custom widget.
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (context.canBeamBack)
+                      IconButton(
+                        icon: const Icon(Icons.arrow_back),
+                        onPressed: () => context.beamBack(),
+                      ),
+                    globalLeftProvider?.buildAppBarLeftWidgets(context) ??
+                        const SizedBox.shrink(),
+                  ],
+                ),
+              ),
+              // RIGHT SIDE: Theme toggle and SVG icon.
+              Align(
+                alignment: Alignment.centerRight,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.only(right: 16.0),
+                      child: SvgPicture.asset(
+                        'assets/centroid.svg',
+                        height: 50,
+                        package: 'tfc_hmi',
+                        colorFilter: ColorFilter.mode(
+                          Theme.of(context).colorScheme.onSurface,
+                          BlendMode.srcIn,
+                        ),
                       ),
                     ),
-                  ),
-                  // RIGHT SIDE: Theme toggle and SVG icon.
-                  Flexible(
-                    flex: 1,
-                    fit: FlexFit.tight,
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.end,
-                      children: [
-                        Flexible(
-                          child: Padding(
-                            padding: const EdgeInsets.only(right: 16.0),
-                            child: FittedBox(
-                              fit: BoxFit.scaleDown,
-                              child: SvgPicture.asset(
-                                'assets/centroid.svg',
-                                height: 50,
-                                package: 'tfc_hmi',
-                                colorFilter: ColorFilter.mode(
-                                  Theme.of(context).colorScheme.onSurface,
-                                  BlendMode.srcIn,
-                                ),
-                              ),
-                            ),
-                          ),
-                        ),
-                        IconButton(
-                          icon: const Icon(Icons.brightness_6),
-                          onPressed: () {
-                            ThemeNotifier themeNotifier =
-                                Provider.of<ThemeNotifier>(context,
-                                    listen: false);
-                            if (themeNotifier.themeMode == ThemeMode.light) {
-                              themeNotifier.setTheme(ThemeMode.dark);
-                            } else {
-                              themeNotifier.setTheme(ThemeMode.light);
-                            }
-                          },
-                        ),
-                      ],
+                    IconButton(
+                      icon: const Icon(Icons.brightness_6),
+                      onPressed: () {
+                        ThemeNotifier themeNotifier =
+                            Provider.of<ThemeNotifier>(context, listen: false);
+                        if (themeNotifier.themeMode == ThemeMode.light) {
+                          themeNotifier.setTheme(ThemeMode.dark);
+                        } else {
+                          themeNotifier.setTheme(ThemeMode.light);
+                        }
+                      },
                     ),
-                  ),
-                ],
-              );
-            },
+                  ],
+                ),
+              ),
+            ],
           ),
         ),
       ),
