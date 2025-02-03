@@ -63,16 +63,20 @@ class IndustrialAppBarLeftWidgetProvider
                 IconButton(
                   icon: const FaIcon(FontAwesomeIcons.droplet),
                   tooltip: 'Cleaning',
-                  onPressed: () async {
-                    try {
-                      await _operationMode.callSetMode('cleaning');
-                    } catch (e) {
-                      debugPrint('Failed to set cleaning mode: $e');
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(content: Text('Failed to start cleaning: $e')),
-                      );
-                    }
-                  },
+                  onPressed: mode == 'stopped'
+                      ? () async {
+                          try {
+                            await _operationMode.callSetMode('cleaning');
+                          } catch (e) {
+                            debugPrint('Failed to set cleaning mode: $e');
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                  content:
+                                      Text('Failed to start cleaning: $e')),
+                            );
+                          }
+                        }
+                      : null,
                 ),
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 8.0),
