@@ -58,7 +58,6 @@ class NavDropdown extends StatelessWidget {
       final children =
           root.children.map((child) => buildMenu(child, context)).toList();
       return PopupMenuItem<MenuItem>(
-        height: 48,
         child: ExpansionTile(
           leading: Icon(root.icon),
           title: Text(
@@ -70,7 +69,6 @@ class NavDropdown extends StatelessWidget {
     } else {
       // Node has no children. Return simple listtile
       return PopupMenuItem<MenuItem>(
-        height: 48,
         value: root,
         child: ListTile(
           leading: Icon(root.icon),
@@ -101,8 +99,6 @@ class NavDropdown extends StatelessWidget {
           minWidth: constraints.maxWidth,
           maxWidth: constraints.maxWidth,
         ),
-        useRootNavigator: true,
-        elevation: 8,
         itemBuilder: (BuildContext context) {
           return menuItem.children
               .map((node) => buildMenu(node, context))
