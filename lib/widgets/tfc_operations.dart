@@ -43,7 +43,6 @@ class IndustrialAppBarLeftWidgetProvider
 
   @override
   Widget buildAppBarLeftWidgets(BuildContext context) {
-    // We use a Row to lay out several widgets horizontally.
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -67,9 +66,9 @@ class IndustrialAppBarLeftWidgetProvider
           },
         ),
         // Show current run state.
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 8.0),
-          child: Flexible(
+        Flexible(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8.0),
             child: Text(
               _isRunning ? 'Running' : 'Stopped',
               style: Theme.of(context).textTheme.titleMedium?.copyWith(

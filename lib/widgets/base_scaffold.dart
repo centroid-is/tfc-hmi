@@ -13,13 +13,8 @@ import 'dart:async';
 // Provider Abstraction
 // ===================
 
-/// Abstract provider for app bar left widgets.
-/// In your app’s widget tree you can wrap your app (or part of it)
-/// with a ChangeNotifierProvider<GlobalAppBarLeftWidgetProvider> to inject
-/// your custom left-side app bar widgets.
 abstract class GlobalAppBarLeftWidgetProvider with ChangeNotifier {
-  /// Called to build the widget(s) that should be shown at the left side
-  /// of the top app bar.
+  /// Build the custom left-side widget.
   Widget buildAppBarLeftWidgets(BuildContext context);
 }
 
@@ -53,11 +48,7 @@ class BaseScaffold extends StatelessWidget {
     return null;
   }
 
-  final NavigationDestinationLabelBehavior labelBehavior =
-      NavigationDestinationLabelBehavior.alwaysShow;
-
-  /// Tries to retrieve the global left-side widget provider.
-  /// If not found, returns null.
+  /// Attempt to get a global left widget provider.
   GlobalAppBarLeftWidgetProvider? _tryGetGlobalAppBarLeftWidgetProvider(
       BuildContext context) {
     try {
@@ -68,119 +59,122 @@ class BaseScaffold extends StatelessWidget {
     }
   }
 
-  /// Builds a leading widget for the AppBar that combines the optional
-  /// back arrow (if available) and the injected global left widget.
-  Widget? _buildLeading(BuildContext context) {
-    final bool canBeamBack = context.canBeamBack;
-    final provider = _tryGetGlobalAppBarLeftWidgetProvider(context);
-    final Widget injectedWidget =
-        provider?.buildAppBarLeftWidgets(context) ?? const SizedBox.shrink();
-
-    // If there is no injected widget and no back arrow, return null.
-    if (!canBeamBack &&
-        injectedWidget is SizedBox &&
-        (injectedWidget as SizedBox).width == 0) {
-      return null;
-    }
-
-    // If both a back arrow and injected widget are available,
-    // combine them in a Row.
-    if (canBeamBack) {
-      return Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          IconButton(
-            icon: const Icon(Icons.arrow_back),
-            onPressed: () => context.beamBack(),
-          ),
-          injectedWidget,
-        ],
-      );
-    } else {
-      // Otherwise, return the injected widget.
-      return injectedWidget;
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final logger = Logger();
-    // Determine a suitable leadingWidth if multiple widgets are present.
-    final bool hasExtraLeftWidgets =
-        _tryGetGlobalAppBarLeftWidgetProvider(context) != null;
-    final double leadingWidth =
-        context.canBeamBack || hasExtraLeftWidgets ? 120.0 : kToolbarHeight;
+    // Retrieve the provider (if any)
+    final globalLeftProvider = _tryGetGlobalAppBarLeftWidgetProvider(context);
 
     return Scaffold(
       appBar: AppBar(
-        // Use the custom built leading widget.
-        leading: _buildLeading(context),
-        leadingWidth: leadingWidth,
-        centerTitle: true,
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.brightness_6),
-            onPressed: () {
-              ThemeNotifier themeNotifier =
-                  Provider.of<ThemeNotifier>(context, listen: false);
-              if (themeNotifier.themeMode == ThemeMode.light) {
-                themeNotifier.setTheme(ThemeMode.dark);
-              } else {
-                themeNotifier.setTheme(ThemeMode.light);
-              }
+        // Disable default leading so we can build our own.
+        automaticallyImplyLeading: false,
+        backgroundColor: Theme.of(context).appBarTheme.backgroundColor,
+        flexibleSpace: SafeArea(
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              return Row(
+                children: [
+                  // LEFT SIDE: Back arrow (if available) + injected widget.
+                  Flexible(
+                    flex: 1,
+                    fit: FlexFit.loose,
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (context.canBeamBack)
+                          IconButton(
+                            icon: const Icon(Icons.arrow_back),
+                            onPressed: () => context.beamBack(),
+                          ),
+                        // The custom left-side widget.
+                        globalLeftProvider?.buildAppBarLeftWidgets(context) ??
+                            const SizedBox.shrink(),
+                      ],
+                    ),
+                  ),
+                  // CENTER: Centered title widget.
+                  Expanded(
+                    flex: 2,
+                    child: Center(
+                      child: StreamBuilder(
+                        stream:
+                            Stream.periodic(const Duration(milliseconds: 250)),
+                        builder: (context, snapshot) {
+                          final currentTime = DateTime.now();
+                          String twoLetter(int value) =>
+                              value < 10 ? '0$value' : '$value';
+                          final day = twoLetter(currentTime.day);
+                          final month = twoLetter(currentTime.month);
+                          final year = currentTime.year;
+                          final hour = twoLetter(currentTime.hour);
+                          final minute = twoLetter(currentTime.minute);
+                          final second = twoLetter(currentTime.second);
+                          final dateFormatted =
+                              '$day-$month-$year $hour:$minute:$second';
+                          return Text(
+                            dateFormatted,
+                            style: Theme.of(context).textTheme.bodyMedium,
+                          );
+                        },
+                      ),
+                    ),
+                  ),
+                  // RIGHT SIDE: Theme toggle and SVG icon.
+                  Flexible(
+                    flex: 1,
+                    fit: FlexFit.tight,
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        Flexible(
+                          child: Padding(
+                            padding: const EdgeInsets.only(right: 16.0),
+                            child: FittedBox(
+                              fit: BoxFit.scaleDown,
+                              child: SvgPicture.asset(
+                                'assets/centroid.svg',
+                                height: 50,
+                                package: 'tfc_hmi',
+                                colorFilter: ColorFilter.mode(
+                                  Theme.of(context).colorScheme.onSurface,
+                                  BlendMode.srcIn,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.brightness_6),
+                          onPressed: () {
+                            ThemeNotifier themeNotifier =
+                                Provider.of<ThemeNotifier>(context,
+                                    listen: false);
+                            if (themeNotifier.themeMode == ThemeMode.light) {
+                              themeNotifier.setTheme(ThemeMode.dark);
+                            } else {
+                              themeNotifier.setTheme(ThemeMode.light);
+                            }
+                          },
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              );
             },
           ),
-        ],
-        title: Stack(
-          children: [
-            Align(
-              alignment: Alignment.center,
-              child: StreamBuilder(
-                stream: Stream.periodic(const Duration(milliseconds: 250)),
-                builder: (context, snapshot) {
-                  final currentTime = DateTime.now();
-                  twoLetterMin(value) {
-                    if (value < 10) {
-                      return '0$value';
-                    }
-                    return value;
-                  }
-
-                  final day = twoLetterMin(currentTime.day);
-                  final month = twoLetterMin(currentTime.month);
-                  final year = currentTime.year;
-                  final hour = twoLetterMin(currentTime.hour);
-                  final minute = twoLetterMin(currentTime.minute);
-                  final second = twoLetterMin(currentTime.second);
-                  final dateFormatted =
-                      '$day-$month-$year $hour:$minute:$second';
-                  return Text(dateFormatted,
-                      style: Theme.of(context).textTheme.bodyMedium);
-                },
-              ),
-            ),
-            Align(
-              alignment: Alignment.centerRight,
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(0, 0, 16, 0),
-                child: SvgPicture.asset(
-                  'assets/centroid.svg',
-                  height: 50,
-                  package: 'tfc_hmi',
-                  colorFilter: ColorFilter.mode(
-                      Theme.of(context).colorScheme.onSurface, BlendMode.srcIn),
-                ),
-              ),
-            ),
-          ],
         ),
       ),
       body: body,
       floatingActionButton: floatingActionButton,
       bottomNavigationBar: NavigationBar(
-        labelBehavior: labelBehavior,
-        selectedIndex: findTopLevelIndexForBeamer(RouteRegistry().root, null,
-            (context.currentBeamLocation.state as BeamState).uri.path),
+        selectedIndex: findTopLevelIndexForBeamer(
+          RouteRegistry().root,
+          null,
+          (context.currentBeamLocation.state as BeamState).uri.path,
+        ),
+        labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
         destinations: [
           ...RouteRegistry().menuItems.map<Widget>((item) {
             if (item.children.isEmpty) {
