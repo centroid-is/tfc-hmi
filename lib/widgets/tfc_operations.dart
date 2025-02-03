@@ -4,11 +4,11 @@ import 'package:tfc_hmi/dbus/generated/operations.dart';
 import 'package:dbus/dbus.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 
-class IndustrialAppBarLeftWidgetProvider
+class OperationModeAppBarLeftWidgetProvider
     extends GlobalAppBarLeftWidgetProvider {
   late final IsCentroidOperationMode _operationMode;
 
-  IndustrialAppBarLeftWidgetProvider(DBusClient client) {
+  OperationModeAppBarLeftWidgetProvider(DBusClient client) {
     _operationMode = IsCentroidOperationMode(
         client,
         'is.centroid.operations.def',

@@ -96,9 +96,10 @@ void main() async {
               Provider<DBusClient>.value(value: client),
               ChangeNotifierProxyProvider<DBusClient,
                   GlobalAppBarLeftWidgetProvider>(
-                create: (context) => IndustrialAppBarLeftWidgetProvider(client),
+                create: (context) =>
+                    OperationModeAppBarLeftWidgetProvider(client),
                 update: (context, client, previous) =>
-                    previous ?? IndustrialAppBarLeftWidgetProvider(client),
+                    previous ?? OperationModeAppBarLeftWidgetProvider(client),
               ),
             ],
             child: MyApp(),
