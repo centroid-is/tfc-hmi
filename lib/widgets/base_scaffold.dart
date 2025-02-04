@@ -2,12 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:beamer/beamer.dart';
 import 'package:logger/logger.dart';
-import 'package:tfc_hmi/widgets/nav_dropdown.dart';
-import '../models/menu_item.dart';
-import '../route_registry.dart';
-import 'package:tfc_hmi/theme.dart';
 import 'package:provider/provider.dart';
 import 'dart:async';
+import 'nav_dropdown.dart';
+import '../models/menu_item.dart';
+import '../route_registry.dart';
+import '../theme.dart';
 
 // ===================
 // Provider Abstraction
@@ -124,7 +124,7 @@ class BaseScaffold extends StatelessWidget {
                       child: SvgPicture.asset(
                         'assets/centroid.svg',
                         height: 50,
-                        package: 'tfc_hmi',
+                        package: 'tfc',
                         colorFilter: ColorFilter.mode(
                           Theme.of(context).colorScheme.onSurface,
                           BlendMode.srcIn,

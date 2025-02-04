@@ -4,12 +4,12 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:provider/provider.dart';
 import 'package:logger/logger.dart';
-import 'package:tfc_hmi/dbus/remote.dart';
-import 'package:tfc_hmi/theme.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:file_picker/file_picker.dart';
 import 'dart:io' show Platform;
 import 'package:path/path.dart' as path;
+import '../dbus/remote.dart';
+import '../theme.dart';
 
 final logger = Logger();
 

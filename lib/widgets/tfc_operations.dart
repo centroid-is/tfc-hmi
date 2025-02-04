@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
-import 'package:tfc_hmi/widgets/base_scaffold.dart';
-import 'package:tfc_hmi/dbus/generated/operations.dart';
 import 'package:dbus/dbus.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
+import 'base_scaffold.dart';
+import '../dbus/generated/operations.dart';
 
 class OperationModeAppBarLeftWidgetProvider
     extends GlobalAppBarLeftWidgetProvider {

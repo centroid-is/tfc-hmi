@@ -1,8 +1,8 @@
 // lib/widgets/nav_dropdown.dart
 import 'package:flutter/material.dart';
-import 'package:tfc_hmi/route_registry.dart';
-import '../models/menu_item.dart';
 import 'package:beamer/beamer.dart';
+import '../models/menu_item.dart';
+import '../route_registry.dart';
 
 class TopLevelNavIndicator extends StatelessWidget {
   final IconData icon;
