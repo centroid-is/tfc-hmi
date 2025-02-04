@@ -1,6 +1,6 @@
-name: tfc_hmi
-description: "A new Flutter package project."
-version: 0.0.1
+name: tfc
+description: "Time For Change(TFC) display framework."
+version: 2025.2.0
 homepage:
 
 environment:

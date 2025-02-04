@@ -565,13 +565,13 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "0.7.3"
-  tfc_hmi:
+  tfc:
     dependency: "direct main"
     description:
       path: ".."
       relative: true
     source: path
-    version: "0.0.1"
+    version: "2025.2.0"
   typed_data:
     dependency: transitive
     description:

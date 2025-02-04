@@ -30,7 +30,7 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  tfc_hmi:
+  tfc:
     path: ../
   beamer: ^1.6.2
   
@@ -81,19 +81,19 @@ flutter:
   fonts:
     - family: roboto-mono
       fonts:
-      - asset: packages/tfc_hmi/fonts/roboto-mono/RobotoMono-Thin.ttf
+      - asset: packages/tfc/fonts/roboto-mono/RobotoMono-Thin.ttf
         weight: 100
-      - asset: packages/tfc_hmi/fonts/roboto-mono/RobotoMono-ExtraLight.ttf
+      - asset: packages/tfc/fonts/roboto-mono/RobotoMono-ExtraLight.ttf
         weight: 200
-      - asset: packages/tfc_hmi/fonts/roboto-mono/RobotoMono-Light.ttf
+      - asset: packages/tfc/fonts/roboto-mono/RobotoMono-Light.ttf
         weight: 300
-      - asset: packages/tfc_hmi/fonts/roboto-mono/RobotoMono-Regular.ttf
+      - asset: packages/tfc/fonts/roboto-mono/RobotoMono-Regular.ttf
         weight: 400
-      - asset: packages/tfc_hmi/fonts/roboto-mono/RobotoMono-Medium.ttf
+      - asset: packages/tfc/fonts/roboto-mono/RobotoMono-Medium.ttf
         weight: 500
-      - asset: packages/tfc_hmi/fonts/roboto-mono/RobotoMono-SemiBold.ttf
+      - asset: packages/tfc/fonts/roboto-mono/RobotoMono-SemiBold.ttf
         weight: 700
-      - asset: packages/tfc_hmi/fonts/roboto-mono/RobotoMono-Bold.ttf
+      - asset: packages/tfc/fonts/roboto-mono/RobotoMono-Bold.ttf
         weight: 900
   #   - family: Trajan Pro
   #     fonts:

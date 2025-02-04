@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:tfc_hmi/widgets/base_scaffold.dart';
 import 'package:beamer/beamer.dart';
+import '../widgets/base_scaffold.dart';
 
 class PageNotFound extends StatelessWidget {
   const PageNotFound({super.key});

@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:tfc_hmi/theme.dart';
 import '../widgets/base_scaffold.dart';
+import '../theme.dart';
 
 class ViewTheme extends StatelessWidget {
   const ViewTheme({super.key});

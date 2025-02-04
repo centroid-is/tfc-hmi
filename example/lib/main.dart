@@ -1,20 +1,20 @@
 import 'package:flutter/material.dart';
 import 'package:beamer/beamer.dart';
 import 'package:dbus/dbus.dart';
-import 'package:tfc_hmi/theme.dart';
-import 'package:tfc_hmi/route_registry.dart';
-import 'package:tfc_hmi/models/menu_item.dart';
-import 'package:tfc_hmi/transition_delegate.dart';
-import 'package:tfc_hmi/pages/ipc_connections.dart';
-import 'package:tfc_hmi/pages/ip_settings.dart';
-import 'package:tfc_hmi/pages/not_found.dart';
-import 'package:tfc_hmi/pages/viewtheme.dart';
-import 'package:tfc_hmi/pages/system.dart';
-import 'package:tfc_hmi/pages/config_list.dart';
-import 'package:tfc_hmi/pages/login.dart';
+import 'package:tfc/theme.dart';
+import 'package:tfc/route_registry.dart';
+import 'package:tfc/models/menu_item.dart';
+import 'package:tfc/transition_delegate.dart';
+import 'package:tfc/pages/ipc_connections.dart';
+import 'package:tfc/pages/ip_settings.dart';
+import 'package:tfc/pages/not_found.dart';
+import 'package:tfc/pages/viewtheme.dart';
+import 'package:tfc/pages/system.dart';
+import 'package:tfc/pages/config_list.dart';
+import 'package:tfc/pages/login.dart';
 import 'package:provider/provider.dart';
-import 'package:tfc_hmi/widgets/tfc_operations.dart';
-import 'package:tfc_hmi/widgets/base_scaffold.dart';
+import 'package:tfc/widgets/tfc_operations.dart';
+import 'package:tfc/widgets/base_scaffold.dart';
 import 'pages/pages.dart';
 
 void main() async {
