@@ -87,19 +87,27 @@ class NavDropdown extends StatelessWidget {
     if (activeRoot != null) {
       print('I am here ${activeRoot.label}');
     }
-    return PopupMenuButton<MenuItem>(
-      onSelected: (MenuItem selectedItem) =>
-          beamSafelyKids(context, selectedItem),
-      color: Theme.of(context).colorScheme.surface,
-      tooltip: menuItem.label,
-      itemBuilder: (BuildContext context) {
-        return menuItem.children
-            .map((node) => buildMenu(node, context))
-            .toList();
-      },
-      child: TopLevelNavIndicator(
-          menuItem.icon, menuItem.label, menuItem == activeRoot),
-    );
+    return LayoutBuilder(builder: (context, constraints) {
+      return PopupMenuButton<MenuItem>(
+        onSelected: (MenuItem selectedItem) =>
+            beamSafelyKids(context, selectedItem),
+        color: Theme.of(context).colorScheme.surface,
+        tooltip: menuItem.label,
+        position: PopupMenuPosition.under,
+        offset: const Offset(0, -(240.0)),
+        constraints: BoxConstraints(
+          minWidth: constraints.maxWidth,
+          maxWidth: constraints.maxWidth,
+        ),
+        itemBuilder: (BuildContext context) {
+          return menuItem.children
+              .map((node) => buildMenu(node, context))
+              .toList();
+        },
+        child: TopLevelNavIndicator(
+            menuItem.icon, menuItem.label, menuItem == activeRoot),
+      );
+    });
   }
 }
 
