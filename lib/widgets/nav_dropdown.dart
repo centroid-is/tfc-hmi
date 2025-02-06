@@ -33,6 +33,7 @@ class TopLevelNavIndicator extends StatelessWidget {
 }
 
 class NavDropdown extends StatelessWidget {
+  static const double itemHeight = 56.0;
   final MenuItem menuItem;
 
   const NavDropdown({
@@ -58,6 +59,7 @@ class NavDropdown extends StatelessWidget {
       final children =
           root.children.map((child) => buildMenu(child, context)).toList();
       return PopupMenuItem<MenuItem>(
+        height: NavDropdown.itemHeight,
         child: ExpansionTile(
           leading: Icon(root.icon),
           title: Text(
@@ -69,6 +71,7 @@ class NavDropdown extends StatelessWidget {
     } else {
       // Node has no children. Return simple listtile
       return PopupMenuItem<MenuItem>(
+        height: NavDropdown.itemHeight,
         value: root,
         child: ListTile(
           leading: Icon(root.icon),
@@ -88,13 +91,17 @@ class NavDropdown extends StatelessWidget {
       print('I am here ${activeRoot.label}');
     }
     return LayoutBuilder(builder: (context, constraints) {
+      const offset = 100.0;
+      final totalItems = menuItem.children.length; // Only count top-level items
+      final menuHeight = totalItems * NavDropdown.itemHeight + offset;
+
       return PopupMenuButton<MenuItem>(
         onSelected: (MenuItem selectedItem) =>
             beamSafelyKids(context, selectedItem),
         color: Theme.of(context).colorScheme.surface,
         tooltip: menuItem.label,
         position: PopupMenuPosition.under,
-        offset: const Offset(0, -(240.0)),
+        offset: Offset(0, -menuHeight), // Dynamic offset based on menu height
         constraints: BoxConstraints(
           minWidth: constraints.maxWidth,
           maxWidth: constraints.maxWidth,
