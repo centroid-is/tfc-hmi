@@ -268,7 +268,7 @@ class _LoginPageState extends State<LoginPage> {
                   SvgPicture.asset(
                     'assets/centroid.svg',
                     height: 50,
-                    package: 'tfc_hmi',
+                    package: 'tfc',
                     colorFilter: ColorFilter.mode(
                         Theme.of(context).colorScheme.onSurface,
                         BlendMode.srcIn),
