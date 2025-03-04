@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import 'package:logger/logger.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:file_picker/file_picker.dart';
+import 'dart:async';
 import 'dart:io' show Platform;
 import 'package:path/path.dart' as path;
 import '../dbus/remote.dart';
@@ -85,15 +86,20 @@ class LoginCredentials {
       });
 
       final result = await (type == ConnectionType.system
-          ? Future.value(DBusClient.system())
-          : connectRemoteSystemBus(
-              remoteHost: host!,
-              sshUser: username!,
-              sshPassword: sshPrivateKeyPath == null ? password : null,
-              sshPrivateKeyPath: sshPrivateKeyPath,
-              sshPrivateKeyPassphrase:
-                  sshPrivateKeyPath != null ? password : null,
-            ));
+              ? Future.value(DBusClient.system())
+              : connectRemoteSystemBus(
+                  remoteHost: host!,
+                  sshUser: username!,
+                  sshPassword: sshPrivateKeyPath == null ? password : null,
+                  sshPrivateKeyPath: sshPrivateKeyPath,
+                  sshPrivateKeyPassphrase:
+                      sshPrivateKeyPath != null ? password : null,
+                ))
+          .timeout(
+        const Duration(seconds: 10),
+        onTimeout: () =>
+            throw TimeoutException('Connection timed out after 10 seconds'),
+      );
 
       if (context.mounted) {
         Navigator.of(context).pop();

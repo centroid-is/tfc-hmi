@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:tfc/widgets/base_scaffold.dart';
+import 'package:tfc/painter/fish/trout.dart';
 
 class HomePage extends StatelessWidget {
   const HomePage({super.key});
@@ -10,8 +11,8 @@ class HomePage extends StatelessWidget {
       title: 'Home Page',
       body: Container(
           child: Center(
-        child:
-            Text('Home Page', style: Theme.of(context).textTheme.displayLarge),
+        child: TroutWidget(size: 200),
+        // Text('Home Page', style: Theme.of(context).textTheme.displayLarge),
       )),
     );
   }

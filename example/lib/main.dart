@@ -15,6 +15,7 @@ import 'package:tfc/pages/login.dart';
 import 'package:provider/provider.dart';
 import 'package:tfc/widgets/tfc_operations.dart';
 import 'package:tfc/widgets/base_scaffold.dart';
+import 'package:tfc/pages/page_view.dart';
 import 'pages/pages.dart';
 
 void main() async {
@@ -37,11 +38,6 @@ void main() async {
         label: 'Profile',
         path: '/settings/profile',
         icon: Icons.person,
-      ),
-      MenuItem(
-        label: 'Privacy',
-        path: '/settings/privacy',
-        icon: Icons.lock,
       ),
       MenuItem(
         label: 'Core',
@@ -78,6 +74,12 @@ void main() async {
     label: 'System',
     path: '/system',
     icon: Icons.tune,
+  ));
+
+  registry.addMenuItem(const MenuItem(
+    label: 'Asset View',
+    path: '/asset-view',
+    icon: Icons.lock,
   ));
 
   // Run the login flow first
@@ -152,7 +154,65 @@ final simpleLocationBuilder = RoutesLocationBuilder(routes: {
         child: SystemsPage(),
       ),
   '/theme': (context, state, args) => const BeamPage(
-      key: ValueKey('/theme'), title: 'Theme', child: ViewTheme())
+      key: ValueKey('/theme'), title: 'Theme', child: ViewTheme()),
+  '/asset-view': (context, state, args) => BeamPage(
+        key: const ValueKey('/asset-view'),
+        title: 'Asset View',
+        child: AssetView(
+          config: AssetViewConfig.fromJson(
+            {
+              "groups": [
+                {
+                  "name": "slow",
+                  "assets": [
+                    {
+                      "asset_name": "LEDConfig",
+                      "key": "Slow LED 1",
+                      "on_color": {"red": 1.0, "green": 0.0, "blue": 0.0},
+                      "off_color": {"red": 0.2, "green": 0.0, "blue": 0.0},
+                      "text_pos": "above",
+                      "coordinates": {"x": 0.2, "y": 0.3},
+                      "size": {"width": 40.0, "height": 40.0}
+                    },
+                    {
+                      "asset_name": "CircleButtonConfig",
+                      "key": "Slow Button 1",
+                      "outward_color": {"red": 0.0, "green": 1.0, "blue": 0.0},
+                      "inward_color": {"red": 0.0, "green": 0.2, "blue": 0.0},
+                      "text_pos": "below",
+                      "coordinates": {"x": 0.4, "y": 0.3},
+                      "size": {"width": 50.0, "height": 50.0}
+                    }
+                  ]
+                },
+                {
+                  "name": "fast",
+                  "assets": [
+                    {
+                      "asset_name": "LEDConfig",
+                      "key": "Fast LED 1",
+                      "on_color": {"red": 0.0, "green": 0.0, "blue": 1.0},
+                      "off_color": {"red": 0.0, "green": 0.0, "blue": 0.2},
+                      "text_pos": "right",
+                      "coordinates": {"x": 0.6, "y": 0.7},
+                      "size": {"width": 40.0, "height": 40.0}
+                    },
+                    {
+                      "asset_name": "CircleButtonConfig",
+                      "key": "Fast Button 1",
+                      "outward_color": {"red": 1.0, "green": 1.0, "blue": 0.0},
+                      "inward_color": {"red": 0.2, "green": 0.2, "blue": 0.0},
+                      "text_pos": "left",
+                      "coordinates": {"x": 0.8, "y": 0.7},
+                      "size": {"width": 50.0, "height": 50.0}
+                    }
+                  ]
+                }
+              ]
+            },
+          ),
+        ),
+      ),
 });
 
 class MyApp extends StatelessWidget {
