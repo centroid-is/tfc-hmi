@@ -22,7 +22,11 @@ dependencies:
   file_picker: ^8.1.7
   rxdart: ^0.28.0
   font_awesome_flutter: ^10.8.0
+  riverpod: ^2.6.1
+  json_annotation: ^4.9.0
 dev_dependencies:
+  build_runner: ^2.4.15
+  json_serializable: ^6.9.4
   flutter_test:
     sdk: flutter
   flutter_lints: ^4.0.0
