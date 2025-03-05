@@ -122,4 +122,8 @@ class StateMan {
     // In real implementation: Delete actual OPC UA subscription
     await Future.delayed(Duration(milliseconds: 500));
   }
+
+  void close() {
+    _connected = false;
+  }
 }

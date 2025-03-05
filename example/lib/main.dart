@@ -12,11 +12,12 @@ import 'package:tfc/pages/viewtheme.dart';
 import 'package:tfc/pages/system.dart';
 import 'package:tfc/pages/config_list.dart';
 import 'package:tfc/pages/login.dart';
-import 'package:provider/provider.dart';
 import 'package:tfc/widgets/tfc_operations.dart';
-import 'package:tfc/widgets/base_scaffold.dart';
 import 'package:tfc/pages/page_view.dart';
 import 'pages/pages.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:tfc/providers/dbus.dart';
+import 'package:tfc/providers/theme.dart';
 
 void main() async {
   // Initialize the RouteRegistry
@@ -83,31 +84,20 @@ void main() async {
   ));
 
   // Run the login flow first
-  final themeNotifier = await ThemeNotifier.create();
   runApp(
-    MultiProvider(
-      providers: [
-        ChangeNotifierProvider(create: (_) => themeNotifier),
-      ],
-      child: LoginApp(onLoginSuccess: (DBusClient client) {
-        // After successful login, run the main app
-        runApp(
-          MultiProvider(
-            providers: [
-              ChangeNotifierProvider(create: (_) => themeNotifier),
-              Provider<DBusClient>.value(value: client),
-              ChangeNotifierProxyProvider<DBusClient,
-                  GlobalAppBarLeftWidgetProvider>(
-                create: (context) =>
-                    OperationModeAppBarLeftWidgetProvider(client),
-                update: (context, client, previous) =>
-                    previous ?? OperationModeAppBarLeftWidgetProvider(client),
-              ),
-            ],
-            child: MyApp(),
-          ),
-        );
-      }),
+    ProviderScope(
+      child: LoginApp(
+        onLoginSuccess: (DBusClient client) {
+          runApp(
+            ProviderScope(
+              overrides: [
+                dbusProvider.overrideWith((ref) => client),
+              ],
+              child: MyApp(),
+            ),
+          );
+        },
+      ),
     ),
   );
 }
@@ -132,20 +122,28 @@ final simpleLocationBuilder = RoutesLocationBuilder(routes: {
   '/settings/core/connections': (context, state, args) => BeamPage(
         key: const ValueKey('/settings/core/connections'),
         title: 'Connections',
-        child: ConnectionsPage(dbusClient: context.read<DBusClient>()),
+        child: Consumer(
+          builder: (context, ref, _) => ConnectionsPage(
+            dbusClient: ref.watch(dbusProvider)!,
+          ),
+        ),
       ),
   '/settings/core/configs': (context, state, data) => BeamPage(
         key: const ValueKey('/settings/core/configs'),
         title: 'All Configs',
-        child: ConfigListPage(
-          dbusClient: context.read<DBusClient>(),
+        child: Consumer(
+          builder: (context, ref, _) => ConfigListPage(
+            dbusClient: ref.watch(dbusProvider)!,
+          ),
         ),
       ),
   '/settings/core/ip': (context, state, args) => BeamPage(
         key: const ValueKey('/settings/core/ip'),
         title: 'IP Settings',
-        child: IpSettingsPage(
-          dbusClient: context.read<DBusClient>(),
+        child: Consumer(
+          builder: (context, ref, _) => IpSettingsPage(
+            dbusClient: ref.watch(dbusProvider)!,
+          ),
         ),
       ),
   '/system': (context, state, args) => const BeamPage(
@@ -215,28 +213,33 @@ final simpleLocationBuilder = RoutesLocationBuilder(routes: {
       ),
 });
 
-class MyApp extends StatelessWidget {
-  final routerDelegate = BeamerDelegate(
-    notFoundPage: const BeamPage(child: PageNotFound()),
-    transitionDelegate: const MyNoAnimationTransitionDelegate(),
-    locationBuilder: (routeInformation, context) =>
-        simpleLocationBuilder(routeInformation, context),
-  );
+class MyApp extends ConsumerWidget {
+  MyApp({super.key})
+      : routerDelegate = BeamerDelegate(
+          notFoundPage: const BeamPage(child: PageNotFound()),
+          transitionDelegate: const MyNoAnimationTransitionDelegate(),
+          locationBuilder: (routeInformation, context) =>
+              simpleLocationBuilder(routeInformation, context),
+        );
 
-  MyApp({super.key});
+  final BeamerDelegate routerDelegate;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final themeAsync = ref.watch(themeStateProvider);
     final (light, dark) = solarized();
-    return Consumer<ThemeNotifier>(builder: (context, themeNotifier, child) {
-      return MaterialApp.router(
-        title: 'Example App',
-        themeMode: themeNotifier.themeMode,
-        theme: light,
-        darkTheme: dark,
-        routerDelegate: routerDelegate,
-        routeInformationParser: BeamerParser(),
-      );
-    });
+
+    return MaterialApp.router(
+      title: 'Example App',
+      themeMode: themeAsync.when(
+        data: (theme) => theme.themeMode,
+        loading: () => ThemeMode.system,
+        error: (_, __) => ThemeMode.system,
+      ),
+      theme: light,
+      darkTheme: dark,
+      routerDelegate: routerDelegate,
+      routeInformationParser: BeamerParser(),
+    );
   }
 }

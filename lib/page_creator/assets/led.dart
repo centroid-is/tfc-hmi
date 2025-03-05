@@ -2,6 +2,10 @@ import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter/material.dart';
 import 'dart:math';
 import 'common.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../client_provider.dart';
+import 'dart:async';
+import 'package:logger/logger.dart';
 
 part 'led.g.dart';
 
@@ -22,11 +26,6 @@ class LEDConfig with AutoAssetName implements Asset {
   @JsonKey(name: 'size')
   final Size size;
 
-  @override
-  Widget build(BuildContext context) {
-    return Led(this).build(context);
-  }
-
   const LEDConfig({
     required this.key,
     required this.onColor,
@@ -36,23 +35,88 @@ class LEDConfig with AutoAssetName implements Asset {
     required this.size,
   });
 
+  @override
+  Widget build(BuildContext context) {
+    return Led(this);
+  }
+
   factory LEDConfig.fromJson(Map<String, dynamic> json) =>
       _$LEDConfigFromJson(json);
   Map<String, dynamic> toJson() => _$LEDConfigToJson(this);
 }
 
-class Led {
+class Led extends ConsumerStatefulWidget {
   final LEDConfig config;
-  final bool? isOn = null;
 
-  Led(this.config);
+  const Led(this.config, {super.key});
 
+  @override
+  ConsumerState<Led> createState() => _LedState();
+}
+
+class _LedState extends ConsumerState<Led> {
+  static final _log = Logger(
+    printer: PrettyPrinter(
+      methodCount: 0,
+      errorMethodCount: 8,
+      lineLength: 120,
+      colors: true,
+      printEmojis: true,
+      dateTimeFormat: DateTimeFormat.onlyTimeAndSinceStart,
+    ),
+  );
+
+  @override
   Widget build(BuildContext context) {
-    final color =
-        isOn == null ? null : (isOn! ? config.onColor : config.offColor);
+    final client = ref.read(stateManProvider);
 
-    // Make LED circular by using the minimum dimension
-    final ledSize = min(config.size.width, config.size.height);
+    return FutureBuilder<bool>(
+      future: client.read<bool>(widget.config.key),
+      builder: (context, initialSnapshot) {
+        _log.d(
+            'Initial value for ${widget.config.key}: ${initialSnapshot.data}');
+
+        return FutureBuilder<Stream<bool>>(
+          future: client.subscribe<bool>(widget.config.key),
+          builder: (context, streamSnapshot) {
+            if (streamSnapshot.hasError) {
+              _log.e('Stream setup error for ${widget.config.key}',
+                  error: streamSnapshot.error);
+              return _buildLED(null);
+            }
+
+            if (!streamSnapshot.hasData) {
+              _log.d(
+                  'Waiting for stream, showing initial value: ${initialSnapshot.data}');
+              return _buildLED(initialSnapshot.data);
+            }
+
+            return StreamBuilder<bool>(
+              stream: streamSnapshot.data,
+              initialData: initialSnapshot.data,
+              builder: (context, snapshot) {
+                if (snapshot.hasError) {
+                  _log.e('Stream error for ${widget.config.key}',
+                      error: snapshot.error);
+                  return _buildLED(null);
+                }
+
+                final isOn = snapshot.data;
+                _log.t('LED ${widget.config.key} value update: $isOn');
+                return _buildLED(isOn);
+              },
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Widget _buildLED(bool? isOn) {
+    final color = isOn == null
+        ? null
+        : (isOn ? widget.config.onColor : widget.config.offColor);
+    final ledSize = min(widget.config.size.width, widget.config.size.height);
 
     Widget led = SizedBox(
       width: ledSize,
@@ -62,19 +126,19 @@ class Led {
       ),
     );
 
-    Widget text = Text(config.key);
+    Widget text = Text(widget.config.key);
 
-    // Use fractional positioning instead of absolute
     return Align(
-      alignment: FractionalOffset(config.coordinates.x, config.coordinates.y),
+      alignment: FractionalOffset(
+          widget.config.coordinates.x, widget.config.coordinates.y),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.center,
-        children: config.textPos == TextPos.above
+        children: widget.config.textPos == TextPos.above
             ? [text, led]
-            : config.textPos == TextPos.below
+            : widget.config.textPos == TextPos.below
                 ? [led, text]
-                : config.textPos == TextPos.right
+                : widget.config.textPos == TextPos.right
                     ? [
                         Row(
                             mainAxisSize: MainAxisSize.min,
