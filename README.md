@@ -45,3 +45,11 @@ install extension mkhl.direnv
 ```sh
 direnv allow
 ```
+
+# Generate code
+
+Generate json_serializable code
+
+```sh
+flutter pub run build_runner build
+```

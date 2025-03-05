@@ -21,6 +21,7 @@ outputs = { self, nixpkgs, flake-utils }:
             flutter
             pkg-config
             libsecret
+            gtk3
           ];
         };
     });

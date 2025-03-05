@@ -2,12 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:beamer/beamer.dart';
 import 'package:logger/logger.dart';
-import 'package:provider/provider.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'dart:async';
 import 'nav_dropdown.dart';
 import '../models/menu_item.dart';
 import '../route_registry.dart';
-import '../theme.dart';
+import '../providers/theme.dart';
 
 // ===================
 // Provider Abstraction
@@ -17,6 +17,9 @@ abstract class GlobalAppBarLeftWidgetProvider with ChangeNotifier {
   /// Build the custom left-side widget.
   Widget buildAppBarLeftWidgets(BuildContext context);
 }
+
+final globalAppBarLeftWidgetProvider =
+    Provider<GlobalAppBarLeftWidgetProvider?>((ref) => null);
 
 // ===================
 // BaseScaffold Widget
@@ -50,10 +53,11 @@ class BaseScaffold extends StatelessWidget {
 
   /// Attempt to get a global left widget provider.
   GlobalAppBarLeftWidgetProvider? _tryGetGlobalAppBarLeftWidgetProvider(
-      BuildContext context) {
+    BuildContext context,
+  ) {
     try {
-      return Provider.of<GlobalAppBarLeftWidgetProvider>(context,
-          listen: false);
+      final container = ProviderScope.containerOf(context);
+      return container.read(globalAppBarLeftWidgetProvider);
     } catch (e) {
       return null;
     }
@@ -131,16 +135,23 @@ class BaseScaffold extends StatelessWidget {
                         ),
                       ),
                     ),
-                    IconButton(
-                      icon: const Icon(Icons.brightness_6),
-                      onPressed: () {
-                        ThemeNotifier themeNotifier =
-                            Provider.of<ThemeNotifier>(context, listen: false);
-                        if (themeNotifier.themeMode == ThemeMode.light) {
-                          themeNotifier.setTheme(ThemeMode.dark);
-                        } else {
-                          themeNotifier.setTheme(ThemeMode.light);
-                        }
+                    Consumer(
+                      builder: (context, ref, child) {
+                        final themeAsync = ref.watch(themeStateProvider);
+                        return themeAsync.when(
+                          data: (themeNotifier) => IconButton(
+                            icon: const Icon(Icons.brightness_6),
+                            onPressed: () {
+                              if (themeNotifier.themeMode == ThemeMode.light) {
+                                themeNotifier.setTheme(ThemeMode.dark);
+                              } else {
+                                themeNotifier.setTheme(ThemeMode.light);
+                              }
+                            },
+                          ),
+                          loading: () => const SizedBox(),
+                          error: (error, stack) => const SizedBox(),
+                        );
                       },
                     ),
                   ],
