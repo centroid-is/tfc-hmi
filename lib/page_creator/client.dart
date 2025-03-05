@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:logger/logger.dart';
 
 // TODO this should be a opc ua compliant status code, should come from the opcua lib
 class OPCUAError extends Error {
@@ -9,11 +10,13 @@ class OPCUAError extends Error {
 }
 
 class StateMan {
+  final logger = Logger();
+
   /// Constructor requires the server endpoint.
   StateMan(this.endpointUrl);
 
   bool get isConnected => _connected;
-  bool _connected = false;
+  bool _connected = true; // todo implement
   final String endpointUrl;
 
   /// Example: read<int>("myKey") or read<String>("myStringKey")
@@ -124,6 +127,7 @@ class StateMan {
   }
 
   void close() {
+    logger.d('Closing connection');
     _connected = false;
   }
 }

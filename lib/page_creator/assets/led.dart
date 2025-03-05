@@ -3,9 +3,9 @@ import 'package:flutter/material.dart';
 import 'dart:math';
 import 'common.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../client_provider.dart';
 import 'dart:async';
 import 'package:logger/logger.dart';
+import '../../providers/state_man.dart';
 
 part 'led.g.dart';
 
