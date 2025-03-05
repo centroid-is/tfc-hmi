@@ -2,15 +2,16 @@ import 'package:flutter/material.dart';
 import 'package:dbus/dbus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-import 'package:provider/provider.dart';
 import 'package:logger/logger.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'dart:async';
 import 'dart:io' show Platform;
 import 'package:path/path.dart' as path;
 import '../dbus/remote.dart';
 import '../theme.dart';
+import '../providers/theme.dart';
 
 final logger = Logger();
 
@@ -128,24 +129,27 @@ class LoginCredentials {
   }
 }
 
-class LoginApp extends StatelessWidget {
+class LoginApp extends ConsumerWidget {
   final void Function(DBusClient) onLoginSuccess;
 
   const LoginApp({super.key, required this.onLoginSuccess});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    // Use Riverpod to watch the asynchronous theme provider.
+    final themeAsync = ref.watch(themeStateProvider);
     final (light, dark) = solarized();
-    return Consumer<ThemeNotifier>(
-      builder: (context, themeNotifier, child) {
-        return MaterialApp(
-          title: 'Login',
-          themeMode: themeNotifier.themeMode,
-          theme: light,
-          darkTheme: dark,
-          home: LoginPage(onLoginSuccess: onLoginSuccess),
-        );
-      },
+    final themeMode = themeAsync.when(
+      data: (themeNotifier) => themeNotifier.themeMode,
+      loading: () => ThemeMode.system,
+      error: (err, stack) => ThemeMode.system,
+    );
+    return MaterialApp(
+      title: 'Login',
+      themeMode: themeMode,
+      theme: light,
+      darkTheme: dark,
+      home: LoginPage(onLoginSuccess: onLoginSuccess),
     );
   }
 }
@@ -394,10 +398,5 @@ class _LoginPageState extends State<LoginPage> {
         ),
       ),
     );
-  }
-
-  @override
-  void dispose() {
-    super.dispose();
   }
 }

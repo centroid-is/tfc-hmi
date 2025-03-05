@@ -83,23 +83,42 @@ void main() async {
     icon: Icons.lock,
   ));
 
-  // Run the login flow first
-  runApp(
-    ProviderScope(
-      child: LoginApp(
+  WidgetsFlutterBinding.ensureInitialized();
+  // Use a single ProviderScope at the root.
+  runApp(const ProviderScope(child: AppInitializer()));
+}
+
+/// This widget handles the login flow before showing the main app.
+class AppInitializer extends StatefulWidget {
+  const AppInitializer({super.key});
+
+  @override
+  State<AppInitializer> createState() => _AppInitializerState();
+}
+
+class _AppInitializerState extends State<AppInitializer> {
+  DBusClient? _dbusClient;
+
+  @override
+  Widget build(BuildContext context) {
+    // If not logged in yet, show the login flow.
+    if (_dbusClient == null) {
+      return LoginApp(
         onLoginSuccess: (DBusClient client) {
-          runApp(
-            ProviderScope(
-              overrides: [
-                dbusProvider.overrideWith((ref) => client),
-              ],
-              child: MyApp(),
-            ),
-          );
+          setState(() {
+            _dbusClient = client;
+          });
         },
-      ),
-    ),
-  );
+      );
+    }
+    // Once logged in, override the dbusProvider and show the main app.
+    return ProviderScope(
+      overrides: [
+        dbusProvider.overrideWithValue(_dbusClient!),
+      ],
+      child: MyApp(),
+    );
+  }
 }
 
 // todo this is a bit of duplication
