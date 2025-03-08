@@ -3,8 +3,6 @@ import 'dart:ui' show Color, Size;
 import 'package:flutter/material.dart';
 part 'common.g.dart';
 
-const String constAssetName = 'asset_name';
-
 @JsonSerializable()
 class ColorConverter implements JsonConverter<Color, Map<String, double>> {
   const ColorConverter();
@@ -83,12 +81,33 @@ extension SizeFromJson on Size {
 
 abstract class Asset {
   String get assetName;
+  Coordinates get coordinates;
+  set coordinates(Coordinates coordinates);
   Widget build(BuildContext context);
   Map<String, dynamic> toJson();
 }
 
-mixin AutoAssetName implements Asset {
-  @JsonKey(name: constAssetName)
+@JsonSerializable(createFactory: false, explicitToJson: true)
+abstract class BaseAsset implements Asset {
   @override
-  String get assetName => runtimeType.toString();
+  String get assetName => variant;
+  @JsonKey(name: 'asset_name')
+  late final String variant;
+
+  BaseAsset() {
+    variant = runtimeType.toString();
+  }
+
+  @JsonKey(name: 'coordinates')
+  Coordinates _coordinates = Coordinates(x: 0.0, y: 0.0);
+
+  @override
+  Coordinates get coordinates => _coordinates;
+
+  @override
+  set coordinates(Coordinates coordinates) {
+    _coordinates = coordinates;
+  }
+
+  Map<String, dynamic> toJson();
 }

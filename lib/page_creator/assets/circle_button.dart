@@ -6,7 +6,7 @@ import 'common.dart';
 part 'circle_button.g.dart';
 
 @JsonSerializable()
-class CircleButtonConfig with AutoAssetName implements Asset {
+class CircleButtonConfig extends BaseAsset {
   final String key;
   @ColorConverter()
   @JsonKey(name: 'outward_color')
@@ -16,8 +16,6 @@ class CircleButtonConfig with AutoAssetName implements Asset {
   final Color inwardColor;
   @JsonKey(name: 'text_pos')
   final TextPos textPos;
-  @JsonKey(name: 'coordinates')
-  final Coordinates coordinates;
   @SizeConverter()
   @JsonKey(name: 'size')
   final Size size;
@@ -27,12 +25,11 @@ class CircleButtonConfig with AutoAssetName implements Asset {
     return CircleButton(this).build(context);
   }
 
-  const CircleButtonConfig({
+  CircleButtonConfig({
     required this.key,
     required this.outwardColor,
     required this.inwardColor,
     required this.textPos,
-    required this.coordinates,
     required this.size,
   });
 

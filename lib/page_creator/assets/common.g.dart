@@ -30,3 +30,9 @@ Map<String, dynamic> _$CoordinatesToJson(Coordinates instance) =>
       'y': instance.y,
       'angle': instance.angle,
     };
+
+Map<String, dynamic> _$BaseAssetToJson(BaseAsset instance) => <String, dynamic>{
+      'assetName': instance.assetName,
+      'asset_name': instance.variant,
+      'coordinates': instance.coordinates.toJson(),
+    };

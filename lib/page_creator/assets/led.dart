@@ -9,8 +9,8 @@ import '../../providers/state_man.dart';
 
 part 'led.g.dart';
 
-@JsonSerializable()
-class LEDConfig with AutoAssetName implements Asset {
+@JsonSerializable(explicitToJson: true)
+class LEDConfig extends BaseAsset {
   final String key;
   @ColorConverter()
   @JsonKey(name: 'on_color')
@@ -20,18 +20,15 @@ class LEDConfig with AutoAssetName implements Asset {
   final Color offColor;
   @JsonKey(name: 'text_pos')
   final TextPos textPos;
-  @JsonKey(name: 'coordinates')
-  final Coordinates coordinates;
   @SizeConverter()
   @JsonKey(name: 'size')
   final Size size;
 
-  const LEDConfig({
+  LEDConfig({
     required this.key,
     required this.onColor,
     required this.offColor,
     required this.textPos,
-    required this.coordinates,
     required this.size,
   });
 
