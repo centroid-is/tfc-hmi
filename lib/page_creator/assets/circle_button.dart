@@ -16,13 +16,53 @@ class CircleButtonConfig extends BaseAsset {
   final Color inwardColor;
   @JsonKey(name: 'text_pos')
   final TextPos textPos;
-  @SizeConverter()
-  @JsonKey(name: 'size')
-  final Size size;
 
   @override
   Widget build(BuildContext context) {
-    return CircleButton(this).build(context);
+    final containerSize = MediaQuery.of(context).size;
+    final actualSize = size.toSize(containerSize);
+
+    final button = Container(
+      width: actualSize.width,
+      height: actualSize.height,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        gradient: RadialGradient(
+          colors: [
+            inwardColor,
+            outwardColor,
+          ],
+          stops: const [0.0, 1.0],
+        ),
+        border: Border.all(
+          color: outwardColor,
+          width: 2,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black,
+            blurRadius: 4,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          customBorder: const CircleBorder(),
+          onTap: () {
+            // Handle tap event
+          },
+        ),
+      ),
+    );
+
+    return buildWithText(button, key, textPos);
+  }
+
+  @override
+  Widget configure(BuildContext context) {
+    return const Text('TODO implement configure');
   }
 
   CircleButtonConfig({
@@ -30,8 +70,13 @@ class CircleButtonConfig extends BaseAsset {
     required this.outwardColor,
     required this.inwardColor,
     required this.textPos,
-    required this.size,
   });
+
+  CircleButtonConfig.preview()
+      : key = 'Circle button preview',
+        outwardColor = Colors.green,
+        inwardColor = Colors.green,
+        textPos = TextPos.right;
 
   factory CircleButtonConfig.fromJson(Map<String, dynamic> json) =>
       _$CircleButtonConfigFromJson(json);
@@ -45,6 +90,44 @@ class CircleButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container();
+    final containerSize = MediaQuery.of(context).size;
+    final actualSize = config.size.toSize(containerSize);
+
+    final button = Container(
+      width: actualSize.width,
+      height: actualSize.height,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        gradient: RadialGradient(
+          colors: [
+            config.inwardColor,
+            config.outwardColor,
+          ],
+          stops: const [0.0, 1.0],
+        ),
+        border: Border.all(
+          color: config.outwardColor,
+          width: 2,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black,
+            blurRadius: 4,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          customBorder: const CircleBorder(),
+          onTap: () {
+            // Handle tap event
+          },
+        ),
+      ),
+    );
+
+    return buildWithText(button, config.key, config.textPos);
   }
 }

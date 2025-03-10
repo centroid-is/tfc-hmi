@@ -14,6 +14,7 @@ import 'package:tfc/pages/config_list.dart';
 import 'package:tfc/pages/login.dart';
 import 'package:tfc/widgets/tfc_operations.dart';
 import 'package:tfc/pages/page_view.dart';
+import 'package:tfc/pages/page_editor.dart';
 import 'pages/pages.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:tfc/providers/dbus.dart';
@@ -81,6 +82,12 @@ void main() async {
     label: 'Asset View',
     path: '/asset-view',
     icon: Icons.lock,
+  ));
+
+  registry.addMenuItem(const MenuItem(
+    label: 'Page Editor',
+    path: '/page-editor',
+    icon: Icons.edit,
   ));
 
   WidgetsFlutterBinding.ensureInitialized();
@@ -229,6 +236,11 @@ final simpleLocationBuilder = RoutesLocationBuilder(routes: {
             },
           ),
         ),
+      ),
+  '/page-editor': (context, state, args) => BeamPage(
+        key: const ValueKey('/page-editor'),
+        title: 'Page Editor',
+        child: PageEditor(),
       ),
 });
 

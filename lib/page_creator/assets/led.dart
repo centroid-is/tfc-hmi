@@ -1,8 +1,9 @@
 import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_colorpicker/flutter_colorpicker.dart';
 import 'dart:math';
 import 'common.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'dart:async';
 import 'package:logger/logger.dart';
 import '../../providers/state_man.dart';
@@ -11,30 +12,89 @@ part 'led.g.dart';
 
 @JsonSerializable(explicitToJson: true)
 class LEDConfig extends BaseAsset {
-  final String key;
+  String key;
   @ColorConverter()
   @JsonKey(name: 'on_color')
-  final Color onColor;
+  Color onColor;
   @ColorConverter()
   @JsonKey(name: 'off_color')
-  final Color offColor;
+  Color offColor;
   @JsonKey(name: 'text_pos')
-  final TextPos textPos;
-  @SizeConverter()
-  @JsonKey(name: 'size')
-  final Size size;
+  TextPos textPos;
 
   LEDConfig({
     required this.key,
     required this.onColor,
     required this.offColor,
     required this.textPos,
-    required this.size,
   });
+
+  LEDConfig.preview()
+      : key = 'Led preview',
+        onColor = Colors.green,
+        offColor = Colors.green,
+        textPos = TextPos.right;
 
   @override
   Widget build(BuildContext context) {
     return Led(this);
+  }
+
+  @override
+  Widget configure(BuildContext context) {
+    return Column(
+      children: [
+        TextFormField(
+          initialValue: key,
+          onChanged: (value) {
+            key = value;
+          },
+        ),
+        Row(
+          children: [
+            const Text('On Color'),
+            ColorPicker(
+              pickerColor: onColor,
+              onColorChanged: (value) {
+                onColor = value;
+              },
+            ),
+          ],
+        ),
+        Row(
+          children: [
+            const Text('Off Color'),
+            ColorPicker(
+              pickerColor: offColor,
+              onColorChanged: (value) {
+                offColor = value;
+              },
+            ),
+          ],
+        ),
+        DropdownButton<TextPos>(
+          value: textPos,
+          onChanged: (value) {
+            textPos = value!;
+          },
+          items: TextPos.values
+              .map((e) =>
+                  DropdownMenuItem<TextPos>(value: e, child: Text(e.name)))
+              .toList(),
+        ),
+        Row(
+          children: [
+            const Text('Size'),
+            Slider(
+              value: size.width,
+              onChanged: (value) {
+                size = RelativeSize(width: value, height: value);
+              },
+            ),
+          ],
+        ),
+      ],
+    );
   }
 
   factory LEDConfig.fromJson(Map<String, dynamic> json) =>
@@ -113,9 +173,13 @@ class _LedState extends ConsumerState<Led> {
     final color = isOn == null
         ? null
         : (isOn ? widget.config.onColor : widget.config.offColor);
-    final ledSize = min(widget.config.size.width, widget.config.size.height);
 
-    Widget led = SizedBox(
+    // Get container size from MediaQuery
+    final containerSize = MediaQuery.of(context).size;
+    final actualSize = widget.config.size.toSize(containerSize);
+    final ledSize = min(actualSize.width, actualSize.height);
+
+    final led = SizedBox(
       width: ledSize,
       height: ledSize,
       child: CustomPaint(
@@ -123,30 +187,10 @@ class _LedState extends ConsumerState<Led> {
       ),
     );
 
-    Widget text = Text(widget.config.key);
-
     return Align(
       alignment: FractionalOffset(
           widget.config.coordinates.x, widget.config.coordinates.y),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: widget.config.textPos == TextPos.above
-            ? [text, led]
-            : widget.config.textPos == TextPos.below
-                ? [led, text]
-                : widget.config.textPos == TextPos.right
-                    ? [
-                        Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [led, text])
-                      ]
-                    : [
-                        Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [text, led])
-                      ],
-      ),
+      child: buildWithText(led, widget.config.key, widget.config.textPos),
     );
   }
 }

@@ -14,21 +14,23 @@ CircleButtonConfig _$CircleButtonConfigFromJson(Map<String, dynamic> json) =>
       inwardColor: const ColorConverter()
           .fromJson(json['inward_color'] as Map<String, double>),
       textPos: $enumDecode(_$TextPosEnumMap, json['text_pos']),
-      size: const SizeConverter().fromJson(json['size'] as Map<String, double>),
     )
       ..variant = json['asset_name'] as String
+      ..pageName = json['pageName'] as String
       ..coordinates =
-          Coordinates.fromJson(json['coordinates'] as Map<String, dynamic>);
+          Coordinates.fromJson(json['coordinates'] as Map<String, dynamic>)
+      ..size = RelativeSize.fromJson(json['size'] as Map<String, dynamic>);
 
 Map<String, dynamic> _$CircleButtonConfigToJson(CircleButtonConfig instance) =>
     <String, dynamic>{
       'asset_name': instance.variant,
+      'pageName': instance.pageName,
       'coordinates': instance.coordinates,
+      'size': instance.size,
       'key': instance.key,
       'outward_color': const ColorConverter().toJson(instance.outwardColor),
       'inward_color': const ColorConverter().toJson(instance.inwardColor),
       'text_pos': _$TextPosEnumMap[instance.textPos]!,
-      'size': const SizeConverter().toJson(instance.size),
     };
 
 const _$TextPosEnumMap = {

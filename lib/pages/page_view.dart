@@ -1,8 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:logger/logger.dart';
-import '../page_creator/assets/led.dart';
-import '../page_creator/assets/circle_button.dart';
 import '../page_creator/assets/common.dart';
+import '../page_creator/assets/registry.dart';
 import '../widgets/base_scaffold.dart';
 
 final _log = Logger(
@@ -16,58 +15,15 @@ final _log = Logger(
   ),
 );
 
-final Map<Type, Asset Function(Map<String, dynamic>)> assetFactories = {
-  LEDConfig: LEDConfig.fromJson,
-  CircleButtonConfig: CircleButtonConfig.fromJson,
-};
-
 class AssetViewConfig {
   final List<Asset> widgets;
 
   AssetViewConfig({required this.widgets});
 
   factory AssetViewConfig.fromJson(Map<String, dynamic> json) {
-    final List<Asset> foundWidgets = [];
-    _log.d('Starting JSON parsing');
-    _log.t('Input JSON: $json');
-
-    void crawlJson(dynamic jsonPart) {
-      if (jsonPart is Map<String, dynamic>) {
-        _log.t('Crawling object: $jsonPart');
-        if (jsonPart.containsKey(constAssetName)) {
-          final assetName = jsonPart[constAssetName] as String;
-          _log.d('Found potential asset: $assetName');
-
-          for (final factory in assetFactories.entries) {
-            if (factory.key.toString() == assetName) {
-              try {
-                final asset = factory.value(jsonPart);
-                foundWidgets.add(asset);
-                _log.d('Successfully parsed ${asset.assetName}');
-                return; // Found an asset, don't crawl deeper
-              } catch (e, stackTrace) {
-                _log.e(
-                  'Failed to parse asset of type $assetName',
-                  error: e,
-                  stackTrace: stackTrace,
-                );
-                rethrow;
-              }
-            }
-          }
-        }
-        // If not an asset, crawl deeper
-        _log.t('No asset found, crawling deeper');
-        jsonPart.values.forEach(crawlJson);
-      } else if (jsonPart is List) {
-        _log.t('Crawling list of length ${jsonPart.length}');
-        jsonPart.forEach(crawlJson);
-      }
-    }
-
-    crawlJson(json);
-    _log.d('Found ${foundWidgets.length} widgets');
-    return AssetViewConfig(widgets: foundWidgets);
+    final widgets = AssetRegistry.parse(json);
+    _log.d('Found ${widgets.length} widgets');
+    return AssetViewConfig(widgets: widgets);
   }
 }
 
