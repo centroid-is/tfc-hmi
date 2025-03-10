@@ -42,64 +42,130 @@ class LEDConfig extends BaseAsset {
 
   @override
   Widget configure(BuildContext context) {
-    return Column(
-      children: [
-        TextFormField(
-          initialValue: key,
-          onChanged: (value) {
-            key = value;
-          },
-        ),
-        Row(
-          children: [
-            const Text('On Color'),
-            ColorPicker(
-              pickerColor: onColor,
-              onColorChanged: (value) {
-                onColor = value;
-              },
-            ),
-          ],
-        ),
-        Row(
-          children: [
-            const Text('Off Color'),
-            ColorPicker(
-              pickerColor: offColor,
-              onColorChanged: (value) {
-                offColor = value;
-              },
-            ),
-          ],
-        ),
-        DropdownButton<TextPos>(
-          value: textPos,
-          onChanged: (value) {
-            textPos = value!;
-          },
-          items: TextPos.values
-              .map((e) =>
-                  DropdownMenuItem<TextPos>(value: e, child: Text(e.name)))
-              .toList(),
-        ),
-        Row(
-          children: [
-            const Text('Size'),
-            Slider(
-              value: size.width,
-              onChanged: (value) {
-                size = RelativeSize(width: value, height: value);
-              },
-            ),
-          ],
-        ),
-      ],
+    return SingleChildScrollView(
+      child: Container(
+        width: 300,
+        padding: const EdgeInsets.all(16),
+        child: _ConfigContent(config: this),
+      ),
     );
   }
 
   factory LEDConfig.fromJson(Map<String, dynamic> json) =>
       _$LEDConfigFromJson(json);
   Map<String, dynamic> toJson() => _$LEDConfigToJson(this);
+}
+
+class _ConfigContent extends StatefulWidget {
+  final LEDConfig config;
+
+  const _ConfigContent({required this.config});
+
+  @override
+  State<_ConfigContent> createState() => _ConfigContentState();
+}
+
+class _ConfigContentState extends State<_ConfigContent> {
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        TextFormField(
+          initialValue: widget.config.key,
+          decoration: const InputDecoration(
+            labelText: 'Key',
+          ),
+          onChanged: (value) {
+            setState(() {
+              widget.config.key = value;
+            });
+          },
+        ),
+        const SizedBox(height: 16),
+        Row(
+          children: [
+            const Text('On Color'),
+            const SizedBox(width: 8),
+            Expanded(
+              child: BlockPicker(
+                pickerColor: widget.config.onColor,
+                onColorChanged: (value) {
+                  setState(() {
+                    widget.config.onColor = value;
+                  });
+                },
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 16),
+        Row(
+          children: [
+            const Text('Off Color'),
+            const SizedBox(width: 8),
+            Expanded(
+              child: BlockPicker(
+                pickerColor: widget.config.offColor,
+                onColorChanged: (value) {
+                  setState(() {
+                    widget.config.offColor = value;
+                  });
+                },
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 16),
+        DropdownButton<TextPos>(
+          value: widget.config.textPos,
+          isExpanded: true,
+          onChanged: (value) {
+            setState(() {
+              widget.config.textPos = value!;
+            });
+          },
+          items: TextPos.values
+              .map((e) =>
+                  DropdownMenuItem<TextPos>(value: e, child: Text(e.name)))
+              .toList(),
+        ),
+        const SizedBox(height: 16),
+        Row(
+          children: [
+            const Text('Size: '),
+            const SizedBox(width: 8),
+            SizedBox(
+              width: 100,
+              child: TextFormField(
+                initialValue:
+                    (widget.config.size.width * 100).toStringAsFixed(2),
+                decoration: const InputDecoration(
+                  suffixText: '%',
+                  isDense: true,
+                  helperText: '0.01-50%',
+                ),
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
+                onChanged: (value) {
+                  final percentage = double.tryParse(value) ?? 0.0;
+                  if (percentage >= 0.01 && percentage <= 50.0) {
+                    setState(() {
+                      widget.config.size = RelativeSize(
+                        width: percentage / 100,
+                        height: percentage / 100,
+                      );
+                    });
+                  }
+                },
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
 }
 
 class Led extends ConsumerStatefulWidget {

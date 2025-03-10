@@ -191,21 +191,23 @@ final simpleLocationBuilder = RoutesLocationBuilder(routes: {
                   "assets": [
                     {
                       "asset_name": "LEDConfig",
+                      "page_name": "main",
                       "key": "Slow LED 1",
                       "on_color": {"red": 1.0, "green": 0.0, "blue": 0.0},
                       "off_color": {"red": 0.2, "green": 0.0, "blue": 0.0},
                       "text_pos": "above",
                       "coordinates": {"x": 0.2, "y": 0.3},
-                      "size": {"width": 40.0, "height": 40.0}
+                      "size": {"width": 0.01, "height": 0.01}
                     },
                     {
                       "asset_name": "CircleButtonConfig",
+                      "page_name": "main",
                       "key": "Slow Button 1",
                       "outward_color": {"red": 0.0, "green": 1.0, "blue": 0.0},
                       "inward_color": {"red": 0.0, "green": 0.2, "blue": 0.0},
                       "text_pos": "below",
                       "coordinates": {"x": 0.4, "y": 0.3},
-                      "size": {"width": 50.0, "height": 50.0}
+                      "size": {"width": 0.01, "height": 0.01}
                     }
                   ]
                 },
@@ -214,21 +216,23 @@ final simpleLocationBuilder = RoutesLocationBuilder(routes: {
                   "assets": [
                     {
                       "asset_name": "LEDConfig",
+                      "page_name": "main",
                       "key": "Fast LED 1",
                       "on_color": {"red": 0.0, "green": 0.0, "blue": 1.0},
                       "off_color": {"red": 0.0, "green": 0.0, "blue": 0.2},
                       "text_pos": "right",
                       "coordinates": {"x": 0.6, "y": 0.7},
-                      "size": {"width": 40.0, "height": 40.0}
+                      "size": {"width": 0.01, "height": 40.0}
                     },
                     {
                       "asset_name": "CircleButtonConfig",
+                      "page_name": "main",
                       "key": "Fast Button 1",
                       "outward_color": {"red": 1.0, "green": 1.0, "blue": 0.0},
                       "inward_color": {"red": 0.2, "green": 0.2, "blue": 0.0},
                       "text_pos": "left",
                       "coordinates": {"x": 0.8, "y": 0.7},
-                      "size": {"width": 50.0, "height": 50.0}
+                      "size": {"width": 0.01, "height": 0.01}
                     }
                   ]
                 }

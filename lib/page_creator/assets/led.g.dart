@@ -15,14 +15,14 @@ LEDConfig _$LEDConfigFromJson(Map<String, dynamic> json) => LEDConfig(
       textPos: $enumDecode(_$TextPosEnumMap, json['text_pos']),
     )
       ..variant = json['asset_name'] as String
-      ..pageName = json['pageName'] as String
+      ..pageName = json['page_name'] as String
       ..coordinates =
           Coordinates.fromJson(json['coordinates'] as Map<String, dynamic>)
       ..size = RelativeSize.fromJson(json['size'] as Map<String, dynamic>);
 
 Map<String, dynamic> _$LEDConfigToJson(LEDConfig instance) => <String, dynamic>{
       'asset_name': instance.variant,
-      'pageName': instance.pageName,
+      'page_name': instance.pageName,
       'coordinates': instance.coordinates.toJson(),
       'size': instance.size.toJson(),
       'key': instance.key,

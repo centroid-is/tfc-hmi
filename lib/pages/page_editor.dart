@@ -1,7 +1,5 @@
 import 'package:flutter/material.dart';
 import '../page_creator/assets/common.dart';
-import '../page_creator/assets/led.dart';
-import '../page_creator/assets/circle_button.dart';
 import '../page_creator/assets/registry.dart';
 import '../widgets/base_scaffold.dart';
 
@@ -32,17 +30,42 @@ class _PageEditorState extends State<PageEditor> {
   Widget _buildPalette() {
     return Expanded(
       flex: 1,
-      child: ListView.separated(
-        itemCount: AssetRegistry.defaultFactories.length,
-        separatorBuilder: (context, index) => const SizedBox(height: 16),
-        itemBuilder: (context, index) {
-          final entry = AssetRegistry.defaultFactories.entries.elementAt(index);
-          return Draggable<Type>(
-            data: entry.key,
-            feedback: entry.value().build(context),
-            child: entry.value().build(context),
-          );
-        },
+      child: Container(
+        padding: const EdgeInsets.all(16.0),
+        decoration: BoxDecoration(
+          border: Border(
+            right: BorderSide(
+              color: Colors.grey.withOpacity(0.3),
+              width: 1.0,
+            ),
+          ),
+        ),
+        child: ListView.separated(
+          padding: const EdgeInsets.symmetric(vertical: 8.0),
+          itemCount: AssetRegistry.defaultFactories.length,
+          separatorBuilder: (context, index) => const SizedBox(height: 16),
+          itemBuilder: (context, index) {
+            final entry =
+                AssetRegistry.defaultFactories.entries.elementAt(index);
+            return Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(8.0),
+                    child: Draggable<Type>(
+                      data: entry.key,
+                      feedback: entry.value().build(context),
+                      child: entry.value().build(context),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        ),
       ),
     );
   }

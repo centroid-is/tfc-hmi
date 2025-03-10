@@ -100,16 +100,20 @@ abstract class BaseAsset implements Asset {
   @override
   String get assetName => variant;
   @JsonKey(name: constAssetName)
-  late final String variant;
+  String variant =
+      'unknown'; // fromJson will set this during deserialization, otherwise it will be set to the runtime type
 
   BaseAsset() {
-    variant = runtimeType.toString();
+    if (variant == 'unknown') {
+      variant = runtimeType.toString();
+    }
   }
 
   @JsonKey(name: 'page_name')
   String _pageName = 'main';
 
   @override
+  @JsonKey(name: 'page_name')
   String get pageName => _pageName;
 
   @override

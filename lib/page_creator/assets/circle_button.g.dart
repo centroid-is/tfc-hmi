@@ -16,7 +16,7 @@ CircleButtonConfig _$CircleButtonConfigFromJson(Map<String, dynamic> json) =>
       textPos: $enumDecode(_$TextPosEnumMap, json['text_pos']),
     )
       ..variant = json['asset_name'] as String
-      ..pageName = json['pageName'] as String
+      ..pageName = json['page_name'] as String
       ..coordinates =
           Coordinates.fromJson(json['coordinates'] as Map<String, dynamic>)
       ..size = RelativeSize.fromJson(json['size'] as Map<String, dynamic>);
@@ -24,7 +24,7 @@ CircleButtonConfig _$CircleButtonConfigFromJson(Map<String, dynamic> json) =>
 Map<String, dynamic> _$CircleButtonConfigToJson(CircleButtonConfig instance) =>
     <String, dynamic>{
       'asset_name': instance.variant,
-      'pageName': instance.pageName,
+      'page_name': instance.pageName,
       'coordinates': instance.coordinates,
       'size': instance.size,
       'key': instance.key,
