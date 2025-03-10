@@ -9,9 +9,9 @@ part of 'led.dart';
 LEDConfig _$LEDConfigFromJson(Map<String, dynamic> json) => LEDConfig(
       key: json['key'] as String,
       onColor: const ColorConverter()
-          .fromJson(json['on_color'] as Map<String, double>),
+          .fromJson(json['on_color'] as Map<String, dynamic>),
       offColor: const ColorConverter()
-          .fromJson(json['off_color'] as Map<String, double>),
+          .fromJson(json['off_color'] as Map<String, dynamic>),
       textPos: $enumDecode(_$TextPosEnumMap, json['text_pos']),
     )
       ..variant = json['asset_name'] as String

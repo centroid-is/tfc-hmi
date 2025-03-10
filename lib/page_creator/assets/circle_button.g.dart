@@ -10,9 +10,9 @@ CircleButtonConfig _$CircleButtonConfigFromJson(Map<String, dynamic> json) =>
     CircleButtonConfig(
       key: json['key'] as String,
       outwardColor: const ColorConverter()
-          .fromJson(json['outward_color'] as Map<String, double>),
+          .fromJson(json['outward_color'] as Map<String, dynamic>),
       inwardColor: const ColorConverter()
-          .fromJson(json['inward_color'] as Map<String, double>),
+          .fromJson(json['inward_color'] as Map<String, dynamic>),
       textPos: $enumDecode(_$TextPosEnumMap, json['text_pos']),
     )
       ..variant = json['asset_name'] as String

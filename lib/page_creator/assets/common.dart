@@ -6,11 +6,11 @@ part 'common.g.dart';
 const String constAssetName = "asset_name";
 
 @JsonSerializable()
-class ColorConverter implements JsonConverter<Color, Map<String, double>> {
+class ColorConverter implements JsonConverter<Color, Map<String, dynamic>> {
   const ColorConverter();
 
   @override
-  Color fromJson(Map<String, double> json) {
+  Color fromJson(Map<String, dynamic> json) {
     return Color.fromRGBO(
       (json['red']! * 255).toInt(),
       (json['green']! * 255).toInt(),

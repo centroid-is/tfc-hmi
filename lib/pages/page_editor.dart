@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../page_creator/assets/common.dart';
 import '../page_creator/assets/registry.dart';
 import '../widgets/base_scaffold.dart';
+import 'dart:convert'; // For JSON encoding
 
 class PageEditor extends StatefulWidget {
   @override
@@ -9,19 +11,51 @@ class PageEditor extends StatefulWidget {
 }
 
 class _PageEditorState extends State<PageEditor> {
-  List<Group> groups = [Group(name: 'default', assets: [])];
-  int selectedGroupIndex = 0;
-  int? selectedAssetIndex;
+  static const String _storageKey = 'page_editor_data';
+  List<Asset> assets = []; // Direct list of assets instead of groups
+
+  @override
+  void initState() {
+    super.initState();
+    _loadFromPrefs();
+  }
+
+  Future<void> _loadFromPrefs() async {
+    final prefs = await SharedPreferences.getInstance();
+    final String? jsonString = prefs.getString(_storageKey);
+    print('Loading from prefs: $jsonString');
+    if (jsonString != null) {
+      setState(() {
+        final json = jsonDecode(jsonString);
+        assets = AssetRegistry.parse(json);
+      });
+    }
+  }
+
+  Future<void> _saveToPrefs() async {
+    final prefs = await SharedPreferences.getInstance();
+    final jsonString = jsonEncode({
+      'assets': assets.map((a) => a.toJson()).toList(),
+    });
+    print('Saving to prefs: $jsonString');
+    await prefs.setString(_storageKey, jsonString);
+  }
+
+  void _updateState(VoidCallback fn) {
+    setState(() {
+      fn();
+      _saveToPrefs();
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
-    final currentGroup = groups[selectedGroupIndex];
     return BaseScaffold(
       title: 'Page Editor',
       body: Row(
         children: [
           _buildPalette(),
-          _buildCanvas(currentGroup),
+          _buildCanvas(),
         ],
       ),
     );
@@ -73,7 +107,7 @@ class _PageEditorState extends State<PageEditor> {
     );
   }
 
-  Widget _buildCanvas(Group currentGroup) {
+  Widget _buildCanvas() {
     return Expanded(
       flex: 4,
       child: Container(
@@ -86,18 +120,28 @@ class _PageEditorState extends State<PageEditor> {
           borderRadius: BorderRadius.circular(4.0),
         ),
         child: DragTarget<Type>(
-          onAccept: (assetType) {
-            final newAsset = AssetRegistry.createDefaultAsset(assetType);
-            setState(() {
-              currentGroup.assets.add(newAsset);
+          onAcceptWithDetails: (details) {
+            final newAsset = AssetRegistry.createDefaultAsset(details.data);
+
+            final RenderBox box = context.findRenderObject() as RenderBox;
+            final localPosition = box.globalToLocal(details.offset);
+
+            final relativeX =
+                (localPosition.dx / box.size.width).clamp(0.0, 1.0);
+            final relativeY =
+                (localPosition.dy / box.size.height).clamp(0.0, 1.0);
+
+            _updateState(() {
+              newAsset.coordinates = Coordinates(x: relativeX, y: relativeY);
+              assets.add(newAsset);
             });
           },
           builder: (context, candidateData, rejectedData) {
             return LayoutBuilder(
               builder: (context, constraints) {
                 return Stack(
-                  children: currentGroup.assets.map((asset) {
-                    final index = currentGroup.assets.indexOf(asset);
+                  children: assets.map((asset) {
+                    final index = assets.indexOf(asset);
                     return Positioned(
                       left: asset.coordinates.x * constraints.maxWidth,
                       top: asset.coordinates.y * constraints.maxHeight,
@@ -113,8 +157,11 @@ class _PageEditorState extends State<PageEditor> {
                                   children: [
                                     asset.configure(context),
                                     TextButton(
-                                      onPressed: () => Navigator.pop(context),
-                                      child: Text('Close'),
+                                      onPressed: () {
+                                        Navigator.pop(context);
+                                        _saveToPrefs();
+                                      },
+                                      child: const Text('Close'),
                                     ),
                                   ],
                                 ),
@@ -129,8 +176,8 @@ class _PageEditorState extends State<PageEditor> {
                           final newY = (asset.coordinates.y +
                                   details.delta.dy / constraints.maxHeight)
                               .clamp(0.0, 1.0);
-                          setState(() {
-                            currentGroup.assets[index].coordinates =
+                          _updateState(() {
+                            assets[index].coordinates =
                                 Coordinates(x: newX, y: newY);
                           });
                         },
@@ -146,22 +193,4 @@ class _PageEditorState extends State<PageEditor> {
       ),
     );
   }
-
-  Map<String, dynamic> toJson() {
-    return {
-      'groups': groups.map((group) => group.toJson()).toList(),
-    };
-  }
-}
-
-class Group {
-  String name;
-  List<Asset> assets;
-
-  Group({required this.name, required this.assets});
-
-  Map<String, dynamic> toJson() => {
-        'name': name,
-        'assets': assets.map((asset) => asset.toJson()).toList(),
-      };
 }
