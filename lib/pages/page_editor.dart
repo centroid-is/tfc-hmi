@@ -57,7 +57,10 @@ class _PageEditorState extends State<PageEditor> {
                     padding: const EdgeInsets.all(8.0),
                     child: Draggable<Type>(
                       data: entry.key,
-                      feedback: entry.value().build(context),
+                      feedback: Material(
+                        color: Colors.transparent,
+                        child: entry.value().build(context),
+                      ),
                       child: entry.value().build(context),
                     ),
                   ),
