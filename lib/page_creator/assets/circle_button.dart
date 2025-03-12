@@ -3,6 +3,9 @@ import 'dart:ui' show Color, Size;
 import 'package:flutter/material.dart';
 import 'dart:math';
 import 'common.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:logger/logger.dart';
+import '../../providers/state_man.dart';
 
 part 'circle_button.g.dart';
 
@@ -20,38 +23,7 @@ class CircleButtonConfig extends BaseAsset {
 
   @override
   Widget build(BuildContext context) {
-    final containerSize = MediaQuery.of(context).size;
-    final actualSize = size.toSize(containerSize);
-    final buttonSize = min(actualSize.width, actualSize.height);
-
-    final button = SizedBox(
-      width: buttonSize,
-      height: buttonSize,
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          customBorder: const CircleBorder(),
-          onTap: () {
-            // Handle tap event
-          },
-          child: CustomPaint(
-            painter: CircleButtonPainter(
-              outwardColor: outwardColor,
-              inwardColor: inwardColor,
-              isPressed: false,
-            ),
-          ),
-        ),
-      ),
-    );
-
-    return Align(
-      alignment: FractionalOffset(
-        coordinates.x,
-        coordinates.y,
-      ),
-      child: buildWithText(button, key, textPos),
-    );
+    return CircleButton(this);
   }
 
   @override
@@ -77,6 +49,94 @@ class CircleButtonConfig extends BaseAsset {
   Map<String, dynamic> toJson() => _$CircleButtonConfigToJson(this);
 }
 
+class CircleButton extends ConsumerStatefulWidget {
+  final CircleButtonConfig config;
+
+  const CircleButton(this.config, {super.key});
+
+  @override
+  ConsumerState<CircleButton> createState() => _CircleButtonState();
+}
+
+class _CircleButtonState extends ConsumerState<CircleButton> {
+  static final _log = Logger(
+    printer: PrettyPrinter(
+      methodCount: 0,
+      errorMethodCount: 8,
+      lineLength: 120,
+      colors: true,
+      printEmojis: true,
+      dateTimeFormat: DateTimeFormat.onlyTimeAndSinceStart,
+    ),
+  );
+
+  bool _isPressed = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final client = ref.read(stateManProvider);
+    final containerSize = MediaQuery.of(context).size;
+    final actualSize = widget.config.size.toSize(containerSize);
+    final buttonSize = min(actualSize.width, actualSize.height);
+
+    final button = SizedBox(
+      width: buttonSize,
+      height: buttonSize,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          customBorder: const CircleBorder(),
+          onTapDown: (_) async {
+            setState(() => _isPressed = true);
+            final client = ref.read(stateManProvider);
+            try {
+              await client.write(widget.config.key, true);
+              _log.d('Button ${widget.config.key} pressed');
+            } catch (e) {
+              _log.e('Error writing button press', error: e);
+            }
+          },
+          onTapUp: (_) async {
+            setState(() => _isPressed = false);
+            final client = ref.read(stateManProvider);
+            try {
+              await client.write(widget.config.key, false);
+              _log.d('Button ${widget.config.key} released');
+            } catch (e) {
+              _log.e('Error writing button release', error: e);
+            }
+          },
+          onTapCancel: () async {
+            setState(() => _isPressed = false);
+            final client = ref.read(stateManProvider);
+            try {
+              await client.write(widget.config.key, false);
+              _log.d('Button ${widget.config.key} tap cancelled');
+            } catch (e) {
+              _log.e('Error writing button cancel', error: e);
+            }
+          },
+          child: CustomPaint(
+            painter: CircleButtonPainter(
+              outwardColor: widget.config.outwardColor,
+              inwardColor: widget.config.inwardColor,
+              isPressed: _isPressed, // Use local state for visual feedback
+            ),
+          ),
+        ),
+      ),
+    );
+
+    return Align(
+      alignment: FractionalOffset(
+        widget.config.coordinates.x,
+        widget.config.coordinates.y,
+      ),
+      child: buildWithText(button, widget.config.key, widget.config.textPos),
+    );
+  }
+}
+
 class CircleButtonPainter extends CustomPainter {
   final Color? outwardColor;
   final Color? inwardColor;
@@ -95,11 +155,16 @@ class CircleButtonPainter extends CustomPainter {
 
     // Draw shadow
     final shadowPaint = Paint()
-      ..color = Colors.black.withOpacity(0.3)
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4);
+      ..color = Colors.black.withOpacity(isPressed ? 0.1 : 1)
+      ..maskFilter = MaskFilter.blur(
+        BlurStyle.normal,
+        isPressed ? 2 : 4,
+      );
+
+    // Shadow offset changes when pressed
     canvas.drawCircle(
-      center + const Offset(0, 2),
-      radius,
+      center + Offset(0, isPressed ? 1 : 3),
+      radius * (isPressed ? 0.95 : 1.0), // Shadow shrinks slightly when pressed
       shadowPaint,
     );
 
@@ -112,30 +177,41 @@ class CircleButtonPainter extends CustomPainter {
             isPressed ? inwardColor! : outwardColor!,
           ],
           stops: const [0.0, 1.0],
-        ).createShader(Rect.fromCircle(center: center, radius: radius));
-      canvas.drawCircle(center, radius, buttonPaint);
+        ).createShader(Rect.fromCircle(
+          center: center,
+          radius: radius *
+              (isPressed ? 0.95 : 1.0), // Button shrinks slightly when pressed
+        ));
+
+      canvas.drawCircle(
+        center,
+        radius * (isPressed ? 0.95 : 1.0),
+        buttonPaint,
+      );
 
       // Draw border
       final borderPaint = Paint()
         ..color = outwardColor!
         ..style = PaintingStyle.stroke
         ..strokeWidth = 2;
-      canvas.drawCircle(center, radius, borderPaint);
+      canvas.drawCircle(
+        center,
+        radius * (isPressed ? 0.95 : 1.0),
+        borderPaint,
+      );
     } else {
-      // Draw error state (gray with exclamation mark)
+      // Error state remains the same
       final errorPaint = Paint()
         ..color = Colors.grey
         ..style = PaintingStyle.fill;
       canvas.drawCircle(center, radius, errorPaint);
 
-      // Draw border
       final borderPaint = Paint()
         ..color = Colors.black
         ..style = PaintingStyle.stroke
         ..strokeWidth = 2;
       canvas.drawCircle(center, radius, borderPaint);
 
-      // Draw exclamation mark
       final textPainter = TextPainter(
         text: TextSpan(
           text: '!',
@@ -150,10 +226,8 @@ class CircleButtonPainter extends CustomPainter {
       textPainter.layout();
       textPainter.paint(
         canvas,
-        Offset(
-          (size.width - textPainter.width) / 2,
-          (size.height - textPainter.height) / 2,
-        ),
+        Offset((size.width - textPainter.width) / 2,
+            (size.height - textPainter.height) / 2),
       );
     }
   }
