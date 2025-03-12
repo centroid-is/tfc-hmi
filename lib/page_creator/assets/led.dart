@@ -1,48 +1,171 @@
 import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_colorpicker/flutter_colorpicker.dart';
 import 'dart:math';
 import 'common.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'dart:async';
 import 'package:logger/logger.dart';
 import '../../providers/state_man.dart';
 
 part 'led.g.dart';
 
-@JsonSerializable()
-class LEDConfig with AutoAssetName implements Asset {
-  final String key;
+@JsonSerializable(explicitToJson: true)
+class LEDConfig extends BaseAsset {
+  String key;
   @ColorConverter()
   @JsonKey(name: 'on_color')
-  final Color onColor;
+  Color onColor;
   @ColorConverter()
   @JsonKey(name: 'off_color')
-  final Color offColor;
+  Color offColor;
   @JsonKey(name: 'text_pos')
-  final TextPos textPos;
-  @JsonKey(name: 'coordinates')
-  final Coordinates coordinates;
-  @SizeConverter()
-  @JsonKey(name: 'size')
-  final Size size;
+  TextPos textPos;
 
-  const LEDConfig({
+  LEDConfig({
     required this.key,
     required this.onColor,
     required this.offColor,
     required this.textPos,
-    required this.coordinates,
-    required this.size,
   });
+
+  LEDConfig.preview()
+      : key = 'Led preview',
+        onColor = Colors.green,
+        offColor = Colors.green,
+        textPos = TextPos.right;
 
   @override
   Widget build(BuildContext context) {
     return Led(this);
   }
 
+  @override
+  Widget configure(BuildContext context) {
+    return SingleChildScrollView(
+      child: Container(
+        width: 300,
+        padding: const EdgeInsets.all(16),
+        child: _ConfigContent(config: this),
+      ),
+    );
+  }
+
   factory LEDConfig.fromJson(Map<String, dynamic> json) =>
       _$LEDConfigFromJson(json);
   Map<String, dynamic> toJson() => _$LEDConfigToJson(this);
+}
+
+class _ConfigContent extends StatefulWidget {
+  final LEDConfig config;
+
+  const _ConfigContent({required this.config});
+
+  @override
+  State<_ConfigContent> createState() => _ConfigContentState();
+}
+
+class _ConfigContentState extends State<_ConfigContent> {
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        TextFormField(
+          initialValue: widget.config.key,
+          decoration: const InputDecoration(
+            labelText: 'Key',
+          ),
+          onChanged: (value) {
+            setState(() {
+              widget.config.key = value;
+            });
+          },
+        ),
+        const SizedBox(height: 16),
+        Row(
+          children: [
+            const Text('On Color'),
+            const SizedBox(width: 8),
+            Expanded(
+              child: BlockPicker(
+                pickerColor: widget.config.onColor,
+                onColorChanged: (value) {
+                  setState(() {
+                    widget.config.onColor = value;
+                  });
+                },
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 16),
+        Row(
+          children: [
+            const Text('Off Color'),
+            const SizedBox(width: 8),
+            Expanded(
+              child: BlockPicker(
+                pickerColor: widget.config.offColor,
+                onColorChanged: (value) {
+                  setState(() {
+                    widget.config.offColor = value;
+                  });
+                },
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 16),
+        DropdownButton<TextPos>(
+          value: widget.config.textPos,
+          isExpanded: true,
+          onChanged: (value) {
+            setState(() {
+              widget.config.textPos = value!;
+            });
+          },
+          items: TextPos.values
+              .map((e) =>
+                  DropdownMenuItem<TextPos>(value: e, child: Text(e.name)))
+              .toList(),
+        ),
+        const SizedBox(height: 16),
+        Row(
+          children: [
+            const Text('Size: '),
+            const SizedBox(width: 8),
+            SizedBox(
+              width: 100,
+              child: TextFormField(
+                initialValue:
+                    (widget.config.size.width * 100).toStringAsFixed(2),
+                decoration: const InputDecoration(
+                  suffixText: '%',
+                  isDense: true,
+                  helperText: '0.01-50%',
+                ),
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
+                onChanged: (value) {
+                  final percentage = double.tryParse(value) ?? 0.0;
+                  if (percentage >= 0.01 && percentage <= 50.0) {
+                    setState(() {
+                      widget.config.size = RelativeSize(
+                        width: percentage / 100,
+                        height: percentage / 100,
+                      );
+                    });
+                  }
+                },
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
 }
 
 class Led extends ConsumerStatefulWidget {
@@ -116,9 +239,13 @@ class _LedState extends ConsumerState<Led> {
     final color = isOn == null
         ? null
         : (isOn ? widget.config.onColor : widget.config.offColor);
-    final ledSize = min(widget.config.size.width, widget.config.size.height);
 
-    Widget led = SizedBox(
+    // Get container size from MediaQuery
+    final containerSize = MediaQuery.of(context).size;
+    final actualSize = widget.config.size.toSize(containerSize);
+    final ledSize = min(actualSize.width, actualSize.height);
+
+    final led = SizedBox(
       width: ledSize,
       height: ledSize,
       child: CustomPaint(
@@ -126,30 +253,10 @@ class _LedState extends ConsumerState<Led> {
       ),
     );
 
-    Widget text = Text(widget.config.key);
-
     return Align(
       alignment: FractionalOffset(
           widget.config.coordinates.x, widget.config.coordinates.y),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: widget.config.textPos == TextPos.above
-            ? [text, led]
-            : widget.config.textPos == TextPos.below
-                ? [led, text]
-                : widget.config.textPos == TextPos.right
-                    ? [
-                        Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [led, text])
-                      ]
-                    : [
-                        Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [text, led])
-                      ],
-      ),
+      child: buildWithText(led, widget.config.key, widget.config.textPos),
     );
   }
 }

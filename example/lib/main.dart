@@ -14,10 +14,13 @@ import 'package:tfc/pages/config_list.dart';
 import 'package:tfc/pages/login.dart';
 import 'package:tfc/widgets/tfc_operations.dart';
 import 'package:tfc/pages/page_view.dart';
+import 'package:tfc/pages/page_editor.dart';
 import 'pages/pages.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:tfc/providers/dbus.dart';
 import 'package:tfc/providers/theme.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'dart:convert';
 
 void main() async {
   // Initialize the RouteRegistry
@@ -81,6 +84,12 @@ void main() async {
     label: 'Asset View',
     path: '/asset-view',
     icon: Icons.lock,
+  ));
+
+  registry.addMenuItem(const MenuItem(
+    label: 'Page Editor',
+    path: '/page-editor',
+    icon: Icons.edit,
   ));
 
   WidgetsFlutterBinding.ensureInitialized();
@@ -175,60 +184,33 @@ final simpleLocationBuilder = RoutesLocationBuilder(routes: {
   '/asset-view': (context, state, args) => BeamPage(
         key: const ValueKey('/asset-view'),
         title: 'Asset View',
-        child: AssetView(
-          config: AssetViewConfig.fromJson(
-            {
-              "groups": [
-                {
-                  "name": "slow",
-                  "assets": [
-                    {
-                      "asset_name": "LEDConfig",
-                      "key": "Slow LED 1",
-                      "on_color": {"red": 1.0, "green": 0.0, "blue": 0.0},
-                      "off_color": {"red": 0.2, "green": 0.0, "blue": 0.0},
-                      "text_pos": "above",
-                      "coordinates": {"x": 0.2, "y": 0.3},
-                      "size": {"width": 40.0, "height": 40.0}
-                    },
-                    {
-                      "asset_name": "CircleButtonConfig",
-                      "key": "Slow Button 1",
-                      "outward_color": {"red": 0.0, "green": 1.0, "blue": 0.0},
-                      "inward_color": {"red": 0.0, "green": 0.2, "blue": 0.0},
-                      "text_pos": "below",
-                      "coordinates": {"x": 0.4, "y": 0.3},
-                      "size": {"width": 50.0, "height": 50.0}
-                    }
-                  ]
-                },
-                {
-                  "name": "fast",
-                  "assets": [
-                    {
-                      "asset_name": "LEDConfig",
-                      "key": "Fast LED 1",
-                      "on_color": {"red": 0.0, "green": 0.0, "blue": 1.0},
-                      "off_color": {"red": 0.0, "green": 0.0, "blue": 0.2},
-                      "text_pos": "right",
-                      "coordinates": {"x": 0.6, "y": 0.7},
-                      "size": {"width": 40.0, "height": 40.0}
-                    },
-                    {
-                      "asset_name": "CircleButtonConfig",
-                      "key": "Fast Button 1",
-                      "outward_color": {"red": 1.0, "green": 1.0, "blue": 0.0},
-                      "inward_color": {"red": 0.2, "green": 0.2, "blue": 0.0},
-                      "text_pos": "left",
-                      "coordinates": {"x": 0.8, "y": 0.7},
-                      "size": {"width": 50.0, "height": 50.0}
-                    }
-                  ]
-                }
-              ]
+        child: Consumer(
+          builder: (context, ref, _) => FutureBuilder<SharedPreferences>(
+            future: SharedPreferences.getInstance(),
+            builder: (context, snapshot) {
+              if (!snapshot.hasData) {
+                return const Center(child: CircularProgressIndicator());
+              }
+
+              final prefs = snapshot.data!;
+              final jsonString = prefs.getString('page_editor_data');
+              print('jsonString: $jsonString');
+              if (jsonString == null) {
+                return const Center(child: Text('No saved layout found'));
+              }
+
+              final json = jsonDecode(jsonString);
+              return AssetView(
+                config: AssetViewConfig.fromJson(json),
+              );
             },
           ),
         ),
+      ),
+  '/page-editor': (context, state, args) => BeamPage(
+        key: const ValueKey('/page-editor'),
+        title: 'Page Editor',
+        child: PageEditor(),
       ),
 });
 
