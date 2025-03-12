@@ -194,7 +194,7 @@ final simpleLocationBuilder = RoutesLocationBuilder(routes: {
 
               final prefs = snapshot.data!;
               final jsonString = prefs.getString('page_editor_data');
-
+              print('jsonString: $jsonString');
               if (jsonString == null) {
                 return const Center(child: Text('No saved layout found'));
               }

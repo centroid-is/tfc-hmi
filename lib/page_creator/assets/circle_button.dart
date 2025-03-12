@@ -1,6 +1,7 @@
 import 'package:json_annotation/json_annotation.dart';
 import 'dart:ui' show Color, Size;
 import 'package:flutter/material.dart';
+import 'dart:math';
 import 'common.dart';
 
 part 'circle_button.g.dart';
@@ -21,31 +22,11 @@ class CircleButtonConfig extends BaseAsset {
   Widget build(BuildContext context) {
     final containerSize = MediaQuery.of(context).size;
     final actualSize = size.toSize(containerSize);
+    final buttonSize = min(actualSize.width, actualSize.height);
 
-    final button = Container(
-      width: actualSize.width,
-      height: actualSize.height,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        gradient: RadialGradient(
-          colors: [
-            inwardColor,
-            outwardColor,
-          ],
-          stops: const [0.0, 1.0],
-        ),
-        border: Border.all(
-          color: outwardColor,
-          width: 2,
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black,
-            blurRadius: 4,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
+    final button = SizedBox(
+      width: buttonSize,
+      height: buttonSize,
       child: Material(
         color: Colors.transparent,
         child: InkWell(
@@ -53,11 +34,24 @@ class CircleButtonConfig extends BaseAsset {
           onTap: () {
             // Handle tap event
           },
+          child: CustomPaint(
+            painter: CircleButtonPainter(
+              outwardColor: outwardColor,
+              inwardColor: inwardColor,
+              isPressed: false,
+            ),
+          ),
         ),
       ),
     );
 
-    return buildWithText(button, key, textPos);
+    return Align(
+      alignment: FractionalOffset(
+        coordinates.x,
+        coordinates.y,
+      ),
+      child: buildWithText(button, key, textPos),
+    );
   }
 
   @override
@@ -83,51 +77,90 @@ class CircleButtonConfig extends BaseAsset {
   Map<String, dynamic> toJson() => _$CircleButtonConfigToJson(this);
 }
 
-class CircleButton extends StatelessWidget {
-  final CircleButtonConfig config;
+class CircleButtonPainter extends CustomPainter {
+  final Color? outwardColor;
+  final Color? inwardColor;
+  final bool isPressed;
 
-  const CircleButton(this.config);
+  CircleButtonPainter({
+    required this.outwardColor,
+    required this.inwardColor,
+    this.isPressed = false,
+  });
 
   @override
-  Widget build(BuildContext context) {
-    final containerSize = MediaQuery.of(context).size;
-    final actualSize = config.size.toSize(containerSize);
+  void paint(Canvas canvas, Size size) {
+    final center = Offset(size.width / 2, size.height / 2);
+    final radius = size.width / 2;
 
-    final button = Container(
-      width: actualSize.width,
-      height: actualSize.height,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        gradient: RadialGradient(
-          colors: [
-            config.inwardColor,
-            config.outwardColor,
-          ],
-          stops: const [0.0, 1.0],
-        ),
-        border: Border.all(
-          color: config.outwardColor,
-          width: 2,
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black,
-            blurRadius: 4,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          customBorder: const CircleBorder(),
-          onTap: () {
-            // Handle tap event
-          },
-        ),
-      ),
+    // Draw shadow
+    final shadowPaint = Paint()
+      ..color = Colors.black.withOpacity(0.3)
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4);
+    canvas.drawCircle(
+      center + const Offset(0, 2),
+      radius,
+      shadowPaint,
     );
 
-    return buildWithText(button, config.key, config.textPos);
+    // Draw button with gradient
+    if (outwardColor != null && inwardColor != null) {
+      final buttonPaint = Paint()
+        ..shader = RadialGradient(
+          colors: [
+            isPressed ? outwardColor! : inwardColor!,
+            isPressed ? inwardColor! : outwardColor!,
+          ],
+          stops: const [0.0, 1.0],
+        ).createShader(Rect.fromCircle(center: center, radius: radius));
+      canvas.drawCircle(center, radius, buttonPaint);
+
+      // Draw border
+      final borderPaint = Paint()
+        ..color = outwardColor!
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2;
+      canvas.drawCircle(center, radius, borderPaint);
+    } else {
+      // Draw error state (gray with exclamation mark)
+      final errorPaint = Paint()
+        ..color = Colors.grey
+        ..style = PaintingStyle.fill;
+      canvas.drawCircle(center, radius, errorPaint);
+
+      // Draw border
+      final borderPaint = Paint()
+        ..color = Colors.black
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2;
+      canvas.drawCircle(center, radius, borderPaint);
+
+      // Draw exclamation mark
+      final textPainter = TextPainter(
+        text: TextSpan(
+          text: '!',
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: size.height * 0.6,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+      );
+      textPainter.layout();
+      textPainter.paint(
+        canvas,
+        Offset(
+          (size.width - textPainter.width) / 2,
+          (size.height - textPainter.height) / 2,
+        ),
+      );
+    }
   }
+
+  @override
+  bool shouldRepaint(CircleButtonPainter oldDelegate) =>
+      outwardColor != oldDelegate.outwardColor ||
+      inwardColor != oldDelegate.inwardColor ||
+      isPressed != oldDelegate.isPressed;
 }

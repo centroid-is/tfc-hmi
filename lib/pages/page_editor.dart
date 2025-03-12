@@ -44,7 +44,6 @@ class _PageEditorState extends State<PageEditor> {
   void _updateState(VoidCallback fn) {
     setState(() {
       fn();
-      _saveToPrefs();
     });
   }
 
@@ -64,32 +63,20 @@ class _PageEditorState extends State<PageEditor> {
   Widget _buildPalette() {
     return Expanded(
       flex: 1,
-      child: Container(
-        padding: const EdgeInsets.all(16.0),
-        decoration: BoxDecoration(
-          border: Border(
-            right: BorderSide(
-              color: Colors.grey.withOpacity(0.3),
-              width: 1.0,
-            ),
-          ),
-        ),
-        child: ListView.separated(
-          padding: const EdgeInsets.symmetric(vertical: 8.0),
-          itemCount: AssetRegistry.defaultFactories.length,
-          separatorBuilder: (context, index) => const SizedBox(height: 16),
-          itemBuilder: (context, index) {
-            final entry =
-                AssetRegistry.defaultFactories.entries.elementAt(index);
-            return Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8.0),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.center,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(8.0),
-                    child: Draggable<Type>(
+      child: Column(
+        children: [
+          Expanded(
+            child: ListView.separated(
+              padding: const EdgeInsets.all(16.0),
+              itemCount: AssetRegistry.defaultFactories.length,
+              separatorBuilder: (context, index) => const SizedBox(height: 24),
+              itemBuilder: (context, index) {
+                final entry =
+                    AssetRegistry.defaultFactories.entries.elementAt(index);
+                return Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Draggable<Type>(
                       data: entry.key,
                       feedback: Material(
                         color: Colors.transparent,
@@ -97,12 +84,20 @@ class _PageEditorState extends State<PageEditor> {
                       ),
                       child: entry.value().build(context),
                     ),
-                  ),
-                ],
-              ),
-            );
-          },
-        ),
+                  ],
+                );
+              },
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.all(16.0),
+            child: ElevatedButton.icon(
+              onPressed: _saveToPrefs,
+              icon: const Icon(Icons.save),
+              label: const Text('Save Layout'),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -150,20 +145,41 @@ class _PageEditorState extends State<PageEditor> {
                           showDialog(
                             context: context,
                             builder: (context) => Dialog(
-                              child: Padding(
-                                padding: const EdgeInsets.all(16.0),
-                                child: Column(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    asset.configure(context),
-                                    TextButton(
-                                      onPressed: () {
-                                        Navigator.pop(context);
-                                        _saveToPrefs();
-                                      },
-                                      child: const Text('Close'),
-                                    ),
-                                  ],
+                              child: IntrinsicWidth(
+                                child: Padding(
+                                  padding: const EdgeInsets.all(16.0),
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      asset.configure(context),
+                                      Row(
+                                        mainAxisAlignment:
+                                            MainAxisAlignment.spaceBetween,
+                                        children: [
+                                          TextButton.icon(
+                                            onPressed: () {
+                                              _updateState(() {
+                                                assets.remove(asset);
+                                              });
+                                              Navigator.pop(context);
+                                            },
+                                            icon: const Icon(Icons.delete,
+                                                color: Colors.red),
+                                            label: const Text(
+                                              'Delete',
+                                              style:
+                                                  TextStyle(color: Colors.red),
+                                            ),
+                                          ),
+                                          TextButton(
+                                            onPressed: () =>
+                                                Navigator.pop(context),
+                                            child: const Text('Close'),
+                                          ),
+                                        ],
+                                      ),
+                                    ],
+                                  ),
                                 ),
                               ),
                             ),
