@@ -21,6 +21,7 @@ import 'package:tfc/providers/dbus.dart';
 import 'package:tfc/providers/theme.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
+import 'dart:io' show Platform;
 
 void main() async {
   // Initialize the RouteRegistry
@@ -33,40 +34,43 @@ void main() async {
     icon: Icons.home,
   ));
 
-  registry.addMenuItem(const MenuItem(
-    label: 'Settings',
-    path: null,
-    icon: Icons.settings,
-    children: [
-      MenuItem(
-        label: 'Profile',
-        path: '/settings/profile',
-        icon: Icons.person,
-      ),
-      MenuItem(
-        label: 'Core',
-        path: '/settings/core',
-        icon: Icons.settings_remote_outlined,
-        children: [
-          MenuItem(
-            label: 'Connections',
-            path: '/settings/core/connections',
-            icon: Icons.link,
-          ),
-          MenuItem(
-            label: 'IP Settings',
-            path: '/settings/core/ip',
-            icon: Icons.network_cell_outlined,
-          ),
-          MenuItem(
-            label: 'Configs',
-            path: '/settings/core/configs',
-            icon: Icons.settings_outlined,
-          ),
-        ],
-      ),
-    ],
-  ));
+  // Only add DBus-dependent settings on Linux
+  if (Platform.isLinux) {
+    registry.addMenuItem(const MenuItem(
+      label: 'Settings',
+      path: null,
+      icon: Icons.settings,
+      children: [
+        MenuItem(
+          label: 'Profile',
+          path: '/settings/profile',
+          icon: Icons.person,
+        ),
+        MenuItem(
+          label: 'Core',
+          path: '/settings/core',
+          icon: Icons.settings_remote_outlined,
+          children: [
+            MenuItem(
+              label: 'Connections',
+              path: '/settings/core/connections',
+              icon: Icons.link,
+            ),
+            MenuItem(
+              label: 'IP Settings',
+              path: '/settings/core/ip',
+              icon: Icons.network_cell_outlined,
+            ),
+            MenuItem(
+              label: 'Configs',
+              path: '/settings/core/configs',
+              icon: Icons.settings_outlined,
+            ),
+          ],
+        ),
+      ],
+    ));
+  }
 
   registry.addMenuItem(const MenuItem(
     label: 'Theme',
@@ -110,7 +114,17 @@ class _AppInitializerState extends State<AppInitializer> {
 
   @override
   Widget build(BuildContext context) {
-    // If not logged in yet, show the login flow.
+    // Skip login on non-Linux platforms
+    if (!Platform.isLinux) {
+      return ProviderScope(
+        overrides: [
+          dbusProvider.overrideWithValue(null),
+        ],
+        child: MyApp(),
+      );
+    }
+
+    // Show login flow on Linux
     if (_dbusClient == null) {
       return LoginApp(
         onLoginSuccess: (DBusClient client) {
@@ -137,50 +151,49 @@ final simpleLocationBuilder = RoutesLocationBuilder(routes: {
         title: 'Home',
         child: HomePage(),
       ),
-  '/settings/profile': (context, state, args) => const BeamPage(
-        key: ValueKey('/settings/profile'),
-        title: 'Profile Settings',
-        child: ProfileSettingsPage(),
-      ),
-  '/settings/privacy': (context, state, args) => const BeamPage(
-        key: ValueKey('/settings/privacy'),
-        title: 'Privacy Settings',
-        child: PrivacyPage(),
-      ),
-  '/settings/core/connections': (context, state, args) => BeamPage(
-        key: const ValueKey('/settings/core/connections'),
-        title: 'Connections',
-        child: Consumer(
-          builder: (context, ref, _) => ConnectionsPage(
-            dbusClient: ref.watch(dbusProvider)!,
+  // Only include DBus-dependent routes on Linux
+  if (Platform.isLinux) ...{
+    '/settings/profile': (context, state, args) => const BeamPage(
+          key: ValueKey('/settings/profile'),
+          title: 'Profile Settings',
+          child: ProfileSettingsPage(),
+        ),
+    '/settings/core/connections': (context, state, args) => BeamPage(
+          key: const ValueKey('/settings/core/connections'),
+          title: 'Connections',
+          child: Consumer(
+            builder: (context, ref, _) => ConnectionsPage(
+              dbusClient: ref.watch(dbusProvider)!,
+            ),
           ),
         ),
-      ),
-  '/settings/core/configs': (context, state, data) => BeamPage(
-        key: const ValueKey('/settings/core/configs'),
-        title: 'All Configs',
-        child: Consumer(
-          builder: (context, ref, _) => ConfigListPage(
-            dbusClient: ref.watch(dbusProvider)!,
+    '/settings/core/configs': (context, state, data) => BeamPage(
+          key: const ValueKey('/settings/core/configs'),
+          title: 'All Configs',
+          child: Consumer(
+            builder: (context, ref, _) => ConfigListPage(
+              dbusClient: ref.watch(dbusProvider)!,
+            ),
           ),
         ),
-      ),
-  '/settings/core/ip': (context, state, args) => BeamPage(
-        key: const ValueKey('/settings/core/ip'),
-        title: 'IP Settings',
-        child: Consumer(
-          builder: (context, ref, _) => IpSettingsPage(
-            dbusClient: ref.watch(dbusProvider)!,
+    '/settings/core/ip': (context, state, args) => BeamPage(
+          key: const ValueKey('/settings/core/ip'),
+          title: 'IP Settings',
+          child: Consumer(
+            builder: (context, ref, _) => IpSettingsPage(
+              dbusClient: ref.watch(dbusProvider)!,
+            ),
           ),
         ),
-      ),
+  },
+  // Non-DBus dependent routes
+  '/theme': (context, state, args) => const BeamPage(
+      key: ValueKey('/theme'), title: 'Theme', child: ViewTheme()),
   '/system': (context, state, args) => const BeamPage(
         key: ValueKey('/system'),
         title: 'System',
         child: SystemsPage(),
       ),
-  '/theme': (context, state, args) => const BeamPage(
-      key: ValueKey('/theme'), title: 'Theme', child: ViewTheme()),
   '/asset-view': (context, state, args) => BeamPage(
         key: const ValueKey('/asset-view'),
         title: 'Asset View',
