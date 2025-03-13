@@ -1,25 +1,26 @@
-import 'package:json_annotation/json_annotation.dart';
 import 'dart:ui' show Color, Size;
-import 'package:flutter/material.dart';
 import 'dart:math';
-import 'common.dart';
+import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter/material.dart';
 import 'package:logger/logger.dart';
+import 'package:flutter_colorpicker/flutter_colorpicker.dart';
+import 'common.dart';
 import '../../providers/state_man.dart';
 
 part 'circle_button.g.dart';
 
 @JsonSerializable()
 class CircleButtonConfig extends BaseAsset {
-  final String key;
+  String key;
   @ColorConverter()
   @JsonKey(name: 'outward_color')
-  final Color outwardColor;
+  Color outwardColor;
   @ColorConverter()
   @JsonKey(name: 'inward_color')
-  final Color inwardColor;
+  Color inwardColor;
   @JsonKey(name: 'text_pos')
-  final TextPos textPos;
+  TextPos textPos;
 
   @override
   Widget build(BuildContext context) {
@@ -28,7 +29,13 @@ class CircleButtonConfig extends BaseAsset {
 
   @override
   Widget configure(BuildContext context) {
-    return const Text('TODO implement configure');
+    return SingleChildScrollView(
+      child: Container(
+        width: 300,
+        padding: const EdgeInsets.all(16),
+        child: _ConfigContent(config: this),
+      ),
+    );
   }
 
   CircleButtonConfig({
@@ -237,4 +244,113 @@ class CircleButtonPainter extends CustomPainter {
       outwardColor != oldDelegate.outwardColor ||
       inwardColor != oldDelegate.inwardColor ||
       isPressed != oldDelegate.isPressed;
+}
+
+class _ConfigContent extends StatefulWidget {
+  final CircleButtonConfig config;
+
+  const _ConfigContent({required this.config});
+
+  @override
+  State<_ConfigContent> createState() => _ConfigContentState();
+}
+
+class _ConfigContentState extends State<_ConfigContent> {
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        TextFormField(
+          initialValue: widget.config.key,
+          decoration: const InputDecoration(
+            labelText: 'Key',
+          ),
+          onChanged: (value) {
+            setState(() {
+              widget.config.key = value;
+            });
+          },
+        ),
+        const SizedBox(height: 16),
+        Row(
+          children: [
+            const Text('Outward Color'),
+            const SizedBox(width: 8),
+            Expanded(
+              child: BlockPicker(
+                pickerColor: widget.config.outwardColor,
+                onColorChanged: (value) {
+                  setState(() {
+                    widget.config.outwardColor = value;
+                  });
+                },
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 16),
+        Row(
+          children: [
+            const Text('Inward Color'),
+            const SizedBox(width: 8),
+            Expanded(
+              child: BlockPicker(
+                pickerColor: widget.config.inwardColor,
+                onColorChanged: (value) {
+                  setState(() {
+                    widget.config.inwardColor = value;
+                  });
+                },
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 16),
+        DropdownButton<TextPos>(
+          value: widget.config.textPos,
+          isExpanded: true,
+          onChanged: (value) {
+            setState(() {
+              widget.config.textPos = value!;
+            });
+          },
+          items: TextPos.values
+              .map((e) => DropdownMenuItem<TextPos>(value: e, child: Text(e.name)))
+              .toList(),
+        ),
+        const SizedBox(height: 16),
+        Row(
+          children: [
+            const Text('Size: '),
+            const SizedBox(width: 8),
+            SizedBox(
+              width: 100,
+              child: TextFormField(
+                initialValue: (widget.config.size.width * 100).toStringAsFixed(2),
+                decoration: const InputDecoration(
+                  suffixText: '%',
+                  isDense: true,
+                  helperText: '0.01-50%',
+                ),
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                onChanged: (value) {
+                  final percentage = double.tryParse(value) ?? 0.0;
+                  if (percentage >= 0.01 && percentage <= 50.0) {
+                    setState(() {
+                      widget.config.size = RelativeSize(
+                        width: percentage / 100,
+                        height: percentage / 100,
+                      );
+                    });
+                  }
+                },
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
 }
