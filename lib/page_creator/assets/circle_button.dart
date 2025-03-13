@@ -125,9 +125,8 @@ class _CircleButtonState extends ConsumerState<CircleButton> {
           },
           child: CustomPaint(
             painter: CircleButtonPainter(
-              outwardColor: widget.config.outwardColor,
-              inwardColor: widget.config.inwardColor,
-              isPressed: _isPressed, // Use local state for visual feedback
+              color: _isPressed ? widget.config.inwardColor : widget.config.outwardColor,
+              isPressed: _isPressed,
             ),
           ),
         ),
@@ -145,13 +144,11 @@ class _CircleButtonState extends ConsumerState<CircleButton> {
 }
 
 class CircleButtonPainter extends CustomPainter {
-  final Color? outwardColor;
-  final Color? inwardColor;
+  final Color color;
   final bool isPressed;
 
   CircleButtonPainter({
-    required this.outwardColor,
-    required this.inwardColor,
+    required this.color,
     this.isPressed = false,
   });
 
@@ -162,87 +159,45 @@ class CircleButtonPainter extends CustomPainter {
 
     // Draw shadow
     final shadowPaint = Paint()
-      ..color = Colors.black.withOpacity(isPressed ? 0.1 : 1)
+      ..color = Colors.black
       ..maskFilter = MaskFilter.blur(
         BlurStyle.normal,
         isPressed ? 2 : 4,
       );
 
-    // Shadow offset changes when pressed
     canvas.drawCircle(
-      center + Offset(0, isPressed ? 1 : 3),
-      radius * (isPressed ? 0.95 : 1.0), // Shadow shrinks slightly when pressed
+      center + Offset(0, isPressed ? 1 : 2),
+      radius * (isPressed ? 0.9 : 1.0),
       shadowPaint,
     );
 
-    // Draw button with gradient
-    if (outwardColor != null && inwardColor != null) {
-      final buttonPaint = Paint()
-        ..shader = RadialGradient(
-          colors: [
-            isPressed ? outwardColor! : inwardColor!,
-            isPressed ? inwardColor! : outwardColor!,
-          ],
-          stops: const [0.0, 1.0],
-        ).createShader(Rect.fromCircle(
-          center: center,
-          radius: radius *
-              (isPressed ? 0.95 : 1.0), // Button shrinks slightly when pressed
-        ));
+    // Draw button
+    final buttonPaint = Paint()
+      ..color = color
+      ..style = PaintingStyle.fill;
 
-      canvas.drawCircle(
-        center,
-        radius * (isPressed ? 0.95 : 1.0),
-        buttonPaint,
-      );
+    canvas.drawCircle(
+      center,
+      radius * (isPressed ? 0.95 : 1.0),
+      buttonPaint,
+    );
 
-      // Draw border
-      final borderPaint = Paint()
-        ..color = outwardColor!
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 2;
-      canvas.drawCircle(
-        center,
-        radius * (isPressed ? 0.95 : 1.0),
-        borderPaint,
-      );
-    } else {
-      // Error state remains the same
-      final errorPaint = Paint()
-        ..color = Colors.grey
-        ..style = PaintingStyle.fill;
-      canvas.drawCircle(center, radius, errorPaint);
+    // Draw border
+    final borderPaint = Paint()
+      ..color = Colors.black.withOpacity(0.1)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1;
 
-      final borderPaint = Paint()
-        ..color = Colors.black
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 2;
-      canvas.drawCircle(center, radius, borderPaint);
-
-      final textPainter = TextPainter(
-        text: TextSpan(
-          text: '!',
-          style: TextStyle(
-            color: Colors.white,
-            fontSize: size.height * 0.6,
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-        textDirection: TextDirection.ltr,
-      );
-      textPainter.layout();
-      textPainter.paint(
-        canvas,
-        Offset((size.width - textPainter.width) / 2,
-            (size.height - textPainter.height) / 2),
-      );
-    }
+    canvas.drawCircle(
+      center,
+      radius * (isPressed ? 0.95 : 1.0),
+      borderPaint,
+    );
   }
 
   @override
   bool shouldRepaint(CircleButtonPainter oldDelegate) =>
-      outwardColor != oldDelegate.outwardColor ||
-      inwardColor != oldDelegate.inwardColor ||
+      color != oldDelegate.color ||
       isPressed != oldDelegate.isPressed;
 }
 
