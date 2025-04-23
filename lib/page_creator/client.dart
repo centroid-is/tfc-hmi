@@ -1,133 +1,188 @@
 import 'dart:async';
 import 'package:logger/logger.dart';
+import 'package:json_annotation/json_annotation.dart';
+import 'package:open62541/open62541.dart';
 
-// TODO this should be a opc ua compliant status code, should come from the opcua lib
-class OPCUAError extends Error {
+part 'client.g.dart';
+
+@JsonSerializable()
+class OpcUAConfig {
+  final String endpoint = "opc.tcp://localhost:4840";
+  final String? username = null;
+  final String? password = null;
+
+  OpcUAConfig();
+
+  factory OpcUAConfig.fromJson(Map<String, dynamic> json) =>
+      _$OpcUAConfigFromJson(json);
+  Map<String, dynamic> toJson() => _$OpcUAConfigToJson(this);
+}
+
+@JsonSerializable()
+class StateManConfig {
+  final OpcUAConfig opcua;
+
+  StateManConfig({
+    required this.opcua,
+  });
+
+  factory StateManConfig.fromJson(Map<String, dynamic> json) =>
+      _$StateManConfigFromJson(json);
+  Map<String, dynamic> toJson() => _$StateManConfigToJson(this);
+}
+
+@JsonSerializable()
+class NodeIdConfig {
+  final int namespace;
+  final String identifier;
+
+  NodeIdConfig({required this.namespace, required this.identifier});
+
+  NodeId toNodeId() {
+    return NodeId.fromString(namespace, identifier);
+  }
+
+  factory NodeIdConfig.fromJson(Map<String, dynamic> json) =>
+      _$NodeIdConfigFromJson(json);
+  Map<String, dynamic> toJson() => _$NodeIdConfigToJson(this);
+}
+
+@JsonSerializable()
+class KeyMappings {
+  final Map<String, NodeIdConfig> nodes;
+
+  KeyMappings({required this.nodes});
+
+  NodeId? lookup(String key) {
+    return nodes[key]?.toNodeId();
+  }
+
+  factory KeyMappings.fromJson(Map<String, dynamic> json) {
+    Map<String, NodeIdConfig> nodes = {};
+
+    json.forEach((key, value) {
+      if (value is Map<String, dynamic>) {
+        if (value['type'] == 'nodeId') {
+          nodes[key] = NodeIdConfig.fromJson(value);
+        } else {
+          throw FormatException(
+              'Unknown type or missing type field for key: $key');
+        }
+      } else {
+        throw FormatException('Invalid value format for key: $key');
+      }
+    });
+
+    return KeyMappings(nodes: nodes);
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      for (var entry in nodes.entries)
+        entry.key: {
+          'type': 'nodeId',
+          ...entry.value.toJson(),
+        }
+    };
+  }
+}
+
+class StateManException implements Exception {
   final String message;
-  OPCUAError(this.message);
+  StateManException(this.message);
   @override
-  String toString() => 'OPCUAError: $message';
+  String toString() => 'StateManException: $message';
 }
 
 class StateMan {
   final logger = Logger();
-
-  /// Constructor requires the server endpoint.
-  StateMan(this.endpointUrl);
-
+  final StateManConfig config;
+  final KeyMappings keyMappings;
+  final client = Client.fromStatic();
+  int? subscriptionId;
   bool get isConnected => _connected;
   bool _connected = true; // todo implement
-  final String endpointUrl;
 
-  /// Example: read<int>("myKey") or read<String>("myStringKey")
-  Future<T> read<T>(String key) async {
+  /// Constructor requires the server endpoint.
+  StateMan({required this.config, required this.keyMappings}) {
+    // spawn a background thread to keep the client active
+    () async {
+      var statusCode = client.connect(
+        config.opcua.endpoint,
+        username: config.opcua.username,
+        password: config.opcua.password,
+      );
+      // Todo: listen to stream of something
+      _connected = statusCode == UA_STATUSCODE_GOOD;
+      if (statusCode != UA_STATUSCODE_GOOD) {
+        logger.e("Not connected. retrying in 10 milliseconds");
+      }
+      while (true) {
+        client.runIterate(Duration(milliseconds: 10));
+        await Future.delayed(Duration(milliseconds: 10));
+      }
+    }();
+  }
+
+  /// Example: read("myKey")
+  Future<DynamicValue> read(String key) async {
     if (!_connected) {
-      throw OPCUAError('Not connected to server');
+      throw StateManException('Not connected to server');
     }
     try {
-      print('Reading value of key: $key');
-      await Future.delayed(Duration(milliseconds: 500));
-
-      // Return type-specific dummy data
-      if (T == int) {
-        return 42 as T;
-      } else if (T == double) {
-        return 42.0 as T;
-      } else if (T == bool) {
-        return true as T;
-      } else if (T == String) {
-        return 'stub-value-of-$key' as T;
-      } else {
-        throw OPCUAError('Unsupported type: $T');
+      final nodeId = keyMappings.lookup(key);
+      if (nodeId == null) {
+        throw StateManException("Key: \"$key\" not found");
       }
+      return await client.readValue(nodeId);
     } catch (e) {
-      throw OPCUAError('Failed to read key: $e');
+      throw StateManException('Failed to read key: \"$key\": $e');
     }
   }
 
-  /// Example: write<int>("myKey", 42) or write<String>("myStringKey", "hello")
-  Future<void> write<T>(String key, T value) async {
+  /// Example: write("myKey", DynamicValue(value: 42, typeId: NodeId.int16))
+  Future<void> write(String key, DynamicValue value) async {
     if (!_connected) {
-      throw OPCUAError('Not connected to server');
+      throw StateManException('Not connected to server');
     }
     try {
-      print('Writing value "$value" to nodeId: $key');
-      await Future.delayed(Duration(milliseconds: 500));
+      final nodeId = keyMappings.lookup(key);
+      if (nodeId == null) {
+        throw StateManException("Key: \"$key\" not found");
+      }
+      await client.writeValue(nodeId, value);
     } catch (e) {
-      throw OPCUAError('Failed to write node: $e');
+      throw StateManException('Failed to write node: \"$key\": $e');
     }
   }
 
   /// Subscribe to data changes on a specific node with type safety.
   /// Returns a Stream that can be cancelled to stop the subscription.
-  /// Example: subscribe<int>("myIntKey") or subscribe<String>("myStringKey")
-  Future<Stream<T>> subscribe<T>(String key) async {
+  /// Example: subscribe("myIntKey") or subscribe("myStringKey")
+  Future<Stream<DynamicValue>> subscribe(String key) async {
     if (!_connected) {
-      throw OPCUAError('Cannot subscribe to node. Not connected to server.');
+      throw StateManException(
+          'Cannot subscribe to node. Not connected to server.');
     }
-
-    final controller = StreamController<T>.broadcast();
-    controller.onCancel = () async {
-      // Cleanup when the last listener unsubscribes
-      print('Unsubscribing from key: $key');
-      await _handleUnsubscribe(key);
-      await controller.close();
-    };
-
     try {
-      print('Subscribing to data changes for key: $key');
-      await _handleSubscribe(key);
-      bool bool_last_value = false;
-      int int_last_value = 0;
-      double double_last_value = 0.0;
-
-      // For demonstration, simulate periodic updates
-      Timer.periodic(Duration(seconds: 2), (timer) {
-        if (controller.isClosed) {
-          timer.cancel();
-          return;
-        }
-        if (!_connected) {
-          timer.cancel();
-          controller.close();
-          return;
-        }
-
-        // Simulate data updates (replace with actual OPC UA data)
-        if (T == int) {
-          controller.add(int_last_value++ as T);
-        } else if (T == String) {
-          controller.add('Updated value at ${DateTime.now()}' as T);
-        } else if (T == double) {
-          controller.add(double_last_value++ as T);
-        } else if (T == bool) {
-          controller.add(bool_last_value as T);
-          bool_last_value = !bool_last_value;
-        } else {
-          print('Unsupported type: $T');
-        }
-      });
-
-      return controller.stream;
+      final nodeId = keyMappings.lookup(key);
+      if (nodeId == null) {
+        throw StateManException("Key: \"$key\" not found");
+      }
+      // Todo the internals will be futures, but not at the moment
+      // Enforce that this is a future
+      await Future.delayed(const Duration(microseconds: 1));
+      subscriptionId ??= client.subscriptionCreate();
+      return client.monitoredItemStream(nodeId, subscriptionId!);
     } catch (e) {
-      await controller.close();
-      throw OPCUAError('Failed to subscribe: $e');
+      throw StateManException('Failed to subscribe: $e');
     }
-  }
-
-  // Internal methods to handle actual OPC UA subscription
-  Future<void> _handleSubscribe(String nodeId) async {
-    // In real implementation: Create actual OPC UA subscription
-    await Future.delayed(Duration(milliseconds: 500));
-  }
-
-  Future<void> _handleUnsubscribe(String nodeId) async {
-    // In real implementation: Delete actual OPC UA subscription
-    await Future.delayed(Duration(milliseconds: 500));
   }
 
   void close() {
     logger.d('Closing connection');
     _connected = false;
+    client.disconnect();
+    client.delete();
   }
 }
