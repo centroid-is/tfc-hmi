@@ -194,13 +194,15 @@ class _LedState extends ConsumerState<Led> {
     final client = ref.read(stateManProvider);
 
     return FutureBuilder<bool>(
-      future: client.read<bool>(widget.config.key),
+      future: client.read(widget.config.key).then((value) => value.asBool),
       builder: (context, initialSnapshot) {
         _log.d(
             'Initial value for ${widget.config.key}: ${initialSnapshot.data}');
 
         return FutureBuilder<Stream<bool>>(
-          future: client.subscribe<bool>(widget.config.key),
+          future: client
+              .subscribe(widget.config.key)
+              .then((stream) => stream.map((value) => value.asBool)),
           builder: (context, streamSnapshot) {
             if (streamSnapshot.hasError) {
               _log.e('Stream setup error for ${widget.config.key}',

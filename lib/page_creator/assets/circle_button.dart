@@ -7,6 +7,7 @@ import 'package:logger/logger.dart';
 import 'package:flutter_colorpicker/flutter_colorpicker.dart';
 import 'common.dart';
 import '../../providers/state_man.dart';
+import 'package:open62541/open62541.dart' show DynamicValue, NodeId;
 
 part 'circle_button.g.dart';
 
@@ -97,7 +98,8 @@ class _CircleButtonState extends ConsumerState<CircleButton> {
             setState(() => _isPressed = true);
             final client = ref.read(stateManProvider);
             try {
-              await client.write(widget.config.key, true);
+              await client.write(widget.config.key,
+                  DynamicValue(value: true, typeId: NodeId.boolean));
               _log.d('Button ${widget.config.key} pressed');
             } catch (e) {
               _log.e('Error writing button press', error: e);
@@ -107,7 +109,8 @@ class _CircleButtonState extends ConsumerState<CircleButton> {
             setState(() => _isPressed = false);
             final client = ref.read(stateManProvider);
             try {
-              await client.write(widget.config.key, false);
+              await client.write(widget.config.key,
+                  DynamicValue(value: false, typeId: NodeId.boolean));
               _log.d('Button ${widget.config.key} released');
             } catch (e) {
               _log.e('Error writing button release', error: e);
@@ -117,7 +120,8 @@ class _CircleButtonState extends ConsumerState<CircleButton> {
             setState(() => _isPressed = false);
             final client = ref.read(stateManProvider);
             try {
-              await client.write(widget.config.key, false);
+              await client.write(widget.config.key,
+                  DynamicValue(value: false, typeId: NodeId.boolean));
               _log.d('Button ${widget.config.key} tap cancelled');
             } catch (e) {
               _log.e('Error writing button cancel', error: e);
@@ -125,7 +129,9 @@ class _CircleButtonState extends ConsumerState<CircleButton> {
           },
           child: CustomPaint(
             painter: CircleButtonPainter(
-              color: _isPressed ? widget.config.inwardColor : widget.config.outwardColor,
+              color: _isPressed
+                  ? widget.config.inwardColor
+                  : widget.config.outwardColor,
               isPressed: _isPressed,
             ),
           ),
@@ -197,8 +203,7 @@ class CircleButtonPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(CircleButtonPainter oldDelegate) =>
-      color != oldDelegate.color ||
-      isPressed != oldDelegate.isPressed;
+      color != oldDelegate.color || isPressed != oldDelegate.isPressed;
 }
 
 class _ConfigContent extends StatefulWidget {
@@ -272,7 +277,8 @@ class _ConfigContentState extends State<_ConfigContent> {
             });
           },
           items: TextPos.values
-              .map((e) => DropdownMenuItem<TextPos>(value: e, child: Text(e.name)))
+              .map((e) =>
+                  DropdownMenuItem<TextPos>(value: e, child: Text(e.name)))
               .toList(),
         ),
         const SizedBox(height: 16),
@@ -283,13 +289,15 @@ class _ConfigContentState extends State<_ConfigContent> {
             SizedBox(
               width: 100,
               child: TextFormField(
-                initialValue: (widget.config.size.width * 100).toStringAsFixed(2),
+                initialValue:
+                    (widget.config.size.width * 100).toStringAsFixed(2),
                 decoration: const InputDecoration(
                   suffixText: '%',
                   isDense: true,
                   helperText: '0.01-50%',
                 ),
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
                 onChanged: (value) {
                   final percentage = double.tryParse(value) ?? 0.0;
                   if (percentage >= 0.01 && percentage <= 50.0) {
