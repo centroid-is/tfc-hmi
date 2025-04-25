@@ -123,10 +123,10 @@ class StateMan {
   Future<void> _connect() async {
     while (true) {
       logger.t("Connecting to server: ${config.opcua.endpoint}");
-      var statusCode = client.connect(
+      var statusCode = await client.connect(
         config.opcua.endpoint,
-        username: config.opcua.username,
-        password: config.opcua.password,
+        // username: config.opcua.username,
+        // password: config.opcua.password,
       );
       
       _connected = statusCode == UA_STATUSCODE_GOOD;
@@ -142,10 +142,10 @@ class StateMan {
   }
 
   void _runIterate() async {
-    while (true) {
-      client.runIterate(const Duration(milliseconds: 10));
+    while (client.runIterate(const Duration(milliseconds: 10))) {
       await Future.delayed(const Duration(milliseconds: 10));
     }
+    throw StateManException("Failed to iterate client!");
   }
 
   /// Example: read("myKey")
@@ -196,7 +196,7 @@ class StateMan {
       // Todo the internals will be futures, but not at the moment
       // Enforce that this is a future
       await Future.delayed(const Duration(microseconds: 1));
-      subscriptionId ??= client.subscriptionCreate();
+      subscriptionId ??= await client.subscriptionCreate();
       return client.monitoredItemStream(nodeId, subscriptionId!);
     } catch (e) {
       throw StateManException('Failed to subscribe: $e');

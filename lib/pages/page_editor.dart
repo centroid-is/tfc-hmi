@@ -197,7 +197,10 @@ class _PageEditorState extends State<PageEditor> {
                                 Coordinates(x: newX, y: newY);
                           });
                         },
-                        child: asset.build(context),
+                        child: AbsorbPointer(
+                          absorbing: true,
+                          child: asset.build(context),
+                        ),
                       ),
                     );
                   }).toList(),
