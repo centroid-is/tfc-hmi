@@ -13,6 +13,10 @@ class OpcUAConfig {
 
   OpcUAConfig();
 
+  String toString() {
+    return 'OpcUAConfig(endpoint: $endpoint, username: $username, password: $password)';
+  }
+
   factory OpcUAConfig.fromJson(Map<String, dynamic> json) =>
       _$OpcUAConfigFromJson(json);
   Map<String, dynamic> toJson() => _$OpcUAConfigToJson(this);
@@ -25,6 +29,10 @@ class StateManConfig {
   StateManConfig({
     required this.opcua,
   });
+
+  String toString() {
+    return 'StateManConfig(opcua: ${opcua.toString()})';
+  }
 
   factory StateManConfig.fromJson(Map<String, dynamic> json) =>
       _$StateManConfigFromJson(json);
@@ -106,38 +114,36 @@ class StateMan {
   /// Constructor requires the server endpoint.
   StateMan({required this.config, required this.keyMappings}) {
     // spawn a background thread to keep the client active
-    () async {
-      while (true) {
-        logger.t("Connecting to server: ${config.opcua.endpoint}");
-        var statusCode = client.connect(
-          "opc.tcp://172.30.118.178:4840",
-        );
-        // Todo: listen to stream of something
-        _connected = statusCode == UA_STATUSCODE_GOOD;
-        if (statusCode != UA_STATUSCODE_GOOD) {
-          logger.e("Not connected. retrying in 1 second");
-        } else {
-          break;
-        }
-        await Future.delayed(const Duration(seconds: 1));
+    _connect().then((_) {
+      _runIterate();
+    });
+  }
+
+  Future<void> _connect() async {
+    while (true) {
+      logger.t("Connecting to server: ${config.opcua.endpoint}");
+      var statusCode = client.connect(
+        config.opcua.endpoint,
+        username: config.opcua.username,
+        password: config.opcua.password,
+      );
+      
+      _connected = statusCode == UA_STATUSCODE_GOOD;
+      
+      if (_connected) {
+        logger.i("Successfully connected to server");
+        return;
       }
-      () async {
-        int subid = client.subscriptionCreate();
-        var stream = client.monitoredItemStream(
-            NodeId.fromString(4, "GVL_IO.domeLightGreen.i_xSignal"), subid);
-        stream.listen((event) {
-          print("the answer is ${event}");
-        }).onDone(() {
-          print("Done");
-        });
-      }();
-      while (true) {
-        print(
-            "#############################running iterate#############################");
-        client.runIterate(const Duration(milliseconds: 10));
-        await Future.delayed(const Duration(milliseconds: 10));
-      }
-    }();
+      
+      logger.e("Not connected. Retrying in 1 second");
+      await Future.delayed(const Duration(seconds: 1));
+    }
+  }
+
+  void _runIterate() {
+    Timer.periodic(const Duration(milliseconds: 10), (t) {
+      client.runIterate(const Duration(milliseconds: 10));
+    });
   }
 
   /// Example: read("myKey")
