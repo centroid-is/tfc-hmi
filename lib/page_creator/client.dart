@@ -117,6 +117,7 @@ class StateMan {
     _connect().then((_) {
       _runIterate();
     });
+    
   }
 
   Future<void> _connect() async {
@@ -140,10 +141,11 @@ class StateMan {
     }
   }
 
-  void _runIterate() {
-    Timer.periodic(const Duration(milliseconds: 10), (t) {
+  void _runIterate() async {
+    while (true) {
       client.runIterate(const Duration(milliseconds: 10));
-    });
+      await Future.delayed(const Duration(milliseconds: 10));
+    }
   }
 
   /// Example: read("myKey")

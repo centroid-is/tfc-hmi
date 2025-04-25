@@ -1,0 +1,28 @@
+// GENERATED CODE - DO NOT MODIFY BY HAND
+
+part of 'conveyor.dart';
+
+// **************************************************************************
+// JsonSerializableGenerator
+// **************************************************************************
+
+ConveyorConfig _$ConveyorConfigFromJson(Map<String, dynamic> json) =>
+    ConveyorConfig(
+      key: json['key'] as String,
+      angle: (json['angle'] as num?)?.toDouble() ?? 0.0,
+    )
+      ..variant = json['asset_name'] as String
+      ..pageName = json['page_name'] as String
+      ..coordinates =
+          Coordinates.fromJson(json['coordinates'] as Map<String, dynamic>)
+      ..size = RelativeSize.fromJson(json['size'] as Map<String, dynamic>);
+
+Map<String, dynamic> _$ConveyorConfigToJson(ConveyorConfig instance) =>
+    <String, dynamic>{
+      'asset_name': instance.variant,
+      'page_name': instance.pageName,
+      'coordinates': instance.coordinates.toJson(),
+      'size': instance.size.toJson(),
+      'key': instance.key,
+      'angle': instance.angle,
+    };
