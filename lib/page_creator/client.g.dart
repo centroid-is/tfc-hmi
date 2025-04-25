@@ -6,10 +6,17 @@ part of 'client.dart';
 // JsonSerializableGenerator
 // **************************************************************************
 
-OpcUAConfig _$OpcUAConfigFromJson(Map<String, dynamic> json) => OpcUAConfig();
+OpcUAConfig _$OpcUAConfigFromJson(Map<String, dynamic> json) => OpcUAConfig()
+  ..endpoint = json['endpoint'] as String
+  ..username = json['username'] as String?
+  ..password = json['password'] as String?;
 
 Map<String, dynamic> _$OpcUAConfigToJson(OpcUAConfig instance) =>
-    <String, dynamic>{};
+    <String, dynamic>{
+      'endpoint': instance.endpoint,
+      'username': instance.username,
+      'password': instance.password,
+    };
 
 StateManConfig _$StateManConfigFromJson(Map<String, dynamic> json) =>
     StateManConfig(

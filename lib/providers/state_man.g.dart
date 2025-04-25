@@ -6,11 +6,11 @@ part of 'state_man.dart';
 // RiverpodGenerator
 // **************************************************************************
 
-String _$stateManHash() => r'24ed06abc8acbc5ccc00f960e290704eb6a19bca';
+String _$stateManHash() => r'2141b36917c8093b86140e211d640ec434fa656f';
 
 /// See also [stateMan].
 @ProviderFor(stateMan)
-final stateManProvider = Provider<StateMan>.internal(
+final stateManProvider = FutureProvider<StateMan>.internal(
   stateMan,
   name: r'stateManProvider',
   debugGetCreateSourceHash:
@@ -21,6 +21,6 @@ final stateManProvider = Provider<StateMan>.internal(
 
 @Deprecated('Will be removed in 3.0. Use Ref instead')
 // ignore: unused_element
-typedef StateManRef = ProviderRef<StateMan>;
+typedef StateManRef = FutureProviderRef<StateMan>;
 // ignore_for_file: type=lint
 // ignore_for_file: subtype_of_sealed_class, invalid_use_of_internal_member, invalid_use_of_visible_for_testing_member, deprecated_member_use_from_same_package

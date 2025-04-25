@@ -46,8 +46,10 @@ class CircleButtonConfig extends BaseAsset {
     required this.textPos,
   });
 
+  static const previewStr = 'Circle button preview';
+
   CircleButtonConfig.preview()
-      : key = 'Circle button preview',
+      : key = previewStr,
         outwardColor = Colors.green,
         inwardColor = Colors.green,
         textPos = TextPos.right;
@@ -82,7 +84,8 @@ class _CircleButtonState extends ConsumerState<CircleButton> {
 
   @override
   Widget build(BuildContext context) {
-    final client = ref.read(stateManProvider);
+    final isPreview = widget.config.key == CircleButtonConfig.previewStr;
+
     final containerSize = MediaQuery.of(context).size;
     final actualSize = widget.config.size.toSize(containerSize);
     final buttonSize = min(actualSize.width, actualSize.height);
@@ -96,7 +99,10 @@ class _CircleButtonState extends ConsumerState<CircleButton> {
           customBorder: const CircleBorder(),
           onTapDown: (_) async {
             setState(() => _isPressed = true);
-            final client = ref.read(stateManProvider);
+            if (isPreview) {
+              return;
+            }
+            final client = await ref.read(stateManProvider.future);
             try {
               await client.write(widget.config.key,
                   DynamicValue(value: true, typeId: NodeId.boolean));
@@ -107,7 +113,10 @@ class _CircleButtonState extends ConsumerState<CircleButton> {
           },
           onTapUp: (_) async {
             setState(() => _isPressed = false);
-            final client = ref.read(stateManProvider);
+            if (isPreview) {
+              return;
+            }
+            final client = await ref.read(stateManProvider.future);
             try {
               await client.write(widget.config.key,
                   DynamicValue(value: false, typeId: NodeId.boolean));
@@ -118,7 +127,10 @@ class _CircleButtonState extends ConsumerState<CircleButton> {
           },
           onTapCancel: () async {
             setState(() => _isPressed = false);
-            final client = ref.read(stateManProvider);
+            if (isPreview) {
+              return;
+            }
+            final client = await ref.read(stateManProvider.future);
             try {
               await client.write(widget.config.key,
                   DynamicValue(value: false, typeId: NodeId.boolean));

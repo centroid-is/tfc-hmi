@@ -7,9 +7,9 @@ part 'client.g.dart';
 
 @JsonSerializable()
 class OpcUAConfig {
-  final String endpoint = "opc.tcp://localhost:4840";
-  final String? username = null;
-  final String? password = null;
+  String endpoint = "opc.tcp://localhost:4840";
+  String? username;
+  String? password;
 
   OpcUAConfig();
 
@@ -20,7 +20,7 @@ class OpcUAConfig {
 
 @JsonSerializable()
 class StateManConfig {
-  final OpcUAConfig opcua;
+  OpcUAConfig opcua;
 
   StateManConfig({
     required this.opcua,
@@ -33,8 +33,8 @@ class StateManConfig {
 
 @JsonSerializable()
 class NodeIdConfig {
-  final int namespace;
-  final String identifier;
+  int namespace;
+  String identifier;
 
   NodeIdConfig({required this.namespace, required this.identifier});
 
@@ -49,7 +49,7 @@ class NodeIdConfig {
 
 @JsonSerializable()
 class KeyMappings {
-  final Map<String, NodeIdConfig> nodes;
+  Map<String, NodeIdConfig> nodes;
 
   KeyMappings({required this.nodes});
 
@@ -107,19 +107,35 @@ class StateMan {
   StateMan({required this.config, required this.keyMappings}) {
     // spawn a background thread to keep the client active
     () async {
-      var statusCode = client.connect(
-        config.opcua.endpoint,
-        username: config.opcua.username,
-        password: config.opcua.password,
-      );
-      // Todo: listen to stream of something
-      _connected = statusCode == UA_STATUSCODE_GOOD;
-      if (statusCode != UA_STATUSCODE_GOOD) {
-        logger.e("Not connected. retrying in 10 milliseconds");
-      }
       while (true) {
-        client.runIterate(Duration(milliseconds: 10));
-        await Future.delayed(Duration(milliseconds: 10));
+        logger.t("Connecting to server: ${config.opcua.endpoint}");
+        var statusCode = client.connect(
+          "opc.tcp://172.30.118.178:4840",
+        );
+        // Todo: listen to stream of something
+        _connected = statusCode == UA_STATUSCODE_GOOD;
+        if (statusCode != UA_STATUSCODE_GOOD) {
+          logger.e("Not connected. retrying in 1 second");
+        } else {
+          break;
+        }
+        await Future.delayed(const Duration(seconds: 1));
+      }
+      () async {
+        int subid = client.subscriptionCreate();
+        var stream = client.monitoredItemStream(
+            NodeId.fromString(4, "GVL_IO.domeLightGreen.i_xSignal"), subid);
+        stream.listen((event) {
+          print("the answer is ${event}");
+        }).onDone(() {
+          print("Done");
+        });
+      }();
+      while (true) {
+        print(
+            "#############################running iterate#############################");
+        client.runIterate(const Duration(milliseconds: 10));
+        await Future.delayed(const Duration(milliseconds: 10));
       }
     }();
   }

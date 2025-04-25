@@ -29,8 +29,10 @@ class LEDConfig extends BaseAsset {
     required this.textPos,
   });
 
+  static const previewStr = 'Led preview';
+
   LEDConfig.preview()
-      : key = 'Led preview',
+      : key = previewStr,
         onColor = Colors.green,
         offColor = Colors.green,
         textPos = TextPos.right;
@@ -191,49 +193,57 @@ class _LedState extends ConsumerState<Led> {
 
   @override
   Widget build(BuildContext context) {
-    final client = ref.read(stateManProvider);
+    if (widget.config.key == LEDConfig.previewStr) {
+      return _buildLED(true);
+    }
 
-    return FutureBuilder<bool>(
-      future: client.read(widget.config.key).then((value) => value.asBool),
-      builder: (context, initialSnapshot) {
-        _log.d(
-            'Initial value for ${widget.config.key}: ${initialSnapshot.data}');
+    final clientAsync = ref.watch(stateManProvider);
 
-        return FutureBuilder<Stream<bool>>(
-          future: client
-              .subscribe(widget.config.key)
-              .then((stream) => stream.map((value) => value.asBool)),
-          builder: (context, streamSnapshot) {
-            if (streamSnapshot.hasError) {
-              _log.e('Stream setup error for ${widget.config.key}',
-                  error: streamSnapshot.error);
-              return _buildLED(null);
-            }
+    return clientAsync.when(
+      data: (client) => FutureBuilder<bool>(
+        future: client.read(widget.config.key).then((value) => value.asBool),
+        builder: (context, initialSnapshot) {
+          _log.d(
+              'Initial value for ${widget.config.key}: ${initialSnapshot.data}');
 
-            if (!streamSnapshot.hasData) {
-              _log.d(
-                  'Waiting for stream, showing initial value: ${initialSnapshot.data}');
-              return _buildLED(initialSnapshot.data);
-            }
+          return FutureBuilder<Stream<bool>>(
+            future: client
+                .subscribe(widget.config.key)
+                .then((stream) => stream.map((value) => value.asBool)),
+            builder: (context, streamSnapshot) {
+              if (streamSnapshot.hasError) {
+                _log.e('Stream setup error for ${widget.config.key}',
+                    error: streamSnapshot.error);
+                return _buildLED(null);
+              }
 
-            return StreamBuilder<bool>(
-              stream: streamSnapshot.data,
-              initialData: initialSnapshot.data,
-              builder: (context, snapshot) {
-                if (snapshot.hasError) {
-                  _log.e('Stream error for ${widget.config.key}',
-                      error: snapshot.error);
-                  return _buildLED(null);
-                }
+              if (!streamSnapshot.hasData) {
+                _log.d(
+                    'Waiting for stream, showing initial value: ${initialSnapshot.data}');
+                return _buildLED(initialSnapshot.data);
+              }
 
-                final isOn = snapshot.data;
-                _log.t('LED ${widget.config.key} value update: $isOn');
-                return _buildLED(isOn);
-              },
-            );
-          },
-        );
-      },
+              return StreamBuilder<bool>(
+                stream: streamSnapshot.data,
+                initialData: initialSnapshot.data,
+                builder: (context, snapshot) {
+                  if (snapshot.hasError) {
+                    _log.e('Stream error for ${widget.config.key}',
+                        error: snapshot.error);
+                    return _buildLED(null);
+                  }
+
+                  final isOn = snapshot.data;
+                  _log.t('LED ${widget.config.key} value update: $isOn');
+                  return _buildLED(isOn);
+                },
+              );
+            },
+          );
+        },
+      ),
+      loading: () => const CircularProgressIndicator(),
+      error: (error, stack) => _buildLED(null),
     );
   }
 

@@ -3,25 +3,31 @@ import 'dart:convert';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../page_creator/client.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 part 'state_man.g.dart';
 
 @Riverpod(keepAlive: true)
-StateMan stateMan(Ref ref) {
-  // Todo: do differently, config should be in the state man
-  Map<String, String> envVars = Platform.environment;
-  var configDirectory = envVars['CONFIGURATION_DIRECTORY'];
-  configDirectory ??= '${Directory.current.path}/config';
-  if (!Directory(configDirectory).existsSync()) {
-    Directory(configDirectory).createSync(recursive: true);
-  }
-  final configFile = File('$configDirectory/state_man.json');
-  final config =
-      StateManConfig.fromJson(jsonDecode(configFile.readAsStringSync()));
-  final keyMappingsFile = File('$configDirectory/key_mappings.json');
-  final keyMappings =
-      KeyMappings.fromJson(jsonDecode(keyMappingsFile.readAsStringSync()));
+Future<StateMan> stateMan(Ref ref) async {
+  final prefs = SharedPreferencesAsync();
 
-  final client = StateMan(config: config, keyMappings: keyMappings);
-  return client;
+  var stateManJson = await prefs.getString('state_man_config');
+  if (stateManJson == null) {
+    final defaultConfig = StateManConfig(opcua: OpcUAConfig());
+    stateManJson = jsonEncode(defaultConfig.toJson());
+    await prefs.setString('state_man_config', stateManJson);
+  }
+  final config = StateManConfig.fromJson(jsonDecode(stateManJson));
+
+  var keyMappingsJson = await prefs.getString('key_mappings');
+  if (keyMappingsJson == null) {
+    final defaultKeyMappings = KeyMappings(nodes: {
+      "exampleKey": NodeIdConfig(namespace: 42, identifier: "identifier")
+    });
+    keyMappingsJson = jsonEncode(defaultKeyMappings.toJson());
+    await prefs.setString('key_mappings', keyMappingsJson);
+  }
+  final keyMappings = KeyMappings.fromJson(jsonDecode(keyMappingsJson));
+
+  return StateMan(config: config, keyMappings: keyMappings);
 }
