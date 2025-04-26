@@ -41,7 +41,8 @@ class ConveyorConfig extends BaseAsset {
     );
   }
 
-  factory ConveyorConfig.fromJson(Map<String, dynamic> json) => _$ConveyorConfigFromJson(json);
+  factory ConveyorConfig.fromJson(Map<String, dynamic> json) =>
+      _$ConveyorConfigFromJson(json);
   Map<String, dynamic> toJson() => _$ConveyorConfigToJson(this);
 }
 
@@ -73,9 +74,12 @@ class _ConveyorConfigContentState extends State<_ConveyorConfigContent> {
             SizedBox(
               width: 80,
               child: TextFormField(
-                initialValue: (widget.config.size.width * 100).toStringAsFixed(2),
-                decoration: const InputDecoration(suffixText: '%', isDense: true),
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                initialValue:
+                    (widget.config.size.width * 100).toStringAsFixed(2),
+                decoration:
+                    const InputDecoration(suffixText: '%', isDense: true),
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
                 onChanged: (val) {
                   final pct = double.tryParse(val) ?? 0.0;
                   if (pct >= 0.01 && pct <= 100) {
@@ -99,9 +103,12 @@ class _ConveyorConfigContentState extends State<_ConveyorConfigContent> {
             SizedBox(
               width: 80,
               child: TextFormField(
-                initialValue: (widget.config.size.height * 100).toStringAsFixed(2),
-                decoration: const InputDecoration(suffixText: '%', isDense: true),
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                initialValue:
+                    (widget.config.size.height * 100).toStringAsFixed(2),
+                decoration:
+                    const InputDecoration(suffixText: '%', isDense: true),
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
                 onChanged: (val) {
                   final pct = double.tryParse(val) ?? 0.0;
                   if (pct >= 0.01 && pct <= 100) {
@@ -125,8 +132,10 @@ class _ConveyorConfigContentState extends State<_ConveyorConfigContent> {
             Expanded(
               child: TextFormField(
                 initialValue: widget.config.angle.toStringAsFixed(0),
-                decoration: const InputDecoration(suffixText: '°', isDense: true),
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                decoration:
+                    const InputDecoration(suffixText: '°', isDense: true),
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
                 onChanged: (value) {
                   final deg = double.tryParse(value) ?? 0.0;
                   setState(() {
@@ -180,216 +189,223 @@ class _ConveyorState extends ConsumerState<Conveyor> {
     );
   }
 
-void _showDetailsDialog(BuildContext context) {
-  showDialog(
-    context: context,
-    builder: (_) => StreamBuilder<(StateMan, DynamicValue)>(
-      stream: ref.watch(stateManProvider.future)
-        .asStream()
-        .switchMap((stateMan) => stateMan.subscribe(widget.config.key)
-          .asStream()
-          .map((stream) => Rx.combineLatest2(
-              Stream.value(stateMan),
-              stream,
-              (stateMan, value) => (stateMan, value)))
-          .switchMap((stream) => stream)),
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const AlertDialog(
-            content: Center(child: CircularProgressIndicator()),
-          );
-        }
-        if (snapshot.hasError) {
+  void _showDetailsDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (_) => StreamBuilder<(StateMan, DynamicValue)>(
+        stream: ref.watch(stateManProvider.future).asStream().switchMap(
+            (stateMan) => stateMan
+                .subscribe(widget.config.key)
+                .asStream()
+                .map((stream) => Rx.combineLatest2(Stream.value(stateMan),
+                    stream, (stateMan, value) => (stateMan, value)))
+                .switchMap((stream) => stream)),
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const AlertDialog(
+              content: Center(child: CircularProgressIndicator()),
+            );
+          }
+          if (snapshot.hasError) {
+            return AlertDialog(
+              title: const Text('Error'),
+              content: Text(snapshot.error.toString()),
+            );
+          }
+
+          var (stateMan, dynValue) = snapshot.data!;
+
           return AlertDialog(
-            title: const Text('Error'),
-            content: Text(snapshot.error.toString()),
-          );
-        }
+            title: Text(widget.config.key),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Status header
+                  Center(
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        RawMaterialButton(
+                          shape: const CircleBorder(),
+                          padding: const EdgeInsets.all(8),
+                          onHighlightChanged: (isPressed) async {
+                            if (dynValue['p_stat_ManualStopOnRelease'].asBool) {
+                              dynValue['p_cmd_JogBwd'] = isPressed;
+                              await stateMan.write(widget.config.key, dynValue);
+                            }
+                          },
+                          onPressed: () {
+                            if (!dynValue['p_stat_ManualStopOnRelease']
+                                .asBool) {
+                              dynValue['p_cmd_JogBwd'] = true;
+                              stateMan.write(widget.config.key, dynValue);
+                            }
+                          },
+                          child: Icon(
+                            Icons.arrow_back,
+                            color: dynValue['p_stat_JogBwd'].asBool
+                                ? Colors.green
+                                : Colors.grey,
+                          ),
+                        ),
+                        const Text('Manual'),
+                        RawMaterialButton(
+                          shape: const CircleBorder(),
+                          padding: const EdgeInsets.all(8),
+                          onHighlightChanged: (isPressed) async {
+                            if (dynValue['p_stat_ManualStopOnRelease'].asBool) {
+                              dynValue['p_cmd_JogFwd'] = isPressed;
+                              await stateMan.write(widget.config.key, dynValue);
+                            }
+                          },
+                          onPressed: () {
+                            if (!dynValue['p_stat_ManualStopOnRelease']
+                                .asBool) {
+                              dynValue['p_cmd_JogFwd'] = true;
+                              stateMan.write(widget.config.key, dynValue);
+                            }
+                          },
+                          child: Icon(
+                            Icons.arrow_forward,
+                            color: dynValue['p_stat_JogFwd'].asBool
+                                ? Colors.green
+                                : Colors.grey,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
 
-        var (stateMan, dynValue) = snapshot.data!;
+                  const SizedBox(height: 12),
 
-        return AlertDialog(
-          title: Text(widget.config.key),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-
-                // Status header
-                Center(
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
+                  // Fault reset toggle
+                  Row(
                     children: [
                       RawMaterialButton(
                         shape: const CircleBorder(),
                         padding: const EdgeInsets.all(8),
-                        onHighlightChanged: (isPressed) {
-                          dynValue['p_cmd_JogBwd'] = dynValue['p_stat_ManualStopOnRelease'].asBool ? isPressed : true;
+                        onPressed: () {
+                          dynValue['p_cmd_FaultReset'] = true;
                           stateMan.write(widget.config.key, dynValue);
                         },
-                        onPressed: () {},
                         child: Icon(
-                          Icons.arrow_back,
-                          color: dynValue['p_stat_JogBwd'].asBool
+                          Icons.circle,
+                          color: dynValue['p_stat_FaultReset'].asBool
                               ? Colors.green
-                              : null,
+                              : Colors.grey,
                         ),
                       ),
-                      const Text('Manual'),
+                      const SizedBox(width: 4),
+                      const Text('Fault reset'),
+                    ],
+                  ),
+
+                  // Manual stop on release toggle
+                  Row(
+                    children: [
                       RawMaterialButton(
                         shape: const CircleBorder(),
                         padding: const EdgeInsets.all(8),
-                        onHighlightChanged: (isPressed) async {
-                          dynValue['p_cmd_JogFwd'] = dynValue['p_stat_ManualStopOnRelease'].asBool ? isPressed : true;
-                          await stateMan.write(widget.config.key, dynValue);
+                        onPressed: () {
+                          dynValue['p_cmd_ManualStopOnRelease'] = true;
+                          stateMan.write(widget.config.key, dynValue);
                         },
-                        onPressed: () {},
                         child: Icon(
-                          Icons.arrow_forward,
-                          color: dynValue['p_stat_JogFwd'].asBool
+                          Icons.circle,
+                          color: dynValue['p_stat_ManualStopOnRelease'].asBool
                               ? Colors.green
-                              : null,
+                              : Colors.grey,
                         ),
                       ),
-                      const SizedBox(width: 16),
-                      Text(dynValue['p_stat_State'].asString),
+                      const SizedBox(width: 4),
+                      const Text('Manual stop on release'),
                     ],
                   ),
-                ),
 
-                const SizedBox(height: 12),
+                  const SizedBox(height: 4),
 
-                // Fault reset toggle
-                Row(
-                  children: [
-                    RawMaterialButton(
-                      shape: const CircleBorder(),
-                      padding: const EdgeInsets.all(8),
-                      onHighlightChanged: (isPressed) {
-                        dynValue['p_cmd_FaultReset'] = isPressed;
-                        stateMan.write(widget.config.key, dynValue);
-                      },
-                      onPressed: () {},
-                      child: Icon(
-                        Icons.circle,
-                        color: dynValue['p_stat_FaultReset'].asBool
-                            ? Colors.green
-                            : Colors.grey,
-                      ),
-                    ),
-                    const SizedBox(width: 4),
-                    const Text('Fault reset'),
-                  ],
-                ),
-
-                // Manual stop on release toggle
-                Row(
-                  children: [
-                    RawMaterialButton(
-                      shape: const CircleBorder(),
-                      padding: const EdgeInsets.all(8),
-                      onHighlightChanged: (isPressed) {
-                        dynValue['p_cmd_ManualStopOnRelease'] = true;
-                        stateMan.write(widget.config.key, dynValue);
-                      },
-                      onPressed: () {},
-                      child: Icon(
-                        Icons.circle,
-                        color: dynValue['p_stat_ManualStopOnRelease'].asBool
-                            ? Colors.green
-                            : Colors.grey,
-                      ),
-                    ),
-                    const SizedBox(width: 4),
-                    const Text('Manual stop on release'),
-                  ],
-                ),
-
-                const SizedBox(height: 4),
-
-                // Reset run hours
-                Row(
-                  children: [
-                    RawMaterialButton(
-                      shape: const CircleBorder(),
-                      padding: const EdgeInsets.all(8),
-                      onHighlightChanged: (isPressed) {
-                        dynValue['p_cmd_ResetRunHours'] = isPressed;
-                        stateMan.write(widget.config.key, dynValue);
-                      },
-                      onPressed: () {},
-                      child: const Icon(
-                        Icons.circle,
-                        color: Colors.grey,
-                      ),
-                    ),
-                    const SizedBox(width: 4),
-                    const Text('Reset run hours'),
-                  ],
-                ),
-
-                const SizedBox(height: 12),
-
-                // Statistics columns
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    const Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('HMIS'),
-                        Text('Last Fault'),
-                        Text('Frequency'),
-                        Text('Run hours'),
-                        Text('Current'),
-                      ],
-                    ),
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      children: [
-                        Text('todo'),
-                        Text(dynValue['p_stat_LastFault'].asString),
-                        Text(dynValue['p_stat_Frequency'].asString),
-                        Text(
-                          Duration(
-                            minutes: dynValue['p_stat_RunMinutes'].asInt,
-                          ).toString(),
+                  // Reset run hours
+                  Row(
+                    children: [
+                      RawMaterialButton(
+                        shape: const CircleBorder(),
+                        padding: const EdgeInsets.all(8),
+                        onPressed: () {
+                          dynValue['p_cmd_ResetRunHours'] = true;
+                          stateMan.write(widget.config.key, dynValue);
+                        },
+                        child: const Icon(
+                          Icons.circle,
+                          color: Colors.grey,
                         ),
-                        Text(dynValue['p_stat_Current'].asString),
-                      ],
-                    ),
-                  ],
-                ),
-
-                const SizedBox(height: 12),
-
-                // Graph placeholder
-                SizedBox(
-                  width: double.infinity,
-                  height: 120,
-                  child: Container(
-                    decoration: BoxDecoration(
-                      border: Border.all(color: Colors.black54),
-                    ),
-                    child: const Center(child: Text('Graph view')),
+                      ),
+                      const SizedBox(width: 4),
+                      const Text('Reset run hours'),
+                    ],
                   ),
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text('Close'),
-            ),
-          ],
-        );
-      },
-    ),
-  );
-}
 
+                  const SizedBox(height: 12),
+
+                  // Statistics columns
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('HMIS'),
+                          Text('Last Fault'),
+                          Text('Frequency'),
+                          Text('Run hours'),
+                          Text('Current'),
+                        ],
+                      ),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          Text(dynValue['p_stat_State'].asString),
+                          Text(dynValue['p_stat_LastFault'].asString),
+                          Text(dynValue['p_stat_Frequency'].asString),
+                          Text(
+                            Duration(
+                              minutes: dynValue['p_stat_RunMinutes'].asInt,
+                            ).toString(),
+                          ),
+                          Text(dynValue['p_stat_Current'].asString),
+                        ],
+                      ),
+                    ],
+                  ),
+
+                  const SizedBox(height: 12),
+
+                  // Graph placeholder
+                  SizedBox(
+                    width: double.infinity,
+                    height: 120,
+                    child: Container(
+                      decoration: BoxDecoration(
+                        border: Border.all(color: Colors.black54),
+                      ),
+                      child: const Center(child: Text('Graph view')),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text('Close'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
 }
 
 class _ConveyorPainter extends CustomPainter {
