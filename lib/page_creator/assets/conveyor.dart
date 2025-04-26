@@ -23,8 +23,10 @@ class ConveyorConfig extends BaseAsset {
     this.angle = 0.0,
   });
 
+  static const previewStr = 'Conveyor Preview';
+
   ConveyorConfig.preview()
-      : key = 'Conveyor Preview',
+      : key = previewStr,
         angle = 0.0;
 
   @override
@@ -191,6 +193,17 @@ class _ConveyorState extends ConsumerState<Conveyor> {
 
   @override
   Widget build(BuildContext context) {
+    if (widget.config.key == ConveyorConfig.previewStr) {
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          _buildConveyorVisual(Colors.grey, context),
+          const SizedBox(width: 12), // spacing between box and text
+          const Text('Conveyor preview'),
+        ],
+      );
+    }
     return StreamBuilder<DynamicValue>(
       stream: ref.watch(stateManProvider.future).asStream().asyncExpand(
           (stateMan) => stateMan
@@ -209,19 +222,23 @@ class _ConveyorState extends ConsumerState<Conveyor> {
 
         return GestureDetector(
           onTap: () => _showDetailsDialog(context),
-          child: Align(
-            alignment: FractionalOffset(
-                widget.config.coordinates.x, widget.config.coordinates.y),
-            child: Transform.rotate(
-              angle: widget.config.angle * pi / 180,
-              child: CustomPaint(
-                size: widget.config.size.toSize(MediaQuery.of(context).size),
-                painter: _ConveyorPainter(color: color),
-              ),
-            ),
-          ),
+          child: _buildConveyorVisual(color, context),
         );
       },
+    );
+  }
+
+  Widget _buildConveyorVisual(Color color, BuildContext context) {
+    return Align(
+      alignment: FractionalOffset(
+          widget.config.coordinates.x, widget.config.coordinates.y),
+      child: Transform.rotate(
+        angle: widget.config.angle * pi / 180,
+        child: CustomPaint(
+          size: widget.config.size.toSize(MediaQuery.of(context).size),
+          painter: _ConveyorPainter(color: color),
+        ),
+      ),
     );
   }
 
@@ -453,16 +470,20 @@ class _ConveyorPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final rect = Offset.zero & size;
+    final borderRadius =
+        Radius.circular(size.shortestSide * 0.2); // 20% of the shortest side
+    final rrect = RRect.fromRectAndRadius(rect, borderRadius);
+
     final paint = Paint()
       ..color = color
       ..style = PaintingStyle.fill;
-    canvas.drawRect(rect, paint);
+    canvas.drawRRect(rrect, paint);
 
     final border = Paint()
       ..color = Colors.black
       ..style = PaintingStyle.stroke
       ..strokeWidth = 2;
-    canvas.drawRect(rect, border);
+    canvas.drawRRect(rrect, border);
   }
 
   @override
