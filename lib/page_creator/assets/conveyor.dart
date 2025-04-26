@@ -170,22 +170,58 @@ class _ConveyorState extends ConsumerState<Conveyor> {
     ),
   );
 
+  Color _getConveyorColor(dynamic dynValue) {
+    try {
+      if (dynValue['p_stat_Frequency'].asInt > 1) {
+        return Colors.green;
+      }
+      final state = dynValue['p_stat_State'].asString;
+      if (state.contains('RDY') ||
+          state.contains('NST') ||
+          state.contains('RUN') ||
+          state.contains('ACC') ||
+          state.contains('DEC')) {
+        return Colors.blue;
+      }
+      return Colors.red;
+    } catch (_) {
+      return Colors.grey;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    // Placeholder: future data fetch or subscription
-    return GestureDetector(
-      onTap: () => _showDetailsDialog(context),
-      child: Align(
-        alignment: FractionalOffset(
-            widget.config.coordinates.x, widget.config.coordinates.y),
-        child: Transform.rotate(
-          angle: widget.config.angle * pi / 180,
-          child: CustomPaint(
-            size: widget.config.size.toSize(MediaQuery.of(context).size),
-            painter: _ConveyorPainter(),
+    return StreamBuilder<DynamicValue>(
+      stream: ref.watch(stateManProvider.future).asStream().asyncExpand(
+          (stateMan) => stateMan
+              .subscribe(widget.config.key)
+              .asStream()
+              .switchMap((s) => s)),
+      builder: (context, snapshot) {
+        if (snapshot.hasError) {
+          _log.e('Error fetching dynamic value for ${widget.config.key}',
+              error: snapshot.error);
+        }
+        _log.d('Dynamic value for ${widget.config.key}: ${snapshot.data}');
+        final dynValue = snapshot.data;
+        final color =
+            dynValue != null ? _getConveyorColor(dynValue) : Colors.grey;
+
+        return GestureDetector(
+          onTap: () => _showDetailsDialog(context),
+          child: Align(
+            alignment: FractionalOffset(
+                widget.config.coordinates.x, widget.config.coordinates.y),
+            child: Transform.rotate(
+              angle: widget.config.angle * pi / 180,
+              child: CustomPaint(
+                size: widget.config.size.toSize(MediaQuery.of(context).size),
+                painter: _ConveyorPainter(color: color),
+              ),
+            ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 
@@ -409,11 +445,14 @@ class _ConveyorState extends ConsumerState<Conveyor> {
 }
 
 class _ConveyorPainter extends CustomPainter {
+  final Color color;
+  _ConveyorPainter({required this.color});
+
   @override
   void paint(Canvas canvas, Size size) {
     final rect = Offset.zero & size;
     final paint = Paint()
-      ..color = Colors.grey.shade200
+      ..color = color
       ..style = PaintingStyle.fill;
     canvas.drawRect(rect, paint);
 
@@ -425,5 +464,6 @@ class _ConveyorPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+  bool shouldRepaint(covariant _ConveyorPainter oldDelegate) =>
+      oldDelegate.color != color;
 }

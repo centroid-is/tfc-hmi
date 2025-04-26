@@ -117,7 +117,6 @@ class StateMan {
     _connect().then((_) {
       _runIterate();
     });
-    
   }
 
   Future<void> _connect() async {
@@ -128,14 +127,14 @@ class StateMan {
         // username: config.opcua.username,
         // password: config.opcua.password,
       );
-      
+
       _connected = statusCode == UA_STATUSCODE_GOOD;
-      
+
       if (_connected) {
         logger.i("Successfully connected to server");
         return;
       }
-      
+
       logger.e("Not connected. Retrying in 1 second");
       await Future.delayed(const Duration(seconds: 1));
     }
@@ -193,13 +192,12 @@ class StateMan {
       if (nodeId == null) {
         throw StateManException("Key: \"$key\" not found");
       }
-      // Todo the internals will be futures, but not at the moment
-      // Enforce that this is a future
-      await Future.delayed(const Duration(microseconds: 1));
       subscriptionId ??= await client.subscriptionCreate();
       return client.monitoredItemStream(nodeId, subscriptionId!);
     } catch (e) {
-      throw StateManException('Failed to subscribe: $e');
+      logger.e('Failed to subscribe: $e, retrying in 1 second');
+      await Future.delayed(const Duration(seconds: 1));
+      return subscribe(key);
     }
   }
 
