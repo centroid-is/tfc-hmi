@@ -238,8 +238,10 @@ class _ConveyorState extends ConsumerState<Conveyor> {
                 .switchMap((stream) => stream)),
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
-            return const AlertDialog(
-              content: Center(child: CircularProgressIndicator()),
+            return const Dialog(
+              backgroundColor: Colors.transparent,
+              elevation: 0,
+              child: Center(child: CircularProgressIndicator()),
             );
           }
           if (snapshot.hasError) {
