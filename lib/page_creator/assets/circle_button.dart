@@ -45,7 +45,7 @@ class CircleButtonConfig extends BaseAsset {
 
   @override
   Widget build(BuildContext context) {
-    return CircleButton(this);
+    return CircleButtonAligned(config: this);
   }
 
   @override
@@ -163,7 +163,7 @@ class _CircleButtonState extends ConsumerState<CircleButton> {
     );
   }
 
-  Widget buildButton(Color color) {
+  Widget _buildButton(Color color) {
     final isPreview = widget.config.key == CircleButtonConfig.previewStr;
     final containerSize = MediaQuery.of(context).size;
     final actualSize = widget.config.size.toSize(containerSize);
@@ -223,20 +223,6 @@ class _CircleButtonState extends ConsumerState<CircleButton> {
     );
   }
 
-  Widget _buildAlignedButton(Color color) {
-    return Align(
-      alignment: FractionalOffset(
-        widget.config.coordinates.x,
-        widget.config.coordinates.y,
-      ),
-      child: buildWithText(
-        buildButton(color),
-        widget.config.key,
-        widget.config.textPos,
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final stateManAsync = ref.watch(stateManProvider);
@@ -247,12 +233,37 @@ class _CircleButtonState extends ConsumerState<CircleButton> {
           stream: colorStream(stateMan),
           builder: (context, snapshot) {
             final color = snapshot.data ?? widget.config.outwardColor;
-            return _buildAlignedButton(color);
+            return _buildButton(color);
           },
         );
       },
-      loading: () => _buildAlignedButton(widget.config.outwardColor),
-      error: (_, __) => _buildAlignedButton(widget.config.outwardColor),
+      loading: () => _buildButton(widget.config.outwardColor),
+      error: (_, __) => _buildButton(widget.config.outwardColor),
+    );
+  }
+}
+
+class CircleButtonAligned extends StatelessWidget {
+  final CircleButtonConfig config;
+
+  const CircleButtonAligned({super.key, required this.config});
+
+  factory CircleButtonAligned.preview() {
+    return CircleButtonAligned(config: CircleButtonConfig.preview());
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Align(
+      alignment: FractionalOffset(
+        config.coordinates.x,
+        config.coordinates.y,
+      ),
+      child: buildWithText(
+        CircleButton(config),
+        config.text ?? config.key,
+        config.textPos,
+      ),
     );
   }
 }
