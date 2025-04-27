@@ -6,6 +6,18 @@ part of 'circle_button.dart';
 // JsonSerializableGenerator
 // **************************************************************************
 
+FeedbackConfig _$FeedbackConfigFromJson(Map<String, dynamic> json) =>
+    FeedbackConfig()
+      ..key = json['key'] as String
+      ..color = const ColorConverter()
+          .fromJson(json['color'] as Map<String, dynamic>);
+
+Map<String, dynamic> _$FeedbackConfigToJson(FeedbackConfig instance) =>
+    <String, dynamic>{
+      'key': instance.key,
+      'color': const ColorConverter().toJson(instance.color),
+    };
+
 CircleButtonConfig _$CircleButtonConfigFromJson(Map<String, dynamic> json) =>
     CircleButtonConfig(
       key: json['key'] as String,
@@ -19,7 +31,11 @@ CircleButtonConfig _$CircleButtonConfigFromJson(Map<String, dynamic> json) =>
       ..pageName = json['page_name'] as String
       ..coordinates =
           Coordinates.fromJson(json['coordinates'] as Map<String, dynamic>)
-      ..size = RelativeSize.fromJson(json['size'] as Map<String, dynamic>);
+      ..size = RelativeSize.fromJson(json['size'] as Map<String, dynamic>)
+      ..feedback = json['feedback'] == null
+          ? null
+          : FeedbackConfig.fromJson(json['feedback'] as Map<String, dynamic>)
+      ..text = json['text'] as String?;
 
 Map<String, dynamic> _$CircleButtonConfigToJson(CircleButtonConfig instance) =>
     <String, dynamic>{
@@ -28,6 +44,8 @@ Map<String, dynamic> _$CircleButtonConfigToJson(CircleButtonConfig instance) =>
       'coordinates': instance.coordinates,
       'size': instance.size,
       'key': instance.key,
+      'feedback': instance.feedback,
+      'text': instance.text,
       'outward_color': const ColorConverter().toJson(instance.outwardColor),
       'inward_color': const ColorConverter().toJson(instance.inwardColor),
       'text_pos': _$TextPosEnumMap[instance.textPos]!,

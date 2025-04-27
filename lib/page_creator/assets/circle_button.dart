@@ -1,19 +1,39 @@
 import 'dart:ui' show Color, Size;
 import 'dart:math';
+import 'dart:async';
+
 import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/material.dart';
 import 'package:logger/logger.dart';
 import 'package:flutter_colorpicker/flutter_colorpicker.dart';
+import 'package:rxdart/rxdart.dart';
+import 'package:open62541/open62541.dart' show DynamicValue, NodeId;
+
 import 'common.dart';
 import '../../providers/state_man.dart';
-import 'package:open62541/open62541.dart' show DynamicValue, NodeId;
+import '../client.dart';
 
 part 'circle_button.g.dart';
 
 @JsonSerializable()
+class FeedbackConfig {
+  String key = "Default";
+  @ColorConverter()
+  Color color = Colors.green;
+
+  FeedbackConfig();
+
+  factory FeedbackConfig.fromJson(Map<String, dynamic> json) =>
+      _$FeedbackConfigFromJson(json);
+  Map<String, dynamic> toJson() => _$FeedbackConfigToJson(this);
+}
+
+@JsonSerializable()
 class CircleButtonConfig extends BaseAsset {
   String key;
+  FeedbackConfig? feedback;
+  String? text;
   @ColorConverter()
   @JsonKey(name: 'outward_color')
   Color outwardColor;
@@ -30,11 +50,28 @@ class CircleButtonConfig extends BaseAsset {
 
   @override
   Widget configure(BuildContext context) {
-    return SingleChildScrollView(
-      child: Container(
-        width: 300,
-        padding: const EdgeInsets.all(16),
-        child: _ConfigContent(config: this),
+    final media = MediaQuery.of(context).size;
+    final maxWidth = media.width * 0.9; // Use 90% of screen width
+    final maxHeight = media.height * 0.8; // Use 80% of screen height
+
+    return Center(
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxWidth: maxWidth,
+          maxHeight: maxHeight,
+          minWidth: 320,
+          minHeight: 200,
+        ),
+        child: Material(
+          borderRadius: BorderRadius.circular(24),
+          color: Theme.of(context).dialogBackgroundColor,
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: SingleChildScrollView(
+              child: _ConfigContent(config: this),
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -80,17 +117,59 @@ class _CircleButtonState extends ConsumerState<CircleButton> {
     ),
   );
 
+  final _pressedController = StreamController<bool>.broadcast();
   bool _isPressed = false;
+  bool _feedbackActive = false;
 
   @override
-  Widget build(BuildContext context) {
-    final isPreview = widget.config.key == CircleButtonConfig.previewStr;
+  void dispose() {
+    _pressedController.close();
+    super.dispose();
+  }
 
+  // Call this in onTapDown, onTapUp, onTapCancel
+  void _setPressed(bool value) {
+    if (_isPressed != value) {
+      setState(() => _isPressed = value);
+      _pressedController.add(value);
+    }
+  }
+
+  Stream<Color> colorStream(StateMan stateMan) {
+    final feedbackStream = widget.config.feedback == null
+        ? Stream<bool>.value(false)
+        : stateMan
+            .subscribe(widget.config.feedback!.key)
+            .asStream()
+            .asyncExpand((s) => s)
+            .map((value) => value?.asBool ?? false)
+            .startWith(_feedbackActive);
+
+    final pressedStream = _pressedController.stream.startWith(_isPressed);
+
+    return Rx.combineLatest2<bool, bool, Color>(
+      feedbackStream,
+      pressedStream,
+      (feedbackActive, isPressed) {
+        _log.d('Feedback active: $feedbackActive, isPressed: $isPressed');
+        _feedbackActive = feedbackActive;
+        if (feedbackActive) {
+          return widget.config.feedback!.color;
+        }
+        return isPressed
+            ? widget.config.inwardColor
+            : widget.config.outwardColor;
+      },
+    );
+  }
+
+  Widget buildButton(Color color) {
+    final isPreview = widget.config.key == CircleButtonConfig.previewStr;
     final containerSize = MediaQuery.of(context).size;
     final actualSize = widget.config.size.toSize(containerSize);
     final buttonSize = min(actualSize.width, actualSize.height);
 
-    final button = SizedBox(
+    return SizedBox(
       width: buttonSize,
       height: buttonSize,
       child: Material(
@@ -98,10 +177,8 @@ class _CircleButtonState extends ConsumerState<CircleButton> {
         child: InkWell(
           customBorder: const CircleBorder(),
           onTapDown: (_) async {
-            setState(() => _isPressed = true);
-            if (isPreview) {
-              return;
-            }
+            _setPressed(true);
+            if (isPreview) return;
             final client = await ref.read(stateManProvider.future);
             try {
               await client.write(widget.config.key,
@@ -112,10 +189,8 @@ class _CircleButtonState extends ConsumerState<CircleButton> {
             }
           },
           onTapUp: (_) async {
-            setState(() => _isPressed = false);
-            if (isPreview) {
-              return;
-            }
+            _setPressed(false);
+            if (isPreview) return;
             final client = await ref.read(stateManProvider.future);
             try {
               await client.write(widget.config.key,
@@ -126,10 +201,8 @@ class _CircleButtonState extends ConsumerState<CircleButton> {
             }
           },
           onTapCancel: () async {
-            setState(() => _isPressed = false);
-            if (isPreview) {
-              return;
-            }
+            _setPressed(false);
+            if (isPreview) return;
             final client = await ref.read(stateManProvider.future);
             try {
               await client.write(widget.config.key,
@@ -141,22 +214,45 @@ class _CircleButtonState extends ConsumerState<CircleButton> {
           },
           child: CustomPaint(
             painter: CircleButtonPainter(
-              color: _isPressed
-                  ? widget.config.inwardColor
-                  : widget.config.outwardColor,
+              color: color,
               isPressed: _isPressed,
             ),
           ),
         ),
       ),
     );
+  }
 
+  Widget _buildAlignedButton(Color color) {
     return Align(
       alignment: FractionalOffset(
         widget.config.coordinates.x,
         widget.config.coordinates.y,
       ),
-      child: buildWithText(button, widget.config.key, widget.config.textPos),
+      child: buildWithText(
+        buildButton(color),
+        widget.config.key,
+        widget.config.textPos,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final stateManAsync = ref.watch(stateManProvider);
+
+    return stateManAsync.when(
+      data: (stateMan) {
+        return StreamBuilder<Color>(
+          stream: colorStream(stateMan),
+          builder: (context, snapshot) {
+            final color = snapshot.data ?? widget.config.outwardColor;
+            return _buildAlignedButton(color);
+          },
+        );
+      },
+      loading: () => _buildAlignedButton(widget.config.outwardColor),
+      error: (_, __) => _buildAlignedButton(widget.config.outwardColor),
     );
   }
 }
@@ -320,6 +416,50 @@ class _ConfigContentState extends State<_ConfigContent> {
                       );
                     });
                   }
+                },
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 16),
+        // Feedback config fields
+        Row(
+          children: [
+            const Text('Feedback Key'),
+            const SizedBox(width: 8),
+            Expanded(
+              child: TextFormField(
+                initialValue: widget.config.feedback?.key ?? '',
+                decoration: const InputDecoration(
+                  labelText: 'Feedback Key',
+                ),
+                onChanged: (value) {
+                  setState(() {
+                    if (widget.config.feedback == null) {
+                      widget.config.feedback = FeedbackConfig();
+                    }
+                    widget.config.feedback!.key = value;
+                  });
+                },
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            const Text('Feedback Color'),
+            const SizedBox(width: 8),
+            Expanded(
+              child: BlockPicker(
+                pickerColor: widget.config.feedback?.color ?? Colors.green,
+                onColorChanged: (value) {
+                  setState(() {
+                    if (widget.config.feedback == null) {
+                      widget.config.feedback = FeedbackConfig();
+                    }
+                    widget.config.feedback!.color = value;
+                  });
                 },
               ),
             ),
