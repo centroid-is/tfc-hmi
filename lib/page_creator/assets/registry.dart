@@ -1,7 +1,7 @@
 import 'package:logger/logger.dart';
 import 'common.dart';
 import 'led.dart';
-import 'circle_button.dart';
+import 'button.dart';
 import 'conveyor.dart';
 
 class AssetRegistry {
@@ -10,13 +10,13 @@ class AssetRegistry {
   static final Map<Type, Asset Function(Map<String, dynamic>)>
       fromJsonFactories = {
     LEDConfig: LEDConfig.fromJson,
-    CircleButtonConfig: CircleButtonConfig.fromJson,
+    ButtonConfig: ButtonConfig.fromJson,
     ConveyorConfig: ConveyorConfig.fromJson,
   };
 
   static final Map<Type, Asset Function()> defaultFactories = {
     LEDConfig: LEDConfig.preview,
-    CircleButtonConfig: CircleButtonConfig.preview,
+    ButtonConfig: ButtonConfig.preview,
     ConveyorConfig: ConveyorConfig.preview,
   };
 

@@ -34,6 +34,7 @@ enum TextPos {
   below,
   left,
   right,
+  inside,
 }
 
 @JsonSerializable()
@@ -147,6 +148,16 @@ abstract class BaseAsset implements Asset {
 Widget buildWithText(Widget widget, String text, TextPos textPos) {
   final textWidget = Text(text);
   const spacing = SizedBox(width: 8, height: 8); // 8 pixel spacing
+
+  if (textPos == TextPos.inside) {
+    return Stack(
+      alignment: Alignment.center,
+      children: [
+        widget,
+        IgnorePointer(child: textWidget),
+      ],
+    );
+  }
 
   return Column(
     mainAxisSize: MainAxisSize.min,

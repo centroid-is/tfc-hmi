@@ -14,7 +14,7 @@ import 'common.dart';
 import '../../providers/state_man.dart';
 import '../client.dart';
 
-part 'circle_button.g.dart';
+part 'button.g.dart';
 
 @JsonSerializable()
 class FeedbackConfig {
@@ -29,8 +29,14 @@ class FeedbackConfig {
   Map<String, dynamic> toJson() => _$FeedbackConfigToJson(this);
 }
 
+@JsonEnum()
+enum ButtonType {
+  circle,
+  square,
+}
+
 @JsonSerializable()
-class CircleButtonConfig extends BaseAsset {
+class ButtonConfig extends BaseAsset {
   String key;
   FeedbackConfig? feedback;
   String? text;
@@ -42,10 +48,12 @@ class CircleButtonConfig extends BaseAsset {
   Color inwardColor;
   @JsonKey(name: 'text_pos')
   TextPos textPos;
+  @JsonKey(name: 'button_type')
+  ButtonType buttonType;
 
   @override
   Widget build(BuildContext context) {
-    return CircleButtonAligned(config: this);
+    return ButtonAligned(config: this);
   }
 
   @override
@@ -76,36 +84,38 @@ class CircleButtonConfig extends BaseAsset {
     );
   }
 
-  CircleButtonConfig({
+  ButtonConfig({
     required this.key,
     required this.outwardColor,
     required this.inwardColor,
     required this.textPos,
+    required this.buttonType,
   });
 
-  static const previewStr = 'Circle button preview';
+  static const previewStr = 'Button preview';
 
-  CircleButtonConfig.preview()
+  ButtonConfig.preview()
       : key = previewStr,
         outwardColor = Colors.green,
         inwardColor = Colors.green,
-        textPos = TextPos.right;
+        textPos = TextPos.right,
+        buttonType = ButtonType.circle;
 
-  factory CircleButtonConfig.fromJson(Map<String, dynamic> json) =>
-      _$CircleButtonConfigFromJson(json);
-  Map<String, dynamic> toJson() => _$CircleButtonConfigToJson(this);
+  factory ButtonConfig.fromJson(Map<String, dynamic> json) =>
+      _$ButtonConfigFromJson(json);
+  Map<String, dynamic> toJson() => _$ButtonConfigToJson(this);
 }
 
-class CircleButton extends ConsumerStatefulWidget {
-  final CircleButtonConfig config;
+class Button extends ConsumerStatefulWidget {
+  final ButtonConfig config;
 
-  const CircleButton(this.config, {super.key});
+  const Button(this.config, {super.key});
 
   @override
-  ConsumerState<CircleButton> createState() => _CircleButtonState();
+  ConsumerState<Button> createState() => _ButtonState();
 }
 
-class _CircleButtonState extends ConsumerState<CircleButton> {
+class _ButtonState extends ConsumerState<Button> {
   static final _log = Logger(
     printer: PrettyPrinter(
       methodCount: 0,
@@ -164,7 +174,7 @@ class _CircleButtonState extends ConsumerState<CircleButton> {
   }
 
   Widget _buildButton(Color color) {
-    final isPreview = widget.config.key == CircleButtonConfig.previewStr;
+    final isPreview = widget.config.key == ButtonConfig.previewStr;
     final containerSize = MediaQuery.of(context).size;
     final actualSize = widget.config.size.toSize(containerSize);
     final buttonSize = min(actualSize.width, actualSize.height);
@@ -175,7 +185,9 @@ class _CircleButtonState extends ConsumerState<CircleButton> {
       child: Material(
         color: Colors.transparent,
         child: InkWell(
-          customBorder: const CircleBorder(),
+          customBorder: widget.config.buttonType == ButtonType.circle
+              ? const CircleBorder()
+              : const RoundedRectangleBorder(),
           onTapDown: (_) async {
             _setPressed(true);
             if (isPreview) return;
@@ -213,9 +225,10 @@ class _CircleButtonState extends ConsumerState<CircleButton> {
             }
           },
           child: CustomPaint(
-            painter: CircleButtonPainter(
+            painter: ButtonPainter(
               color: color,
               isPressed: _isPressed,
+              buttonType: widget.config.buttonType,
             ),
           ),
         ),
@@ -243,13 +256,13 @@ class _CircleButtonState extends ConsumerState<CircleButton> {
   }
 }
 
-class CircleButtonAligned extends StatelessWidget {
-  final CircleButtonConfig config;
+class ButtonAligned extends StatelessWidget {
+  final ButtonConfig config;
 
-  const CircleButtonAligned({super.key, required this.config});
+  const ButtonAligned({super.key, required this.config});
 
-  factory CircleButtonAligned.preview() {
-    return CircleButtonAligned(config: CircleButtonConfig.preview());
+  factory ButtonAligned.preview() {
+    return ButtonAligned(config: ButtonConfig.preview());
   }
 
   @override
@@ -260,7 +273,7 @@ class CircleButtonAligned extends StatelessWidget {
         config.coordinates.y,
       ),
       child: buildWithText(
-        CircleButton(config),
+        Button(config),
         config.text ?? config.key,
         config.textPos,
       ),
@@ -268,13 +281,15 @@ class CircleButtonAligned extends StatelessWidget {
   }
 }
 
-class CircleButtonPainter extends CustomPainter {
+class ButtonPainter extends CustomPainter {
   final Color color;
   final bool isPressed;
+  final ButtonType buttonType;
 
-  CircleButtonPainter({
+  ButtonPainter({
     required this.color,
     this.isPressed = false,
+    required this.buttonType,
   });
 
   @override
@@ -290,22 +305,41 @@ class CircleButtonPainter extends CustomPainter {
         isPressed ? 2 : 4,
       );
 
-    canvas.drawCircle(
-      center + Offset(0, isPressed ? 1 : 2),
-      radius * (isPressed ? 0.9 : 1.0),
-      shadowPaint,
-    );
+    // Draw button and shadow based on type
+    if (buttonType == ButtonType.circle) {
+      canvas.drawCircle(
+        center + Offset(0, isPressed ? 1 : 2),
+        radius * (isPressed ? 0.9 : 1.0),
+        shadowPaint,
+      );
+    } else {
+      final rect = Rect.fromCenter(
+        center: center + Offset(0, isPressed ? 1 : 2),
+        width: size.width * (isPressed ? 0.9 : 1.0),
+        height: size.height * (isPressed ? 0.9 : 1.0),
+      );
+      canvas.drawRect(rect, shadowPaint);
+    }
 
-    // Draw button
+    // Draw button fill
     final buttonPaint = Paint()
       ..color = color
       ..style = PaintingStyle.fill;
 
-    canvas.drawCircle(
-      center,
-      radius * (isPressed ? 0.95 : 1.0),
-      buttonPaint,
-    );
+    if (buttonType == ButtonType.circle) {
+      canvas.drawCircle(
+        center,
+        radius * (isPressed ? 0.95 : 1.0),
+        buttonPaint,
+      );
+    } else {
+      final rect = Rect.fromCenter(
+        center: center,
+        width: size.width * (isPressed ? 0.95 : 1.0),
+        height: size.height * (isPressed ? 0.95 : 1.0),
+      );
+      canvas.drawRect(rect, buttonPaint);
+    }
 
     // Draw border
     final borderPaint = Paint()
@@ -313,20 +347,31 @@ class CircleButtonPainter extends CustomPainter {
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1;
 
-    canvas.drawCircle(
-      center,
-      radius * (isPressed ? 0.95 : 1.0),
-      borderPaint,
-    );
+    if (buttonType == ButtonType.circle) {
+      canvas.drawCircle(
+        center,
+        radius * (isPressed ? 0.95 : 1.0),
+        borderPaint,
+      );
+    } else {
+      final rect = Rect.fromCenter(
+        center: center,
+        width: size.width * (isPressed ? 0.95 : 1.0),
+        height: size.height * (isPressed ? 0.95 : 1.0),
+      );
+      canvas.drawRect(rect, borderPaint);
+    }
   }
 
   @override
-  bool shouldRepaint(CircleButtonPainter oldDelegate) =>
-      color != oldDelegate.color || isPressed != oldDelegate.isPressed;
+  bool shouldRepaint(ButtonPainter oldDelegate) =>
+      color != oldDelegate.color ||
+      isPressed != oldDelegate.isPressed ||
+      buttonType != oldDelegate.buttonType;
 }
 
 class _ConfigContent extends StatefulWidget {
-  final CircleButtonConfig config;
+  final ButtonConfig config;
 
   const _ConfigContent({required this.config});
 
@@ -401,12 +446,37 @@ class _ConfigContentState extends State<_ConfigContent> {
               .toList(),
         ),
         const SizedBox(height: 16),
+        // Button type selector
+        DropdownButton<ButtonType>(
+          value: widget.config.buttonType,
+          isExpanded: true,
+          onChanged: (value) {
+            setState(() {
+              widget.config.buttonType = value!;
+              // Optionally, sync height and width if switching to circle
+              if (value == ButtonType.circle) {
+                final avg =
+                    (widget.config.size.width + widget.config.size.height) / 2;
+                widget.config.size = RelativeSize(width: avg, height: avg);
+              }
+            });
+          },
+          items: ButtonType.values
+              .map((e) => DropdownMenuItem<ButtonType>(
+                    value: e,
+                    child: Text(e.name[0].toUpperCase() + e.name.substring(1)),
+                  ))
+              .toList(),
+        ),
+        const SizedBox(height: 16),
         Row(
           children: [
-            const Text('Size: '),
+            Text(widget.config.buttonType == ButtonType.square
+                ? 'Width: '
+                : 'Size: '),
             const SizedBox(width: 8),
             SizedBox(
-              width: 100,
+              width: 80,
               child: TextFormField(
                 initialValue:
                     (widget.config.size.width * 100).toStringAsFixed(2),
@@ -418,18 +488,50 @@ class _ConfigContentState extends State<_ConfigContent> {
                 keyboardType:
                     const TextInputType.numberWithOptions(decimal: true),
                 onChanged: (value) {
-                  final percentage = double.tryParse(value) ?? 0.0;
-                  if (percentage >= 0.01 && percentage <= 50.0) {
+                  final widthPercent = double.tryParse(value) ?? 0.0;
+                  if (widthPercent >= 0.01 && widthPercent <= 50.0) {
                     setState(() {
                       widget.config.size = RelativeSize(
-                        width: percentage / 100,
-                        height: percentage / 100,
+                        width: widthPercent / 100,
+                        height: widget.config.buttonType == ButtonType.square
+                            ? widget.config.size.height
+                            : widthPercent / 100,
                       );
                     });
                   }
                 },
               ),
             ),
+            if (widget.config.buttonType == ButtonType.square) ...[
+              const SizedBox(width: 16),
+              const Text('Height: '),
+              const SizedBox(width: 8),
+              SizedBox(
+                width: 80,
+                child: TextFormField(
+                  initialValue:
+                      (widget.config.size.height * 100).toStringAsFixed(2),
+                  decoration: const InputDecoration(
+                    suffixText: '%',
+                    isDense: true,
+                    helperText: '0.01-50%',
+                  ),
+                  keyboardType:
+                      const TextInputType.numberWithOptions(decimal: true),
+                  onChanged: (value) {
+                    final heightPercent = double.tryParse(value) ?? 0.0;
+                    if (heightPercent >= 0.01 && heightPercent <= 50.0) {
+                      setState(() {
+                        widget.config.size = RelativeSize(
+                          width: widget.config.size.width,
+                          height: heightPercent / 100,
+                        );
+                      });
+                    }
+                  },
+                ),
+              ),
+            ],
           ],
         ),
         const SizedBox(height: 16),

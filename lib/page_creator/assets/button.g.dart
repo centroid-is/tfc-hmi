@@ -1,6 +1,6 @@
 // GENERATED CODE - DO NOT MODIFY BY HAND
 
-part of 'circle_button.dart';
+part of 'button.dart';
 
 // **************************************************************************
 // JsonSerializableGenerator
@@ -18,14 +18,14 @@ Map<String, dynamic> _$FeedbackConfigToJson(FeedbackConfig instance) =>
       'color': const ColorConverter().toJson(instance.color),
     };
 
-CircleButtonConfig _$CircleButtonConfigFromJson(Map<String, dynamic> json) =>
-    CircleButtonConfig(
+ButtonConfig _$ButtonConfigFromJson(Map<String, dynamic> json) => ButtonConfig(
       key: json['key'] as String,
       outwardColor: const ColorConverter()
           .fromJson(json['outward_color'] as Map<String, dynamic>),
       inwardColor: const ColorConverter()
           .fromJson(json['inward_color'] as Map<String, dynamic>),
       textPos: $enumDecode(_$TextPosEnumMap, json['text_pos']),
+      buttonType: $enumDecode(_$ButtonTypeEnumMap, json['button_type']),
     )
       ..variant = json['asset_name'] as String
       ..pageName = json['page_name'] as String
@@ -37,7 +37,7 @@ CircleButtonConfig _$CircleButtonConfigFromJson(Map<String, dynamic> json) =>
           : FeedbackConfig.fromJson(json['feedback'] as Map<String, dynamic>)
       ..text = json['text'] as String?;
 
-Map<String, dynamic> _$CircleButtonConfigToJson(CircleButtonConfig instance) =>
+Map<String, dynamic> _$ButtonConfigToJson(ButtonConfig instance) =>
     <String, dynamic>{
       'asset_name': instance.variant,
       'page_name': instance.pageName,
@@ -49,6 +49,7 @@ Map<String, dynamic> _$CircleButtonConfigToJson(CircleButtonConfig instance) =>
       'outward_color': const ColorConverter().toJson(instance.outwardColor),
       'inward_color': const ColorConverter().toJson(instance.inwardColor),
       'text_pos': _$TextPosEnumMap[instance.textPos]!,
+      'button_type': _$ButtonTypeEnumMap[instance.buttonType]!,
     };
 
 const _$TextPosEnumMap = {
@@ -56,4 +57,10 @@ const _$TextPosEnumMap = {
   TextPos.below: 'below',
   TextPos.left: 'left',
   TextPos.right: 'right',
+  TextPos.inside: 'inside',
+};
+
+const _$ButtonTypeEnumMap = {
+  ButtonType.circle: 'circle',
+  ButtonType.square: 'square',
 };

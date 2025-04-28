@@ -36,4 +36,5 @@ const _$TextPosEnumMap = {
   TextPos.below: 'below',
   TextPos.left: 'left',
   TextPos.right: 'right',
+  TextPos.inside: 'inside',
 };
