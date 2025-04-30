@@ -174,7 +174,7 @@ class _ConveyorState extends ConsumerState<Conveyor> {
 
   Color _getConveyorColor(dynamic dynValue) {
     try {
-      if (dynValue['p_stat_Frequency'].asInt > 1) {
+      if (dynValue['p_stat_Frequency'].asInt != 0) {
         return Colors.green;
       }
       final state = dynValue['p_stat_State'].asString;

@@ -13,6 +13,7 @@ part 'led.g.dart';
 @JsonSerializable(explicitToJson: true)
 class LEDConfig extends BaseAsset {
   String key;
+  String? text;
   @ColorConverter()
   @JsonKey(name: 'on_color')
   Color onColor;
@@ -74,14 +75,23 @@ class _ConfigContentState extends State<_ConfigContent> {
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        TextFormField(
+        KeyField(
           initialValue: widget.config.key,
-          decoration: const InputDecoration(
-            labelText: 'Key',
-          ),
           onChanged: (value) {
             setState(() {
               widget.config.key = value;
+            });
+          },
+        ),
+        const SizedBox(height: 16),
+        TextFormField(
+          initialValue: widget.config.text,
+          decoration: const InputDecoration(
+            labelText: 'Text',
+          ),
+          onChanged: (value) {
+            setState(() {
+              widget.config.text = value;
             });
           },
         ),
@@ -119,7 +129,6 @@ class _ConfigContentState extends State<_ConfigContent> {
             ),
           ],
         ),
-        const SizedBox(height: 16),
         DropdownButton<TextPos>(
           value: widget.config.textPos,
           isExpanded: true,
@@ -268,7 +277,8 @@ class _LedState extends ConsumerState<Led> {
     return Align(
       alignment: FractionalOffset(
           widget.config.coordinates.x, widget.config.coordinates.y),
-      child: buildWithText(led, widget.config.key, widget.config.textPos),
+      child: buildWithText(
+          led, widget.config.text ?? widget.config.key, widget.config.textPos),
     );
   }
 }

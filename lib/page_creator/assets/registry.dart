@@ -8,7 +8,7 @@ class AssetRegistry {
   static final Logger _log = Logger();
 
   static final Map<Type, Asset Function(Map<String, dynamic>)>
-      fromJsonFactories = {
+      _fromJsonFactories = {
     LEDConfig: LEDConfig.fromJson,
     ButtonConfig: ButtonConfig.fromJson,
     ConveyorConfig: ConveyorConfig.fromJson,
@@ -20,6 +20,16 @@ class AssetRegistry {
     ConveyorConfig: ConveyorConfig.preview,
   };
 
+  static void registerFromJsonFactory<T extends Asset>(
+      Asset Function(Map<String, dynamic>) fromJson) {
+    _fromJsonFactories[T] = fromJson;
+  }
+
+  static void registerDefaultFactory<T extends Asset>(
+      Asset Function() preview) {
+    defaultFactories[T] = preview;
+  }
+
   static List<Asset> parse(Map<String, dynamic> json) {
     final List<Asset> foundWidgets = [];
     void crawlJson(dynamic jsonPart) {
@@ -29,7 +39,7 @@ class AssetRegistry {
           final assetName = jsonPart[constAssetName] as String;
           _log.d('Found potential asset: $assetName');
 
-          for (final factory in fromJsonFactories.entries) {
+          for (final factory in _fromJsonFactories.entries) {
             if (factory.key.toString() == assetName) {
               try {
                 final asset = factory.value(jsonPart);

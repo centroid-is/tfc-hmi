@@ -108,8 +108,6 @@ class StateMan {
   final KeyMappings keyMappings;
   final client = Client.fromStatic();
   int? subscriptionId;
-  bool get isConnected => _connected;
-  bool _connected = true; // todo implement
 
   /// Constructor requires the server endpoint.
   StateMan({required this.config, required this.keyMappings}) {
@@ -122,21 +120,19 @@ class StateMan {
   Future<void> _connect() async {
     while (true) {
       logger.t("Connecting to server: ${config.opcua.endpoint}");
-      var statusCode = await client.connect(
-        config.opcua.endpoint,
-        // username: config.opcua.username,
-        // password: config.opcua.password,
-      );
-
-      _connected = statusCode == UA_STATUSCODE_GOOD;
-
-      if (_connected) {
-        logger.i("Successfully connected to server");
-        return;
+      try {
+        await client.connect(
+          config.opcua.endpoint,
+          // username: config.opcua.username,
+          // password: config.opcua.password,
+        );
+      } catch (e) {
+        logger.e("Failed to connect: $e");
+        await Future.delayed(const Duration(seconds: 1));
+        continue;
       }
-
-      logger.e("Not connected. Retrying in 1 second");
-      await Future.delayed(const Duration(seconds: 1));
+      logger.i("Successfully connected to server");
+      return;
     }
   }
 
@@ -149,9 +145,7 @@ class StateMan {
 
   /// Example: read("myKey")
   Future<DynamicValue> read(String key) async {
-    if (!_connected) {
-      throw StateManException('Not connected to server');
-    }
+    await client.awaitConnect();
     try {
       final nodeId = keyMappings.lookup(key);
       if (nodeId == null) {
@@ -165,9 +159,7 @@ class StateMan {
 
   /// Example: write("myKey", DynamicValue(value: 42, typeId: NodeId.int16))
   Future<void> write(String key, DynamicValue value) async {
-    if (!_connected) {
-      throw StateManException('Not connected to server');
-    }
+    await client.awaitConnect();
     try {
       final nodeId = keyMappings.lookup(key);
       if (nodeId == null) {
@@ -183,17 +175,14 @@ class StateMan {
   /// Returns a Stream that can be cancelled to stop the subscription.
   /// Example: subscribe("myIntKey") or subscribe("myStringKey")
   Future<Stream<DynamicValue>> subscribe(String key) async {
-    if (!_connected) {
-      throw StateManException(
-          'Cannot subscribe to node. Not connected to server.');
-    }
+    await client.awaitConnect();
     try {
       final nodeId = keyMappings.lookup(key);
       if (nodeId == null) {
         throw StateManException("Key: \"$key\" not found");
       }
       subscriptionId ??= await client.subscriptionCreate();
-      return client.monitoredItemStream(nodeId, subscriptionId!);
+      return client.monitoredItem(nodeId, subscriptionId!);
     } catch (e) {
       logger.e('Failed to subscribe: $e, retrying in 1 second');
       await Future.delayed(const Duration(seconds: 1));
@@ -203,7 +192,6 @@ class StateMan {
 
   void close() {
     logger.d('Closing connection');
-    _connected = false;
     client.disconnect();
     client.delete();
   }
