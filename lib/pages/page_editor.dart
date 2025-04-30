@@ -97,10 +97,26 @@ class _PageEditorState extends State<PageEditor> {
                   Positioned(
                     left: 16,
                     bottom: 16,
-                    child: FloatingActionButton(
-                      mini: true,
-                      onPressed: () => setState(() => _showPalette = true),
-                      child: Icon(Icons.menu),
+                    child: Row(
+                      children: [
+                        FloatingActionButton(
+                          mini: true,
+                          heroTag: 'hamburger',
+                          backgroundColor:
+                              Theme.of(context).colorScheme.primary,
+                          onPressed: () => setState(() => _showPalette = true),
+                          child: Icon(Icons.menu, color: Colors.white),
+                        ),
+                        const SizedBox(width: 8),
+                        FloatingActionButton(
+                          mini: true,
+                          heroTag: 'save',
+                          backgroundColor:
+                              Theme.of(context).colorScheme.primary,
+                          onPressed: _saveToPrefs,
+                          child: Icon(Icons.save, color: Colors.white),
+                        ),
+                      ],
                     ),
                   ),
                   // 1. Tap-to-close overlay (only when palette is open)
@@ -181,14 +197,6 @@ class _PageEditorState extends State<PageEditor> {
             },
           ),
         ),
-        Padding(
-          padding: const EdgeInsets.all(16.0),
-          child: ElevatedButton.icon(
-            onPressed: _saveToPrefs,
-            icon: const Icon(Icons.save),
-            label: const Text('Save Layout'),
-          ),
-        ),
       ],
     );
   }
@@ -238,8 +246,6 @@ class _PageEditorState extends State<PageEditor> {
 
   void _moveAsset(
       Asset asset, DragUpdateDetails details, BoxConstraints constraints) {
-    final localPosition = details.globalPosition;
-
     final newX = (asset.coordinates.x + details.delta.dx / constraints.maxWidth)
         .clamp(0.0, 1.0);
     final newY =
