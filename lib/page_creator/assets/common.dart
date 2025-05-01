@@ -39,9 +39,9 @@ enum TextPos {
 
 @JsonSerializable()
 class Coordinates {
-  final double x; // 0.0 to 1.0
-  final double y; // 0.0 to 1.0
-  final double? angle;
+  double x; // 0.0 to 1.0
+  double y; // 0.0 to 1.0
+  double? angle;
 
   Coordinates({
     required this.x,
@@ -314,8 +314,14 @@ class _KeyFieldDialogState extends State<_KeyFieldDialog> {
 class SizeField extends StatefulWidget {
   final RelativeSize initialValue;
   final ValueChanged<RelativeSize>? onChanged;
+  final bool useSingleSize;
 
-  const SizeField({super.key, required this.initialValue, this.onChanged});
+  const SizeField({
+    super.key,
+    required this.initialValue,
+    this.onChanged,
+    this.useSingleSize = false, // Default to false for backward compatibility
+  });
 
   @override
   State<SizeField> createState() => _SizeFieldState();
@@ -342,14 +348,43 @@ class _SizeFieldState extends State<SizeField> {
   }
 
   void _onChanged() {
-    final width = double.tryParse(_widthController.text) ?? 3.0;
-    final height = double.tryParse(_heightController.text) ?? 3.0;
-    final relSize = RelativeSize(width: width / 100, height: height / 100);
-    widget.onChanged?.call(relSize);
+    if (widget.useSingleSize) {
+      final size = double.tryParse(_widthController.text) ?? 3.0;
+      final relSize = RelativeSize(width: size / 100, height: size / 100);
+      widget.onChanged?.call(relSize);
+    } else {
+      final width = double.tryParse(_widthController.text) ?? 3.0;
+      final height = double.tryParse(_heightController.text) ?? 3.0;
+      final relSize = RelativeSize(width: width / 100, height: height / 100);
+      widget.onChanged?.call(relSize);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
+    if (widget.useSingleSize) {
+      return Row(
+        children: [
+          const Text('Size: '),
+          const SizedBox(width: 8),
+          SizedBox(
+            width: 100,
+            child: TextFormField(
+              controller: _widthController,
+              decoration: const InputDecoration(
+                suffixText: '%',
+                isDense: true,
+                helperText: '0.01-50%',
+              ),
+              keyboardType:
+                  const TextInputType.numberWithOptions(decimal: true),
+              onChanged: (_) => _onChanged(),
+            ),
+          ),
+        ],
+      );
+    }
+
     return Row(
       children: [
         Expanded(

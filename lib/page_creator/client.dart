@@ -111,37 +111,25 @@ class StateMan {
 
   /// Constructor requires the server endpoint.
   StateMan({required this.config, required this.keyMappings}) {
-    // spawn a background thread to keep the client active
-    _connect().then((_) {
-      _runIterate();
-    });
-  }
-
-  Future<void> _connect() async {
-    while (true) {
-      logger.t("Connecting to server: ${config.opcua.endpoint}");
-      try {
-        await client.connect(
-          config.opcua.endpoint,
-          // username: config.opcua.username,
-          // password: config.opcua.password,
-        );
-      } catch (e) {
-        logger.e("Failed to connect: $e");
+    // spawn a background task to keep the client active
+    () async {
+      while (true) {
+        client.connect(config.opcua.endpoint);
+        while (client.runIterate(const Duration(milliseconds: 10))) {
+          await Future.delayed(const Duration(milliseconds: 10));
+        }
         await Future.delayed(const Duration(seconds: 1));
-        continue;
       }
-      logger.i("Successfully connected to server");
-      return;
-    }
+    }();
   }
 
-  void _runIterate() async {
-    while (client.runIterate(const Duration(milliseconds: 10))) {
-      await Future.delayed(const Duration(milliseconds: 10));
-    }
-    throw StateManException("Failed to iterate client!");
-  }
+  // NodeId? _parseNodeId(String key) {
+  //   try {
+  //     return NodeId.fromString(key);
+  //   } catch (e) {
+  //     throw StateManException('Failed to parse nodeId: \"$key\": $e');
+  //   }
+  // }
 
   /// Example: read("myKey")
   Future<DynamicValue> read(String key) async {
@@ -149,6 +137,7 @@ class StateMan {
     try {
       final nodeId = keyMappings.lookup(key);
       if (nodeId == null) {
+        await Future.delayed(const Duration(seconds: 1000));
         throw StateManException("Key: \"$key\" not found");
       }
       return await client.readValue(nodeId);
@@ -163,6 +152,8 @@ class StateMan {
     try {
       final nodeId = keyMappings.lookup(key);
       if (nodeId == null) {
+        await Future.delayed(const Duration(seconds: 1000));
+
         throw StateManException("Key: \"$key\" not found");
       }
       await client.writeValue(nodeId, value);
@@ -179,6 +170,7 @@ class StateMan {
     try {
       final nodeId = keyMappings.lookup(key);
       if (nodeId == null) {
+        await Future.delayed(const Duration(seconds: 1000));
         throw StateManException("Key: \"$key\" not found");
       }
       subscriptionId ??= await client.subscriptionCreate();

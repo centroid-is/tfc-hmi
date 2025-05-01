@@ -13,8 +13,11 @@ class PageEditor extends StatefulWidget {
 
 class _PageEditorState extends State<PageEditor> {
   static const String _storageKey = 'page_editor_data';
-  List<Asset> assets = []; // Direct list of assets instead of groups
+  List<Asset> assets = [];
   bool _showPalette = false;
+  bool _showJsonEditor = false;
+  String? _jsonError;
+  final TextEditingController _jsonController = TextEditingController();
 
   @override
   void initState() {
@@ -27,10 +30,21 @@ class _PageEditorState extends State<PageEditor> {
     final String? jsonString = prefs.getString(_storageKey);
     print('Loading from prefs: $jsonString');
     if (jsonString != null) {
-      setState(() {
+      try {
         final json = jsonDecode(jsonString);
-        assets = AssetRegistry.parse(json);
-      });
+        final newAssets = AssetRegistry.parse(json);
+        setState(() {
+          assets = newAssets;
+          _showJsonEditor = false;
+          _jsonError = null;
+        });
+      } catch (e) {
+        setState(() {
+          _showJsonEditor = true;
+          _jsonError = e.toString();
+          _jsonController.text = jsonString;
+        });
+      }
     }
   }
 
@@ -49,6 +63,16 @@ class _PageEditorState extends State<PageEditor> {
     });
   }
 
+  String _formatJson(String jsonString) {
+    try {
+      var json = jsonDecode(jsonString);
+      return JsonEncoder.withIndent('  ').convert(json);
+    } catch (e) {
+      // If we can't parse the JSON, return the original string
+      return jsonString;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return BaseScaffold(
@@ -58,6 +82,9 @@ class _PageEditorState extends State<PageEditor> {
           aspectRatio: 16 / 9,
           child: LayoutBuilder(
             builder: (context, constraints) {
+              if (_showJsonEditor) {
+                return _buildJsonEditor();
+              }
               return Stack(
                 fit: StackFit.expand,
                 children: [
@@ -105,7 +132,7 @@ class _PageEditorState extends State<PageEditor> {
                           backgroundColor:
                               Theme.of(context).colorScheme.primary,
                           onPressed: () => setState(() => _showPalette = true),
-                          child: Icon(Icons.menu, color: Colors.white),
+                          child: const Icon(Icons.menu, color: Colors.white),
                         ),
                         const SizedBox(width: 8),
                         FloatingActionButton(
@@ -114,7 +141,34 @@ class _PageEditorState extends State<PageEditor> {
                           backgroundColor:
                               Theme.of(context).colorScheme.primary,
                           onPressed: _saveToPrefs,
-                          child: Icon(Icons.save, color: Colors.white),
+                          child: const Icon(Icons.save, color: Colors.white),
+                        ),
+                        const SizedBox(width: 8),
+                        FloatingActionButton(
+                          mini: true,
+                          heroTag: 'json',
+                          backgroundColor:
+                              Theme.of(context).colorScheme.primary,
+                          onPressed: () {
+                            setState(() {
+                              if (!_showJsonEditor) {
+                                // Going to JSON editor
+                                _jsonController.text = _formatJson(jsonEncode({
+                                  'assets':
+                                      assets.map((a) => a.toJson()).toList(),
+                                }));
+                                _showJsonEditor = true;
+                              } else {
+                                // Going back to canvas
+                                _showJsonEditor = false;
+                              }
+                              _jsonError = null;
+                            });
+                          },
+                          child: Icon(
+                            _showJsonEditor ? Icons.edit : Icons.code,
+                            color: Colors.white,
+                          ),
                         ),
                       ],
                     ),
@@ -255,5 +309,172 @@ class _PageEditorState extends State<PageEditor> {
     _updateState(() {
       asset.coordinates = Coordinates(x: newX, y: newY);
     });
+  }
+
+  Widget _buildJsonEditor() {
+    final scrollController = ScrollController();
+
+    return Card(
+      margin: EdgeInsets.all(16),
+      child: Padding(
+        padding: EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  'JSON Editor',
+                  style: Theme.of(context).textTheme.headlineSmall,
+                ),
+                // Add Format button
+                TextButton.icon(
+                  onPressed: () {
+                    final formatted = _formatJson(_jsonController.text);
+                    _jsonController.value = TextEditingValue(
+                      text: formatted,
+                      selection:
+                          TextSelection.collapsed(offset: formatted.length),
+                    );
+                  },
+                  icon: Icon(Icons.format_align_left),
+                  label: Text('Format JSON'),
+                ),
+              ],
+            ),
+            if (_jsonError != null) ...[
+              SizedBox(height: 8),
+              Container(
+                padding: EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Colors.red.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: Text(
+                  _jsonError!,
+                  style: TextStyle(
+                    color: Colors.red,
+                    fontFamily: 'monospace',
+                  ),
+                ),
+              ),
+            ],
+            SizedBox(height: 16),
+            Expanded(
+              child: Container(
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.surfaceVariant,
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: SingleChildScrollView(
+                  controller: scrollController,
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // Line numbers column
+                      Container(
+                        width: 48,
+                        decoration: BoxDecoration(
+                          color: Theme.of(context)
+                              .colorScheme
+                              .surfaceVariant
+                              .withOpacity(0.7),
+                          borderRadius:
+                              BorderRadius.horizontal(left: Radius.circular(4)),
+                        ),
+                        child: ValueListenableBuilder<TextEditingValue>(
+                          valueListenable: _jsonController,
+                          builder: (context, value, child) {
+                            final lineCount =
+                                '\n'.allMatches(value.text).length + 1;
+                            return Column(
+                              crossAxisAlignment: CrossAxisAlignment.end,
+                              children: [
+                                for (var i = 1; i <= lineCount; i++)
+                                  Padding(
+                                    padding: EdgeInsets.symmetric(
+                                        horizontal: 8, vertical: 1),
+                                    child: SizedBox(
+                                      height: 21, // Match line height
+                                      child: Text(
+                                        '$i',
+                                        style: TextStyle(
+                                          color: Theme.of(context)
+                                              .colorScheme
+                                              .onSurfaceVariant
+                                              .withOpacity(0.5),
+                                          fontFamily: 'monospace',
+                                          fontSize: 14,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                              ],
+                            );
+                          },
+                        ),
+                      ),
+                      // Vertical divider
+                      Container(
+                        width: 1,
+                        color: Theme.of(context)
+                            .colorScheme
+                            .onSurfaceVariant
+                            .withOpacity(0.1),
+                      ),
+                      // Text editor
+                      Expanded(
+                        child: TextField(
+                          controller: _jsonController,
+                          maxLines: null,
+                          style: TextStyle(
+                            fontFamily: 'monospace',
+                            fontSize: 14,
+                            height: 1.5, // Line height to match line numbers
+                          ),
+                          decoration: InputDecoration(
+                            border: InputBorder.none,
+                            contentPadding: EdgeInsets.all(8),
+                            hintText: 'Edit JSON configuration',
+                            fillColor: Colors.transparent,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            SizedBox(height: 16),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                SizedBox(width: 8),
+                ElevatedButton(
+                  onPressed: () {
+                    try {
+                      final json = jsonDecode(_jsonController.text);
+                      final newAssets = AssetRegistry.parse(json);
+                      setState(() {
+                        assets = newAssets;
+                        _showJsonEditor = false;
+                        _jsonError = null;
+                      });
+                      _saveToPrefs();
+                    } catch (e) {
+                      setState(() {
+                        _jsonError = e.toString();
+                      });
+                    }
+                  },
+                  child: Text('Save Configuration'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }

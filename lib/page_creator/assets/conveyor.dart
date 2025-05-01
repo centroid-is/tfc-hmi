@@ -15,19 +15,14 @@ part 'conveyor.g.dart';
 @JsonSerializable(explicitToJson: true)
 class ConveyorConfig extends BaseAsset {
   String key;
-  @JsonKey(name: 'angle')
-  double angle;
 
   ConveyorConfig({
     required this.key,
-    this.angle = 0.0,
   });
 
   static const previewStr = 'Conveyor Preview';
 
-  ConveyorConfig.preview()
-      : key = previewStr,
-        angle = 0.0;
+  ConveyorConfig.preview() : key = previewStr;
 
   @override
   Widget build(BuildContext context) => Conveyor(this);
@@ -69,62 +64,9 @@ class _ConveyorConfigContentState extends State<_ConveyorConfigContent> {
           onChanged: (val) => setState(() => widget.config.key = val),
         ),
         const SizedBox(height: 16),
-        Row(
-          children: [
-            const Text('Width (%):'),
-            const SizedBox(width: 8),
-            SizedBox(
-              width: 80,
-              child: TextFormField(
-                initialValue:
-                    (widget.config.size.width * 100).toStringAsFixed(2),
-                decoration:
-                    const InputDecoration(suffixText: '%', isDense: true),
-                keyboardType:
-                    const TextInputType.numberWithOptions(decimal: true),
-                onChanged: (val) {
-                  final pct = double.tryParse(val) ?? 0.0;
-                  if (pct >= 0.01 && pct <= 100) {
-                    setState(() {
-                      widget.config.size = RelativeSize(
-                        width: pct / 100,
-                        height: widget.config.size.height,
-                      );
-                    });
-                  }
-                },
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 16),
-        Row(
-          children: [
-            const Text('Height (%):'),
-            const SizedBox(width: 8),
-            SizedBox(
-              width: 80,
-              child: TextFormField(
-                initialValue:
-                    (widget.config.size.height * 100).toStringAsFixed(2),
-                decoration:
-                    const InputDecoration(suffixText: '%', isDense: true),
-                keyboardType:
-                    const TextInputType.numberWithOptions(decimal: true),
-                onChanged: (val) {
-                  final pct = double.tryParse(val) ?? 0.0;
-                  if (pct >= 0.01 && pct <= 100) {
-                    setState(() {
-                      widget.config.size = RelativeSize(
-                        width: widget.config.size.width,
-                        height: pct / 100,
-                      );
-                    });
-                  }
-                },
-              ),
-            ),
-          ],
+        SizeField(
+          initialValue: widget.config.size,
+          onChanged: (size) => setState(() => widget.config.size = size),
         ),
         const SizedBox(height: 16),
         Row(
@@ -133,7 +75,8 @@ class _ConveyorConfigContentState extends State<_ConveyorConfigContent> {
             const SizedBox(width: 8),
             Expanded(
               child: TextFormField(
-                initialValue: widget.config.angle.toStringAsFixed(0),
+                initialValue:
+                    widget.config.coordinates.angle?.toStringAsFixed(0),
                 decoration:
                     const InputDecoration(suffixText: '°', isDense: true),
                 keyboardType:
@@ -141,7 +84,7 @@ class _ConveyorConfigContentState extends State<_ConveyorConfigContent> {
                 onChanged: (value) {
                   final deg = double.tryParse(value) ?? 0.0;
                   setState(() {
-                    widget.config.angle = deg;
+                    widget.config.coordinates.angle = deg;
                   });
                 },
               ),
@@ -174,18 +117,14 @@ class _ConveyorState extends ConsumerState<Conveyor> {
 
   Color _getConveyorColor(dynamic dynValue) {
     try {
+      if (dynValue['p_stat_LastFault'].asInt != 0) {
+        return Colors.red;
+      }
+
       if (dynValue['p_stat_Frequency'].asInt != 0) {
         return Colors.green;
       }
-      final state = dynValue['p_stat_State'].asString;
-      if (state.contains('RDY') ||
-          state.contains('NST') ||
-          state.contains('RUN') ||
-          state.contains('ACC') ||
-          state.contains('DEC')) {
-        return Colors.blue;
-      }
-      return Colors.red;
+      return Colors.blue;
     } catch (_) {
       return Colors.grey;
     }
@@ -233,7 +172,7 @@ class _ConveyorState extends ConsumerState<Conveyor> {
       alignment: FractionalOffset(
           widget.config.coordinates.x, widget.config.coordinates.y),
       child: Transform.rotate(
-        angle: widget.config.angle * pi / 180,
+        angle: (widget.config.coordinates.angle ?? 0.0) * pi / 180,
         child: CustomPaint(
           size: widget.config.size.toSize(MediaQuery.of(context).size),
           painter: _ConveyorPainter(color: color),
@@ -420,15 +359,15 @@ class _ConveyorState extends ConsumerState<Conveyor> {
                       Column(
                         crossAxisAlignment: CrossAxisAlignment.end,
                         children: [
-                          Text(dynValue['p_stat_State'].asString),
-                          Text(dynValue['p_stat_LastFault'].asString),
-                          Text(dynValue['p_stat_Frequency'].asString),
+                          Text(dynValue['p_stat_State'].toString()),
+                          Text(dynValue['p_stat_LastFault'].toString()),
+                          Text(dynValue['p_stat_Frequency'].toString()),
                           Text(
                             Duration(
                               minutes: dynValue['p_stat_RunMinutes'].asInt,
                             ).toString(),
                           ),
-                          Text(dynValue['p_stat_Current'].asString),
+                          Text(dynValue['p_stat_Current'].toString()),
                         ],
                       ),
                     ],

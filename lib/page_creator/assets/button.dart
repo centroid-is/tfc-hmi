@@ -296,6 +296,8 @@ class ButtonPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final center = Offset(size.width / 2, size.height / 2);
     final radius = size.width / 2;
+    final borderRadius = Radius.circular(
+        size.shortestSide * 0.2); // 20% of shortest side like LED and conveyor
 
     // Draw shadow
     final shadowPaint = Paint()
@@ -313,12 +315,13 @@ class ButtonPainter extends CustomPainter {
         shadowPaint,
       );
     } else {
-      final rect = Rect.fromCenter(
+      final shadowRect = Rect.fromCenter(
         center: center + Offset(0, isPressed ? 1 : 2),
         width: size.width * (isPressed ? 0.9 : 1.0),
         height: size.height * (isPressed ? 0.9 : 1.0),
       );
-      canvas.drawRect(rect, shadowPaint);
+      final shadowRRect = RRect.fromRectAndRadius(shadowRect, borderRadius);
+      canvas.drawRRect(shadowRRect, shadowPaint);
     }
 
     // Draw button fill
@@ -338,7 +341,8 @@ class ButtonPainter extends CustomPainter {
         width: size.width * (isPressed ? 0.95 : 1.0),
         height: size.height * (isPressed ? 0.95 : 1.0),
       );
-      canvas.drawRect(rect, buttonPaint);
+      final rrect = RRect.fromRectAndRadius(rect, borderRadius);
+      canvas.drawRRect(rrect, buttonPaint);
     }
 
     // Draw border
@@ -359,7 +363,8 @@ class ButtonPainter extends CustomPainter {
         width: size.width * (isPressed ? 0.95 : 1.0),
         height: size.height * (isPressed ? 0.95 : 1.0),
       );
-      canvas.drawRect(rect, borderPaint);
+      final rrect = RRect.fromRectAndRadius(rect, borderRadius);
+      canvas.drawRRect(rrect, borderPaint);
     }
   }
 
