@@ -2,7 +2,7 @@ import 'dart:async';
 import 'package:logger/logger.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:open62541/open62541.dart';
-
+import 'package:rxdart/rxdart.dart';
 part 'client.g.dart';
 
 @JsonSerializable()
@@ -108,6 +108,7 @@ class StateMan {
   final KeyMappings keyMappings;
   final client = Client.fromStatic();
   int? subscriptionId;
+  final Map<String, _SubscriptionEntry> _subscriptions = {};
 
   /// Constructor requires the server endpoint.
   StateMan({required this.config, required this.keyMappings}) {
@@ -145,7 +146,6 @@ class StateMan {
       final nodeId = keyMappings.lookup(key);
       if (nodeId == null) {
         await Future.delayed(const Duration(seconds: 1000));
-
         throw StateManException("Key: \"$key\" not found");
       }
       await client.writeValue(nodeId, value);
@@ -159,25 +159,71 @@ class StateMan {
   /// Example: subscribe("myIntKey") or subscribe("myStringKey")
   Future<Stream<DynamicValue>> subscribe(String key) async {
     await client.awaitConnect();
-    try {
-      final nodeId = keyMappings.lookup(key);
-      if (nodeId == null) {
-        await Future.delayed(const Duration(seconds: 1000));
-        throw StateManException("Key: \"$key\" not found");
-      }
-      subscriptionId ??= await client.subscriptionCreate();
-      return client.monitoredItem(nodeId, subscriptionId!,
-          prefetchTypeId: true);
-    } catch (e) {
-      logger.e('Failed to subscribe: $e, retrying in 1 second');
-      await Future.delayed(const Duration(seconds: 1));
-      return subscribe(key);
+    final nodeId = keyMappings.lookup(key);
+    if (nodeId == null) {
+      throw StateManException('Key: "$key" not found');
     }
+    subscriptionId ??= await client.subscriptionCreate();
+    if (!_subscriptions.containsKey(key)) {
+      _subscriptions[key] = _SubscriptionEntry(
+        key,
+        client.monitoredItem(nodeId, subscriptionId!, prefetchTypeId: true),
+        (key) {
+          _subscriptions.remove(key);
+          logger.d('Unsubscribed from $key');
+        },
+      );
+    }
+    return _subscriptions[key]!.stream;
   }
 
   void close() {
     logger.d('Closing connection');
     client.disconnect();
     client.delete();
+  }
+}
+
+class _SubscriptionEntry {
+  final String key;
+  final ReplaySubject<DynamicValue> _subject;
+  int _listenerCount = 0;
+  Timer? _idleTimer;
+  late final StreamSubscription<DynamicValue> _rawSub;
+  final Function(String key) _onDispose;
+
+  _SubscriptionEntry(
+    this.key,
+    Stream<DynamicValue> raw,
+    this._onDispose,
+  ) : _subject = ReplaySubject<DynamicValue>(maxSize: 1) {
+    // 1) wire raw → subject
+    _rawSub = raw.listen(
+      _subject.add,
+      onError: _subject.addError,
+      onDone: _subject.close,
+    );
+    // 2) Count UI listeners for idle shutdown:
+    _subject
+      ..onListen = _handleListen
+      ..onCancel = _handleCancel;
+  }
+
+  Stream<DynamicValue> get stream => _subject.stream;
+
+  void _handleListen() {
+    _listenerCount++;
+    _idleTimer?.cancel();
+  }
+
+  void _handleCancel() {
+    _listenerCount--;
+    if (_listenerCount == 0) {
+      _idleTimer = Timer(const Duration(minutes: 10), () {
+        _rawSub.cancel(); // tear down the OPC-UA monitoredItem
+        _onDispose(key); // remove from StateMan._subscriptions
+        _subject.close(); // close the replay buffer
+      });
+    }
   }
 }

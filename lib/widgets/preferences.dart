@@ -196,7 +196,6 @@ class _ValueEditor extends StatefulWidget {
 
 class _ValueEditorState extends State<_ValueEditor> {
   late TextEditingController _controller;
-  String? _error;
 
   @override
   void initState() {
