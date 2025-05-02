@@ -1,11 +1,13 @@
+import 'dart:math';
+import 'dart:io';
+
 import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_colorpicker/flutter_colorpicker.dart';
-import 'dart:math';
+import 'package:rxdart/rxdart.dart';
+
 import 'common.dart';
-import 'dart:async';
-import 'package:logger/logger.dart';
 import '../../providers/state_man.dart';
 
 part 'led.g.dart';
@@ -206,98 +208,59 @@ class _ConfigContentState extends State<_ConfigContent> {
   }
 }
 
-class Led extends ConsumerStatefulWidget {
+class Led extends ConsumerWidget {
   final LEDConfig config;
 
   const Led(this.config, {super.key});
 
   @override
-  ConsumerState<Led> createState() => _LedState();
-}
+  Widget build(BuildContext context, WidgetRef ref) {
+    return StreamBuilder<bool>(
+      stream: ref.watch(stateManProvider.future).asStream().asyncExpand(
+            (stateMan) => stateMan
+                .subscribe(config.key)
+                .asStream()
+                .switchMap((s) => s)
+                .map((dynamicValue) => dynamicValue.asBool),
+          ),
+      builder: (context, snapshot) {
+        if (snapshot.hasError || snapshot.hasData == false) {
+          stderr.writeln(
+              'Stream setup error for ${config.key}, error: ${snapshot.error}');
+          return LedRaw(config, value: null);
+        }
 
-class _LedState extends ConsumerState<Led> {
-  static final _log = Logger(
-    printer: PrettyPrinter(
-      methodCount: 0,
-      errorMethodCount: 8,
-      lineLength: 120,
-      colors: true,
-      printEmojis: true,
-      dateTimeFormat: DateTimeFormat.onlyTimeAndSinceStart,
-    ),
-  );
-
-  @override
-  Widget build(BuildContext context) {
-    if (widget.config.key == LEDConfig.previewStr) {
-      return _buildLED(true);
-    }
-
-    final clientAsync = ref.watch(stateManProvider);
-
-    return clientAsync.when(
-      data: (client) => FutureBuilder<bool>(
-        future: client.read(widget.config.key).then((value) => value.asBool),
-        builder: (context, initialSnapshot) {
-          _log.d(
-              'Initial value for ${widget.config.key}: ${initialSnapshot.data}');
-
-          return FutureBuilder<Stream<bool>>(
-            future: client
-                .subscribe(widget.config.key)
-                .then((stream) => stream.map((value) => value.asBool)),
-            builder: (context, streamSnapshot) {
-              if (streamSnapshot.hasError) {
-                _log.e('Stream setup error for ${widget.config.key}',
-                    error: streamSnapshot.error);
-                return _buildLED(null);
-              }
-
-              if (!streamSnapshot.hasData) {
-                _log.d(
-                    'Waiting for stream, showing initial value: ${initialSnapshot.data}');
-                return _buildLED(initialSnapshot.data);
-              }
-
-              return StreamBuilder<bool>(
-                stream: streamSnapshot.data,
-                initialData: initialSnapshot.data,
-                builder: (context, snapshot) {
-                  if (snapshot.hasError) {
-                    _log.e('Stream error for ${widget.config.key}',
-                        error: snapshot.error);
-                    return _buildLED(null);
-                  }
-
-                  final isOn = snapshot.data;
-                  _log.t('LED ${widget.config.key} value update: $isOn');
-                  return _buildLED(isOn);
-                },
-              );
-            },
-          );
-        },
-      ),
-      loading: () => const CircularProgressIndicator(),
-      error: (error, stack) => _buildLED(null),
+        return LedRaw(config, value: snapshot.data);
+      },
     );
   }
+}
 
-  Widget _buildLED(bool? isOn) {
-    final color = isOn == null
-        ? null
-        : (isOn ? widget.config.onColor : widget.config.offColor);
+class LedRaw extends ConsumerWidget {
+  final LEDConfig config;
+  final bool? value;
+
+  const LedRaw(this.config, {super.key, this.value});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    bool? isOn = value;
+    if (config.key == LEDConfig.previewStr) {
+      isOn = true;
+    }
+    final color =
+        isOn == null ? null : (isOn ? config.onColor : config.offColor);
 
     // Get container size from MediaQuery
     final containerSize = MediaQuery.of(context).size;
-    final actualSize = widget.config.size.toSize(containerSize);
+    final actualSize = config.size.toSize(containerSize);
 
     // For circles, use minimum dimension to maintain aspect ratio
     // For squares, use actual width and height independently
-    final width = widget.config.ledType == LEDType.circle
+    final width = config.ledType == LEDType.circle
         ? min(actualSize.width, actualSize.height)
         : actualSize.width;
-    final height = widget.config.ledType == LEDType.circle
+    final height = config.ledType == LEDType.circle
         ? min(actualSize.width, actualSize.height)
         : actualSize.height;
 
@@ -305,15 +268,13 @@ class _LedState extends ConsumerState<Led> {
       width: width,
       height: height,
       child: CustomPaint(
-        painter: LEDPainter(color: color, ledType: widget.config.ledType),
+        painter: LEDPainter(color: color, ledType: config.ledType),
       ),
     );
 
     return Align(
-      alignment: FractionalOffset(
-          widget.config.coordinates.x, widget.config.coordinates.y),
-      child: buildWithText(
-          led, widget.config.text ?? widget.config.key, widget.config.textPos),
+      alignment: FractionalOffset(config.coordinates.x, config.coordinates.y),
+      child: buildWithText(led, config.text ?? config.key, config.textPos),
     );
   }
 }

@@ -123,14 +123,6 @@ class StateMan {
     }();
   }
 
-  // NodeId? _parseNodeId(String key) {
-  //   try {
-  //     return NodeId.fromString(key);
-  //   } catch (e) {
-  //     throw StateManException('Failed to parse nodeId: \"$key\": $e');
-  //   }
-  // }
-
   /// Example: read("myKey")
   Future<DynamicValue> read(String key) async {
     await client.awaitConnect();
@@ -140,7 +132,7 @@ class StateMan {
         await Future.delayed(const Duration(seconds: 1000));
         throw StateManException("Key: \"$key\" not found");
       }
-      return await client.readValue(nodeId);
+      return await client.readValue(nodeId, prefetchTypeId: true);
     } catch (e) {
       throw StateManException('Failed to read key: \"$key\": $e');
     }
@@ -174,7 +166,8 @@ class StateMan {
         throw StateManException("Key: \"$key\" not found");
       }
       subscriptionId ??= await client.subscriptionCreate();
-      return client.monitoredItem(nodeId, subscriptionId!);
+      return client.monitoredItem(nodeId, subscriptionId!,
+          prefetchTypeId: true);
     } catch (e) {
       logger.e('Failed to subscribe: $e, retrying in 1 second');
       await Future.delayed(const Duration(seconds: 1));

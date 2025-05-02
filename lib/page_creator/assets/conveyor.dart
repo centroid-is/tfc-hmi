@@ -154,7 +154,7 @@ class _ConveyorState extends ConsumerState<Conveyor> {
           _log.e('Error fetching dynamic value for ${widget.config.key}',
               error: snapshot.error);
         }
-        _log.d('Dynamic value for ${widget.config.key}: ${snapshot.data}');
+        // _log.d('Dynamic value for ${widget.config.key}: ${snapshot.data}');
         final dynValue = snapshot.data;
         final color =
             dynValue != null ? _getConveyorColor(dynValue) : Colors.grey;
