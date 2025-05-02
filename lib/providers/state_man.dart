@@ -3,13 +3,13 @@ import 'dart:convert';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../page_creator/client.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'preferences.dart';
 
 part 'state_man.g.dart';
 
 @Riverpod(keepAlive: true)
 Future<StateMan> stateMan(Ref ref) async {
-  final prefs = SharedPreferencesAsync();
+  final prefs = await ref.read(preferencesProvider.future);
 
   var stateManJson = await prefs.getString('state_man_config');
   if (stateManJson == null) {
