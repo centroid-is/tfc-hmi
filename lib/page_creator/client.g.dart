@@ -39,9 +39,24 @@ Map<String, dynamic> _$NodeIdConfigToJson(NodeIdConfig instance) =>
       'identifier': instance.identifier,
     };
 
+KeyMappingEntry _$KeyMappingEntryFromJson(Map<String, dynamic> json) =>
+    KeyMappingEntry(
+      nodeId: json['nodeId'] == null
+          ? null
+          : NodeIdConfig.fromJson(json['nodeId'] as Map<String, dynamic>),
+      collectSize: (json['collectSize'] as num?)?.toInt(),
+    );
+
+Map<String, dynamic> _$KeyMappingEntryToJson(KeyMappingEntry instance) =>
+    <String, dynamic>{
+      'nodeId': instance.nodeId,
+      'collectSize': instance.collectSize,
+    };
+
 KeyMappings _$KeyMappingsFromJson(Map<String, dynamic> json) => KeyMappings(
       nodes: (json['nodes'] as Map<String, dynamic>).map(
-        (k, e) => MapEntry(k, NodeIdConfig.fromJson(e as Map<String, dynamic>)),
+        (k, e) =>
+            MapEntry(k, KeyMappingEntry.fromJson(e as Map<String, dynamic>)),
       ),
     );
 

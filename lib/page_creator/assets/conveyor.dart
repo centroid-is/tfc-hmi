@@ -9,6 +9,8 @@ import '../../providers/state_man.dart';
 import '../../page_creator/client.dart';
 import 'package:rxdart/rxdart.dart';
 import 'package:open62541/open62541.dart' show DynamicValue;
+import 'package:fl_chart/fl_chart.dart';
+import 'package:intl/intl.dart' as intl;
 
 part 'conveyor.g.dart';
 
@@ -381,13 +383,11 @@ class _ConveyorState extends ConsumerState<Conveyor> {
 
                   // Graph placeholder
                   SizedBox(
-                    width: double.infinity,
-                    height: 120,
-                    child: Container(
-                      decoration: BoxDecoration(
-                        border: Border.all(color: Colors.black54),
-                      ),
-                      child: const Center(child: Text('Graph view')),
+                    width: MediaQuery.of(context).size.width * 0.3,
+                    height: MediaQuery.of(context).size.height * 0.3,
+                    child: ConveyorStatsGraph(
+                      stateMan: stateMan,
+                      keyName: widget.config.key,
                     ),
                   ),
                 ],
@@ -457,4 +457,160 @@ class _ConveyorPainter extends CustomPainter {
   bool shouldRepaint(covariant _ConveyorPainter oldDelegate) =>
       oldDelegate.color != color ||
       oldDelegate.showExclamation != showExclamation;
+}
+
+class ConveyorStatsGraph extends StatefulWidget {
+  final StateMan stateMan;
+  final String keyName;
+  const ConveyorStatsGraph(
+      {required this.stateMan, required this.keyName, super.key});
+
+  @override
+  State<ConveyorStatsGraph> createState() => _ConveyorStatsGraphState();
+}
+
+class _ConveyorStatsGraphState extends State<ConveyorStatsGraph> {
+  @override
+  void initState() {
+    super.initState();
+    widget.stateMan.collect(widget.keyName, 100);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final primary = Theme.of(context).colorScheme.primary;
+    final secondary = Theme.of(context).colorScheme.secondary;
+    return StreamBuilder<List<CollectedSample>>(
+      stream: widget.stateMan.collectStream(widget.keyName),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData || snapshot.data!.isEmpty) {
+          return const Center(child: Text('No data'));
+        }
+        final samples = snapshot.data!;
+        final currentSpots = <FlSpot>[];
+        final freqSpots = <FlSpot>[];
+        final minTime = samples.first.time.millisecondsSinceEpoch.toDouble();
+        final maxTime = samples.last.time.millisecondsSinceEpoch.toDouble();
+        for (final sample in samples) {
+          final v = sample.value;
+          final current = v['p_stat_Current']?.asDouble ?? 0.0;
+          final freq = v['p_stat_Frequency']?.asDouble ?? 0.0;
+          final time = sample.time.millisecondsSinceEpoch.toDouble();
+          currentSpots.add(FlSpot(time, current));
+          freqSpots.add(FlSpot(time, freq));
+        }
+
+        // Find min/max for axes
+        double minCurrent = currentSpots
+            .map((e) => e.y)
+            .fold<double>(double.infinity, (a, b) => a < b ? a : b);
+        double maxCurrent = currentSpots
+            .map((e) => e.y)
+            .fold<double>(-double.infinity, (a, b) => a > b ? a : b);
+        double minFreq = freqSpots
+            .map((e) => e.y)
+            .fold<double>(double.infinity, (a, b) => a < b ? a : b);
+        double maxFreq = freqSpots
+            .map((e) => e.y)
+            .fold<double>(-double.infinity, (a, b) => a > b ? a : b);
+
+        // Add some padding
+        minCurrent = minCurrent.isFinite ? minCurrent : 0;
+        maxCurrent = maxCurrent.isFinite ? maxCurrent : 1;
+        minFreq = minFreq.isFinite ? minFreq : 0;
+        maxFreq = maxFreq.isFinite ? maxFreq : 1;
+
+        // For dual axes, fl_chart uses yAxis for each LineChartBarData (0=left, 1=right)
+        return Padding(
+          padding: const EdgeInsets.all(0),
+          child: SizedBox(
+            height: 200,
+            child: LineChart(
+              LineChartData(
+                // These are for the default (left) axis, but we set min/max for both axes below
+                minY: minCurrent < minFreq ? minCurrent : minFreq,
+                maxY: maxCurrent > maxFreq ? maxCurrent : maxFreq,
+                lineBarsData: [
+                  // Current (primary color, left axis)
+                  LineChartBarData(
+                    spots: currentSpots,
+                    isCurved: true,
+                    color: primary,
+                    barWidth: 2,
+                    dotData: FlDotData(show: false),
+                    belowBarData: BarAreaData(show: false),
+                    //yAxis: 0,
+                  ),
+                  // Frequency (secondary color, right axis)
+                  LineChartBarData(
+                    spots: freqSpots,
+                    isCurved: true,
+                    color: secondary,
+                    barWidth: 2,
+                    dotData: FlDotData(show: false),
+                    belowBarData: BarAreaData(show: false),
+                    //yAxis: 1,
+                  ),
+                ],
+                lineTouchData: LineTouchData(enabled: true),
+                titlesData: FlTitlesData(
+                  leftTitles: AxisTitles(
+                    axisNameWidget: Padding(
+                      padding: const EdgeInsets.only(right: 8.0),
+                      child: Text('Current (A)',
+                          style: TextStyle(
+                              color: primary, fontWeight: FontWeight.bold)),
+                    ),
+                    sideTitles: SideTitles(
+                      showTitles: true,
+                      getTitlesWidget: (value, meta) => Text(
+                        value.toStringAsFixed(1),
+                        style: TextStyle(color: primary, fontSize: 10),
+                      ),
+                    ),
+                  ),
+                  rightTitles: AxisTitles(
+                    axisNameWidget: Padding(
+                      padding: const EdgeInsets.only(left: 8.0),
+                      child: Text('Frequency (Hz)',
+                          style: TextStyle(
+                              color: secondary, fontWeight: FontWeight.bold)),
+                    ),
+                    sideTitles: SideTitles(
+                      showTitles: true,
+                      getTitlesWidget: (value, meta) => Text(
+                        value.toStringAsFixed(1),
+                        style: TextStyle(color: secondary, fontSize: 10),
+                      ),
+                    ),
+                  ),
+                  bottomTitles: AxisTitles(
+                    axisNameWidget: Text('Time'),
+                    sideTitles: SideTitles(
+                      showTitles: true,
+                      interval:
+                          ((maxTime - minTime) / 4).clamp(1, double.infinity),
+                      getTitlesWidget: (value, meta) {
+                        final dt =
+                            DateTime.fromMillisecondsSinceEpoch(value.toInt());
+                        final formatted = intl.DateFormat.Hms().format(dt);
+                        return Text(formatted,
+                            style: const TextStyle(fontSize: 10));
+                      },
+                    ),
+                  ),
+                  topTitles:
+                      AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                ),
+                gridData: FlGridData(show: true),
+                borderData: FlBorderData(show: true),
+                //minYForEachAxis: [minCurrent, minFreq],
+                //maxYForEachAxis: [maxCurrent, maxFreq],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
 }

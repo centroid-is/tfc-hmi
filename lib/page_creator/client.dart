@@ -56,43 +56,30 @@ class NodeIdConfig {
 }
 
 @JsonSerializable()
+class KeyMappingEntry {
+  NodeIdConfig? nodeId;
+  int? collectSize;
+
+  KeyMappingEntry({this.nodeId, this.collectSize});
+
+  factory KeyMappingEntry.fromJson(Map<String, dynamic> json) =>
+      _$KeyMappingEntryFromJson(json);
+  Map<String, dynamic> toJson() => _$KeyMappingEntryToJson(this);
+}
+
+@JsonSerializable()
 class KeyMappings {
-  Map<String, NodeIdConfig> nodes;
+  Map<String, KeyMappingEntry> nodes;
 
   KeyMappings({required this.nodes});
 
   NodeId? lookup(String key) {
-    return nodes[key]?.toNodeId();
+    return nodes[key]?.nodeId?.toNodeId();
   }
 
-  factory KeyMappings.fromJson(Map<String, dynamic> json) {
-    Map<String, NodeIdConfig> nodes = {};
-
-    json.forEach((key, value) {
-      if (value is Map<String, dynamic>) {
-        if (value['type'] == 'nodeId') {
-          nodes[key] = NodeIdConfig.fromJson(value);
-        } else {
-          throw FormatException(
-              'Unknown type or missing type field for key: $key');
-        }
-      } else {
-        throw FormatException('Invalid value format for key: $key');
-      }
-    });
-
-    return KeyMappings(nodes: nodes);
-  }
-
-  Map<String, dynamic> toJson() {
-    return {
-      for (var entry in nodes.entries)
-        entry.key: {
-          'type': 'nodeId',
-          ...entry.value.toJson(),
-        }
-    };
-  }
+  factory KeyMappings.fromJson(Map<String, dynamic> json) =>
+      _$KeyMappingsFromJson(json);
+  Map<String, dynamic> toJson() => _$KeyMappingsToJson(this);
 }
 
 class StateManException implements Exception {
@@ -110,8 +97,13 @@ class StateMan {
   int? subscriptionId;
   final Map<String, _SubscriptionEntry> _subscriptions = {};
 
+  // Use the new manager
+  late final _KeyCollectorManager _collectorManager;
+
   /// Constructor requires the server endpoint.
   StateMan({required this.config, required this.keyMappings}) {
+    _collectorManager = _KeyCollectorManager(subscribeFn: subscribe);
+
     // spawn a background task to keep the client active
     () async {
       while (true) {
@@ -177,10 +169,24 @@ class StateMan {
     return _subscriptions[key]!.stream;
   }
 
+  // Delegate collection methods
+  Future<void> collect(String key, int size) =>
+      _collectorManager.collect(key, size);
+  Stream<List<CollectedSample>> collectStream(String key) =>
+      _collectorManager.collectStream(key);
+  void stopCollect(String key) => _collectorManager.stopCollect(key);
+
   void close() {
     logger.d('Closing connection');
     client.disconnect();
     client.delete();
+    _collectorManager.close();
+    // Clean up subscriptions
+    for (final entry in _subscriptions.values) {
+      entry._rawSub.cancel();
+      entry._subject.close();
+    }
+    _subscriptions.clear();
   }
 }
 
@@ -225,5 +231,93 @@ class _SubscriptionEntry {
         _subject.close(); // close the replay buffer
       });
     }
+  }
+}
+
+class CollectedSample {
+  final DynamicValue value;
+  final DateTime time;
+
+  CollectedSample(this.value, this.time);
+}
+
+class _RingBuffer<T> {
+  final int size;
+  final List<T?> _buffer;
+  int _index = 0;
+  int _count = 0;
+
+  _RingBuffer(this.size)
+      : _buffer = List<T?>.filled(size, null, growable: false);
+
+  void add(T item) {
+    _buffer[_index] = item;
+    _index = (_index + 1) % size;
+    if (_count < size) _count++;
+  }
+
+  List<T> toList() {
+    final list = <T>[];
+    for (int i = 0; i < _count; i++) {
+      final idx = (_index - _count + i + size) % size;
+      list.add(_buffer[idx]!);
+    }
+    return list;
+  }
+}
+
+class _KeyCollectorManager {
+  final Future<Stream<DynamicValue>> Function(String key) subscribeFn;
+  final Map<String, BehaviorSubject<List<CollectedSample>>> _collectors = {};
+  final Map<String, _RingBuffer<CollectedSample>> _buffers = {};
+  final Map<String, StreamSubscription<DynamicValue>> _collectorSubs = {};
+
+  _KeyCollectorManager({required this.subscribeFn});
+
+  Future<void> collect(String key, int size) async {
+    if (_collectors.containsKey(key)) {
+      return;
+    }
+
+    final buffer = _RingBuffer<CollectedSample>(size);
+    final subject = BehaviorSubject<List<CollectedSample>>();
+
+    final sub = await subscribeFn(key);
+    final subscription = sub.listen((value) {
+      buffer.add(CollectedSample(value, DateTime.now()));
+      subject.add(buffer.toList());
+    });
+
+    _collectors[key] = subject;
+    _buffers[key] = buffer;
+    _collectorSubs[key] = subscription;
+  }
+
+  Stream<List<CollectedSample>> collectStream(String key) {
+    final subject = _collectors[key];
+    if (subject == null) {
+      throw StateManException('No collection started for key: $key');
+    }
+    return subject.stream;
+  }
+
+  void stopCollect(String key) {
+    _collectorSubs[key]?.cancel();
+    _collectors[key]?.close();
+    _collectors.remove(key);
+    _buffers.remove(key);
+    _collectorSubs.remove(key);
+  }
+
+  void close() {
+    for (final sub in _collectorSubs.values) {
+      sub.cancel();
+    }
+    for (final subject in _collectors.values) {
+      subject.close();
+    }
+    _collectorSubs.clear();
+    _collectors.clear();
+    _buffers.clear();
   }
 }

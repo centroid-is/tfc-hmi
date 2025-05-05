@@ -22,15 +22,21 @@ Future<StateMan> stateMan(Ref ref) async {
   var keyMappingsJson = await prefs.getString('key_mappings');
   if (keyMappingsJson == null) {
     final defaultKeyMappings = KeyMappings(nodes: {
-      "exampleKey": NodeIdConfig(namespace: 42, identifier: "identifier")
+      "exampleKey": KeyMappingEntry(
+          nodeId: NodeIdConfig(namespace: 42, identifier: "identifier"))
     });
     keyMappingsJson = jsonEncode(defaultKeyMappings.toJson());
     await prefs.setString('key_mappings', keyMappingsJson);
   }
+  final keyMappings = KeyMappings.fromJson(jsonDecode(keyMappingsJson));
   try {
-    return StateMan(
-        config: config,
-        keyMappings: KeyMappings.fromJson(jsonDecode(keyMappingsJson)));
+    final stateMan = StateMan(config: config, keyMappings: keyMappings);
+    for (var entry in keyMappings.nodes.entries) {
+      if (entry.value.collectSize != null) {
+        await stateMan.collect(entry.key, entry.value.collectSize!);
+      }
+    }
+    return stateMan;
   } catch (e) {
     stderr.writeln('Error parsing key mappings: $e');
     rethrow;
