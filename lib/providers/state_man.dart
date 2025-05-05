@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../page_creator/client.dart';
@@ -26,7 +27,12 @@ Future<StateMan> stateMan(Ref ref) async {
     keyMappingsJson = jsonEncode(defaultKeyMappings.toJson());
     await prefs.setString('key_mappings', keyMappingsJson);
   }
-  final keyMappings = KeyMappings.fromJson(jsonDecode(keyMappingsJson));
-
-  return StateMan(config: config, keyMappings: keyMappings);
+  try {
+    return StateMan(
+        config: config,
+        keyMappings: KeyMappings.fromJson(jsonDecode(keyMappingsJson)));
+  } catch (e) {
+    stderr.writeln('Error parsing key mappings: $e');
+    rethrow;
+  }
 }

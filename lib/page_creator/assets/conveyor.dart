@@ -137,7 +137,7 @@ class _ConveyorState extends ConsumerState<Conveyor> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          _buildConveyorVisual(Colors.grey, context),
+          _buildConveyorVisual(context, Colors.grey),
           const SizedBox(width: 12), // spacing between box and text
           const Text('Conveyor preview'),
         ],
@@ -150,9 +150,10 @@ class _ConveyorState extends ConsumerState<Conveyor> {
               .asStream()
               .switchMap((s) => s)),
       builder: (context, snapshot) {
-        if (snapshot.hasError) {
+        if (snapshot.hasError || !snapshot.hasData) {
           _log.e('Error fetching dynamic value for ${widget.config.key}',
               error: snapshot.error);
+          return _buildConveyorVisual(context, Colors.grey, true);
         }
         // _log.d('Dynamic value for ${widget.config.key}: ${snapshot.data}');
         final dynValue = snapshot.data;
@@ -161,13 +162,14 @@ class _ConveyorState extends ConsumerState<Conveyor> {
 
         return GestureDetector(
           onTap: () => _showDetailsDialog(context),
-          child: _buildConveyorVisual(color, context),
+          child: _buildConveyorVisual(context, color),
         );
       },
     );
   }
 
-  Widget _buildConveyorVisual(Color color, BuildContext context) {
+  Widget _buildConveyorVisual(BuildContext context, Color color,
+      [bool? showExclamation]) {
     return Align(
       alignment: FractionalOffset(
           widget.config.coordinates.x, widget.config.coordinates.y),
@@ -175,7 +177,8 @@ class _ConveyorState extends ConsumerState<Conveyor> {
         angle: (widget.config.coordinates.angle ?? 0.0) * pi / 180,
         child: CustomPaint(
           size: widget.config.size.toSize(MediaQuery.of(context).size),
-          painter: _ConveyorPainter(color: color),
+          painter: _ConveyorPainter(
+              color: color, showExclamation: showExclamation ?? false),
         ),
       ),
     );
@@ -361,13 +364,14 @@ class _ConveyorState extends ConsumerState<Conveyor> {
                         children: [
                           Text(dynValue['p_stat_State'].toString()),
                           Text(dynValue['p_stat_LastFault'].toString()),
-                          Text(dynValue['p_stat_Frequency'].toString()),
+                          Text(dynValue['p_stat_Frequency']
+                              .asDouble
+                              .toStringAsFixed(2)),
                           Text(
-                            Duration(
-                              minutes: dynValue['p_stat_RunMinutes'].asInt,
-                            ).toString(),
-                          ),
-                          Text(dynValue['p_stat_Current'].toString()),
+                              "${dynValue['p_stat_RunMinutes'].asInt ~/ 60}:${dynValue['p_stat_RunMinutes'].asInt % 60}"),
+                          Text(dynValue['p_stat_Current']
+                              .asDouble
+                              .toStringAsFixed(2)),
                         ],
                       ),
                     ],
@@ -404,7 +408,9 @@ class _ConveyorState extends ConsumerState<Conveyor> {
 
 class _ConveyorPainter extends CustomPainter {
   final Color color;
-  _ConveyorPainter({required this.color});
+  final bool showExclamation;
+
+  _ConveyorPainter({required this.color, this.showExclamation = false});
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -423,9 +429,32 @@ class _ConveyorPainter extends CustomPainter {
       ..style = PaintingStyle.stroke
       ..strokeWidth = 2;
     canvas.drawRRect(rrect, border);
+
+    // Draw exclamation mark if needed
+    if (showExclamation) {
+      final textPainter = TextPainter(
+        text: TextSpan(
+          text: '!',
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: size.shortestSide * 0.7,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        textAlign: TextAlign.center,
+        textDirection: TextDirection.ltr,
+      );
+      textPainter.layout();
+      final offset = Offset(
+        (size.width - textPainter.width) / 2,
+        (size.height - textPainter.height) / 2,
+      );
+      textPainter.paint(canvas, offset);
+    }
   }
 
   @override
   bool shouldRepaint(covariant _ConveyorPainter oldDelegate) =>
-      oldDelegate.color != color;
+      oldDelegate.color != color ||
+      oldDelegate.showExclamation != showExclamation;
 }
