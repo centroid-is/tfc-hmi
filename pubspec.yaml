@@ -29,7 +29,10 @@ dependencies:
   open62541:
     git:
       url: https://github.com/centroid-is/open62541_dart.git
-      ref: add-await-connect
+      ref: main
+  postgres: ^3.5.6
+  fl_chart: ^0.71.0
+  intl: ^0.20.2
 dev_dependencies:
   build_runner: ^2.4.15
   json_serializable: ^6.9.4
