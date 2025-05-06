@@ -1,21 +1,37 @@
 import 'package:logger/logger.dart';
 import 'common.dart';
 import 'led.dart';
-import 'circle_button.dart';
+import 'button.dart';
+import 'conveyor.dart';
+import 'arrow.dart';
 
 class AssetRegistry {
   static final Logger _log = Logger();
 
   static final Map<Type, Asset Function(Map<String, dynamic>)>
-      fromJsonFactories = {
+      _fromJsonFactories = {
     LEDConfig: LEDConfig.fromJson,
-    CircleButtonConfig: CircleButtonConfig.fromJson,
+    ButtonConfig: ButtonConfig.fromJson,
+    ConveyorConfig: ConveyorConfig.fromJson,
+    ArrowConfig: ArrowConfig.fromJson,
   };
 
   static final Map<Type, Asset Function()> defaultFactories = {
     LEDConfig: LEDConfig.preview,
-    CircleButtonConfig: CircleButtonConfig.preview,
+    ButtonConfig: ButtonConfig.preview,
+    ConveyorConfig: ConveyorConfig.preview,
+    ArrowConfig: ArrowConfig.preview,
   };
+
+  static void registerFromJsonFactory<T extends Asset>(
+      Asset Function(Map<String, dynamic>) fromJson) {
+    _fromJsonFactories[T] = fromJson;
+  }
+
+  static void registerDefaultFactory<T extends Asset>(
+      Asset Function() preview) {
+    defaultFactories[T] = preview;
+  }
 
   static List<Asset> parse(Map<String, dynamic> json) {
     final List<Asset> foundWidgets = [];
@@ -26,7 +42,7 @@ class AssetRegistry {
           final assetName = jsonPart[constAssetName] as String;
           _log.d('Found potential asset: $assetName');
 
-          for (final factory in fromJsonFactories.entries) {
+          for (final factory in _fromJsonFactories.entries) {
             if (factory.key.toString() == assetName) {
               try {
                 final asset = factory.value(jsonPart);

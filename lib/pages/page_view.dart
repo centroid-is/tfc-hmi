@@ -15,6 +15,48 @@ final _log = Logger(
   ),
 );
 
+class AssetStack extends StatelessWidget {
+  final List<Asset> assets;
+  final BoxConstraints constraints;
+  final void Function(Asset asset)? onTap;
+  final void Function(Asset asset, DragUpdateDetails details)? onPanUpdate;
+  final bool absorb;
+
+  const AssetStack({
+    Key? key,
+    required this.assets,
+    required this.constraints,
+    this.onTap,
+    this.onPanUpdate,
+    this.absorb = false,
+  }) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        ...assets.map((asset) {
+          return Positioned(
+            left: asset.coordinates.x * constraints.maxWidth,
+            top: asset.coordinates.y * constraints.maxHeight,
+            child: GestureDetector(
+              onTap: onTap != null ? () => onTap!(asset) : null,
+              onPanUpdate: onPanUpdate != null
+                  ? (details) => onPanUpdate!(asset, details)
+                  : null,
+              child: AbsorbPointer(
+                absorbing: absorb,
+                child: asset.build(context),
+              ),
+            ),
+          );
+        }).toList(),
+      ],
+    );
+  }
+}
+
 class AssetViewConfig {
   final List<Asset> widgets;
 
@@ -37,17 +79,21 @@ class AssetView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    _log.d('Building AssetView with ${config.widgets.length} widgets');
     return BaseScaffold(
       title: 'Asset View',
-      body: Stack(
-        fit: StackFit.expand,
-        children: [
-          ...config.widgets.map((widget) {
-            _log.t('Building widget of type ${widget.runtimeType}');
-            return widget.build(context);
-          }),
-        ],
+      body: Center(
+        child: AspectRatio(
+          aspectRatio: 16 / 9,
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              return AssetStack(
+                assets: config.widgets,
+                constraints: constraints,
+                absorb: false, // allow interaction in view mode
+              );
+            },
+          ),
+        ),
       ),
     );
   }

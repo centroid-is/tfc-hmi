@@ -1,26 +1,26 @@
 // GENERATED CODE - DO NOT MODIFY BY HAND
 
-part of 'state_man.dart';
+part of 'preferences.dart';
 
 // **************************************************************************
 // RiverpodGenerator
 // **************************************************************************
 
-String _$stateManHash() => r'1dbc65f38be50aa32e01cb1c89b5b15e6e43662b';
+String _$preferencesHash() => r'0a610180d610239d4e316dcd90a3760214b9e657';
 
-/// See also [stateMan].
-@ProviderFor(stateMan)
-final stateManProvider = FutureProvider<StateMan>.internal(
-  stateMan,
-  name: r'stateManProvider',
+/// See also [preferences].
+@ProviderFor(preferences)
+final preferencesProvider = FutureProvider<Preferences>.internal(
+  preferences,
+  name: r'preferencesProvider',
   debugGetCreateSourceHash:
-      const bool.fromEnvironment('dart.vm.product') ? null : _$stateManHash,
+      const bool.fromEnvironment('dart.vm.product') ? null : _$preferencesHash,
   dependencies: null,
   allTransitiveDependencies: null,
 );
 
 @Deprecated('Will be removed in 3.0. Use Ref instead')
 // ignore: unused_element
-typedef StateManRef = FutureProviderRef<StateMan>;
+typedef PreferencesRef = FutureProviderRef<Preferences>;
 // ignore_for_file: type=lint
 // ignore_for_file: subtype_of_sealed_class, invalid_use_of_internal_member, invalid_use_of_visible_for_testing_member, deprecated_member_use_from_same_package

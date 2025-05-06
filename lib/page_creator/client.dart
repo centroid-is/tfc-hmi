@@ -1,133 +1,323 @@
 import 'dart:async';
 import 'package:logger/logger.dart';
+import 'package:json_annotation/json_annotation.dart';
+import 'package:open62541/open62541.dart';
+import 'package:rxdart/rxdart.dart';
+part 'client.g.dart';
 
-// TODO this should be a opc ua compliant status code, should come from the opcua lib
-class OPCUAError extends Error {
+@JsonSerializable()
+class OpcUAConfig {
+  String endpoint = "opc.tcp://localhost:4840";
+  String? username;
+  String? password;
+
+  OpcUAConfig();
+
+  String toString() {
+    return 'OpcUAConfig(endpoint: $endpoint, username: $username, password: $password)';
+  }
+
+  factory OpcUAConfig.fromJson(Map<String, dynamic> json) =>
+      _$OpcUAConfigFromJson(json);
+  Map<String, dynamic> toJson() => _$OpcUAConfigToJson(this);
+}
+
+@JsonSerializable()
+class StateManConfig {
+  OpcUAConfig opcua;
+
+  StateManConfig({
+    required this.opcua,
+  });
+
+  String toString() {
+    return 'StateManConfig(opcua: ${opcua.toString()})';
+  }
+
+  factory StateManConfig.fromJson(Map<String, dynamic> json) =>
+      _$StateManConfigFromJson(json);
+  Map<String, dynamic> toJson() => _$StateManConfigToJson(this);
+}
+
+@JsonSerializable()
+class NodeIdConfig {
+  int namespace;
+  String identifier;
+
+  NodeIdConfig({required this.namespace, required this.identifier});
+
+  NodeId toNodeId() {
+    return NodeId.fromString(namespace, identifier);
+  }
+
+  factory NodeIdConfig.fromJson(Map<String, dynamic> json) =>
+      _$NodeIdConfigFromJson(json);
+  Map<String, dynamic> toJson() => _$NodeIdConfigToJson(this);
+}
+
+@JsonSerializable()
+class KeyMappingEntry {
+  NodeIdConfig? nodeId;
+  int? collectSize;
+
+  KeyMappingEntry({this.nodeId, this.collectSize});
+
+  factory KeyMappingEntry.fromJson(Map<String, dynamic> json) =>
+      _$KeyMappingEntryFromJson(json);
+  Map<String, dynamic> toJson() => _$KeyMappingEntryToJson(this);
+}
+
+@JsonSerializable()
+class KeyMappings {
+  Map<String, KeyMappingEntry> nodes;
+
+  KeyMappings({required this.nodes});
+
+  NodeId? lookup(String key) {
+    return nodes[key]?.nodeId?.toNodeId();
+  }
+
+  factory KeyMappings.fromJson(Map<String, dynamic> json) =>
+      _$KeyMappingsFromJson(json);
+  Map<String, dynamic> toJson() => _$KeyMappingsToJson(this);
+}
+
+class StateManException implements Exception {
   final String message;
-  OPCUAError(this.message);
+  StateManException(this.message);
   @override
-  String toString() => 'OPCUAError: $message';
+  String toString() => 'StateManException: $message';
 }
 
 class StateMan {
   final logger = Logger();
+  final StateManConfig config;
+  final KeyMappings keyMappings;
+  final client = Client.fromStatic();
+  int? subscriptionId;
+  final Map<String, _SubscriptionEntry> _subscriptions = {};
+
+  // Use the new manager
+  late final _KeyCollectorManager _collectorManager;
 
   /// Constructor requires the server endpoint.
-  StateMan(this.endpointUrl);
+  StateMan({required this.config, required this.keyMappings}) {
+    _collectorManager = _KeyCollectorManager(subscribeFn: subscribe);
 
-  bool get isConnected => _connected;
-  bool _connected = true; // todo implement
-  final String endpointUrl;
-
-  /// Example: read<int>("myKey") or read<String>("myStringKey")
-  Future<T> read<T>(String key) async {
-    if (!_connected) {
-      throw OPCUAError('Not connected to server');
-    }
-    try {
-      print('Reading value of key: $key');
-      await Future.delayed(Duration(milliseconds: 500));
-
-      // Return type-specific dummy data
-      if (T == int) {
-        return 42 as T;
-      } else if (T == double) {
-        return 42.0 as T;
-      } else if (T == bool) {
-        return true as T;
-      } else if (T == String) {
-        return 'stub-value-of-$key' as T;
-      } else {
-        throw OPCUAError('Unsupported type: $T');
+    // spawn a background task to keep the client active
+    () async {
+      while (true) {
+        client.connect(config.opcua.endpoint);
+        while (client.runIterate(const Duration(milliseconds: 10))) {
+          await Future.delayed(const Duration(milliseconds: 10));
+        }
+        await Future.delayed(const Duration(seconds: 1));
       }
+    }();
+  }
+
+  /// Example: read("myKey")
+  Future<DynamicValue> read(String key) async {
+    await client.awaitConnect();
+    try {
+      final nodeId = keyMappings.lookup(key);
+      if (nodeId == null) {
+        await Future.delayed(const Duration(seconds: 1000));
+        throw StateManException("Key: \"$key\" not found");
+      }
+      return await client.readValue(nodeId, prefetchTypeId: true);
     } catch (e) {
-      throw OPCUAError('Failed to read key: $e');
+      throw StateManException('Failed to read key: \"$key\": $e');
     }
   }
 
-  /// Example: write<int>("myKey", 42) or write<String>("myStringKey", "hello")
-  Future<void> write<T>(String key, T value) async {
-    if (!_connected) {
-      throw OPCUAError('Not connected to server');
-    }
+  /// Example: write("myKey", DynamicValue(value: 42, typeId: NodeId.int16))
+  Future<void> write(String key, DynamicValue value) async {
+    await client.awaitConnect();
     try {
-      print('Writing value "$value" to nodeId: $key');
-      await Future.delayed(Duration(milliseconds: 500));
+      final nodeId = keyMappings.lookup(key);
+      if (nodeId == null) {
+        await Future.delayed(const Duration(seconds: 1000));
+        throw StateManException("Key: \"$key\" not found");
+      }
+      await client.writeValue(nodeId, value);
     } catch (e) {
-      throw OPCUAError('Failed to write node: $e');
+      throw StateManException('Failed to write node: \"$key\": $e');
     }
   }
 
   /// Subscribe to data changes on a specific node with type safety.
   /// Returns a Stream that can be cancelled to stop the subscription.
-  /// Example: subscribe<int>("myIntKey") or subscribe<String>("myStringKey")
-  Future<Stream<T>> subscribe<T>(String key) async {
-    if (!_connected) {
-      throw OPCUAError('Cannot subscribe to node. Not connected to server.');
+  /// Example: subscribe("myIntKey") or subscribe("myStringKey")
+  Future<Stream<DynamicValue>> subscribe(String key) async {
+    await client.awaitConnect();
+    final nodeId = keyMappings.lookup(key);
+    if (nodeId == null) {
+      throw StateManException('Key: "$key" not found');
     }
-
-    final controller = StreamController<T>.broadcast();
-    controller.onCancel = () async {
-      // Cleanup when the last listener unsubscribes
-      print('Unsubscribing from key: $key');
-      await _handleUnsubscribe(key);
-      await controller.close();
-    };
-
-    try {
-      print('Subscribing to data changes for key: $key');
-      await _handleSubscribe(key);
-      bool bool_last_value = false;
-      int int_last_value = 0;
-      double double_last_value = 0.0;
-
-      // For demonstration, simulate periodic updates
-      Timer.periodic(Duration(seconds: 2), (timer) {
-        if (controller.isClosed) {
-          timer.cancel();
-          return;
-        }
-        if (!_connected) {
-          timer.cancel();
-          controller.close();
-          return;
-        }
-
-        // Simulate data updates (replace with actual OPC UA data)
-        if (T == int) {
-          controller.add(int_last_value++ as T);
-        } else if (T == String) {
-          controller.add('Updated value at ${DateTime.now()}' as T);
-        } else if (T == double) {
-          controller.add(double_last_value++ as T);
-        } else if (T == bool) {
-          controller.add(bool_last_value as T);
-          bool_last_value = !bool_last_value;
-        } else {
-          print('Unsupported type: $T');
-        }
-      });
-
-      return controller.stream;
-    } catch (e) {
-      await controller.close();
-      throw OPCUAError('Failed to subscribe: $e');
+    subscriptionId ??= await client.subscriptionCreate();
+    if (!_subscriptions.containsKey(key)) {
+      _subscriptions[key] = _SubscriptionEntry(
+        key,
+        client.monitoredItem(nodeId, subscriptionId!, prefetchTypeId: true),
+        (key) {
+          _subscriptions.remove(key);
+          logger.d('Unsubscribed from $key');
+        },
+      );
     }
+    return _subscriptions[key]!.stream;
   }
 
-  // Internal methods to handle actual OPC UA subscription
-  Future<void> _handleSubscribe(String nodeId) async {
-    // In real implementation: Create actual OPC UA subscription
-    await Future.delayed(Duration(milliseconds: 500));
-  }
-
-  Future<void> _handleUnsubscribe(String nodeId) async {
-    // In real implementation: Delete actual OPC UA subscription
-    await Future.delayed(Duration(milliseconds: 500));
-  }
+  // Delegate collection methods
+  Future<void> collect(String key, int size) =>
+      _collectorManager.collect(key, size);
+  Stream<List<CollectedSample>> collectStream(String key) =>
+      _collectorManager.collectStream(key);
+  void stopCollect(String key) => _collectorManager.stopCollect(key);
 
   void close() {
     logger.d('Closing connection');
-    _connected = false;
+    client.disconnect();
+    client.delete();
+    _collectorManager.close();
+    // Clean up subscriptions
+    for (final entry in _subscriptions.values) {
+      entry._rawSub.cancel();
+      entry._subject.close();
+    }
+    _subscriptions.clear();
+  }
+}
+
+class _SubscriptionEntry {
+  final String key;
+  final ReplaySubject<DynamicValue> _subject;
+  int _listenerCount = 0;
+  Timer? _idleTimer;
+  late final StreamSubscription<DynamicValue> _rawSub;
+  final Function(String key) _onDispose;
+
+  _SubscriptionEntry(
+    this.key,
+    Stream<DynamicValue> raw,
+    this._onDispose,
+  ) : _subject = ReplaySubject<DynamicValue>(maxSize: 1) {
+    // 1) wire raw → subject
+    _rawSub = raw.listen(
+      _subject.add,
+      onError: _subject.addError,
+      onDone: _subject.close,
+    );
+    // 2) Count UI listeners for idle shutdown:
+    _subject
+      ..onListen = _handleListen
+      ..onCancel = _handleCancel;
+  }
+
+  Stream<DynamicValue> get stream => _subject.stream;
+
+  void _handleListen() {
+    _listenerCount++;
+    _idleTimer?.cancel();
+  }
+
+  void _handleCancel() {
+    _listenerCount--;
+    if (_listenerCount == 0) {
+      _idleTimer = Timer(const Duration(minutes: 10), () {
+        _rawSub.cancel(); // tear down the OPC-UA monitoredItem
+        _onDispose(key); // remove from StateMan._subscriptions
+        _subject.close(); // close the replay buffer
+      });
+    }
+  }
+}
+
+class CollectedSample {
+  final DynamicValue value;
+  final DateTime time;
+
+  CollectedSample(this.value, this.time);
+}
+
+class _RingBuffer<T> {
+  final int size;
+  final List<T?> _buffer;
+  int _index = 0;
+  int _count = 0;
+
+  _RingBuffer(this.size)
+      : _buffer = List<T?>.filled(size, null, growable: false);
+
+  void add(T item) {
+    _buffer[_index] = item;
+    _index = (_index + 1) % size;
+    if (_count < size) _count++;
+  }
+
+  List<T> toList() {
+    final list = <T>[];
+    for (int i = 0; i < _count; i++) {
+      final idx = (_index - _count + i + size) % size;
+      list.add(_buffer[idx]!);
+    }
+    return list;
+  }
+}
+
+class _KeyCollectorManager {
+  final Future<Stream<DynamicValue>> Function(String key) subscribeFn;
+  final Map<String, BehaviorSubject<List<CollectedSample>>> _collectors = {};
+  final Map<String, _RingBuffer<CollectedSample>> _buffers = {};
+  final Map<String, StreamSubscription<DynamicValue>> _collectorSubs = {};
+
+  _KeyCollectorManager({required this.subscribeFn});
+
+  Future<void> collect(String key, int size) async {
+    if (_collectors.containsKey(key)) {
+      return;
+    }
+
+    final buffer = _RingBuffer<CollectedSample>(size);
+    final subject = BehaviorSubject<List<CollectedSample>>();
+
+    final sub = await subscribeFn(key);
+    final subscription = sub.listen((value) {
+      buffer.add(CollectedSample(value, DateTime.now()));
+      subject.add(buffer.toList());
+    });
+
+    _collectors[key] = subject;
+    _buffers[key] = buffer;
+    _collectorSubs[key] = subscription;
+  }
+
+  Stream<List<CollectedSample>> collectStream(String key) {
+    final subject = _collectors[key];
+    if (subject == null) {
+      throw StateManException('No collection started for key: $key');
+    }
+    return subject.stream;
+  }
+
+  void stopCollect(String key) {
+    _collectorSubs[key]?.cancel();
+    _collectors[key]?.close();
+    _collectors.remove(key);
+    _buffers.remove(key);
+    _collectorSubs.remove(key);
+  }
+
+  void close() {
+    for (final sub in _collectorSubs.values) {
+      sub.cancel();
+    }
+    for (final subject in _collectors.values) {
+      subject.close();
+    }
+    _collectorSubs.clear();
+    _collectors.clear();
+    _buffers.clear();
   }
 }

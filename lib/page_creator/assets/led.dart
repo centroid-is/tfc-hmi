@@ -1,18 +1,27 @@
+import 'dart:math';
+import 'dart:io';
+
 import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_colorpicker/flutter_colorpicker.dart';
-import 'dart:math';
+import 'package:rxdart/rxdart.dart';
+
 import 'common.dart';
-import 'dart:async';
-import 'package:logger/logger.dart';
 import '../../providers/state_man.dart';
 
 part 'led.g.dart';
 
+@JsonEnum()
+enum LEDType {
+  circle,
+  square,
+}
+
 @JsonSerializable(explicitToJson: true)
 class LEDConfig extends BaseAsset {
   String key;
+  String? text;
   @ColorConverter()
   @JsonKey(name: 'on_color')
   Color onColor;
@@ -21,6 +30,8 @@ class LEDConfig extends BaseAsset {
   Color offColor;
   @JsonKey(name: 'text_pos')
   TextPos textPos;
+  @JsonKey(name: 'led_type')
+  LEDType ledType = LEDType.circle;
 
   LEDConfig({
     required this.key,
@@ -29,8 +40,10 @@ class LEDConfig extends BaseAsset {
     required this.textPos,
   });
 
+  static const previewStr = 'Led preview';
+
   LEDConfig.preview()
-      : key = 'Led preview',
+      : key = previewStr,
         onColor = Colors.green,
         offColor = Colors.green,
         textPos = TextPos.right;
@@ -68,203 +81,209 @@ class _ConfigContent extends StatefulWidget {
 class _ConfigContentState extends State<_ConfigContent> {
   @override
   Widget build(BuildContext context) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        TextFormField(
-          initialValue: widget.config.key,
-          decoration: const InputDecoration(
-            labelText: 'Key',
+    final media = MediaQuery.of(context).size;
+    final maxWidth = media.width * 0.9; // Use 90% of screen width
+    final maxHeight = media.height * 0.8; // Use 80% of screen height
+
+    return Center(
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxWidth: maxWidth,
+          maxHeight: maxHeight,
+          minWidth: 320,
+          minHeight: 200,
+        ),
+        child: Material(
+          borderRadius: BorderRadius.circular(24),
+          color: Theme.of(context).dialogBackgroundColor,
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  KeyField(
+                    initialValue: widget.config.key,
+                    onChanged: (value) {
+                      setState(() {
+                        widget.config.key = value;
+                      });
+                    },
+                  ),
+                  const SizedBox(height: 16),
+                  TextFormField(
+                    initialValue: widget.config.text,
+                    decoration: const InputDecoration(
+                      labelText: 'Text',
+                    ),
+                    onChanged: (value) {
+                      setState(() {
+                        widget.config.text = value;
+                      });
+                    },
+                  ),
+                  const SizedBox(height: 16),
+                  Row(
+                    children: [
+                      const Text('On Color'),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: BlockPicker(
+                          pickerColor: widget.config.onColor,
+                          onColorChanged: (value) {
+                            setState(() {
+                              widget.config.onColor = value;
+                            });
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  Row(
+                    children: [
+                      const Text('Off Color'),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: BlockPicker(
+                          pickerColor: widget.config.offColor,
+                          onColorChanged: (value) {
+                            setState(() {
+                              widget.config.offColor = value;
+                            });
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  DropdownButton<TextPos>(
+                    value: widget.config.textPos,
+                    isExpanded: true,
+                    onChanged: (value) {
+                      setState(() {
+                        widget.config.textPos = value!;
+                      });
+                    },
+                    items: TextPos.values
+                        .map((e) => DropdownMenuItem<TextPos>(
+                            value: e, child: Text(e.name)))
+                        .toList(),
+                  ),
+                  const SizedBox(height: 16),
+                  DropdownButton<LEDType>(
+                    value: widget.config.ledType,
+                    isExpanded: true,
+                    onChanged: (value) {
+                      setState(() {
+                        widget.config.ledType = value!;
+                      });
+                    },
+                    items: LEDType.values
+                        .map((e) => DropdownMenuItem<LEDType>(
+                              value: e,
+                              child: Text(e.name[0].toUpperCase() +
+                                  e.name.substring(1)),
+                            ))
+                        .toList(),
+                  ),
+                  const SizedBox(height: 16),
+                  SizeField(
+                    initialValue: widget.config.size,
+                    useSingleSize: widget.config.ledType == LEDType.circle,
+                    onChanged: (value) {
+                      setState(() {
+                        widget.config.size = value;
+                      });
+                    },
+                  ),
+                ],
+              ),
+            ),
           ),
-          onChanged: (value) {
-            setState(() {
-              widget.config.key = value;
-            });
-          },
         ),
-        const SizedBox(height: 16),
-        Row(
-          children: [
-            const Text('On Color'),
-            const SizedBox(width: 8),
-            Expanded(
-              child: BlockPicker(
-                pickerColor: widget.config.onColor,
-                onColorChanged: (value) {
-                  setState(() {
-                    widget.config.onColor = value;
-                  });
-                },
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 16),
-        Row(
-          children: [
-            const Text('Off Color'),
-            const SizedBox(width: 8),
-            Expanded(
-              child: BlockPicker(
-                pickerColor: widget.config.offColor,
-                onColorChanged: (value) {
-                  setState(() {
-                    widget.config.offColor = value;
-                  });
-                },
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 16),
-        DropdownButton<TextPos>(
-          value: widget.config.textPos,
-          isExpanded: true,
-          onChanged: (value) {
-            setState(() {
-              widget.config.textPos = value!;
-            });
-          },
-          items: TextPos.values
-              .map((e) =>
-                  DropdownMenuItem<TextPos>(value: e, child: Text(e.name)))
-              .toList(),
-        ),
-        const SizedBox(height: 16),
-        Row(
-          children: [
-            const Text('Size: '),
-            const SizedBox(width: 8),
-            SizedBox(
-              width: 100,
-              child: TextFormField(
-                initialValue:
-                    (widget.config.size.width * 100).toStringAsFixed(2),
-                decoration: const InputDecoration(
-                  suffixText: '%',
-                  isDense: true,
-                  helperText: '0.01-50%',
-                ),
-                keyboardType:
-                    const TextInputType.numberWithOptions(decimal: true),
-                onChanged: (value) {
-                  final percentage = double.tryParse(value) ?? 0.0;
-                  if (percentage >= 0.01 && percentage <= 50.0) {
-                    setState(() {
-                      widget.config.size = RelativeSize(
-                        width: percentage / 100,
-                        height: percentage / 100,
-                      );
-                    });
-                  }
-                },
-              ),
-            ),
-          ],
-        ),
-      ],
+      ),
     );
   }
 }
 
-class Led extends ConsumerStatefulWidget {
+class Led extends ConsumerWidget {
   final LEDConfig config;
 
   const Led(this.config, {super.key});
 
   @override
-  ConsumerState<Led> createState() => _LedState();
-}
+  Widget build(BuildContext context, WidgetRef ref) {
+    return StreamBuilder<bool>(
+      stream: ref.watch(stateManProvider.future).asStream().asyncExpand(
+            (stateMan) => stateMan
+                .subscribe(config.key)
+                .asStream()
+                .switchMap((s) => s)
+                .map((dynamicValue) => dynamicValue.asBool),
+          ),
+      builder: (context, snapshot) {
+        if (snapshot.hasError || snapshot.hasData == false) {
+          stderr.writeln(
+              'Stream setup error for ${config.key}, error: ${snapshot.error}');
+          return LedRaw(config, value: null);
+        }
 
-class _LedState extends ConsumerState<Led> {
-  static final _log = Logger(
-    printer: PrettyPrinter(
-      methodCount: 0,
-      errorMethodCount: 8,
-      lineLength: 120,
-      colors: true,
-      printEmojis: true,
-      dateTimeFormat: DateTimeFormat.onlyTimeAndSinceStart,
-    ),
-  );
-
-  @override
-  Widget build(BuildContext context) {
-    final client = ref.read(stateManProvider);
-
-    return FutureBuilder<bool>(
-      future: client.read<bool>(widget.config.key),
-      builder: (context, initialSnapshot) {
-        _log.d(
-            'Initial value for ${widget.config.key}: ${initialSnapshot.data}');
-
-        return FutureBuilder<Stream<bool>>(
-          future: client.subscribe<bool>(widget.config.key),
-          builder: (context, streamSnapshot) {
-            if (streamSnapshot.hasError) {
-              _log.e('Stream setup error for ${widget.config.key}',
-                  error: streamSnapshot.error);
-              return _buildLED(null);
-            }
-
-            if (!streamSnapshot.hasData) {
-              _log.d(
-                  'Waiting for stream, showing initial value: ${initialSnapshot.data}');
-              return _buildLED(initialSnapshot.data);
-            }
-
-            return StreamBuilder<bool>(
-              stream: streamSnapshot.data,
-              initialData: initialSnapshot.data,
-              builder: (context, snapshot) {
-                if (snapshot.hasError) {
-                  _log.e('Stream error for ${widget.config.key}',
-                      error: snapshot.error);
-                  return _buildLED(null);
-                }
-
-                final isOn = snapshot.data;
-                _log.t('LED ${widget.config.key} value update: $isOn');
-                return _buildLED(isOn);
-              },
-            );
-          },
-        );
+        return LedRaw(config, value: snapshot.data);
       },
     );
   }
+}
 
-  Widget _buildLED(bool? isOn) {
-    final color = isOn == null
-        ? null
-        : (isOn ? widget.config.onColor : widget.config.offColor);
+class LedRaw extends ConsumerWidget {
+  final LEDConfig config;
+  final bool? value;
+
+  const LedRaw(this.config, {super.key, this.value});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    bool? isOn = value;
+    if (config.key == LEDConfig.previewStr) {
+      isOn = true;
+    }
+    final color =
+        isOn == null ? null : (isOn ? config.onColor : config.offColor);
 
     // Get container size from MediaQuery
     final containerSize = MediaQuery.of(context).size;
-    final actualSize = widget.config.size.toSize(containerSize);
-    final ledSize = min(actualSize.width, actualSize.height);
+    final actualSize = config.size.toSize(containerSize);
+
+    // For circles, use minimum dimension to maintain aspect ratio
+    // For squares, use actual width and height independently
+    final width = config.ledType == LEDType.circle
+        ? min(actualSize.width, actualSize.height)
+        : actualSize.width;
+    final height = config.ledType == LEDType.circle
+        ? min(actualSize.width, actualSize.height)
+        : actualSize.height;
 
     final led = SizedBox(
-      width: ledSize,
-      height: ledSize,
+      width: width,
+      height: height,
       child: CustomPaint(
-        painter: LEDPainter(color: color),
+        painter: LEDPainter(color: color, ledType: config.ledType),
       ),
     );
 
     return Align(
-      alignment: FractionalOffset(
-          widget.config.coordinates.x, widget.config.coordinates.y),
-      child: buildWithText(led, widget.config.key, widget.config.textPos),
+      alignment: FractionalOffset(config.coordinates.x, config.coordinates.y),
+      child: buildWithText(led, config.text ?? config.key, config.textPos),
     );
   }
 }
 
 class LEDPainter extends CustomPainter {
   final Color? color;
+  final LEDType ledType;
 
-  LEDPainter({required this.color});
+  LEDPainter({required this.color, required this.ledType});
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -272,22 +291,46 @@ class LEDPainter extends CustomPainter {
       ..color = color ?? Colors.grey
       ..style = PaintingStyle.fill;
 
-    // Draw circle
-    canvas.drawCircle(
-      Offset(size.width / 2, size.height / 2),
-      size.width / 2,
-      paint,
-    );
+    final center = Offset(size.width / 2, size.height / 2);
 
-    // Draw border
-    paint.color = Colors.black;
-    paint.style = PaintingStyle.stroke;
-    paint.strokeWidth = 2;
-    canvas.drawCircle(
-      Offset(size.width / 2, size.height / 2),
-      size.width / 2,
-      paint,
-    );
+    // Draw shape based on type
+    if (ledType == LEDType.circle) {
+      // Draw circle
+      canvas.drawCircle(
+        center,
+        size.width / 2,
+        paint,
+      );
+
+      // Draw border
+      paint.color = Colors.black;
+      paint.style = PaintingStyle.stroke;
+      paint.strokeWidth = 2;
+      canvas.drawCircle(
+        center,
+        size.width / 2,
+        paint,
+      );
+    } else {
+      // Draw rounded rectangle
+      final rect = Rect.fromCenter(
+        center: center,
+        width: size.width,
+        height: size.height,
+      );
+      final borderRadius = Radius.circular(
+          size.shortestSide * 0.2); // 20% of shortest side like conveyor
+      final rrect = RRect.fromRectAndRadius(rect, borderRadius);
+
+      // Draw filled rounded rectangle
+      canvas.drawRRect(rrect, paint);
+
+      // Draw border
+      paint.color = Colors.black;
+      paint.style = PaintingStyle.stroke;
+      paint.strokeWidth = 2;
+      canvas.drawRRect(rrect, paint);
+    }
 
     if (color == null) {
       final textPainter = TextPainter(
@@ -313,5 +356,6 @@ class LEDPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(LEDPainter oldDelegate) => color != oldDelegate.color;
+  bool shouldRepaint(LEDPainter oldDelegate) =>
+      color != oldDelegate.color || ledType != oldDelegate.ledType;
 }
