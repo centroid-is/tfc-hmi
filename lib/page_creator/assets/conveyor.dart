@@ -250,9 +250,11 @@ class _ConveyorState extends ConsumerState<Conveyor> {
                             color: dynValue['p_stat_JogBwd'].asBool
                                 ? Colors.green
                                 : Colors.grey,
+                            size: 48,
                           ),
                         ),
-                        const Text('Manual'),
+                        Text('Jog',
+                            style: Theme.of(context).textTheme.headlineLarge),
                         RawMaterialButton(
                           shape: const CircleBorder(),
                           padding: const EdgeInsets.all(8),
@@ -274,6 +276,7 @@ class _ConveyorState extends ConsumerState<Conveyor> {
                             color: dynValue['p_stat_JogFwd'].asBool
                                 ? Colors.green
                                 : Colors.grey,
+                            size: 48,
                           ),
                         ),
                       ],
@@ -297,10 +300,12 @@ class _ConveyorState extends ConsumerState<Conveyor> {
                           color: dynValue['p_stat_FaultReset'].asBool
                               ? Colors.green
                               : Colors.grey,
+                          size: 48,
                         ),
                       ),
                       const SizedBox(width: 4),
-                      const Text('Fault reset'),
+                      Text('Fault reset',
+                          style: Theme.of(context).textTheme.titleLarge),
                     ],
                   ),
 
@@ -319,10 +324,12 @@ class _ConveyorState extends ConsumerState<Conveyor> {
                           color: dynValue['p_stat_ManualStopOnRelease'].asBool
                               ? Colors.green
                               : Colors.grey,
+                          size: 48,
                         ),
                       ),
                       const SizedBox(width: 4),
-                      const Text('Manual stop on release'),
+                      Text('Manual stop on release',
+                          style: Theme.of(context).textTheme.titleLarge),
                     ],
                   ),
 
@@ -341,10 +348,12 @@ class _ConveyorState extends ConsumerState<Conveyor> {
                         child: const Icon(
                           Icons.circle,
                           color: Colors.grey,
+                          size: 48,
                         ),
                       ),
                       const SizedBox(width: 4),
-                      const Text('Reset run hours'),
+                      Text('Reset run hours',
+                          style: Theme.of(context).textTheme.titleLarge),
                     ],
                   ),
 
