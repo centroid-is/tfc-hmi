@@ -1,17 +1,19 @@
+import 'dart:convert'; // For JSON encoding
+
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../page_creator/assets/common.dart';
 import '../page_creator/assets/registry.dart';
 import '../widgets/base_scaffold.dart';
-import 'dart:convert'; // For JSON encoding
 import 'page_view.dart';
+import '../providers/preferences.dart';
 
-class PageEditor extends StatefulWidget {
+class PageEditor extends ConsumerStatefulWidget {
   @override
-  _PageEditorState createState() => _PageEditorState();
+  ConsumerState<PageEditor> createState() => _PageEditorState();
 }
 
-class _PageEditorState extends State<PageEditor> {
+class _PageEditorState extends ConsumerState<PageEditor> {
   static const String _storageKey = 'page_editor_data';
   List<Asset> assets = [];
   bool _showPalette = false;
@@ -26,8 +28,8 @@ class _PageEditorState extends State<PageEditor> {
   }
 
   Future<void> _loadFromPrefs() async {
-    final prefs = await SharedPreferences.getInstance();
-    final String? jsonString = prefs.getString(_storageKey);
+    final prefs = await ref.read(preferencesProvider.future);
+    final String? jsonString = await prefs.getString(_storageKey);
     print('Loading from prefs: $jsonString');
     if (jsonString != null) {
       try {
@@ -49,7 +51,7 @@ class _PageEditorState extends State<PageEditor> {
   }
 
   Future<void> _saveToPrefs() async {
-    final prefs = await SharedPreferences.getInstance();
+    final prefs = await ref.read(preferencesProvider.future);
     final jsonString = jsonEncode({
       'assets': assets.map((a) => a.toJson()).toList(),
     });
