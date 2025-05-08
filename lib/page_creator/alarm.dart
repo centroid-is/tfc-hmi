@@ -279,7 +279,7 @@ class Expression {
     '==': 'Equal to',
     '!=': 'Not equal to',
   };
-  static final operatorRegex = RegExp(r'(AND|OR|<|>|==|!=|<=|>=)');
+  static final operatorRegex = RegExp(r'(AND|OR|<=|>=|==|!=|<|>)');
 
   Expression({required this.formula});
 
@@ -359,58 +359,80 @@ class Expression {
     final tokens = _parseExpression();
     if (tokens.isEmpty) return false;
 
-    DynamicValue? lastValue;
-    _Token? lastOperator;
-
-    for (final token in tokens) {
-      if (token.isOperator && lastOperator == null) {
-        lastOperator = token;
-        continue;
-      } else if (!token.isOperator && lastValue == null) {
-        lastValue = variables[token.value];
-        continue;
-      } else if (lastOperator != null &&
-          lastValue != null &&
-          !token.isOperator) {
-        final rhs = variables[token.value];
-        if (rhs == null) {
-          throw ArgumentError('Variable ${token.value} not found');
-        }
-        var thisResult = DynamicValue(value: null);
-        switch (lastOperator.value) {
-          case 'AND':
-            thisResult.value = lastValue.asBool && rhs.asBool;
-            break;
-          case 'OR':
-            thisResult.value = lastValue.asBool || rhs.asBool;
-            break;
-          case '<': // double is not strictly correct but it's ok for now
-            thisResult.value = lastValue.asDouble < rhs.asDouble;
-            break;
-          case '<=':
-            thisResult.value = lastValue.asDouble <= rhs.asDouble;
-            break;
-          case '>':
-            thisResult.value = lastValue.asDouble > rhs.asDouble;
-            break;
-          case '>=':
-            thisResult.value = lastValue.asDouble >= rhs.asDouble;
-            break;
-          case '==': // string is not strictly correct but it's ok for now
-            thisResult.value = lastValue.asString == rhs.asString;
-            break;
-          case '!=':
-            thisResult.value = lastValue.asString != rhs.asString;
-            break;
-          default:
-            throw ArgumentError('Invalid operator ${lastOperator.value}');
-        }
-        lastValue = thisResult;
-      } else {
-        throw ArgumentError('Invalid expression');
+    // Helper function to evaluate a single operation
+    DynamicValue evaluateOperation(
+        DynamicValue lhs, String op, DynamicValue rhs) {
+      switch (op) {
+        case 'AND':
+          return DynamicValue(value: lhs.asBool && rhs.asBool);
+        case 'OR':
+          return DynamicValue(value: lhs.asBool || rhs.asBool);
+        case '<':
+          return DynamicValue(value: lhs.asDouble < rhs.asDouble);
+        case '<=':
+          return DynamicValue(value: lhs.asDouble <= rhs.asDouble);
+        case '>':
+          return DynamicValue(value: lhs.asDouble > rhs.asDouble);
+        case '>=':
+          return DynamicValue(value: lhs.asDouble >= rhs.asDouble);
+        case '==':
+          return DynamicValue(value: lhs.asString == rhs.asString);
+        case '!=':
+          return DynamicValue(value: lhs.asString != rhs.asString);
+        default:
+          throw ArgumentError('Invalid operator $op');
       }
     }
-    return lastValue?.asBool ?? false;
+
+    // Define operator precedence (higher number = higher precedence)
+    final precedence = {
+      'AND': 2,
+      'OR': 1,
+      '<': 3,
+      '<=': 3,
+      '>': 3,
+      '>=': 3,
+      '==': 3,
+      '!=': 3,
+    };
+
+    // Convert tokens to a list of values and operators
+    var values = <DynamicValue>[];
+    var operators = <String>[];
+
+    for (var token in tokens) {
+      if (token.isOperator) {
+        while (operators.isNotEmpty &&
+            precedence[operators.last]! >= precedence[token.value]!) {
+          final op = operators.removeLast();
+          final rhs = values.removeLast();
+          final lhs = values.removeLast();
+          values.add(evaluateOperation(lhs, op, rhs));
+        }
+        operators.add(token.value);
+      } else {
+        final value = variables[token.value];
+        if (value == null) {
+          throw ArgumentError('Variable ${token.value} not found');
+        }
+        values.add(value);
+      }
+    }
+
+    // Process remaining operators
+    while (operators.isNotEmpty) {
+      final op = operators.removeLast();
+      final rhs = values.removeLast();
+      final lhs = values.removeLast();
+      values.add(evaluateOperation(lhs, op, rhs));
+    }
+
+    // Final result should be a single value
+    if (values.length != 1) {
+      throw ArgumentError('Invalid expression');
+    }
+
+    return values.first.asBool;
   }
 
   /// Creates a UI widget for building/editing the expression
