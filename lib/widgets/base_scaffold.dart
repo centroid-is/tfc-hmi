@@ -1,9 +1,11 @@
+import 'dart:io';
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:beamer/beamer.dart';
 import 'package:logger/logger.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'dart:async';
 import 'nav_dropdown.dart';
 import '../models/menu_item.dart';
 import '../route_registry.dart';
@@ -125,13 +127,18 @@ class BaseScaffold extends StatelessWidget {
                   children: [
                     Padding(
                       padding: const EdgeInsets.only(right: 16.0),
-                      child: SvgPicture.asset(
-                        'assets/centroid.svg',
-                        height: 50,
-                        package: 'tfc',
-                        colorFilter: ColorFilter.mode(
-                          Theme.of(context).colorScheme.onSurface,
-                          BlendMode.srcIn,
+                      child: GestureDetector(
+                        onDoubleTap: () {
+                          exit(0);
+                        },
+                        child: SvgPicture.asset(
+                          'assets/centroid.svg',
+                          height: 50,
+                          package: 'tfc',
+                          colorFilter: ColorFilter.mode(
+                            Theme.of(context).colorScheme.onSurface,
+                            BlendMode.srcIn,
+                          ),
                         ),
                       ),
                     ),
