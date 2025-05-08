@@ -10,12 +10,16 @@ PreferencesConfig _$PreferencesConfigFromJson(Map<String, dynamic> json) =>
     PreferencesConfig(
       postgres: _$JsonConverterFromJson<Map<String, dynamic>, Endpoint>(
           json['postgres'], const EndpointConverter().fromJson),
+      sslMode: _$JsonConverterFromJson<String, SslMode>(
+          json['sslMode'], const SslModeConverter().fromJson),
     );
 
 Map<String, dynamic> _$PreferencesConfigToJson(PreferencesConfig instance) =>
     <String, dynamic>{
       'postgres': _$JsonConverterToJson<Map<String, dynamic>, Endpoint>(
           instance.postgres, const EndpointConverter().toJson),
+      'sslMode': _$JsonConverterToJson<String, SslMode>(
+          instance.sslMode, const SslModeConverter().toJson),
     };
 
 Value? _$JsonConverterFromJson<Json, Value>(

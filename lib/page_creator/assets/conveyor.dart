@@ -152,9 +152,12 @@ class _ConveyorState extends ConsumerState<Conveyor> {
               .asStream()
               .switchMap((s) => s)),
       builder: (context, snapshot) {
-        if (snapshot.hasError || !snapshot.hasData) {
-          _log.e('Error fetching dynamic value for ${widget.config.key}',
-              error: snapshot.error);
+        if (snapshot.hasError) {
+          _log.e(
+              'Error fetching dynamic value for ${widget.config.key}, error: ${snapshot.error}');
+          return _buildConveyorVisual(context, Colors.grey, true);
+        }
+        if (!snapshot.hasData) {
           return _buildConveyorVisual(context, Colors.grey, true);
         }
         // _log.d('Dynamic value for ${widget.config.key}: ${snapshot.data}');
@@ -534,25 +537,25 @@ class _ConveyorStatsGraphState extends State<ConveyorStatsGraph> {
                   // Current (primary color, left axis)
                   LineChartBarData(
                     spots: currentSpots,
-                    isCurved: true,
+                    isCurved: false,
                     color: primary,
                     barWidth: 2,
-                    dotData: FlDotData(show: false),
+                    dotData: const FlDotData(show: false),
                     belowBarData: BarAreaData(show: false),
                     //yAxis: 0,
                   ),
                   // Frequency (secondary color, right axis)
                   LineChartBarData(
                     spots: freqSpots,
-                    isCurved: true,
+                    isCurved: false,
                     color: secondary,
                     barWidth: 2,
-                    dotData: FlDotData(show: false),
+                    dotData: const FlDotData(show: false),
                     belowBarData: BarAreaData(show: false),
                     //yAxis: 1,
                   ),
                 ],
-                lineTouchData: LineTouchData(enabled: true),
+                lineTouchData: const LineTouchData(enabled: true),
                 titlesData: FlTitlesData(
                   leftTitles: AxisTitles(
                     axisNameWidget: Padding(

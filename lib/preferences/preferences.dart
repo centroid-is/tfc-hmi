@@ -1,8 +1,15 @@
+import 'dart:io';
+
 import 'package:postgres/postgres.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:json_annotation/json_annotation.dart';
 
 part 'preferences.g.dart';
+
+class PreferencesException implements Exception {
+  final String message;
+  PreferencesException(this.message);
+}
 
 class EndpointConverter
     implements JsonConverter<Endpoint, Map<String, dynamic>> {
@@ -22,23 +29,38 @@ class EndpointConverter
 
   @override
   Map<String, dynamic> toJson(Endpoint endpoint) => {
-        'host': endpoint.host,
-        'port': endpoint.port,
-        'database': endpoint.database,
-        'username': endpoint.username,
-        'password': endpoint.password,
-        'isUnixSocket': endpoint.isUnixSocket,
-      };
+    'host': endpoint.host,
+    'port': endpoint.port,
+    'database': endpoint.database,
+    'username': endpoint.username,
+    'password': endpoint.password,
+    'isUnixSocket': endpoint.isUnixSocket,
+  };
+}
+
+class SslModeConverter implements JsonConverter<SslMode, String> {
+  const SslModeConverter();
+
+  @override
+  SslMode fromJson(String json) {
+    return SslMode.values.firstWhere(
+      (mode) => mode.name == json,
+      orElse: () => SslMode.disable,
+    );
+  }
+
+  @override
+  String toJson(SslMode mode) => mode.name;
 }
 
 @JsonSerializable()
 class PreferencesConfig {
   @EndpointConverter()
-  final Endpoint? postgres;
+  Endpoint? postgres;
+  @SslModeConverter()
+  SslMode? sslMode;
 
-  PreferencesConfig({
-    required this.postgres,
-  });
+  PreferencesConfig({this.postgres, this.sslMode});
 
   factory PreferencesConfig.fromJson(Map<String, dynamic> json) =>
       _$PreferencesConfigFromJson(json);
@@ -136,28 +158,36 @@ class Preferences implements PreferencesApi {
   }
 
   static Future<Preferences> create({required PreferencesConfig config}) async {
-    if (config.postgres == null) {
-      return Preferences(
-        config: config,
-        connection: null,
-      );
+    try {
+      if (config.postgres == null) {
+        return Preferences(config: config, connection: null);
+      }
+      final connection = await Connection.open(
+        config.postgres!,
+        settings: ConnectionSettings(sslMode: config.sslMode),
+      ).onError((error, stackTrace) {
+        throw PreferencesException(
+          'Connection to Postgres failed: $error\n $stackTrace',
+        );
+      });
+      await ensureTable(connection);
+      return Preferences(config: config, connection: connection);
+    } on PreferencesException catch (e) {
+      stderr.writeln(e.message);
+      return Preferences(config: config, connection: null);
     }
-    final connection = await Connection.open(config.postgres!);
-    await ensureTable(connection);
-    return Preferences(
-      config: config,
-      connection: connection,
-    );
   }
 
-  bool get _hasValidConnection => connection != null && connection!.isOpen;
+  bool get dbConnected => connection != null && connection!.isOpen;
 
   Future<void> _upsertToPostgres(String key, Object? value, String type) async {
-    if (!_hasValidConnection) return;
+    if (!dbConnected) return;
     final valStr = value is List<String> ? value.join(',') : value?.toString();
     await connection!.execute(
-      'INSERT INTO flutter_preferences (key, value, type) VALUES (@key, @value, @type) '
-      'ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, type = EXCLUDED.type',
+      Sql.named(
+        'INSERT INTO flutter_preferences (key, value, type) VALUES (@key, @value, @type) '
+        'ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, type = EXCLUDED.type',
+      ),
       parameters: {'key': key, 'value': valStr, 'type': type},
     );
   }
@@ -244,9 +274,10 @@ class Preferences implements PreferencesApi {
 
   /// Loads all preferences from Postgres into shared preferences.
   Future<void> loadFromPostgres() async {
-    if (!_hasValidConnection) return;
-    final result = await connection!
-        .execute('SELECT key, value, type FROM flutter_preferences');
+    if (!dbConnected) return;
+    final result = await connection!.execute(
+      'SELECT key, value, type FROM flutter_preferences',
+    );
     for (final row in result) {
       final key = row[0] as String;
       final value = row[1] as String?;

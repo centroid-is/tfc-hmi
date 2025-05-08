@@ -3,6 +3,8 @@ import 'package:logger/logger.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:open62541/open62541.dart';
 import 'package:rxdart/rxdart.dart';
+import 'package:open62541/open62541.dart';
+
 part 'client.g.dart';
 
 @JsonSerializable()
@@ -13,6 +15,7 @@ class OpcUAConfig {
 
   OpcUAConfig();
 
+  @override
   String toString() {
     return 'OpcUAConfig(endpoint: $endpoint, username: $username, password: $password)';
   }
@@ -26,10 +29,9 @@ class OpcUAConfig {
 class StateManConfig {
   OpcUAConfig opcua;
 
-  StateManConfig({
-    required this.opcua,
-  });
+  StateManConfig({required this.opcua});
 
+  @override
   String toString() {
     return 'StateManConfig(opcua: ${opcua.toString()})';
   }
@@ -59,8 +61,10 @@ class NodeIdConfig {
 class KeyMappingEntry {
   NodeIdConfig? nodeId;
   int? collectSize;
+  @JsonKey(name: 'pollIntervalUs')
+  Duration? pollInterval;
 
-  KeyMappingEntry({this.nodeId, this.collectSize});
+  KeyMappingEntry({this.nodeId, this.collectSize, this.pollInterval});
 
   factory KeyMappingEntry.fromJson(Map<String, dynamic> json) =>
       _$KeyMappingEntryFromJson(json);
@@ -102,12 +106,18 @@ class StateMan {
 
   /// Constructor requires the server endpoint.
   StateMan({required this.config, required this.keyMappings}) {
-    _collectorManager = _KeyCollectorManager(subscribeFn: subscribe);
+    _collectorManager = _KeyCollectorManager(monitorFn: _monitor);
 
     // spawn a background task to keep the client active
     () async {
       while (true) {
-        client.connect(config.opcua.endpoint);
+        try {
+          client.connect(config.opcua.endpoint);
+        } catch (e) {
+          logger.e('Failed to connect to $config.opcua.endpoint: $e');
+          await Future.delayed(const Duration(seconds: 1));
+          continue;
+        }
         while (client.runIterate(const Duration(milliseconds: 10))) {
           await Future.delayed(const Duration(milliseconds: 10));
         }
@@ -125,7 +135,7 @@ class StateMan {
         await Future.delayed(const Duration(seconds: 1000));
         throw StateManException("Key: \"$key\" not found");
       }
-      return await client.readValue(nodeId, prefetchTypeId: true);
+      return await client.read(nodeId);
     } catch (e) {
       throw StateManException('Failed to read key: \"$key\": $e');
     }
@@ -150,32 +160,36 @@ class StateMan {
   /// Returns a Stream that can be cancelled to stop the subscription.
   /// Example: subscribe("myIntKey") or subscribe("myStringKey")
   Future<Stream<DynamicValue>> subscribe(String key) async {
-    await client.awaitConnect();
-    final nodeId = keyMappings.lookup(key);
-    if (nodeId == null) {
-      throw StateManException('Key: "$key" not found');
-    }
-    subscriptionId ??= await client.subscriptionCreate();
-    if (!_subscriptions.containsKey(key)) {
-      _subscriptions[key] = _SubscriptionEntry(
-        key,
-        client.monitoredItem(nodeId, subscriptionId!, prefetchTypeId: true),
-        (key) {
-          _subscriptions.remove(key);
-          logger.d('Unsubscribed from $key');
-        },
-      );
-    }
-    return _subscriptions[key]!.stream;
+    return _monitor(key);
   }
 
-  // Delegate collection methods
-  Future<void> collect(String key, int size) =>
-      _collectorManager.collect(key, size);
+  /// Poll a node at a specific interval.
+  /// Returns a Stream that can be cancelled to stop the polling.
+  /// Example: poll("myIntKey", const Duration(seconds: 1))
+  Future<Stream<DynamicValue>> poll(String key, Duration? interval) async {
+    return _monitor(key, pollInterval: interval);
+  }
+
+  /// Initiate a collection of data from a node.
+  /// [pollInterval] is the interval at which the data is collected.
+  /// If not provided, the data is collected on change.
+  /// The data is collected in a ring buffer and stored in RAM.
+  /// Returns when the collection is started.
+  Future<void> collect(
+    String key,
+    int collectSize, {
+    Duration? pollInterval,
+  }) =>
+      _collectorManager.collect(key, collectSize, pollInterval: pollInterval);
+
+  /// Returns a Stream of the collected data.
   Stream<List<CollectedSample>> collectStream(String key) =>
       _collectorManager.collectStream(key);
+
+  /// Stop a collection.
   void stopCollect(String key) => _collectorManager.stopCollect(key);
 
+  /// Close the connection to the server.
   void close() {
     logger.d('Closing connection');
     client.disconnect();
@@ -188,6 +202,33 @@ class StateMan {
     }
     _subscriptions.clear();
   }
+
+  Future<Stream<DynamicValue>> _monitor(String key,
+      {Duration? pollInterval}) async {
+    await client.awaitConnect();
+    final nodeId = keyMappings.lookup(key);
+    if (nodeId == null) {
+      throw StateManException('Key: "$key" not found');
+    }
+    subscriptionId ??= await client.subscriptionCreate();
+    final subKey = '${key}_${pollInterval?.toString() ?? ''}';
+    if (!_subscriptions.containsKey(subKey)) {
+      final stream = client.monitor(nodeId, subscriptionId!,
+          monitoringMode: pollInterval == null
+              ? MonitoringMode.UA_MONITORINGMODE_REPORTING
+              : MonitoringMode.UA_MONITORINGMODE_SAMPLING,
+          samplingInterval: pollInterval ?? const Duration(milliseconds: 250));
+      _subscriptions[subKey] = _SubscriptionEntry(
+        subKey,
+        stream,
+        (key) {
+          _subscriptions.remove(key);
+          logger.d('Unsubscribed from $key');
+        },
+      );
+    }
+    return _subscriptions[subKey]!.stream;
+  }
 }
 
 class _SubscriptionEntry {
@@ -198,11 +239,8 @@ class _SubscriptionEntry {
   late final StreamSubscription<DynamicValue> _rawSub;
   final Function(String key) _onDispose;
 
-  _SubscriptionEntry(
-    this.key,
-    Stream<DynamicValue> raw,
-    this._onDispose,
-  ) : _subject = ReplaySubject<DynamicValue>(maxSize: 1) {
+  _SubscriptionEntry(this.key, Stream<DynamicValue> raw, this._onDispose)
+      : _subject = ReplaySubject<DynamicValue>(maxSize: 1) {
     // 1) wire raw → subject
     _rawSub = raw.listen(
       _subject.add,
@@ -267,14 +305,15 @@ class _RingBuffer<T> {
 }
 
 class _KeyCollectorManager {
-  final Future<Stream<DynamicValue>> Function(String key) subscribeFn;
+  final Future<Stream<DynamicValue>> Function(String key,
+      {Duration? pollInterval}) monitorFn;
   final Map<String, BehaviorSubject<List<CollectedSample>>> _collectors = {};
   final Map<String, _RingBuffer<CollectedSample>> _buffers = {};
   final Map<String, StreamSubscription<DynamicValue>> _collectorSubs = {};
 
-  _KeyCollectorManager({required this.subscribeFn});
+  _KeyCollectorManager({required this.monitorFn});
 
-  Future<void> collect(String key, int size) async {
+  Future<void> collect(String key, int size, {Duration? pollInterval}) async {
     if (_collectors.containsKey(key)) {
       return;
     }
@@ -282,7 +321,7 @@ class _KeyCollectorManager {
     final buffer = _RingBuffer<CollectedSample>(size);
     final subject = BehaviorSubject<List<CollectedSample>>();
 
-    final sub = await subscribeFn(key);
+    final sub = await monitorFn(key, pollInterval: pollInterval);
     final subscription = sub.listen((value) {
       buffer.add(CollectedSample(value, DateTime.now()));
       subject.add(buffer.toList());

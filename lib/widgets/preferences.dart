@@ -30,7 +30,6 @@ class PreferencesWidget extends ConsumerWidget {
                     final prefs = preferences.sharedPreferences;
                     await prefs.setString(
                         'preferences_config', jsonEncode(newConfig.toJson()));
-                    // Optionally, you could show a snackbar or reload the widget
                   },
                 ),
               ],
@@ -99,23 +98,24 @@ class PreferencesWidget extends ConsumerWidget {
   }
 }
 
-class _ConfigEditor extends StatefulWidget {
+class _ConfigEditor extends ConsumerStatefulWidget {
   final PreferencesConfig config;
   final ValueChanged<PreferencesConfig> onSave;
 
   const _ConfigEditor({required this.config, required this.onSave});
 
   @override
-  State<_ConfigEditor> createState() => _ConfigEditorState();
+  ConsumerState<_ConfigEditor> createState() => _ConfigEditorState();
 }
 
-class _ConfigEditorState extends State<_ConfigEditor> {
+class _ConfigEditorState extends ConsumerState<_ConfigEditor> {
   late TextEditingController hostController;
   late TextEditingController portController;
   late TextEditingController dbController;
   late TextEditingController userController;
   late TextEditingController passController;
   late bool isUnixSocket;
+  late SslMode? sslMode;
 
   @override
   void initState() {
@@ -128,54 +128,112 @@ class _ConfigEditorState extends State<_ConfigEditor> {
     userController = TextEditingController(text: endpoint?.username ?? '');
     passController = TextEditingController(text: endpoint?.password ?? '');
     isUnixSocket = endpoint?.isUnixSocket ?? false;
+    sslMode = widget.config.sslMode;
   }
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.all(8.0),
-      child: Column(
-        children: [
-          TextField(
-              controller: hostController,
-              decoration: const InputDecoration(labelText: 'Host')),
-          TextField(
-              controller: portController,
-              decoration: const InputDecoration(labelText: 'Port'),
-              keyboardType: TextInputType.number),
-          TextField(
-              controller: dbController,
-              decoration: const InputDecoration(labelText: 'Database')),
-          TextField(
-              controller: userController,
-              decoration: const InputDecoration(labelText: 'Username')),
-          TextField(
-              controller: passController,
-              decoration: const InputDecoration(labelText: 'Password')),
-          CheckboxListTile(
-            title: const Text('Is Unix Socket'),
-            value: isUnixSocket,
-            onChanged: (v) => setState(() => isUnixSocket = v ?? false),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              final newConfig = PreferencesConfig(
-                postgres: Endpoint(
-                  host: hostController.text,
-                  port: int.tryParse(portController.text) ?? 5432,
-                  database: dbController.text,
-                  username: userController.text,
-                  password: passController.text,
-                  isUnixSocket: isUnixSocket,
+    return FutureBuilder<Preferences>(
+        future: ref.watch(preferencesProvider.future),
+        builder: (context, snapshot) {
+          if (!snapshot.hasData) {
+            return const Padding(
+              padding: EdgeInsets.all(16.0),
+              child: Center(child: CircularProgressIndicator()),
+            );
+          }
+          if (snapshot.hasError) {
+            return Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Center(child: Text('Error: ${snapshot.error}')),
+            );
+          }
+          final prefs = snapshot.data!;
+          return Padding(
+            padding: const EdgeInsets.all(8.0),
+            child: Column(
+              children: [
+                Text(
+                  'Connection Status: ${prefs.dbConnected}',
+                  style: const TextStyle(fontSize: 12),
                 ),
-              );
-              widget.onSave(newConfig);
-            },
-            child: const Text('Save Config'),
-          ),
-        ],
-      ),
-    );
+                TextField(
+                    controller: hostController,
+                    decoration: const InputDecoration(labelText: 'Host')),
+                TextField(
+                    controller: portController,
+                    decoration: const InputDecoration(labelText: 'Port'),
+                    keyboardType: TextInputType.number),
+                TextField(
+                    controller: dbController,
+                    decoration: const InputDecoration(labelText: 'Database')),
+                TextField(
+                    controller: userController,
+                    decoration: const InputDecoration(labelText: 'Username')),
+                TextField(
+                    controller: passController,
+                    decoration: const InputDecoration(labelText: 'Password')),
+                CheckboxListTile(
+                  title: const Text('Is Unix Socket'),
+                  value: isUnixSocket,
+                  onChanged: (v) => setState(() => isUnixSocket = v ?? false),
+                ),
+                Row(
+                  children: [
+                    const Text('SSL Mode: '),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Container(
+                        decoration: BoxDecoration(
+                          border: Border.all(
+                            color: sslMode == null ? Colors.red : Colors.grey,
+                            width: 1.0,
+                          ),
+                          borderRadius: BorderRadius.circular(4),
+                          color: sslMode == null
+                              ? Colors.red.withAlpha((0.05 * 255).toInt())
+                              : null,
+                        ),
+                        child: DropdownButton<SslMode>(
+                          value: sslMode,
+                          isExpanded: true,
+                          hint: const Text("Select SSL Mode"),
+                          icon: const Icon(Icons.arrow_drop_down),
+                          onChanged: (v) => setState(() => sslMode = v),
+                          items: SslMode.values
+                              .map((e) => DropdownMenuItem(
+                                    value: e,
+                                    child: Text(e.name),
+                                  ))
+                              .toList(),
+                          underline: SizedBox(),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                ElevatedButton(
+                  onPressed: () {
+                    final newConfig = PreferencesConfig(
+                      postgres: Endpoint(
+                        host: hostController.text,
+                        port: int.tryParse(portController.text) ?? 5432,
+                        database: dbController.text,
+                        username: userController.text,
+                        password: passController.text,
+                        isUnixSocket: isUnixSocket,
+                      ),
+                      sslMode: sslMode,
+                    );
+                    widget.onSave(newConfig);
+                    ref.invalidate(preferencesProvider);
+                  },
+                  child: const Text('Save Config'),
+                ),
+              ],
+            ),
+          );
+        });
   }
 }
 

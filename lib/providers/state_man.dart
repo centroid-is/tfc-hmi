@@ -33,7 +33,8 @@ Future<StateMan> stateMan(Ref ref) async {
     final stateMan = StateMan(config: config, keyMappings: keyMappings);
     for (var entry in keyMappings.nodes.entries) {
       if (entry.value.collectSize != null) {
-        await stateMan.collect(entry.key, entry.value.collectSize!);
+        await stateMan.collect(entry.key, entry.value.collectSize!,
+            pollInterval: entry.value.pollInterval);
       }
     }
     return stateMan;
