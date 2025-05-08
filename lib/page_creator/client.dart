@@ -3,7 +3,6 @@ import 'package:logger/logger.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:open62541/open62541.dart';
 import 'package:rxdart/rxdart.dart';
-import 'package:open62541/open62541.dart';
 
 part 'client.g.dart';
 
@@ -61,10 +60,8 @@ class NodeIdConfig {
 class KeyMappingEntry {
   NodeIdConfig? nodeId;
   int? collectSize;
-  @JsonKey(name: 'pollIntervalUs')
-  Duration? pollInterval;
 
-  KeyMappingEntry({this.nodeId, this.collectSize, this.pollInterval});
+  KeyMappingEntry({this.nodeId, this.collectSize});
 
   factory KeyMappingEntry.fromJson(Map<String, dynamic> json) =>
       _$KeyMappingEntryFromJson(json);
@@ -163,24 +160,11 @@ class StateMan {
     return _monitor(key);
   }
 
-  /// Poll a node at a specific interval.
-  /// Returns a Stream that can be cancelled to stop the polling.
-  /// Example: poll("myIntKey", const Duration(seconds: 1))
-  Future<Stream<DynamicValue>> poll(String key, Duration? interval) async {
-    return _monitor(key, pollInterval: interval);
-  }
-
   /// Initiate a collection of data from a node.
-  /// [pollInterval] is the interval at which the data is collected.
-  /// If not provided, the data is collected on change.
   /// The data is collected in a ring buffer and stored in RAM.
   /// Returns when the collection is started.
-  Future<void> collect(
-    String key,
-    int collectSize, {
-    Duration? pollInterval,
-  }) =>
-      _collectorManager.collect(key, collectSize, pollInterval: pollInterval);
+  Future<void> collect(String key, int collectSize) =>
+      _collectorManager.collect(key, collectSize);
 
   /// Returns a Stream of the collected data.
   Stream<List<CollectedSample>> collectStream(String key) =>
@@ -203,23 +187,17 @@ class StateMan {
     _subscriptions.clear();
   }
 
-  Future<Stream<DynamicValue>> _monitor(String key,
-      {Duration? pollInterval}) async {
+  Future<Stream<DynamicValue>> _monitor(String key) async {
     await client.awaitConnect();
     final nodeId = keyMappings.lookup(key);
     if (nodeId == null) {
       throw StateManException('Key: "$key" not found');
     }
     subscriptionId ??= await client.subscriptionCreate();
-    final subKey = '${key}_${pollInterval?.toString() ?? ''}';
-    if (!_subscriptions.containsKey(subKey)) {
-      final stream = client.monitor(nodeId, subscriptionId!,
-          monitoringMode: pollInterval == null
-              ? MonitoringMode.UA_MONITORINGMODE_REPORTING
-              : MonitoringMode.UA_MONITORINGMODE_SAMPLING,
-          samplingInterval: pollInterval ?? const Duration(milliseconds: 250));
-      _subscriptions[subKey] = _SubscriptionEntry(
-        subKey,
+    if (!_subscriptions.containsKey(key)) {
+      final stream = client.monitor(nodeId, subscriptionId!);
+      _subscriptions[key] = _SubscriptionEntry(
+        key,
         stream,
         (key) {
           _subscriptions.remove(key);
@@ -227,7 +205,7 @@ class StateMan {
         },
       );
     }
-    return _subscriptions[subKey]!.stream;
+    return _subscriptions[key]!.stream;
   }
 }
 
@@ -302,18 +280,21 @@ class _RingBuffer<T> {
     }
     return list;
   }
+
+  T? get last {
+    return _buffer[_index - 1];
+  }
 }
 
 class _KeyCollectorManager {
-  final Future<Stream<DynamicValue>> Function(String key,
-      {Duration? pollInterval}) monitorFn;
+  final Future<Stream<DynamicValue>> Function(String key) monitorFn;
   final Map<String, BehaviorSubject<List<CollectedSample>>> _collectors = {};
   final Map<String, _RingBuffer<CollectedSample>> _buffers = {};
   final Map<String, StreamSubscription<DynamicValue>> _collectorSubs = {};
 
   _KeyCollectorManager({required this.monitorFn});
 
-  Future<void> collect(String key, int size, {Duration? pollInterval}) async {
+  Future<void> collect(String key, int size) async {
     if (_collectors.containsKey(key)) {
       return;
     }
@@ -321,7 +302,7 @@ class _KeyCollectorManager {
     final buffer = _RingBuffer<CollectedSample>(size);
     final subject = BehaviorSubject<List<CollectedSample>>();
 
-    final sub = await monitorFn(key, pollInterval: pollInterval);
+    final sub = await monitorFn(key);
     final subscription = sub.listen((value) {
       buffer.add(CollectedSample(value, DateTime.now()));
       subject.add(buffer.toList());

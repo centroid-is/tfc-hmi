@@ -11,7 +11,6 @@ void main() {
         onColor: const Color.fromARGB(255, 0, 255, 0),
         offColor: const Color.fromARGB(255, 255, 0, 0),
         textPos: TextPos.above,
-        size: const Size(20, 20),
       );
 
       final json = config.toJson();

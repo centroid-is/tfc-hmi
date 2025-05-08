@@ -45,16 +45,12 @@ KeyMappingEntry _$KeyMappingEntryFromJson(Map<String, dynamic> json) =>
           ? null
           : NodeIdConfig.fromJson(json['nodeId'] as Map<String, dynamic>),
       collectSize: (json['collectSize'] as num?)?.toInt(),
-      pollInterval: json['pollIntervalUs'] == null
-          ? null
-          : Duration(microseconds: (json['pollIntervalUs'] as num).toInt()),
     );
 
 Map<String, dynamic> _$KeyMappingEntryToJson(KeyMappingEntry instance) =>
     <String, dynamic>{
       'nodeId': instance.nodeId,
       'collectSize': instance.collectSize,
-      'pollIntervalUs': instance.pollInterval?.inMicroseconds,
     };
 
 KeyMappings _$KeyMappingsFromJson(Map<String, dynamic> json) => KeyMappings(
