@@ -29,13 +29,13 @@ class EndpointConverter
 
   @override
   Map<String, dynamic> toJson(Endpoint endpoint) => {
-    'host': endpoint.host,
-    'port': endpoint.port,
-    'database': endpoint.database,
-    'username': endpoint.username,
-    'password': endpoint.password,
-    'isUnixSocket': endpoint.isUnixSocket,
-  };
+        'host': endpoint.host,
+        'port': endpoint.port,
+        'database': endpoint.database,
+        'username': endpoint.username,
+        'password': endpoint.password,
+        'isUnixSocket': endpoint.isUnixSocket,
+      };
 }
 
 class SslModeConverter implements JsonConverter<SslMode, String> {
@@ -171,7 +171,9 @@ class Preferences implements PreferencesApi {
         );
       });
       await ensureTable(connection);
-      return Preferences(config: config, connection: connection);
+      final prefs = Preferences(config: config, connection: connection);
+      await prefs.loadFromPostgres();
+      return prefs;
     } on PreferencesException catch (e) {
       stderr.writeln(e.message);
       return Preferences(config: config, connection: null);
