@@ -137,10 +137,10 @@ class LoginApp extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     // Use Riverpod to watch the asynchronous theme provider.
-    final themeAsync = ref.watch(themeStateProvider);
+    final themeAsync = ref.watch(themeNotifierProvider);
     final (light, dark) = solarized();
     final themeMode = themeAsync.when(
-      data: (themeNotifier) => themeNotifier.themeMode,
+      data: (themeMode) => themeMode,
       loading: () => ThemeMode.system,
       error: (err, stack) => ThemeMode.system,
     );

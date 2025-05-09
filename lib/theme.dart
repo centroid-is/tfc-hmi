@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 abstract final class SolarizedColors {
   static const Color base03 = Color.fromARGB(255, 0, 43, 54);
@@ -33,13 +32,12 @@ abstract final class SolarizedColors {
     onSurface: SolarizedColors.base01,
     tertiary: SolarizedColors.yellow,
     onTertiary: SolarizedColors.base02,
-    surfaceContainerLow: SolarizedColors
-        .base02, //Used for cards and elevated buttons and propably allot more. Default looks bad.
-    surfaceContainerHighest: SolarizedColors.base02, // Used for fill
+    surfaceContainerLow: SolarizedColors.base02,
+    surfaceContainerHighest: SolarizedColors.base02,
   );
 
-  ColorScheme solarizedLightColorScheme = const ColorScheme.dark(
-    brightness: Brightness.dark,
+  ColorScheme solarizedLightColorScheme = const ColorScheme.light(
+    brightness: Brightness.light,
     primary: SolarizedColors.green,
     onPrimary: SolarizedColors.base2,
     secondary: SolarizedColors.base1,
@@ -50,38 +48,21 @@ abstract final class SolarizedColors {
     onSurface: SolarizedColors.base00,
     tertiary: SolarizedColors.yellow,
     onTertiary: SolarizedColors.base2,
-    surfaceContainerLow: SolarizedColors
-        .base2, //Used for cards and elevated buttons and propably allot more. Default looks bad.
-    surfaceContainerHighest: SolarizedColors.base2, // Used for fill
+    surfaceContainerLow: SolarizedColors.base2,
+    surfaceContainerHighest: SolarizedColors.base2,
   );
 
-  themeFromColorScheme(ColorScheme scheme) {
-    TextStyle solarizedDarkBaseStyle =
-        const TextStyle(fontFamily: 'roboto-mono');
-
-// Not currently used, default text themes are to my liking.
-// each size can be customized here if desired
-    TextTheme solarizedTextTheme = const TextTheme();
-
-// Customize inputdecorations
-    InputDecorationTheme solarizedDarkInputDecorationsTheme = const InputDecorationTheme(
-        // focusedBorder:
-        //     OutlineInputBorder(borderSide: BorderSide(color: scheme.primary)),
-        // errorBorder:
-        //     OutlineInputBorder(borderSide: BorderSide(color: scheme.error)),
-        // enabledBorder:
-        //     OutlineInputBorder(borderSide: BorderSide(color: scheme.secondary)),
-        // disabledBorder: OutlineInputBorder(
-        //     borderSide: BorderSide(color: scheme.onSecondaryContainer)),
-        border: OutlineInputBorder());
+  ThemeData themeFromColorScheme(ColorScheme scheme) {
     return ThemeData(
       colorScheme: scheme,
       fontFamily: 'roboto-mono',
-      textTheme: solarizedTextTheme,
+      textTheme: const TextTheme(),
       scrollbarTheme: const ScrollbarThemeData(
           thumbVisibility: WidgetStatePropertyAll(true)),
       useMaterial3: true,
-      inputDecorationTheme: solarizedDarkInputDecorationsTheme,
+      inputDecorationTheme: const InputDecorationTheme(
+        border: OutlineInputBorder(),
+      ),
       shadowColor: scheme.surfaceBright,
     );
   }
@@ -89,39 +70,4 @@ abstract final class SolarizedColors {
   final solarizedLight = themeFromColorScheme(solarizedLightColorScheme);
   final solarizedDark = themeFromColorScheme(solarizedDarkColorScheme);
   return (solarizedLight, solarizedDark);
-}
-
-class ThemeNotifier with ChangeNotifier {
-  static const String _key = 'theme_mode';
-  ThemeMode _themeMode;
-
-  static Future<ThemeNotifier> create() async {
-    final prefs = await SharedPreferences.getInstance();
-    final String? themeName = prefs.getString(_key);
-    return ThemeNotifier._(themeName);
-  }
-
-  ThemeNotifier._(String? themeName)
-      : _themeMode = _themeStringToMode(themeName);
-
-  ThemeMode get themeMode => _themeMode;
-
-  void setTheme(ThemeMode mode) {
-    _themeMode = mode;
-    SharedPreferences.getInstance().then((prefs) {
-      prefs.setString(_key, mode.name);
-    });
-    notifyListeners();
-  }
-
-  static ThemeMode _themeStringToMode(String? themeName) {
-    switch (themeName) {
-      case 'light':
-        return ThemeMode.light;
-      case 'dark':
-        return ThemeMode.dark;
-      default:
-        return ThemeMode.system;
-    }
-  }
 }

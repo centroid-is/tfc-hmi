@@ -144,20 +144,26 @@ class BaseScaffold extends StatelessWidget {
                     ),
                     Consumer(
                       builder: (context, ref, child) {
-                        final themeAsync = ref.watch(themeStateProvider);
-                        return themeAsync.when(
-                          data: (themeNotifier) => IconButton(
-                            icon: const Icon(Icons.brightness_6),
-                            onPressed: () {
-                              if (themeNotifier.themeMode == ThemeMode.light) {
-                                themeNotifier.setTheme(ThemeMode.dark);
-                              } else {
-                                themeNotifier.setTheme(ThemeMode.light);
-                              }
-                            },
-                          ),
-                          loading: () => const SizedBox(),
-                          error: (error, stack) => const SizedBox(),
+                        final notifier =
+                            ref.read(themeNotifierProvider.notifier);
+                        return FutureBuilder(
+                          future: ref.watch(themeNotifierProvider.future),
+                          builder: (context, snapshot) {
+                            if (snapshot.hasData) {
+                              final currentTheme = snapshot.data!;
+                              return IconButton(
+                                icon: const Icon(Icons.brightness_6),
+                                onPressed: () {
+                                  if (currentTheme == ThemeMode.light) {
+                                    notifier.setTheme(ThemeMode.dark);
+                                  } else {
+                                    notifier.setTheme(ThemeMode.light);
+                                  }
+                                },
+                              );
+                            }
+                            return const SizedBox();
+                          },
                         );
                       },
                     ),

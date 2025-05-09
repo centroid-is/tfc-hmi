@@ -8,13 +8,12 @@ part of 'alarm.dart';
 
 ExpressionConfig _$ExpressionConfigFromJson(Map<String, dynamic> json) =>
     ExpressionConfig(
-      expression:
-          Expression.fromJson(json['expression'] as Map<String, dynamic>),
+      value: Expression.fromJson(json['value'] as Map<String, dynamic>),
     );
 
 Map<String, dynamic> _$ExpressionConfigToJson(ExpressionConfig instance) =>
     <String, dynamic>{
-      'expression': instance.expression,
+      'value': instance.value,
     };
 
 AlarmRule _$AlarmRuleFromJson(Map<String, dynamic> json) => AlarmRule(
@@ -53,4 +52,16 @@ Map<String, dynamic> _$AlarmConfigToJson(AlarmConfig instance) =>
       'title': instance.title,
       'description': instance.description,
       'rules': instance.rules,
+    };
+
+AlarmManConfig _$AlarmManConfigFromJson(Map<String, dynamic> json) =>
+    AlarmManConfig(
+      alarms: (json['alarms'] as List<dynamic>)
+          .map((e) => AlarmConfig.fromJson(e as Map<String, dynamic>))
+          .toList(),
+    );
+
+Map<String, dynamic> _$AlarmManConfigToJson(AlarmManConfig instance) =>
+    <String, dynamic>{
+      'alarms': instance.alarms,
     };

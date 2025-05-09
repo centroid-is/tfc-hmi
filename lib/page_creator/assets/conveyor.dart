@@ -6,7 +6,7 @@ import 'common.dart';
 import 'dart:async';
 import 'package:logger/logger.dart';
 import '../../providers/state_man.dart';
-import '../../page_creator/client.dart';
+import '../../core/state_man.dart';
 import 'package:rxdart/rxdart.dart';
 import 'package:open62541/open62541.dart' show DynamicValue;
 import 'package:fl_chart/fl_chart.dart';

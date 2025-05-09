@@ -12,7 +12,7 @@ import 'package:open62541/open62541.dart' show DynamicValue, NodeId;
 
 import 'common.dart';
 import '../../providers/state_man.dart';
-import '../client.dart';
+import '../../core/state_man.dart';
 
 part 'button.g.dart';
 

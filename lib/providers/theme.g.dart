@@ -6,21 +6,21 @@ part of 'theme.dart';
 // RiverpodGenerator
 // **************************************************************************
 
-String _$themeStateHash() => r'3d4b67e88614f3e6cbca6e2f8882379591503119';
+String _$themeNotifierHash() => r'5a033ab504a07d0156f0d83b217393307cc5e46e';
 
-/// See also [themeState].
-@ProviderFor(themeState)
-final themeStateProvider = FutureProvider<ThemeNotifier>.internal(
-  themeState,
-  name: r'themeStateProvider',
-  debugGetCreateSourceHash:
-      const bool.fromEnvironment('dart.vm.product') ? null : _$themeStateHash,
+/// See also [ThemeNotifier].
+@ProviderFor(ThemeNotifier)
+final themeNotifierProvider =
+    AutoDisposeAsyncNotifierProvider<ThemeNotifier, ThemeMode>.internal(
+  ThemeNotifier.new,
+  name: r'themeNotifierProvider',
+  debugGetCreateSourceHash: const bool.fromEnvironment('dart.vm.product')
+      ? null
+      : _$themeNotifierHash,
   dependencies: null,
   allTransitiveDependencies: null,
 );
 
-@Deprecated('Will be removed in 3.0. Use Ref instead')
-// ignore: unused_element
-typedef ThemeStateRef = FutureProviderRef<ThemeNotifier>;
+typedef _$ThemeNotifier = AutoDisposeAsyncNotifier<ThemeMode>;
 // ignore_for_file: type=lint
 // ignore_for_file: subtype_of_sealed_class, invalid_use_of_internal_member, invalid_use_of_visible_for_testing_member, deprecated_member_use_from_same_package

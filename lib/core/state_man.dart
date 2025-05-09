@@ -4,7 +4,7 @@ import 'package:json_annotation/json_annotation.dart';
 import 'package:open62541/open62541.dart';
 import 'package:rxdart/rxdart.dart';
 
-part 'client.g.dart';
+part 'state_man.g.dart';
 
 @JsonSerializable()
 class OpcUAConfig {

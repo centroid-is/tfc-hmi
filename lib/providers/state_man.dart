@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../page_creator/client.dart';
+import '../core/state_man.dart';
 import 'preferences.dart';
 
 part 'state_man.g.dart';

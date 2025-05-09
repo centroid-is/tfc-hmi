@@ -1,4 +1,4 @@
-import '../preferences/preferences.dart';
+import '../core/preferences.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:riverpod/riverpod.dart';
 import 'dart:convert';

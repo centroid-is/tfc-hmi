@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:postgres/postgres.dart';
 import '../providers/preferences.dart';
-import '../preferences/preferences.dart';
+import '../core/preferences.dart';
 import 'dart:convert';
 
 class PreferencesWidget extends ConsumerWidget {
