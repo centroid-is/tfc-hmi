@@ -18,6 +18,15 @@ class ExpressionConfig {
   factory ExpressionConfig.fromJson(Map<String, dynamic> json) =>
       _$ExpressionConfigFromJson(json);
   Map<String, dynamic> toJson() => _$ExpressionConfigToJson(this);
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    return other is ExpressionConfig && value.formula == other.value.formula;
+  }
+
+  @override
+  int get hashCode => value.formula.hashCode;
 }
 
 @JsonEnum()
@@ -42,6 +51,18 @@ class AlarmRule {
   factory AlarmRule.fromJson(Map<String, dynamic> json) =>
       _$AlarmRuleFromJson(json);
   Map<String, dynamic> toJson() => _$AlarmRuleToJson(this);
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    return other is AlarmRule &&
+        level == other.level &&
+        expression == other.expression &&
+        acknowledgeRequired == other.acknowledgeRequired;
+  }
+
+  @override
+  int get hashCode => Object.hash(level, expression, acknowledgeRequired);
 }
 
 @JsonSerializable()
@@ -80,21 +101,73 @@ class AlarmManConfig {
 class AlarmMan {
   final AlarmManConfig config;
   final Preferences preferences;
-  final List<Alarm> alarms;
+  final StateMan stateMan;
+  final Set<Alarm> alarms;
+  final Set<AlarmActive> _activeAlarms;
+  final StreamController<Set<AlarmActive>> _activeAlarmsController;
 
-  AlarmMan._({required this.config, required this.preferences})
-      : alarms = config.alarms.map((e) => Alarm(config: e)).toList();
+  AlarmMan._(
+      {required this.config, required this.preferences, required this.stateMan})
+      : alarms = config.alarms.map((e) => Alarm(config: e)).toSet(),
+        _activeAlarms = {},
+        _activeAlarmsController = BehaviorSubject<Set<AlarmActive>>.seeded({}) {
+    _activeAlarmsController.onListen = () async {
+      for (final alarm in alarms) {
+        final stream = alarm.onChange(stateMan);
+        stream.listen((alarmNotification) {
+          if (alarmNotification.active) {
+            _activeAlarms.add(
+                AlarmActive(alarm: alarm, notification: alarmNotification));
+            _activeAlarmsController.add(_activeAlarms);
+          } else if (!alarmNotification.active && !alarm.pendingAck) {
+            // please note that an alarm can be active for multiple rules
+            // so we only remove the specific rule that is now inactive
+            _activeAlarms.removeWhere((e) =>
+                e.alarm.config.uid == alarm.config.uid && // the uid must match
+                e.notification.rule ==
+                    alarmNotification.rule); // the rule must match
+            _activeAlarmsController.add(_activeAlarms);
+          }
+          if (alarmNotification.active &&
+              alarmNotification.rule.acknowledgeRequired) {
+            alarm.pendingAck = true;
+          }
+        });
+      }
+    };
+    _activeAlarmsController.onCancel = () async {};
+  }
 
-  static Future<AlarmMan> create(Preferences preferences) async {
+  static Future<AlarmMan> create(
+      Preferences preferences, StateMan stateMan) async {
     final configJson = await preferences.getString('alarm_man_config');
     if (configJson == null) {
       final config = AlarmManConfig(alarms: []);
       await preferences.setString(
           'alarm_man_config', jsonEncode(config.toJson()));
-      return AlarmMan._(config: config, preferences: preferences);
+      return AlarmMan._(
+          config: config, preferences: preferences, stateMan: stateMan);
     }
     final config = AlarmManConfig.fromJson(jsonDecode(configJson));
-    return AlarmMan._(config: config, preferences: preferences);
+    return AlarmMan._(
+        config: config, preferences: preferences, stateMan: stateMan);
+  }
+
+  Stream<Set<AlarmActive>> activeAlarms() {
+    return _activeAlarmsController.stream;
+  }
+
+  void ackAlarm(Alarm alarm) {
+    for (final activeAlarm in _activeAlarms) {
+      if (activeAlarm.alarm.config.uid == alarm.config.uid) {
+        activeAlarm.alarm.pendingAck = false;
+        _activeAlarms.removeWhere((e) =>
+            e.alarm.config.uid == alarm.config.uid &&
+            e.notification == activeAlarm.notification);
+        break;
+      }
+    }
+    _activeAlarmsController.add(_activeAlarms);
   }
 
   void addAlarm(AlarmConfig alarm) {
@@ -126,6 +199,7 @@ class AlarmMan {
 class Alarm {
   final AlarmConfig config;
   final List<bool> _lastStates; // Track state for each rule
+  var pendingAck = false;
 
   Alarm({required this.config})
       : _lastStates = List.filled(config.rules.length, false);
@@ -147,7 +221,10 @@ class Alarm {
             // If any rule is true, the alarm is active
             final alarmState = _lastStates.any((state) => state);
             streamController.add(AlarmNotification(
-                uid: config.uid, active: alarmState, rule: rule));
+                uid: config.uid,
+                active: alarmState,
+                rule: rule,
+                timestamp: DateTime.now()));
           }
         });
       }
@@ -167,9 +244,32 @@ class AlarmNotification {
   final String uid;
   final bool active;
   final AlarmRule rule;
+  final DateTime timestamp;
 
   AlarmNotification(
-      {required this.uid, required this.active, required this.rule});
+      {required this.uid,
+      required this.active,
+      required this.rule,
+      required this.timestamp});
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    return other is AlarmNotification &&
+        uid == other.uid &&
+        active == other.active &&
+        rule == other.rule;
+  }
+
+  @override
+  int get hashCode => Object.hash(uid, active, rule);
+}
+
+class AlarmActive {
+  final Alarm alarm;
+  final AlarmNotification notification;
+
+  AlarmActive({required this.alarm, required this.notification});
 }
 
 class Expression {

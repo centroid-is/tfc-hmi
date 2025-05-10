@@ -3,11 +3,12 @@ import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../core/alarm.dart';
 import 'preferences.dart';
-
+import 'state_man.dart';
 part 'alarm.g.dart';
 
 @Riverpod(keepAlive: true)
 Future<AlarmMan> alarmMan(Ref ref) async {
   final prefs = await ref.watch(preferencesProvider.future);
-  return await AlarmMan.create(prefs);
+  final stateMan = await ref.watch(stateManProvider.future);
+  return await AlarmMan.create(prefs, stateMan);
 }

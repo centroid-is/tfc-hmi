@@ -3,7 +3,7 @@ import 'package:logger/logger.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:open62541/open62541.dart';
 import 'package:rxdart/rxdart.dart';
-
+import 'package:collection/collection.dart';
 part 'state_man.g.dart';
 
 @JsonSerializable()
@@ -78,6 +78,14 @@ class KeyMappings {
     return nodes[key]?.nodeId?.toNodeId();
   }
 
+  String? lookupKey(NodeId nodeId) {
+    return nodes.entries
+        .firstWhereOrNull((entry) => entry.value.nodeId?.toNodeId() == nodeId)
+        ?.key;
+  }
+
+  Iterable<String> get keys => nodes.keys;
+
   factory KeyMappings.fromJson(Map<String, dynamic> json) =>
       _$KeyMappingsFromJson(json);
   Map<String, dynamic> toJson() => _$KeyMappingsToJson(this);
@@ -136,6 +144,28 @@ class StateMan {
     } catch (e) {
       throw StateManException('Failed to read key: \"$key\": $e');
     }
+  }
+
+  Future<Map<String, DynamicValue>> readMany(List<String> keys) async {
+    await client.awaitConnect();
+
+    final parameters = <NodeId, List<AttributeId>>{};
+    for (final key in keys) {
+      final nodeId = keyMappings.lookup(key);
+      if (nodeId == null) {
+        throw StateManException("Key: \"$key\" not found");
+      }
+      parameters[nodeId] = [
+        AttributeId.UA_ATTRIBUTEID_DESCRIPTION,
+        AttributeId.UA_ATTRIBUTEID_DISPLAYNAME,
+        AttributeId.UA_ATTRIBUTEID_DATATYPE,
+        AttributeId.UA_ATTRIBUTEID_VALUE,
+      ];
+    }
+    final results = await client.readAttribute(parameters);
+
+    return results
+        .map((key, value) => MapEntry(keyMappings.lookupKey(key)!, value));
   }
 
   /// Example: write("myKey", DynamicValue(value: 42, typeId: NodeId.int16))

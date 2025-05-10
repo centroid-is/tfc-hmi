@@ -10,7 +10,8 @@ import 'nav_dropdown.dart';
 import '../models/menu_item.dart';
 import '../route_registry.dart';
 import '../providers/theme.dart';
-
+import '../providers/alarm.dart';
+import '../core/alarm.dart';
 // ===================
 // Provider Abstraction
 // ===================
@@ -27,7 +28,7 @@ final globalAppBarLeftWidgetProvider =
 // BaseScaffold Widget
 // ===================
 
-class BaseScaffold extends StatelessWidget {
+class BaseScaffold extends ConsumerWidget {
   final Widget body;
   final String title;
   final Widget? floatingActionButton;
@@ -65,8 +66,120 @@ class BaseScaffold extends StatelessWidget {
     }
   }
 
+  Widget _buildClockOrAlarm(BuildContext context, WidgetRef ref) {
+    String formatTimestamp(DateTime timestamp) {
+      String twoLetter(int value) => value < 10 ? '0$value' : '$value';
+      final day = twoLetter(timestamp.day);
+      final month = twoLetter(timestamp.month);
+      final year = timestamp.year;
+      final hour = twoLetter(timestamp.hour);
+      final minute = twoLetter(timestamp.minute);
+      final second = twoLetter(timestamp.second);
+      return '$day-$month-$year $hour:$minute:$second';
+    }
+
+    return StreamBuilder(
+        stream: Stream.fromFuture(ref.watch(alarmManProvider.future))
+            .asyncExpand((alarmMan) => alarmMan.activeAlarms()),
+        builder: (context, snapshot) {
+          if (!snapshot.hasError &&
+              snapshot.hasData &&
+              snapshot.data!.isNotEmpty) {
+            // Get 3 highest priority alarms
+            final highestPriorAlarms = <AlarmActive>[];
+            for (final alarm in snapshot.data!) {
+              if (highestPriorAlarms.length < 3) {
+                highestPriorAlarms.add(alarm);
+              } else {
+                if (alarm.notification.rule.level.index >
+                    highestPriorAlarms.last.notification.rule.level.index) {
+                  highestPriorAlarms.removeLast();
+                  highestPriorAlarms.add(alarm);
+                }
+              }
+              highestPriorAlarms.sort((a, b) => b.notification.rule.level.index
+                  .compareTo(a.notification.rule.level.index));
+            }
+            return Column(
+              mainAxisSize: MainAxisSize.min,
+              children: highestPriorAlarms.map((e) {
+                Color backgroundColor;
+                Color textColor;
+                switch (e.notification.rule.level) {
+                  case AlarmLevel.info:
+                    backgroundColor =
+                        Theme.of(context).colorScheme.primaryContainer;
+                    textColor =
+                        Theme.of(context).colorScheme.onPrimaryContainer;
+                    break;
+                  case AlarmLevel.warning:
+                    backgroundColor =
+                        Theme.of(context).colorScheme.tertiaryContainer;
+                    textColor =
+                        Theme.of(context).colorScheme.onTertiaryContainer;
+                    break;
+                  case AlarmLevel.error:
+                    backgroundColor =
+                        Theme.of(context).colorScheme.errorContainer;
+                    textColor = Theme.of(context).colorScheme.onErrorContainer;
+                    break;
+                }
+                return Container(
+                  margin: const EdgeInsets.symmetric(vertical: 1),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 2, vertical: 1),
+                  decoration: BoxDecoration(
+                    color: backgroundColor,
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: RichText(
+                    text: TextSpan(
+                      style: TextStyle(
+                        color: textColor,
+                        fontSize:
+                            Theme.of(context).textTheme.bodySmall!.fontSize,
+                      ),
+                      children: [
+                        TextSpan(
+                          text:
+                              '${formatTimestamp(e.notification.timestamp)}: ',
+                        ),
+                        TextSpan(
+                          text: '${e.alarm.config.title}: ',
+                          style: const TextStyle(fontWeight: FontWeight.bold),
+                        ),
+                        TextSpan(
+                          text: (() {
+                            final description = e.alarm.config.description
+                                .replaceAll('\n', ' ')
+                                .trim();
+                            return description.length > 100
+                                ? description.substring(0, 97) + '...'
+                                : description;
+                          })(),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              }).toList(),
+            );
+          }
+          return StreamBuilder(
+            stream: Stream.periodic(const Duration(milliseconds: 250)),
+            builder: (context, snapshot) {
+              final currentTime = DateTime.now();
+              return Text(
+                formatTimestamp(currentTime),
+                style: Theme.of(context).textTheme.bodyMedium,
+              );
+            },
+          );
+        });
+  }
+
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final logger = Logger();
     // Retrieve the provider (if any)
     final globalLeftProvider = _tryGetGlobalAppBarLeftWidgetProvider(context);
@@ -82,26 +195,7 @@ class BaseScaffold extends StatelessWidget {
               // CENTER: Always centered title widget.
               Align(
                 alignment: Alignment.center,
-                child: StreamBuilder(
-                  stream: Stream.periodic(const Duration(milliseconds: 250)),
-                  builder: (context, snapshot) {
-                    final currentTime = DateTime.now();
-                    String twoLetter(int value) =>
-                        value < 10 ? '0$value' : '$value';
-                    final day = twoLetter(currentTime.day);
-                    final month = twoLetter(currentTime.month);
-                    final year = currentTime.year;
-                    final hour = twoLetter(currentTime.hour);
-                    final minute = twoLetter(currentTime.minute);
-                    final second = twoLetter(currentTime.second);
-                    final dateFormatted =
-                        '$day-$month-$year $hour:$minute:$second';
-                    return Text(
-                      dateFormatted,
-                      style: Theme.of(context).textTheme.bodyMedium,
-                    );
-                  },
-                ),
+                child: _buildClockOrAlarm(context, ref),
               ),
               // LEFT SIDE: Back arrow (if available) + injected custom widget.
               Align(

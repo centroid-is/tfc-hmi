@@ -534,6 +534,7 @@ class CreateAlarm extends ConsumerWidget {
           );
         }
         onSubmit();
+        ref.invalidate(alarmManProvider);
       },
     );
   }
@@ -563,6 +564,7 @@ class EditAlarm extends ConsumerWidget {
             const SnackBar(content: Text('Alarm updated!')),
           );
         }
+        ref.invalidate(alarmManProvider);
         onSubmit();
       },
     );
