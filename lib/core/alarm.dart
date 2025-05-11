@@ -144,6 +144,9 @@ class AlarmMan {
               e.notification.rule == alarmNotification.rule);
 
           if (alarmNotification.active) {
+            if (existing != null) {
+              _removeActiveAlarm(existing);
+            }
             _activeAlarms.add(
                 AlarmActive(alarm: alarm, notification: alarmNotification));
           } else if (!alarmNotification.rule.acknowledgeRequired) {

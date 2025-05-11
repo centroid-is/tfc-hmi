@@ -593,9 +593,13 @@ class _ListActiveAlarmsState extends ConsumerState<ListActiveAlarms> {
     return StreamBuilder(
       stream: Stream.fromFuture(ref.watch(alarmManProvider.future)).asyncExpand(
         (alarmMan) => _showHistory
-            ? alarmMan.history().map((history) =>
-                history.map((h) => h?.alarm).whereType<AlarmActive>().toList())
-            : alarmMan.activeAlarms().map((active) => active.toList()),
+            ? alarmMan.history().map((history) => history
+                .where((h) => h != null)
+                .map((h) => (h!.alarm, h.timestamp))
+                .toList()
+              ..sort((a, b) => b.$2.compareTo(a.$2)))
+            : alarmMan.activeAlarms().map(
+                (active) => active.map((a) => (a, null as DateTime?)).toList()),
       ),
       builder: (context, snapshot) {
         if (!snapshot.hasData) {
@@ -604,7 +608,9 @@ class _ListActiveAlarmsState extends ConsumerState<ListActiveAlarms> {
 
         var alarms = snapshot.data!;
         if (!_showHistory) {
-          alarms = _filterAlarms(alarms);
+          alarms = _filterAlarms(alarms.map((a) => a.$1).toList())
+              .map((a) => (a, null as DateTime?))
+              .toList();
         }
 
         if (alarms.isEmpty) {
@@ -627,7 +633,7 @@ class _ListActiveAlarmsState extends ConsumerState<ListActiveAlarms> {
               child: ListView.builder(
                 itemCount: alarms.length,
                 itemBuilder: (context, index) {
-                  final alarm = alarms[index];
+                  final (alarm, deactivationTime) = alarms[index];
                   final (backgroundColor, textColor) =
                       alarm.notification.getColors(context);
 
@@ -638,11 +644,23 @@ class _ListActiveAlarmsState extends ConsumerState<ListActiveAlarms> {
                         alarm.alarm.config.title,
                         style: TextStyle(color: textColor),
                       ),
-                      subtitle: Text(
-                        formatTimestamp(alarm.notification.timestamp),
-                        style: TextStyle(
-                          color: textColor.withAlpha(178),
-                        ),
+                      subtitle: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Activated: ${formatTimestamp(alarm.notification.timestamp)}',
+                            style: TextStyle(
+                              color: textColor.withAlpha(178),
+                            ),
+                          ),
+                          if (deactivationTime != null)
+                            Text(
+                              'Deactivated: ${formatTimestamp(deactivationTime)}',
+                              style: TextStyle(
+                                color: textColor.withAlpha(178),
+                              ),
+                            ),
+                        ],
                       ),
                       onTap: () => widget.onShow?.call(alarm),
                     ),
