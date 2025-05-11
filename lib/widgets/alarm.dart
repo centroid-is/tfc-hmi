@@ -200,6 +200,11 @@ class _AlarmFormState extends ConsumerState<AlarmForm> {
     _rules = widget.initialConfig?.rules.toList() ?? [];
   }
 
+  // Add a method to check if all expressions are valid
+  bool _areAllExpressionsValid() {
+    return _rules.every((rule) => rule.expression.value.isValid());
+  }
+
   @override
   Widget build(BuildContext context) {
     return SingleChildScrollView(
@@ -323,7 +328,7 @@ class _AlarmFormState extends ConsumerState<AlarmForm> {
             const SizedBox(height: 16),
             if (widget.onSubmit != null)
               ElevatedButton(
-                onPressed: _rules.isEmpty
+                onPressed: (_rules.isEmpty || !_areAllExpressionsValid())
                     ? null
                     : () {
                         if (_formKey.currentState?.validate() ?? false) {
@@ -409,6 +414,7 @@ class _ExpressionBuilderState extends ConsumerState<ExpressionBuilder> {
               const Text('  temperature > 100'),
               const Text('  pressure < 10 AND flow > 5'),
               const Text('  status == "FAULT"'),
+              const Text('  (temperature > 100 OR pressure < 10) AND flow > 5'),
               const SizedBox(height: 8),
               const Text(
                 'Allowed operators:',

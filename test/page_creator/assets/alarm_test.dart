@@ -383,5 +383,173 @@ void main() {
           }),
           isFalse);
     });
+    test('Simple parentheses: A AND (B OR C)', () {
+      final expression = Expression(formula: 'A AND (B OR C)');
+      expect(
+        expression.evaluate({
+          'A': DynamicValue(value: true),
+          'B': DynamicValue(value: false),
+          'C': DynamicValue(value: true),
+        }),
+        isTrue,
+      );
+      expect(
+        expression.evaluate({
+          'A': DynamicValue(value: false),
+          'B': DynamicValue(value: true),
+          'C': DynamicValue(value: true),
+        }),
+        isFalse,
+      );
+    });
+
+    test('Simple grouping: (A AND B) OR C', () {
+      final expression = Expression(formula: '(A AND B) OR C');
+      expect(
+        expression.evaluate({
+          'A': DynamicValue(value: false),
+          'B': DynamicValue(value: false),
+          'C': DynamicValue(value: false),
+        }),
+        isFalse,
+      );
+      expect(
+        expression.evaluate({
+          'A': DynamicValue(value: true),
+          'B': DynamicValue(value: true),
+          'C': DynamicValue(value: false),
+        }),
+        isTrue,
+      );
+      expect(
+        expression.evaluate({
+          'A': DynamicValue(value: false),
+          'B': DynamicValue(value: false),
+          'C': DynamicValue(value: true),
+        }),
+        isTrue,
+      );
+    });
+
+    test('Nested parentheses: A AND (B OR (C AND D))', () {
+      final expression = Expression(formula: 'A AND (B OR (C AND D))');
+      expect(
+        expression.evaluate({
+          'A': DynamicValue(value: true),
+          'B': DynamicValue(value: false),
+          'C': DynamicValue(value: true),
+          'D': DynamicValue(value: true),
+        }),
+        isTrue,
+      );
+      expect(
+        expression.evaluate({
+          'A': DynamicValue(value: true),
+          'B': DynamicValue(value: false),
+          'C': DynamicValue(value: true),
+          'D': DynamicValue(value: false),
+        }),
+        isFalse,
+      );
+      expect(
+        expression.evaluate({
+          'A': DynamicValue(value: false),
+          'B': DynamicValue(value: true),
+          'C': DynamicValue(value: false),
+          'D': DynamicValue(value: true),
+        }),
+        isFalse,
+      );
+    });
+
+    test('Deep nested: ((A OR B) AND (C OR D)) OR E', () {
+      final expression = Expression(formula: '((A OR B) AND (C OR D)) OR E');
+      expect(
+        expression.evaluate({
+          'A': DynamicValue(value: true),
+          'B': DynamicValue(value: false),
+          'C': DynamicValue(value: false),
+          'D': DynamicValue(value: true),
+          'E': DynamicValue(value: false),
+        }),
+        isTrue,
+      );
+      expect(
+        expression.evaluate({
+          'A': DynamicValue(value: false),
+          'B': DynamicValue(value: false),
+          'C': DynamicValue(value: false),
+          'D': DynamicValue(value: false),
+          'E': DynamicValue(value: false),
+        }),
+        isFalse,
+      );
+      expect(
+        expression.evaluate({
+          'A': DynamicValue(value: false),
+          'B': DynamicValue(value: false),
+          'C': DynamicValue(value: false),
+          'D': DynamicValue(value: false),
+          'E': DynamicValue(value: true),
+        }),
+        isTrue,
+      );
+    });
+
+    test('Mismatched parentheses should throw', () {
+      final bad1 = Expression(formula: 'A AND (B OR C');
+      expect(
+        () => bad1.evaluate({
+          'A': DynamicValue(value: true),
+          'B': DynamicValue(value: true),
+          'C': DynamicValue(value: true),
+        }),
+        throwsArgumentError,
+      );
+      final bad2 = Expression(formula: 'A AND B) OR C');
+      expect(
+        () => bad2.evaluate({
+          'A': DynamicValue(value: true),
+          'B': DynamicValue(value: true),
+          'C': DynamicValue(value: true),
+        }),
+        throwsArgumentError,
+      );
+    });
+
+    test('Is expression valid', () {
+      // Valid simple expressions
+      expect(Expression(formula: 'A AND B').isValid(), isTrue);
+      expect(Expression(formula: '(A AND B)').isValid(), isTrue);
+      expect(Expression(formula: 'A AND (B OR C)').isValid(), isTrue);
+      expect(Expression(formula: 'A').isValid(), isTrue);
+
+      // More complex valid expressions
+      expect(Expression(formula: '((A))').isValid(), isTrue);
+      expect(Expression(formula: '(A)').isValid(), isTrue);
+      expect(Expression(formula: '(A OR B) AND C').isValid(), isTrue);
+      expect(Expression(formula: 'A OR (B AND C)').isValid(), isTrue);
+      expect(
+          Expression(formula: 'A AND (B AND (C OR D)) OR E').isValid(), isTrue);
+      expect(Expression(formula: 'A OR B AND C').isValid(), isTrue);
+      expect(Expression(formula: 'A AND B AND C OR D OR E').isValid(), isTrue);
+
+      // Invalid expressions
+      expect(Expression(formula: '').isValid(), isFalse);
+      expect(Expression(formula: 'AND A B').isValid(), isFalse);
+      expect(Expression(formula: 'A AND B)').isValid(), isFalse);
+      expect(Expression(formula: '(A AND B').isValid(), isFalse);
+      expect(Expression(formula: '()').isValid(), isFalse);
+      expect(Expression(formula: ')(').isValid(), isFalse);
+      expect(Expression(formula: '(A AND)').isValid(), isFalse);
+      expect(Expression(formula: '(AND A B)').isValid(), isFalse);
+      expect(Expression(formula: '(AND A OR B)').isValid(), isFalse);
+      expect(Expression(formula: 'A OR OR B').isValid(), isFalse);
+      expect(Expression(formula: 'A AND B C').isValid(), isFalse);
+      expect(Expression(formula: 'A (B OR C)').isValid(), isFalse);
+      expect(Expression(formula: '(A OR B) C').isValid(), isFalse);
+      expect(Expression(formula: '((A AND B)').isValid(), isFalse);
+      expect(Expression(formula: '(A AND B))').isValid(), isFalse);
+    });
   });
 }

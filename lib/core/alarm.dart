@@ -362,7 +362,7 @@ class Expression {
     '==': 'Equal to',
     '!=': 'Not equal to',
   };
-  static final operatorRegex = RegExp(r'(AND|OR|<=|>=|==|!=|<|>)');
+  static final expressionRegex = RegExp(r'(AND|OR|<=|>=|==|!=|<|>|\(|\))');
 
   Expression({required this.formula});
 
@@ -376,21 +376,44 @@ class Expression {
 
   /// Validates if the expression looks like a valid boolean expression
   bool isValid() {
-    // todo boolean DynamicValue
+    late List<_Token> tokens;
+    try {
+      tokens = _parseExpression();
+    } catch (_) {
+      return false;
+    }
+    if (tokens.isEmpty) return false;
 
-    return _looksBoolean(formula);
-  }
+    int parenCount = 0;
+    bool expectOperand = true;
 
-  /// Basic validation that the expression contains at least one operator
-  bool _looksBoolean(String expr) {
-    return operatorRegex.hasMatch(expr);
+    for (final token in tokens) {
+      if (token.parenthesis == '(') {
+        if (!expectOperand) return false;
+        parenCount++;
+        expectOperand = true;
+      } else if (token.parenthesis == ')') {
+        parenCount--;
+        if (parenCount < 0 || expectOperand) return false;
+        expectOperand = false;
+      } else if (token.operator != null) {
+        if (expectOperand) return false;
+        expectOperand = true;
+      } else if (token.value != null) {
+        if (!expectOperand) return false;
+        expectOperand = false;
+      }
+    }
+
+    if (parenCount != 0 || expectOperand) return false;
+    return true;
   }
 
   /// Parses the expression and returns a list of variable names used in the expression
   List<String> extractVariables() {
     // Remove operators and split by spaces to get potential variables
     final withoutOperators = formula
-        .replaceAll(operatorRegex, ' ')
+        .replaceAll(expressionRegex, ' ')
         .split(' ')
         .where((s) => s.isNotEmpty)
         .toList();
@@ -409,7 +432,7 @@ class Expression {
     if (formula.isEmpty) return [];
 
     // Get all matches (both operators and the text between them)
-    final matches = operatorRegex.allMatches(formula);
+    final matches = expressionRegex.allMatches(formula);
     final tokens = <_Token>[];
     var lastEnd = 0;
 
@@ -417,18 +440,31 @@ class Expression {
       // Add the text before the operator (if any)
       final beforeOp = formula.substring(lastEnd, match.start).trim();
       if (beforeOp.isNotEmpty) {
-        tokens.add(_Token(value: beforeOp, isOperator: false));
+        if (beforeOp.contains(' ') || beforeOp.contains('\t')) {
+          throw ArgumentError('Variable name: "$beforeOp" contains whitespace');
+        }
+        tokens.add(_Token(value: beforeOp));
       }
 
       // Add the operator
-      tokens.add(_Token(value: match.group(0)!, isOperator: true));
+      final operator = match.group(0);
+      if (operator != null) {
+        if (operator == '(' || operator == ')') {
+          tokens.add(_Token(parenthesis: operator));
+        } else {
+          tokens.add(_Token(operator: operator));
+        }
+      }
       lastEnd = match.end;
     }
 
     // Add any remaining text after the last operator
     final remaining = formula.substring(lastEnd).trim();
     if (remaining.isNotEmpty) {
-      tokens.add(_Token(value: remaining, isOperator: false));
+      if (remaining.contains(' ') || remaining.contains('\t')) {
+        throw ArgumentError('Variable name: $remaining contains whitespace');
+      }
+      tokens.add(_Token(value: remaining));
     }
 
     // Validate that we have a valid pattern of variables and operators
@@ -437,14 +473,65 @@ class Expression {
     return tokens;
   }
 
-  /// Evaluates the expression with given variable values
-  bool evaluate(Map<String, DynamicValue> variables) {
-    final tokens = _parseExpression();
-    if (tokens.isEmpty) return false;
+  DynamicValue _evaluate(
+      List<_Token> tokens, Map<String, DynamicValue> variables) {
+    // Define operator precedence
+    final precedence = {
+      'OR': 1,
+      'AND': 2,
+      '==': 3,
+      '!=': 3,
+      '<': 3,
+      '<=': 3,
+      '>': 3,
+      '>=': 3,
+    };
 
-    // Helper function to evaluate a single operation
-    DynamicValue evaluateOperation(
-        DynamicValue lhs, String op, DynamicValue rhs) {
+    // Convert infix tokens to RPN using the Shunting-yard algorithm
+    final outputQueue = <_Token>[];
+    final operatorStack = <_Token>[];
+
+    for (final token in tokens) {
+      if (token.value != null) {
+        // Variable or literal
+        outputQueue.add(token);
+      } else if (token.operator != null) {
+        // Operator
+        while (operatorStack.isNotEmpty &&
+            operatorStack.last.operator != null &&
+            precedence[operatorStack.last.operator]! >=
+                precedence[token.operator]!) {
+          outputQueue.add(operatorStack.removeLast());
+        }
+        operatorStack.add(token);
+      } else if (token.parenthesis == '(') {
+        operatorStack.add(token);
+      } else if (token.parenthesis == ')') {
+        while (
+            operatorStack.isNotEmpty && operatorStack.last.parenthesis != '(') {
+          outputQueue.add(operatorStack.removeLast());
+        }
+        if (operatorStack.isNotEmpty && operatorStack.last.parenthesis == '(') {
+          operatorStack.removeLast();
+        } else {
+          throw ArgumentError('Mismatched parentheses');
+        }
+      }
+    }
+
+    // Drain remaining operators
+    while (operatorStack.isNotEmpty) {
+      final top = operatorStack.removeLast();
+      if (top.parenthesis != null) {
+        throw ArgumentError('Mismatched parentheses');
+      }
+      outputQueue.add(top);
+    }
+
+    // Evaluate the RPN expression
+    final evalStack = <DynamicValue>[];
+
+    DynamicValue evaluateOp(DynamicValue lhs, String op, DynamicValue rhs) {
       switch (op) {
         case 'AND':
           return DynamicValue(value: lhs.asBool && rhs.asBool);
@@ -467,55 +554,36 @@ class Expression {
       }
     }
 
-    // Define operator precedence (higher number = higher precedence)
-    final precedence = {
-      'AND': 2,
-      'OR': 1,
-      '<': 3,
-      '<=': 3,
-      '>': 3,
-      '>=': 3,
-      '==': 3,
-      '!=': 3,
-    };
-
-    // Convert tokens to a list of values and operators
-    var values = <DynamicValue>[];
-    var operators = <String>[];
-
-    for (var token in tokens) {
-      if (token.isOperator) {
-        while (operators.isNotEmpty &&
-            precedence[operators.last]! >= precedence[token.value]!) {
-          final op = operators.removeLast();
-          final rhs = values.removeLast();
-          final lhs = values.removeLast();
-          values.add(evaluateOperation(lhs, op, rhs));
+    for (final tok in outputQueue) {
+      if (tok.value != null) {
+        final name = tok.value!;
+        final val = variables[name];
+        if (val == null) {
+          throw ArgumentError('Variable $name not found');
         }
-        operators.add(token.value);
-      } else {
-        final value = variables[token.value];
-        if (value == null) {
-          throw ArgumentError('Variable ${token.value} not found');
+        evalStack.add(val);
+      } else if (tok.operator != null) {
+        if (evalStack.length < 2) {
+          throw ArgumentError('Invalid expression');
         }
-        values.add(value);
+        final rhs = evalStack.removeLast();
+        final lhs = evalStack.removeLast();
+        evalStack.add(evaluateOp(lhs, tok.operator!, rhs));
       }
     }
 
-    // Process remaining operators
-    while (operators.isNotEmpty) {
-      final op = operators.removeLast();
-      final rhs = values.removeLast();
-      final lhs = values.removeLast();
-      values.add(evaluateOperation(lhs, op, rhs));
-    }
-
-    // Final result should be a single value
-    if (values.length != 1) {
+    if (evalStack.length != 1) {
       throw ArgumentError('Invalid expression');
     }
+    return evalStack.first;
+  }
 
-    return values.first.asBool;
+  /// Evaluates the expression with given variable values
+  bool evaluate(Map<String, DynamicValue> variables) {
+    final tokens = _parseExpression();
+    if (tokens.isEmpty) return false;
+    final result = _evaluate(tokens, variables);
+    return result.asBool;
   }
 }
 
@@ -561,8 +629,9 @@ class _Evaluator {
 }
 
 class _Token {
-  final String value;
-  final bool isOperator;
+  final String? value;
+  final String? operator;
+  final String? parenthesis;
 
-  _Token({required this.value, required this.isOperator});
+  _Token({this.value, this.operator, this.parenthesis});
 }
