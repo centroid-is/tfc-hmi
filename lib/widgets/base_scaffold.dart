@@ -28,6 +28,17 @@ final globalAppBarLeftWidgetProvider =
 // BaseScaffold Widget
 // ===================
 
+String formatTimestamp(DateTime timestamp) {
+  String twoLetter(int value) => value < 10 ? '0$value' : '$value';
+  final day = twoLetter(timestamp.day);
+  final month = twoLetter(timestamp.month);
+  final year = timestamp.year;
+  final hour = twoLetter(timestamp.hour);
+  final minute = twoLetter(timestamp.minute);
+  final second = twoLetter(timestamp.second);
+  return '$day-$month-$year $hour:$minute:$second';
+}
+
 class BaseScaffold extends ConsumerWidget {
   final Widget body;
   final String title;
@@ -67,17 +78,6 @@ class BaseScaffold extends ConsumerWidget {
   }
 
   Widget _buildClockOrAlarm(BuildContext context, WidgetRef ref) {
-    String formatTimestamp(DateTime timestamp) {
-      String twoLetter(int value) => value < 10 ? '0$value' : '$value';
-      final day = twoLetter(timestamp.day);
-      final month = twoLetter(timestamp.month);
-      final year = timestamp.year;
-      final hour = twoLetter(timestamp.hour);
-      final minute = twoLetter(timestamp.minute);
-      final second = twoLetter(timestamp.second);
-      return '$day-$month-$year $hour:$minute:$second';
-    }
-
     return StreamBuilder(
         stream: Stream.fromFuture(ref.watch(alarmManProvider.future))
             .asyncExpand((alarmMan) => alarmMan.activeAlarms()),
@@ -103,27 +103,8 @@ class BaseScaffold extends ConsumerWidget {
             return Column(
               mainAxisSize: MainAxisSize.min,
               children: highestPriorAlarms.map((e) {
-                Color backgroundColor;
-                Color textColor;
-                switch (e.notification.rule.level) {
-                  case AlarmLevel.info:
-                    backgroundColor =
-                        Theme.of(context).colorScheme.primaryContainer;
-                    textColor =
-                        Theme.of(context).colorScheme.onPrimaryContainer;
-                    break;
-                  case AlarmLevel.warning:
-                    backgroundColor =
-                        Theme.of(context).colorScheme.tertiaryContainer;
-                    textColor =
-                        Theme.of(context).colorScheme.onTertiaryContainer;
-                    break;
-                  case AlarmLevel.error:
-                    backgroundColor =
-                        Theme.of(context).colorScheme.errorContainer;
-                    textColor = Theme.of(context).colorScheme.onErrorContainer;
-                    break;
-                }
+                final (backgroundColor, textColor) =
+                    e.notification.getColors(context);
                 return Container(
                   margin: const EdgeInsets.symmetric(vertical: 1),
                   padding:

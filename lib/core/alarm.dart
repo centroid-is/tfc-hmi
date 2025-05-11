@@ -1,8 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
+import 'package:collection/collection.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:open62541/open62541.dart' show DynamicValue;
 import 'package:rxdart/rxdart.dart';
+import 'package:flutter/material.dart';
 
 import 'preferences.dart';
 import 'state_man.dart';
@@ -18,6 +20,11 @@ class ExpressionConfig {
   factory ExpressionConfig.fromJson(Map<String, dynamic> json) =>
       _$ExpressionConfigFromJson(json);
   Map<String, dynamic> toJson() => _$ExpressionConfigToJson(this);
+
+  @override
+  String toString() {
+    return 'ExpressionConfig(value: $value)';
+  }
 
   @override
   bool operator ==(Object other) {
@@ -47,6 +54,11 @@ class AlarmRule {
     required this.expression,
     required this.acknowledgeRequired,
   });
+
+  @override
+  String toString() {
+    return 'AlarmRule(level: $level, expression: $expression, acknowledgeRequired: $acknowledgeRequired)';
+  }
 
   factory AlarmRule.fromJson(Map<String, dynamic> json) =>
       _$AlarmRuleFromJson(json);
@@ -82,6 +94,11 @@ class AlarmConfig {
     required this.rules,
   });
 
+  @override
+  String toString() {
+    return 'AlarmConfig(uid: $uid, key: $key, title: $title, description: $description, rules: $rules)';
+  }
+
   factory AlarmConfig.fromJson(Map<String, dynamic> json) =>
       _$AlarmConfigFromJson(json);
   Map<String, dynamic> toJson() => _$AlarmConfigToJson(this);
@@ -116,22 +133,35 @@ class AlarmMan {
         final stream = alarm.onChange(stateMan);
         stream.listen((alarmNotification) {
           if (alarmNotification.active) {
+            final existing = _activeAlarms.firstWhereOrNull((e) =>
+                e.alarm.config.uid == alarm.config.uid &&
+                e.notification.rule == alarmNotification.rule);
+            if (existing != null) {
+              _activeAlarms.remove(existing);
+            }
             _activeAlarms.add(
                 AlarmActive(alarm: alarm, notification: alarmNotification));
-            _activeAlarmsController.add(_activeAlarms);
-          } else if (!alarmNotification.active && !alarm.pendingAck) {
-            // please note that an alarm can be active for multiple rules
-            // so we only remove the specific rule that is now inactive
+          } else if (!alarmNotification.rule.acknowledgeRequired) {
             _activeAlarms.removeWhere((e) =>
-                e.alarm.config.uid == alarm.config.uid && // the uid must match
+                e.alarm.config.uid ==
+                    alarm.config
+                        .uid && // the uid must match, we are in correct closure
                 e.notification.rule ==
                     alarmNotification.rule); // the rule must match
-            _activeAlarmsController.add(_activeAlarms);
+          } else {
+            for (final e in _activeAlarms) {
+              if (e.alarm.config.uid == alarm.config.uid &&
+                  e.notification.rule == alarmNotification.rule) {
+                e.pendingAck = true;
+                e.notification.active = false;
+                break;
+              }
+            }
           }
-          if (alarmNotification.active &&
-              alarmNotification.rule.acknowledgeRequired) {
-            alarm.pendingAck = true;
-          }
+          _activeAlarmsController.add(_activeAlarms);
+
+          print('alarmNotification: $alarmNotification');
+          print('active alarms: $_activeAlarms');
         });
       }
     };
@@ -157,16 +187,8 @@ class AlarmMan {
     return _activeAlarmsController.stream;
   }
 
-  void ackAlarm(Alarm alarm) {
-    for (final activeAlarm in _activeAlarms) {
-      if (activeAlarm.alarm.config.uid == alarm.config.uid) {
-        activeAlarm.alarm.pendingAck = false;
-        _activeAlarms.removeWhere((e) =>
-            e.alarm.config.uid == alarm.config.uid &&
-            e.notification == activeAlarm.notification);
-        break;
-      }
-    }
+  void ackAlarm(AlarmActive alarm) {
+    _activeAlarms.remove(alarm);
     _activeAlarmsController.add(_activeAlarms);
   }
 
@@ -199,7 +221,6 @@ class AlarmMan {
 class Alarm {
   final AlarmConfig config;
   final List<bool> _lastStates; // Track state for each rule
-  var pendingAck = false;
 
   Alarm({required this.config})
       : _lastStates = List.filled(config.rules.length, false);
@@ -242,7 +263,7 @@ class Alarm {
 
 class AlarmNotification {
   final String uid;
-  final bool active;
+  bool active;
   final AlarmRule rule;
   final DateTime timestamp;
 
@@ -251,6 +272,11 @@ class AlarmNotification {
       required this.active,
       required this.rule,
       required this.timestamp});
+
+  @override
+  String toString() {
+    return 'AlarmNotification(uid: $uid, active: $active, rule: $rule, timestamp: $timestamp)';
+  }
 
   @override
   bool operator ==(Object other) {
@@ -263,13 +289,44 @@ class AlarmNotification {
 
   @override
   int get hashCode => Object.hash(uid, active, rule);
+
+  /// Returns the background and text colors for this alarm level
+  (Color, Color) getColors(BuildContext context) {
+    switch (rule.level) {
+      case AlarmLevel.info:
+        return (
+          Theme.of(context).colorScheme.primaryContainer,
+          Theme.of(context).colorScheme.onPrimaryContainer
+        );
+      case AlarmLevel.warning:
+        return (
+          Theme.of(context).colorScheme.tertiaryContainer,
+          Theme.of(context).colorScheme.onTertiaryContainer
+        );
+      case AlarmLevel.error:
+        return (
+          Theme.of(context).colorScheme.errorContainer,
+          Theme.of(context).colorScheme.onErrorContainer
+        );
+    }
+  }
 }
 
 class AlarmActive {
   final Alarm alarm;
   final AlarmNotification notification;
+  bool pendingAck;
 
-  AlarmActive({required this.alarm, required this.notification});
+  @override
+  String toString() {
+    return 'AlarmActive(alarm: $alarm, notification: $notification)';
+  }
+
+  AlarmActive({
+    required this.alarm,
+    required this.notification,
+    this.pendingAck = false,
+  });
 }
 
 class Expression {

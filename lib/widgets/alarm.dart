@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/alarm.dart';
 import '../providers/alarm.dart';
+import 'base_scaffold.dart';
 
 class ListAlarms extends ConsumerStatefulWidget {
   final void Function(AlarmConfig)? onEdit;
@@ -567,6 +568,263 @@ class EditAlarm extends ConsumerWidget {
         ref.invalidate(alarmManProvider);
         onSubmit();
       },
+    );
+  }
+}
+
+class ListActiveAlarms extends ConsumerStatefulWidget {
+  final void Function(AlarmActive)? onShow;
+
+  const ListActiveAlarms({
+    super.key,
+    this.onShow,
+  });
+
+  @override
+  ConsumerState<ListActiveAlarms> createState() => _ListActiveAlarmsState();
+}
+
+class _ListActiveAlarmsState extends ConsumerState<ListActiveAlarms> {
+  String _searchQuery = '';
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder(
+      stream: Stream.fromFuture(ref.watch(alarmManProvider.future))
+          .asyncExpand((alarmMan) => alarmMan.activeAlarms()),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData) {
+          return const Center(child: CircularProgressIndicator());
+        }
+
+        // Group alarms by uid and keep only the highest priority one for each
+        final Map<String, AlarmActive> highestPriorityAlarms = {};
+        for (final alarm in snapshot.data!) {
+          final existing = highestPriorityAlarms[alarm.alarm.config.uid];
+          if (existing == null ||
+              alarm.notification.rule.level.index >
+                  existing.notification.rule.level.index) {
+            highestPriorityAlarms[alarm.alarm.config.uid] = alarm;
+          }
+        }
+
+        var alarms = highestPriorityAlarms.values.toList()
+          ..sort((a, b) {
+            // First sort by priority (error > warning > info)
+            final priorityCompare = b.notification.rule.level.index
+                .compareTo(a.notification.rule.level.index);
+            if (priorityCompare != 0) return priorityCompare;
+
+            // If same priority, sort by most recent timestamp
+            return b.notification.timestamp.compareTo(a.notification.timestamp);
+          });
+
+        // Filter alarms based on search query
+        if (_searchQuery.isNotEmpty) {
+          alarms = alarms.where((alarm) {
+            final title = alarm.alarm.config.title.toLowerCase();
+            final description = alarm.alarm.config.description.toLowerCase();
+            final query = _searchQuery.toLowerCase();
+            return title.contains(query) || description.contains(query);
+          }).toList();
+        }
+
+        if (alarms.isEmpty) {
+          return Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: SearchBar(
+                  hintText: 'Search active alarms...',
+                  leading: const Icon(Icons.search),
+                  onChanged: (value) {
+                    setState(() {
+                      _searchQuery = value;
+                    });
+                  },
+                ),
+              ),
+              const Expanded(
+                child: Center(
+                  child: Text('No active alarms'),
+                ),
+              ),
+            ],
+          );
+        }
+
+        return Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: SearchBar(
+                hintText: 'Search active alarms...',
+                leading: const Icon(Icons.search),
+                onChanged: (value) {
+                  setState(() {
+                    _searchQuery = value;
+                  });
+                },
+              ),
+            ),
+            Expanded(
+              child: ListView.builder(
+                itemCount: alarms.length,
+                itemBuilder: (context, index) {
+                  final alarm = alarms[index];
+                  final (backgroundColor, textColor) =
+                      alarm.notification.getColors(context);
+
+                  return Card(
+                    color: backgroundColor,
+                    child: ListTile(
+                      title: Text(
+                        alarm.alarm.config.title,
+                        style: TextStyle(color: textColor),
+                      ),
+                      subtitle: Text(
+                        formatTimestamp(alarm.notification.timestamp),
+                        style: TextStyle(
+                          color: textColor.withAlpha(178),
+                        ),
+                      ),
+                      onTap: () => widget.onShow?.call(alarm),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class ViewActiveAlarm extends ConsumerWidget {
+  final AlarmActive alarm;
+  final void Function()? onClose;
+
+  const ViewActiveAlarm({
+    super.key,
+    required this.alarm,
+    this.onClose,
+  });
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final (backgroundColor, textColor) = alarm.notification.getColors(context);
+    final isActive = alarm.notification.active;
+    final requiresAck = alarm.notification.rule.acknowledgeRequired;
+    final canAck = !isActive && alarm.pendingAck;
+
+    return Card(
+      color: backgroundColor,
+      child: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  alarm.alarm.config.title,
+                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                        color: textColor,
+                        fontWeight: FontWeight.bold,
+                      ),
+                ),
+                if (onClose != null)
+                  IconButton(
+                    icon: const Icon(Icons.close),
+                    onPressed: onClose,
+                    color: textColor,
+                  ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text(
+              formatTimestamp(alarm.notification.timestamp),
+              style: TextStyle(
+                color: textColor.withAlpha(178),
+                fontSize: Theme.of(context).textTheme.bodySmall?.fontSize,
+              ),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              alarm.alarm.config.description,
+              style: TextStyle(color: textColor),
+            ),
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 4,
+                  ),
+                  decoration: BoxDecoration(
+                    color: textColor.withAlpha(30),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: Text(
+                    'Level: ${alarm.notification.rule.level.name.toUpperCase()}',
+                    style: TextStyle(color: textColor),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 4,
+                  ),
+                  decoration: BoxDecoration(
+                    color: textColor.withAlpha(30),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: Text(
+                    'Status: ${isActive ? 'ACTIVE' : 'INACTIVE'}',
+                    style: TextStyle(color: textColor),
+                  ),
+                ),
+              ],
+            ),
+            if (requiresAck) ...[
+              const SizedBox(height: 16),
+              Text(
+                'This alarm requires acknowledgment',
+                style: TextStyle(
+                  color: textColor,
+                  fontStyle: FontStyle.italic,
+                ),
+              ),
+            ],
+            if (canAck) ...[
+              const SizedBox(height: 16),
+              ElevatedButton.icon(
+                onPressed: () async {
+                  final alarmMan = await ref.read(alarmManProvider.future);
+                  alarmMan.ackAlarm(alarm);
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Alarm acknowledged')),
+                    );
+                  }
+                  onClose?.call();
+                },
+                icon: const Icon(Icons.check),
+                label: const Text('Acknowledge'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: textColor,
+                  foregroundColor: backgroundColor,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
     );
   }
 }
