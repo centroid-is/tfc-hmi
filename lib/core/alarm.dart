@@ -1,5 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
+
 import 'package:collection/collection.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:open62541/open62541.dart' show DynamicValue;
@@ -8,7 +10,7 @@ import 'package:flutter/material.dart';
 
 import 'preferences.dart';
 import 'state_man.dart';
-
+import 'ring_buffer.dart';
 part 'alarm.g.dart';
 
 @JsonSerializable()
@@ -122,32 +124,35 @@ class AlarmMan {
   final Set<Alarm> alarms;
   final Set<AlarmActive> _activeAlarms;
   final StreamController<Set<AlarmActive>> _activeAlarmsController;
-
+  final RingBuffer<AlarmHistory> _history;
+  final StreamController<List<AlarmHistory?>> _historyController;
   AlarmMan._(
       {required this.config, required this.preferences, required this.stateMan})
       : alarms = config.alarms.map((e) => Alarm(config: e)).toSet(),
         _activeAlarms = {},
-        _activeAlarmsController = BehaviorSubject<Set<AlarmActive>>.seeded({}) {
+        _activeAlarmsController = BehaviorSubject<Set<AlarmActive>>.seeded({}),
+        _history = RingBuffer<AlarmHistory>(1000),
+        _historyController = BehaviorSubject<List<AlarmHistory?>>.seeded([]) {
     _activeAlarmsController.onListen = () async {
       for (final alarm in alarms) {
         final stream = alarm.onChange(stateMan);
         stream.listen((alarmNotification) {
+          final existing = _activeAlarms.firstWhereOrNull((e) =>
+              // the uid must match, we are in correct closure
+              e.alarm.config.uid == alarm.config.uid &&
+              // the rule must match
+              e.notification.rule == alarmNotification.rule);
+
           if (alarmNotification.active) {
-            final existing = _activeAlarms.firstWhereOrNull((e) =>
-                e.alarm.config.uid == alarm.config.uid &&
-                e.notification.rule == alarmNotification.rule);
-            if (existing != null) {
-              _activeAlarms.remove(existing);
-            }
             _activeAlarms.add(
                 AlarmActive(alarm: alarm, notification: alarmNotification));
           } else if (!alarmNotification.rule.acknowledgeRequired) {
-            _activeAlarms.removeWhere((e) =>
-                e.alarm.config.uid ==
-                    alarm.config
-                        .uid && // the uid must match, we are in correct closure
-                e.notification.rule ==
-                    alarmNotification.rule); // the rule must match
+            if (existing != null) {
+              _removeActiveAlarm(existing);
+            } else {
+              stderr.writeln(
+                  'Did not find existing active alarm for alarmNotification: $alarmNotification');
+            }
           } else {
             for (final e in _activeAlarms) {
               if (e.alarm.config.uid == alarm.config.uid &&
@@ -159,9 +164,6 @@ class AlarmMan {
             }
           }
           _activeAlarmsController.add(_activeAlarms);
-
-          print('alarmNotification: $alarmNotification');
-          print('active alarms: $_activeAlarms');
         });
       }
     };
@@ -187,8 +189,12 @@ class AlarmMan {
     return _activeAlarmsController.stream;
   }
 
+  Stream<List<AlarmHistory?>> history() {
+    return _historyController.stream;
+  }
+
   void ackAlarm(AlarmActive alarm) {
-    _activeAlarms.remove(alarm);
+    _removeActiveAlarm(alarm);
     _activeAlarmsController.add(_activeAlarms);
   }
 
@@ -215,6 +221,13 @@ class AlarmMan {
   void _saveConfig() async {
     await preferences.setString(
         'alarm_man_config', jsonEncode(config.toJson()));
+  }
+
+  void _removeActiveAlarm(AlarmActive alarm) {
+    alarm.notification.active = false;
+    _history.add(AlarmHistory(alarm: alarm, timestamp: DateTime.now()));
+    _activeAlarms.remove(alarm);
+    _historyController.add(_history.buffer);
   }
 }
 
@@ -327,6 +340,13 @@ class AlarmActive {
     required this.notification,
     this.pendingAck = false,
   });
+}
+
+class AlarmHistory {
+  final AlarmActive alarm;
+  final DateTime timestamp;
+
+  AlarmHistory({required this.alarm, required this.timestamp});
 }
 
 class Expression {

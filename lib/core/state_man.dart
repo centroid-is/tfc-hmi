@@ -1,9 +1,13 @@
 import 'dart:async';
+
 import 'package:logger/logger.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:open62541/open62541.dart';
 import 'package:rxdart/rxdart.dart';
 import 'package:collection/collection.dart';
+
+import 'ring_buffer.dart';
+
 part 'state_man.g.dart';
 
 @JsonSerializable()
@@ -287,39 +291,10 @@ class CollectedSample {
   CollectedSample(this.value, this.time);
 }
 
-class _RingBuffer<T> {
-  final int size;
-  final List<T?> _buffer;
-  int _index = 0;
-  int _count = 0;
-
-  _RingBuffer(this.size)
-      : _buffer = List<T?>.filled(size, null, growable: false);
-
-  void add(T item) {
-    _buffer[_index] = item;
-    _index = (_index + 1) % size;
-    if (_count < size) _count++;
-  }
-
-  List<T> toList() {
-    final list = <T>[];
-    for (int i = 0; i < _count; i++) {
-      final idx = (_index - _count + i + size) % size;
-      list.add(_buffer[idx]!);
-    }
-    return list;
-  }
-
-  T? get last {
-    return _buffer[_index - 1];
-  }
-}
-
 class _KeyCollectorManager {
   final Future<Stream<DynamicValue>> Function(String key) monitorFn;
   final Map<String, BehaviorSubject<List<CollectedSample>>> _collectors = {};
-  final Map<String, _RingBuffer<CollectedSample>> _buffers = {};
+  final Map<String, RingBuffer<CollectedSample>> _buffers = {};
   final Map<String, StreamSubscription<DynamicValue>> _collectorSubs = {};
 
   _KeyCollectorManager({required this.monitorFn});
@@ -329,7 +304,7 @@ class _KeyCollectorManager {
       return;
     }
 
-    final buffer = _RingBuffer<CollectedSample>(size);
+    final buffer = RingBuffer<CollectedSample>(size);
     final subject = BehaviorSubject<List<CollectedSample>>();
 
     final sub = await monitorFn(key);

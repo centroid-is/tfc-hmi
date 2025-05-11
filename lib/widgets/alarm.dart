@@ -586,67 +586,34 @@ class ListActiveAlarms extends ConsumerStatefulWidget {
 
 class _ListActiveAlarmsState extends ConsumerState<ListActiveAlarms> {
   String _searchQuery = '';
+  bool _showHistory = false;
 
   @override
   Widget build(BuildContext context) {
     return StreamBuilder(
-      stream: Stream.fromFuture(ref.watch(alarmManProvider.future))
-          .asyncExpand((alarmMan) => alarmMan.activeAlarms()),
+      stream: Stream.fromFuture(ref.watch(alarmManProvider.future)).asyncExpand(
+        (alarmMan) => _showHistory
+            ? alarmMan.history().map((history) =>
+                history.map((h) => h?.alarm).whereType<AlarmActive>().toList())
+            : alarmMan.activeAlarms().map((active) => active.toList()),
+      ),
       builder: (context, snapshot) {
         if (!snapshot.hasData) {
           return const Center(child: CircularProgressIndicator());
         }
 
-        // Group alarms by uid and keep only the highest priority one for each
-        final Map<String, AlarmActive> highestPriorityAlarms = {};
-        for (final alarm in snapshot.data!) {
-          final existing = highestPriorityAlarms[alarm.alarm.config.uid];
-          if (existing == null ||
-              alarm.notification.rule.level.index >
-                  existing.notification.rule.level.index) {
-            highestPriorityAlarms[alarm.alarm.config.uid] = alarm;
-          }
-        }
-
-        var alarms = highestPriorityAlarms.values.toList()
-          ..sort((a, b) {
-            // First sort by priority (error > warning > info)
-            final priorityCompare = b.notification.rule.level.index
-                .compareTo(a.notification.rule.level.index);
-            if (priorityCompare != 0) return priorityCompare;
-
-            // If same priority, sort by most recent timestamp
-            return b.notification.timestamp.compareTo(a.notification.timestamp);
-          });
-
-        // Filter alarms based on search query
-        if (_searchQuery.isNotEmpty) {
-          alarms = alarms.where((alarm) {
-            final title = alarm.alarm.config.title.toLowerCase();
-            final description = alarm.alarm.config.description.toLowerCase();
-            final query = _searchQuery.toLowerCase();
-            return title.contains(query) || description.contains(query);
-          }).toList();
+        var alarms = snapshot.data!;
+        if (!_showHistory) {
+          alarms = _filterAlarms(alarms);
         }
 
         if (alarms.isEmpty) {
           return Column(
             children: [
-              Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: SearchBar(
-                  hintText: 'Search active alarms...',
-                  leading: const Icon(Icons.search),
-                  onChanged: (value) {
-                    setState(() {
-                      _searchQuery = value;
-                    });
-                  },
-                ),
-              ),
+              _buildSearchAndToggleBar(),
               const Expanded(
                 child: Center(
-                  child: Text('No active alarms'),
+                  child: Text('No alarms'),
                 ),
               ),
             ],
@@ -655,18 +622,7 @@ class _ListActiveAlarmsState extends ConsumerState<ListActiveAlarms> {
 
         return Column(
           children: [
-            Padding(
-              padding: const EdgeInsets.all(16.0),
-              child: SearchBar(
-                hintText: 'Search active alarms...',
-                leading: const Icon(Icons.search),
-                onChanged: (value) {
-                  setState(() {
-                    _searchQuery = value;
-                  });
-                },
-              ),
-            ),
+            _buildSearchAndToggleBar(),
             Expanded(
               child: ListView.builder(
                 itemCount: alarms.length,
@@ -698,6 +654,139 @@ class _ListActiveAlarmsState extends ConsumerState<ListActiveAlarms> {
         );
       },
     );
+  }
+
+  Widget _buildSearchAndToggleBar() {
+    return Padding(
+      padding: const EdgeInsets.all(16.0),
+      child: Material(
+        elevation: 2,
+        borderRadius: BorderRadius.circular(12),
+        color: Theme.of(context).colorScheme.surface,
+        child: Container(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(12),
+            color: Theme.of(context).colorScheme.surface,
+          ),
+          child: Row(
+            children: [
+              // Search field
+              Expanded(
+                child: TextField(
+                  decoration: InputDecoration(
+                    hintText:
+                        'Search ${_showHistory ? "historical" : "active"} alarms...',
+                    prefixIcon: const Icon(Icons.search),
+                    border: InputBorder.none,
+                    contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 16, vertical: 14),
+                  ),
+                  onChanged: (value) {
+                    setState(() {
+                      _searchQuery = value;
+                    });
+                  },
+                ),
+              ),
+              // Toggle
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8.0),
+                child: SegmentedButton<bool>(
+                  style: ButtonStyle(
+                    visualDensity: VisualDensity.compact,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    padding: WidgetStateProperty.all(EdgeInsets.zero),
+                    backgroundColor:
+                        WidgetStateProperty.all(Colors.transparent),
+                    elevation: WidgetStateProperty.all(0),
+                    side: WidgetStateProperty.all(BorderSide.none),
+                  ),
+                  segments: [
+                    ButtonSegment<bool>(
+                      value: false,
+                      icon: const Icon(Icons.warning, size: 18),
+                      label: Padding(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8.0, vertical: 2.0),
+                        child: Text(
+                          'Active',
+                          style: TextStyle(
+                            fontWeight: !_showHistory
+                                ? FontWeight.bold
+                                : FontWeight.normal,
+                            color: Theme.of(context).colorScheme.primary,
+                          ),
+                        ),
+                      ),
+                    ),
+                    ButtonSegment<bool>(
+                      value: true,
+                      icon: const Icon(Icons.history, size: 18),
+                      label: Padding(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8.0, vertical: 2.0),
+                        child: Text(
+                          'History',
+                          style: TextStyle(
+                            fontWeight: _showHistory
+                                ? FontWeight.bold
+                                : FontWeight.normal,
+                            color: Theme.of(context).colorScheme.primary,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                  selected: {_showHistory},
+                  onSelectionChanged: (Set<bool> newSelection) {
+                    setState(() {
+                      _showHistory = newSelection.first;
+                      _searchQuery = '';
+                    });
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  List<AlarmActive> _filterAlarms(List<AlarmActive> alarms) {
+    // Group alarms by uid and keep only the highest priority one for each
+    final Map<String, AlarmActive> highestPriorityAlarms = {};
+    for (final alarm in alarms) {
+      final existing = highestPriorityAlarms[alarm.alarm.config.uid];
+      if (existing == null ||
+          alarm.notification.rule.level.index >
+              existing.notification.rule.level.index) {
+        highestPriorityAlarms[alarm.alarm.config.uid] = alarm;
+      }
+    }
+
+    var filteredAlarms = highestPriorityAlarms.values.toList()
+      ..sort((a, b) {
+        // First sort by priority (error > warning > info)
+        final priorityCompare = b.notification.rule.level.index
+            .compareTo(a.notification.rule.level.index);
+        if (priorityCompare != 0) return priorityCompare;
+
+        // If same priority, sort by most recent timestamp
+        return b.notification.timestamp.compareTo(a.notification.timestamp);
+      });
+
+    // Filter alarms based on search query
+    if (_searchQuery.isNotEmpty) {
+      filteredAlarms = filteredAlarms.where((alarm) {
+        final title = alarm.alarm.config.title.toLowerCase();
+        final description = alarm.alarm.config.description.toLowerCase();
+        final query = _searchQuery.toLowerCase();
+        return title.contains(query) || description.contains(query);
+      }).toList();
+    }
+
+    return filteredAlarms;
   }
 }
 
