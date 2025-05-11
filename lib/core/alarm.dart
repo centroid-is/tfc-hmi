@@ -124,15 +124,15 @@ class AlarmMan {
   final Set<Alarm> alarms;
   final Set<AlarmActive> _activeAlarms;
   final StreamController<Set<AlarmActive>> _activeAlarmsController;
-  final RingBuffer<AlarmHistory> _history;
-  final StreamController<List<AlarmHistory?>> _historyController;
+  final RingBuffer<AlarmActive> _history;
+  final StreamController<List<AlarmActive?>> _historyController;
   AlarmMan._(
       {required this.config, required this.preferences, required this.stateMan})
       : alarms = config.alarms.map((e) => Alarm(config: e)).toSet(),
         _activeAlarms = {},
         _activeAlarmsController = BehaviorSubject<Set<AlarmActive>>.seeded({}),
-        _history = RingBuffer<AlarmHistory>(1000),
-        _historyController = BehaviorSubject<List<AlarmHistory?>>.seeded([]) {
+        _history = RingBuffer<AlarmActive>(1000),
+        _historyController = BehaviorSubject<List<AlarmActive?>>.seeded([]) {
     _activeAlarmsController.onListen = () async {
       for (final alarm in alarms) {
         final stream = alarm.onChange(stateMan);
@@ -192,7 +192,7 @@ class AlarmMan {
     return _activeAlarmsController.stream;
   }
 
-  Stream<List<AlarmHistory?>> history() {
+  Stream<List<AlarmActive?>> history() {
     return _historyController.stream;
   }
 
@@ -228,7 +228,8 @@ class AlarmMan {
 
   void _removeActiveAlarm(AlarmActive alarm) {
     alarm.notification.active = false;
-    _history.add(AlarmHistory(alarm: alarm, timestamp: DateTime.now()));
+    alarm.deactivated = DateTime.now();
+    _history.add(alarm);
     _activeAlarms.remove(alarm);
     _historyController.add(_history.buffer);
   }
@@ -332,24 +333,19 @@ class AlarmActive {
   final Alarm alarm;
   final AlarmNotification notification;
   bool pendingAck;
+  DateTime? deactivated;
 
   @override
   String toString() {
-    return 'AlarmActive(alarm: $alarm, notification: $notification)';
+    return 'AlarmActive(alarm: $alarm, notification: $notification, deactivated: $deactivated)';
   }
 
   AlarmActive({
     required this.alarm,
     required this.notification,
     this.pendingAck = false,
+    this.deactivated,
   });
-}
-
-class AlarmHistory {
-  final AlarmActive alarm;
-  final DateTime timestamp;
-
-  AlarmHistory({required this.alarm, required this.timestamp});
 }
 
 class Expression {

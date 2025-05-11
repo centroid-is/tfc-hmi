@@ -574,10 +574,12 @@ class EditAlarm extends ConsumerWidget {
 
 class ListActiveAlarms extends ConsumerStatefulWidget {
   final void Function(AlarmActive)? onShow;
+  final void Function()? onViewChanged;
 
   const ListActiveAlarms({
     super.key,
     this.onShow,
+    this.onViewChanged,
   });
 
   @override
@@ -595,9 +597,9 @@ class _ListActiveAlarmsState extends ConsumerState<ListActiveAlarms> {
         (alarmMan) => _showHistory
             ? alarmMan.history().map((history) => history
                 .where((h) => h != null)
-                .map((h) => (h!.alarm, h.timestamp))
+                .map((h) => (h!, h!.deactivated))
                 .toList()
-              ..sort((a, b) => b.$2.compareTo(a.$2)))
+              ..sort((a, b) => b.$2!.compareTo(a.$2!)))
             : alarmMan.activeAlarms().map(
                 (active) => active.map((a) => (a, null as DateTime?)).toList()),
       ),
@@ -713,46 +715,18 @@ class _ListActiveAlarmsState extends ConsumerState<ListActiveAlarms> {
                   style: ButtonStyle(
                     visualDensity: VisualDensity.compact,
                     tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    padding: WidgetStateProperty.all(EdgeInsets.zero),
-                    backgroundColor:
-                        WidgetStateProperty.all(Colors.transparent),
-                    elevation: WidgetStateProperty.all(0),
                     side: WidgetStateProperty.all(BorderSide.none),
                   ),
-                  segments: [
+                  segments: const [
                     ButtonSegment<bool>(
                       value: false,
-                      icon: const Icon(Icons.warning, size: 18),
-                      label: Padding(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 8.0, vertical: 2.0),
-                        child: Text(
-                          'Active',
-                          style: TextStyle(
-                            fontWeight: !_showHistory
-                                ? FontWeight.bold
-                                : FontWeight.normal,
-                            color: Theme.of(context).colorScheme.primary,
-                          ),
-                        ),
-                      ),
+                      icon: Icon(Icons.warning, size: 18),
+                      label: Text('Active'),
                     ),
                     ButtonSegment<bool>(
                       value: true,
-                      icon: const Icon(Icons.history, size: 18),
-                      label: Padding(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 8.0, vertical: 2.0),
-                        child: Text(
-                          'History',
-                          style: TextStyle(
-                            fontWeight: _showHistory
-                                ? FontWeight.bold
-                                : FontWeight.normal,
-                            color: Theme.of(context).colorScheme.primary,
-                          ),
-                        ),
-                      ),
+                      icon: Icon(Icons.history, size: 18),
+                      label: Text('History'),
                     ),
                   ],
                   selected: {_showHistory},
@@ -761,6 +735,7 @@ class _ListActiveAlarmsState extends ConsumerState<ListActiveAlarms> {
                       _showHistory = newSelection.first;
                       _searchQuery = '';
                     });
+                    widget.onViewChanged?.call();
                   },
                 ),
               ),
@@ -852,12 +827,25 @@ class ViewActiveAlarm extends ConsumerWidget {
               ],
             ),
             const SizedBox(height: 8),
-            Text(
-              formatTimestamp(alarm.notification.timestamp),
-              style: TextStyle(
-                color: textColor.withAlpha(178),
-                fontSize: Theme.of(context).textTheme.bodySmall?.fontSize,
-              ),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Activated: ${formatTimestamp(alarm.notification.timestamp)}',
+                  style: TextStyle(
+                    color: textColor.withAlpha(178),
+                    fontSize: Theme.of(context).textTheme.bodySmall?.fontSize,
+                  ),
+                ),
+                if (alarm.deactivated != null)
+                  Text(
+                    'Deactivated: ${formatTimestamp(alarm.deactivated!)}',
+                    style: TextStyle(
+                      color: textColor.withAlpha(178),
+                      fontSize: Theme.of(context).textTheme.bodySmall?.fontSize,
+                    ),
+                  ),
+              ],
             ),
             const SizedBox(height: 16),
             Text(

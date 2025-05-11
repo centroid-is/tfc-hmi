@@ -31,6 +31,11 @@ class _AlarmViewPageState extends State<AlarmViewPage> {
                     _selectedAlarm = alarm;
                   });
                 },
+                onViewChanged: () {
+                  setState(() {
+                    _selectedAlarm = null;
+                  });
+                },
               ),
             ),
             const SizedBox(width: 24),
