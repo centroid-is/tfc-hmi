@@ -227,30 +227,38 @@ class _IoTinkerPageState extends ConsumerState<IoTinkerPage>
               return Column(
                 children: [
                   for (int i = 0; i < 8; i = i + 2)
-                    RowIOView(
-                      leftRaw: rawStates[i],
-                      rightRaw: rawStates[i + 1],
-                      leftProcessed: processedStates[i],
-                      rightProcessed: processedStates[i + 1],
-                      leftSelected: map["force_values"]![i].asInt,
-                      rightSelected: map["force_values"]![i + 1].asInt,
-                      animationValue: animation,
-                      leftOnChanged: (value) async {
-                        map["force_values"]![i].value = value;
-                        await stateMan.write(
-                            NodeId.fromString(nodeId.namespace,
-                                    "${nodeId.string}.force_values")
-                                .toString(),
-                            map["force_values"]!);
-                      },
-                      rightOnChanged: (value) async {
-                        map["force_values"]![i + 1].value = value;
-                        await stateMan.write(
-                            NodeId.fromString(nodeId.namespace,
-                                    "${nodeId.string}.force_values")
-                                .toString(),
-                            map["force_values"]!);
-                      },
+                    Column(
+                      children: [
+                        RowIOView(
+                          leftRaw: rawStates[i],
+                          rightRaw: rawStates[i + 1],
+                          leftProcessed: processedStates[i],
+                          rightProcessed: processedStates[i + 1],
+                          leftSelected: map["force_values"]![i].asInt,
+                          rightSelected: map["force_values"]![i + 1].asInt,
+                          animationValue: animation,
+                          leftOnChanged: (value) async {
+                            map["force_values"]![i].value = value;
+                            await stateMan.write(
+                                NodeId.fromString(nodeId.namespace,
+                                        "${nodeId.string}.force_values")
+                                    .toString(),
+                                map["force_values"]!);
+                          },
+                          rightOnChanged: (value) async {
+                            map["force_values"]![i + 1].value = value;
+                            await stateMan.write(
+                                NodeId.fromString(nodeId.namespace,
+                                        "${nodeId.string}.force_values")
+                                    .toString(),
+                                map["force_values"]!);
+                          },
+                          leftDescription: value["descriptions"][i].asString,
+                          rightDescription:
+                              value["descriptions"][i + 1].asString,
+                        ),
+                        const SizedBox(height: 6),
+                      ],
                     ),
                 ],
               );
@@ -270,25 +278,28 @@ class IOForceButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return SegmentedButton(
-      segments: const [
-        ButtonSegment(
-          value: 0,
-          label: Text('Auto'),
-        ),
-        ButtonSegment(
-          value: 1,
-          label: Text('Low '),
-        ),
-        ButtonSegment(
-          value: 2,
-          label: Text('High'),
-        ),
-      ],
-      selected: {selected},
-      onSelectionChanged: (value) {
-        onChanged(value.first);
-      },
+    return SizedBox(
+      width: 300,
+      child: SegmentedButton(
+        segments: const [
+          ButtonSegment(
+            value: 0,
+            label: Text('Auto'),
+          ),
+          ButtonSegment(
+            value: 1,
+            label: Text('Low '),
+          ),
+          ButtonSegment(
+            value: 2,
+            label: Text('High'),
+          ),
+        ],
+        selected: {selected},
+        onSelectionChanged: (value) {
+          onChanged(value.first);
+        },
+      ),
     );
   }
 }
@@ -304,6 +315,8 @@ class RowIOView extends AnimatedWidget {
     required this.rightSelected,
     required this.leftOnChanged,
     required this.rightOnChanged,
+    this.leftDescription,
+    this.rightDescription,
     required Animation<int> animationValue,
   }) : super(listenable: animationValue);
   final int leftSelected;
@@ -314,52 +327,82 @@ class RowIOView extends AnimatedWidget {
   final bool rightProcessed;
   final void Function(int) leftOnChanged;
   final void Function(int) rightOnChanged;
+  final String? leftDescription;
+  final String? rightDescription;
 
   @override
   Widget build(BuildContext context) {
     final animation = listenable as Animation<int>;
     return Row(
+      crossAxisAlignment: CrossAxisAlignment.end,
       children: [
-        IOForceButton(
-          selected: leftSelected,
-          onChanged: leftOnChanged,
-        ),
-        const SizedBox(width: 10),
-        Container(
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(2),
-            border: Border.all(color: Colors.black),
-          ),
-          child: Row(
-            children: [
-              CustomPaint(
-                size: const Size(40, 40),
-                painter: TriangleBoxPainter(
-                  colorLeft: leftRaw ? Colors.green : Colors.grey,
-                  colorRight: leftProcessed ? Colors.green : Colors.grey,
-                  animationValue: leftSelected == 0 ? 0 : animation.value,
+        // LEFT COLUMN: description + button
+        Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (leftDescription != null)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 4),
+                child: Text(
+                  leftDescription!,
+                  style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                  textAlign: TextAlign.right,
                 ),
               ),
-              Container(
-                width: 40,
-                height: 40,
-                color: Colors.grey,
+            IOForceButton(
+              selected: leftSelected,
+              onChanged: leftOnChanged,
+            ),
+          ],
+        ),
+        const SizedBox(width: 16),
+        // MIDDLE: the three boxes in a row
+        Row(
+          mainAxisAlignment: MainAxisAlignment.end,
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            CustomPaint(
+              size: const Size(50, 50),
+              painter: TriangleBoxPainter(
+                colorLeft: leftRaw ? Colors.green : Colors.grey,
+                colorRight: leftProcessed ? Colors.green : Colors.grey,
+                animationValue: leftSelected == 0 ? 0 : animation.value,
               ),
-              CustomPaint(
-                size: const Size(40, 40),
-                painter: TriangleBoxPainter(
-                  colorLeft: rightRaw ? Colors.green : Colors.grey,
-                  colorRight: rightProcessed ? Colors.green : Colors.grey,
-                  animationValue: rightSelected == 0 ? 0 : animation.value,
+            ),
+            Container(
+              width: 50,
+              height: 50,
+              color: Colors.grey,
+            ),
+            CustomPaint(
+              size: const Size(50, 50),
+              painter: TriangleBoxPainter(
+                colorLeft: rightRaw ? Colors.green : Colors.grey,
+                colorRight: rightProcessed ? Colors.green : Colors.grey,
+                animationValue: rightSelected == 0 ? 0 : animation.value,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(width: 16),
+        // RIGHT COLUMN: description + button
+        Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (rightDescription != null)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 4),
+                child: Text(
+                  rightDescription!,
+                  style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                  textAlign: TextAlign.center,
                 ),
               ),
-            ],
-          ),
-        ),
-        const SizedBox(width: 10),
-        IOForceButton(
-          selected: rightSelected,
-          onChanged: rightOnChanged,
+            IOForceButton(
+              selected: rightSelected,
+              onChanged: rightOnChanged,
+            ),
+          ],
         ),
       ],
     );
