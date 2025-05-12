@@ -237,10 +237,10 @@ class AlarmMan {
 
 class Alarm {
   final AlarmConfig config;
-  final List<bool> _lastStates; // Track state for each rule
+  final List<String?> _lastEvaluations;
 
   Alarm({required this.config})
-      : _lastStates = List.filled(config.rules.length, false);
+      : _lastEvaluations = List.filled(config.rules.length, null);
 
   Stream<AlarmNotification> onChange(StateMan stateMan) {
     final streamController = StreamController<AlarmNotification>.broadcast();
@@ -254,13 +254,14 @@ class Alarm {
         evaluators.add(evaluator);
         evaluator.state().listen((state) {
           // Only emit if state has changed for this rule
-          if (state != _lastStates[i]) {
-            _lastStates[i] = state;
+          if (state != _lastEvaluations[i]) {
+            _lastEvaluations[i] = state;
             // If any rule is true, the alarm is active
-            final alarmState = _lastStates.any((state) => state);
+            final alarmState = _lastEvaluations.any((state) => state != null);
             streamController.add(AlarmNotification(
                 uid: config.uid,
                 active: alarmState,
+                expression: _lastEvaluations[i],
                 rule: rule,
                 timestamp: DateTime.now()));
           }
@@ -281,18 +282,20 @@ class Alarm {
 class AlarmNotification {
   final String uid;
   bool active;
+  String? expression;
   final AlarmRule rule;
   final DateTime timestamp;
 
   AlarmNotification(
       {required this.uid,
       required this.active,
+      required this.expression,
       required this.rule,
       required this.timestamp});
 
   @override
   String toString() {
-    return 'AlarmNotification(uid: $uid, active: $active, rule: $rule, timestamp: $timestamp)';
+    return 'AlarmNotification(uid: $uid, active: $active, expression: $expression, rule: $rule, timestamp: $timestamp)';
   }
 
   @override
@@ -301,11 +304,12 @@ class AlarmNotification {
     return other is AlarmNotification &&
         uid == other.uid &&
         active == other.active &&
+        expression == other.expression &&
         rule == other.rule;
   }
 
   @override
-  int get hashCode => Object.hash(uid, active, rule);
+  int get hashCode => Object.hash(uid, active, expression, rule);
 
   /// Returns the background and text colors for this alarm level
   (Color, Color) getColors(BuildContext context) {
@@ -585,17 +589,48 @@ class Expression {
     final result = _evaluate(tokens, variables);
     return result.asBool;
   }
+
+  /// Formats the expression with given variable values
+  /// Example:
+  /// formula: "A AND B"
+  /// variables: {"A": true, "B": false}
+  /// result: "A{true} AND B{false}"
+  String formatWithValues(Map<String, DynamicValue> variables) {
+    // Split the formula into tokens
+    final tokens = _parseExpression();
+    final result = StringBuffer();
+
+    for (final token in tokens) {
+      if (token.value != null) {
+        // For variables, append the value in curly braces
+        final value = variables[token.value!];
+        if (value == null) {
+          throw ArgumentError('Variable ${token.value} not found in variables');
+        }
+        result.write('${token.value}{${value.asString}}');
+      } else if (token.operator != null) {
+        // For operators, add spaces around them
+        result.write(' ${token.operator} ');
+      } else if (token.parenthesis != null) {
+        // For parentheses, add them as is
+        result.write(token.parenthesis);
+      }
+    }
+
+    return result.toString().trim();
+  }
 }
 
 class _Evaluator {
   final StateMan stateMan;
   final ExpressionConfig expression;
   StreamSubscription? subscription;
-  StreamController<bool> streamController = StreamController<bool>.broadcast();
+  StreamController<String?> streamController =
+      StreamController<String?>.broadcast();
 
   _Evaluator({required this.stateMan, required this.expression});
 
-  Stream<bool> state() {
+  Stream<String?> state() {
     streamController.onListen = () async {
       final variables = expression.value.extractVariables();
       final streams = await Future.wait(variables.map((variable) async {
@@ -610,7 +645,11 @@ class _Evaluator {
             .entries
             .map((e) => MapEntry(e.value, values[e.key])));
         final result = expression.value.evaluate(map);
-        streamController.add(result);
+        if (result) {
+          streamController.add(expression.value.formatWithValues(map));
+        } else {
+          streamController.add(null);
+        }
       });
     };
 

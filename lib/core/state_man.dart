@@ -140,7 +140,7 @@ class StateMan {
   Future<DynamicValue> read(String key) async {
     await client.awaitConnect();
     try {
-      final nodeId = keyMappings.lookup(key);
+      final nodeId = lookupNodeId(key);
       if (nodeId == null) {
         await Future.delayed(const Duration(seconds: 1000));
         throw StateManException("Key: \"$key\" not found");
@@ -156,7 +156,7 @@ class StateMan {
 
     final parameters = <NodeId, List<AttributeId>>{};
     for (final key in keys) {
-      final nodeId = keyMappings.lookup(key);
+      final nodeId = lookupNodeId(key);
       if (nodeId == null) {
         throw StateManException("Key: \"$key\" not found");
       }

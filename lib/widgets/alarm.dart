@@ -892,6 +892,13 @@ class ViewActiveAlarm extends ConsumerWidget {
                 ),
               ],
             ),
+            if (alarm.notification.expression != null) ...[
+              const SizedBox(height: 16),
+              Text(
+                'Expression: ${alarm.notification.expression}',
+                style: TextStyle(color: textColor, fontWeight: FontWeight.bold),
+              ),
+            ],
             if (requiresAck) ...[
               const SizedBox(height: 16),
               Text(

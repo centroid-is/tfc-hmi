@@ -552,4 +552,80 @@ void main() {
       expect(Expression(formula: '(A AND B))').isValid(), isFalse);
     });
   });
+  group('Alarm expression formatWithValues', () {
+    test('Format with values', () {
+      final expression = Expression(formula: 'A AND B');
+      final formatted = expression.formatWithValues(
+          {'A': DynamicValue(value: true), 'B': DynamicValue(value: false)});
+      expect(formatted, 'A{true} AND B{false}');
+    });
+    test('Format with values complex expressions', () {
+      // Test 1: Complex nested expression with mixed types
+      final expression1 = Expression(formula: '(A AND B) OR (C AND D)');
+      final formatted1 = expression1.formatWithValues({
+        'A': DynamicValue(value: true),
+        'B': DynamicValue(value: false),
+        'C': DynamicValue(value: 42),
+        'D': DynamicValue(value: "test")
+      });
+      expect(formatted1, '(A{true} AND B{false}) OR (C{42} AND D{test})');
+
+      // Test 2: Deep nested expression with comparison operators
+      final expression2 =
+          Expression(formula: '((A > B) AND (C <= D)) OR (E == F)');
+      final formatted2 = expression2.formatWithValues({
+        'A': DynamicValue(value: 100),
+        'B': DynamicValue(value: 50),
+        'C': DynamicValue(value: 75),
+        'D': DynamicValue(value: 75),
+        'E': DynamicValue(value: "status"),
+        'F': DynamicValue(value: "status")
+      });
+      expect(formatted2,
+          '((A{100} > B{50}) AND (C{75} <= D{75})) OR (E{status} == F{status})');
+
+      // Test 3: Multiple comparison operators with different types
+      final expression3 = Expression(formula: 'A != B AND C > D OR E < F');
+      final formatted3 = expression3.formatWithValues({
+        'A': DynamicValue(value: "active"),
+        'B': DynamicValue(value: "inactive"),
+        'C': DynamicValue(value: 200),
+        'D': DynamicValue(value: 150),
+        'E': DynamicValue(value: 25),
+        'F': DynamicValue(value: 50)
+      });
+      expect(formatted3,
+          'A{active} != B{inactive} AND C{200} > D{150} OR E{25} < F{50}');
+
+      // Test 4: Complex boolean expression with multiple levels
+      final expression4 =
+          Expression(formula: 'A AND (B OR (C AND D)) OR (E AND F)');
+      final formatted4 = expression4.formatWithValues({
+        'A': DynamicValue(value: true),
+        'B': DynamicValue(value: false),
+        'C': DynamicValue(value: true),
+        'D': DynamicValue(value: false),
+        'E': DynamicValue(value: true),
+        'F': DynamicValue(value: true)
+      });
+      expect(formatted4,
+          'A{true} AND (B{false} OR (C{true} AND D{false})) OR (E{true} AND F{true})');
+
+      // Test 5: Expression with all operator types
+      final expression5 =
+          Expression(formula: 'A < B AND C > D OR E <= F AND G >= H');
+      final formatted5 = expression5.formatWithValues({
+        'A': DynamicValue(value: 10),
+        'B': DynamicValue(value: 20),
+        'C': DynamicValue(value: 30),
+        'D': DynamicValue(value: 25),
+        'E': DynamicValue(value: 40),
+        'F': DynamicValue(value: 40),
+        'G': DynamicValue(value: 50),
+        'H': DynamicValue(value: 45)
+      });
+      expect(formatted5,
+          'A{10} < B{20} AND C{30} > D{25} OR E{40} <= F{40} AND G{50} >= H{45}');
+    });
+  });
 }
