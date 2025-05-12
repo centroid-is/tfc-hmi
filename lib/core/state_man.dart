@@ -64,6 +64,7 @@ class NodeIdConfig {
 class KeyMappingEntry {
   NodeIdConfig? nodeId;
   int? collectSize;
+  bool? io; // if true, the key is an IO unit
 
   KeyMappingEntry({this.nodeId, this.collectSize});
 
@@ -223,7 +224,18 @@ class StateMan {
 
   Future<Stream<DynamicValue>> _monitor(String key) async {
     await client.awaitConnect();
-    final nodeId = keyMappings.lookup(key);
+
+    final regex = RegExp(r'ns=(\d+);s=(.+)');
+    final match = regex.firstMatch(key);
+    NodeId? nodeId;
+    if (match == null) {
+      nodeId = keyMappings.lookup(key);
+    } else {
+      final namespace = int.parse(match.group(1)!);
+      final identifier = match.group(2)!;
+      nodeId = NodeId.fromString(namespace, identifier);
+    }
+
     if (nodeId == null) {
       throw StateManException('Key: "$key" not found');
     }

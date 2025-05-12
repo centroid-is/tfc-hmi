@@ -45,12 +45,13 @@ KeyMappingEntry _$KeyMappingEntryFromJson(Map<String, dynamic> json) =>
           ? null
           : NodeIdConfig.fromJson(json['nodeId'] as Map<String, dynamic>),
       collectSize: (json['collectSize'] as num?)?.toInt(),
-    );
+    )..io = json['io'] as bool?;
 
 Map<String, dynamic> _$KeyMappingEntryToJson(KeyMappingEntry instance) =>
     <String, dynamic>{
       'nodeId': instance.nodeId,
       'collectSize': instance.collectSize,
+      'io': instance.io,
     };
 
 KeyMappings _$KeyMappingsFromJson(Map<String, dynamic> json) => KeyMappings(

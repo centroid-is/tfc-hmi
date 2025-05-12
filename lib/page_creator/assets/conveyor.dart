@@ -119,7 +119,7 @@ class _ConveyorState extends ConsumerState<Conveyor> {
 
   Color _getConveyorColor(dynamic dynValue) {
     try {
-      if (dynValue['p_stat_LastFault'].asInt != 0) {
+      if (dynValue['p_stat_Error'].asBool) {
         return Colors.red;
       }
 
