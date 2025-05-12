@@ -177,7 +177,7 @@ class StateMan {
   Future<void> write(String key, DynamicValue value) async {
     await client.awaitConnect();
     try {
-      final nodeId = keyMappings.lookup(key);
+      final nodeId = lookupNodeId(key);
       if (nodeId == null) {
         await Future.delayed(const Duration(seconds: 1000));
         throw StateManException("Key: \"$key\" not found");
@@ -222,9 +222,7 @@ class StateMan {
     _subscriptions.clear();
   }
 
-  Future<Stream<DynamicValue>> _monitor(String key) async {
-    await client.awaitConnect();
-
+  NodeId? lookupNodeId(String key) {
     final regex = RegExp(r'ns=(\d+);s=(.+)');
     final match = regex.firstMatch(key);
     NodeId? nodeId;
@@ -235,7 +233,13 @@ class StateMan {
       final identifier = match.group(2)!;
       nodeId = NodeId.fromString(namespace, identifier);
     }
+    return nodeId;
+  }
 
+  Future<Stream<DynamicValue>> _monitor(String key) async {
+    await client.awaitConnect();
+
+    final nodeId = lookupNodeId(key);
     if (nodeId == null) {
       throw StateManException('Key: "$key" not found');
     }

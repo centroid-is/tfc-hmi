@@ -804,7 +804,7 @@ class ViewActiveAlarm extends ConsumerWidget {
     final (backgroundColor, textColor) = alarm.notification.getColors(context);
     final isActive = alarm.notification.active;
     final requiresAck = alarm.notification.rule.acknowledgeRequired;
-    final canAck = !isActive && alarm.pendingAck;
+    final canAck = !isActive && alarm.pendingAck && alarm.deactivated == null;
 
     return Card(
       color: backgroundColor,

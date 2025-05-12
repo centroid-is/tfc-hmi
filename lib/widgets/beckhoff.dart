@@ -3,42 +3,115 @@ import 'package:flutter/foundation.dart';
 
 class ModuleWidget extends StatelessWidget {
   final List<bool> ledStates;
-  final double width;
+  final double height;
   final bool disconnected;
+  final bool selected;
+  final (String, String) topLabels;
+
   ModuleWidget(
-      {required this.ledStates, this.width = 80, this.disconnected = false})
+      {required this.ledStates,
+      this.height = 300,
+      this.disconnected = false,
+      this.selected = false,
+      this.topLabels = ('', '')})
       : assert(ledStates.length == 8);
 
   @override
-  Widget build(BuildContext context) => SizedBox(
-        width: width,
-        height: width * 6.0,
-        child: CustomPaint(painter: ModulePainter(ledStates: ledStates)),
-      );
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: height / 6,
+      height: height,
+      child: CustomPaint(
+          painter: ModulePainter(
+              ledStates: ledStates,
+              disconnected: disconnected,
+              selected: selected,
+              topLabels: topLabels)),
+    );
+  }
+}
+
+class LedBlockWidget extends StatelessWidget {
+  final List<bool> ledStates;
+  final double height;
+
+  LedBlockWidget({required this.ledStates, this.height = 200});
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: height,
+      width: height / 1.3,
+      child: CustomPaint(
+        painter: LedBlockPainter(ledStates: ledStates),
+      ),
+    );
+  }
 }
 
 class ModulePainter extends CustomPainter {
   final List<bool> ledStates;
-  ModulePainter({required this.ledStates});
+  final bool disconnected;
+  final bool selected;
+  final (String, String) topLabels;
+  ModulePainter({
+    required this.ledStates,
+    this.disconnected = false,
+    this.selected = false,
+    this.topLabels = ('', ''),
+  });
 
   @override
   void paint(Canvas canvas, Size size) {
+    final strokeWidth = size.width * 0.03;
     // Colors
     final bodyColor = Color(0xFFF7F5E6);
     final labelYellow = Color(0xFFC0C040);
-    final borderPaint = Paint()
+    final outerBorderPaint = Paint()
+      ..color = selected ? Colors.orange : Colors.grey.shade700
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = strokeWidth;
+    final innerBorderPaint = Paint()
       ..color = Colors.grey.shade700
       ..style = PaintingStyle.stroke
-      ..strokeWidth = size.width * 0.03;
+      ..strokeWidth = strokeWidth;
     final fillPaint = Paint()..color = bodyColor;
 
     // Draw module body
     final moduleRect = RRect.fromRectAndRadius(
+      Rect.fromLTWH(0, 0, size.width - strokeWidth, size.height - strokeWidth),
+      Radius.circular(size.width * 0.06),
+    );
+    final fillRect = RRect.fromRectAndRadius(
       Rect.fromLTWH(0, 0, size.width, size.height),
       Radius.circular(size.width * 0.06),
     );
-    canvas.drawRRect(moduleRect, fillPaint);
-    canvas.drawRRect(moduleRect, borderPaint);
+    canvas.drawRRect(fillRect, fillPaint);
+    canvas.drawRRect(moduleRect, outerBorderPaint);
+
+    // Draw exclamation mark if disconnected
+    if (disconnected) {
+      final iconSize = size.width * 0.3;
+      final iconPaint = Paint()
+        ..color = Colors.red
+        ..style = PaintingStyle.fill;
+
+      // Draw the dot
+      canvas.drawCircle(
+        Offset(size.width / 2, size.height * 0.15),
+        iconSize * 0.15,
+        iconPaint,
+      );
+
+      // Draw the line
+      final lineRect = Rect.fromLTWH(
+        size.width / 2 - iconSize * 0.1,
+        size.height * 0.15 + iconSize * 0.2,
+        iconSize * 0.2,
+        iconSize * 0.5,
+      );
+      canvas.drawRect(lineRect, iconPaint);
+    }
 
     double pad = size.width * 0.05;
     double labelH = size.height * 0.06;
@@ -85,41 +158,20 @@ class ModulePainter extends CustomPainter {
       double x = pad + i * (labelW + pad);
       final rect = Rect.fromLTWH(x, pad, labelW, labelH);
       canvas.drawRect(rect, Paint()..color = labelYellow);
-      canvas.drawRect(rect, borderPaint);
-      drawLabel(
-          i == 0 ? '07' : '08', Offset(x, pad), labelW, labelH, labelH * 0.6);
+      canvas.drawRect(rect, innerBorderPaint);
+      drawLabel(i == 0 ? topLabels.$1 : topLabels.$2, Offset(x, pad), labelW,
+          labelH, labelH * 0.6);
     }
 
     // --- Draw LED block ---
     final ledBlock =
         Rect.fromLTWH(pad, ledBlockY, size.width - pad * 2, ledBlockH);
-    canvas.drawRect(ledBlock, Paint()..color = Color(0xFFDDDDDD));
-    canvas.drawRect(ledBlock, borderPaint);
-
-    // Draw LEDs
-    int cols = 2, rows = 4;
-    double cellW = (ledBlock.width - pad * (cols + 1)) / cols;
-    double cellH = (ledBlock.height - pad * (rows + 1)) / rows;
-    for (int i = 0; i < 8; i++) {
-      int r = i ~/ cols, c = i % cols;
-      double cx = ledBlock.left + pad + c * (cellW + pad);
-      double cy = ledBlock.top + pad + r * (cellH + pad);
-      final cellRect = Rect.fromLTWH(cx, cy, cellW, cellH);
-      if (ledStates[i]) {
-        canvas.drawRect(cellRect, Paint()..color = Color(0xFF6CA545));
-      } else {
-        canvas.drawRect(
-          cellRect,
-          Paint()
-            ..shader = LinearGradient(
-              colors: [Color(0xFFF0F0F0), Color(0xFFCCCCCC)],
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-            ).createShader(cellRect),
-        );
-      }
-      canvas.drawRect(cellRect, borderPaint);
-    }
+    canvas.save();
+    canvas.clipRect(ledBlock);
+    canvas.translate(ledBlock.left, ledBlock.top);
+    LedBlockPainter(ledStates: ledStates)
+        .paint(canvas, Size(ledBlock.width, ledBlock.height));
+    canvas.restore();
 
     // --- Draw I/O sections ---
     for (int s = 0; s < 4; s++) {
@@ -129,7 +181,7 @@ class ModulePainter extends CustomPainter {
         // I-label
         final labelRect = Rect.fromLTWH(x, top, labelW, labelH);
         canvas.drawRect(labelRect, Paint()..color = labelYellow);
-        canvas.drawRect(labelRect, borderPaint);
+        canvas.drawRect(labelRect, innerBorderPaint);
         drawLabel(
             'I${s * 2 + c + 1}', Offset(x, top), labelW, labelH, labelH * 0.6);
 
@@ -149,14 +201,14 @@ class ModulePainter extends CustomPainter {
           sqSize,
         );
         canvas.drawRect(sq, Paint()..color = Colors.grey.shade300);
-        canvas.drawRect(sq, borderPaint);
+        canvas.drawRect(sq, innerBorderPaint);
 
         // Round wire hole
         double crY = sqY + sqSize + gap;
         Offset crCenter = Offset(x + labelW / 2, crY + crSize / 2);
         canvas.drawCircle(
             crCenter, crSize / 2, Paint()..color = Colors.grey.shade300);
-        canvas.drawCircle(crCenter, crSize / 2, borderPaint);
+        canvas.drawCircle(crCenter, crSize / 2, innerBorderPaint);
       }
     }
 
@@ -192,5 +244,72 @@ class ModulePainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant ModulePainter old) =>
+      !listEquals(old.ledStates, ledStates) ||
+      old.selected != selected ||
+      old.disconnected != disconnected;
+}
+
+class LedBlockPainter extends CustomPainter {
+  final List<bool> ledStates;
+  final (String, String) topLabels;
+
+  LedBlockPainter({
+    required this.ledStates,
+    this.topLabels = ('', ''),
+  }) : assert(ledStates.length == 8);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    // Colors
+    final backgroundColor = Color(0xFFDDDDDD);
+    final borderColor = Colors.grey.shade700;
+    final activeColor = Color(0xFF6CA545);
+    final inactiveTopColor = Color(0xFFF0F0F0);
+    final inactiveBottomColor = Color(0xFFCCCCCC);
+
+    // Calculate dimensions
+    final pad = size.width * 0.05;
+    final cols = 2;
+    final rows = 4;
+    final cellW = (size.width - pad * (cols + 1)) / cols;
+    final cellH = (size.height - pad * (rows + 1)) / rows;
+
+    // Draw background
+    final blockRect = Rect.fromLTWH(0, 0, size.width, size.height);
+    canvas.drawRect(blockRect, Paint()..color = backgroundColor);
+
+    // Draw border
+    final borderPaint = Paint()
+      ..color = borderColor
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = size.width * 0.03;
+    canvas.drawRect(blockRect, borderPaint);
+
+    // Draw LEDs
+    for (int i = 0; i < 8; i++) {
+      int r = i ~/ cols, c = i % cols;
+      double cx = pad + c * (cellW + pad);
+      double cy = pad + r * (cellH + pad);
+      final cellRect = Rect.fromLTWH(cx, cy, cellW, cellH);
+
+      if (ledStates[i]) {
+        canvas.drawRect(cellRect, Paint()..color = activeColor);
+      } else {
+        canvas.drawRect(
+          cellRect,
+          Paint()
+            ..shader = LinearGradient(
+              colors: [inactiveTopColor, inactiveBottomColor],
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+            ).createShader(cellRect),
+        );
+      }
+      canvas.drawRect(cellRect, borderPaint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant LedBlockPainter old) =>
       !listEquals(old.ledStates, ledStates);
 }
