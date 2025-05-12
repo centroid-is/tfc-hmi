@@ -1,23 +1,27 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 
-class ModuleWidget extends StatelessWidget {
-  final List<bool> ledStates;
+enum IOState { low, high, forcedLow, forcedHigh }
+
+class ModuleWidget extends AnimatedWidget {
+  final List<IOState> ledStates;
   final double height;
   final bool disconnected;
   final bool selected;
   final (String, String) topLabels;
-
   ModuleWidget(
       {required this.ledStates,
       this.height = 300,
       this.disconnected = false,
       this.selected = false,
-      this.topLabels = ('', '')})
-      : assert(ledStates.length == 8);
+      this.topLabels = ('', ''),
+      required Animation<int> animation})
+      : assert(ledStates.length == 8),
+        super(listenable: animation);
 
   @override
   Widget build(BuildContext context) {
+    final animation = listenable as Animation<int>;
     return SizedBox(
       width: height / 6,
       height: height,
@@ -26,39 +30,24 @@ class ModuleWidget extends StatelessWidget {
               ledStates: ledStates,
               disconnected: disconnected,
               selected: selected,
-              topLabels: topLabels)),
-    );
-  }
-}
-
-class LedBlockWidget extends StatelessWidget {
-  final List<bool> ledStates;
-  final double height;
-
-  LedBlockWidget({required this.ledStates, this.height = 200});
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      height: height,
-      width: height / 1.3,
-      child: CustomPaint(
-        painter: LedBlockPainter(ledStates: ledStates),
-      ),
+              topLabels: topLabels,
+              animation: animation)),
     );
   }
 }
 
 class ModulePainter extends CustomPainter {
-  final List<bool> ledStates;
+  final List<IOState> ledStates;
   final bool disconnected;
   final bool selected;
   final (String, String) topLabels;
+  final Animation<int> animation;
   ModulePainter({
     required this.ledStates,
     this.disconnected = false,
     this.selected = false,
     this.topLabels = ('', ''),
+    required this.animation,
   });
 
   @override
@@ -169,7 +158,7 @@ class ModulePainter extends CustomPainter {
     canvas.save();
     canvas.clipRect(ledBlock);
     canvas.translate(ledBlock.left, ledBlock.top);
-    LedBlockPainter(ledStates: ledStates)
+    LedBlockPainter(ledStates: ledStates, animation: animation)
         .paint(canvas, Size(ledBlock.width, ledBlock.height));
     canvas.restore();
 
@@ -243,19 +232,17 @@ class ModulePainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant ModulePainter old) =>
-      !listEquals(old.ledStates, ledStates) ||
-      old.selected != selected ||
-      old.disconnected != disconnected;
+  bool shouldRepaint(covariant ModulePainter old) => true;
 }
 
 class LedBlockPainter extends CustomPainter {
-  final List<bool> ledStates;
+  final List<IOState> ledStates;
   final (String, String) topLabels;
-
+  final Animation<int> animation;
   LedBlockPainter({
     required this.ledStates,
     this.topLabels = ('', ''),
+    required this.animation,
   }) : assert(ledStates.length == 8);
 
   @override
@@ -292,7 +279,7 @@ class LedBlockPainter extends CustomPainter {
       double cy = pad + r * (cellH + pad);
       final cellRect = Rect.fromLTWH(cx, cy, cellW, cellH);
 
-      if (ledStates[i]) {
+      if (ledStates[i] == IOState.high || ledStates[i] == IOState.forcedHigh) {
         canvas.drawRect(cellRect, Paint()..color = activeColor);
       } else {
         canvas.drawRect(
@@ -305,11 +292,17 @@ class LedBlockPainter extends CustomPainter {
             ).createShader(cellRect),
         );
       }
-      canvas.drawRect(cellRect, borderPaint);
+      Paint thisBorder = Paint.from(borderPaint)
+        ..color = ledStates[i] == IOState.forcedHigh ||
+                ledStates[i] == IOState.forcedLow
+            ? Colors.red.withAlpha(animation.value)
+            : borderPaint.color;
+      canvas.drawRect(cellRect, thisBorder);
     }
   }
 
   @override
   bool shouldRepaint(covariant LedBlockPainter old) =>
-      !listEquals(old.ledStates, ledStates);
+      !listEquals(old.ledStates, ledStates) ||
+      old.animation.value != animation.value;
 }

@@ -97,24 +97,46 @@ class _IoTinkerPageState extends ConsumerState<IoTinkerPage>
 
   Widget _buildUnit(
       String key, NodeId nodeId, DynamicValue value, Animation<int> animation) {
-    return StreamBuilder<DynamicValue>(
-      stream: ref.watch(stateManProvider.future).asStream().asyncExpand(
-          (stateMan) => stateMan
-              .subscribe(NodeId.fromString(
-                      nodeId.namespace, "${nodeId.string}.raw_state")
-                  .toString())
-              .asStream()
-              .switchMap((s) => s)),
+    return StreamBuilder<Map<String, DynamicValue>>(
+      stream: ref
+          .watch(stateManProvider.future)
+          .asStream()
+          .asyncExpand((stateMan) => CombineLatestStream(
+                  [
+                    stateMan
+                        .subscribe(NodeId.fromString(
+                                nodeId.namespace, "${nodeId.string}.raw_state")
+                            .toString())
+                        .asStream()
+                        .switchMap((s) => s),
+                    stateMan
+                        .subscribe(NodeId.fromString(nodeId.namespace,
+                                "${nodeId.string}.force_values")
+                            .toString())
+                        .asStream()
+                        .switchMap((s) => s),
+                  ],
+                  (List<DynamicValue> values) => {
+                        "raw_state": values[0],
+                        "force_values": values[1],
+                      })),
       builder: (context, snapshot) {
         if (!snapshot.hasData || snapshot.hasError) {
           return ModuleWidget(
-            ledStates: List.filled(8, false),
+            ledStates: List.filled(8, IOState.low),
             disconnected: true,
+            animation: animation,
           );
         }
         final data = snapshot.data!;
-        List<bool> ledStates =
-            List.generate(8, (i) => (data.asInt & (1 << i)) != 0);
+        List<IOState> ledStates = List.generate(8, (i) {
+          final forceValue = data["force_values"]![i].asInt;
+          if (forceValue == 1) return IOState.forcedLow;
+          if (forceValue == 2) return IOState.forcedHigh;
+          return (data["raw_state"]!.asInt & (1 << i)) != 0
+              ? IOState.high
+              : IOState.low;
+        });
         return GestureDetector(
           onTap: () {
             setState(() {
@@ -133,6 +155,7 @@ class _IoTinkerPageState extends ConsumerState<IoTinkerPage>
           child: ModuleWidget(
             ledStates: ledStates,
             selected: selectedKey == key,
+            animation: animation,
           ),
         );
       },
