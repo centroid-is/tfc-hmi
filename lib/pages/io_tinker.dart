@@ -193,25 +193,27 @@ class _IoTinkerPageState extends ConsumerState<IoTinkerPage>
                       .toString())
                   .asStream()
                   .switchMap((s) => s),
-              // stateMan
-              //     .subscribe(NodeId.fromString(
-              //             nodeId.namespace, "${nodeId.string}.on_filters")
-              //         .toString())
-              //     .asStream()
-              //     .switchMap((s) => s),
-              // stateMan
-              //     .subscribe(NodeId.fromString(
-              //             nodeId.namespace, "${nodeId.string}.off_filters")
-              //         .toString())
-              //     .asStream()
-              //     .switchMap((s) => s),
+              if (value.contains("on_filters"))
+                stateMan
+                    .subscribe(NodeId.fromString(
+                            nodeId.namespace, "${nodeId.string}.on_filters")
+                        .toString())
+                    .asStream()
+                    .switchMap((s) => s),
+              if (value.contains("off_filters"))
+                stateMan
+                    .subscribe(NodeId.fromString(
+                            nodeId.namespace, "${nodeId.string}.off_filters")
+                        .toString())
+                    .asStream()
+                    .switchMap((s) => s),
             ], (List<DynamicValue> values) {
               return {
                 "raw_state": values[0],
                 "processed_state": values[1],
                 "force_values": values[2],
-                // "on_filters": values[3],
-                // "off_filters": values[4],
+                if (value.contains("on_filters")) "on_filters": values[3],
+                if (value.contains("off_filters")) "off_filters": values[4],
               };
             }),
             builder: (context, snapshot) {
@@ -256,6 +258,52 @@ class _IoTinkerPageState extends ConsumerState<IoTinkerPage>
                           leftDescription: value["descriptions"][i].asString,
                           rightDescription:
                               value["descriptions"][i + 1].asString,
+                          leftFilterEdit: map.containsKey("on_filters") &&
+                                  map.containsKey("off_filters")
+                              ? FilterEdit(
+                                  onFilter: map["on_filters"]![i].asInt,
+                                  offFilter: map["off_filters"]![i].asInt,
+                                  onChangedOnFilter: (value) async {
+                                    map["on_filters"]![i].value = value;
+                                    await stateMan.write(
+                                        NodeId.fromString(nodeId.namespace,
+                                                "${nodeId.string}.on_filters")
+                                            .toString(),
+                                        map["on_filters"]!);
+                                  },
+                                  onChangedOffFilter: (value) async {
+                                    map["off_filters"]![i].value = value;
+                                    await stateMan.write(
+                                        NodeId.fromString(nodeId.namespace,
+                                                "${nodeId.string}.off_filters")
+                                            .toString(),
+                                        map["off_filters"]!);
+                                  },
+                                )
+                              : null,
+                          rightFilterEdit: map.containsKey("on_filters") &&
+                                  map.containsKey("off_filters")
+                              ? FilterEdit(
+                                  onFilter: map["on_filters"]![i + 1].asInt,
+                                  offFilter: map["off_filters"]![i + 1].asInt,
+                                  onChangedOnFilter: (value) async {
+                                    map["on_filters"]![i + 1].value = value;
+                                    await stateMan.write(
+                                        NodeId.fromString(nodeId.namespace,
+                                                "${nodeId.string}.on_filters")
+                                            .toString(),
+                                        map["on_filters"]!);
+                                  },
+                                  onChangedOffFilter: (value) async {
+                                    map["off_filters"]![i + 1].value = value;
+                                    await stateMan.write(
+                                        NodeId.fromString(nodeId.namespace,
+                                                "${nodeId.string}.off_filters")
+                                            .toString(),
+                                        map["off_filters"]!);
+                                  },
+                                )
+                              : null,
                         ),
                         const SizedBox(height: 6),
                       ],
@@ -279,8 +327,9 @@ class IOForceButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return SizedBox(
-      width: 300,
+      width: 200,
       child: SegmentedButton(
+        showSelectedIcon: false,
         segments: const [
           ButtonSegment(
             value: 0,
@@ -304,6 +353,115 @@ class IOForceButton extends StatelessWidget {
   }
 }
 
+class FilterEdit extends StatelessWidget {
+  final int onFilter;
+  final int offFilter;
+  final void Function(int) onChangedOnFilter;
+  final void Function(int) onChangedOffFilter;
+  const FilterEdit(
+      {super.key,
+      required this.onFilter,
+      required this.offFilter,
+      required this.onChangedOnFilter,
+      required this.onChangedOffFilter});
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            SizedBox(
+              width: 100,
+              child: TextFormField(
+                decoration: const InputDecoration(
+                  labelText: 'On filter',
+                  suffixText: 'ms',
+                ),
+                initialValue: onFilter.toString(),
+                onChanged: (value) {
+                  if (value.isNotEmpty) {
+                    onChangedOnFilter(int.parse(value));
+                  }
+                },
+              ),
+            ),
+            const SizedBox(width: 16),
+            SizedBox(
+              width: 100,
+              child: TextFormField(
+                decoration: const InputDecoration(
+                  labelText: 'Off filter',
+                  suffixText: 'ms',
+                ),
+                initialValue: offFilter.toString(),
+                onChanged: (value) {
+                  if (value.isNotEmpty) {
+                    onChangedOffFilter(int.parse(value));
+                  }
+                },
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+class RowControl extends StatelessWidget {
+  final String? description;
+  final int selected;
+  final void Function(int) onChanged;
+  final FilterEdit? filterEdit;
+  const RowControl(
+      {super.key,
+      required this.description,
+      required this.selected,
+      required this.onChanged,
+      this.filterEdit});
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 250,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        mainAxisAlignment: MainAxisAlignment.center,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (description != null)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 4),
+              child: Text(
+                description!.isNotEmpty
+                    ? description![0].toUpperCase() + description!.substring(1)
+                    : description!,
+                style: TextStyle(
+                  fontSize: 14,
+                  color: Theme.of(context).colorScheme.tertiary,
+                ),
+                textAlign: TextAlign.center,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          IOForceButton(
+            selected: selected,
+            onChanged: onChanged,
+          ),
+          if (filterEdit != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 10),
+              child: filterEdit!,
+            ),
+        ],
+      ),
+    );
+  }
+}
+
 class RowIOView extends AnimatedWidget {
   const RowIOView({
     super.key,
@@ -317,6 +475,8 @@ class RowIOView extends AnimatedWidget {
     required this.rightOnChanged,
     this.leftDescription,
     this.rightDescription,
+    this.leftFilterEdit,
+    this.rightFilterEdit,
     required Animation<int> animationValue,
   }) : super(listenable: animationValue);
   final int leftSelected;
@@ -329,31 +489,22 @@ class RowIOView extends AnimatedWidget {
   final void Function(int) rightOnChanged;
   final String? leftDescription;
   final String? rightDescription;
+  final FilterEdit? leftFilterEdit;
+  final FilterEdit? rightFilterEdit;
 
   @override
   Widget build(BuildContext context) {
     final animation = listenable as Animation<int>;
     return Row(
-      crossAxisAlignment: CrossAxisAlignment.end,
+      crossAxisAlignment: CrossAxisAlignment.center,
+      mainAxisAlignment: MainAxisAlignment.center,
       children: [
         // LEFT COLUMN: description + button
-        Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (leftDescription != null)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 4),
-                child: Text(
-                  leftDescription!,
-                  style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-                  textAlign: TextAlign.right,
-                ),
-              ),
-            IOForceButton(
-              selected: leftSelected,
-              onChanged: leftOnChanged,
-            ),
-          ],
+        RowControl(
+          description: leftDescription,
+          selected: leftSelected,
+          onChanged: leftOnChanged,
+          filterEdit: leftFilterEdit,
         ),
         const SizedBox(width: 16),
         // MIDDLE: the three boxes in a row
@@ -362,7 +513,7 @@ class RowIOView extends AnimatedWidget {
           crossAxisAlignment: CrossAxisAlignment.end,
           children: [
             CustomPaint(
-              size: const Size(50, 50),
+              size: const Size(120, 120),
               painter: TriangleBoxPainter(
                 colorLeft: leftRaw ? Colors.green : Colors.grey,
                 colorRight: leftProcessed ? Colors.green : Colors.grey,
@@ -370,12 +521,12 @@ class RowIOView extends AnimatedWidget {
               ),
             ),
             Container(
-              width: 50,
-              height: 50,
+              width: 120,
+              height: 120,
               color: Colors.grey,
             ),
             CustomPaint(
-              size: const Size(50, 50),
+              size: const Size(120, 120),
               painter: TriangleBoxPainter(
                 colorLeft: rightRaw ? Colors.green : Colors.grey,
                 colorRight: rightProcessed ? Colors.green : Colors.grey,
@@ -386,23 +537,11 @@ class RowIOView extends AnimatedWidget {
         ),
         const SizedBox(width: 16),
         // RIGHT COLUMN: description + button
-        Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (rightDescription != null)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 4),
-                child: Text(
-                  rightDescription!,
-                  style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-                  textAlign: TextAlign.center,
-                ),
-              ),
-            IOForceButton(
-              selected: rightSelected,
-              onChanged: rightOnChanged,
-            ),
-          ],
+        RowControl(
+          description: rightDescription,
+          selected: rightSelected,
+          onChanged: rightOnChanged,
+          filterEdit: rightFilterEdit,
         ),
       ],
     );
