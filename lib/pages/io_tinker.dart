@@ -126,6 +126,9 @@ class _IoTinkerPageState extends ConsumerState<IoTinkerPage>
             ledStates: List.filled(8, IOState.low),
             disconnected: true,
             animation: animation,
+            name: value.contains("on_filters")
+                ? "EL1008"
+                : "EL2008", // todo this is not great
           );
         }
         final data = snapshot.data!;
@@ -156,6 +159,9 @@ class _IoTinkerPageState extends ConsumerState<IoTinkerPage>
             ledStates: ledStates,
             selected: selectedKey == key,
             animation: animation,
+            name: value.contains("on_filters")
+                ? "EL1008"
+                : "EL2008", // todo this is not great,
           ),
         );
       },
@@ -183,16 +189,17 @@ class _IoTinkerPageState extends ConsumerState<IoTinkerPage>
                   .switchMap((s) => s),
               stateMan
                   .subscribe(NodeId.fromString(
-                          nodeId.namespace, "${nodeId.string}.processed_state")
-                      .toString())
-                  .asStream()
-                  .switchMap((s) => s),
-              stateMan
-                  .subscribe(NodeId.fromString(
                           nodeId.namespace, "${nodeId.string}.force_values")
                       .toString())
                   .asStream()
                   .switchMap((s) => s),
+              if (value.contains("processed_state"))
+                stateMan
+                    .subscribe(NodeId.fromString(nodeId.namespace,
+                            "${nodeId.string}.processed_state")
+                        .toString())
+                    .asStream()
+                    .switchMap((s) => s),
               if (value.contains("on_filters"))
                 stateMan
                     .subscribe(NodeId.fromString(
@@ -210,8 +217,9 @@ class _IoTinkerPageState extends ConsumerState<IoTinkerPage>
             ], (List<DynamicValue> values) {
               return {
                 "raw_state": values[0],
-                "processed_state": values[1],
-                "force_values": values[2],
+                "force_values": values[1],
+                if (value.contains("processed_state"))
+                  "processed_state": values[2],
                 if (value.contains("on_filters")) "on_filters": values[3],
                 if (value.contains("off_filters")) "off_filters": values[4],
               };
@@ -223,8 +231,10 @@ class _IoTinkerPageState extends ConsumerState<IoTinkerPage>
               final map = snapshot.data!;
               List<bool> rawStates = List.generate(
                   8, (i) => (map["raw_state"]!.asInt & (1 << i)) != 0);
-              List<bool> processedStates = List.generate(
-                  8, (i) => (map["processed_state"]!.asInt & (1 << i)) != 0);
+              List<bool>? processedStates = map["processed_state"] != null
+                  ? List.generate(
+                      8, (i) => (map["processed_state"]!.asInt & (1 << i)) != 0)
+                  : null;
 
               return Column(
                 children: [
@@ -234,8 +244,8 @@ class _IoTinkerPageState extends ConsumerState<IoTinkerPage>
                         RowIOView(
                           leftRaw: rawStates[i],
                           rightRaw: rawStates[i + 1],
-                          leftProcessed: processedStates[i],
-                          rightProcessed: processedStates[i + 1],
+                          leftProcessed: processedStates?[i],
+                          rightProcessed: processedStates?[i + 1],
                           leftSelected: map["force_values"]![i].asInt,
                           rightSelected: map["force_values"]![i + 1].asInt,
                           animationValue: animation,
@@ -483,8 +493,8 @@ class RowIOView extends AnimatedWidget {
   final int rightSelected;
   final bool leftRaw;
   final bool rightRaw;
-  final bool leftProcessed;
-  final bool rightProcessed;
+  final bool? leftProcessed;
+  final bool? rightProcessed;
   final void Function(int) leftOnChanged;
   final void Function(int) rightOnChanged;
   final String? leftDescription;
@@ -516,7 +526,8 @@ class RowIOView extends AnimatedWidget {
               size: const Size(120, 120),
               painter: TriangleBoxPainter(
                 colorLeft: leftRaw ? Colors.green : Colors.grey,
-                colorRight: leftProcessed ? Colors.green : Colors.grey,
+                colorRight:
+                    leftProcessed ?? leftRaw ? Colors.green : Colors.grey,
                 animationValue: leftSelected == 0 ? 0 : animation.value,
               ),
             ),
@@ -529,7 +540,8 @@ class RowIOView extends AnimatedWidget {
               size: const Size(120, 120),
               painter: TriangleBoxPainter(
                 colorLeft: rightRaw ? Colors.green : Colors.grey,
-                colorRight: rightProcessed ? Colors.green : Colors.grey,
+                colorRight:
+                    rightProcessed ?? rightRaw ? Colors.green : Colors.grey,
                 animationValue: rightSelected == 0 ? 0 : animation.value,
               ),
             ),

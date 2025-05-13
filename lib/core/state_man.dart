@@ -243,19 +243,47 @@ class StateMan {
     if (nodeId == null) {
       throw StateManException('Key: "$key" not found');
     }
-    subscriptionId ??= await client.subscriptionCreate();
-    if (!_subscriptions.containsKey(key)) {
-      final stream = client.monitor(nodeId, subscriptionId!);
-      _subscriptions[key] = _SubscriptionEntry(
-        key,
-        stream,
-        (key) {
-          _subscriptions.remove(key);
-          logger.d('Unsubscribed from $key');
-        },
-      );
+
+    if (_subscriptions.containsKey(key) && _subscriptions[key]!.hasFirstValue) {
+      return _subscriptions[key]!.stream;
     }
-    return _subscriptions[key]!.stream;
+
+    while (true) {
+      try {
+        subscriptionId ??= await client.subscriptionCreate();
+        final stream =
+            client.monitor(nodeId, subscriptionId!).asBroadcastStream();
+
+        // Create subscription first
+        if (!_subscriptions.containsKey(key)) {
+          _subscriptions[key] = _SubscriptionEntry(
+            key,
+            stream,
+            (key) {
+              _subscriptions.remove(key);
+              logger.d('Unsubscribed from $key');
+            },
+          );
+        }
+
+        // Then test for first value
+        await stream.first.timeout(
+          const Duration(seconds: 1),
+          onTimeout: () {
+            throw TimeoutException('No value received within 1 seconds');
+          },
+        );
+
+        return _subscriptions[key]!.stream;
+      } catch (e) {
+        logger.w('Failed to get initial value for $key: $e');
+        // Clean up the failed subscription
+        _subscriptions[key]?._rawSub.cancel();
+        _subscriptions[key]?._subject.close();
+        _subscriptions.remove(key);
+        continue;
+      }
+    }
   }
 }
 
@@ -266,12 +294,18 @@ class _SubscriptionEntry {
   Timer? _idleTimer;
   late final StreamSubscription<DynamicValue> _rawSub;
   final Function(String key) _onDispose;
+  var _hasFirstValue = false;
+
+  bool get hasFirstValue => _hasFirstValue;
 
   _SubscriptionEntry(this.key, Stream<DynamicValue> raw, this._onDispose)
       : _subject = ReplaySubject<DynamicValue>(maxSize: 1) {
     // 1) wire raw → subject
     _rawSub = raw.listen(
-      _subject.add,
+      (value) {
+        _hasFirstValue = true;
+        _subject.add(value);
+      },
       onError: _subject.addError,
       onDone: _subject.close,
     );
@@ -303,6 +337,11 @@ class _SubscriptionEntry {
 class CollectedSample {
   final DynamicValue value;
   final DateTime time;
+
+  @override
+  String toString() {
+    return 'CollectedSample(value: $value, time: $time)';
+  }
 
   CollectedSample(this.value, this.time);
 }

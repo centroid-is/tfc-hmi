@@ -9,12 +9,14 @@ class ModuleWidget extends AnimatedWidget {
   final bool disconnected;
   final bool selected;
   final (String, String) topLabels;
+  final String name;
   ModuleWidget(
       {required this.ledStates,
       this.height = 300,
       this.disconnected = false,
       this.selected = false,
       this.topLabels = ('', ''),
+      required this.name,
       required Animation<int> animation})
       : assert(ledStates.length == 8),
         super(listenable: animation);
@@ -31,6 +33,7 @@ class ModuleWidget extends AnimatedWidget {
               disconnected: disconnected,
               selected: selected,
               topLabels: topLabels,
+              name: name,
               animation: animation)),
     );
   }
@@ -42,12 +45,14 @@ class ModulePainter extends CustomPainter {
   final bool selected;
   final (String, String) topLabels;
   final Animation<int> animation;
+  final String name;
   ModulePainter({
     required this.ledStates,
     this.disconnected = false,
     this.selected = false,
     this.topLabels = ('', ''),
     required this.animation,
+    required this.name,
   });
 
   @override
@@ -223,8 +228,7 @@ class ModulePainter extends CustomPainter {
       return tp;
     }
 
-    drawLeftLabel(
-        'EL1008', Offset(textLeft, el1008Y), textWidth, el1008H, el1008H);
+    drawLeftLabel(name, Offset(textLeft, el1008Y), textWidth, el1008H, el1008H);
     drawLeftLabel('BECKHOFF', Offset(textLeft, beckhoffY), textWidth, beckhoffH,
         beckhoffH);
 
