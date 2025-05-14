@@ -112,11 +112,11 @@ class StateMan {
   final Map<String, _SubscriptionEntry> _subscriptions = {};
 
   // Use the new manager
-  late final _KeyCollectorManager _collectorManager;
+  late final KeyCollectorManager _collectorManager;
 
   /// Constructor requires the server endpoint.
   StateMan({required this.config, required this.keyMappings}) {
-    _collectorManager = _KeyCollectorManager(monitorFn: _monitor);
+    _collectorManager = KeyCollectorManager(monitorFn: _monitor);
 
     // spawn a background task to keep the client active
     () async {
@@ -346,13 +346,13 @@ class CollectedSample {
   CollectedSample(this.value, this.time);
 }
 
-class _KeyCollectorManager {
+class KeyCollectorManager {
   final Future<Stream<DynamicValue>> Function(String key) monitorFn;
   final Map<String, BehaviorSubject<List<CollectedSample>>> _collectors = {};
   final Map<String, RingBuffer<CollectedSample>> _buffers = {};
   final Map<String, StreamSubscription<DynamicValue>> _collectorSubs = {};
 
-  _KeyCollectorManager({required this.monitorFn});
+  KeyCollectorManager({required this.monitorFn});
 
   Future<void> collect(String key, int size) async {
     if (_collectors.containsKey(key)) {
@@ -364,7 +364,7 @@ class _KeyCollectorManager {
 
     final sub = await monitorFn(key);
     final subscription = sub.listen((value) {
-      buffer.add(CollectedSample(value, DateTime.now()));
+      buffer.add(CollectedSample(DynamicValue.from(value), DateTime.now()));
       subject.add(buffer.toList());
     });
 

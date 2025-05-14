@@ -77,5 +77,20 @@ void main() {
       expect(buffer.toList(), [97, 98, 99]);
       expect(buffer.last, 99);
     });
+
+    test('should maintain most recent values when buffer overflows', () {
+      final buffer = RingBuffer<int>(2); // Buffer size of 2
+
+      // Add more values than buffer size
+      buffer.add(1);
+      buffer.add(2);
+      buffer.add(3);
+
+      // Should only contain the most recent values
+      expect(buffer.toList(), [2, 3],
+          reason: 'Buffer should contain only the most recent values');
+      expect(buffer.last, 3,
+          reason: 'Last value should be the most recently added value');
+    });
   });
 }
