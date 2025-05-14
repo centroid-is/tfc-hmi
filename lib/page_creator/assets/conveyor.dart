@@ -18,9 +18,7 @@ part 'conveyor.g.dart';
 class ConveyorConfig extends BaseAsset {
   String key;
 
-  ConveyorConfig({
-    required this.key,
-  });
+  ConveyorConfig({required this.key});
 
   static const previewStr = 'Conveyor Preview';
 
@@ -77,12 +75,16 @@ class _ConveyorConfigContentState extends State<_ConveyorConfigContent> {
             const SizedBox(width: 8),
             Expanded(
               child: TextFormField(
-                initialValue:
-                    widget.config.coordinates.angle?.toStringAsFixed(0),
-                decoration:
-                    const InputDecoration(suffixText: '°', isDense: true),
-                keyboardType:
-                    const TextInputType.numberWithOptions(decimal: true),
+                initialValue: widget.config.coordinates.angle?.toStringAsFixed(
+                  0,
+                ),
+                decoration: const InputDecoration(
+                  suffixText: '°',
+                  isDense: true,
+                ),
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
                 onChanged: (value) {
                   final deg = double.tryParse(value) ?? 0.0;
                   setState(() {
@@ -147,14 +149,16 @@ class _ConveyorState extends ConsumerState<Conveyor> {
     }
     return StreamBuilder<DynamicValue>(
       stream: ref.watch(stateManProvider.future).asStream().asyncExpand(
-          (stateMan) => stateMan
-              .subscribe(widget.config.key)
-              .asStream()
-              .switchMap((s) => s)),
+            (stateMan) => stateMan
+                .subscribe(widget.config.key)
+                .asStream()
+                .switchMap((s) => s),
+          ),
       builder: (context, snapshot) {
         if (snapshot.hasError) {
           _log.e(
-              'Error fetching dynamic value for ${widget.config.key}, error: ${snapshot.error}');
+            'Error fetching dynamic value for ${widget.config.key}, error: ${snapshot.error}',
+          );
           return _buildConveyorVisual(context, Colors.grey, true);
         }
         if (!snapshot.hasData) {
@@ -173,17 +177,24 @@ class _ConveyorState extends ConsumerState<Conveyor> {
     );
   }
 
-  Widget _buildConveyorVisual(BuildContext context, Color color,
-      [bool? showExclamation]) {
+  Widget _buildConveyorVisual(
+    BuildContext context,
+    Color color, [
+    bool? showExclamation,
+  ]) {
     return Align(
       alignment: FractionalOffset(
-          widget.config.coordinates.x, widget.config.coordinates.y),
+        widget.config.coordinates.x,
+        widget.config.coordinates.y,
+      ),
       child: Transform.rotate(
         angle: (widget.config.coordinates.angle ?? 0.0) * pi / 180,
         child: CustomPaint(
           size: widget.config.size.toSize(MediaQuery.of(context).size),
           painter: _ConveyorPainter(
-              color: color, showExclamation: showExclamation ?? false),
+            color: color,
+            showExclamation: showExclamation ?? false,
+          ),
         ),
       ),
     );
@@ -194,12 +205,18 @@ class _ConveyorState extends ConsumerState<Conveyor> {
       context: context,
       builder: (_) => StreamBuilder<(StateMan, DynamicValue)>(
         stream: ref.watch(stateManProvider.future).asStream().switchMap(
-            (stateMan) => stateMan
-                .subscribe(widget.config.key)
-                .asStream()
-                .map((stream) => Rx.combineLatest2(Stream.value(stateMan),
-                    stream, (stateMan, value) => (stateMan, value)))
-                .switchMap((stream) => stream)),
+              (stateMan) => stateMan
+                  .subscribe(widget.config.key)
+                  .asStream()
+                  .map(
+                    (stream) => Rx.combineLatest2(
+                      Stream.value(stateMan),
+                      stream,
+                      (stateMan, value) => (stateMan, value),
+                    ),
+                  )
+                  .switchMap((stream) => stream),
+            ),
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
             return const Dialog(
@@ -235,7 +252,10 @@ class _ConveyorState extends ConsumerState<Conveyor> {
                           onHighlightChanged: (isPressed) async {
                             if (dynValue['p_stat_ManualStopOnRelease'].asBool) {
                               dynValue['p_cmd_JogBwd'] = isPressed;
-                              await stateMan.write(widget.config.key, dynValue);
+                              await stateMan.write(
+                                widget.config.key,
+                                dynValue,
+                              );
                             }
                           },
                           onPressed: () {
@@ -253,15 +273,20 @@ class _ConveyorState extends ConsumerState<Conveyor> {
                             size: 48,
                           ),
                         ),
-                        Text('Jog',
-                            style: Theme.of(context).textTheme.headlineLarge),
+                        Text(
+                          'Jog',
+                          style: Theme.of(context).textTheme.headlineLarge,
+                        ),
                         RawMaterialButton(
                           shape: const CircleBorder(),
                           padding: const EdgeInsets.all(8),
                           onHighlightChanged: (isPressed) async {
                             if (dynValue['p_stat_ManualStopOnRelease'].asBool) {
                               dynValue['p_cmd_JogFwd'] = isPressed;
-                              await stateMan.write(widget.config.key, dynValue);
+                              await stateMan.write(
+                                widget.config.key,
+                                dynValue,
+                              );
                             }
                           },
                           onPressed: () {
@@ -304,8 +329,10 @@ class _ConveyorState extends ConsumerState<Conveyor> {
                         ),
                       ),
                       const SizedBox(width: 4),
-                      Text('Fault reset',
-                          style: Theme.of(context).textTheme.titleLarge),
+                      Text(
+                        'Fault reset',
+                        style: Theme.of(context).textTheme.titleLarge,
+                      ),
                     ],
                   ),
 
@@ -328,8 +355,10 @@ class _ConveyorState extends ConsumerState<Conveyor> {
                         ),
                       ),
                       const SizedBox(width: 4),
-                      Text('Manual stop on release',
-                          style: Theme.of(context).textTheme.titleLarge),
+                      Text(
+                        'Manual stop on release',
+                        style: Theme.of(context).textTheme.titleLarge,
+                      ),
                     ],
                   ),
 
@@ -352,8 +381,10 @@ class _ConveyorState extends ConsumerState<Conveyor> {
                         ),
                       ),
                       const SizedBox(width: 4),
-                      Text('Reset run hours',
-                          style: Theme.of(context).textTheme.titleLarge),
+                      Text(
+                        'Reset run hours',
+                        style: Theme.of(context).textTheme.titleLarge,
+                      ),
                     ],
                   ),
 
@@ -361,31 +392,119 @@ class _ConveyorState extends ConsumerState<Conveyor> {
 
                   // Statistics columns
                   Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      const Column(
+                      // Labels
+                      Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text('HMIS'),
-                          Text('Last Fault'),
-                          Text('Frequency'),
-                          Text('Run hours'),
-                          Text('Current'),
+                          Text('HMIS',
+                              style: Theme.of(context).textTheme.bodyLarge),
+                          Text('Last Fault',
+                              style: Theme.of(context).textTheme.bodyLarge),
+                          Text('Frequency',
+                              style: Theme.of(context).textTheme.bodyLarge),
+                          Text('Run hours',
+                              style: Theme.of(context).textTheme.bodyLarge),
+                          Text('Current',
+                              style: Theme.of(context).textTheme.bodyLarge),
                         ],
                       ),
+                      // Values
                       Column(
                         crossAxisAlignment: CrossAxisAlignment.end,
                         children: [
-                          Text(dynValue['p_stat_State'].toString()),
-                          Text(dynValue['p_stat_LastFault'].toString()),
-                          Text(dynValue['p_stat_Frequency']
-                              .asDouble
-                              .toStringAsFixed(2)),
+                          Text(dynValue['p_stat_State'].toString(),
+                              style: Theme.of(context).textTheme.bodyLarge),
+                          Text(dynValue['p_stat_LastFault'].toString(),
+                              style: Theme.of(context).textTheme.bodyLarge),
                           Text(
-                              "${dynValue['p_stat_RunMinutes'].asInt ~/ 60}:${dynValue['p_stat_RunMinutes'].asInt % 60}"),
-                          Text(dynValue['p_stat_Current']
-                              .asDouble
-                              .toStringAsFixed(2)),
+                              "${dynValue['p_stat_Frequency'].asDouble.toStringAsFixed(2)} Hz",
+                              style: Theme.of(context).textTheme.bodyLarge),
+                          Text(
+                            "${dynValue['p_stat_RunMinutes'].asInt ~/ 60}:${dynValue['p_stat_RunMinutes'].asInt % 60} h:m",
+                            style: Theme.of(context).textTheme.bodyLarge,
+                          ),
+                          Text(
+                              "${dynValue['p_stat_Current'].asDouble.toStringAsFixed(2)} A",
+                              style: Theme.of(context).textTheme.bodyLarge),
+                        ],
+                      ),
+                      // Editable fields
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          Padding(
+                            padding: const EdgeInsets.all(8.0),
+                            child: SizedBox(
+                              width: 200,
+                              child: TextFormField(
+                                initialValue: dynValue['p_cfg_AutoFreq']
+                                    .asDouble
+                                    .toStringAsFixed(2),
+                                decoration: const InputDecoration(
+                                    labelText: 'Auto frequency',
+                                    suffixText: 'Hz',
+                                    suffixIcon: null),
+                                onChanged: (value) {
+                                  if (value.isEmpty) {
+                                    return;
+                                  }
+                                  dynValue['p_cfg_AutoFreq'] =
+                                      double.parse(value);
+                                  stateMan.write(widget.config.key, dynValue);
+                                },
+                              ),
+                            ),
+                          ),
+                          Padding(
+                            padding: const EdgeInsets.all(8.0),
+                            child: SizedBox(
+                              width: 200,
+                              child: TextFormField(
+                                initialValue: dynValue['p_cfg_CleaningFreq']
+                                    .asDouble
+                                    .toStringAsFixed(2),
+                                decoration: const InputDecoration(
+                                    labelText: 'Cleaning frequency',
+                                    suffixText: 'Hz',
+                                    suffixIcon: null),
+                                onChanged: (value) {
+                                  if (value.isEmpty) {
+                                    return;
+                                  }
+                                  dynValue['p_cfg_CleaningFreq'] =
+                                      double.parse(value);
+                                  stateMan.write(widget.config.key, dynValue);
+                                },
+                              ),
+                            ),
+                          ),
+                          Padding(
+                            padding: const EdgeInsets.all(8.0),
+                            child: SizedBox(
+                              width: 200,
+                              child: TextFormField(
+                                initialValue: dynValue['p_cfg_ManualFreq']
+                                    .asDouble
+                                    .toStringAsFixed(2),
+                                decoration: const InputDecoration(
+                                  labelText: 'Manual frequency',
+                                  suffixText: 'Hz',
+                                  suffixIcon: null,
+                                ),
+                                onChanged: (value) {
+                                  if (value.isEmpty) {
+                                    return;
+                                  }
+                                  dynValue['p_cfg_ManualFreq'] =
+                                      double.parse(value);
+                                  stateMan.write(widget.config.key, dynValue);
+                                },
+                              ),
+                            ),
+                          ),
                         ],
                       ),
                     ],
@@ -393,7 +512,7 @@ class _ConveyorState extends ConsumerState<Conveyor> {
 
                   const SizedBox(height: 12),
 
-                  // Graph placeholder
+                  // Graph
                   SizedBox(
                     width: MediaQuery.of(context).size.width * 0.3,
                     height: MediaQuery.of(context).size.height * 0.3,
@@ -427,8 +546,9 @@ class _ConveyorPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final rect = Offset.zero & size;
-    final borderRadius =
-        Radius.circular(size.shortestSide * 0.2); // 20% of the shortest side
+    final borderRadius = Radius.circular(
+      size.shortestSide * 0.2,
+    ); // 20% of the shortest side
     final rrect = RRect.fromRectAndRadius(rect, borderRadius);
 
     final paint = Paint()
@@ -474,8 +594,11 @@ class _ConveyorPainter extends CustomPainter {
 class ConveyorStatsGraph extends StatefulWidget {
   final StateMan stateMan;
   final String keyName;
-  const ConveyorStatsGraph(
-      {required this.stateMan, required this.keyName, super.key});
+  const ConveyorStatsGraph({
+    required this.stateMan,
+    required this.keyName,
+    super.key,
+  });
 
   @override
   State<ConveyorStatsGraph> createState() => _ConveyorStatsGraphState();
@@ -569,9 +692,13 @@ class _ConveyorStatsGraphState extends State<ConveyorStatsGraph> {
                   leftTitles: AxisTitles(
                     axisNameWidget: Padding(
                       padding: const EdgeInsets.only(right: 8.0),
-                      child: Text('Current (A)',
-                          style: TextStyle(
-                              color: primary, fontWeight: FontWeight.bold)),
+                      child: Text(
+                        'Current (A)',
+                        style: TextStyle(
+                          color: primary,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
                     ),
                     sideTitles: SideTitles(
                       showTitles: true,
@@ -584,9 +711,13 @@ class _ConveyorStatsGraphState extends State<ConveyorStatsGraph> {
                   rightTitles: AxisTitles(
                     axisNameWidget: Padding(
                       padding: const EdgeInsets.only(left: 8.0),
-                      child: Text('Frequency (Hz)',
-                          style: TextStyle(
-                              color: secondary, fontWeight: FontWeight.bold)),
+                      child: Text(
+                        'Frequency (Hz)',
+                        style: TextStyle(
+                          color: secondary,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
                     ),
                     sideTitles: SideTitles(
                       showTitles: true,
@@ -600,19 +731,25 @@ class _ConveyorStatsGraphState extends State<ConveyorStatsGraph> {
                     axisNameWidget: Text('Time'),
                     sideTitles: SideTitles(
                       showTitles: true,
-                      interval:
-                          ((maxTime - minTime) / 4).clamp(1, double.infinity),
+                      interval: ((maxTime - minTime) / 4).clamp(
+                        1,
+                        double.infinity,
+                      ),
                       getTitlesWidget: (value, meta) {
-                        final dt =
-                            DateTime.fromMillisecondsSinceEpoch(value.toInt());
+                        final dt = DateTime.fromMillisecondsSinceEpoch(
+                          value.toInt(),
+                        );
                         final formatted = intl.DateFormat.Hms().format(dt);
-                        return Text(formatted,
-                            style: const TextStyle(fontSize: 10));
+                        return Text(
+                          formatted,
+                          style: const TextStyle(fontSize: 10),
+                        );
                       },
                     ),
                   ),
-                  topTitles:
-                      AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                  topTitles: AxisTitles(
+                    sideTitles: SideTitles(showTitles: false),
+                  ),
                 ),
                 gridData: FlGridData(show: true),
                 borderData: FlBorderData(show: true),
