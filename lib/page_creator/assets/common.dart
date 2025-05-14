@@ -230,7 +230,7 @@ class _KeyFieldState extends State<KeyField> {
           onPressed: _openDialog,
         ),
       ),
-      onChanged: widget.onChanged,
+      onSubmitted: widget.onChanged,
     );
   }
 }
