@@ -440,6 +440,8 @@ class _ConveyorState extends ConsumerState<Conveyor> {
                             child: SizedBox(
                               width: 200,
                               child: TextFormField(
+                                key: Key(
+                                    'auto_freq_field-${dynValue['p_cfg_AutoFreq'].asString}'),
                                 initialValue: dynValue['p_cfg_AutoFreq']
                                     .asDouble
                                     .toStringAsFixed(2),
@@ -447,7 +449,7 @@ class _ConveyorState extends ConsumerState<Conveyor> {
                                     labelText: 'Auto frequency',
                                     suffixText: 'Hz',
                                     suffixIcon: null),
-                                onChanged: (value) {
+                                onFieldSubmitted: (value) {
                                   if (value.isEmpty) {
                                     return;
                                   }
@@ -463,6 +465,8 @@ class _ConveyorState extends ConsumerState<Conveyor> {
                             child: SizedBox(
                               width: 200,
                               child: TextFormField(
+                                key: Key(
+                                    'cleaning_freq_field-${dynValue['p_cfg_CleaningFreq'].asString}'),
                                 initialValue: dynValue['p_cfg_CleaningFreq']
                                     .asDouble
                                     .toStringAsFixed(2),
@@ -470,7 +474,7 @@ class _ConveyorState extends ConsumerState<Conveyor> {
                                     labelText: 'Cleaning frequency',
                                     suffixText: 'Hz',
                                     suffixIcon: null),
-                                onChanged: (value) {
+                                onFieldSubmitted: (value) {
                                   if (value.isEmpty) {
                                     return;
                                   }
@@ -486,6 +490,8 @@ class _ConveyorState extends ConsumerState<Conveyor> {
                             child: SizedBox(
                               width: 200,
                               child: TextFormField(
+                                key: Key(
+                                    'manual_freq_field-${dynValue['p_cfg_ManualFreq'].asString}'),
                                 initialValue: dynValue['p_cfg_ManualFreq']
                                     .asDouble
                                     .toStringAsFixed(2),
@@ -494,7 +500,7 @@ class _ConveyorState extends ConsumerState<Conveyor> {
                                   suffixText: 'Hz',
                                   suffixIcon: null,
                                 ),
-                                onChanged: (value) {
+                                onFieldSubmitted: (value) {
                                   if (value.isEmpty) {
                                     return;
                                   }
