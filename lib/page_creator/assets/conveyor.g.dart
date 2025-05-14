@@ -9,6 +9,8 @@ part of 'conveyor.dart';
 ConveyorConfig _$ConveyorConfigFromJson(Map<String, dynamic> json) =>
     ConveyorConfig(
       key: json['key'] as String,
+      batchesKey: json['batchesKey'] as String?,
+      simulateBatches: json['simulateBatches'] as bool?,
     )
       ..variant = json['asset_name'] as String
       ..pageName = json['page_name'] as String
@@ -23,4 +25,6 @@ Map<String, dynamic> _$ConveyorConfigToJson(ConveyorConfig instance) =>
       'coordinates': instance.coordinates.toJson(),
       'size': instance.size.toJson(),
       'key': instance.key,
+      'batchesKey': instance.batchesKey,
+      'simulateBatches': instance.simulateBatches,
     };

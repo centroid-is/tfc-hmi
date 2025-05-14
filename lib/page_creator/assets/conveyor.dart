@@ -17,8 +17,10 @@ part 'conveyor.g.dart';
 @JsonSerializable(explicitToJson: true)
 class ConveyorConfig extends BaseAsset {
   String key;
+  String? batchesKey;
+  bool? simulateBatches;
 
-  ConveyorConfig({required this.key});
+  ConveyorConfig({required this.key, this.batchesKey, this.simulateBatches});
 
   static const previewStr = 'Conveyor Preview';
 
@@ -58,10 +60,27 @@ class _ConveyorConfigContentState extends State<_ConveyorConfigContent> {
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        TextFormField(
+        KeyField(
           initialValue: widget.config.key,
-          decoration: const InputDecoration(labelText: 'Key'),
           onChanged: (val) => setState(() => widget.config.key = val),
+        ),
+        const SizedBox(height: 16),
+        const Text('Batches key:'),
+        const SizedBox(height: 8),
+        KeyField(
+          initialValue: widget.config.batchesKey,
+          onChanged: (val) => setState(() => widget.config.batchesKey = val),
+        ),
+        const SizedBox(height: 16),
+        Row(
+          children: [
+            const Text('Simulate batches:'),
+            const SizedBox(width: 8),
+            Checkbox(
+                value: widget.config.simulateBatches ?? false,
+                onChanged: (val) =>
+                    setState(() => widget.config.simulateBatches = val)),
+          ],
         ),
         const SizedBox(height: 16),
         SizeField(
@@ -118,6 +137,35 @@ class _ConveyorState extends ConsumerState<Conveyor> {
       printEmojis: false,
     ),
   );
+  final Map<String, Batch> _batches = {};
+  // periodic timer for batches
+  Timer? _simulateBatchesTimer;
+
+  void _startSimulateBatchesTimer() {
+    _simulateBatchesTimer ??=
+        Timer.periodic(const Duration(milliseconds: 20), (timer) {
+      if (_batches.isNotEmpty) {
+        final batch = _batches.values.first;
+        batch.start += 0.01;
+        batch.end += 0.01;
+        if (batch.start >= 1) {
+          _batches.clear();
+        }
+      } else {
+        // length 10 % of conveyor
+        _batches['0'] = Batch(start: -0.1, end: 0, color: Colors.yellow);
+      }
+      if (mounted) {
+        setState(() {});
+      } else {
+        _simulateBatchesTimer?.cancel();
+      }
+    });
+  }
+
+  void _stopSimulateBatchesTimer() {
+    _simulateBatchesTimer?.cancel();
+  }
 
   Color _getConveyorColor(dynamic dynValue) {
     try {
@@ -147,12 +195,25 @@ class _ConveyorState extends ConsumerState<Conveyor> {
         ],
       );
     }
-    return StreamBuilder<DynamicValue>(
+    return StreamBuilder<Map<String, DynamicValue>>(
       stream: ref.watch(stateManProvider.future).asStream().asyncExpand(
-            (stateMan) => stateMan
-                .subscribe(widget.config.key)
-                .asStream()
-                .switchMap((s) => s),
+            (stateMan) => CombineLatestStream(
+              [
+                stateMan
+                    .subscribe(widget.config.key)
+                    .asStream()
+                    .switchMap((s) => s),
+                if (widget.config.batchesKey != null)
+                  stateMan
+                      .subscribe(widget.config.batchesKey!)
+                      .asStream()
+                      .switchMap((s) => s),
+              ],
+              (List<DynamicValue> values) => {
+                'drive': values[0],
+                if (widget.config.batchesKey != null) 'batches': values[1],
+              },
+            ),
           ),
       builder: (context, snapshot) {
         if (snapshot.hasError) {
@@ -165,9 +226,18 @@ class _ConveyorState extends ConsumerState<Conveyor> {
           return _buildConveyorVisual(context, Colors.grey, true);
         }
         // _log.d('Dynamic value for ${widget.config.key}: ${snapshot.data}');
-        final dynValue = snapshot.data;
-        final color =
-            dynValue != null ? _getConveyorColor(dynValue) : Colors.grey;
+        final dynValue = snapshot.data!;
+        final color = _getConveyorColor(dynValue['drive']);
+
+        if (widget.config.simulateBatches ?? false) {
+          _startSimulateBatchesTimer();
+        } else {
+          _stopSimulateBatchesTimer();
+        }
+
+        if (snapshot.data!['batches'] != null) {
+          _updateBatches(snapshot.data!['batches']!);
+        }
 
         return GestureDetector(
           onTap: () => _showDetailsDialog(context),
@@ -175,6 +245,29 @@ class _ConveyorState extends ConsumerState<Conveyor> {
         );
       },
     );
+  }
+
+  void _updateBatches(DynamicValue dynConveyor) {
+    final conveyorLength = dynConveyor['p_stat_Length'].asDouble;
+    const batchLength = 500; // todo variable mm
+    var idx = 0;
+    final batches = dynConveyor['p_stat_Batches'].asArray;
+    for (final batchInfo in batches) {
+      final occupied = batchInfo['xOccupied'].asBool;
+      final backendOfBatch = batchInfo['position'].asDouble;
+      final relativeStart = backendOfBatch / conveyorLength;
+      final relativeEnd = (backendOfBatch + batchLength) / conveyorLength;
+      if (occupied) {
+        _batches[idx.toString()] =
+            Batch(start: relativeStart, end: relativeEnd);
+      } else {
+        _batches.remove(idx.toString());
+      }
+      idx++;
+    }
+    if (mounted) {
+      // setState(() {});
+    }
   }
 
   Widget _buildConveyorVisual(
@@ -194,6 +287,7 @@ class _ConveyorState extends ConsumerState<Conveyor> {
           painter: _ConveyorPainter(
             color: color,
             showExclamation: showExclamation ?? false,
+            batches: _batches,
           ),
         ),
       ),
@@ -543,11 +637,23 @@ class _ConveyorState extends ConsumerState<Conveyor> {
   }
 }
 
+class Batch {
+  double start; // 0…1 (can be <0 while entering)
+  double end; // 0…1 (can be >1 while exiting)
+  Color color;
+
+  Batch({required this.start, required this.end, this.color = Colors.white});
+}
+
 class _ConveyorPainter extends CustomPainter {
+  final Map<String, Batch> batches;
   final Color color;
   final bool showExclamation;
 
-  _ConveyorPainter({required this.color, this.showExclamation = false});
+  _ConveyorPainter(
+      {required this.color,
+      this.showExclamation = false,
+      required this.batches});
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -588,6 +694,37 @@ class _ConveyorPainter extends CustomPainter {
         (size.height - textPainter.height) / 2,
       );
       textPainter.paint(canvas, offset);
+      return;
+    }
+    // 2) draw each batch segment as a plain box
+    final paintBorder = Paint()
+      ..color = Colors.black
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1;
+    final batchHeight = size.height * 0.8;
+    final batchRadius =
+        Radius.circular(batchHeight * 0.2); // 20% of batch height
+
+    for (final batch in batches.values) {
+      final paintBatch = Paint()..color = batch.color;
+      // clamp into [0..1] then to pixels
+      final x0 = (batch.start.clamp(0.0, 1.0)) * size.width;
+      final x1 = (batch.end.clamp(0.0, 1.0)) * size.width;
+      final w = x1 - x0;
+      if (w <= 0) continue; // not yet visible / already off
+
+      final rect = Rect.fromLTWH(
+        x0,
+        (size.height - batchHeight) / 2,
+        w,
+        batchHeight,
+      );
+      final rrect = RRect.fromRectAndRadius(rect, batchRadius);
+
+      // fill
+      canvas.drawRRect(rrect, paintBatch);
+      // border (optional)
+      canvas.drawRRect(rrect, paintBorder);
     }
   }
 
