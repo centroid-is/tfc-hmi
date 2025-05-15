@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/alarm.dart';
 import '../providers/alarm.dart';
 import 'base_scaffold.dart';
+import '../page_creator/assets/common.dart';
 
 class ListAlarms extends ConsumerStatefulWidget {
   final void Function(AlarmConfig)? onEdit;
@@ -29,7 +30,7 @@ class _ListAlarmsState extends ConsumerState<ListAlarms> {
   @override
   Widget build(BuildContext context) {
     return FutureBuilder(
-      future: ref.read(alarmManProvider.future),
+      future: ref.watch(alarmManProvider.future),
       builder: (context, snapshot) {
         if (snapshot.hasData) {
           final alarms = snapshot.data!.alarms.where((alarm) {
@@ -484,30 +485,102 @@ class _ExpressionBuilderState extends ConsumerState<ExpressionBuilder> {
         const SizedBox(height: 8),
         Wrap(
           spacing: 8,
-          children: Expression.operators.keys.map((op) {
-            return OutlinedButton(
+          children: [
+            ...Expression.operators.keys.map((op) {
+              return OutlinedButton(
+                onPressed: widget.editable
+                    ? () {
+                        final text = controller.text;
+                        final selection = controller.selection;
+                        final newText = text.isEmpty
+                            ? op
+                            : text.replaceRange(
+                                selection.start,
+                                selection.end,
+                                ' $op ',
+                              );
+                        controller.text = newText;
+                        controller.selection = TextSelection.collapsed(
+                            offset: text.isEmpty
+                                ? op.length
+                                : selection.start + op.length + 2);
+                        widget.onChanged(Expression(formula: controller.text));
+                      }
+                    : null,
+                child: Text(op),
+              );
+            }),
+            OutlinedButton(
               onPressed: widget.editable
                   ? () {
                       final text = controller.text;
                       final selection = controller.selection;
                       final newText = text.isEmpty
-                          ? op
+                          ? '('
                           : text.replaceRange(
                               selection.start,
                               selection.end,
-                              ' $op ',
+                              '(',
                             );
                       controller.text = newText;
                       controller.selection = TextSelection.collapsed(
-                          offset: text.isEmpty
-                              ? op.length
-                              : selection.start + op.length + 2);
+                          offset: text.isEmpty ? 1 : selection.start + 1);
                       widget.onChanged(Expression(formula: controller.text));
                     }
                   : null,
-              child: Text(op),
-            );
-          }).toList(),
+              child: const Text('('),
+            ),
+            OutlinedButton(
+              onPressed: widget.editable
+                  ? () {
+                      final text = controller.text;
+                      final selection = controller.selection;
+                      final newText = text.isEmpty
+                          ? ')'
+                          : text.replaceRange(
+                              selection.start,
+                              selection.end,
+                              ')',
+                            );
+                      controller.text = newText;
+                      controller.selection = TextSelection.collapsed(
+                          offset: text.isEmpty ? 1 : selection.start + 1);
+                      widget.onChanged(Expression(formula: controller.text));
+                    }
+                  : null,
+              child: const Text(')'),
+            ),
+            OutlinedButton(
+              onPressed: widget.editable
+                  ? () async {
+                      final key = await showDialog<String>(
+                        context: context,
+                        builder: (context) => KeySearchDialog(
+                          initialQuery: '',
+                        ),
+                      );
+                      if (key != null && context.mounted) {
+                        final text = controller.text;
+                        final selection = controller.selection;
+                        final newText = text.isEmpty
+                            ? key
+                            : text.replaceRange(
+                                selection.start,
+                                selection.end,
+                                key,
+                              );
+                        controller.text = newText;
+                        controller.selection = TextSelection.collapsed(
+                            offset: text.isEmpty
+                                ? key.length
+                                : selection.start + key.length);
+                        widget.onChanged(Expression(formula: controller.text));
+                      }
+                    }
+                  : null,
+              child: const Text('Key'),
+            ),
+          ],
         ),
       ],
     );
@@ -598,25 +671,29 @@ class _ListActiveAlarmsState extends ConsumerState<ListActiveAlarms> {
 
   @override
   Widget build(BuildContext context) {
-    return StreamBuilder(
+    return StreamBuilder<(AlarmMan, List<(AlarmActive, DateTime?)>)>(
       stream: Stream.fromFuture(ref.watch(alarmManProvider.future)).asyncExpand(
         (alarmMan) => _showHistory
-            ? alarmMan.history().map((history) => history
-                .where((h) => h != null)
-                .map((h) => (h!, h!.deactivated))
-                .toList()
-              ..sort((a, b) => b.$2!.compareTo(a.$2!)))
-            : alarmMan.activeAlarms().map(
-                (active) => active.map((a) => (a, null as DateTime?)).toList()),
+            ? alarmMan.history().map((history) => (
+                  alarmMan,
+                  history
+                      .where((h) => h != null)
+                      .map((h) => (h!, h!.deactivated))
+                      .toList()
+                    ..sort((a, b) => b.$2!.compareTo(a.$2!))
+                ))
+            : alarmMan.activeAlarms().map((active) =>
+                (alarmMan, active.map((a) => (a, null as DateTime?)).toList())),
       ),
       builder: (context, snapshot) {
         if (!snapshot.hasData) {
           return const Center(child: CircularProgressIndicator());
         }
 
-        var alarms = snapshot.data!;
+        var (alarmMan, alarms) = snapshot.data!;
         if (!_showHistory) {
-          alarms = _filterAlarms(alarms.map((a) => a.$1).toList())
+          alarms = alarmMan
+              .filterAlarms(alarms.map((a) => a.$1).toList(), _searchQuery)
               .map((a) => (a, null as DateTime?))
               .toList();
         }
@@ -750,42 +827,6 @@ class _ListActiveAlarmsState extends ConsumerState<ListActiveAlarms> {
         ),
       ),
     );
-  }
-
-  List<AlarmActive> _filterAlarms(List<AlarmActive> alarms) {
-    // Group alarms by uid and keep only the highest priority one for each
-    final Map<String, AlarmActive> highestPriorityAlarms = {};
-    for (final alarm in alarms) {
-      final existing = highestPriorityAlarms[alarm.alarm.config.uid];
-      if (existing == null ||
-          alarm.notification.rule.level.index >
-              existing.notification.rule.level.index) {
-        highestPriorityAlarms[alarm.alarm.config.uid] = alarm;
-      }
-    }
-
-    var filteredAlarms = highestPriorityAlarms.values.toList()
-      ..sort((a, b) {
-        // First sort by priority (error > warning > info)
-        final priorityCompare = b.notification.rule.level.index
-            .compareTo(a.notification.rule.level.index);
-        if (priorityCompare != 0) return priorityCompare;
-
-        // If same priority, sort by most recent timestamp
-        return b.notification.timestamp.compareTo(a.notification.timestamp);
-      });
-
-    // Filter alarms based on search query
-    if (_searchQuery.isNotEmpty) {
-      filteredAlarms = filteredAlarms.where((alarm) {
-        final title = alarm.alarm.config.title.toLowerCase();
-        final description = alarm.alarm.config.description.toLowerCase();
-        final query = _searchQuery.toLowerCase();
-        return title.contains(query) || description.contains(query);
-      }).toList();
-    }
-
-    return filteredAlarms;
   }
 }
 

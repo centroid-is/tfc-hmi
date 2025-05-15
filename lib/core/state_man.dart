@@ -208,6 +208,8 @@ class StateMan {
   /// Stop a collection.
   void stopCollect(String key) => _collectorManager.stopCollect(key);
 
+  List<String> get keys => keyMappings.keys.toList();
+
   /// Close the connection to the server.
   void close() {
     logger.d('Closing connection');

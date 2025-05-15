@@ -1,6 +1,6 @@
 import 'dart:io';
 import 'dart:async';
-
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:beamer/beamer.dart';
@@ -78,28 +78,20 @@ class BaseScaffold extends ConsumerWidget {
   }
 
   Widget _buildClockOrAlarm(BuildContext context, WidgetRef ref) {
-    return StreamBuilder(
+    return StreamBuilder<(AlarmMan, List<AlarmActive>)>(
         stream: Stream.fromFuture(ref.watch(alarmManProvider.future))
-            .asyncExpand((alarmMan) => alarmMan.activeAlarms()),
+            .asyncExpand((alarmMan) => alarmMan
+                .activeAlarms()
+                .map((activeAlarms) => (alarmMan, activeAlarms.toList()))),
         builder: (context, snapshot) {
           if (!snapshot.hasError &&
               snapshot.hasData &&
-              snapshot.data!.isNotEmpty) {
-            // Get 3 highest priority alarms
-            final highestPriorAlarms = <AlarmActive>[];
-            for (final alarm in snapshot.data!) {
-              if (highestPriorAlarms.length < 3) {
-                highestPriorAlarms.add(alarm);
-              } else {
-                if (alarm.notification.rule.level.index >
-                    highestPriorAlarms.last.notification.rule.level.index) {
-                  highestPriorAlarms.removeLast();
-                  highestPriorAlarms.add(alarm);
-                }
-              }
-              highestPriorAlarms.sort((a, b) => b.notification.rule.level.index
-                  .compareTo(a.notification.rule.level.index));
-            }
+              snapshot.data!.$2.isNotEmpty) {
+            final (alarmMan, activeAlarms) = snapshot.data!;
+            final filteredAlarms = alarmMan.filterAlarms(activeAlarms, '');
+            final highestPriorAlarms =
+                filteredAlarms.sublist(0, math.min(2, filteredAlarms.length));
+
             return Column(
               mainAxisSize: MainAxisSize.min,
               children: highestPriorAlarms.map((e) {

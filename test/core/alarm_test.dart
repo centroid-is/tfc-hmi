@@ -552,6 +552,7 @@ void main() {
       expect(Expression(formula: '(A AND B))').isValid(), isFalse);
     });
   });
+
   group('Alarm expression formatWithValues', () {
     test('Format with values', () {
       final expression = Expression(formula: 'A AND B');
@@ -627,5 +628,168 @@ void main() {
       expect(formatted5,
           'A{10} < B{20} AND C{30} > D{25} OR E{40} <= F{40} AND G{50} >= H{45}');
     });
+
+    test('Format with values with literal values', () {
+      final expression = Expression(formula: 'A == "test" AND B == 42');
+      final formatted = expression.formatWithValues(
+          {'A': DynamicValue(value: "test"), 'B': DynamicValue(value: 42)});
+      expect(formatted, 'A{test} == "test" AND B{42} == 42');
+    });
+  });
+
+  test('Alarm expression with literal values', () {
+    var expression = Expression(formula: 'A == true');
+    expect(expression.evaluate({'A': DynamicValue(value: true)}), isTrue);
+    expect(expression.evaluate({'A': DynamicValue(value: false)}), isFalse);
+    expression = Expression(formula: 'A == True');
+    expect(expression.evaluate({'A': DynamicValue(value: true)}), isTrue);
+    expect(expression.evaluate({'A': DynamicValue(value: false)}), isFalse);
+    expression = Expression(formula: 'A == TRUE');
+    expect(expression.evaluate({'A': DynamicValue(value: true)}), isTrue);
+    expect(expression.evaluate({'A': DynamicValue(value: false)}), isFalse);
+    expression = Expression(formula: 'A == TRuE');
+    expect(expression.evaluate({'A': DynamicValue(value: true)}), isTrue);
+    expect(expression.evaluate({'A': DynamicValue(value: false)}), isFalse);
+    expression = Expression(formula: 'A == TrUE');
+    expect(expression.evaluate({'A': DynamicValue(value: true)}), isTrue);
+    expect(expression.evaluate({'A': DynamicValue(value: false)}), isFalse);
+  });
+  test('Alarm expression with numeric literals', () {
+    // Test integer literals
+    var expression = Expression(formula: 'A == 42');
+    expect(expression.evaluate({'A': DynamicValue(value: 42)}), isTrue);
+    expect(expression.evaluate({'A': DynamicValue(value: 43)}), isFalse);
+
+    // Test negative numbers
+    expression = Expression(formula: 'A == -42');
+    expect(expression.evaluate({'A': DynamicValue(value: -42)}), isTrue);
+    expect(expression.evaluate({'A': DynamicValue(value: 42)}), isFalse);
+
+    // Test decimal numbers
+    expression = Expression(formula: 'A == 3.14');
+    expect(expression.evaluate({'A': DynamicValue(value: 3.14)}), isTrue);
+    expect(expression.evaluate({'A': DynamicValue(value: 3.15)}), isFalse);
+
+    // Test numeric comparisons
+    expression = Expression(formula: 'A > 100');
+    expect(expression.evaluate({'A': DynamicValue(value: 101)}), isTrue);
+    expect(expression.evaluate({'A': DynamicValue(value: 100)}), isFalse);
+    expect(expression.evaluate({'A': DynamicValue(value: 99)}), isFalse);
+
+    // Test multiple numeric comparisons
+    expression = Expression(formula: 'A > 100 AND B < 50');
+    expect(
+        expression.evaluate(
+            {'A': DynamicValue(value: 101), 'B': DynamicValue(value: 49)}),
+        isTrue);
+    expect(
+        expression.evaluate(
+            {'A': DynamicValue(value: 101), 'B': DynamicValue(value: 51)}),
+        isFalse);
+
+    // Test numeric ranges
+    expression = Expression(formula: 'A >= 0 AND A <= 100');
+    expect(expression.evaluate({'A': DynamicValue(value: 50)}), isTrue);
+    expect(expression.evaluate({'A': DynamicValue(value: 0)}), isTrue);
+    expect(expression.evaluate({'A': DynamicValue(value: 100)}), isTrue);
+    expect(expression.evaluate({'A': DynamicValue(value: -1)}), isFalse);
+    expect(expression.evaluate({'A': DynamicValue(value: 101)}), isFalse);
+
+    // Test complex numeric expressions
+    expression = Expression(formula: '(A > 100 OR B < 50) AND C == 0');
+    expect(
+        expression.evaluate({
+          'A': DynamicValue(value: 101),
+          'B': DynamicValue(value: 51),
+          'C': DynamicValue(value: 0)
+        }),
+        isTrue);
+    expect(
+        expression.evaluate({
+          'A': DynamicValue(value: 99),
+          'B': DynamicValue(value: 49),
+          'C': DynamicValue(value: 0)
+        }),
+        isTrue);
+    expect(
+        expression.evaluate({
+          'A': DynamicValue(value: 101),
+          'B': DynamicValue(value: 51),
+          'C': DynamicValue(value: 1)
+        }),
+        isFalse);
+  });
+  test('Alarm expression with string literals', () {
+    var expression = Expression(formula: 'A == "test"');
+    expect(expression.evaluate({'A': DynamicValue(value: "test")}), isTrue);
+    expect(expression.evaluate({'A': DynamicValue(value: "other")}), isFalse);
+    expression = Expression(formula: 'A != "test"');
+    expect(expression.evaluate({'A': DynamicValue(value: "test")}), isFalse);
+    expect(expression.evaluate({'A': DynamicValue(value: "other")}), isTrue);
+    expression = Expression(formula: 'A == "test" AND B == "other"');
+    expect(
+        expression.evaluate({
+          'A': DynamicValue(value: "test"),
+          'B': DynamicValue(value: "other")
+        }),
+        isTrue);
+    expect(
+        expression.evaluate({
+          'A': DynamicValue(value: "test"),
+          'B': DynamicValue(value: "test")
+        }),
+        isFalse);
+
+    expression = Expression(formula: 'A == "test" OR B == "other"');
+    expect(
+        expression.evaluate({
+          'A': DynamicValue(value: "test"),
+          'B': DynamicValue(value: "other")
+        }),
+        isTrue);
+    expect(
+        expression.evaluate({
+          'A': DynamicValue(value: "test"),
+          'B': DynamicValue(value: "test")
+        }),
+        isTrue);
+    expect(
+        expression.evaluate({
+          'A': DynamicValue(value: "other"),
+          'B': DynamicValue(value: "test")
+        }),
+        isFalse);
+    expect(
+        expression.evaluate({
+          'A': DynamicValue(value: "other"),
+          'B': DynamicValue(value: "other")
+        }),
+        isTrue);
+
+    expression = Expression(formula: 'A == \'test\' AND B == "other"');
+    expect(
+        expression.evaluate({
+          'A': DynamicValue(value: "test"),
+          'B': DynamicValue(value: "other")
+        }),
+        isTrue);
+    expect(
+        expression.evaluate({
+          'A': DynamicValue(value: "test"),
+          'B': DynamicValue(value: "test")
+        }),
+        isFalse);
+    expect(
+        expression.evaluate({
+          'A': DynamicValue(value: "other"),
+          'B': DynamicValue(value: "test")
+        }),
+        isFalse);
+    expect(
+        expression.evaluate({
+          'A': DynamicValue(value: "other"),
+          'B': DynamicValue(value: "other")
+        }),
+        isFalse);
   });
 }

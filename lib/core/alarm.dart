@@ -221,6 +221,42 @@ class AlarmMan {
     alarms.add(Alarm(config: alarm));
   }
 
+  List<AlarmActive> filterAlarms(List<AlarmActive> alarms, String searchQuery) {
+    // Group alarms by uid and keep only the highest priority one for each
+    final Map<String, AlarmActive> highestPriorityAlarms = {};
+    for (final alarm in alarms) {
+      final existing = highestPriorityAlarms[alarm.alarm.config.uid];
+      if (existing == null ||
+          alarm.notification.rule.level.index >
+              existing.notification.rule.level.index) {
+        highestPriorityAlarms[alarm.alarm.config.uid] = alarm;
+      }
+    }
+
+    var filteredAlarms = highestPriorityAlarms.values.toList()
+      ..sort((a, b) {
+        // First sort by priority (error > warning > info)
+        final priorityCompare = b.notification.rule.level.index
+            .compareTo(a.notification.rule.level.index);
+        if (priorityCompare != 0) return priorityCompare;
+
+        // If same priority, sort by most recent timestamp
+        return b.notification.timestamp.compareTo(a.notification.timestamp);
+      });
+
+    // Filter alarms based on search query
+    if (searchQuery.isNotEmpty) {
+      filteredAlarms = filteredAlarms.where((alarm) {
+        final title = alarm.alarm.config.title.toLowerCase();
+        final description = alarm.alarm.config.description.toLowerCase();
+        final query = searchQuery.toLowerCase();
+        return title.contains(query) || description.contains(query);
+      }).toList();
+    }
+
+    return filteredAlarms;
+  }
+
   void _saveConfig() async {
     await preferences.setString(
         'alarm_man_config', jsonEncode(config.toJson()));
@@ -256,8 +292,8 @@ class Alarm {
           // Only emit if state has changed for this rule
           if (state != _lastEvaluations[i]) {
             _lastEvaluations[i] = state;
-            // If any rule is true, the alarm is active
-            final alarmState = _lastEvaluations.any((state) => state != null);
+            // If this rule is true, the alarm is active
+            final alarmState = state != null;
             streamController.add(AlarmNotification(
                 uid: config.uid,
                 active: alarmState,
@@ -550,9 +586,19 @@ class Expression {
         case '>=':
           return DynamicValue(value: lhs.asDouble >= rhs.asDouble);
         case '==':
-          return DynamicValue(value: lhs.asString == rhs.asString);
+          {
+            if (lhs.isString && rhs.isString) {
+              return DynamicValue(value: lhs.asString == rhs.asString);
+            }
+            return DynamicValue(value: lhs.asDouble == rhs.asDouble);
+          }
         case '!=':
-          return DynamicValue(value: lhs.asString != rhs.asString);
+          {
+            if (lhs.isString && rhs.isString) {
+              return DynamicValue(value: lhs.asString != rhs.asString);
+            }
+            return DynamicValue(value: lhs.asDouble != rhs.asDouble);
+          }
         default:
           throw ArgumentError('Invalid operator $op');
       }
@@ -561,9 +607,12 @@ class Expression {
     for (final tok in outputQueue) {
       if (tok.value != null) {
         final name = tok.value!;
-        final val = variables[name];
+        var val = variables[name];
         if (val == null) {
-          throw ArgumentError('Variable $name not found');
+          val = parseLiteral(name);
+          if (val == null) {
+            throw ArgumentError('Variable $name not found');
+          }
         }
         evalStack.add(val);
       } else if (tok.operator != null) {
@@ -603,11 +652,17 @@ class Expression {
     for (final token in tokens) {
       if (token.value != null) {
         // For variables, append the value in curly braces
-        final value = variables[token.value!];
+        var value = variables[token.value!];
         if (value == null) {
-          throw ArgumentError('Variable ${token.value} not found in variables');
+          value = parseLiteral(token.value!);
+          if (value == null) {
+            throw ArgumentError(
+                'Variable ${token.value} not found in variables');
+          }
+          result.write('${token.value}');
+          continue;
         }
-        result.write('${token.value}{${value.asString}}');
+        result.write('${token.value}{${value.toString()}}');
       } else if (token.operator != null) {
         // For operators, add spaces around them
         result.write(' ${token.operator} ');
@@ -618,6 +673,29 @@ class Expression {
     }
 
     return result.toString().trim();
+  }
+
+  DynamicValue? parseLiteral(String value) {
+    // Handle boolean literals
+    if (value.toLowerCase() == 'true') {
+      return DynamicValue(value: true);
+    }
+    if (value.toLowerCase() == 'false') {
+      return DynamicValue(value: false);
+    }
+
+    // Handle numeric literals
+    final numValue = double.tryParse(value);
+    if (numValue != null) {
+      return DynamicValue(value: numValue);
+    }
+
+    // Handle string literals (quoted)
+    if ((value.startsWith('"') && value.endsWith('"')) ||
+        (value.startsWith("'") && value.endsWith("'"))) {
+      return DynamicValue(value: value.substring(1, value.length - 1));
+    }
+    return null;
   }
 }
 

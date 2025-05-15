@@ -95,7 +95,6 @@ class _ConfigContentState extends State<_ConfigContent> {
         ),
         child: Material(
           borderRadius: BorderRadius.circular(24),
-          color: Theme.of(context).dialogBackgroundColor,
           child: Padding(
             padding: const EdgeInsets.all(20),
             child: SingleChildScrollView(
@@ -197,6 +196,12 @@ class _ConfigContentState extends State<_ConfigContent> {
                         widget.config.size = value;
                       });
                     },
+                  ),
+                  const SizedBox(height: 16),
+                  CoordinatesField(
+                    initialValue: widget.config.coordinates,
+                    onChanged: (c) =>
+                        setState(() => widget.config.coordinates = c),
                   ),
                 ],
               ),

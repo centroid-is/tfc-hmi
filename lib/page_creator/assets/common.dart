@@ -1,6 +1,10 @@
-import 'package:json_annotation/json_annotation.dart';
 import 'dart:ui' show Color, Size;
+
+import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import '../../providers/state_man.dart';
 part 'common.g.dart';
 
 const String constAssetName = "asset_name";
@@ -180,7 +184,7 @@ Widget buildWithText(Widget widget, String text, TextPos textPos) {
   );
 }
 
-class KeyField extends StatefulWidget {
+class KeyField extends ConsumerStatefulWidget {
   final String? initialValue;
   final ValueChanged<String>? onChanged;
   final String label;
@@ -193,22 +197,53 @@ class KeyField extends StatefulWidget {
   });
 
   @override
-  State<KeyField> createState() => _KeyFieldState();
+  ConsumerState<KeyField> createState() => _KeyFieldState();
 }
 
-class _KeyFieldState extends State<KeyField> {
+class _KeyFieldState extends ConsumerState<KeyField> {
   late TextEditingController _controller;
+  List<String> _allKeys = [];
+  final FocusNode _focusNode = FocusNode();
 
   @override
   void initState() {
     super.initState();
     _controller = TextEditingController(text: widget.initialValue ?? '');
+    _focusNode.addListener(_onFocusChange);
+
+    // Fetch keys during initialization
+    final stateMan = ref.read(stateManProvider).value;
+    if (stateMan != null) {
+      _allKeys = stateMan.keys.toList();
+    }
   }
 
   @override
   void dispose() {
     _controller.dispose();
+    _focusNode.dispose();
     super.dispose();
+  }
+
+  void _onFocusChange() {
+    if (!_focusNode.hasFocus) {
+      setState(() {});
+    }
+  }
+
+  void _openSearchDialog() async {
+    final result = await showDialog<String>(
+      context: context,
+      builder: (context) => KeySearchDialog(
+        allKeys: _allKeys,
+        initialQuery: _controller.text,
+      ),
+    );
+    if (result != null) {
+      _controller.text = result;
+      widget.onChanged?.call(result);
+      setState(() {});
+    }
   }
 
   void _openDialog() async {
@@ -229,14 +264,115 @@ class _KeyFieldState extends State<KeyField> {
   Widget build(BuildContext context) {
     return TextField(
       controller: _controller,
+      focusNode: _focusNode,
       decoration: InputDecoration(
         labelText: widget.label,
-        suffixIcon: IconButton(
-          icon: const Icon(Icons.edit),
-          onPressed: _openDialog,
+        suffixIcon: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            IconButton(
+              icon: const Icon(Icons.search),
+              onPressed: _openSearchDialog,
+            ),
+            IconButton(
+              icon: const Icon(Icons.edit),
+              onPressed: _openDialog,
+            ),
+          ],
         ),
       ),
+      onChanged: widget.onChanged,
       onSubmitted: widget.onChanged,
+    );
+  }
+}
+
+class KeySearchDialog extends ConsumerStatefulWidget {
+  final List<String>?
+      allKeys; // can be omitted, then the keys are fetched from the state manager
+  final String initialQuery;
+
+  const KeySearchDialog({
+    super.key,
+    this.allKeys,
+    required this.initialQuery,
+  });
+
+  @override
+  ConsumerState<KeySearchDialog> createState() => _KeySearchDialogState();
+}
+
+class _KeySearchDialogState extends ConsumerState<KeySearchDialog> {
+  late TextEditingController _searchController;
+  List<String> _searchResults = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _searchController = TextEditingController(text: widget.initialQuery);
+    _performSearch(widget.initialQuery);
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  void _performSearch(String query) async {
+    List<String> allKeys = widget.allKeys ??
+        await ref
+            .read(stateManProvider.future)
+            .then((stateMan) => stateMan.keys);
+    setState(() {
+      _searchResults = allKeys
+          .where((key) => key.toLowerCase().contains(query.toLowerCase()))
+          .toList();
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Search Keys'),
+      content: SizedBox(
+        width: double.maxFinite,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: _searchController,
+              decoration: const InputDecoration(
+                labelText: 'Search',
+                prefixIcon: Icon(Icons.search),
+              ),
+              onChanged: _performSearch,
+              autofocus: true,
+            ),
+            const SizedBox(height: 8),
+            Flexible(
+              child: ListView.builder(
+                shrinkWrap: true,
+                itemCount: _searchResults.length,
+                itemBuilder: (context, index) {
+                  final key = _searchResults[index];
+                  return ListTile(
+                    dense: true,
+                    title: Text(key),
+                    onTap: () => Navigator.of(context).pop(key),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+      ],
     );
   }
 }
