@@ -183,8 +183,14 @@ Widget buildWithText(Widget widget, String text, TextPos textPos) {
 class KeyField extends StatefulWidget {
   final String? initialValue;
   final ValueChanged<String>? onChanged;
+  final String label;
 
-  const KeyField({super.key, this.initialValue, this.onChanged});
+  const KeyField({
+    super.key,
+    this.initialValue,
+    this.onChanged,
+    this.label = 'Key',
+  });
 
   @override
   State<KeyField> createState() => _KeyFieldState();
@@ -224,7 +230,7 @@ class _KeyFieldState extends State<KeyField> {
     return TextField(
       controller: _controller,
       decoration: InputDecoration(
-        labelText: 'Key',
+        labelText: widget.label,
         suffixIcon: IconButton(
           icon: const Icon(Icons.edit),
           onPressed: _openDialog,
@@ -365,16 +371,13 @@ class _SizeFieldState extends State<SizeField> {
     if (widget.useSingleSize) {
       return Row(
         children: [
-          const Text('Size: '),
-          const SizedBox(width: 8),
-          SizedBox(
-            width: 100,
+          Expanded(
             child: TextFormField(
               controller: _widthController,
               decoration: const InputDecoration(
+                labelText: 'Size %',
                 suffixText: '%',
                 isDense: true,
-                helperText: '0.01-50%',
               ),
               keyboardType:
                   const TextInputType.numberWithOptions(decimal: true),
@@ -404,6 +407,108 @@ class _SizeFieldState extends State<SizeField> {
             onChanged: (_) => _onChanged(),
           ),
         ),
+      ],
+    );
+  }
+}
+
+class CoordinatesField extends StatefulWidget {
+  final Coordinates initialValue;
+  final ValueChanged<Coordinates>? onChanged;
+  final bool enableAngle;
+
+  const CoordinatesField({
+    super.key,
+    required this.initialValue,
+    this.onChanged,
+    this.enableAngle = false, // Default to false for backward compatibility
+  });
+
+  @override
+  State<CoordinatesField> createState() => _CoordinatesFieldState();
+}
+
+class _CoordinatesFieldState extends State<CoordinatesField> {
+  late TextEditingController _xController;
+  late TextEditingController _yController;
+  late TextEditingController _angleController;
+
+  @override
+  void initState() {
+    super.initState();
+    _xController = TextEditingController(
+        text: (widget.initialValue.x * 100).toStringAsFixed(2));
+    _yController = TextEditingController(
+        text: (widget.initialValue.y * 100).toStringAsFixed(2));
+    _angleController = TextEditingController(
+        text: widget.initialValue.angle?.toStringAsFixed(2) ?? '');
+  }
+
+  @override
+  void dispose() {
+    _xController.dispose();
+    _yController.dispose();
+    _angleController.dispose();
+    super.dispose();
+  }
+
+  void _onChanged() {
+    final x = double.tryParse(_xController.text) ?? 0.0;
+    final y = double.tryParse(_yController.text) ?? 0.0;
+    final angle =
+        widget.enableAngle ? double.tryParse(_angleController.text) : null;
+
+    final coordinates = Coordinates(
+      x: x / 100, // Convert from percentage to 0.0-1.0 range
+      y: y / 100,
+      angle: angle,
+    );
+    widget.onChanged?.call(coordinates);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: TextFormField(
+                controller: _xController,
+                decoration: const InputDecoration(
+                  labelText: 'X 0-100%',
+                ),
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
+                onChanged: (_) => _onChanged(),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: TextFormField(
+                controller: _yController,
+                decoration: const InputDecoration(
+                  labelText: 'Y 0-100%',
+                ),
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
+                onChanged: (_) => _onChanged(),
+              ),
+            ),
+          ],
+        ),
+        if (widget.enableAngle) ...[
+          const SizedBox(height: 8),
+          TextFormField(
+            controller: _angleController,
+            decoration: const InputDecoration(
+              labelText: 'Angle (°)',
+            ),
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            onChanged: (_) => _onChanged(),
+          ),
+        ],
       ],
     );
   }

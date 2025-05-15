@@ -391,16 +391,14 @@ class _ConfigContentState extends State<_ConfigContent> {
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        TextFormField(
+        KeyField(
           initialValue: widget.config.key,
-          decoration: const InputDecoration(
-            labelText: 'Key',
-          ),
-          onChanged: (value) {
-            setState(() {
-              widget.config.key = value;
-            });
-          },
+          onChanged: (value) => setState(() => widget.config.key = value),
+        ),
+        const SizedBox(height: 16),
+        CoordinatesField(
+          initialValue: widget.config.coordinates,
+          onChanged: (c) => setState(() => widget.config.coordinates = c),
         ),
         const SizedBox(height: 16),
         Row(

@@ -24,7 +24,8 @@ class ArrowConfig extends BaseAsset {
       : key = "",
         label = "Arrow preview";
 
-  factory ArrowConfig.fromJson(Map<String, dynamic> json) => _$ArrowConfigFromJson(json);
+  factory ArrowConfig.fromJson(Map<String, dynamic> json) =>
+      _$ArrowConfigFromJson(json);
   Map<String, dynamic> toJson() => _$ArrowConfigToJson(this);
 
   @override
@@ -48,19 +49,16 @@ class _ArrowConfigEditor extends StatefulWidget {
 }
 
 class _ArrowConfigEditorState extends State<_ArrowConfigEditor> {
-  late TextEditingController _keyController;
   late TextEditingController _labelController;
 
   @override
   void initState() {
     super.initState();
-    _keyController = TextEditingController(text: widget.config.key);
     _labelController = TextEditingController(text: widget.config.label);
   }
 
   @override
   void dispose() {
-    _keyController.dispose();
     _labelController.dispose();
     super.dispose();
   }
@@ -71,9 +69,8 @@ class _ArrowConfigEditorState extends State<_ArrowConfigEditor> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          TextFormField(
-            controller: _keyController,
-            decoration: const InputDecoration(labelText: 'Key'),
+          KeyField(
+            initialValue: widget.config.key,
             onChanged: (value) => setState(() => widget.config.key = value),
           ),
           const SizedBox(height: 16),
@@ -81,6 +78,11 @@ class _ArrowConfigEditorState extends State<_ArrowConfigEditor> {
             controller: _labelController,
             decoration: const InputDecoration(labelText: 'Label'),
             onChanged: (value) => setState(() => widget.config.label = value),
+          ),
+          const SizedBox(height: 16),
+          CoordinatesField(
+            initialValue: widget.config.coordinates,
+            onChanged: (c) => setState(() => widget.config.coordinates = c),
           ),
           const SizedBox(height: 16),
           SizeField(
@@ -102,7 +104,8 @@ class ArrowWidget extends ConsumerStatefulWidget {
   ConsumerState<ArrowWidget> createState() => _ArrowWidgetState();
 }
 
-class _ArrowWidgetState extends ConsumerState<ArrowWidget> with SingleTickerProviderStateMixin {
+class _ArrowWidgetState extends ConsumerState<ArrowWidget>
+    with SingleTickerProviderStateMixin {
   late AnimationController _controller;
 
   @override
@@ -145,14 +148,16 @@ class _ArrowWidgetState extends ConsumerState<ArrowWidget> with SingleTickerProv
     final iconSize = widget.config.size.toSize(containerSize);
 
     if (widget.config.key.isEmpty) {
-      return Icon(Icons.arrow_upward, size: iconSize.shortestSide, color: Colors.grey);
+      return Icon(Icons.arrow_upward,
+          size: iconSize.shortestSide, color: Colors.grey);
     }
 
     return StreamBuilder<DynamicValue>(
-      stream: ref
-          .watch(stateManProvider.future)
-          .asStream()
-          .asyncExpand((stateMan) => stateMan.subscribe(widget.config.key).asStream().switchMap((s) => s)),
+      stream: ref.watch(stateManProvider.future).asStream().asyncExpand(
+          (stateMan) => stateMan
+              .subscribe(widget.config.key)
+              .asStream()
+              .switchMap((s) => s)),
       builder: (context, snapshot) {
         String operation = "right";
         if (snapshot.hasData) {

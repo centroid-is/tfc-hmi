@@ -64,12 +64,11 @@ class _ConveyorConfigContentState extends State<_ConveyorConfigContent> {
           initialValue: widget.config.key,
           onChanged: (val) => setState(() => widget.config.key = val),
         ),
-        const SizedBox(height: 16),
-        const Text('Batches key:'),
         const SizedBox(height: 8),
         KeyField(
           initialValue: widget.config.batchesKey,
           onChanged: (val) => setState(() => widget.config.batchesKey = val),
+          label: 'Batches key',
         ),
         const SizedBox(height: 16),
         Row(
@@ -88,31 +87,10 @@ class _ConveyorConfigContentState extends State<_ConveyorConfigContent> {
           onChanged: (size) => setState(() => widget.config.size = size),
         ),
         const SizedBox(height: 16),
-        Row(
-          children: [
-            const Text('Angle (°):'),
-            const SizedBox(width: 8),
-            Expanded(
-              child: TextFormField(
-                initialValue: widget.config.coordinates.angle?.toStringAsFixed(
-                  0,
-                ),
-                decoration: const InputDecoration(
-                  suffixText: '°',
-                  isDense: true,
-                ),
-                keyboardType: const TextInputType.numberWithOptions(
-                  decimal: true,
-                ),
-                onChanged: (value) {
-                  final deg = double.tryParse(value) ?? 0.0;
-                  setState(() {
-                    widget.config.coordinates.angle = deg;
-                  });
-                },
-              ),
-            ),
-          ],
+        CoordinatesField(
+          initialValue: widget.config.coordinates,
+          onChanged: (c) => setState(() => widget.config.coordinates = c),
+          enableAngle: true,
         ),
       ],
     );
