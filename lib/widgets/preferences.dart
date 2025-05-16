@@ -372,6 +372,7 @@ class _JsonEditor extends StatefulWidget {
 class _JsonEditorState extends State<_JsonEditor> {
   late TextEditingController _controller;
   String? _error;
+  static const double _lineHeight = 24.0;
 
   @override
   void initState() {
@@ -444,9 +445,16 @@ class _JsonEditorState extends State<_JsonEditor> {
                     crossAxisAlignment: CrossAxisAlignment.end,
                     children: List.generate(
                       lines,
-                      (i) => Text('${i + 1}',
+                      (i) => SizedBox(
+                        height: _lineHeight,
+                        child: Text(
+                          '${i + 1}',
                           style: const TextStyle(
-                              fontFamily: 'monospace', fontSize: 12)),
+                            fontFamily: 'monospace',
+                            fontSize: 14,
+                          ),
+                        ),
+                      ),
                     ),
                   ),
                 ),
@@ -455,7 +463,11 @@ class _JsonEditorState extends State<_JsonEditor> {
                   child: TextField(
                     controller: _controller,
                     maxLines: null,
-                    style: const TextStyle(fontFamily: 'monospace'),
+                    style: const TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 14,
+                      height: _lineHeight / 14,
+                    ),
                     decoration: const InputDecoration(
                       border: InputBorder.none,
                       contentPadding:

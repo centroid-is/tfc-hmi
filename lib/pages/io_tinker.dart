@@ -1,9 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:logger/logger.dart';
-import 'package:tfc/page_creator/assets/led.dart';
 import 'package:open62541/open62541.dart' show DynamicValue, NodeId;
-import 'package:flutter/foundation.dart';
 import 'package:rxdart/rxdart.dart';
 import 'package:tfc/core/state_man.dart';
 import '../widgets/beckhoff.dart';
@@ -35,8 +33,10 @@ class _IoTinkerPageState extends ConsumerState<IoTinkerPage>
     );
     animation = IntTween(begin: 80, end: 255).animate(controller)
       ..addStatusListener((status) async {
+        if (!mounted) return;
         if (status == AnimationStatus.completed) {
           await Future.delayed(const Duration(milliseconds: 100));
+          if (!mounted) return;
           controller.reverse();
         } else if (status == AnimationStatus.dismissed) {
           controller.forward();

@@ -52,6 +52,9 @@ class NodeIdConfig {
   NodeIdConfig({required this.namespace, required this.identifier});
 
   NodeId toNodeId() {
+    if (int.tryParse(identifier) != null) {
+      return NodeId.fromNumeric(namespace, int.parse(identifier));
+    }
     return NodeId.fromString(namespace, identifier);
   }
 

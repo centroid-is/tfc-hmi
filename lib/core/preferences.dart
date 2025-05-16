@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:postgres/postgres.dart';
@@ -138,12 +139,19 @@ abstract class PreferencesApi {
   ///
   /// It is highly recommended that an [allowList] be provided to this call.
   Future<void> clear({Set<String>? allowList});
+
+  /// Stream of preferences that have changed.
+  ///
+  /// The stream will emit the key of the preference that has changed.
+  Stream<String> get onPreferencesChanged;
 }
 
 class Preferences implements PreferencesApi {
   final PreferencesConfig config;
   final Connection? connection;
   final SharedPreferencesAsync sharedPreferences = SharedPreferencesAsync();
+  final StreamController<String> _onPreferencesChanged =
+      StreamController<String>.broadcast();
 
   Preferences({required this.config, required this.connection});
 
@@ -238,41 +246,52 @@ class Preferences implements PreferencesApi {
   Future<void> setBool(String key, bool value) async {
     await sharedPreferences.setBool(key, value);
     await _upsertToPostgres(key, value, 'bool');
+    _onPreferencesChanged.add(key);
   }
 
   @override
   Future<void> setInt(String key, int value) async {
     await sharedPreferences.setInt(key, value);
     await _upsertToPostgres(key, value, 'int');
+    _onPreferencesChanged.add(key);
   }
 
   @override
   Future<void> setDouble(String key, double value) async {
     await sharedPreferences.setDouble(key, value);
     await _upsertToPostgres(key, value, 'double');
+    _onPreferencesChanged.add(key);
   }
 
   @override
   Future<void> setString(String key, String value) async {
     await sharedPreferences.setString(key, value);
     await _upsertToPostgres(key, value, 'String');
+    _onPreferencesChanged.add(key);
   }
 
   @override
   Future<void> setStringList(String key, List<String> value) async {
     await sharedPreferences.setStringList(key, value);
     await _upsertToPostgres(key, value, 'List<String>');
+    _onPreferencesChanged.add(key);
   }
 
   @override
   Future<void> remove(String key) {
-    return sharedPreferences.remove(key);
+    sharedPreferences.remove(key);
+    // TODO: remove from postgres
+    _onPreferencesChanged.add(key);
+    return Future.value();
   }
 
   @override
   Future<void> clear({Set<String>? allowList}) {
     return sharedPreferences.clear(allowList: allowList);
   }
+
+  @override
+  Stream<String> get onPreferencesChanged => _onPreferencesChanged.stream;
 
   /// Loads all preferences from Postgres into shared preferences.
   Future<void> loadFromPostgres() async {

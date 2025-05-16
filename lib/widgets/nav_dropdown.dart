@@ -1,4 +1,5 @@
-// lib/widgets/nav_dropdown.dart
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:beamer/beamer.dart';
 import '../models/menu_item.dart';
@@ -85,36 +86,57 @@ class NavDropdown extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Capture the parent context so we can safely navigate after the popup closes
+    final parentContext = context;
     final activeRoot = findRootNodeOfLeaf(RouteRegistry().root, null,
         (context.currentBeamLocation.state as BeamState).uri.path);
     if (activeRoot != null) {
-      print('I am here ${activeRoot.label}');
+      // print('I am here ${activeRoot.label}');
     }
-    return LayoutBuilder(builder: (context, constraints) {
-      const offset = 100.0;
-      final totalItems = menuItem.children.length; // Only count top-level items
-      final menuHeight = totalItems * NavDropdown.itemHeight + offset;
-
-      return PopupMenuButton<MenuItem>(
-        onSelected: (MenuItem selectedItem) =>
-            beamSafelyKids(context, selectedItem),
-        color: Theme.of(context).colorScheme.surface,
-        tooltip: menuItem.label,
-        position: PopupMenuPosition.under,
-        offset: Offset(0, -menuHeight), // Dynamic offset based on menu height
-        constraints: BoxConstraints(
-          minWidth: constraints.maxWidth,
-          maxWidth: constraints.maxWidth,
-        ),
-        itemBuilder: (BuildContext context) {
-          return menuItem.children
-              .map((node) => buildMenu(node, context))
-              .toList();
-        },
-        child: TopLevelNavIndicator(
-            menuItem.icon, menuItem.label, menuItem == activeRoot),
-      );
-    });
+    return Builder(
+      builder: (innerContext) {
+        return InkWell(
+          onTap: () async {
+            // Calculate dynamic upward offset so menu appears above nav bar
+            final totalItems = menuItem.children.length;
+            final menuHeight = totalItems * NavDropdown.itemHeight;
+            final RenderBox button =
+                innerContext.findRenderObject() as RenderBox;
+            final RenderBox overlay = Overlay.of(innerContext)
+                .context
+                .findRenderObject() as RenderBox;
+            final origin = button.localToGlobal(Offset.zero, ancestor: overlay);
+            final bottomRight = button.localToGlobal(
+              button.size.bottomRight(Offset.zero),
+              ancestor: overlay,
+            );
+            final shiftedRect =
+                Rect.fromPoints(origin, bottomRight).translate(0, -menuHeight);
+            final RelativeRect position = RelativeRect.fromRect(
+              shiftedRect,
+              Offset.zero & overlay.size,
+            );
+            // Show the menu and wait until it's fully closed
+            final MenuItem? selectedItem = await showMenu<MenuItem>(
+              context: parentContext,
+              position: position,
+              items: menuItem.children
+                  .map((node) => buildMenu(node, innerContext))
+                  .toList(),
+            );
+            if (selectedItem != null) {
+              // todo get rid of the warning
+              beamSafelyKids(parentContext, selectedItem);
+            }
+          },
+          child: TopLevelNavIndicator(
+            menuItem.icon,
+            menuItem.label,
+            menuItem == activeRoot,
+          ),
+        );
+      },
+    );
   }
 }
 
@@ -122,7 +144,7 @@ void beamSafelyKids(BuildContext context, MenuItem item) {
   if (item.path != null) {
     context.beamToNamed(item.path.toString());
   } else {
-    //logger.d('Item pressed and navigated does not have a page $item');
+    stderr.writeln('Item pressed and navigated does not have a page $item');
     showDialog(
         context: context,
         builder: (BuildContext context) {
