@@ -7,6 +7,8 @@ import 'package:json_annotation/json_annotation.dart';
 import 'package:open62541/open62541.dart' show DynamicValue;
 import 'package:rxdart/rxdart.dart';
 import 'package:flutter/material.dart';
+import 'package:postgres/postgres.dart' show Sql;
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'preferences.dart';
 import 'state_man.dart';
@@ -117,8 +119,20 @@ class AlarmManConfig {
   Map<String, dynamic> toJson() => _$AlarmManConfigToJson(this);
 }
 
+@JsonSerializable()
+class AlarmManLocalConfig {
+  final bool historyToDb;
+
+  AlarmManLocalConfig({required this.historyToDb});
+
+  factory AlarmManLocalConfig.fromJson(Map<String, dynamic> json) =>
+      _$AlarmManLocalConfigFromJson(json);
+  Map<String, dynamic> toJson() => _$AlarmManLocalConfigToJson(this);
+}
+
 class AlarmMan {
   final AlarmManConfig config;
+  final AlarmManLocalConfig localConfig;
   final Preferences preferences;
   final StateMan stateMan;
   final Set<Alarm> alarms;
@@ -127,7 +141,10 @@ class AlarmMan {
   final RingBuffer<AlarmActive> _history;
   final StreamController<List<AlarmActive?>> _historyController;
   AlarmMan._(
-      {required this.config, required this.preferences, required this.stateMan})
+      {required this.config,
+      required this.preferences,
+      required this.stateMan,
+      required this.localConfig})
       : alarms = config.alarms.map((e) => Alarm(config: e)).toSet(),
         _activeAlarms = {},
         _activeAlarmsController = BehaviorSubject<Set<AlarmActive>>.seeded({}),
@@ -175,17 +192,33 @@ class AlarmMan {
 
   static Future<AlarmMan> create(
       Preferences preferences, StateMan stateMan) async {
-    final configJson = await preferences.getString('alarm_man_config');
-    if (configJson == null) {
-      final config = AlarmManConfig(alarms: []);
-      await preferences.setString(
-          'alarm_man_config', jsonEncode(config.toJson()));
-      return AlarmMan._(
-          config: config, preferences: preferences, stateMan: stateMan);
+    final sharedPreferences = SharedPreferencesAsync();
+    var localConfigJson =
+        await sharedPreferences.getString('alarm_man_local_config');
+    if (localConfigJson == null) {
+      await sharedPreferences.setString('alarm_man_local_config',
+          jsonEncode(AlarmManLocalConfig(historyToDb: false).toJson()));
+      localConfigJson =
+          await sharedPreferences.getString('alarm_man_local_config');
     }
-    final config = AlarmManConfig.fromJson(jsonDecode(configJson));
+    final localConfig =
+        AlarmManLocalConfig.fromJson(jsonDecode(localConfigJson!));
+
+    var configJson = await preferences.getString('alarm_man_config');
+    if (configJson == null) {
+      configJson = await preferences.getString('alarm_man_config');
+      if (configJson == null) {
+        await preferences.setString(
+            'alarm_man_config', jsonEncode(AlarmManConfig(alarms: [])));
+        configJson = await preferences.getString('alarm_man_config');
+      }
+    }
+    final config = AlarmManConfig.fromJson(jsonDecode(configJson!));
     return AlarmMan._(
-        config: config, preferences: preferences, stateMan: stateMan);
+        config: config,
+        preferences: preferences,
+        stateMan: stateMan,
+        localConfig: localConfig);
   }
 
   Stream<Set<AlarmActive>> activeAlarms() {
@@ -268,6 +301,106 @@ class AlarmMan {
     _history.add(alarm);
     _activeAlarms.remove(alarm);
     _historyController.add(_history.buffer);
+    if (localConfig.historyToDb) {
+      _addToDb(alarm);
+    }
+  }
+
+  Future<void> _addToDb(AlarmActive alarm) async {
+    if (preferences.connection == null) return;
+    await _ensureTable();
+    await preferences.connection!.execute(
+      Sql.named('''
+        INSERT INTO alarm_history (
+          alarm_uid, alarm_title, alarm_description, alarm_level,
+          expression, active, pending_ack, created_at, deactivated_at
+        ) VALUES (
+          @uid, @title, @description, @level,
+          @expression, @active, @pending_ack, @created_at, @deactivated_at
+        )
+      '''),
+      parameters: {
+        'uid': alarm.alarm.config.uid,
+        'title': alarm.alarm.config.title,
+        'description': alarm.alarm.config.description,
+        'level': alarm.notification.rule.level.name,
+        'expression': alarm.notification.expression,
+        'active': alarm.notification.active,
+        'pending_ack': alarm.pendingAck,
+        'created_at': alarm.notification.timestamp,
+        'deactivated_at': alarm.deactivated,
+      },
+    );
+  }
+
+  Future<void> _ensureTable() async {
+    if (preferences.connection == null) return;
+    await preferences.connection!.execute('''
+      CREATE TABLE IF NOT EXISTS alarm_history (
+        id SERIAL PRIMARY KEY,
+        alarm_uid TEXT NOT NULL,
+        alarm_title TEXT NOT NULL,
+        alarm_description TEXT NOT NULL,
+        alarm_level TEXT NOT NULL,
+        expression TEXT,
+        active BOOLEAN NOT NULL,
+        pending_ack BOOLEAN NOT NULL,
+        created_at TIMESTAMP NOT NULL,
+        deactivated_at TIMESTAMP,
+        acknowledged_at TIMESTAMP
+      )
+    ''');
+  }
+
+  Future<List<AlarmActive>> getRecentAlarms({int limit = 1000}) async {
+    if (preferences.connection == null) return [];
+
+    final result = await preferences.connection!.execute(
+      Sql.named('''
+        SELECT * FROM alarm_history 
+        ORDER BY created_at DESC 
+        LIMIT @limit
+      '''),
+      parameters: {'limit': limit},
+    );
+
+    return result.map((row) {
+      // Find the corresponding alarm config from our current alarms
+      final alarmConfig = alarms.firstWhere(
+        (a) => a.config.uid == row[1] as String, // alarm_uid is at index 1
+        orElse: () =>
+            throw Exception('Alarm config not found for uid: ${row[1]}'),
+      );
+
+      // Create AlarmRule from stored data
+      final rule = AlarmRule(
+        level: AlarmLevel.values.firstWhere(
+          (l) => l.name == row[4] as String, // alarm_level is at index 4
+        ),
+        expression: ExpressionConfig(
+          value: Expression(
+              formula: row[5] as String? ?? ''), // expression is at index 5
+        ),
+        acknowledgeRequired: false, // We don't store this in history
+      );
+
+      // Create AlarmNotification
+      final notification = AlarmNotification(
+        uid: row[1] as String, // alarm_uid
+        active: row[6] as bool, // active
+        expression: row[5] as String?, // expression
+        rule: rule,
+        timestamp: row[8] as DateTime, // created_at
+      );
+
+      // Create and return AlarmActive
+      return AlarmActive(
+        alarm: alarmConfig,
+        notification: notification,
+        pendingAck: row[7] as bool, // pending_ack
+        deactivated: row[9] as DateTime?, // deactivated_at
+      );
+    }).toList();
   }
 }
 

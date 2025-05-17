@@ -6,7 +6,7 @@ part of 'state_man.dart';
 // RiverpodGenerator
 // **************************************************************************
 
-String _$stateManHash() => r'006e60d725c8570b828e98eee7a6beef41ac06b2';
+String _$stateManHash() => r'4a6dcdaf460abf549197b52bdb48820963a4c527';
 
 /// See also [stateMan].
 @ProviderFor(stateMan)
