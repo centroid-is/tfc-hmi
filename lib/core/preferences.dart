@@ -139,11 +139,6 @@ abstract class PreferencesApi {
   ///
   /// It is highly recommended that an [allowList] be provided to this call.
   Future<void> clear({Set<String>? allowList});
-
-  /// Stream of preferences that have changed.
-  ///
-  /// The stream will emit the key of the preference that has changed.
-  Stream<String> get onPreferencesChanged;
 }
 
 class Preferences implements PreferencesApi {
@@ -290,8 +285,17 @@ class Preferences implements PreferencesApi {
     return sharedPreferences.clear(allowList: allowList);
   }
 
-  @override
   Stream<String> get onPreferencesChanged => _onPreferencesChanged.stream;
+
+  Future<bool> isKeyInDatabase(String key) async {
+    if (!dbConnected) return false;
+    final result = await connection!.execute(
+      Sql.named(
+          'SELECT EXISTS(SELECT 1 FROM flutter_preferences WHERE key = @key)'),
+      parameters: {'key': key},
+    );
+    return result[0][0] as bool;
+  }
 
   /// Loads all preferences from Postgres into shared preferences.
   Future<void> loadFromPostgres() async {
@@ -333,5 +337,87 @@ class Preferences implements PreferencesApi {
           throw Exception('Unsupported type: $type');
       }
     }
+  }
+}
+
+/// A wrapper around SharedPreferencesAsync that implements PreferencesApi
+class SharedPreferencesWrapper implements PreferencesApi {
+  final SharedPreferencesAsync _prefs;
+
+  SharedPreferencesWrapper(this._prefs);
+
+  @override
+  Future<Set<String>> getKeys({Set<String>? allowList}) {
+    return _prefs.getKeys(allowList: allowList);
+  }
+
+  @override
+  Future<Map<String, Object?>> getAll({Set<String>? allowList}) {
+    return _prefs.getAll(allowList: allowList);
+  }
+
+  @override
+  Future<bool?> getBool(String key) {
+    return _prefs.getBool(key);
+  }
+
+  @override
+  Future<int?> getInt(String key) {
+    return _prefs.getInt(key);
+  }
+
+  @override
+  Future<double?> getDouble(String key) {
+    return _prefs.getDouble(key);
+  }
+
+  @override
+  Future<String?> getString(String key) {
+    return _prefs.getString(key);
+  }
+
+  @override
+  Future<List<String>?> getStringList(String key) {
+    return _prefs.getStringList(key);
+  }
+
+  @override
+  Future<bool> containsKey(String key) {
+    return _prefs.containsKey(key);
+  }
+
+  @override
+  Future<void> setBool(String key, bool value) {
+    return _prefs.setBool(key, value);
+  }
+
+  @override
+  Future<void> setInt(String key, int value) {
+    return _prefs.setInt(key, value);
+  }
+
+  @override
+  Future<void> setDouble(String key, double value) {
+    return _prefs.setDouble(key, value);
+  }
+
+  @override
+  Future<void> setString(String key, String value) {
+    return _prefs.setString(key, value);
+  }
+
+  @override
+  Future<void> setStringList(String key, List<String> value) {
+    return _prefs.setStringList(key, value);
+  }
+
+  @override
+  Future<void> remove(String key) {
+    return _prefs.remove(key);
+  }
+
+  @override
+  Future<void> clear({Set<String>? allowList}) {
+    return _prefs.clear(allowList: allowList);
   }
 }

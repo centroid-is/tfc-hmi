@@ -13,18 +13,17 @@ part 'state_man.g.dart';
 
 @Riverpod(keepAlive: true)
 Future<StateMan> stateMan(Ref ref) async {
-  final prefs = await ref.watch(preferencesProvider.future);
-
   final SharedPreferencesAsync sharedPreferences = SharedPreferencesAsync();
 
   var stateManJson = await sharedPreferences.getString('state_man_config');
   if (stateManJson == null) {
     final defaultConfig = StateManConfig(opcua: OpcUAConfig());
     stateManJson = jsonEncode(defaultConfig.toJson());
-    await prefs.setString('state_man_config', stateManJson);
+    await sharedPreferences.setString('state_man_config', stateManJson);
   }
-  print('stateManJson: $stateManJson');
   final config = StateManConfig.fromJson(jsonDecode(stateManJson));
+
+  final prefs = await ref.watch(preferencesProvider.future);
 
   var keyMappingsJson = await prefs.getString('key_mappings');
   if (keyMappingsJson == null) {

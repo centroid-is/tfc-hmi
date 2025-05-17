@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:postgres/postgres.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
 import '../providers/preferences.dart';
 import '../core/preferences.dart';
 import 'dart:convert';
@@ -11,24 +13,25 @@ class PreferencesWidget extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     return FutureBuilder<Preferences>(
-      future: ref.read(preferencesProvider.future),
+      future: ref.watch(preferencesProvider.future),
       builder: (context, snapshot) {
         if (!snapshot.hasData) {
           return const Center(child: CircularProgressIndicator());
         }
         final preferences = snapshot.data!;
         final config = preferences.config;
+        final localPrefs =
+            SharedPreferencesWrapper(preferences.sharedPreferences);
 
         return ListView(
           children: [
             ExpansionTile(
-              title: const Text('Preferences Config'),
+              title: const Text('(Local) Preferences Config'),
               children: [
                 _ConfigEditor(
                   config: config,
                   onSave: (newConfig) async {
-                    final prefs = preferences.sharedPreferences;
-                    await prefs.setString(
+                    await localPrefs.setString(
                         'preferences_config', jsonEncode(newConfig.toJson()));
                   },
                 ),
@@ -53,39 +56,101 @@ class PreferencesWidget extends ConsumerWidget {
                       );
                     }
                     return Column(
-                      children: allPrefs.entries
-                          .where((e) => e.key != 'preferences_config')
-                          .map((e) => ExpansionTile(
-                                title: Text(e.key),
-                                children: [
-                                  _ValueEditor(
-                                    keyName: e.key,
-                                    value: e.value,
-                                    onChanged: (newValue) async {
-                                      // Save the new value
-                                      if (newValue is bool) {
-                                        await preferences.setBool(
-                                            e.key, newValue);
-                                      } else if (newValue is int) {
-                                        await preferences.setInt(
-                                            e.key, newValue);
-                                      } else if (newValue is double) {
-                                        await preferences.setDouble(
-                                            e.key, newValue);
-                                      } else if (newValue is List<String>) {
-                                        await preferences.setStringList(
-                                            e.key, newValue);
-                                      } else if (newValue is String) {
-                                        await preferences.setString(
-                                            e.key, newValue);
-                                      }
-                                      // Force refresh
-                                      (context as Element).markNeedsBuild();
-                                    },
-                                  ),
-                                ],
-                              ))
-                          .toList(),
+                      children: (() {
+                        final list = allPrefs.entries
+                            .where((e) => e.key != 'preferences_config')
+                            .toList();
+                        list.sort((a, b) => a.key.compareTo(b.key));
+                        return list
+                            .map((e) => FutureBuilder<bool>(
+                                future: preferences.isKeyInDatabase(e.key),
+                                builder: (context, snapshot) {
+                                  if (!snapshot.hasData) {
+                                    return const Padding(
+                                      padding: EdgeInsets.all(16.0),
+                                      child: Center(
+                                          child: CircularProgressIndicator()),
+                                    );
+                                  }
+                                  return ExpansionTile(
+                                    title: Row(
+                                      children: [
+                                        Expanded(
+                                            child: Text(
+                                                "(${snapshot.data! ? 'DB' : 'Local'}) ${e.key}")),
+                                        IconButton(
+                                          icon:
+                                              const Icon(Icons.delete_outline),
+                                          onPressed: () async {
+                                            final confirmed =
+                                                await showDialog<bool>(
+                                              context: context,
+                                              builder: (context) => AlertDialog(
+                                                title: const Text(
+                                                    'Delete Preference'),
+                                                content:
+                                                    Text('Delete "${e.key}"?'),
+                                                actions: [
+                                                  TextButton(
+                                                    onPressed: () =>
+                                                        Navigator.pop(
+                                                            context, false),
+                                                    child: const Text('Cancel'),
+                                                  ),
+                                                  TextButton(
+                                                    onPressed: () =>
+                                                        Navigator.pop(
+                                                            context, true),
+                                                    child: const Text('Delete'),
+                                                  ),
+                                                ],
+                                              ),
+                                            );
+                                            if (confirmed == true) {
+                                              await preferences.remove(e.key);
+                                              ref.invalidate(
+                                                  preferencesProvider);
+                                            }
+                                          },
+                                        ),
+                                      ],
+                                    ),
+                                    children: [
+                                      _ValueEditor(
+                                        keyName: e.key,
+                                        value: e.value,
+                                        onChanged: (newValue) async {
+                                          // Check if key is in database
+                                          final isInDb = snapshot.data!;
+
+                                          // Use appropriate preferences implementation
+                                          final prefs =
+                                              isInDb ? preferences : localPrefs;
+
+                                          if (newValue is bool) {
+                                            await prefs.setBool(
+                                                e.key, newValue);
+                                          } else if (newValue is int) {
+                                            await prefs.setInt(e.key, newValue);
+                                          } else if (newValue is double) {
+                                            await prefs.setDouble(
+                                                e.key, newValue);
+                                          } else if (newValue is List<String>) {
+                                            await prefs.setStringList(
+                                                e.key, newValue);
+                                          } else if (newValue is String) {
+                                            await prefs.setString(
+                                                e.key, newValue);
+                                          }
+                                          // Force refresh
+                                          (context as Element).markNeedsBuild();
+                                        },
+                                      ),
+                                    ],
+                                  );
+                                }))
+                            .toList();
+                      })(),
                     );
                   },
                 ),
@@ -116,6 +181,7 @@ class _ConfigEditorState extends ConsumerState<_ConfigEditor> {
   late TextEditingController passController;
   late bool isUnixSocket;
   late SslMode? sslMode;
+  final SharedPreferencesAsync sharedPreferences = SharedPreferencesAsync();
 
   @override
   void initState() {
