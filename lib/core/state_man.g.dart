@@ -9,13 +9,17 @@ part of 'state_man.dart';
 OpcUAConfig _$OpcUAConfigFromJson(Map<String, dynamic> json) => OpcUAConfig()
   ..endpoint = json['endpoint'] as String
   ..username = json['username'] as String?
-  ..password = json['password'] as String?;
+  ..password = json['password'] as String?
+  ..sslCert = const FileConverter().fromJson(json['ssl_cert'] as String?)
+  ..sslKey = const FileConverter().fromJson(json['ssl_key'] as String?);
 
 Map<String, dynamic> _$OpcUAConfigToJson(OpcUAConfig instance) =>
     <String, dynamic>{
       'endpoint': instance.endpoint,
       'username': instance.username,
       'password': instance.password,
+      'ssl_cert': const FileConverter().toJson(instance.sslCert),
+      'ssl_key': const FileConverter().toJson(instance.sslKey),
     };
 
 StateManConfig _$StateManConfigFromJson(Map<String, dynamic> json) =>

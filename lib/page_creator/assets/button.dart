@@ -396,6 +396,11 @@ class _ConfigContentState extends State<_ConfigContent> {
           onChanged: (value) => setState(() => widget.config.key = value),
         ),
         const SizedBox(height: 16),
+        TextFormField(
+          initialValue: widget.config.text,
+          onChanged: (value) => setState(() => widget.config.text = value),
+        ),
+        const SizedBox(height: 16),
         CoordinatesField(
           initialValue: widget.config.coordinates,
           onChanged: (c) => setState(() => widget.config.coordinates = c),
@@ -544,11 +549,8 @@ class _ConfigContentState extends State<_ConfigContent> {
             const Text('Feedback Key'),
             const SizedBox(width: 8),
             Expanded(
-              child: TextFormField(
+              child: KeyField(
                 initialValue: widget.config.feedback?.key ?? '',
-                decoration: const InputDecoration(
-                  labelText: 'Feedback Key',
-                ),
                 onChanged: (value) {
                   setState(() {
                     if (widget.config.feedback == null) {

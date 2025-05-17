@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:logger/logger.dart';
 import 'package:json_annotation/json_annotation.dart';
@@ -10,17 +12,39 @@ import 'ring_buffer.dart';
 
 part 'state_man.g.dart';
 
+class FileConverter implements JsonConverter<File?, String?> {
+  const FileConverter();
+
+  @override
+  File? fromJson(String? json) {
+    if (json == null) return null;
+    return File(json);
+  }
+
+  @override
+  String? toJson(File? file) {
+    if (file == null) return null;
+    return file.path;
+  }
+}
+
 @JsonSerializable()
 class OpcUAConfig {
   String endpoint = "opc.tcp://localhost:4840";
   String? username;
   String? password;
+  @FileConverter()
+  @JsonKey(name: 'ssl_cert')
+  File? sslCert;
+  @FileConverter()
+  @JsonKey(name: 'ssl_key')
+  File? sslKey;
 
   OpcUAConfig();
 
   @override
   String toString() {
-    return 'OpcUAConfig(endpoint: $endpoint, username: $username, password: $password)';
+    return 'OpcUAConfig(endpoint: $endpoint, username: $username, password: $password, sslCert: $sslCert, sslKey: $sslKey)';
   }
 
   factory OpcUAConfig.fromJson(Map<String, dynamic> json) =>
@@ -110,7 +134,7 @@ class StateMan {
   final logger = Logger();
   final StateManConfig config;
   final KeyMappings keyMappings;
-  final client = Client.fromStatic();
+  final Client client;
   int? subscriptionId;
   final Map<String, _SubscriptionEntry> _subscriptions = {};
 
@@ -118,7 +142,8 @@ class StateMan {
   late final KeyCollectorManager _collectorManager;
 
   /// Constructor requires the server endpoint.
-  StateMan({required this.config, required this.keyMappings}) {
+  StateMan._(
+      {required this.config, required this.keyMappings, required this.client}) {
     _collectorManager = KeyCollectorManager(monitorFn: _monitor);
 
     // spawn a background task to keep the client active
@@ -134,9 +159,42 @@ class StateMan {
         while (client.runIterate(const Duration(milliseconds: 10))) {
           await Future.delayed(const Duration(milliseconds: 10));
         }
+        client.disconnect();
         await Future.delayed(const Duration(seconds: 1));
       }
     }();
+  }
+
+  static Future<StateMan> create(
+      {required StateManConfig config,
+      required KeyMappings keyMappings}) async {
+    Uint8List? cert;
+    Uint8List? key;
+    MessageSecurityMode securityMode =
+        MessageSecurityMode.UA_MESSAGESECURITYMODE_NONE;
+    // Example directory: /Users/jonb/Library/Containers/is.centroid.sildarvinnsla.skammtalina/Data/Documents/certs
+    if (config.opcua.sslCert != null && config.opcua.sslKey != null) {
+      print('path: ${config.opcua.sslCert!.path}');
+      cert = await config.opcua.sslCert!.readAsBytes();
+      key = await config.opcua.sslKey!.readAsBytes();
+      securityMode = MessageSecurityMode.UA_MESSAGESECURITYMODE_SIGNANDENCRYPT;
+    }
+    String? username;
+    String? password;
+    if (config.opcua.username != null && config.opcua.password != null) {
+      username = config.opcua.username;
+      password = config.opcua.password;
+    }
+    final client = Client.fromStatic(
+      username: username,
+      password: password,
+      certificate: cert,
+      privateKey: key,
+      securityMode: securityMode,
+    );
+    final stateMan =
+        StateMan._(config: config, keyMappings: keyMappings, client: client);
+    return stateMan;
   }
 
   /// Example: read("myKey")
@@ -311,7 +369,10 @@ class _SubscriptionEntry {
         _hasFirstValue = true;
         _subject.add(value);
       },
-      onError: _subject.addError,
+      onError: (e, s) {
+        print('onError: $e, $s');
+        _subject.addError(e, s);
+      },
       onDone: _subject.close,
     );
     // 2) Count UI listeners for idle shutdown:

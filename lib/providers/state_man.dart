@@ -4,6 +4,8 @@ import 'dart:async';
 
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
 import '../core/state_man.dart';
 import 'preferences.dart';
 
@@ -13,12 +15,15 @@ part 'state_man.g.dart';
 Future<StateMan> stateMan(Ref ref) async {
   final prefs = await ref.watch(preferencesProvider.future);
 
-  var stateManJson = await prefs.getString('state_man_config');
+  final SharedPreferencesAsync sharedPreferences = SharedPreferencesAsync();
+
+  var stateManJson = await sharedPreferences.getString('state_man_config');
   if (stateManJson == null) {
     final defaultConfig = StateManConfig(opcua: OpcUAConfig());
     stateManJson = jsonEncode(defaultConfig.toJson());
     await prefs.setString('state_man_config', stateManJson);
   }
+  print('stateManJson: $stateManJson');
   final config = StateManConfig.fromJson(jsonDecode(stateManJson));
 
   var keyMappingsJson = await prefs.getString('key_mappings');
@@ -35,7 +40,7 @@ Future<StateMan> stateMan(Ref ref) async {
   // Watch for changes in specific preferences
   final listener = prefs.onPreferencesChanged.listen(
     (key) {
-      if (key == 'state_man_config' || key == 'key_mappings') {
+      if (key == 'key_mappings') {
         ref.invalidateSelf();
       }
     },
@@ -49,7 +54,8 @@ Future<StateMan> stateMan(Ref ref) async {
   });
 
   try {
-    final stateMan = StateMan(config: config, keyMappings: keyMappings);
+    final stateMan =
+        await StateMan.create(config: config, keyMappings: keyMappings);
     for (var entry in keyMappings.nodes.entries) {
       if (entry.value.collectSize != null) {
         await stateMan.collect(entry.key, entry.value.collectSize!);

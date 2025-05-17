@@ -229,9 +229,12 @@ class Led extends ConsumerWidget {
                 .map((dynamicValue) => dynamicValue.asBool),
           ),
       builder: (context, snapshot) {
-        if (snapshot.hasError || snapshot.hasData == false) {
+        if (snapshot.hasError) {
           stderr.writeln(
               'Stream setup error for ${config.key}, error: ${snapshot.error}');
+          return LedRaw(config, value: null);
+        }
+        if (snapshot.hasData == false) {
           return LedRaw(config, value: null);
         }
 
