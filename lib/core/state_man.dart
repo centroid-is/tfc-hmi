@@ -137,9 +137,10 @@ class StateMan {
   final Client client;
   int? subscriptionId;
   final Map<String, _SubscriptionEntry> _subscriptions = {};
-
-  // Use the new manager
   late final KeyCollectorManager _collectorManager;
+  bool _connectionHealthy = true;
+  Timer? _healthCheckTimer;
+  bool _shouldRun = true;
 
   /// Constructor requires the server endpoint.
   StateMan._(
@@ -155,27 +156,63 @@ class StateMan {
       for (final entry in _subscriptions.values) {
         entry.addInactivityError();
       }
-
-      // I would like to periodically read
+      _connectionHealthy = false;
+      _startConnectionHealthCheck();
     });
 
     // spawn a background task to keep the client active
     () async {
-      while (true) {
+      while (_shouldRun) {
+        () async {
+          try {
+            await client.connect(config.opcua.endpoint);
+          } catch (e) {
+            logger.e('Failed to connect to $config.opcua.endpoint: $e');
+            await Future.delayed(const Duration(seconds: 1));
+            // continue;
+          }
+        }();
         try {
-          client.connect(config.opcua.endpoint);
+          while (client.runIterate(const Duration(milliseconds: 10)) &&
+              _shouldRun) {
+            await Future.delayed(const Duration(milliseconds: 10));
+          }
         } catch (e) {
-          logger.e('Failed to connect to $config.opcua.endpoint: $e');
-          await Future.delayed(const Duration(seconds: 1));
-          continue;
-        }
-        while (client.runIterate(const Duration(milliseconds: 10))) {
-          await Future.delayed(const Duration(milliseconds: 10));
+          logger.e('Failed to run iterate: $e');
         }
         client.disconnect();
         await Future.delayed(const Duration(seconds: 1));
       }
+      logger.e('StateMan background task exited');
+      // Segfault on delete .... lets debug later
+      // client.delete();
     }();
+  }
+
+  void _startConnectionHealthCheck() {
+    _healthCheckTimer?.cancel();
+    _healthCheckTimer = Timer.periodic(const Duration(seconds: 2), (_) async {
+      if (keyMappings.keys.isEmpty) return;
+      final key = keyMappings.keys.first;
+      try {
+        await client.read(keyMappings.lookup(key)!);
+        if (!_connectionHealthy) {
+          _connectionHealthy = true;
+          logger.i('Connection recovered, resending last values to streams');
+          for (final entry in _subscriptions.values) {
+            entry.resendLastValue();
+          }
+          // Destroy self
+          _healthCheckTimer?.cancel();
+          _healthCheckTimer = null;
+        }
+      } catch (e) {
+        if (_connectionHealthy) {
+          logger.w('Connection lost, will retry health check');
+        }
+        _connectionHealthy = false;
+      }
+    });
   }
 
   static Future<StateMan> create(
@@ -187,7 +224,6 @@ class StateMan {
         MessageSecurityMode.UA_MESSAGESECURITYMODE_NONE;
     // Example directory: /Users/jonb/Library/Containers/is.centroid.sildarvinnsla.skammtalina/Data/Documents/certs
     if (config.opcua.sslCert != null && config.opcua.sslKey != null) {
-      print('path: ${config.opcua.sslCert!.path}');
       cert = await config.opcua.sslCert!.readAsBytes();
       key = await config.opcua.sslKey!.readAsBytes();
       securityMode = MessageSecurityMode.UA_MESSAGESECURITYMODE_SIGNANDENCRYPT;
@@ -210,9 +246,16 @@ class StateMan {
     return stateMan;
   }
 
+  Future<void> awaitConnect() async {
+    while (!_connectionHealthy) {
+      await Future.delayed(const Duration(milliseconds: 1000));
+    }
+    await client.awaitConnect();
+  }
+
   /// Example: read("myKey")
   Future<DynamicValue> read(String key) async {
-    await client.awaitConnect();
+    await awaitConnect();
     try {
       final nodeId = lookupNodeId(key);
       if (nodeId == null) {
@@ -226,7 +269,7 @@ class StateMan {
   }
 
   Future<Map<String, DynamicValue>> readMany(List<String> keys) async {
-    await client.awaitConnect();
+    await awaitConnect();
 
     final parameters = <NodeId, List<AttributeId>>{};
     for (final key in keys) {
@@ -249,7 +292,7 @@ class StateMan {
 
   /// Example: write("myKey", DynamicValue(value: 42, typeId: NodeId.int16))
   Future<void> write(String key, DynamicValue value) async {
-    await client.awaitConnect();
+    await awaitConnect();
     try {
       final nodeId = lookupNodeId(key);
       if (nodeId == null) {
@@ -287,8 +330,8 @@ class StateMan {
   /// Close the connection to the server.
   void close() {
     logger.d('Closing connection');
+    _shouldRun = false;
     client.disconnect();
-    client.delete();
     _collectorManager.close();
     // Clean up subscriptions
     for (final entry in _subscriptions.values) {
@@ -296,6 +339,7 @@ class StateMan {
       entry._subject.close();
     }
     _subscriptions.clear();
+    _healthCheckTimer?.cancel();
   }
 
   NodeId? lookupNodeId(String key) {
@@ -313,14 +357,14 @@ class StateMan {
   }
 
   Future<Stream<DynamicValue>> _monitor(String key) async {
-    await client.awaitConnect();
+    await awaitConnect();
 
     final nodeId = lookupNodeId(key);
     if (nodeId == null) {
       throw StateManException('Key: "$key" not found');
     }
 
-    if (_subscriptions.containsKey(key) && _subscriptions[key]!.hasFirstValue) {
+    if (_subscriptions.containsKey(key)) {
       return _subscriptions[key]!.stream;
     }
 
@@ -330,7 +374,15 @@ class StateMan {
         final stream =
             client.monitor(nodeId, subscriptionId!).asBroadcastStream();
 
-        // Create subscription first
+        // Test for first value
+        final firstValue = await stream.first.timeout(
+          const Duration(seconds: 1),
+          onTimeout: () {
+            throw TimeoutException('No value received within 1 seconds');
+          },
+        );
+
+        // Got first value, create subscription
         if (!_subscriptions.containsKey(key)) {
           _subscriptions[key] = _SubscriptionEntry(
             key,
@@ -339,16 +391,9 @@ class StateMan {
               _subscriptions.remove(key);
               logger.d('Unsubscribed from $key');
             },
+            firstValue,
           );
         }
-
-        // Then test for first value
-        await stream.first.timeout(
-          const Duration(seconds: 1),
-          onTimeout: () {
-            throw TimeoutException('No value received within 1 seconds');
-          },
-        );
 
         return _subscriptions[key]!.stream;
       } catch (e) {
@@ -370,16 +415,16 @@ class _SubscriptionEntry {
   Timer? _idleTimer;
   late final StreamSubscription<DynamicValue> _rawSub;
   final Function(String key) _onDispose;
-  var _hasFirstValue = false;
+  DynamicValue _lastValue;
 
-  bool get hasFirstValue => _hasFirstValue;
-
-  _SubscriptionEntry(this.key, Stream<DynamicValue> raw, this._onDispose)
-      : _subject = ReplaySubject<DynamicValue>(maxSize: 1) {
+  _SubscriptionEntry(this.key, Stream<DynamicValue> raw, this._onDispose,
+      DynamicValue firstValue)
+      : _subject = ReplaySubject<DynamicValue>(maxSize: 1),
+        _lastValue = firstValue {
     // 1) wire raw → subject
     _rawSub = raw.listen(
       (value) {
-        _hasFirstValue = true;
+        _lastValue = value;
         _subject.add(value);
       },
       onError: _subject.addError,
@@ -389,6 +434,7 @@ class _SubscriptionEntry {
     _subject
       ..onListen = _handleListen
       ..onCancel = _handleCancel;
+    _subject.add(_lastValue);
   }
 
   Stream<DynamicValue> get stream => _subject.stream;
@@ -411,6 +457,10 @@ class _SubscriptionEntry {
 
   void addInactivityError() {
     _subject.addError(StateManException('Subscription inactive'));
+  }
+
+  void resendLastValue() {
+    _subject.add(_lastValue);
   }
 }
 

@@ -48,10 +48,6 @@ Future<StateMan> stateMan(Ref ref) async {
     },
   );
 
-  ref.onDispose(() {
-    listener.cancel();
-  });
-
   try {
     final stateMan =
         await StateMan.create(config: config, keyMappings: keyMappings);
@@ -60,8 +56,14 @@ Future<StateMan> stateMan(Ref ref) async {
         await stateMan.collect(entry.key, entry.value.collectSize!);
       }
     }
+
+    ref.onDispose(() async {
+      listener.cancel();
+      stateMan.close();
+    });
     return stateMan;
   } catch (e) {
+    listener.cancel();
     stderr.writeln('Error parsing key mappings: $e');
     rethrow;
   }
