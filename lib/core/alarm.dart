@@ -184,6 +184,8 @@ class AlarmMan {
             }
           }
           _activeAlarmsController.add(_activeAlarms);
+        }, onError: (error, stack) {
+          stderr.writeln('Alarm stream error: $error');
         });
       }
     };
@@ -434,6 +436,8 @@ class Alarm {
                 rule: rule,
                 timestamp: DateTime.now()));
           }
+        }, onError: (error, stack) {
+          streamController.addError(error, stack);
         });
       }
     };
@@ -849,19 +853,23 @@ class _Evaluator {
         return stream;
       }));
 
-      subscription =
-          CombineLatestStream.list<DynamicValue>(streams).listen((values) {
-        final map = Map.fromEntries(variables
-            .asMap()
-            .entries
-            .map((e) => MapEntry(e.value, values[e.key])));
-        final result = expression.value.evaluate(map);
-        if (result) {
-          streamController.add(expression.value.formatWithValues(map));
-        } else {
-          streamController.add(null);
-        }
-      });
+      subscription = CombineLatestStream.list<DynamicValue>(streams).listen(
+        (values) {
+          final map = Map.fromEntries(variables
+              .asMap()
+              .entries
+              .map((e) => MapEntry(e.value, values[e.key])));
+          final result = expression.value.evaluate(map);
+          if (result) {
+            streamController.add(expression.value.formatWithValues(map));
+          } else {
+            streamController.add(null);
+          }
+        },
+        onError: (error, stack) {
+          streamController.addError(error, stack);
+        },
+      );
     };
 
     streamController.onCancel = () async {

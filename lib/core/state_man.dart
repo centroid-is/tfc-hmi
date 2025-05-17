@@ -146,6 +146,19 @@ class StateMan {
       {required this.config, required this.keyMappings, required this.client}) {
     _collectorManager = KeyCollectorManager(monitorFn: _monitor);
 
+    client.config.stateStream.listen((state) {
+      logger.e('State: $state');
+    });
+    client.config.subscriptionInactivityStream.listen((inactivity) {
+      logger.e('Subscription inactivity: $inactivity');
+      // Send error to all active subscriptions
+      for (final entry in _subscriptions.values) {
+        entry.addInactivityError();
+      }
+
+      // I would like to periodically read
+    });
+
     // spawn a background task to keep the client active
     () async {
       while (true) {
@@ -369,10 +382,7 @@ class _SubscriptionEntry {
         _hasFirstValue = true;
         _subject.add(value);
       },
-      onError: (e, s) {
-        print('onError: $e, $s');
-        _subject.addError(e, s);
-      },
+      onError: _subject.addError,
       onDone: _subject.close,
     );
     // 2) Count UI listeners for idle shutdown:
@@ -397,6 +407,10 @@ class _SubscriptionEntry {
         _subject.close(); // close the replay buffer
       });
     }
+  }
+
+  void addInactivityError() {
+    _subject.addError(StateManException('Subscription inactive'));
   }
 }
 
@@ -432,6 +446,8 @@ class KeyCollectorManager {
     final subscription = sub.listen((value) {
       buffer.add(CollectedSample(DynamicValue.from(value), DateTime.now()));
       subject.add(buffer.toList());
+    }, onError: (e, s) {
+      // TODO: handle error, I think I dont care about this error
     });
 
     _collectors[key] = subject;
