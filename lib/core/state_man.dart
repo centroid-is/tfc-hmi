@@ -147,9 +147,6 @@ class StateMan {
       {required this.config, required this.keyMappings, required this.client}) {
     _collectorManager = KeyCollectorManager(monitorFn: _monitor);
 
-    client.config.stateStream.listen((state) {
-      logger.e('State: $state');
-    });
     client.config.subscriptionInactivityStream.listen((inactivity) {
       logger.e('Subscription inactivity: $inactivity');
       // Send error to all active subscriptions
@@ -158,6 +155,8 @@ class StateMan {
       }
       _connectionHealthy = false;
       _startConnectionHealthCheck();
+    }).onError((e, s) {
+      logger.e('Failed to listen to subscription inactivity: $e, $s');
     });
 
     // spawn a background task to keep the client active
@@ -189,6 +188,28 @@ class StateMan {
     }();
   }
 
+  Future<void> newSession() async {
+    final completer = Completer<void>();
+    bool sessionLost = true;
+    StreamSubscription? streamSubscription;
+    streamSubscription = client.config.stateStream.listen((value) {
+      if (value.sessionState == SessionState.UA_SESSIONSTATE_CREATE_REQUESTED) {
+        sessionLost = true;
+      }
+      if (value.sessionState == SessionState.UA_SESSIONSTATE_ACTIVATED &&
+          sessionLost) {
+        completer.complete();
+        streamSubscription?.cancel();
+      }
+    });
+    streamSubscription.onError((e, s) {
+      logger.e('Failed to listen to state stream: $e, $s');
+      streamSubscription?.cancel();
+      completer.completeError(e);
+    });
+    return completer.future;
+  }
+
   void _startConnectionHealthCheck() {
     _healthCheckTimer?.cancel();
     _healthCheckTimer = Timer.periodic(const Duration(seconds: 2), (_) async {
@@ -198,7 +219,8 @@ class StateMan {
         await client.read(keyMappings.lookup(key)!);
         if (!_connectionHealthy) {
           _connectionHealthy = true;
-          logger.i('Connection recovered, resending last values to streams');
+          logger.i(
+              'Connection recovered, resending last values to streams, _subscriptions.length: ${_subscriptions.length}');
           for (final entry in _subscriptions.values) {
             entry.resendLastValue();
           }
