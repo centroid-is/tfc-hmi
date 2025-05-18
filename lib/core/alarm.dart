@@ -216,11 +216,19 @@ class AlarmMan {
       }
     }
     final config = AlarmManConfig.fromJson(jsonDecode(configJson!));
-    return AlarmMan._(
+    final alarmMan = AlarmMan._(
         config: config,
         preferences: preferences,
         stateMan: stateMan,
         localConfig: localConfig);
+    try {
+      await alarmMan._ensureTable();
+      alarmMan._history.addAll(await alarmMan.getRecentAlarms());
+      alarmMan._historyController.add(alarmMan._history.buffer);
+    } catch (e) {
+      stderr.writeln('Error loading history: $e');
+    }
+    return alarmMan;
   }
 
   Stream<Set<AlarmActive>> activeAlarms() {
@@ -310,7 +318,6 @@ class AlarmMan {
 
   Future<void> _addToDb(AlarmActive alarm) async {
     if (preferences.connection == null) return;
-    await _ensureTable();
     await preferences.connection!.execute(
       Sql.named('''
         INSERT INTO alarm_history (

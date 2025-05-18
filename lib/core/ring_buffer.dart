@@ -15,6 +15,12 @@ class RingBuffer<T> {
     if (_count < size) _count++;
   }
 
+  void addAll(Iterable<T> items) {
+    for (final item in items) {
+      add(item);
+    }
+  }
+
   List<T?> get buffer => _buffer;
 
   List<T> toList() {
