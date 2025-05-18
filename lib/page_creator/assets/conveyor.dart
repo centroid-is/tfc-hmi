@@ -266,6 +266,7 @@ class _ConveyorState extends ConsumerState<Conveyor> {
             color: color,
             showExclamation: showExclamation ?? false,
             batches: _batches,
+            angle: widget.config.coordinates.angle ?? 0.0,
           ),
         ),
       ),
@@ -627,11 +628,13 @@ class _ConveyorPainter extends CustomPainter {
   final Map<String, Batch> batches;
   final Color color;
   final bool showExclamation;
+  final double angle;
 
   _ConveyorPainter(
       {required this.color,
       this.showExclamation = false,
-      required this.batches});
+      required this.batches,
+      required this.angle});
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -654,6 +657,12 @@ class _ConveyorPainter extends CustomPainter {
 
     // Draw exclamation mark if needed
     if (showExclamation) {
+      canvas.save();
+      // Move origin to center of conveyor
+      canvas.translate(size.width / 2, size.height / 2);
+      // Counter-rotate
+      canvas.rotate(-angle * pi / 180);
+      // Draw exclamation mark centered at (0,0)
       final textPainter = TextPainter(
         text: TextSpan(
           text: '!',
@@ -668,10 +677,11 @@ class _ConveyorPainter extends CustomPainter {
       );
       textPainter.layout();
       final offset = Offset(
-        (size.width - textPainter.width) / 2,
-        (size.height - textPainter.height) / 2,
+        -textPainter.width / 2,
+        -textPainter.height / 2,
       );
       textPainter.paint(canvas, offset);
+      canvas.restore();
       return;
     }
     // 2) draw each batch segment as a plain box
