@@ -11,7 +11,7 @@ import 'package:tfc/pages/not_found.dart';
 import 'package:tfc/pages/viewtheme.dart';
 import 'package:tfc/pages/system.dart';
 import 'package:tfc/pages/config_list.dart';
-import 'package:tfc/pages/login.dart';
+import 'package:tfc/pages/dbus_login.dart';
 import 'package:tfc/widgets/tfc_operations.dart';
 import 'package:tfc/pages/page_view.dart';
 import 'package:tfc/pages/page_editor.dart';

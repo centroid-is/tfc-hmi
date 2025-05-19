@@ -129,41 +129,23 @@ class LoginCredentials {
   }
 }
 
-class LoginApp extends ConsumerWidget {
+class LoginForm extends ConsumerStatefulWidget {
   final void Function(DBusClient) onLoginSuccess;
+  final bool showLogo;
+  final double? width;
 
-  const LoginApp({super.key, required this.onLoginSuccess});
+  const LoginForm({
+    super.key,
+    required this.onLoginSuccess,
+    this.showLogo = true,
+    this.width,
+  });
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    // Use Riverpod to watch the asynchronous theme provider.
-    final themeAsync = ref.watch(themeNotifierProvider);
-    final (light, dark) = solarized();
-    final themeMode = themeAsync.when(
-      data: (themeMode) => themeMode,
-      loading: () => ThemeMode.system,
-      error: (err, stack) => ThemeMode.system,
-    );
-    return MaterialApp(
-      title: 'Login',
-      themeMode: themeMode,
-      theme: light,
-      darkTheme: dark,
-      home: LoginPage(onLoginSuccess: onLoginSuccess),
-    );
-  }
+  ConsumerState<LoginForm> createState() => _LoginFormState();
 }
 
-class LoginPage extends StatefulWidget {
-  final void Function(DBusClient) onLoginSuccess;
-
-  const LoginPage({super.key, required this.onLoginSuccess});
-
-  @override
-  State<LoginPage> createState() => _LoginPageState();
-}
-
-class _LoginPageState extends State<LoginPage> {
+class _LoginFormState extends ConsumerState<LoginForm> {
   LoginCredentials? _currentCredentials;
 
   Future<void> _saveCredentials(LoginCredentials creds) async {
@@ -249,152 +231,189 @@ class _LoginPageState extends State<LoginPage> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      body: Center(
-        child: SizedBox(
-          width: 300,
-          child: FutureBuilder<LoginCredentials>(
-            future: _loadSavedCredentials(),
-            builder: (context, savedCredsSnapshot) {
-              // Wait for credentials to load
-              if (!savedCredsSnapshot.hasData) {
-                return const CircularProgressIndicator();
-              }
+    return SizedBox(
+      width: widget.width ?? 300,
+      child: FutureBuilder<LoginCredentials>(
+        future: _loadSavedCredentials(),
+        builder: (context, savedCredsSnapshot) {
+          // Wait for credentials to load
+          if (!savedCredsSnapshot.hasData) {
+            return const CircularProgressIndicator();
+          }
 
-              _currentCredentials ??= savedCredsSnapshot.data?.copyWith();
+          _currentCredentials ??= savedCredsSnapshot.data?.copyWith();
 
-              final credentials = _currentCredentials!;
+          final credentials = _currentCredentials!;
 
-              final hostController =
-                  TextEditingController(text: credentials.host);
-              final userController =
-                  TextEditingController(text: credentials.username);
-              final passwordController =
-                  TextEditingController(text: credentials.password);
+          final hostController = TextEditingController(text: credentials.host);
+          final userController =
+              TextEditingController(text: credentials.username);
+          final passwordController =
+              TextEditingController(text: credentials.password);
 
-              return Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  SvgPicture.asset(
-                    'assets/centroid.svg',
-                    height: 50,
-                    package: 'tfc',
-                    colorFilter: ColorFilter.mode(
-                        Theme.of(context).colorScheme.onSurface,
-                        BlendMode.srcIn),
+          return Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              if (widget.showLogo) ...[
+                SvgPicture.asset(
+                  'assets/centroid.svg',
+                  height: 50,
+                  package: 'tfc',
+                  colorFilter: ColorFilter.mode(
+                      Theme.of(context).colorScheme.onSurface, BlendMode.srcIn),
+                ),
+                const SizedBox(height: 32),
+              ],
+              SegmentedButton<ConnectionType>(
+                segments: const [
+                  ButtonSegment(
+                    value: ConnectionType.system,
+                    label: Text('System DBus'),
                   ),
-                  const SizedBox(height: 32),
-                  SegmentedButton<ConnectionType>(
-                    segments: const [
-                      ButtonSegment(
-                        value: ConnectionType.system,
-                        label: Text('System DBus'),
-                      ),
-                      ButtonSegment(
-                        value: ConnectionType.remote,
-                        label: Text('Remote DBus'),
-                      ),
-                    ],
-                    selected: {credentials.type},
-                    onSelectionChanged: (Set<ConnectionType> selection) {
-                      setState(() {
-                        credentials.type = selection.first;
-                      });
-                    },
-                  ),
-                  if (credentials.type == ConnectionType.remote) ...[
-                    const SizedBox(height: 16),
-                    TextField(
-                      controller: hostController,
-                      decoration: const InputDecoration(labelText: 'Host'),
-                    ),
-                    const SizedBox(height: 16),
-                    TextField(
-                      controller: userController,
-                      decoration: const InputDecoration(labelText: 'Username'),
-                    ),
-                    const SizedBox(height: 16),
-                    TextField(
-                      controller: passwordController,
-                      decoration: const InputDecoration(
-                        labelText: 'Password',
-                      ),
-                      obscureText: true,
-                    ),
-                    const SizedBox(height: 8),
-                    Row(
-                      children: [
-                        const Text('Or use private key'),
-                        const SizedBox(width: 8),
-                        IconButton(
-                          onPressed: _pickPrivateKey,
-                          icon: const Icon(Icons.key),
-                          tooltip: 'Select Private Key',
-                        ),
-                      ],
-                    ),
-                    if (credentials.sshPrivateKeyPath != null) ...[
-                      const SizedBox(height: 8),
-                      Text(
-                        'Selected key: ${credentials.sshPrivateKeyPath!.split('/').last}',
-                        style: Theme.of(context).textTheme.bodySmall,
-                      ),
-                    ],
-                  ],
-                  CheckboxListTile(
-                    title: const Text('Auto Login'),
-                    value: credentials.autoLogin,
-                    onChanged: (value) {
-                      setState(() {
-                        credentials.autoLogin = value!;
-                      });
-                    },
-                  ),
-                  const SizedBox(height: 20),
-                  FutureBuilder<DBusClient>(
-                    future: credentials.autoLogin &&
-                            savedCredsSnapshot.data!.autoLogin
-                        ? credentials.connect(context)
-                        : null,
-                    builder: (context, loginSnapshot) {
-                      if (loginSnapshot.hasData) {
-                        WidgetsBinding.instance.addPostFrameCallback((_) {
-                          widget.onLoginSuccess(loginSnapshot.data!);
-                        });
-                      }
-
-                      return ElevatedButton(
-                        onPressed: loginSnapshot.connectionState ==
-                                ConnectionState.waiting
-                            ? null
-                            : () async {
-                                final creds = LoginCredentials(
-                                  type: credentials.type,
-                                  host: hostController.text,
-                                  username: userController.text,
-                                  password: passwordController.text.isNotEmpty
-                                      ? passwordController.text
-                                      : null,
-                                  sshPrivateKeyPath:
-                                      credentials.sshPrivateKeyPath,
-                                  autoLogin: credentials.autoLogin,
-                                );
-                                _saveCredentials(creds); // Fire and forget
-
-                                final client = await creds.connect(context);
-                                widget.onLoginSuccess(client);
-                              },
-                        child: loginSnapshot.connectionState ==
-                                ConnectionState.waiting
-                            ? const CircularProgressIndicator()
-                            : const Text('Login'),
-                      );
-                    },
+                  ButtonSegment(
+                    value: ConnectionType.remote,
+                    label: Text('Remote DBus'),
                   ),
                 ],
-              );
-            },
-          ),
+                selected: {credentials.type},
+                onSelectionChanged: (Set<ConnectionType> selection) {
+                  setState(() {
+                    credentials.type = selection.first;
+                  });
+                },
+              ),
+              if (credentials.type == ConnectionType.remote) ...[
+                const SizedBox(height: 16),
+                TextField(
+                  controller: hostController,
+                  decoration: const InputDecoration(labelText: 'Host'),
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: userController,
+                  decoration: const InputDecoration(labelText: 'Username'),
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: passwordController,
+                  decoration: const InputDecoration(
+                    labelText: 'Password',
+                  ),
+                  obscureText: true,
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    const Text('Or use private key'),
+                    const SizedBox(width: 8),
+                    IconButton(
+                      onPressed: _pickPrivateKey,
+                      icon: const Icon(Icons.key),
+                      tooltip: 'Select Private Key',
+                    ),
+                  ],
+                ),
+                if (credentials.sshPrivateKeyPath != null) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    'Selected key: ${credentials.sshPrivateKeyPath!.split('/').last}',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ],
+              ],
+              CheckboxListTile(
+                title: const Text('Auto Login'),
+                value: credentials.autoLogin,
+                onChanged: (value) {
+                  setState(() {
+                    credentials.autoLogin = value!;
+                  });
+                },
+              ),
+              const SizedBox(height: 20),
+              FutureBuilder<DBusClient>(
+                future:
+                    credentials.autoLogin && savedCredsSnapshot.data!.autoLogin
+                        ? credentials.connect(context)
+                        : null,
+                builder: (context, loginSnapshot) {
+                  if (loginSnapshot.hasData) {
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      widget.onLoginSuccess(loginSnapshot.data!);
+                    });
+                  }
+
+                  return ElevatedButton(
+                    onPressed: loginSnapshot.connectionState ==
+                            ConnectionState.waiting
+                        ? null
+                        : () async {
+                            final creds = LoginCredentials(
+                              type: credentials.type,
+                              host: hostController.text,
+                              username: userController.text,
+                              password: passwordController.text.isNotEmpty
+                                  ? passwordController.text
+                                  : null,
+                              sshPrivateKeyPath: credentials.sshPrivateKeyPath,
+                              autoLogin: credentials.autoLogin,
+                            );
+                            _saveCredentials(creds); // Fire and forget
+
+                            final client = await creds.connect(context);
+                            widget.onLoginSuccess(client);
+                          },
+                    child:
+                        loginSnapshot.connectionState == ConnectionState.waiting
+                            ? const CircularProgressIndicator()
+                            : const Text('Login'),
+                  );
+                },
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+class LoginApp extends ConsumerWidget {
+  final void Function(DBusClient) onLoginSuccess;
+
+  const LoginApp({super.key, required this.onLoginSuccess});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final themeAsync = ref.watch(themeNotifierProvider);
+    final (light, dark) = solarized();
+    final themeMode = themeAsync.when(
+      data: (themeMode) => themeMode,
+      loading: () => ThemeMode.system,
+      error: (err, stack) => ThemeMode.system,
+    );
+    return MaterialApp(
+      title: 'Login',
+      themeMode: themeMode,
+      theme: light,
+      darkTheme: dark,
+      home: LoginPage(onLoginSuccess: onLoginSuccess),
+    );
+  }
+}
+
+class LoginPage extends ConsumerWidget {
+  final void Function(DBusClient) onLoginSuccess;
+
+  const LoginPage({super.key, required this.onLoginSuccess});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return Scaffold(
+      body: Center(
+        child: LoginForm(
+          onLoginSuccess: onLoginSuccess,
+          showLogo: true,
         ),
       ),
     );
