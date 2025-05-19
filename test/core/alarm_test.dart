@@ -550,6 +550,14 @@ void main() {
       expect(Expression(formula: '(A OR B) C').isValid(), isFalse);
       expect(Expression(formula: '((A AND B)').isValid(), isFalse);
       expect(Expression(formula: '(A AND B))').isValid(), isFalse);
+
+      expect(
+          Expression(
+                  formula:
+                      'Line1.running == true AND Line1.Conveyor1.InPlace == false')
+              .isValid(),
+          isTrue);
+      ;
     });
   });
 

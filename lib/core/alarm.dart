@@ -583,7 +583,7 @@ class Expression {
       } else if (token.operator != null) {
         if (expectOperand) return false;
         expectOperand = true;
-      } else if (token.value != null) {
+      } else if (token.value != null || token.literal != null) {
         if (!expectOperand) return false;
         expectOperand = false;
       }
