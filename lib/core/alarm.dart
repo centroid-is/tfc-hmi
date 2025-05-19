@@ -595,20 +595,11 @@ class Expression {
 
   /// Parses the expression and returns a list of variable names used in the expression
   List<String> extractVariables() {
-    // Remove operators and split by spaces to get potential variables
-    final withoutOperators = formula
-        .replaceAll(expressionRegex, ' ')
-        .split(' ')
-        .where((s) => s.isNotEmpty)
+    final tokens = _parseExpression();
+    return tokens
+        .where((token) => token.value != null)
+        .map((token) => token.value!)
         .toList();
-
-    // Filter out numeric literals and quoted strings
-    return withoutOperators.where((s) {
-      if (double.tryParse(s) != null) return false;
-      if (s.startsWith('"') && s.endsWith('"')) return false;
-      if (s.startsWith("'") && s.endsWith("'")) return false;
-      return true;
-    }).toList();
   }
 
   // List of (variable, operator, variable, operator, variable, ...)
@@ -627,7 +618,11 @@ class Expression {
         if (beforeOp.contains(' ') || beforeOp.contains('\t')) {
           throw ArgumentError('Variable name: "$beforeOp" contains whitespace');
         }
-        tokens.add(_Token(value: beforeOp));
+        if (parseLiteral(beforeOp) != null) {
+          tokens.add(_Token(literal: beforeOp));
+        } else {
+          tokens.add(_Token(value: beforeOp));
+        }
       }
 
       // Add the operator
@@ -648,7 +643,11 @@ class Expression {
       if (remaining.contains(' ') || remaining.contains('\t')) {
         throw ArgumentError('Variable name: $remaining contains whitespace');
       }
-      tokens.add(_Token(value: remaining));
+      if (parseLiteral(remaining) != null) {
+        tokens.add(_Token(literal: remaining));
+      } else {
+        tokens.add(_Token(value: remaining));
+      }
     }
 
     // Validate that we have a valid pattern of variables and operators
@@ -678,6 +677,9 @@ class Expression {
     for (final token in tokens) {
       if (token.value != null) {
         // Variable or literal
+        outputQueue.add(token);
+      } else if (token.literal != null) {
+        // Literal
         outputQueue.add(token);
       } else if (token.operator != null) {
         // Operator
@@ -734,12 +736,18 @@ class Expression {
             if (lhs.isString && rhs.isString) {
               return DynamicValue(value: lhs.asString == rhs.asString);
             }
+            if (lhs.isBoolean && rhs.isBoolean) {
+              return DynamicValue(value: lhs.asBool == rhs.asBool);
+            }
             return DynamicValue(value: lhs.asDouble == rhs.asDouble);
           }
         case '!=':
           {
             if (lhs.isString && rhs.isString) {
               return DynamicValue(value: lhs.asString != rhs.asString);
+            }
+            if (lhs.isBoolean && rhs.isBoolean) {
+              return DynamicValue(value: lhs.asBool != rhs.asBool);
             }
             return DynamicValue(value: lhs.asDouble != rhs.asDouble);
           }
@@ -753,19 +761,19 @@ class Expression {
         final name = tok.value!;
         var val = variables[name];
         if (val == null) {
-          val = parseLiteral(name);
-          if (val == null) {
-            throw ArgumentError('Variable $name not found');
-          }
+          throw ArgumentError('Variable $name not found');
         }
         evalStack.add(val);
+      } else if (tok.literal != null) {
+        evalStack.add(parseLiteral(tok.literal!)!);
       } else if (tok.operator != null) {
         if (evalStack.length < 2) {
           throw ArgumentError('Invalid expression');
         }
         final rhs = evalStack.removeLast();
         final lhs = evalStack.removeLast();
-        evalStack.add(evaluateOp(lhs, tok.operator!, rhs));
+        final evaluation = evaluateOp(lhs, tok.operator!, rhs);
+        evalStack.add(evaluation);
       }
     }
 
@@ -795,24 +803,17 @@ class Expression {
 
     for (final token in tokens) {
       if (token.value != null) {
-        // For variables, append the value in curly braces
-        var value = variables[token.value!];
-        if (value == null) {
-          value = parseLiteral(token.value!);
-          if (value == null) {
-            throw ArgumentError(
-                'Variable ${token.value} not found in variables');
-          }
-          result.write('${token.value}');
-          continue;
-        }
-        result.write('${token.value}{${value.toString()}}');
+        final value = variables[token.value!];
+        result.write('${token.value}{${value.toString().trim()}}');
       } else if (token.operator != null) {
         // For operators, add spaces around them
         result.write(' ${token.operator} ');
       } else if (token.parenthesis != null) {
         // For parentheses, add them as is
         result.write(token.parenthesis);
+      } else if (token.literal != null) {
+        // For literals, add them as is
+        result.write('${token.literal}');
       }
     }
 
@@ -897,6 +898,7 @@ class _Token {
   final String? value;
   final String? operator;
   final String? parenthesis;
+  final String? literal;
 
-  _Token({this.value, this.operator, this.parenthesis});
+  _Token({this.value, this.operator, this.parenthesis, this.literal});
 }

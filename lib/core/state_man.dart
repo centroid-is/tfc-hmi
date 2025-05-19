@@ -143,21 +143,22 @@ class StateMan {
   bool _shouldRun = true;
 
   /// Constructor requires the server endpoint.
-  StateMan._(
-      {required this.config, required this.keyMappings, required this.client}) {
+  StateMan._({
+    required this.config,
+    required this.keyMappings,
+    required this.client,
+  }) {
     _collectorManager = KeyCollectorManager(monitorFn: _monitor);
 
-    client.config.subscriptionInactivityStream.listen((inactivity) {
-      logger.e('Subscription inactivity: $inactivity');
-      // Send error to all active subscriptions
-      for (final entry in _subscriptions.values) {
-        entry.addInactivityError();
-      }
-      _connectionHealthy = false;
-      _startConnectionHealthCheck();
-    }).onError((e, s) {
-      logger.e('Failed to listen to subscription inactivity: $e, $s');
-    });
+    client.config.subscriptionInactivityStream
+        .listen((inactivity) {
+          logger.e('Subscription inactivity: $inactivity');
+          _connectionHealthy = false;
+          _startConnectionHealthCheck();
+        })
+        .onError((e, s) {
+          logger.e('Failed to listen to subscription inactivity: $e, $s');
+        });
 
     // spawn a background task to keep the client active
     () async {
@@ -220,7 +221,8 @@ class StateMan {
         if (!_connectionHealthy) {
           _connectionHealthy = true;
           logger.i(
-              'Connection recovered, resending last values to streams, _subscriptions.length: ${_subscriptions.length}');
+            'Connection recovered, resending last values to streams, _subscriptions.length: ${_subscriptions.length}',
+          );
           for (final entry in _subscriptions.values) {
             entry.resendLastValue();
           }
@@ -237,9 +239,10 @@ class StateMan {
     });
   }
 
-  static Future<StateMan> create(
-      {required StateManConfig config,
-      required KeyMappings keyMappings}) async {
+  static Future<StateMan> create({
+    required StateManConfig config,
+    required KeyMappings keyMappings,
+  }) async {
     Uint8List? cert;
     Uint8List? key;
     MessageSecurityMode securityMode =
@@ -263,8 +266,11 @@ class StateMan {
       privateKey: key,
       securityMode: securityMode,
     );
-    final stateMan =
-        StateMan._(config: config, keyMappings: keyMappings, client: client);
+    final stateMan = StateMan._(
+      config: config,
+      keyMappings: keyMappings,
+      client: client,
+    );
     return stateMan;
   }
 
@@ -308,8 +314,9 @@ class StateMan {
     }
     final results = await client.readAttribute(parameters);
 
-    return results
-        .map((key, value) => MapEntry(keyMappings.lookupKey(key)!, value));
+    return results.map(
+      (key, value) => MapEntry(keyMappings.lookupKey(key)!, value),
+    );
   }
 
   /// Example: write("myKey", DynamicValue(value: 42, typeId: NodeId.int16))
@@ -406,15 +413,10 @@ class StateMan {
 
         // Got first value, create subscription
         if (!_subscriptions.containsKey(key)) {
-          _subscriptions[key] = _SubscriptionEntry(
-            key,
-            stream,
-            (key) {
-              _subscriptions.remove(key);
-              logger.d('Unsubscribed from $key');
-            },
-            firstValue,
-          );
+          _subscriptions[key] = _SubscriptionEntry(key, stream, (key) {
+            _subscriptions.remove(key);
+            logger.d('Unsubscribed from $key');
+          }, firstValue);
         }
 
         return _subscriptions[key]!.stream;
@@ -439,10 +441,13 @@ class _SubscriptionEntry {
   final Function(String key) _onDispose;
   DynamicValue _lastValue;
 
-  _SubscriptionEntry(this.key, Stream<DynamicValue> raw, this._onDispose,
-      DynamicValue firstValue)
-      : _subject = ReplaySubject<DynamicValue>(maxSize: 1),
-        _lastValue = firstValue {
+  _SubscriptionEntry(
+    this.key,
+    Stream<DynamicValue> raw,
+    this._onDispose,
+    DynamicValue firstValue,
+  ) : _subject = ReplaySubject<DynamicValue>(maxSize: 1),
+      _lastValue = firstValue {
     // 1) wire raw → subject
     _rawSub = raw.listen(
       (value) {
@@ -475,10 +480,6 @@ class _SubscriptionEntry {
         _subject.close(); // close the replay buffer
       });
     }
-  }
-
-  void addInactivityError() {
-    _subject.addError(StateManException('Subscription inactive'));
   }
 
   void resendLastValue() {
@@ -515,12 +516,15 @@ class KeyCollectorManager {
     final subject = BehaviorSubject<List<CollectedSample>>();
 
     final sub = await monitorFn(key);
-    final subscription = sub.listen((value) {
-      buffer.add(CollectedSample(DynamicValue.from(value), DateTime.now()));
-      subject.add(buffer.toList());
-    }, onError: (e, s) {
-      // TODO: handle error, I think I dont care about this error
-    });
+    final subscription = sub.listen(
+      (value) {
+        buffer.add(CollectedSample(DynamicValue.from(value), DateTime.now()));
+        subject.add(buffer.toList());
+      },
+      onError: (e, s) {
+        // TODO: handle error, I think I dont care about this error
+      },
+    );
 
     _collectors[key] = subject;
     _buffers[key] = buffer;

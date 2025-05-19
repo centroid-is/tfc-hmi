@@ -792,4 +792,13 @@ void main() {
         }),
         isFalse);
   });
+  group('Alarm expression extractVariables', () {
+    test('Literal not in variables', () {
+      final expression = Expression(
+          formula:
+              'Line1.running == true AND Line1.Conveyor1.InPlace == false');
+      expect(expression.extractVariables(),
+          ['Line1.running', 'Line1.Conveyor1.InPlace']);
+    });
+  });
 }
