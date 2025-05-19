@@ -57,7 +57,7 @@ Future<StateMan> stateMan(Ref ref) async {
       }
     }
 
-    stateMan.newSession().then((_) => ref.invalidateSelf());
+    // stateMan.newSession().then((_) => ref.invalidateSelf());
 
     ref.onDispose(() async {
       listener.cancel();

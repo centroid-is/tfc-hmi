@@ -130,12 +130,35 @@ class StateManException implements Exception {
   String toString() => 'StateManException: $message';
 }
 
+class SingleWorker {
+  List<Completer<bool>> waiters = [];
+
+  Future<bool> doTheWork() async {
+    waiters.add(Completer<bool>());
+    if (waiters.length == 1) {
+      waiters.last.complete(true);
+    }
+
+    return waiters.last.future;
+  }
+
+  void complete() {
+    for (final waiter in waiters) {
+      if (!waiter.isCompleted) {
+        waiter.complete(false);
+      }
+    }
+    waiters.clear();
+  }
+}
+
 class StateMan {
   final logger = Logger();
   final StateManConfig config;
   final KeyMappings keyMappings;
   final Client client;
   int? subscriptionId;
+  final SingleWorker _worker = SingleWorker();
   final Map<String, _SubscriptionEntry> _subscriptions = {};
   late final KeyCollectorManager _collectorManager;
   bool _connectionHealthy = true;
@@ -150,93 +173,61 @@ class StateMan {
   }) {
     _collectorManager = KeyCollectorManager(monitorFn: _monitor);
 
-    client.config.subscriptionInactivityStream
-        .listen((inactivity) {
-          logger.e('Subscription inactivity: $inactivity');
-          _connectionHealthy = false;
-          _startConnectionHealthCheck();
-        })
-        .onError((e, s) {
-          logger.e('Failed to listen to subscription inactivity: $e, $s');
-        });
+    client.config.subscriptionInactivityStream.listen((inactivity) {
+      logger.e('Subscription inactivity: $inactivity');
+      //_connectionHealthy = false;
+      // _startConnectionHealthCheck();
+    }).onError((e, s) {
+      logger.e('Failed to listen to subscription inactivity: $e, $s');
+    });
 
     // spawn a background task to keep the client active
     () async {
       while (_shouldRun) {
-        () async {
-          try {
-            await client.connect(config.opcua.endpoint);
-          } catch (e) {
-            logger.e('Failed to connect to $config.opcua.endpoint: $e');
-            await Future.delayed(const Duration(seconds: 1));
-            // continue;
-          }
-        }();
-        try {
-          while (client.runIterate(const Duration(milliseconds: 10)) &&
-              _shouldRun) {
-            await Future.delayed(const Duration(milliseconds: 10));
-          }
-        } catch (e) {
-          logger.e('Failed to run iterate: $e');
+        client.connect(config.opcua.endpoint).onError((e, stacktrace) =>
+            logger.e('Failed to connect to ${config.opcua.endpoint}: $e'));
+        while (
+            client.runIterate(const Duration(milliseconds: 10)) && _shouldRun) {
+          await Future.delayed(const Duration(milliseconds: 10));
         }
+        logger.e('Disconnecting client');
         client.disconnect();
-        await Future.delayed(const Duration(seconds: 1));
+        await Future.delayed(const Duration(milliseconds: 1000));
       }
       logger.e('StateMan background task exited');
-      // Segfault on delete .... lets debug later
-      // client.delete();
     }();
-  }
 
-  Future<void> newSession() async {
-    final completer = Completer<void>();
-    bool sessionLost = true;
-    StreamSubscription? streamSubscription;
-    streamSubscription = client.config.stateStream.listen((value) {
-      if (value.sessionState == SessionState.UA_SESSIONSTATE_CREATE_REQUESTED) {
+    bool sessionLost = false;
+    client.config.stateStream.listen((value) {
+      if (value.sessionState == SessionState.UA_SESSIONSTATE_CREATE_REQUESTED &&
+          _subscriptions.isNotEmpty) {
+        logger.e('Session lost!');
         sessionLost = true;
       }
       if (value.sessionState == SessionState.UA_SESSIONSTATE_ACTIVATED &&
           sessionLost) {
-        completer.complete();
-        streamSubscription?.cancel();
+        logger.e('Session lost, resubscribing');
+        // Session was lost, resubscribe
+        sessionLost = false;
+        subscriptionId = null;
+        for (final entry in _subscriptions.values) {
+          _monitor(entry.key, resub: true);
+        }
+      } else if (value.sessionState == SessionState.UA_SESSIONSTATE_ACTIVATED) {
+        // Session was not lost, retransmit last data values.
+        logger.w(
+            'Session regained, resending last values ${_subscriptions.length}');
+        _resendLastValues();
       }
-    });
-    streamSubscription.onError((e, s) {
+    }).onError((e, s) {
       logger.e('Failed to listen to state stream: $e, $s');
-      streamSubscription?.cancel();
-      completer.completeError(e);
     });
-    return completer.future;
   }
 
-  void _startConnectionHealthCheck() {
-    _healthCheckTimer?.cancel();
-    _healthCheckTimer = Timer.periodic(const Duration(seconds: 2), (_) async {
-      if (keyMappings.keys.isEmpty) return;
-      final key = keyMappings.keys.first;
-      try {
-        await client.read(keyMappings.lookup(key)!);
-        if (!_connectionHealthy) {
-          _connectionHealthy = true;
-          logger.i(
-            'Connection recovered, resending last values to streams, _subscriptions.length: ${_subscriptions.length}',
-          );
-          for (final entry in _subscriptions.values) {
-            entry.resendLastValue();
-          }
-          // Destroy self
-          _healthCheckTimer?.cancel();
-          _healthCheckTimer = null;
-        }
-      } catch (e) {
-        if (_connectionHealthy) {
-          logger.w('Connection lost, will retry health check');
-        }
-        _connectionHealthy = false;
-      }
-    });
+  void _resendLastValues() {
+    for (final entry in _subscriptions.values) {
+      entry.resendLastValue();
+    }
   }
 
   static Future<StateMan> create({
@@ -364,7 +355,7 @@ class StateMan {
     _collectorManager.close();
     // Clean up subscriptions
     for (final entry in _subscriptions.values) {
-      entry._rawSub.cancel();
+      entry._rawSub?.cancel();
       entry._subject.close();
     }
     _subscriptions.clear();
@@ -385,21 +376,43 @@ class StateMan {
     return nodeId;
   }
 
-  Future<Stream<DynamicValue>> _monitor(String key) async {
+  Future<Stream<DynamicValue>> _monitor(String key,
+      {bool resub = false}) async {
     await awaitConnect();
+    print('Monitoring $key resub: $resub');
 
     final nodeId = lookupNodeId(key);
     if (nodeId == null) {
       throw StateManException('Key: "$key" not found');
     }
 
-    if (_subscriptions.containsKey(key)) {
+    bool keyExists = _subscriptions.containsKey(key);
+
+    if (keyExists && !resub) {
       return _subscriptions[key]!.stream;
+    } else if (!keyExists && !resub) {
+      _subscriptions[key] = _SubscriptionEntry(key, (key) {
+        _subscriptions.remove(key);
+        logger.d('Unsubscribed from $key');
+      });
     }
 
     while (true) {
       try {
-        subscriptionId ??= await client.subscriptionCreate();
+        await awaitConnect();
+        if (subscriptionId == null && await _worker.doTheWork()) {
+          print('Creating subscription');
+          try {
+            subscriptionId = await client.subscriptionCreate();
+          } catch (e) {
+            logger.e('Failed to create subscription: $e');
+          } finally {
+            _worker.complete();
+          }
+        }
+        if (subscriptionId == null) {
+          continue;
+        }
         final stream =
             client.monitor(nodeId, subscriptionId!).asBroadcastStream();
 
@@ -412,20 +425,11 @@ class StateMan {
         );
 
         // Got first value, create subscription
-        if (!_subscriptions.containsKey(key)) {
-          _subscriptions[key] = _SubscriptionEntry(key, stream, (key) {
-            _subscriptions.remove(key);
-            logger.d('Unsubscribed from $key');
-          }, firstValue);
-        }
+        _subscriptions[key]!.subscribe(stream, firstValue);
 
         return _subscriptions[key]!.stream;
       } catch (e) {
         logger.w('Failed to get initial value for $key: $e');
-        // Clean up the failed subscription
-        _subscriptions[key]?._rawSub.cancel();
-        _subscriptions[key]?._subject.close();
-        _subscriptions.remove(key);
         continue;
       }
     }
@@ -437,18 +441,25 @@ class _SubscriptionEntry {
   final ReplaySubject<DynamicValue> _subject;
   int _listenerCount = 0;
   Timer? _idleTimer;
-  late final StreamSubscription<DynamicValue> _rawSub;
+  StreamSubscription<DynamicValue>? _rawSub;
   final Function(String key) _onDispose;
-  DynamicValue _lastValue;
+  DynamicValue? _lastValue;
 
   _SubscriptionEntry(
     this.key,
-    Stream<DynamicValue> raw,
     this._onDispose,
-    DynamicValue firstValue,
-  ) : _subject = ReplaySubject<DynamicValue>(maxSize: 1),
-      _lastValue = firstValue {
-    // 1) wire raw → subject
+  ) : _subject = ReplaySubject<DynamicValue>(maxSize: 1) {
+    // Count UI listeners for idle shutdown:
+    _subject
+      ..onListen = _handleListen
+      ..onCancel = _handleCancel;
+  }
+
+  Stream<DynamicValue> get stream => _subject.stream;
+
+  void subscribe(Stream<DynamicValue> raw, DynamicValue firstValue) {
+    _rawSub?.cancel();
+    // wire raw → subject
     _rawSub = raw.listen(
       (value) {
         _lastValue = value;
@@ -457,14 +468,9 @@ class _SubscriptionEntry {
       onError: _subject.addError,
       onDone: _subject.close,
     );
-    // 2) Count UI listeners for idle shutdown:
-    _subject
-      ..onListen = _handleListen
-      ..onCancel = _handleCancel;
-    _subject.add(_lastValue);
+    _lastValue = firstValue;
+    _subject.add(firstValue);
   }
-
-  Stream<DynamicValue> get stream => _subject.stream;
 
   void _handleListen() {
     _listenerCount++;
@@ -475,7 +481,7 @@ class _SubscriptionEntry {
     _listenerCount--;
     if (_listenerCount == 0) {
       _idleTimer = Timer(const Duration(minutes: 10), () {
-        _rawSub.cancel(); // tear down the OPC-UA monitoredItem
+        _rawSub?.cancel(); // tear down the OPC-UA monitoredItem
         _onDispose(key); // remove from StateMan._subscriptions
         _subject.close(); // close the replay buffer
       });
@@ -483,7 +489,9 @@ class _SubscriptionEntry {
   }
 
   void resendLastValue() {
-    _subject.add(_lastValue);
+    if (_lastValue != null) {
+      _subject.add(_lastValue!);
+    }
   }
 }
 
