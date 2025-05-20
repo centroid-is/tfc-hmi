@@ -38,6 +38,10 @@ class ExpressionConfig {
 
   @override
   int get hashCode => value.formula.hashCode;
+
+  static ExpressionConfig from(ExpressionConfig copy) {
+    return ExpressionConfig(value: copy.value);
+  }
 }
 
 @JsonEnum()
@@ -79,6 +83,14 @@ class AlarmRule {
 
   @override
   int get hashCode => Object.hash(level, expression, acknowledgeRequired);
+
+  static AlarmRule from(AlarmRule copy) {
+    return AlarmRule(
+      level: copy.level,
+      expression: ExpressionConfig.from(copy.expression),
+      acknowledgeRequired: copy.acknowledgeRequired,
+    );
+  }
 }
 
 @JsonSerializable()
@@ -106,6 +118,16 @@ class AlarmConfig {
   factory AlarmConfig.fromJson(Map<String, dynamic> json) =>
       _$AlarmConfigFromJson(json);
   Map<String, dynamic> toJson() => _$AlarmConfigToJson(this);
+
+  static AlarmConfig from(AlarmConfig copy) {
+    return AlarmConfig(
+      uid: copy.uid,
+      key: copy.key,
+      title: copy.title,
+      description: copy.description,
+      rules: copy.rules.map((e) => AlarmRule.from(e)).toList(),
+    );
+  }
 }
 
 @JsonSerializable()

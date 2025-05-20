@@ -14,6 +14,7 @@ class _AlarmEditorPageState extends State<AlarmEditorPage> {
   AlarmConfig? _edit;
   AlarmConfig? _show;
   bool _create = false;
+  AlarmConfig? _createTemplate;
 
   @override
   Widget build(BuildContext context) {
@@ -42,9 +43,10 @@ class _AlarmEditorPageState extends State<AlarmEditorPage> {
                     _create = false;
                   });
                 },
-                onCreate: () {
+                onCreate: (config_template) {
                   setState(() {
                     _create = true;
+                    _createTemplate = config_template;
                     _edit = null;
                     _show = null;
                   });
@@ -86,6 +88,7 @@ class _AlarmEditorPageState extends State<AlarmEditorPage> {
                         )
                       : _create
                           ? CreateAlarm(
+                              template: _createTemplate,
                               onSubmit: () {
                                 setState(() {
                                   _create = false;

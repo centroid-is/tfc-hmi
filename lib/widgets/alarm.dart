@@ -10,7 +10,7 @@ class ListAlarms extends ConsumerStatefulWidget {
   final void Function(AlarmConfig)? onEdit;
   final void Function(AlarmConfig)? onShow;
   final void Function(AlarmConfig)? onDelete;
-  final void Function()? onCreate;
+  final void Function(AlarmConfig?)? onCreate;
 
   const ListAlarms({
     super.key,
@@ -64,7 +64,7 @@ class _ListAlarmsState extends ConsumerState<ListAlarms> {
                     IconButton(
                       icon: const Icon(Icons.add),
                       onPressed: () {
-                        widget.onCreate?.call();
+                        widget.onCreate?.call(null);
                       },
                     ),
                     Expanded(
@@ -90,10 +90,16 @@ class _ListAlarmsState extends ConsumerState<ListAlarms> {
                       title: Text(alarm.config.title),
                       subtitle: Text(alarm.config.description),
                       trailing: SizedBox(
-                        width: 96,
+                        width: 144,
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
+                            IconButton(
+                              icon: const Icon(Icons.copy),
+                              onPressed: () {
+                                widget.onCreate?.call(alarm.config);
+                              },
+                            ),
                             IconButton(
                               icon: const Icon(Icons.edit),
                               onPressed: () {
@@ -589,12 +595,14 @@ class _ExpressionBuilderState extends ConsumerState<ExpressionBuilder> {
 
 class CreateAlarm extends ConsumerWidget {
   final void Function() onSubmit;
+  final AlarmConfig? template;
 
-  const CreateAlarm({super.key, required this.onSubmit});
+  const CreateAlarm({super.key, required this.onSubmit, this.template});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     return AlarmForm(
+      initialConfig: template == null ? null : AlarmConfig.from(template!),
       editable: true,
       submitText: 'Create Alarm',
       onSubmit: (config) async {
