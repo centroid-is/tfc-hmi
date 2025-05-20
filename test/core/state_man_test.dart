@@ -1,8 +1,8 @@
 import 'dart:async';
 
 import 'package:open62541/open62541.dart' show DynamicValue, NodeId;
-import 'package:test/test.dart';
 import 'package:tfc/core/state_man.dart';
+import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   group('KeyCollectorManager', () {

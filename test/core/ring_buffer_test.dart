@@ -1,5 +1,4 @@
-import 'package:flutter_test/flutter_test.dart' as flutter_test;
-import 'package:test/test.dart';
+import 'package:flutter_test/flutter_test.dart';
 import 'package:tfc/core/ring_buffer.dart';
 
 void main() {
@@ -53,11 +52,11 @@ void main() {
     });
 
     test('zero size buffer', () {
-      expect(() => RingBuffer<int>(0), flutter_test.throwsAssertionError);
+      expect(() => RingBuffer<int>(0), throwsAssertionError);
     });
 
     test('negative size buffer', () {
-      expect(() => RingBuffer<int>(-1), flutter_test.throwsRangeError);
+      expect(() => RingBuffer<int>(-1), throwsRangeError);
     });
 
     test('buffer with null values', () {
