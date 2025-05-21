@@ -1,5 +1,8 @@
-import 'package:json_annotation/json_annotation.dart';
+import 'dart:math' as math;
+
+import 'package:flutter/rendering.dart';
 import 'package:flutter/material.dart';
+import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'dart:math';
 import 'common.dart';
@@ -258,7 +261,7 @@ class _ConveyorState extends ConsumerState<Conveyor> {
         widget.config.coordinates.x,
         widget.config.coordinates.y,
       ),
-      child: Transform.rotate(
+      child: LayoutRotatedBox(
         angle: (widget.config.coordinates.angle ?? 0.0) * pi / 180,
         child: CustomPaint(
           size: widget.config.size.toSize(MediaQuery.of(context).size),
@@ -626,6 +629,114 @@ class _ConveyorState extends ConsumerState<Conveyor> {
   }
 }
 
+/// Rotates [child] by [angle] (radians),
+/// *and* expands its layout box to the rotated AABB,
+/// *and* transforms hit-testing so you get taps anywhere over it.
+class LayoutRotatedBox extends SingleChildRenderObjectWidget {
+  final double angle;
+  const LayoutRotatedBox({
+    required this.angle,
+    Widget? child,
+    Key? key,
+  }) : super(key: key, child: child);
+
+  @override
+  RenderObject createRenderObject(BuildContext context) {
+    return _RenderLayoutRotatedBox(angle);
+  }
+
+  @override
+  void updateRenderObject(
+      BuildContext context, _RenderLayoutRotatedBox renderObject) {
+    renderObject.angle = angle;
+  }
+}
+
+class _RenderLayoutRotatedBox extends RenderProxyBox {
+  double _angle;
+  _RenderLayoutRotatedBox(this._angle);
+
+  set angle(double value) {
+    if (value == _angle) return;
+    _angle = value;
+    markNeedsLayout();
+    markNeedsPaint();
+  }
+
+  @override
+  void performLayout() {
+    if (child == null) {
+      size = constraints.smallest;
+      return;
+    }
+
+    // 1) Layout the child at its normal constraints
+    child!.layout(constraints, parentUsesSize: true);
+    final w = child!.size.width;
+    final h = child!.size.height;
+
+    // 2) Compute the axis-aligned bbox of the rotated rect
+    final c = math.cos(_angle).abs();
+    final s = math.sin(_angle).abs();
+    final boxW = w * c + h * s;
+    final boxH = w * s + h * c;
+
+    size = constraints.constrain(Size(boxW, boxH));
+  }
+
+  Offset _childOffset() {
+    // Center the child in our AABB
+    return Offset((size.width - child!.size.width) / 2,
+        (size.height - child!.size.height) / 2);
+  }
+
+  @override
+  void paint(PaintingContext context, Offset offset) {
+    if (child == null) return;
+
+    // 3) Push the rotation transform + center
+    final childOffset = _childOffset();
+    final transform = Matrix4.identity()
+      ..translate(offset.dx + child!.size.width / 2 + childOffset.dx,
+          offset.dy + child!.size.height / 2 + childOffset.dy)
+      ..rotateZ(_angle)
+      ..translate(-child!.size.width / 2, -child!.size.height / 2);
+
+    context.pushTransform(
+      needsCompositing,
+      Offset.zero,
+      transform,
+      (innerContext, innerOffset) {
+        innerContext.paintChild(child!, innerOffset);
+      },
+    );
+  }
+
+  @override
+  bool hitTest(BoxHitTestResult result, {required Offset position}) {
+    if (child == null) return false;
+
+    // 4) Convert `position` into the child's unrotated coords
+    final childOffset = _childOffset();
+    final local = position - childOffset;
+    final dx = local.dx - child!.size.width / 2;
+    final dy = local.dy - child!.size.height / 2;
+    final cosA = math.cos(-_angle), sinA = math.sin(-_angle);
+    final x0 = cosA * dx - sinA * dy + child!.size.width / 2;
+    final y0 = sinA * dx + cosA * dy + child!.size.height / 2;
+
+    // 5) If inside the child's rect, hit
+    if (x0 >= 0 &&
+        x0 <= child!.size.width &&
+        y0 >= 0 &&
+        y0 <= child!.size.height) {
+      result.add(BoxHitTestEntry(this, position));
+      return true;
+    }
+    return false;
+  }
+}
+
 class Batch {
   double start; // 0…1 (can be <0 while entering)
   double end; // 0…1 (can be >1 while exiting)
@@ -887,8 +998,8 @@ class _ConveyorStatsGraphState extends State<ConveyorStatsGraph> {
                         return Padding(
                           padding: const EdgeInsets.only(top: 8.0),
                           child: Text(
-                          formatted,
-                          style: const TextStyle(fontSize: 10),
+                            formatted,
+                            style: const TextStyle(fontSize: 10),
                           ),
                         );
                       },
