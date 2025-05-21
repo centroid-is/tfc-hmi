@@ -52,12 +52,12 @@ Future<StateMan> stateMan(Ref ref) async {
     final stateMan =
         await StateMan.create(config: config, keyMappings: keyMappings);
     for (var entry in keyMappings.nodes.entries) {
-      if (entry.value.collectSize != null) {
-        await stateMan.collect(entry.key, entry.value.collectSize!);
+      if (entry.value.collectSize != null &&
+          entry.value.collectInterval != null) {
+        await stateMan.collect(
+            entry.key, entry.value.collectSize!, entry.value.collectInterval!);
       }
     }
-
-    // stateMan.newSession().then((_) => ref.invalidateSelf());
 
     ref.onDispose(() async {
       listener.cancel();

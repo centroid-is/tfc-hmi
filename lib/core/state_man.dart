@@ -28,6 +28,22 @@ class FileConverter implements JsonConverter<File?, String?> {
   }
 }
 
+class DurationMicrosecondsConverter implements JsonConverter<Duration?, int?> {
+  const DurationMicrosecondsConverter();
+
+  @override
+  Duration? fromJson(int? json) {
+    if (json == null) return null;
+    return Duration(microseconds: json);
+  }
+
+  @override
+  int? toJson(Duration? duration) {
+    if (duration == null) return null;
+    return duration.inMicroseconds;
+  }
+}
+
 @JsonSerializable()
 class OpcUAConfig {
   String endpoint = "opc.tcp://localhost:4840";
@@ -91,6 +107,9 @@ class NodeIdConfig {
 class KeyMappingEntry {
   NodeIdConfig? nodeId;
   int? collectSize;
+  @DurationMicrosecondsConverter()
+  @JsonKey(name: 'collect_interval_us')
+  Duration? collectInterval; // microseconds
   bool? io; // if true, the key is an IO unit
 
   KeyMappingEntry({this.nodeId, this.collectSize});
@@ -335,8 +354,8 @@ class StateMan {
   /// Initiate a collection of data from a node.
   /// The data is collected in a ring buffer and stored in RAM.
   /// Returns when the collection is started.
-  Future<void> collect(String key, int collectSize) =>
-      _collectorManager.collect(key, collectSize);
+  Future<void> collect(String key, int collectSize, Duration interval) =>
+      _collectorManager.collect(key, collectSize, interval);
 
   /// Returns a Stream of the collected data.
   Stream<List<CollectedSample>> collectStream(String key) =>
@@ -515,7 +534,7 @@ class KeyCollectorManager {
 
   KeyCollectorManager({required this.monitorFn});
 
-  Future<void> collect(String key, int size) async {
+  Future<void> collect(String key, int size, Duration interval) async {
     if (_collectors.containsKey(key)) {
       return;
     }
@@ -523,16 +542,26 @@ class KeyCollectorManager {
     final buffer = RingBuffer<CollectedSample>(size);
     final subject = BehaviorSubject<List<CollectedSample>>();
 
+    DynamicValue? lastValue;
+    Timer? periodicTimer;
     final sub = await monitorFn(key);
     final subscription = sub.listen(
       (value) {
-        buffer.add(CollectedSample(DynamicValue.from(value), DateTime.now()));
-        subject.add(buffer.toList());
+        lastValue = value;
       },
       onError: (e, s) {
+        periodicTimer?.cancel();
         // TODO: handle error, I think I dont care about this error
       },
     );
+
+    periodicTimer = Timer.periodic(interval, (timer) {
+      if (lastValue != null) {
+        buffer.add(
+            CollectedSample(DynamicValue.from(lastValue!), DateTime.now()));
+        subject.add(buffer.toList());
+      }
+    });
 
     _collectors[key] = subject;
     _buffers[key] = buffer;

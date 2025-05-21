@@ -324,18 +324,20 @@ class _ConveyorState extends ConsumerState<Conveyor> {
                           padding: const EdgeInsets.all(8),
                           onHighlightChanged: (isPressed) async {
                             if (dynValue['p_stat_ManualStopOnRelease'].asBool) {
-                              dynValue['p_cmd_JogBwd'] = isPressed;
+                              final newValue = DynamicValue.from(dynValue);
+                              newValue['p_cmd_JogBwd'] = isPressed;
                               await stateMan.write(
                                 widget.config.key,
-                                dynValue,
+                                newValue,
                               );
                             }
                           },
                           onPressed: () {
                             if (!dynValue['p_stat_ManualStopOnRelease']
                                 .asBool) {
-                              dynValue['p_cmd_JogBwd'] = true;
-                              stateMan.write(widget.config.key, dynValue);
+                              final newValue = DynamicValue.from(dynValue);
+                              newValue['p_cmd_JogBwd'] = true;
+                              stateMan.write(widget.config.key, newValue);
                             }
                           },
                           child: Icon(
@@ -355,18 +357,20 @@ class _ConveyorState extends ConsumerState<Conveyor> {
                           padding: const EdgeInsets.all(8),
                           onHighlightChanged: (isPressed) async {
                             if (dynValue['p_stat_ManualStopOnRelease'].asBool) {
-                              dynValue['p_cmd_JogFwd'] = isPressed;
+                              final newValue = DynamicValue.from(dynValue);
+                              newValue['p_cmd_JogFwd'] = isPressed;
                               await stateMan.write(
                                 widget.config.key,
-                                dynValue,
+                                newValue,
                               );
                             }
                           },
                           onPressed: () {
                             if (!dynValue['p_stat_ManualStopOnRelease']
                                 .asBool) {
-                              dynValue['p_cmd_JogFwd'] = true;
-                              stateMan.write(widget.config.key, dynValue);
+                              final newValue = DynamicValue.from(dynValue);
+                              newValue['p_cmd_JogFwd'] = true;
+                              stateMan.write(widget.config.key, newValue);
                             }
                           },
                           child: Icon(
@@ -390,8 +394,9 @@ class _ConveyorState extends ConsumerState<Conveyor> {
                         shape: const CircleBorder(),
                         padding: const EdgeInsets.all(8),
                         onPressed: () {
-                          dynValue['p_cmd_FaultReset'] = true;
-                          stateMan.write(widget.config.key, dynValue);
+                          final newValue = DynamicValue.from(dynValue);
+                          newValue['p_cmd_FaultReset'] = true;
+                          stateMan.write(widget.config.key, newValue);
                         },
                         child: Icon(
                           Icons.circle,
@@ -416,8 +421,9 @@ class _ConveyorState extends ConsumerState<Conveyor> {
                         shape: const CircleBorder(),
                         padding: const EdgeInsets.all(8),
                         onPressed: () {
-                          dynValue['p_cmd_ManualStopOnRelease'] = true;
-                          stateMan.write(widget.config.key, dynValue);
+                          final newValue = DynamicValue.from(dynValue);
+                          newValue['p_cmd_ManualStopOnRelease'] = true;
+                          stateMan.write(widget.config.key, newValue);
                         },
                         child: Icon(
                           Icons.circle,
@@ -444,8 +450,9 @@ class _ConveyorState extends ConsumerState<Conveyor> {
                         shape: const CircleBorder(),
                         padding: const EdgeInsets.all(8),
                         onPressed: () {
-                          dynValue['p_cmd_ResetRunHours'] = true;
-                          stateMan.write(widget.config.key, dynValue);
+                          final newValue = DynamicValue.from(dynValue);
+                          newValue['p_cmd_ResetRunHours'] = true;
+                          stateMan.write(widget.config.key, newValue);
                         },
                         child: const Icon(
                           Icons.circle,
@@ -526,9 +533,10 @@ class _ConveyorState extends ConsumerState<Conveyor> {
                                   if (value.isEmpty) {
                                     return;
                                   }
-                                  dynValue['p_cfg_AutoFreq'] =
+                                  final newValue = DynamicValue.from(dynValue);
+                                  newValue['p_cfg_AutoFreq'] =
                                       double.parse(value);
-                                  stateMan.write(widget.config.key, dynValue);
+                                  stateMan.write(widget.config.key, newValue);
                                 },
                               ),
                             ),
@@ -551,9 +559,10 @@ class _ConveyorState extends ConsumerState<Conveyor> {
                                   if (value.isEmpty) {
                                     return;
                                   }
-                                  dynValue['p_cfg_CleaningFreq'] =
+                                  final newValue = DynamicValue.from(dynValue);
+                                  newValue['p_cfg_CleaningFreq'] =
                                       double.parse(value);
-                                  stateMan.write(widget.config.key, dynValue);
+                                  stateMan.write(widget.config.key, newValue);
                                 },
                               ),
                             ),
@@ -577,9 +586,10 @@ class _ConveyorState extends ConsumerState<Conveyor> {
                                   if (value.isEmpty) {
                                     return;
                                   }
-                                  dynValue['p_cfg_ManualFreq'] =
+                                  final newValue = DynamicValue.from(dynValue);
+                                  newValue['p_cfg_ManualFreq'] =
                                       double.parse(value);
-                                  stateMan.write(widget.config.key, dynValue);
+                                  stateMan.write(widget.config.key, newValue);
                                 },
                               ),
                             ),
@@ -739,7 +749,6 @@ class _ConveyorStatsGraphState extends State<ConveyorStatsGraph> {
   @override
   void initState() {
     super.initState();
-    widget.stateMan.collect(widget.keyName, 100);
   }
 
   @override
