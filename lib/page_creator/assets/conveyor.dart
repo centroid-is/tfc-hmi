@@ -756,7 +756,9 @@ class _ConveyorStatsGraphState extends State<ConveyorStatsGraph> {
     final primary = Theme.of(context).colorScheme.primary;
     final secondary = Theme.of(context).colorScheme.secondary;
     return StreamBuilder<List<CollectedSample>>(
-      stream: widget.stateMan.collectStream(widget.keyName),
+      stream: widget.stateMan
+          .collectStream(widget.keyName)
+          .throttleTime(const Duration(seconds: 1)),
       builder: (context, snapshot) {
         if (!snapshot.hasData || snapshot.data!.isEmpty) {
           return const Center(child: Text('No data'));

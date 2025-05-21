@@ -48,13 +48,18 @@ KeyMappingEntry _$KeyMappingEntryFromJson(Map<String, dynamic> json) =>
       nodeId: json['nodeId'] == null
           ? null
           : NodeIdConfig.fromJson(json['nodeId'] as Map<String, dynamic>),
-      collectSize: (json['collectSize'] as num?)?.toInt(),
-    )..io = json['io'] as bool?;
+      collectSize: (json['collect_size'] as num?)?.toInt(),
+    )
+      ..collectInterval = const DurationMicrosecondsConverter()
+          .fromJson((json['collect_interval_us'] as num?)?.toInt())
+      ..io = json['io'] as bool?;
 
 Map<String, dynamic> _$KeyMappingEntryToJson(KeyMappingEntry instance) =>
     <String, dynamic>{
       'nodeId': instance.nodeId,
-      'collectSize': instance.collectSize,
+      'collect_size': instance.collectSize,
+      'collect_interval_us': const DurationMicrosecondsConverter()
+          .toJson(instance.collectInterval),
       'io': instance.io,
     };
 

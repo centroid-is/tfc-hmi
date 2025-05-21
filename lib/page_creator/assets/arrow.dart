@@ -104,41 +104,25 @@ class ArrowWidget extends ConsumerStatefulWidget {
   ConsumerState<ArrowWidget> createState() => _ArrowWidgetState();
 }
 
-class _ArrowWidgetState extends ConsumerState<ArrowWidget>
-    with SingleTickerProviderStateMixin {
-  late AnimationController _controller;
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = AnimationController(
-      duration: const Duration(seconds: 1),
-      vsync: this,
-    );
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
+class _ArrowWidgetState extends ConsumerState<ArrowWidget> {
   double _angleForOperation(String op) {
     switch (op) {
-      case "up":
-        return -math.pi / 2;
-      case "down":
-        return math.pi / 2;
       case "left":
-        return math.pi;
+        return -math.pi / 2;
       case "right":
+        return math.pi / 2;
+      case "down":
+        return math.pi;
+      case "up":
       default:
         return 0.0;
     }
   }
 
   IconData _iconForOperation(String op) {
-    // You can use different icons if you want
+    if (op == "lost") {
+      return Icons.question_mark_outlined;
+    }
     return Icons.arrow_upward;
   }
 
@@ -159,7 +143,7 @@ class _ArrowWidgetState extends ConsumerState<ArrowWidget>
               .asStream()
               .switchMap((s) => s)),
       builder: (context, snapshot) {
-        String operation = "right";
+        String operation = "lost";
         if (snapshot.hasData) {
           final str = snapshot.data.toString().toLowerCase() ?? "";
           if (str.contains("left")) {
@@ -170,37 +154,19 @@ class _ArrowWidgetState extends ConsumerState<ArrowWidget>
             operation = "up";
           } else if (str.contains("down")) {
             operation = "down";
-          } else if (str.contains("spin")) {
-            operation = "spin";
+          } else if (str.contains("lost")) {
+            operation = "lost";
           }
         }
 
-        if (operation == "spin") {
-          _controller.repeat();
-          return AnimatedBuilder(
-            animation: _controller,
-            builder: (context, child) {
-              return Transform.rotate(
-                angle: _controller.value * 2 * math.pi,
-                child: Icon(
-                  _iconForOperation("up"),
-                  size: iconSize.shortestSide,
-                  color: Colors.black,
-                ),
-              );
-            },
-          );
-        } else {
-          _controller.stop();
-          return Transform.rotate(
-            angle: _angleForOperation(operation),
-            child: Icon(
-              _iconForOperation(operation),
-              size: iconSize.shortestSide,
-              color: Colors.black,
-            ),
-          );
-        }
+        return Transform.rotate(
+          angle: _angleForOperation(operation),
+          child: Icon(
+            _iconForOperation(operation),
+            size: iconSize.shortestSide,
+            color: Colors.black,
+          ),
+        );
       },
     );
   }

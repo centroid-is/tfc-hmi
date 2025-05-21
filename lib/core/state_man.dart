@@ -101,11 +101,17 @@ class NodeIdConfig {
   factory NodeIdConfig.fromJson(Map<String, dynamic> json) =>
       _$NodeIdConfigFromJson(json);
   Map<String, dynamic> toJson() => _$NodeIdConfigToJson(this);
+
+  @override
+  String toString() {
+    return 'NodeIdConfig(namespace: $namespace, identifier: $identifier)';
+  }
 }
 
 @JsonSerializable()
 class KeyMappingEntry {
   NodeIdConfig? nodeId;
+  @JsonKey(name: 'collect_size')
   int? collectSize;
   @DurationMicrosecondsConverter()
   @JsonKey(name: 'collect_interval_us')
@@ -117,6 +123,11 @@ class KeyMappingEntry {
   factory KeyMappingEntry.fromJson(Map<String, dynamic> json) =>
       _$KeyMappingEntryFromJson(json);
   Map<String, dynamic> toJson() => _$KeyMappingEntryToJson(this);
+
+  @override
+  String toString() {
+    return 'KeyMappingEntry(nodeId: ${nodeId?.toString()}, collectSize: $collectSize, collectInterval: $collectInterval, io: $io)';
+  }
 }
 
 @JsonSerializable()
