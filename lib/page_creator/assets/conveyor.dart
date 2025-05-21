@@ -870,21 +870,26 @@ class _ConveyorStatsGraphState extends State<ConveyorStatsGraph> {
                     ),
                   ),
                   bottomTitles: AxisTitles(
-                    axisNameWidget: Text('Time'),
+                    axisNameWidget: const Text('Time'),
                     sideTitles: SideTitles(
                       showTitles: true,
-                      interval: ((maxTime - minTime) / 4).clamp(
-                        1,
-                        double.infinity,
-                      ),
+                      reservedSize: 24,
                       getTitlesWidget: (value, meta) {
+                        // Only show labels for min and max values
+                        if (value != minTime && value != maxTime) {
+                          return const SizedBox.shrink();
+                        }
+
                         final dt = DateTime.fromMillisecondsSinceEpoch(
                           value.toInt(),
                         );
                         final formatted = intl.DateFormat.Hms().format(dt);
-                        return Text(
+                        return Padding(
+                          padding: const EdgeInsets.only(top: 8.0),
+                          child: Text(
                           formatted,
                           style: const TextStyle(fontSize: 10),
+                          ),
                         );
                       },
                     ),
