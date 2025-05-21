@@ -60,29 +60,33 @@ class LoginCredentials {
 
   Future<DBusClient> connect(BuildContext context) async {
     logger.d('Connecting to: $this');
+    BuildContext? dialogContext;
     try {
+      bool connected = false;
       // wait for build to finish creating widgets before showing loading dialog, can occur during auto login
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (context.mounted) {
+        if (context.mounted && !connected) {
           showDialog(
-            context: context,
-            barrierDismissible: false,
-            builder: (context) => const Center(
-              child: Card(
-                child: Padding(
-                  padding: EdgeInsets.all(16.0),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      CircularProgressIndicator(),
-                      SizedBox(height: 16),
-                      Text('Connecting...'),
-                    ],
+              context: context,
+              barrierDismissible: false,
+              builder: (context) {
+                dialogContext = context;
+                return const Center(
+                  child: Card(
+                    child: Padding(
+                      padding: EdgeInsets.all(16.0),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          CircularProgressIndicator(),
+                          SizedBox(height: 16),
+                          Text('Connecting...'),
+                        ],
+                      ),
+                    ),
                   ),
-                ),
-              ),
-            ),
-          );
+                );
+              });
         }
       });
 
@@ -101,15 +105,18 @@ class LoginCredentials {
         onTimeout: () =>
             throw TimeoutException('Connection timed out after 10 seconds'),
       );
+      connected = true;
 
-      if (context.mounted) {
-        Navigator.of(context).pop();
+      if (dialogContext != null) {
+        Navigator.pop(dialogContext!);
       }
       return result;
     } catch (e) {
       logger.e('Error connecting to bus: $e');
       if (context.mounted) {
-        Navigator.of(context).pop(); // Close loading dialog
+        if (dialogContext != null) {
+          Navigator.pop(dialogContext!);
+        }
         await showDialog(
           context: context,
           builder: (context) => AlertDialog(
