@@ -570,7 +570,11 @@ class KeyCollectorManager {
       if (lastValue != null) {
         buffer.add(
             CollectedSample(DynamicValue.from(lastValue!), DateTime.now()));
-        subject.add(buffer.toList());
+        if (subject.isClosed) {
+          periodicTimer?.cancel();
+        } else {
+          subject.add(buffer.toList());
+        }
       }
     });
 
