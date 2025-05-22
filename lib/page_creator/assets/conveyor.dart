@@ -148,18 +148,25 @@ class _ConveyorState extends ConsumerState<Conveyor> {
     _simulateBatchesTimer?.cancel();
   }
 
-  Color _getConveyorColor(dynamic dynValue) {
+  Color _getConveyorColor(DynamicValue dynValue) {
     try {
-      if (dynValue['p_stat_Error'].asBool) {
+      final state = dynValue['p_stat_RunMode'].asInt;
+      final fields = dynValue['p_stat_RunMode'].enumFields;
+      final name = fields?[state]?.name;
+      if (name == 'fault') {
         return Colors.red;
-      }
-
-      if (dynValue['p_stat_Frequency'].asInt != 0) {
+      } else if (name == 'stopped') {
+        return Colors.grey;
+      } else if (name == 'auto') {
         return Colors.green;
+      } else if (name == 'manual') {
+        return Colors.yellow;
+      } else if (name == 'clean') {
+        return Colors.blue;
       }
-      return Colors.blue;
+      return Colors.pink;
     } catch (_) {
-      return Colors.grey;
+      return Colors.purple;
     }
   }
 
@@ -208,7 +215,7 @@ class _ConveyorState extends ConsumerState<Conveyor> {
         }
         // _log.d('Dynamic value for ${widget.config.key}: ${snapshot.data}');
         final dynValue = snapshot.data!;
-        final color = _getConveyorColor(dynValue['drive']);
+        final color = _getConveyorColor(dynValue['drive'] as DynamicValue);
 
         if (widget.config.simulateBatches ?? false) {
           _startSimulateBatchesTimer();
