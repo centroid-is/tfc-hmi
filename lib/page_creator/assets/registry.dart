@@ -13,6 +13,7 @@ class AssetRegistry {
     LEDConfig: LEDConfig.fromJson,
     ButtonConfig: ButtonConfig.fromJson,
     ConveyorConfig: ConveyorConfig.fromJson,
+    ConveyorColorPaletteConfig: ConveyorColorPaletteConfig.fromJson,
     ArrowConfig: ArrowConfig.fromJson,
   };
 
@@ -20,6 +21,7 @@ class AssetRegistry {
     LEDConfig: LEDConfig.preview,
     ButtonConfig: ButtonConfig.preview,
     ConveyorConfig: ConveyorConfig.preview,
+    ConveyorColorPaletteConfig: ConveyorColorPaletteConfig.preview,
     ArrowConfig: ArrowConfig.preview,
   };
 

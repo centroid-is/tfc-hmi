@@ -18,6 +18,156 @@ import 'package:intl/intl.dart' as intl;
 part 'conveyor.g.dart';
 
 @JsonSerializable(explicitToJson: true)
+class ConveyorColorPaletteConfig extends BaseAsset {
+  ConveyorColorPaletteConfig();
+  bool preview = false;
+
+  @override
+  Widget build(BuildContext context) => ConveyorColorPalette(config: this);
+
+  @override
+  Widget configure(BuildContext context) {
+    return Column(
+      children: [
+        SizeField(
+          initialValue: size,
+          onChanged: (size) => this.size = size,
+        ),
+        const SizedBox(height: 16),
+        CoordinatesField(
+          initialValue: coordinates,
+          onChanged: (coordinates) => this.coordinates = coordinates,
+          enableAngle: true,
+        ),
+      ],
+    );
+  }
+
+  ConveyorColorPaletteConfig.preview() : preview = true;
+
+  factory ConveyorColorPaletteConfig.fromJson(Map<String, dynamic> json) =>
+      _$ConveyorColorPaletteConfigFromJson(json);
+  Map<String, dynamic> toJson() => _$ConveyorColorPaletteConfigToJson(this);
+}
+
+class ConveyorColorPalette extends StatelessWidget {
+  final ConveyorColorPaletteConfig config;
+  const ConveyorColorPalette({required this.config});
+
+  @override
+  Widget build(BuildContext context) {
+    final size = config.size.toSize(MediaQuery.of(context).size);
+    return Align(
+      alignment: FractionalOffset(
+        config.coordinates.x,
+        config.coordinates.y,
+      ),
+      child: SizedBox(
+        width: size.width,
+        height: size.height,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text('Conveyor colors',
+                  style: TextStyle(fontWeight: FontWeight.bold)),
+              if (!config.preview)
+                Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.all(8.0),
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: Colors.green,
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: const Center(
+                          child: Padding(
+                            padding: EdgeInsets.all(8.0),
+                            child: Text(
+                              'Auto',
+                              style: TextStyle(color: Colors.white),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.all(8.0),
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: Colors.blue,
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: const Padding(
+                          padding: EdgeInsets.all(8.0),
+                          child: Center(
+                            child: Text('Clean',
+                                style: TextStyle(color: Colors.white)),
+                          ),
+                        ),
+                      ),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.all(8.0),
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: Colors.yellow,
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: const Padding(
+                          padding: EdgeInsets.all(8.0),
+                          child: Center(
+                            child: Text('Manual',
+                                style: TextStyle(color: Colors.blueGrey)),
+                          ),
+                        ),
+                      ),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.all(8.0),
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: Colors.grey,
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: const Padding(
+                          padding: EdgeInsets.all(8.0),
+                          child: Center(
+                            child: Text('Stopped',
+                                style: TextStyle(color: Colors.white)),
+                          ),
+                        ),
+                      ),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.all(8.0),
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: Colors.red,
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: const Padding(
+                          padding: EdgeInsets.all(8.0),
+                          child: Center(
+                            child: Text('Fault',
+                                style: TextStyle(color: Colors.white)),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+@JsonSerializable(explicitToJson: true)
 class ConveyorConfig extends BaseAsset {
   String key;
   String? batchesKey;
