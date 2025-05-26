@@ -267,16 +267,10 @@ class ButtonAligned extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Align(
-      alignment: FractionalOffset(
-        config.coordinates.x,
-        config.coordinates.y,
-      ),
-      child: buildWithText(
-        Button(config),
-        config.text ?? config.key,
-        config.textPos,
-      ),
+    return buildWithText(
+      Button(config),
+      config.text ?? config.key,
+      config.textPos,
     );
   }
 }

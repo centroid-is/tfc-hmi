@@ -280,10 +280,7 @@ class LedRaw extends ConsumerWidget {
       ),
     );
 
-    return Align(
-      alignment: FractionalOffset(config.coordinates.x, config.coordinates.y),
-      child: buildWithText(led, config.text ?? config.key, config.textPos),
-    );
+    return buildWithText(led, config.text ?? config.key, config.textPos);
   }
 }
 

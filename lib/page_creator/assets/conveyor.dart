@@ -57,110 +57,104 @@ class ConveyorColorPalette extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final size = config.size.toSize(MediaQuery.of(context).size);
-    return Align(
-      alignment: FractionalOffset(
-        config.coordinates.x,
-        config.coordinates.y,
-      ),
-      child: SizedBox(
-        width: size.width,
-        height: size.height,
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Text('Conveyor colors',
-                  style: TextStyle(fontWeight: FontWeight.bold)),
-              if (!config.preview)
-                Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Padding(
-                      padding: const EdgeInsets.all(8.0),
-                      child: Container(
-                        decoration: BoxDecoration(
-                          color: Colors.green,
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: const Center(
-                          child: Padding(
-                            padding: EdgeInsets.all(8.0),
-                            child: Text(
-                              'Auto',
-                              style: TextStyle(color: Colors.white),
-                            ),
-                          ),
-                        ),
+    return SizedBox(
+      width: size.width,
+      height: size.height,
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text('Conveyor colors',
+                style: TextStyle(fontWeight: FontWeight.bold)),
+            if (!config.preview)
+              Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.all(8.0),
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: Colors.green,
+                        borderRadius: BorderRadius.circular(4),
                       ),
-                    ),
-                    Padding(
-                      padding: const EdgeInsets.all(8.0),
-                      child: Container(
-                        decoration: BoxDecoration(
-                          color: Colors.blue,
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: const Padding(
+                      child: const Center(
+                        child: Padding(
                           padding: EdgeInsets.all(8.0),
-                          child: Center(
-                            child: Text('Clean',
-                                style: TextStyle(color: Colors.white)),
+                          child: Text(
+                            'Auto',
+                            style: TextStyle(color: Colors.white),
                           ),
                         ),
                       ),
                     ),
-                    Padding(
-                      padding: const EdgeInsets.all(8.0),
-                      child: Container(
-                        decoration: BoxDecoration(
-                          color: Colors.yellow,
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: const Padding(
-                          padding: EdgeInsets.all(8.0),
-                          child: Center(
-                            child: Text('Manual',
-                                style: TextStyle(color: Colors.blueGrey)),
-                          ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.all(8.0),
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: Colors.blue,
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: const Padding(
+                        padding: EdgeInsets.all(8.0),
+                        child: Center(
+                          child: Text('Clean',
+                              style: TextStyle(color: Colors.white)),
                         ),
                       ),
                     ),
-                    Padding(
-                      padding: const EdgeInsets.all(8.0),
-                      child: Container(
-                        decoration: BoxDecoration(
-                          color: Colors.grey,
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: const Padding(
-                          padding: EdgeInsets.all(8.0),
-                          child: Center(
-                            child: Text('Stopped',
-                                style: TextStyle(color: Colors.white)),
-                          ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.all(8.0),
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: Colors.yellow,
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: const Padding(
+                        padding: EdgeInsets.all(8.0),
+                        child: Center(
+                          child: Text('Manual',
+                              style: TextStyle(color: Colors.blueGrey)),
                         ),
                       ),
                     ),
-                    Padding(
-                      padding: const EdgeInsets.all(8.0),
-                      child: Container(
-                        decoration: BoxDecoration(
-                          color: Colors.red,
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: const Padding(
-                          padding: EdgeInsets.all(8.0),
-                          child: Center(
-                            child: Text('Fault',
-                                style: TextStyle(color: Colors.white)),
-                          ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.all(8.0),
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: Colors.grey,
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: const Padding(
+                        padding: EdgeInsets.all(8.0),
+                        child: Center(
+                          child: Text('Stopped',
+                              style: TextStyle(color: Colors.white)),
                         ),
                       ),
                     ),
-                  ],
-                ),
-            ],
-          ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.all(8.0),
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: Colors.red,
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: const Padding(
+                        padding: EdgeInsets.all(8.0),
+                        child: Center(
+                          child: Text('Fault',
+                              style: TextStyle(color: Colors.white)),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+          ],
         ),
       ),
     );
