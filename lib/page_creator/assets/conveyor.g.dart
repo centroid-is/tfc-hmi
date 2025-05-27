@@ -13,7 +13,10 @@ ConveyorColorPaletteConfig _$ConveyorColorPaletteConfigFromJson(
       ..pageName = json['page_name'] as String
       ..coordinates =
           Coordinates.fromJson(json['coordinates'] as Map<String, dynamic>)
-      ..size = RelativeSize.fromJson(json['size'] as Map<String, dynamic>);
+      ..size = RelativeSize.fromJson(json['size'] as Map<String, dynamic>)
+      ..text = json['text'] as String?
+      ..textPos = $enumDecodeNullable(_$TextPosEnumMap, json['textPos'])
+      ..preview = json['preview'] as bool?;
 
 Map<String, dynamic> _$ConveyorColorPaletteConfigToJson(
         ConveyorColorPaletteConfig instance) =>
@@ -22,7 +25,18 @@ Map<String, dynamic> _$ConveyorColorPaletteConfigToJson(
       'page_name': instance.pageName,
       'coordinates': instance.coordinates.toJson(),
       'size': instance.size.toJson(),
+      'text': instance.text,
+      'textPos': _$TextPosEnumMap[instance.textPos],
+      'preview': instance.preview,
     };
+
+const _$TextPosEnumMap = {
+  TextPos.above: 'above',
+  TextPos.below: 'below',
+  TextPos.left: 'left',
+  TextPos.right: 'right',
+  TextPos.inside: 'inside',
+};
 
 ConveyorConfig _$ConveyorConfigFromJson(Map<String, dynamic> json) =>
     ConveyorConfig(
@@ -34,7 +48,9 @@ ConveyorConfig _$ConveyorConfigFromJson(Map<String, dynamic> json) =>
       ..pageName = json['page_name'] as String
       ..coordinates =
           Coordinates.fromJson(json['coordinates'] as Map<String, dynamic>)
-      ..size = RelativeSize.fromJson(json['size'] as Map<String, dynamic>);
+      ..size = RelativeSize.fromJson(json['size'] as Map<String, dynamic>)
+      ..text = json['text'] as String?
+      ..textPos = $enumDecodeNullable(_$TextPosEnumMap, json['textPos']);
 
 Map<String, dynamic> _$ConveyorConfigToJson(ConveyorConfig instance) =>
     <String, dynamic>{
@@ -42,6 +58,8 @@ Map<String, dynamic> _$ConveyorConfigToJson(ConveyorConfig instance) =>
       'page_name': instance.pageName,
       'coordinates': instance.coordinates.toJson(),
       'size': instance.size.toJson(),
+      'text': instance.text,
+      'textPos': _$TextPosEnumMap[instance.textPos],
       'key': instance.key,
       'batchesKey': instance.batchesKey,
       'simulateBatches': instance.simulateBatches,

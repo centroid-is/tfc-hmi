@@ -21,15 +21,12 @@ enum LEDType {
 @JsonSerializable(explicitToJson: true)
 class LEDConfig extends BaseAsset {
   String key;
-  String? text;
   @ColorConverter()
   @JsonKey(name: 'on_color')
   Color onColor;
   @ColorConverter()
   @JsonKey(name: 'off_color')
   Color offColor;
-  @JsonKey(name: 'text_pos')
-  TextPos textPos;
   @JsonKey(name: 'led_type')
   LEDType ledType = LEDType.circle;
 
@@ -37,7 +34,6 @@ class LEDConfig extends BaseAsset {
     required this.key,
     required this.onColor,
     required this.offColor,
-    required this.textPos,
   });
 
   static const previewStr = 'Led preview';
@@ -45,8 +41,9 @@ class LEDConfig extends BaseAsset {
   LEDConfig.preview()
       : key = previewStr,
         onColor = Colors.green,
-        offColor = Colors.green,
-        textPos = TextPos.right;
+        offColor = Colors.green {
+    textPos = TextPos.right;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -272,15 +269,13 @@ class LedRaw extends ConsumerWidget {
         ? min(actualSize.width, actualSize.height)
         : actualSize.height;
 
-    final led = SizedBox(
+    return SizedBox(
       width: width,
       height: height,
       child: CustomPaint(
         painter: LEDPainter(color: color, ledType: config.ledType),
       ),
     );
-
-    return buildWithText(led, config.text ?? config.key, config.textPos);
   }
 }
 

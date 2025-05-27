@@ -12,7 +12,6 @@ LEDConfig _$LEDConfigFromJson(Map<String, dynamic> json) => LEDConfig(
           .fromJson(json['on_color'] as Map<String, dynamic>),
       offColor: const ColorConverter()
           .fromJson(json['off_color'] as Map<String, dynamic>),
-      textPos: $enumDecode(_$TextPosEnumMap, json['text_pos']),
     )
       ..variant = json['asset_name'] as String
       ..pageName = json['page_name'] as String
@@ -20,6 +19,7 @@ LEDConfig _$LEDConfigFromJson(Map<String, dynamic> json) => LEDConfig(
           Coordinates.fromJson(json['coordinates'] as Map<String, dynamic>)
       ..size = RelativeSize.fromJson(json['size'] as Map<String, dynamic>)
       ..text = json['text'] as String?
+      ..textPos = $enumDecodeNullable(_$TextPosEnumMap, json['textPos'])
       ..ledType = $enumDecode(_$LEDTypeEnumMap, json['led_type']);
 
 Map<String, dynamic> _$LEDConfigToJson(LEDConfig instance) => <String, dynamic>{
@@ -27,11 +27,11 @@ Map<String, dynamic> _$LEDConfigToJson(LEDConfig instance) => <String, dynamic>{
       'page_name': instance.pageName,
       'coordinates': instance.coordinates.toJson(),
       'size': instance.size.toJson(),
-      'key': instance.key,
       'text': instance.text,
+      'textPos': _$TextPosEnumMap[instance.textPos],
+      'key': instance.key,
       'on_color': const ColorConverter().toJson(instance.onColor),
       'off_color': const ColorConverter().toJson(instance.offColor),
-      'text_pos': _$TextPosEnumMap[instance.textPos]!,
       'led_type': _$LEDTypeEnumMap[instance.ledType]!,
     };
 

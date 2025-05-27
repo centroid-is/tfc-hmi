@@ -20,7 +20,7 @@ part 'conveyor.g.dart';
 @JsonSerializable(explicitToJson: true)
 class ConveyorColorPaletteConfig extends BaseAsset {
   ConveyorColorPaletteConfig();
-  bool preview = false;
+  bool? preview = false;
 
   @override
   Widget build(BuildContext context) => ConveyorColorPalette(config: this);
@@ -66,7 +66,7 @@ class ConveyorColorPalette extends StatelessWidget {
           children: [
             const Text('Conveyor colors',
                 style: TextStyle(fontWeight: FontWeight.bold)),
-            if (!config.preview)
+            if (!(config.preview ?? false))
               Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [

@@ -39,21 +39,18 @@ enum ButtonType {
 class ButtonConfig extends BaseAsset {
   String key;
   FeedbackConfig? feedback;
-  String? text;
   @ColorConverter()
   @JsonKey(name: 'outward_color')
   Color outwardColor;
   @ColorConverter()
   @JsonKey(name: 'inward_color')
   Color inwardColor;
-  @JsonKey(name: 'text_pos')
-  TextPos textPos;
   @JsonKey(name: 'button_type')
   ButtonType buttonType;
 
   @override
   Widget build(BuildContext context) {
-    return ButtonAligned(config: this);
+    return Button(this);
   }
 
   @override
@@ -88,7 +85,6 @@ class ButtonConfig extends BaseAsset {
     required this.key,
     required this.outwardColor,
     required this.inwardColor,
-    required this.textPos,
     required this.buttonType,
   });
 
@@ -98,8 +94,9 @@ class ButtonConfig extends BaseAsset {
       : key = previewStr,
         outwardColor = Colors.green,
         inwardColor = Colors.green,
-        textPos = TextPos.right,
-        buttonType = ButtonType.circle;
+        buttonType = ButtonType.circle {
+    textPos = TextPos.right;
+  }
 
   factory ButtonConfig.fromJson(Map<String, dynamic> json) =>
       _$ButtonConfigFromJson(json);
@@ -252,25 +249,6 @@ class _ButtonState extends ConsumerState<Button> {
       },
       loading: () => _buildButton(widget.config.outwardColor),
       error: (_, __) => _buildButton(widget.config.outwardColor),
-    );
-  }
-}
-
-class ButtonAligned extends StatelessWidget {
-  final ButtonConfig config;
-
-  const ButtonAligned({super.key, required this.config});
-
-  factory ButtonAligned.preview() {
-    return ButtonAligned(config: ButtonConfig.preview());
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return buildWithText(
-      Button(config),
-      config.text ?? config.key,
-      config.textPos,
     );
   }
 }

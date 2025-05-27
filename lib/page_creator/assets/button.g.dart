@@ -24,7 +24,6 @@ ButtonConfig _$ButtonConfigFromJson(Map<String, dynamic> json) => ButtonConfig(
           .fromJson(json['outward_color'] as Map<String, dynamic>),
       inwardColor: const ColorConverter()
           .fromJson(json['inward_color'] as Map<String, dynamic>),
-      textPos: $enumDecode(_$TextPosEnumMap, json['text_pos']),
       buttonType: $enumDecode(_$ButtonTypeEnumMap, json['button_type']),
     )
       ..variant = json['asset_name'] as String
@@ -32,10 +31,11 @@ ButtonConfig _$ButtonConfigFromJson(Map<String, dynamic> json) => ButtonConfig(
       ..coordinates =
           Coordinates.fromJson(json['coordinates'] as Map<String, dynamic>)
       ..size = RelativeSize.fromJson(json['size'] as Map<String, dynamic>)
+      ..text = json['text'] as String?
+      ..textPos = $enumDecodeNullable(_$TextPosEnumMap, json['textPos'])
       ..feedback = json['feedback'] == null
           ? null
-          : FeedbackConfig.fromJson(json['feedback'] as Map<String, dynamic>)
-      ..text = json['text'] as String?;
+          : FeedbackConfig.fromJson(json['feedback'] as Map<String, dynamic>);
 
 Map<String, dynamic> _$ButtonConfigToJson(ButtonConfig instance) =>
     <String, dynamic>{
@@ -43,14 +43,19 @@ Map<String, dynamic> _$ButtonConfigToJson(ButtonConfig instance) =>
       'page_name': instance.pageName,
       'coordinates': instance.coordinates,
       'size': instance.size,
+      'text': instance.text,
+      'textPos': _$TextPosEnumMap[instance.textPos],
       'key': instance.key,
       'feedback': instance.feedback,
-      'text': instance.text,
       'outward_color': const ColorConverter().toJson(instance.outwardColor),
       'inward_color': const ColorConverter().toJson(instance.inwardColor),
-      'text_pos': _$TextPosEnumMap[instance.textPos]!,
       'button_type': _$ButtonTypeEnumMap[instance.buttonType]!,
     };
+
+const _$ButtonTypeEnumMap = {
+  ButtonType.circle: 'circle',
+  ButtonType.square: 'square',
+};
 
 const _$TextPosEnumMap = {
   TextPos.above: 'above',
@@ -58,9 +63,4 @@ const _$TextPosEnumMap = {
   TextPos.left: 'left',
   TextPos.right: 'right',
   TextPos.inside: 'inside',
-};
-
-const _$ButtonTypeEnumMap = {
-  ButtonType.circle: 'circle',
-  ButtonType.square: 'square',
 };

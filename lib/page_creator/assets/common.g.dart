@@ -42,4 +42,14 @@ Map<String, dynamic> _$BaseAssetToJson(BaseAsset instance) => <String, dynamic>{
       'page_name': instance.pageName,
       'coordinates': instance.coordinates.toJson(),
       'size': instance.size.toJson(),
+      'text': instance.text,
+      'textPos': _$TextPosEnumMap[instance.textPos],
     };
+
+const _$TextPosEnumMap = {
+  TextPos.above: 'above',
+  TextPos.below: 'below',
+  TextPos.left: 'left',
+  TextPos.right: 'right',
+  TextPos.inside: 'inside',
+};

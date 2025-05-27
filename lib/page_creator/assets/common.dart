@@ -89,6 +89,10 @@ class RelativeSize {
 
 abstract class Asset {
   String get assetName;
+  String? get text;
+  set text(String? text);
+  TextPos? get textPos;
+  set textPos(TextPos? textPos);
   Coordinates get coordinates;
   set coordinates(Coordinates coordinates);
   String get pageName;
@@ -147,9 +151,33 @@ abstract class BaseAsset implements Asset {
   set size(RelativeSize size) {
     _size = size;
   }
+
+  @JsonKey(name: 'text')
+  String? _text;
+
+  @override
+  String? get text => _text;
+
+  @override
+  set text(String? text) {
+    _text = text;
+  }
+
+  @JsonKey(name: 'text_pos')
+  TextPos? _textPos;
+
+  @override
+  TextPos? get textPos => _textPos;
+
+  @override
+  set textPos(TextPos? textPos) {
+    _textPos = textPos;
+  }
 }
 
-Widget buildWithText(Widget widget, String text, TextPos textPos) {
+Widget buildWithText(Widget widget, String? text, TextPos? textPos) {
+  if (text == null) return widget;
+  textPos ??= TextPos.right;
   final textWidget = Text(text);
   const spacing = SizedBox(width: 8, height: 8); // 8 pixel spacing
 
