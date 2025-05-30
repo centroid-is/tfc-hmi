@@ -6,7 +6,7 @@ import 'package:logger/logger.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:tfc/core/preferences.dart';
 
-import '../page_creator/assets/common.dart'; // your Asset, Coordinates, RelativeSize, etc.
+import '../page_creator/assets/common.dart'; // your Asset, Coordinates, RelativeSize, TextPos, etc.
 import '../page_creator/assets/registry.dart';
 import '../widgets/base_scaffold.dart';
 
@@ -33,7 +33,7 @@ class AssetStackConfig {
   Map<String, dynamic> toJson() => _$AssetStackConfigToJson(this);
 }
 
-/// A helper widget that measures its child’s laid-out Size
+/// A helper widget that measures its child's laid-out Size
 /// and calls `onChange(Size)` whenever it changes.
 typedef OnWidgetSizeChange = void Function(Size size);
 
@@ -67,47 +67,40 @@ Matrix4 _buildTransform(AssetStackConfig cfg) {
     ..scale(cfg.xMirror ? -1.0 : 1.0, cfg.yMirror ? -1.0 : 1.0);
 }
 
-Widget _buildWithText(
-    Widget widget, String? text, TextPos? textPos, AssetStackConfig cfg) {
-  if (text == null) return widget;
-  textPos ??= TextPos.right;
-
-  // if (cfg.xMirror && (textPos == TextPos.right || textPos == TextPos.left)) {
-  //   textPos = textPos == TextPos.right ? TextPos.left : TextPos.right;
-  // }
-
-  final textWidget = Text(text);
-  const spacing = SizedBox(width: 8, height: 8); // 8 pixel spacing
-
-  if (textPos == TextPos.inside) {
-    return Stack(
-      alignment: Alignment.center,
-      children: [
-        widget,
-        IgnorePointer(child: textWidget),
-      ],
-    );
+/// Computes the top-left offset for the label given the asset center, its size,
+/// the label size, and the desired position.
+Offset _labelOffset(
+  Offset center,
+  Size assetSize,
+  Size textSize,
+  TextPos pos, [
+  double spacing = 8,
+]) {
+  final halfW = assetSize.width / 2;
+  final halfH = assetSize.height / 2;
+  switch (pos) {
+    case TextPos.above:
+      return Offset(
+        center.dx - textSize.width / 2,
+        center.dy - halfH - spacing - textSize.height,
+      );
+    case TextPos.below:
+      return Offset(
+        center.dx - textSize.width / 2,
+        center.dy + halfH + spacing,
+      );
+    case TextPos.left:
+      return Offset(
+        center.dx - halfW - spacing - textSize.width,
+        center.dy - textSize.height / 2,
+      );
+    case TextPos.right:
+    default:
+      return Offset(
+        center.dx + halfW + spacing,
+        center.dy - textSize.height / 2,
+      );
   }
-
-  return Column(
-    mainAxisSize: MainAxisSize.min,
-    // crossAxisAlignment: CrossAxisAlignment.center,
-    children: textPos == TextPos.above
-        ? [textWidget, spacing, widget]
-        : textPos == TextPos.below
-            ? [widget, spacing, textWidget]
-            : textPos == TextPos.right
-                ? [
-                    Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [widget, spacing, textWidget])
-                  ]
-                : [
-                    Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [textWidget, spacing, widget])
-                  ],
-  );
 }
 
 class AssetStack extends StatefulWidget {
@@ -151,78 +144,110 @@ class _AssetStackState extends State<AssetStack> {
       builder: (context, snap) {
         final cfg = snap.data ?? AssetStackConfig();
 
-        return Stack(
-          fit: StackFit.expand,
-          children: widget.assets.map((asset) {
-            // 1) Compute normalized coords (with optional mirroring)
-            final fx =
-                cfg.xMirror ? 1 - asset.coordinates.x : asset.coordinates.x;
-            final fy =
-                cfg.yMirror ? 1 - asset.coordinates.y : asset.coordinates.y;
+        // We'll accumulate all Positioned children here
+        final positionedChildren = <Widget>[];
 
-            // 2) Canvas‐pixel center point
-            final cx = fx * W;
-            final cy = fy * H;
+        for (final asset in widget.assets) {
+          // 1) normalized coords with optional mirroring
+          final fx =
+              cfg.xMirror ? 1 - asset.coordinates.x : asset.coordinates.x;
+          final fy =
+              cfg.yMirror ? 1 - asset.coordinates.y : asset.coordinates.y;
 
-            // 3) Determine half‐size: either measured or fallback to config.size
-            final measured = _measuredSizes[asset];
-            final halfW = (measured?.width ?? (asset.size.width * W)) / 2;
-            final halfH = (measured?.height ?? (asset.size.height * H)) / 2;
+          // 2) canvas-pixel center point
+          final cx = fx * W;
+          final cy = fy * H;
+          final center = Offset(cx, cy);
 
-            return Stack(children: [
-              // A) The asset itself, wrapped in MeasureSize + GestureDetector
-              Positioned(
-                left: cx - halfW,
-                top: cy - halfH,
-                child: Row(
-                  children: [
-                    Transform(
-                      alignment: Alignment.center,
-                      transform: asset.coordinates.angle != null
-                          ? _buildTransform(cfg)
-                          : Matrix4.identity(),
-                      child: _buildWithText(
-                          MeasureSize(
-                            onChange: (s) {
-                              // store and re‐layout
-                              setState(() => _measuredSizes[asset] = s);
-                            },
-                            child: GestureDetector(
-                              onTap: widget.onTap != null
-                                  ? () => widget.onTap!(asset)
-                                  : null,
-                              onPanUpdate: widget.onPanUpdate != null
-                                  ? (d) => widget.onPanUpdate!(asset, d)
-                                  : null,
-                              child: AbsorbPointer(
-                                absorbing: widget.absorb,
-                                child: asset.build(context),
-                              ),
-                            ),
-                          ),
-                          asset.text,
-                          asset.textPos,
-                          cfg),
-                    ),
-                  ],
-                ),
+          // 3) measured asset size or fallback
+          final measured = _measuredSizes[asset];
+          final assetW = measured?.width ?? (asset.size.width * W);
+          final assetH = measured?.height ?? (asset.size.height * H);
+          final assetSize = Size(assetW, assetH);
+          final halfW = assetW / 2;
+          final halfH = assetH / 2;
+
+          // 4) measure text size if any
+          Size textSize = Size.zero;
+          if (asset.text != null && asset.text!.isNotEmpty) {
+            final tp = TextPainter(
+              text: TextSpan(
+                text: asset.text,
+                style: DefaultTextStyle.of(context).style,
               ),
+              textDirection: TextDirection.ltr,
+            )..layout();
+            textSize = tp.size;
+          }
 
-              // B) The red dot at the *exact* center on the canvas
-              Positioned(
-                left: cx - 4, // dot is 8×8 → half = 4
-                top: cy - 4,
-                child: Container(
-                  width: 8,
-                  height: 8,
-                  decoration: BoxDecoration(
-                    color: Colors.red,
-                    shape: BoxShape.circle,
+          // A) add the asset widget itself
+          positionedChildren.add(
+            Positioned(
+              left: cx - halfW,
+              top: cy - halfH,
+              child: Transform(
+                alignment: Alignment.center,
+                transform: asset.coordinates.angle != null
+                    ? _buildTransform(cfg)
+                    : Matrix4.identity(),
+                child: MeasureSize(
+                  onChange: (s) => setState(() => _measuredSizes[asset] = s),
+                  child: GestureDetector(
+                    onTap: widget.onTap != null
+                        ? () => widget.onTap!(asset)
+                        : null,
+                    onPanUpdate: widget.onPanUpdate != null
+                        ? (d) => widget.onPanUpdate!(asset, d)
+                        : null,
+                    child: AbsorbPointer(
+                      absorbing: widget.absorb,
+                      child: asset.build(context),
+                    ),
                   ),
                 ),
               ),
-            ]);
-          }).toList(),
+            ),
+          );
+
+          // B) add the label (if any)
+          if (asset.text != null && asset.text!.isNotEmpty) {
+            var pos = asset.textPos ?? TextPos.right;
+            if (cfg.xMirror && (pos == TextPos.left || pos == TextPos.right)) {
+              pos = pos == TextPos.left ? TextPos.right : TextPos.left;
+            }
+            if (cfg.yMirror && (pos == TextPos.above || pos == TextPos.below)) {
+              pos = pos == TextPos.above ? TextPos.below : TextPos.above;
+            }
+            final labelOff = _labelOffset(center, assetSize, textSize, pos);
+            positionedChildren.add(
+              Positioned(
+                left: labelOff.dx,
+                top: labelOff.dy,
+                child: Text(asset.text!),
+              ),
+            );
+          }
+
+          // C) add the red center dot
+          positionedChildren.add(
+            Positioned(
+              left: cx - 4,
+              top: cy - 4,
+              child: Container(
+                width: 8,
+                height: 8,
+                decoration: BoxDecoration(
+                  color: Colors.red,
+                  shape: BoxShape.circle,
+                ),
+              ),
+            ),
+          );
+        }
+
+        return Stack(
+          fit: StackFit.expand,
+          children: positionedChildren,
         );
       },
     );
