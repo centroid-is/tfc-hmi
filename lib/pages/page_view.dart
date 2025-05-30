@@ -62,6 +62,54 @@ class _MeasureSizeState extends State<MeasureSize> {
   }
 }
 
+Matrix4 _buildTransform(AssetStackConfig cfg) {
+  return Matrix4.identity()
+    ..scale(cfg.xMirror ? -1.0 : 1.0, cfg.yMirror ? -1.0 : 1.0);
+}
+
+Widget _buildWithText(
+    Widget widget, String? text, TextPos? textPos, AssetStackConfig cfg) {
+  if (text == null) return widget;
+  textPos ??= TextPos.right;
+
+  // if (cfg.xMirror && (textPos == TextPos.right || textPos == TextPos.left)) {
+  //   textPos = textPos == TextPos.right ? TextPos.left : TextPos.right;
+  // }
+
+  final textWidget = Text(text);
+  const spacing = SizedBox(width: 8, height: 8); // 8 pixel spacing
+
+  if (textPos == TextPos.inside) {
+    return Stack(
+      alignment: Alignment.center,
+      children: [
+        widget,
+        IgnorePointer(child: textWidget),
+      ],
+    );
+  }
+
+  return Column(
+    mainAxisSize: MainAxisSize.min,
+    // crossAxisAlignment: CrossAxisAlignment.center,
+    children: textPos == TextPos.above
+        ? [textWidget, spacing, widget]
+        : textPos == TextPos.below
+            ? [widget, spacing, textWidget]
+            : textPos == TextPos.right
+                ? [
+                    Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [widget, spacing, textWidget])
+                  ]
+                : [
+                    Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [textWidget, spacing, widget])
+                  ],
+  );
+}
+
 class AssetStack extends StatefulWidget {
   final List<Asset> assets;
   final BoxConstraints constraints;
@@ -128,27 +176,34 @@ class _AssetStackState extends State<AssetStack> {
                 top: cy - halfH,
                 child: Row(
                   children: [
-                    buildWithText(
-                        MeasureSize(
-                          onChange: (s) {
-                            // store and re‐layout
-                            setState(() => _measuredSizes[asset] = s);
-                          },
-                          child: GestureDetector(
-                            onTap: widget.onTap != null
-                                ? () => widget.onTap!(asset)
-                                : null,
-                            onPanUpdate: widget.onPanUpdate != null
-                                ? (d) => widget.onPanUpdate!(asset, d)
-                                : null,
-                            child: AbsorbPointer(
-                              absorbing: widget.absorb,
-                              child: asset.build(context),
+                    Transform(
+                      alignment: Alignment.center,
+                      transform: asset.coordinates.angle != null
+                          ? _buildTransform(cfg)
+                          : Matrix4.identity(),
+                      child: _buildWithText(
+                          MeasureSize(
+                            onChange: (s) {
+                              // store and re‐layout
+                              setState(() => _measuredSizes[asset] = s);
+                            },
+                            child: GestureDetector(
+                              onTap: widget.onTap != null
+                                  ? () => widget.onTap!(asset)
+                                  : null,
+                              onPanUpdate: widget.onPanUpdate != null
+                                  ? (d) => widget.onPanUpdate!(asset, d)
+                                  : null,
+                              child: AbsorbPointer(
+                                absorbing: widget.absorb,
+                                child: asset.build(context),
+                              ),
                             ),
                           ),
-                        ),
-                        asset.text,
-                        asset.textPos),
+                          asset.text,
+                          asset.textPos,
+                          cfg),
+                    ),
                   ],
                 ),
               ),

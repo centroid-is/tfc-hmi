@@ -175,43 +175,6 @@ abstract class BaseAsset implements Asset {
   }
 }
 
-Widget buildWithText(Widget widget, String? text, TextPos? textPos) {
-  if (text == null) return widget;
-  textPos ??= TextPos.right;
-  final textWidget = Text(text);
-  const spacing = SizedBox(width: 8, height: 8); // 8 pixel spacing
-
-  if (textPos == TextPos.inside) {
-    return Stack(
-      alignment: Alignment.center,
-      children: [
-        widget,
-        IgnorePointer(child: textWidget),
-      ],
-    );
-  }
-
-  return Column(
-    mainAxisSize: MainAxisSize.min,
-    crossAxisAlignment: CrossAxisAlignment.center,
-    children: textPos == TextPos.above
-        ? [textWidget, spacing, widget]
-        : textPos == TextPos.below
-            ? [widget, spacing, textWidget]
-            : textPos == TextPos.right
-                ? [
-                    Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [widget, spacing, textWidget])
-                  ]
-                : [
-                    Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [textWidget, spacing, widget])
-                  ],
-  );
-}
-
 class KeyField extends ConsumerStatefulWidget {
   final String? initialValue;
   final ValueChanged<String>? onChanged;
@@ -666,8 +629,29 @@ class _CoordinatesFieldState extends State<CoordinatesField> {
           const SizedBox(height: 8),
           TextFormField(
             controller: _angleController,
-            decoration: const InputDecoration(
+            decoration: InputDecoration(
               labelText: 'Angle (°)',
+              suffixIcon: IconButton(
+                icon: const Icon(Icons.info_outline),
+                onPressed: () {
+                  showDialog(
+                    context: context,
+                    builder: (context) => AlertDialog(
+                      title: const Text('Angle and Mirroring'),
+                      content: const Text(
+                        'When an angle is specified, the asset will be mirrored. '
+                        'Positive angles rotate clockwise, negative angles rotate counterclockwise.',
+                      ),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.of(context).pop(),
+                          child: const Text('OK'),
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              ),
             ),
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
             onChanged: (_) => _onChanged(),
