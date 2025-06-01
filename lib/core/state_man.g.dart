@@ -11,7 +11,8 @@ OpcUAConfig _$OpcUAConfigFromJson(Map<String, dynamic> json) => OpcUAConfig()
   ..username = json['username'] as String?
   ..password = json['password'] as String?
   ..sslCert = const FileConverter().fromJson(json['ssl_cert'] as String?)
-  ..sslKey = const FileConverter().fromJson(json['ssl_key'] as String?);
+  ..sslKey = const FileConverter().fromJson(json['ssl_key'] as String?)
+  ..serverAlias = json['server_alias'] as String?;
 
 Map<String, dynamic> _$OpcUAConfigToJson(OpcUAConfig instance) =>
     <String, dynamic>{
@@ -20,11 +21,14 @@ Map<String, dynamic> _$OpcUAConfigToJson(OpcUAConfig instance) =>
       'password': instance.password,
       'ssl_cert': const FileConverter().toJson(instance.sslCert),
       'ssl_key': const FileConverter().toJson(instance.sslKey),
+      'server_alias': instance.serverAlias,
     };
 
 StateManConfig _$StateManConfigFromJson(Map<String, dynamic> json) =>
     StateManConfig(
-      opcua: OpcUAConfig.fromJson(json['opcua'] as Map<String, dynamic>),
+      opcua: (json['opcua'] as List<dynamic>)
+          .map((e) => OpcUAConfig.fromJson(e as Map<String, dynamic>))
+          .toList(),
     );
 
 Map<String, dynamic> _$StateManConfigToJson(StateManConfig instance) =>
@@ -32,22 +36,25 @@ Map<String, dynamic> _$StateManConfigToJson(StateManConfig instance) =>
       'opcua': instance.opcua,
     };
 
-NodeIdConfig _$NodeIdConfigFromJson(Map<String, dynamic> json) => NodeIdConfig(
+OpcUANodeConfig _$OpcUANodeConfigFromJson(Map<String, dynamic> json) =>
+    OpcUANodeConfig(
       namespace: (json['namespace'] as num).toInt(),
       identifier: json['identifier'] as String,
-    );
+    )..serverAlias = json['server_alias'] as String?;
 
-Map<String, dynamic> _$NodeIdConfigToJson(NodeIdConfig instance) =>
+Map<String, dynamic> _$OpcUANodeConfigToJson(OpcUANodeConfig instance) =>
     <String, dynamic>{
       'namespace': instance.namespace,
       'identifier': instance.identifier,
+      'server_alias': instance.serverAlias,
     };
 
 KeyMappingEntry _$KeyMappingEntryFromJson(Map<String, dynamic> json) =>
     KeyMappingEntry(
-      nodeId: json['nodeId'] == null
+      opcuaNode: json['opcua_node'] == null
           ? null
-          : NodeIdConfig.fromJson(json['nodeId'] as Map<String, dynamic>),
+          : OpcUANodeConfig.fromJson(
+              json['opcua_node'] as Map<String, dynamic>),
       collectSize: (json['collect_size'] as num?)?.toInt(),
     )
       ..collectInterval = const DurationMicrosecondsConverter()
@@ -56,7 +63,7 @@ KeyMappingEntry _$KeyMappingEntryFromJson(Map<String, dynamic> json) =>
 
 Map<String, dynamic> _$KeyMappingEntryToJson(KeyMappingEntry instance) =>
     <String, dynamic>{
-      'nodeId': instance.nodeId,
+      'opcua_node': instance.opcuaNode,
       'collect_size': instance.collectSize,
       'collect_interval_us': const DurationMicrosecondsConverter()
           .toJson(instance.collectInterval),

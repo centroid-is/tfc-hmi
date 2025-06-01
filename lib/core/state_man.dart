@@ -55,6 +55,8 @@ class OpcUAConfig {
   @FileConverter()
   @JsonKey(name: 'ssl_key')
   File? sslKey;
+  @JsonKey(name: 'server_alias')
+  String? serverAlias;
 
   OpcUAConfig();
 
@@ -70,7 +72,7 @@ class OpcUAConfig {
 
 @JsonSerializable()
 class StateManConfig {
-  OpcUAConfig opcua;
+  List<OpcUAConfig> opcua;
 
   StateManConfig({required this.opcua});
 
@@ -85,11 +87,13 @@ class StateManConfig {
 }
 
 @JsonSerializable()
-class NodeIdConfig {
+class OpcUANodeConfig {
   int namespace;
   String identifier;
+  @JsonKey(name: 'server_alias')
+  String? serverAlias;
 
-  NodeIdConfig({required this.namespace, required this.identifier});
+  OpcUANodeConfig({required this.namespace, required this.identifier});
 
   NodeId toNodeId() {
     if (int.tryParse(identifier) != null) {
@@ -98,19 +102,20 @@ class NodeIdConfig {
     return NodeId.fromString(namespace, identifier);
   }
 
-  factory NodeIdConfig.fromJson(Map<String, dynamic> json) =>
-      _$NodeIdConfigFromJson(json);
-  Map<String, dynamic> toJson() => _$NodeIdConfigToJson(this);
+  factory OpcUANodeConfig.fromJson(Map<String, dynamic> json) =>
+      _$OpcUANodeConfigFromJson(json);
+  Map<String, dynamic> toJson() => _$OpcUANodeConfigToJson(this);
 
   @override
   String toString() {
-    return 'NodeIdConfig(namespace: $namespace, identifier: $identifier)';
+    return 'OpcUANodeConfig(namespace: $namespace, identifier: $identifier)';
   }
 }
 
 @JsonSerializable()
 class KeyMappingEntry {
-  NodeIdConfig? nodeId;
+  @JsonKey(name: 'opcua_node')
+  OpcUANodeConfig? opcuaNode;
   @JsonKey(name: 'collect_size')
   int? collectSize;
   @DurationMicrosecondsConverter()
@@ -118,7 +123,7 @@ class KeyMappingEntry {
   Duration? collectInterval; // microseconds
   bool? io; // if true, the key is an IO unit
 
-  KeyMappingEntry({this.nodeId, this.collectSize});
+  KeyMappingEntry({this.opcuaNode, this.collectSize});
 
   factory KeyMappingEntry.fromJson(Map<String, dynamic> json) =>
       _$KeyMappingEntryFromJson(json);
@@ -126,7 +131,7 @@ class KeyMappingEntry {
 
   @override
   String toString() {
-    return 'KeyMappingEntry(nodeId: ${nodeId?.toString()}, collectSize: $collectSize, collectInterval: $collectInterval, io: $io)';
+    return 'KeyMappingEntry(opcuaNode: ${opcuaNode?.toString()}, collectSize: $collectSize, collectInterval: $collectInterval, io: $io)';
   }
 }
 
@@ -136,13 +141,18 @@ class KeyMappings {
 
   KeyMappings({required this.nodes});
 
-  NodeId? lookup(String key) {
-    return nodes[key]?.nodeId?.toNodeId();
+  NodeId? lookupNodeId(String key) {
+    return nodes[key]?.opcuaNode?.toNodeId();
+  }
+
+  String? lookupServerAlias(String key) {
+    return nodes[key]?.opcuaNode?.serverAlias;
   }
 
   String? lookupKey(NodeId nodeId) {
     return nodes.entries
-        .firstWhereOrNull((entry) => entry.value.nodeId?.toNodeId() == nodeId)
+        .firstWhereOrNull(
+            (entry) => entry.value.opcuaNode?.toNodeId() == nodeId)
         ?.key;
   }
 
@@ -182,16 +192,21 @@ class SingleWorker {
   }
 }
 
+class ClientWrapper {
+  final Client client;
+  final OpcUAConfig config;
+  ClientWrapper(this.client, this.config);
+}
+
 class StateMan {
   final logger = Logger();
   final StateManConfig config;
   final KeyMappings keyMappings;
-  final Client client;
+  final List<ClientWrapper> clients;
   int? subscriptionId;
   final SingleWorker _worker = SingleWorker();
   final Map<String, _SubscriptionEntry> _subscriptions = {};
   late final KeyCollectorManager _collectorManager;
-  bool _connectionHealthy = true;
   Timer? _healthCheckTimer;
   bool _shouldRun = true;
 
@@ -199,59 +214,56 @@ class StateMan {
   StateMan._({
     required this.config,
     required this.keyMappings,
-    required this.client,
+    required this.clients,
   }) {
     _collectorManager = KeyCollectorManager(monitorFn: _monitor);
 
-    client.config.subscriptionInactivityStream.listen((inactivity) {
-      logger.e('Subscription inactivity: $inactivity');
-      //_connectionHealthy = false;
-      // _startConnectionHealthCheck();
-    }).onError((e, s) {
-      logger.e('Failed to listen to subscription inactivity: $e, $s');
-    });
-
-    // spawn a background task to keep the client active
-    () async {
-      while (_shouldRun) {
-        client.connect(config.opcua.endpoint).onError((e, stacktrace) =>
-            logger.e('Failed to connect to ${config.opcua.endpoint}: $e'));
-        while (
-            client.runIterate(const Duration(milliseconds: 10)) && _shouldRun) {
-          await Future.delayed(const Duration(milliseconds: 10));
+    for (final wrapper in clients) {
+      // spawn a background task to keep the client active
+      () async {
+        while (_shouldRun) {
+          wrapper.client.connect(wrapper.config.endpoint).onError((e,
+                  stacktrace) =>
+              logger.e('Failed to connect to ${wrapper.config.endpoint}: $e'));
+          while (wrapper.client.runIterate(const Duration(milliseconds: 10)) &&
+              _shouldRun) {
+            await Future.delayed(const Duration(milliseconds: 10));
+          }
+          logger.e('Disconnecting client');
+          wrapper.client.disconnect();
+          await Future.delayed(const Duration(milliseconds: 1000));
         }
-        logger.e('Disconnecting client');
-        client.disconnect();
-        await Future.delayed(const Duration(milliseconds: 1000));
-      }
-      logger.e('StateMan background task exited');
-    }();
+        logger.e('StateMan background task exited');
+      }();
 
-    bool sessionLost = false;
-    client.config.stateStream.listen((value) {
-      if (value.sessionState == SessionState.UA_SESSIONSTATE_CREATE_REQUESTED &&
-          _subscriptions.isNotEmpty) {
-        logger.e('Session lost!');
-        sessionLost = true;
-      }
-      if (value.sessionState == SessionState.UA_SESSIONSTATE_ACTIVATED &&
-          sessionLost) {
-        logger.e('Session lost, resubscribing');
-        // Session was lost, resubscribe
-        sessionLost = false;
-        subscriptionId = null;
-        for (final entry in _subscriptions.values) {
-          _monitor(entry.key, resub: true);
+      bool sessionLost = false;
+      wrapper.client.config.stateStream.listen((value) {
+        if (value.sessionState ==
+                SessionState.UA_SESSIONSTATE_CREATE_REQUESTED &&
+            _subscriptions.isNotEmpty) {
+          logger.e('Session lost!');
+          sessionLost = true;
         }
-      } else if (value.sessionState == SessionState.UA_SESSIONSTATE_ACTIVATED) {
-        // Session was not lost, retransmit last data values.
-        logger.w(
-            'Session regained, resending last values ${_subscriptions.length}');
-        _resendLastValues();
-      }
-    }).onError((e, s) {
-      logger.e('Failed to listen to state stream: $e, $s');
-    });
+        if (value.sessionState == SessionState.UA_SESSIONSTATE_ACTIVATED &&
+            sessionLost) {
+          logger.e('Session lost, resubscribing');
+          // Session was lost, resubscribe
+          sessionLost = false;
+          subscriptionId = null;
+          for (final entry in _subscriptions.values) {
+            _monitor(entry.key, resub: true);
+          }
+        } else if (value.sessionState ==
+            SessionState.UA_SESSIONSTATE_ACTIVATED) {
+          // Session was not lost, retransmit last data values.
+          logger.w(
+              'Session regained, resending last values ${_subscriptions.length}');
+          _resendLastValues();
+        }
+      }).onError((e, s) {
+        logger.e('Failed to listen to state stream: $e, $s');
+      });
+    }
   }
 
   void _resendLastValues() {
@@ -264,53 +276,63 @@ class StateMan {
     required StateManConfig config,
     required KeyMappings keyMappings,
   }) async {
-    Uint8List? cert;
-    Uint8List? key;
-    MessageSecurityMode securityMode =
-        MessageSecurityMode.UA_MESSAGESECURITYMODE_NONE;
     // Example directory: /Users/jonb/Library/Containers/is.centroid.sildarvinnsla.skammtalina/Data/Documents/certs
-    if (config.opcua.sslCert != null && config.opcua.sslKey != null) {
-      cert = await config.opcua.sslCert!.readAsBytes();
-      key = await config.opcua.sslKey!.readAsBytes();
-      securityMode = MessageSecurityMode.UA_MESSAGESECURITYMODE_SIGNANDENCRYPT;
+    List<ClientWrapper> clients = [];
+    for (final opcuaConfig in config.opcua) {
+      Uint8List? cert;
+      Uint8List? key;
+      MessageSecurityMode securityMode =
+          MessageSecurityMode.UA_MESSAGESECURITYMODE_NONE;
+      if (opcuaConfig.sslCert != null && opcuaConfig.sslKey != null) {
+        cert = await opcuaConfig.sslCert!.readAsBytes();
+        key = await opcuaConfig.sslKey!.readAsBytes();
+        securityMode =
+            MessageSecurityMode.UA_MESSAGESECURITYMODE_SIGNANDENCRYPT;
+      }
+      String? username;
+      String? password;
+      if (opcuaConfig.username != null && opcuaConfig.password != null) {
+        username = opcuaConfig.username;
+        password = opcuaConfig.password;
+      }
+      clients.add(ClientWrapper(
+        Client.fromStatic(
+          username: username,
+          password: password,
+          certificate: cert,
+          privateKey: key,
+          securityMode: securityMode,
+        ),
+        opcuaConfig,
+      ));
     }
-    String? username;
-    String? password;
-    if (config.opcua.username != null && config.opcua.password != null) {
-      username = config.opcua.username;
-      password = config.opcua.password;
-    }
-    final client = Client.fromStatic(
-      username: username,
-      password: password,
-      certificate: cert,
-      privateKey: key,
-      securityMode: securityMode,
-    );
     final stateMan = StateMan._(
       config: config,
       keyMappings: keyMappings,
-      client: client,
+      clients: clients,
     );
     return stateMan;
   }
 
-  Future<void> awaitConnect() async {
-    while (!_connectionHealthy) {
-      await Future.delayed(const Duration(milliseconds: 1000));
-    }
-    await client.awaitConnect();
+  Client _getClient(String key) {
+    // This throws if the key is not found
+    // Be mindful that null == null is true
+    return clients
+        .firstWhere((wrapper) =>
+            wrapper.config.serverAlias == keyMappings.lookupServerAlias(key))
+        .client;
   }
 
   /// Example: read("myKey")
   Future<DynamicValue> read(String key) async {
-    await awaitConnect();
     try {
+      final client = _getClient(key);
       final nodeId = lookupNodeId(key);
       if (nodeId == null) {
         await Future.delayed(const Duration(seconds: 1000));
         throw StateManException("Key: \"$key\" not found");
       }
+      await client.awaitConnect();
       return await client.read(nodeId);
     } catch (e) {
       throw StateManException('Failed to read key: \"$key\": $e');
@@ -318,37 +340,46 @@ class StateMan {
   }
 
   Future<Map<String, DynamicValue>> readMany(List<String> keys) async {
-    await awaitConnect();
+    final parameters = <Client, Map<NodeId, List<AttributeId>>>{};
 
-    final parameters = <NodeId, List<AttributeId>>{};
     for (final key in keys) {
+      final client = _getClient(key);
       final nodeId = lookupNodeId(key);
       if (nodeId == null) {
         throw StateManException("Key: \"$key\" not found");
       }
-      parameters[nodeId] = [
-        AttributeId.UA_ATTRIBUTEID_DESCRIPTION,
-        AttributeId.UA_ATTRIBUTEID_DISPLAYNAME,
-        AttributeId.UA_ATTRIBUTEID_DATATYPE,
-        AttributeId.UA_ATTRIBUTEID_VALUE,
-      ];
+      parameters[client] = {
+        nodeId: [
+          AttributeId.UA_ATTRIBUTEID_DESCRIPTION,
+          AttributeId.UA_ATTRIBUTEID_DISPLAYNAME,
+          AttributeId.UA_ATTRIBUTEID_DATATYPE,
+          AttributeId.UA_ATTRIBUTEID_VALUE,
+        ]
+      };
     }
-    final results = await client.readAttribute(parameters);
 
-    return results.map(
-      (key, value) => MapEntry(keyMappings.lookupKey(key)!, value),
-    );
+    final results = <String, DynamicValue>{};
+    for (final pair in parameters.entries) {
+      final client = pair.key;
+      final parameters = pair.value;
+      await client.awaitConnect();
+      final res = await client.readAttribute(parameters);
+      results.addAll(res
+          .map((key, value) => MapEntry(keyMappings.lookupKey(key)!, value)));
+    }
+    return results;
   }
 
   /// Example: write("myKey", DynamicValue(value: 42, typeId: NodeId.int16))
   Future<void> write(String key, DynamicValue value) async {
-    await awaitConnect();
     try {
+      final client = _getClient(key);
       final nodeId = lookupNodeId(key);
       if (nodeId == null) {
         await Future.delayed(const Duration(seconds: 1000));
         throw StateManException("Key: \"$key\" not found");
       }
+      await client.awaitConnect();
       await client.writeValue(nodeId, value);
     } catch (e) {
       throw StateManException('Failed to write node: \"$key\": $e');
@@ -381,7 +412,9 @@ class StateMan {
   void close() {
     logger.d('Closing connection');
     _shouldRun = false;
-    client.disconnect();
+    for (final wrapper in clients) {
+      wrapper.client.disconnect();
+    }
     _collectorManager.close();
     // Clean up subscriptions
     for (final entry in _subscriptions.values) {
@@ -393,23 +426,19 @@ class StateMan {
   }
 
   NodeId? lookupNodeId(String key) {
-    final regex = RegExp(r'ns=(\d+);s=(.+)');
-    final match = regex.firstMatch(key);
-    NodeId? nodeId;
-    if (match == null) {
-      nodeId = keyMappings.lookup(key);
-    } else {
-      final namespace = int.parse(match.group(1)!);
-      final identifier = match.group(2)!;
-      nodeId = NodeId.fromString(namespace, identifier);
-    }
-    return nodeId;
+    return keyMappings.lookupNodeId(key);
   }
 
   Future<Stream<DynamicValue>> _monitor(String key,
       {bool resub = false}) async {
-    await awaitConnect();
-    print('Monitoring $key resub: $resub');
+    late Client client;
+    try {
+      client = _getClient(key);
+      await client.awaitConnect();
+    } catch (e) {
+      throw StateManException(
+          'Failed to connect to client for key: "$key": $e');
+    }
 
     final nodeId = lookupNodeId(key);
     if (nodeId == null) {
@@ -429,9 +458,8 @@ class StateMan {
 
     while (true) {
       try {
-        await awaitConnect();
+        await client.awaitConnect();
         if (subscriptionId == null && await _worker.doTheWork()) {
-          print('Creating subscription');
           try {
             subscriptionId = await client.subscriptionCreate();
           } catch (e) {

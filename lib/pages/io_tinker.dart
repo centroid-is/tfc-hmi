@@ -84,7 +84,8 @@ class _IoTinkerPageState extends ConsumerState<IoTinkerPage>
             scrollDirection: Axis.horizontal,
             child: Row(
               children: map.keys.map((key) {
-                final nodeId = stateMan.keyMappings.lookup(key);
+                // Todo, fix this
+                final nodeId = stateMan.keyMappings.lookupNodeId(key);
                 final value = map[key]!;
                 return _buildUnit(key, nodeId!, value, animation);
               }).toList(),

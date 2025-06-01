@@ -17,7 +17,7 @@ Future<StateMan> stateMan(Ref ref) async {
 
   var stateManJson = await sharedPreferences.getString('state_man_config');
   if (stateManJson == null) {
-    final defaultConfig = StateManConfig(opcua: OpcUAConfig());
+    final defaultConfig = StateManConfig(opcua: [OpcUAConfig()]);
     stateManJson = jsonEncode(defaultConfig.toJson());
     await sharedPreferences.setString('state_man_config', stateManJson);
   }
@@ -29,7 +29,7 @@ Future<StateMan> stateMan(Ref ref) async {
   if (keyMappingsJson == null) {
     final defaultKeyMappings = KeyMappings(nodes: {
       "exampleKey": KeyMappingEntry(
-          nodeId: NodeIdConfig(namespace: 42, identifier: "identifier"))
+          opcuaNode: OpcUANodeConfig(namespace: 42, identifier: "identifier"))
     });
     keyMappingsJson = jsonEncode(defaultKeyMappings.toJson());
     await prefs.setString('key_mappings', keyMappingsJson);

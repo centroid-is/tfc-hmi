@@ -4,6 +4,7 @@ import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/state_man.dart';
 import '../../providers/state_man.dart';
 part 'common.g.dart';
 
@@ -201,12 +202,6 @@ class _KeyFieldState extends ConsumerState<KeyField> {
     super.initState();
     _controller = TextEditingController(text: widget.initialValue ?? '');
     _focusNode.addListener(_onFocusChange);
-
-    // Fetch keys during initialization
-    final stateMan = ref.read(stateManProvider).value;
-    if (stateMan != null) {
-      _allKeys = stateMan.keys.toList();
-    }
   }
 
   @override
@@ -253,28 +248,35 @@ class _KeyFieldState extends ConsumerState<KeyField> {
 
   @override
   Widget build(BuildContext context) {
-    return TextField(
-      controller: _controller,
-      focusNode: _focusNode,
-      decoration: InputDecoration(
-        labelText: widget.label,
-        suffixIcon: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            IconButton(
-              icon: const Icon(Icons.search),
-              onPressed: _openSearchDialog,
+    return FutureBuilder<StateMan>(
+        future: ref.watch(stateManProvider.future),
+        builder: (context, snapshot) {
+          if (snapshot.hasData) {
+            _allKeys = snapshot.data!.keys.toList();
+          }
+          return TextField(
+            controller: _controller,
+            focusNode: _focusNode,
+            decoration: InputDecoration(
+              labelText: widget.label,
+              suffixIcon: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  IconButton(
+                    icon: const Icon(Icons.search),
+                    onPressed: _openSearchDialog,
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.edit),
+                    onPressed: _openDialog,
+                  ),
+                ],
+              ),
             ),
-            IconButton(
-              icon: const Icon(Icons.edit),
-              onPressed: _openDialog,
-            ),
-          ],
-        ),
-      ),
-      onChanged: widget.onChanged,
-      onSubmitted: widget.onChanged,
-    );
+            onChanged: widget.onChanged,
+            onSubmitted: widget.onChanged,
+          );
+        });
   }
 }
 
