@@ -309,7 +309,8 @@ class _PageEditorState extends ConsumerState<PageEditor> {
             .clamp(0.0, 1.0);
 
     _updateState(() {
-      asset.coordinates = Coordinates(x: newX, y: newY);
+      asset.coordinates =
+          Coordinates(x: newX, y: newY, angle: asset.coordinates.angle);
     });
   }
 
