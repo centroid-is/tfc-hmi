@@ -56,105 +56,76 @@ class ConveyorColorPalette extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // First, compute the exact width/height we want from config.size:
     final size = config.size.toSize(MediaQuery.of(context).size);
+
     return SizedBox(
       width: size.width,
       height: size.height,
-      child: SingleChildScrollView(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Text('Conveyor colors',
-                style: TextStyle(fontWeight: FontWeight.bold)),
-            if (!(config.preview ?? false))
-              Column(
-                mainAxisSize: MainAxisSize.min,
+      child: Column(
+        children: [
+          // ─── Top “title” row ───
+          const Expanded(
+            flex: 1,
+            child: Center(
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Text(
+                  'Conveyor colors',
+                  style: TextStyle(fontWeight: FontWeight.bold),
+                ),
+              ),
+            ),
+          ),
+
+          // If we are not in preview mode, build five equally‐spaced color rows
+          if (!(config.preview ?? false))
+            Expanded(
+              flex: 5,
+              child: Column(
                 children: [
-                  Padding(
-                    padding: const EdgeInsets.all(8.0),
-                    child: Container(
-                      decoration: BoxDecoration(
-                        color: Colors.green,
-                        borderRadius: BorderRadius.circular(4),
-                      ),
-                      child: const Center(
-                        child: Padding(
-                          padding: EdgeInsets.all(8.0),
-                          child: Text(
-                            'Auto',
-                            style: TextStyle(color: Colors.white),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.all(8.0),
-                    child: Container(
-                      decoration: BoxDecoration(
-                        color: Colors.blue,
-                        borderRadius: BorderRadius.circular(4),
-                      ),
-                      child: const Padding(
-                        padding: EdgeInsets.all(8.0),
-                        child: Center(
-                          child: Text('Clean',
-                              style: TextStyle(color: Colors.white)),
-                        ),
-                      ),
-                    ),
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.all(8.0),
-                    child: Container(
-                      decoration: BoxDecoration(
-                        color: Colors.yellow,
-                        borderRadius: BorderRadius.circular(4),
-                      ),
-                      child: const Padding(
-                        padding: EdgeInsets.all(8.0),
-                        child: Center(
-                          child: Text('Manual',
-                              style: TextStyle(color: Colors.blueGrey)),
-                        ),
-                      ),
-                    ),
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.all(8.0),
-                    child: Container(
-                      decoration: BoxDecoration(
-                        color: Colors.grey,
-                        borderRadius: BorderRadius.circular(4),
-                      ),
-                      child: const Padding(
-                        padding: EdgeInsets.all(8.0),
-                        child: Center(
-                          child: Text('Stopped',
-                              style: TextStyle(color: Colors.white)),
-                        ),
-                      ),
-                    ),
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.all(8.0),
-                    child: Container(
-                      decoration: BoxDecoration(
-                        color: Colors.red,
-                        borderRadius: BorderRadius.circular(4),
-                      ),
-                      child: const Padding(
-                        padding: EdgeInsets.all(8.0),
-                        child: Center(
-                          child: Text('Fault',
-                              style: TextStyle(color: Colors.white)),
-                        ),
-                      ),
-                    ),
-                  ),
+                  // Each of these five Expanded(...) blocks will receive 20% of
+                  // the “remaining” vertical space (because flex:1 + flex:1 + … = 5)
+                  _buildColorRow(Colors.green, 'Auto', textColor: Colors.white),
+                  _buildColorRow(Colors.blue, 'Clean', textColor: Colors.white),
+                  _buildColorRow(Colors.yellow, 'Manual',
+                      textColor: Colors.blueGrey),
+                  _buildColorRow(Colors.grey, 'Stopped',
+                      textColor: Colors.white),
+                  _buildColorRow(Colors.red, 'Fault', textColor: Colors.white),
                 ],
               ),
-          ],
+            ),
+        ],
+      ),
+    );
+  }
+
+  /// Helper that returns an Expanded widget wrapping a padded Container of a given color,
+  /// with text that always fills/shrinks to fit that container.
+  Widget _buildColorRow(Color background, String label,
+      {required Color textColor}) {
+    return Expanded(
+      flex: 1,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 4.0),
+        child: Container(
+          decoration: BoxDecoration(
+            color: background,
+            borderRadius: BorderRadius.circular(4),
+          ),
+          child: Center(
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Text(
+                label,
+                style: TextStyle(
+                  color: textColor,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+          ),
         ),
       ),
     );
