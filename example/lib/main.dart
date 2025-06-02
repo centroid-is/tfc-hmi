@@ -231,7 +231,7 @@ class MyApp extends ConsumerWidget {
   MyApp({super.key})
       : routerDelegate = BeamerDelegate(
           notFoundPage: const BeamPage(child: PageNotFound()),
-          transitionDelegate: const MyNoAnimationTransitionDelegate(),
+          transitionDelegate: MyNoAnimationTransitionDelegate(),
           locationBuilder: (routeInformation, context) =>
               simpleLocationBuilder(routeInformation, context),
         );

@@ -1,5 +1,5 @@
 import 'dart:convert';
-
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:logger/logger.dart';
@@ -31,35 +31,6 @@ class AssetStackConfig {
   factory AssetStackConfig.fromJson(Map<String, dynamic> json) =>
       _$AssetStackConfigFromJson(json);
   Map<String, dynamic> toJson() => _$AssetStackConfigToJson(this);
-}
-
-/// A helper widget that measures its child's laid-out Size
-/// and calls `onChange(Size)` whenever it changes.
-typedef OnWidgetSizeChange = void Function(Size size);
-
-class MeasureSize extends StatefulWidget {
-  final Widget child;
-  final OnWidgetSizeChange onChange;
-  const MeasureSize({required this.child, required this.onChange, Key? key})
-      : super(key: key);
-  @override
-  _MeasureSizeState createState() => _MeasureSizeState();
-}
-
-class _MeasureSizeState extends State<MeasureSize> {
-  Size? _oldSize;
-  @override
-  Widget build(BuildContext context) {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      final newSize = (context.findRenderObject() as RenderBox).size;
-      if (_oldSize != newSize) {
-        _oldSize = newSize;
-        widget.onChange(newSize);
-      }
-    });
-    return widget.child;
-  }
 }
 
 Matrix4 _buildTransform(AssetStackConfig cfg) {
@@ -125,7 +96,6 @@ class AssetStack extends StatefulWidget {
 
 class _AssetStackState extends State<AssetStack> {
   final prefs = SharedPreferencesWrapper(SharedPreferencesAsync());
-  final Map<Asset, Size> _measuredSizes = {};
 
   @override
   Widget build(BuildContext context) {
@@ -159,13 +129,18 @@ class _AssetStackState extends State<AssetStack> {
           final cy = fy * H;
           final center = Offset(cx, cy);
 
-          // 3) measured asset size or fallback
-          final measured = _measuredSizes[asset];
-          final assetW = measured?.width ?? (asset.size.width * W);
-          final assetH = measured?.height ?? (asset.size.height * H);
+          final assetW = asset.size.width * W;
+          final assetH = asset.size.height * H;
           final assetSize = Size(assetW, assetH);
           final halfW = assetW / 2;
           final halfH = assetH / 2;
+
+          final textScaler = TextScaler.linear(
+              math.min(asset.size.width * W, asset.size.height * H) / 25);
+          final labelStyle = DefaultTextStyle.of(context).style.copyWith(
+                fontSize: textScaler
+                    .scale(DefaultTextStyle.of(context).style.fontSize ?? 16),
+              );
 
           // 4) measure text size if any
           Size textSize = Size.zero;
@@ -173,7 +148,7 @@ class _AssetStackState extends State<AssetStack> {
             final tp = TextPainter(
               text: TextSpan(
                 text: asset.text,
-                style: DefaultTextStyle.of(context).style,
+                style: labelStyle,
               ),
               textDirection: TextDirection.ltr,
             )..layout();
@@ -190,17 +165,17 @@ class _AssetStackState extends State<AssetStack> {
                 transform: asset.coordinates.angle != null
                     ? _buildTransform(cfg)
                     : Matrix4.identity(),
-                child: MeasureSize(
-                  onChange: (s) => setState(() => _measuredSizes[asset] = s),
-                  child: GestureDetector(
-                    onTap: widget.onTap != null
-                        ? () => widget.onTap!(asset)
-                        : null,
-                    onPanUpdate: widget.onPanUpdate != null
-                        ? (d) => widget.onPanUpdate!(asset, d)
-                        : null,
-                    child: AbsorbPointer(
-                      absorbing: widget.absorb,
+                child: GestureDetector(
+                  onTap:
+                      widget.onTap != null ? () => widget.onTap!(asset) : null,
+                  onPanUpdate: widget.onPanUpdate != null
+                      ? (d) => widget.onPanUpdate!(asset, d)
+                      : null,
+                  child: AbsorbPointer(
+                    absorbing: widget.absorb,
+                    child: SizedBox(
+                      width: asset.size.width * W,
+                      height: asset.size.height * H,
                       child: asset.build(context),
                     ),
                   ),
@@ -223,7 +198,10 @@ class _AssetStackState extends State<AssetStack> {
               Positioned(
                 left: labelOff.dx,
                 top: labelOff.dy,
-                child: Text(asset.text!),
+                child: Text(
+                  asset.text!,
+                  style: labelStyle,
+                ),
               ),
             );
           }

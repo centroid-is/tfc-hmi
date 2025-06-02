@@ -256,25 +256,8 @@ class LedRaw extends ConsumerWidget {
     final color =
         isOn == null ? null : (isOn ? config.onColor : config.offColor);
 
-    // Get container size from MediaQuery
-    final containerSize = MediaQuery.of(context).size;
-    final actualSize = config.size.toSize(containerSize);
-
-    // For circles, use minimum dimension to maintain aspect ratio
-    // For squares, use actual width and height independently
-    final width = config.ledType == LEDType.circle
-        ? min(actualSize.width, actualSize.height)
-        : actualSize.width;
-    final height = config.ledType == LEDType.circle
-        ? min(actualSize.width, actualSize.height)
-        : actualSize.height;
-
-    return SizedBox(
-      width: width,
-      height: height,
-      child: CustomPaint(
-        painter: LEDPainter(color: color, ledType: config.ledType),
-      ),
+    return CustomPaint(
+      painter: LEDPainter(color: color, ledType: config.ledType),
     );
   }
 }

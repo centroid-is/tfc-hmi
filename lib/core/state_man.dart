@@ -296,12 +296,14 @@ class StateMan {
         password = opcuaConfig.password;
       }
       clients.add(ClientWrapper(
-        Client.fromStatic(
+        Client(
+          loadOpen62541Library(staticLinking: true),
           username: username,
           password: password,
           certificate: cert,
           privateKey: key,
           securityMode: securityMode,
+          logLevel: LogLevel.UA_LOGLEVEL_ERROR,
         ),
         opcuaConfig,
       ));

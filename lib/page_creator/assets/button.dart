@@ -172,61 +172,54 @@ class _ButtonState extends ConsumerState<Button> {
 
   Widget _buildButton(Color color) {
     final isPreview = widget.config.key == ButtonConfig.previewStr;
-    final containerSize = MediaQuery.of(context).size;
-    final actualSize = widget.config.size.toSize(containerSize);
-    final buttonSize = min(actualSize.width, actualSize.height);
 
-    return SizedBox(
-      width: buttonSize,
-      height: buttonSize,
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          customBorder: widget.config.buttonType == ButtonType.circle
-              ? const CircleBorder()
-              : const RoundedRectangleBorder(),
-          onTapDown: (_) async {
-            _setPressed(true);
-            if (isPreview) return;
-            final client = await ref.read(stateManProvider.future);
-            try {
-              await client.write(widget.config.key,
-                  DynamicValue(value: true, typeId: NodeId.boolean));
-              _log.d('Button ${widget.config.key} pressed');
-            } catch (e) {
-              _log.e('Error writing button press', error: e);
-            }
-          },
-          onTapUp: (_) async {
-            _setPressed(false);
-            if (isPreview) return;
-            final client = await ref.read(stateManProvider.future);
-            try {
-              await client.write(widget.config.key,
-                  DynamicValue(value: false, typeId: NodeId.boolean));
-              _log.d('Button ${widget.config.key} released');
-            } catch (e) {
-              _log.e('Error writing button release', error: e);
-            }
-          },
-          onTapCancel: () async {
-            _setPressed(false);
-            if (isPreview) return;
-            final client = await ref.read(stateManProvider.future);
-            try {
-              await client.write(widget.config.key,
-                  DynamicValue(value: false, typeId: NodeId.boolean));
-              _log.d('Button ${widget.config.key} tap cancelled');
-            } catch (e) {
-              _log.e('Error writing button cancel', error: e);
-            }
-          },
-          child: CustomPaint(
-            painter: ButtonPainter(
-              color: color,
-              isPressed: _isPressed,
-              buttonType: widget.config.buttonType,
-            ),
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        customBorder: widget.config.buttonType == ButtonType.circle
+            ? const CircleBorder()
+            : const RoundedRectangleBorder(),
+        onTapDown: (_) async {
+          _setPressed(true);
+          if (isPreview) return;
+          final client = await ref.read(stateManProvider.future);
+          try {
+            await client.write(widget.config.key,
+                DynamicValue(value: true, typeId: NodeId.boolean));
+            _log.d('Button ${widget.config.key} pressed');
+          } catch (e) {
+            _log.e('Error writing button press', error: e);
+          }
+        },
+        onTapUp: (_) async {
+          _setPressed(false);
+          if (isPreview) return;
+          final client = await ref.read(stateManProvider.future);
+          try {
+            await client.write(widget.config.key,
+                DynamicValue(value: false, typeId: NodeId.boolean));
+            _log.d('Button ${widget.config.key} released');
+          } catch (e) {
+            _log.e('Error writing button release', error: e);
+          }
+        },
+        onTapCancel: () async {
+          _setPressed(false);
+          if (isPreview) return;
+          final client = await ref.read(stateManProvider.future);
+          try {
+            await client.write(widget.config.key,
+                DynamicValue(value: false, typeId: NodeId.boolean));
+            _log.d('Button ${widget.config.key} tap cancelled');
+          } catch (e) {
+            _log.e('Error writing button cancel', error: e);
+          }
+        },
+        child: CustomPaint(
+          painter: ButtonPainter(
+            color: color,
+            isPressed: _isPressed,
+            buttonType: widget.config.buttonType,
           ),
         ),
       ),
