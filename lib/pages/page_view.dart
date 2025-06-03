@@ -9,6 +9,7 @@ import 'package:tfc/core/preferences.dart';
 import '../page_creator/assets/common.dart'; // your Asset, Coordinates, RelativeSize, TextPos, etc.
 import '../page_creator/assets/registry.dart';
 import '../widgets/base_scaffold.dart';
+import '../widgets/zoomable_canvas.dart';
 
 part 'page_view.g.dart';
 
@@ -250,15 +251,12 @@ class AssetView extends StatelessWidget {
   Widget build(BuildContext context) {
     return BaseScaffold(
       title: 'Asset View',
-      body: Center(
-        child: AspectRatio(
-          aspectRatio: 16 / 9,
-          child: LayoutBuilder(
-            builder: (context, constraints) => AssetStack(
-              assets: config.widgets,
-              constraints: constraints,
-              absorb: false,
-            ),
+      body: ZoomableCanvas(
+        child: LayoutBuilder(
+          builder: (context, constraints) => AssetStack(
+            assets: config.widgets,
+            constraints: constraints,
+            absorb: false,
           ),
         ),
       ),

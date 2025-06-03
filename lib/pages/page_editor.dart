@@ -7,6 +7,7 @@ import '../page_creator/assets/registry.dart';
 import '../widgets/base_scaffold.dart';
 import 'page_view.dart';
 import '../providers/preferences.dart';
+import '../widgets/zoomable_canvas.dart';
 
 class PageEditor extends ConsumerStatefulWidget {
   @override
@@ -79,148 +80,146 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   Widget build(BuildContext context) {
     return BaseScaffold(
       title: 'Page Editor',
-      body: Center(
-        child: AspectRatio(
-          aspectRatio: 16 / 9,
-          child: LayoutBuilder(
-            builder: (context, constraints) {
-              if (_showJsonEditor) {
-                return _buildJsonEditor();
-              }
-              return Stack(
-                fit: StackFit.expand,
-                children: [
-                  // Shared asset stack with editor controls
-                  DragTarget<Type>(
-                    onAcceptWithDetails: (details) {
-                      // Calculate drop position relative to the canvas
-                      final RenderBox box =
-                          context.findRenderObject() as RenderBox;
-                      final localPosition = box.globalToLocal(details.offset);
+      body: ZoomableCanvas(
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            if (_showJsonEditor) {
+              return _buildJsonEditor();
+            }
+            return Stack(
+              fit: StackFit.expand,
+              children: [
+                // Add a background to make the canvas bounds visible
+                Container(
+                  color: Theme.of(context).colorScheme.surface,
+                ),
+                // Shared asset stack with editor controls
+                DragTarget<Type>(
+                  onAcceptWithDetails: (details) {
+                    // Calculate drop position relative to the canvas
+                    final RenderBox box =
+                        context.findRenderObject() as RenderBox;
+                    final localPosition = box.globalToLocal(details.offset);
 
-                      final relativeX =
-                          (localPosition.dx / box.size.width).clamp(0.0, 1.0);
-                      final relativeY =
-                          (localPosition.dy / box.size.height).clamp(0.0, 1.0);
+                    final relativeX =
+                        (localPosition.dx / box.size.width).clamp(0.0, 1.0);
+                    final relativeY =
+                        (localPosition.dy / box.size.height).clamp(0.0, 1.0);
 
-                      final newAsset =
-                          AssetRegistry.createDefaultAsset(details.data);
-                      setState(() {
-                        newAsset.coordinates =
-                            Coordinates(x: relativeX, y: relativeY);
-                        assets.add(newAsset);
-                      });
-                    },
-                    builder: (context, candidateData, rejectedData) {
-                      return AssetStack(
-                        assets: assets,
-                        constraints: constraints,
-                        onTap: (asset) => _showConfigDialog(asset),
-                        onPanUpdate: (asset, details) =>
-                            _moveAsset(asset, details, constraints),
-                        absorb: true,
-                      );
-                    },
+                    final newAsset =
+                        AssetRegistry.createDefaultAsset(details.data);
+                    setState(() {
+                      newAsset.coordinates =
+                          Coordinates(x: relativeX, y: relativeY);
+                      assets.add(newAsset);
+                    });
+                  },
+                  builder: (context, candidateData, rejectedData) {
+                    return AssetStack(
+                      assets: assets,
+                      constraints: constraints,
+                      onTap: (asset) => _showConfigDialog(asset),
+                      onPanUpdate: (asset, details) =>
+                          _moveAsset(asset, details, constraints),
+                      absorb: true,
+                    );
+                  },
+                ),
+                // Hamburger icon OVER the canvas, bottom left
+                Positioned(
+                  left: 16,
+                  bottom: 16,
+                  child: Row(
+                    children: [
+                      FloatingActionButton(
+                        mini: true,
+                        heroTag: 'hamburger',
+                        backgroundColor: Theme.of(context).colorScheme.primary,
+                        onPressed: () => setState(() => _showPalette = true),
+                        child: const Icon(Icons.menu, color: Colors.white),
+                      ),
+                      const SizedBox(width: 8),
+                      FloatingActionButton(
+                        mini: true,
+                        heroTag: 'save',
+                        backgroundColor: Theme.of(context).colorScheme.primary,
+                        onPressed: _saveToPrefs,
+                        child: const Icon(Icons.save, color: Colors.white),
+                      ),
+                      const SizedBox(width: 8),
+                      FloatingActionButton(
+                        mini: true,
+                        heroTag: 'json',
+                        backgroundColor: Theme.of(context).colorScheme.primary,
+                        onPressed: () {
+                          setState(() {
+                            if (!_showJsonEditor) {
+                              // Going to JSON editor
+                              _jsonController.text = _formatJson(jsonEncode({
+                                'assets':
+                                    assets.map((a) => a.toJson()).toList(),
+                              }));
+                              _showJsonEditor = true;
+                            } else {
+                              // Going back to canvas
+                              _showJsonEditor = false;
+                            }
+                            _jsonError = null;
+                          });
+                        },
+                        child: Icon(
+                          _showJsonEditor ? Icons.edit : Icons.code,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ],
                   ),
-                  // Hamburger icon OVER the canvas, bottom left
+                ),
+                // 1. Tap-to-close overlay (only when palette is open)
+                if (_showPalette)
+                  Positioned.fill(
+                    child: GestureDetector(
+                      onTap: () => setState(() => _showPalette = false),
+                      behavior: HitTestBehavior
+                          .translucent, // Ensures the whole area is tappable
+                      child: Container(), // Transparent
+                    ),
+                  ),
+                // 2. The sliding palette drawer
+                if (_showPalette)
                   Positioned(
-                    left: 16,
-                    bottom: 16,
-                    child: Row(
-                      children: [
-                        FloatingActionButton(
-                          mini: true,
-                          heroTag: 'hamburger',
-                          backgroundColor:
-                              Theme.of(context).colorScheme.primary,
-                          onPressed: () => setState(() => _showPalette = true),
-                          child: const Icon(Icons.menu, color: Colors.white),
+                    top: 0,
+                    bottom: 0,
+                    left: 0,
+                    child: SizedBox(
+                      width: 320,
+                      child: Material(
+                        elevation: 8,
+                        color: Theme.of(context).scaffoldBackgroundColor,
+                        borderRadius: BorderRadius.only(
+                          topRight: Radius.circular(12),
+                          bottomRight: Radius.circular(12),
                         ),
-                        const SizedBox(width: 8),
-                        FloatingActionButton(
-                          mini: true,
-                          heroTag: 'save',
-                          backgroundColor:
-                              Theme.of(context).colorScheme.primary,
-                          onPressed: _saveToPrefs,
-                          child: const Icon(Icons.save, color: Colors.white),
+                        child: Stack(
+                          children: [
+                            _buildPalette(),
+                            Positioned(
+                              top: 8,
+                              right: 8,
+                              child: IconButton(
+                                icon: Icon(Icons.close),
+                                onPressed: () =>
+                                    setState(() => _showPalette = false),
+                              ),
+                            ),
+                          ],
                         ),
-                        const SizedBox(width: 8),
-                        FloatingActionButton(
-                          mini: true,
-                          heroTag: 'json',
-                          backgroundColor:
-                              Theme.of(context).colorScheme.primary,
-                          onPressed: () {
-                            setState(() {
-                              if (!_showJsonEditor) {
-                                // Going to JSON editor
-                                _jsonController.text = _formatJson(jsonEncode({
-                                  'assets':
-                                      assets.map((a) => a.toJson()).toList(),
-                                }));
-                                _showJsonEditor = true;
-                              } else {
-                                // Going back to canvas
-                                _showJsonEditor = false;
-                              }
-                              _jsonError = null;
-                            });
-                          },
-                          child: Icon(
-                            _showJsonEditor ? Icons.edit : Icons.code,
-                            color: Colors.white,
-                          ),
-                        ),
-                      ],
+                      ),
                     ),
                   ),
-                  // 1. Tap-to-close overlay (only when palette is open)
-                  if (_showPalette)
-                    Positioned.fill(
-                      child: GestureDetector(
-                        onTap: () => setState(() => _showPalette = false),
-                        behavior: HitTestBehavior
-                            .translucent, // Ensures the whole area is tappable
-                        child: Container(), // Transparent
-                      ),
-                    ),
-                  // 2. The sliding palette drawer
-                  if (_showPalette)
-                    Positioned(
-                      top: 0,
-                      bottom: 0,
-                      left: 0,
-                      child: SizedBox(
-                        width: 320,
-                        child: Material(
-                          elevation: 8,
-                          color: Theme.of(context).scaffoldBackgroundColor,
-                          borderRadius: BorderRadius.only(
-                            topRight: Radius.circular(12),
-                            bottomRight: Radius.circular(12),
-                          ),
-                          child: Stack(
-                            children: [
-                              _buildPalette(),
-                              Positioned(
-                                top: 8,
-                                right: 8,
-                                child: IconButton(
-                                  icon: Icon(Icons.close),
-                                  onPressed: () =>
-                                      setState(() => _showPalette = false),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-                ],
-              );
-            },
-          ),
+              ],
+            );
+          },
         ),
       ),
     );
@@ -312,6 +311,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
 
   void _moveAsset(
       Asset asset, DragUpdateDetails details, BoxConstraints constraints) {
+    // The scale factor will be handled by the InteractiveViewer's transformation
     final newX = (asset.coordinates.x + details.delta.dx / constraints.maxWidth)
         .clamp(0.0, 1.0);
     final newY =
