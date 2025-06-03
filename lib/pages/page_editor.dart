@@ -240,13 +240,23 @@ class _PageEditorState extends ConsumerState<PageEditor> {
               return Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Draggable<Type>(
-                    data: entry.key,
-                    feedback: Material(
-                      color: Colors.transparent,
-                      child: entry.value().build(context),
+                  SizedBox(
+                    child: Draggable<Type>(
+                      data: entry.key,
+                      feedback: Material(
+                        color: Colors.transparent,
+                        child: SizedBox(
+                          width: 100,
+                          height: 100,
+                          child: entry.value().build(context),
+                        ),
+                      ),
+                      child: SizedBox(
+                        width: 100,
+                        height: 100,
+                        child: entry.value().build(context),
+                      ),
                     ),
-                    child: entry.value().build(context),
                   ),
                 ],
               );

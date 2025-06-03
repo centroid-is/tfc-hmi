@@ -4,6 +4,7 @@ import 'led.dart';
 import 'button.dart';
 import 'conveyor.dart';
 import 'arrow.dart';
+import 'led_column.dart';
 
 class AssetRegistry {
   static final Logger _log = Logger();
@@ -15,6 +16,7 @@ class AssetRegistry {
     ConveyorConfig: ConveyorConfig.fromJson,
     ConveyorColorPaletteConfig: ConveyorColorPaletteConfig.fromJson,
     ArrowConfig: ArrowConfig.fromJson,
+    LEDColumnConfig: LEDColumnConfig.fromJson,
   };
 
   static final Map<Type, Asset Function()> defaultFactories = {
@@ -23,6 +25,7 @@ class AssetRegistry {
     ConveyorConfig: ConveyorConfig.preview,
     ConveyorColorPaletteConfig: ConveyorColorPaletteConfig.preview,
     ArrowConfig: ArrowConfig.preview,
+    LEDColumnConfig: LEDColumnConfig.preview,
   };
 
   static void registerFromJsonFactory<T extends Asset>(
