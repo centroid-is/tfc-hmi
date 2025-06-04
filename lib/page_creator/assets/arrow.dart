@@ -128,12 +128,8 @@ class _ArrowWidgetState extends ConsumerState<ArrowWidget> {
 
   @override
   Widget build(BuildContext context) {
-    final containerSize = MediaQuery.of(context).size;
-    final iconSize = widget.config.size.toSize(containerSize);
-
     if (widget.config.key.isEmpty) {
-      return Icon(Icons.arrow_upward,
-          size: iconSize.shortestSide, color: Colors.grey);
+      return const Icon(Icons.arrow_upward, color: Colors.grey);
     }
 
     return StreamBuilder<DynamicValue>(
@@ -163,7 +159,6 @@ class _ArrowWidgetState extends ConsumerState<ArrowWidget> {
           angle: _angleForOperation(operation),
           child: Icon(
             _iconForOperation(operation),
-            size: iconSize.shortestSide,
             color: Colors.black,
           ),
         );

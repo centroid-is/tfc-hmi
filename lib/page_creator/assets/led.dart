@@ -281,7 +281,7 @@ class LEDPainter extends CustomPainter {
       // Draw circle
       canvas.drawCircle(
         center,
-        size.width / 2,
+        (min(size.width, size.height) / 2),
         paint,
       );
 
@@ -291,7 +291,7 @@ class LEDPainter extends CustomPainter {
       paint.strokeWidth = 2;
       canvas.drawCircle(
         center,
-        size.width / 2,
+        (min(size.width, size.height) / 2),
         paint,
       );
     } else {
