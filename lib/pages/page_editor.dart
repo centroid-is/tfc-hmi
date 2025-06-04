@@ -216,41 +216,60 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                     Listener(
                       behavior: HitTestBehavior.translucent,
                       onPointerDown: (pointerEvent) {
-                        // If no Ctrl/Cmd, clear any existing selection
-                        if (!_isModifierPressed(
-                            HardwareKeyboard.instance.logicalKeysPressed)) {
+                        // Check if we're clicking on an asset first
+                        bool hitAsset = assets.any((asset) {
+                          final assetRect = Rect.fromLTWH(
+                            asset.coordinates.x * constraints.maxWidth,
+                            asset.coordinates.y * constraints.maxHeight,
+                            asset.size.width * constraints.maxWidth,
+                            asset.size.height * constraints.maxHeight,
+                          );
+                          final localPosition = pointerEvent.localPosition;
+                          return assetRect.contains(localPosition);
+                        });
+
+                        // Only start selection box if we didn't hit an asset
+                        if (!hitAsset) {
+                          // If no Ctrl/Cmd, clear any existing selection
+                          if (!_isModifierPressed(
+                              HardwareKeyboard.instance.logicalKeysPressed)) {
+                            setState(() {
+                              _selectedAssets.clear();
+                            });
+                          }
+                          // Record the start of the drag‐selection
+                          final box = context.findRenderObject() as RenderBox;
+                          final local =
+                              box.globalToLocal(pointerEvent.position);
                           setState(() {
-                            _selectedAssets.clear();
+                            _selectionStart = local;
+                            _selectionCurrent = local;
                           });
                         }
-                        // Record the start of the drag‐selection
-                        final box = context.findRenderObject() as RenderBox;
-                        final local = box.globalToLocal(pointerEvent.position);
-                        setState(() {
-                          _selectionStart = local;
-                          _selectionCurrent = local;
-                        });
                       },
                       onPointerMove: (pointerEvent) {
-                        // Continue updating the selection rectangle
-                        final box = context.findRenderObject() as RenderBox;
-                        final local = box.globalToLocal(pointerEvent.position);
-                        setState(() {
-                          _selectionCurrent = local;
+                        // Only update selection if we have a valid selection start
+                        if (_selectionStart != null) {
+                          final box = context.findRenderObject() as RenderBox;
+                          final local =
+                              box.globalToLocal(pointerEvent.position);
+                          setState(() {
+                            _selectionCurrent = local;
 
-                          // Compute the rectangle in relative coords and update _selectedAssets
-                          final bounds = Rect.fromPoints(
-                              _selectionStart!, _selectionCurrent!);
-                          _selectedAssets = assets.where((asset) {
-                            final assetRect = Rect.fromLTWH(
-                              asset.coordinates.x * constraints.maxWidth,
-                              asset.coordinates.y * constraints.maxHeight,
-                              asset.size.width * constraints.maxWidth,
-                              asset.size.height * constraints.maxHeight,
-                            );
-                            return bounds.overlaps(assetRect);
-                          }).toSet();
-                        });
+                            // Compute the rectangle in relative coords and update _selectedAssets
+                            final bounds = Rect.fromPoints(
+                                _selectionStart!, _selectionCurrent!);
+                            _selectedAssets = assets.where((asset) {
+                              final assetRect = Rect.fromLTWH(
+                                asset.coordinates.x * constraints.maxWidth,
+                                asset.coordinates.y * constraints.maxHeight,
+                                asset.size.width * constraints.maxWidth,
+                                asset.size.height * constraints.maxHeight,
+                              );
+                              return bounds.overlaps(assetRect);
+                            }).toSet();
+                          });
+                        }
                       },
                       onPointerUp: (pointerEvent) {
                         // Finish the selection‐box
