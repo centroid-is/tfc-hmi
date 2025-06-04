@@ -81,6 +81,7 @@ class AssetStack extends StatefulWidget {
   final void Function(Asset asset)? onTap;
   final void Function(Asset asset, DragUpdateDetails details)? onPanUpdate;
   final bool absorb;
+  final Set<Asset> selectedAssets;
 
   const AssetStack({
     Key? key,
@@ -89,6 +90,7 @@ class AssetStack extends StatefulWidget {
     this.onTap,
     this.onPanUpdate,
     this.absorb = false,
+    required this.selectedAssets,
   }) : super(key: key);
 
   @override
@@ -161,24 +163,42 @@ class _AssetStackState extends State<AssetStack> {
             Positioned(
               left: cx - halfW,
               top: cy - halfH,
-              child: Transform(
-                alignment: Alignment.center,
-                transform: asset.coordinates.angle != null
-                    ? _buildTransform(cfg)
-                    : Matrix4.identity(),
-                child: GestureDetector(
-                  onTap:
-                      widget.onTap != null ? () => widget.onTap!(asset) : null,
-                  onPanUpdate: widget.onPanUpdate != null
-                      ? (d) => widget.onPanUpdate!(asset, d)
+              child: Container(
+                decoration: BoxDecoration(
+                  border: widget.selectedAssets.contains(asset)
+                      ? Border.all(color: Colors.blue, width: 2)
                       : null,
-                  child: AbsorbPointer(
-                    absorbing: widget.absorb,
-                    child: SizedBox(
-                      width: asset.size.width * W,
-                      height: asset.size.height * H,
-                      child: asset.build(context),
-                    ),
+                ),
+                child: Transform(
+                  alignment: Alignment.center,
+                  transform: asset.coordinates.angle != null
+                      ? _buildTransform(cfg)
+                      : Matrix4.identity(),
+                  child: Stack(
+                    children: [
+                      AbsorbPointer(
+                        absorbing: widget.absorb,
+                        child: SizedBox(
+                          width: asset.size.width * W,
+                          height: asset.size.height * H,
+                          child: asset.build(context),
+                        ),
+                      ),
+                      Positioned.fill(
+                        child: GestureDetector(
+                          behavior: HitTestBehavior.translucent,
+                          onTap: widget.onTap != null
+                              ? () => widget.onTap!(asset)
+                              : null,
+                          onPanUpdate: widget.onPanUpdate != null
+                              ? (d) => widget.onPanUpdate!(asset, d)
+                              : null,
+                          child: Container(
+                            color: Colors.transparent,
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ),
@@ -257,6 +277,7 @@ class AssetView extends StatelessWidget {
             assets: config.widgets,
             constraints: constraints,
             absorb: false,
+            selectedAssets: {},
           ),
         ),
       ),
