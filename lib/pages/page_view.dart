@@ -174,32 +174,29 @@ class _AssetStackState extends State<AssetStack> {
                   transform: asset.coordinates.angle != null
                       ? _buildTransform(cfg)
                       : Matrix4.identity(),
-                  child: Stack(
-                    children: [
-                      AbsorbPointer(
-                        absorbing: widget.absorb,
-                        child: SizedBox(
+                  child: widget.absorb
+                      ? SizedBox(
+                          width: asset.size.width * W,
+                          height: asset.size.height * H,
+                          child: GestureDetector(
+                            behavior: HitTestBehavior.translucent,
+                            onTap: widget.onTap != null
+                                ? () => widget.onTap!(asset)
+                                : null,
+                            onPanUpdate: widget.onPanUpdate != null
+                                ? (d) => widget.onPanUpdate!(asset, d)
+                                : null,
+                            child: AbsorbPointer(
+                              absorbing: widget.absorb,
+                              child: asset.build(context),
+                            ),
+                          ),
+                        )
+                      : SizedBox(
                           width: asset.size.width * W,
                           height: asset.size.height * H,
                           child: asset.build(context),
                         ),
-                      ),
-                      Positioned.fill(
-                        child: GestureDetector(
-                          behavior: HitTestBehavior.translucent,
-                          onTap: widget.onTap != null
-                              ? () => widget.onTap!(asset)
-                              : null,
-                          onPanUpdate: widget.onPanUpdate != null
-                              ? (d) => widget.onPanUpdate!(asset, d)
-                              : null,
-                          child: Container(
-                            color: Colors.transparent,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
                 ),
               ),
             ),

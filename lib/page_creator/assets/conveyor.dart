@@ -378,21 +378,15 @@ class _ConveyorState extends ConsumerState<Conveyor> {
     Color color, [
     bool? showExclamation,
   ]) {
-    return Align(
-      alignment: FractionalOffset(
-        widget.config.coordinates.x,
-        widget.config.coordinates.y,
-      ),
-      child: LayoutRotatedBox(
-        angle: (widget.config.coordinates.angle ?? 0.0) * pi / 180,
-        child: CustomPaint(
-          size: widget.config.size.toSize(MediaQuery.of(context).size),
-          painter: _ConveyorPainter(
-            color: color,
-            showExclamation: showExclamation ?? false,
-            batches: _batches,
-            angle: widget.config.coordinates.angle ?? 0.0,
-          ),
+    return LayoutRotatedBox(
+      angle: (widget.config.coordinates.angle ?? 0.0) * pi / 180,
+      child: CustomPaint(
+        size: widget.config.size.toSize(MediaQuery.of(context).size),
+        painter: _ConveyorPainter(
+          color: color,
+          showExclamation: showExclamation ?? false,
+          batches: _batches,
+          angle: widget.config.coordinates.angle ?? 0.0,
         ),
       ),
     );
