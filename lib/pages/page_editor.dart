@@ -28,6 +28,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   Offset? _selectionStart;
   Offset? _selectionCurrent;
   Set<Asset> _selectedAssets = {};
+  bool _isDraggingAsset = false;
 
   @override
   void initState() {
@@ -100,9 +101,14 @@ class _PageEditorState extends ConsumerState<PageEditor> {
 
         // Select assets that intersect with the selection box
         _selectedAssets = assets.where((asset) {
+          final cx = asset.coordinates.x * constraints.maxWidth;
+          final cy = asset.coordinates.y * constraints.maxHeight;
+          final halfW = (asset.size.width * constraints.maxWidth) / 2;
+          final halfH = (asset.size.height * constraints.maxHeight) / 2;
+
           final assetRect = Rect.fromLTWH(
-            asset.coordinates.x * constraints.maxWidth,
-            asset.coordinates.y * constraints.maxHeight,
+            cx - halfW, // Offset by half width to match Positioned widget
+            cy - halfH, // Offset by half height to match Positioned widget
             asset.size.width * constraints.maxWidth,
             asset.size.height * constraints.maxHeight,
           );
@@ -159,7 +165,8 @@ class _PageEditorState extends ConsumerState<PageEditor> {
       child: BaseScaffold(
         title: 'Page Editor',
         body: ZoomableCanvas(
-          panEnabled: !_isSelectMode,
+          scaleEnabled: !_showJsonEditor,
+          panEnabled: !_isSelectMode && !_showJsonEditor,
           child: LayoutBuilder(
             builder: (context, constraints) {
               if (_showJsonEditor) {
@@ -205,8 +212,9 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                             _showConfigDialog(asset);
                           }
                         },
-                        onPanUpdate: (asset, details) =>
-                            _moveAsset(asset, details, constraints),
+                        onPanUpdate: (asset, details) {
+                          _moveAsset(asset, details, constraints);
+                        },
                         absorb: true,
                         selectedAssets: _selectedAssets,
                       );
@@ -216,11 +224,22 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                     Listener(
                       behavior: HitTestBehavior.translucent,
                       onPointerDown: (pointerEvent) {
+                        print('Pointer down!');
                         // Check if we're clicking on an asset first
                         bool hitAsset = assets.any((asset) {
+                          final cx = asset.coordinates.x * constraints.maxWidth;
+                          final cy =
+                              asset.coordinates.y * constraints.maxHeight;
+                          final halfW =
+                              (asset.size.width * constraints.maxWidth) / 2;
+                          final halfH =
+                              (asset.size.height * constraints.maxHeight) / 2;
+
                           final assetRect = Rect.fromLTWH(
-                            asset.coordinates.x * constraints.maxWidth,
-                            asset.coordinates.y * constraints.maxHeight,
+                            cx -
+                                halfW, // Offset by half width to match Positioned widget
+                            cy -
+                                halfH, // Offset by half height to match Positioned widget
                             asset.size.width * constraints.maxWidth,
                             asset.size.height * constraints.maxHeight,
                           );
@@ -248,21 +267,32 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                         }
                       },
                       onPointerMove: (pointerEvent) {
-                        // Only update selection if we have a valid selection start
-                        if (_selectionStart != null) {
+                        // Only update selection if we have a valid selection start AND we're not dragging an asset
+                        if (_selectionStart != null && !_isDraggingAsset) {
                           final box = context.findRenderObject() as RenderBox;
                           final local =
                               box.globalToLocal(pointerEvent.position);
                           setState(() {
                             _selectionCurrent = local;
 
-                            // Compute the rectangle in relative coords and update _selectedAssets
                             final bounds = Rect.fromPoints(
                                 _selectionStart!, _selectionCurrent!);
                             _selectedAssets = assets.where((asset) {
+                              final cx =
+                                  asset.coordinates.x * constraints.maxWidth;
+                              final cy =
+                                  asset.coordinates.y * constraints.maxHeight;
+                              final halfW =
+                                  (asset.size.width * constraints.maxWidth) / 2;
+                              final halfH =
+                                  (asset.size.height * constraints.maxHeight) /
+                                      2;
+
                               final assetRect = Rect.fromLTWH(
-                                asset.coordinates.x * constraints.maxWidth,
-                                asset.coordinates.y * constraints.maxHeight,
+                                cx -
+                                    halfW, // Offset by half width to match Positioned widget
+                                cy -
+                                    halfH, // Offset by half height to match Positioned widget
                                 asset.size.width * constraints.maxWidth,
                                 asset.size.height * constraints.maxHeight,
                               );
@@ -272,8 +302,8 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                         }
                       },
                       onPointerUp: (pointerEvent) {
-                        // Finish the selection‐box
                         setState(() {
+                          _isDraggingAsset = false;
                           _selectionStart = null;
                           _selectionCurrent = null;
                         });
@@ -513,15 +543,22 @@ class _PageEditorState extends ConsumerState<PageEditor> {
 
   void _moveAsset(
       Asset asset, DragUpdateDetails details, BoxConstraints constraints) {
-    final newX = (asset.coordinates.x + details.delta.dx / constraints.maxWidth)
-        .clamp(0.0, 1.0);
-    final newY =
-        (asset.coordinates.y + details.delta.dy / constraints.maxHeight)
-            .clamp(0.0, 1.0);
+    // If the dragged asset is selected, move all selected assets
+    final assetsToMove =
+        _selectedAssets.contains(asset) ? _selectedAssets.toList() : [asset];
 
     _updateState(() {
-      asset.coordinates =
-          Coordinates(x: newX, y: newY, angle: asset.coordinates.angle);
+      for (final assetToMove in assetsToMove) {
+        final newX = (assetToMove.coordinates.x +
+                details.delta.dx / constraints.maxWidth)
+            .clamp(0.0, 1.0);
+        final newY = (assetToMove.coordinates.y +
+                details.delta.dy / constraints.maxHeight)
+            .clamp(0.0, 1.0);
+
+        assetToMove.coordinates =
+            Coordinates(x: newX, y: newY, angle: assetToMove.coordinates.angle);
+      }
     });
   }
 

@@ -6,6 +6,7 @@ class ZoomableCanvas extends StatefulWidget {
   final double maxScale;
   final double aspectRatio;
   final bool panEnabled;
+  final bool scaleEnabled;
 
   const ZoomableCanvas({
     Key? key,
@@ -14,6 +15,7 @@ class ZoomableCanvas extends StatefulWidget {
     this.maxScale = 4.0,
     this.aspectRatio = 16 / 9,
     this.panEnabled = true,
+    this.scaleEnabled = true,
   }) : super(key: key);
 
   @override
@@ -48,7 +50,7 @@ class _ZoomableCanvasState extends State<ZoomableCanvas> {
                 maxScale: widget.maxScale,
                 boundaryMargin: EdgeInsets.all(double.infinity),
                 panEnabled: widget.panEnabled,
-                scaleEnabled: true,
+                scaleEnabled: widget.scaleEnabled,
                 child: Stack(
                   fit: StackFit.expand,
                   children: [

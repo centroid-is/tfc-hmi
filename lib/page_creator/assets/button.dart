@@ -158,7 +158,6 @@ class _ButtonState extends ConsumerState<Button> {
       feedbackStream,
       pressedStream,
       (feedbackActive, isPressed) {
-        _log.d('Feedback active: $feedbackActive, isPressed: $isPressed');
         _feedbackActive = feedbackActive;
         if (feedbackActive) {
           return widget.config.feedback!.color;
