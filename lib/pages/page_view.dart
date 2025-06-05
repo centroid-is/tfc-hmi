@@ -80,6 +80,7 @@ class AssetStack extends StatefulWidget {
   final BoxConstraints constraints;
   final void Function(Asset asset)? onTap;
   final void Function(Asset asset, DragUpdateDetails details)? onPanUpdate;
+  final void Function(Asset asset, DragStartDetails details)? onPanStart;
   final bool absorb;
   final Set<Asset> selectedAssets;
 
@@ -89,6 +90,7 @@ class AssetStack extends StatefulWidget {
     required this.constraints,
     this.onTap,
     this.onPanUpdate,
+    this.onPanStart,
     this.absorb = false,
     required this.selectedAssets,
   }) : super(key: key);
@@ -185,6 +187,10 @@ class _AssetStackState extends State<AssetStack> {
                                 : null,
                             onPanUpdate: widget.onPanUpdate != null
                                 ? (d) => widget.onPanUpdate!(asset, d)
+                                : null,
+                            onPanStart: widget.onPanStart != null
+                                ? (details) =>
+                                    widget.onPanStart!(asset, details)
                                 : null,
                             child: AbsorbPointer(
                               absorbing: widget.absorb,

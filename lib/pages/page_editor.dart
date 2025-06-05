@@ -20,6 +20,7 @@ class PageEditor extends ConsumerStatefulWidget {
 class _PageEditorState extends ConsumerState<PageEditor> {
   static const String _storageKey = 'page_editor_data';
   List<Asset> assets = [];
+  final List<String> _undoHistory = [];
   bool _showPalette = false;
   bool _showJsonEditor = false;
   String? _jsonError;
@@ -39,7 +40,6 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   Future<void> _loadFromPrefs() async {
     final prefs = await ref.read(preferencesProvider.future);
     final String? jsonString = await prefs.getString(_storageKey);
-    print('Loading from prefs: $jsonString');
     if (jsonString != null) {
       try {
         final json = jsonDecode(jsonString);
@@ -59,12 +59,15 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     }
   }
 
-  Future<void> _saveToPrefs() async {
-    final prefs = await ref.read(preferencesProvider.future);
-    final jsonString = jsonEncode({
+  String _assetsToJson() {
+    return jsonEncode({
       'assets': assets.map((a) => a.toJson()).toList(),
     });
-    await prefs.setString(_storageKey, jsonString);
+  }
+
+  Future<void> _saveToPrefs() async {
+    final prefs = await ref.read(preferencesProvider.future);
+    await prefs.setString(_storageKey, _assetsToJson());
   }
 
   void _updateState(VoidCallback fn) {
@@ -83,51 +86,20 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     }
   }
 
-  void _handleSelectionBox(Offset position, BoxConstraints constraints) {
-    if (_selectionStart == null) {
-      setState(() {
-        _selectionStart = position;
-        _selectionCurrent = position;
-      });
-    } else {
-      setState(() {
-        _selectionCurrent = position;
+  void _saveToHistory() {
+    _undoHistory.add(_assetsToJson());
 
-        // Calculate selection bounds in relative coordinates
-        final bounds = Rect.fromPoints(
-          _selectionStart!,
-          _selectionCurrent!,
-        );
-
-        // Select assets that intersect with the selection box
-        _selectedAssets = assets.where((asset) {
-          final cx = asset.coordinates.x * constraints.maxWidth;
-          final cy = asset.coordinates.y * constraints.maxHeight;
-          final halfW = (asset.size.width * constraints.maxWidth) / 2;
-          final halfH = (asset.size.height * constraints.maxHeight) / 2;
-
-          final assetRect = Rect.fromLTWH(
-            cx - halfW, // Offset by half width to match Positioned widget
-            cy - halfH, // Offset by half height to match Positioned widget
-            asset.size.width * constraints.maxWidth,
-            asset.size.height * constraints.maxHeight,
-          );
-          return bounds.overlaps(assetRect);
-        }).toSet();
-      });
+    if (_undoHistory.length > 50) {
+      _undoHistory.removeAt(0);
     }
   }
 
-  void _adjustSelectedAssetsSize(double factor) {
-    setState(() {
-      for (final asset in _selectedAssets) {
-        asset.size = RelativeSize(
-          width: (asset.size.width * factor).clamp(0.01, 1.0),
-          height: (asset.size.height * factor).clamp(0.01, 1.0),
-        );
-      }
-    });
-    _saveToPrefs();
+  void _handleUndo() {
+    if (_undoHistory.isNotEmpty) {
+      setState(() {
+        assets = AssetRegistry.parse(jsonDecode(_undoHistory.removeLast()));
+      });
+    }
   }
 
   bool _isModifierPressed(Set<LogicalKeyboardKey> keysPressed) {
@@ -157,10 +129,16 @@ class _PageEditorState extends ConsumerState<PageEditor> {
 
   @override
   Widget build(BuildContext context) {
-    return KeyboardListener(
-      focusNode: FocusNode(),
-      onKeyEvent: (keyEvent) {
-        setState(() {});
+    return Focus(
+      autofocus: true,
+      onKeyEvent: (node, event) {
+        if (event is KeyDownEvent &&
+            _isModifierPressed(HardwareKeyboard.instance.logicalKeysPressed) &&
+            event.logicalKey == LogicalKeyboardKey.keyZ) {
+          _handleUndo();
+          return KeyEventResult.handled;
+        }
+        return KeyEventResult.ignored;
       },
       child: BaseScaffold(
         title: 'Page Editor',
@@ -202,7 +180,6 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                         assets: assets,
                         constraints: constraints,
                         onTap: (asset) {
-                          print('Asset tapped!');
                           if (_isSelectMode) {
                             _handleAssetSelection(
                               asset,
@@ -215,6 +192,9 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                         onPanUpdate: (asset, details) {
                           _moveAsset(asset, details, constraints);
                         },
+                        onPanStart: (asset, details) {
+                          _saveToHistory();
+                        },
                         absorb: true,
                         selectedAssets: _selectedAssets,
                       );
@@ -224,7 +204,6 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                     Listener(
                       behavior: HitTestBehavior.translucent,
                       onPointerDown: (pointerEvent) {
-                        print('Pointer down!');
                         // Check if we're clicking on an asset first
                         bool hitAsset = assets.any((asset) {
                           final cx = asset.coordinates.x * constraints.maxWidth;
@@ -514,6 +493,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                   children: [
                     TextButton.icon(
                       onPressed: () {
+                        _saveToHistory();
                         _updateState(() {
                           assets.remove(asset);
                         });
@@ -560,6 +540,19 @@ class _PageEditorState extends ConsumerState<PageEditor> {
             Coordinates(x: newX, y: newY, angle: assetToMove.coordinates.angle);
       }
     });
+  }
+
+  void _adjustSelectedAssetsSize(double factor) {
+    _saveToHistory();
+    setState(() {
+      for (final asset in _selectedAssets) {
+        asset.size = RelativeSize(
+          width: (asset.size.width * factor).clamp(0.01, 1.0),
+          height: (asset.size.height * factor).clamp(0.01, 1.0),
+        );
+      }
+    });
+    _saveToPrefs();
   }
 
   Widget _buildJsonEditor() {
