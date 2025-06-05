@@ -154,31 +154,40 @@ class LEDColumn extends StatelessWidget {
                     final double fontSize = rowConstraints.maxHeight * 0.5;
 
                     // LED widget with consistent size
-                    final ledWidget = AspectRatio(
-                      aspectRatio: 1,
-                      child: FractionallySizedBox(
-                        widthFactor: 1.0,
-                        heightFactor: 1.0,
-                        child: Led(ledConfig),
-                      ),
-                    );
+                    final ledWidget =
+                        ledConfig.text == null || ledConfig.text!.isEmpty
+                            ? Expanded(
+                                child: AspectRatio(
+                                  aspectRatio: 1,
+                                  child: Led(ledConfig),
+                                ),
+                              )
+                            : AspectRatio(
+                                aspectRatio: 1,
+                                child: FractionallySizedBox(
+                                  widthFactor: 1.0,
+                                  heightFactor: 1.0,
+                                  child: Led(ledConfig),
+                                ),
+                              );
 
                     // Text widget with consistent style
-                    final textWidget = ledConfig.text != null
-                        ? Expanded(
-                            child: Text(
-                              ledConfig.text!,
-                              style: TextStyle(fontSize: fontSize),
-                              overflow: TextOverflow.ellipsis,
-                              maxLines: 1,
-                              textAlign: ledConfig.textPos == TextPos.left
-                                  ? TextAlign.right
-                                  : ledConfig.textPos == TextPos.right
-                                      ? TextAlign.left
-                                      : TextAlign.center,
-                            ),
-                          )
-                        : null;
+                    final textWidget =
+                        ledConfig.text != null && ledConfig.text!.isNotEmpty
+                            ? Expanded(
+                                child: Text(
+                                  ledConfig.text!,
+                                  style: TextStyle(fontSize: fontSize),
+                                  overflow: TextOverflow.ellipsis,
+                                  maxLines: 1,
+                                  textAlign: ledConfig.textPos == TextPos.left
+                                      ? TextAlign.right
+                                      : ledConfig.textPos == TextPos.right
+                                          ? TextAlign.left
+                                          : TextAlign.center,
+                                ),
+                              )
+                            : null;
 
                     return Row(
                       crossAxisAlignment: CrossAxisAlignment.center,
