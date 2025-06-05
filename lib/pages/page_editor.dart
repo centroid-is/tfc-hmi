@@ -30,6 +30,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   Offset? _selectionCurrent;
   Set<Asset> _selectedAssets = {};
   bool _isDraggingAsset = false;
+  String? _copiedAssets;
 
   @override
   void initState() {
@@ -59,15 +60,15 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     }
   }
 
-  String _assetsToJson() {
+  String _assetsToJson(List<Asset> theAssets) {
     return jsonEncode({
-      'assets': assets.map((a) => a.toJson()).toList(),
+      'assets': theAssets.map((a) => a.toJson()).toList(),
     });
   }
 
   Future<void> _saveToPrefs() async {
     final prefs = await ref.read(preferencesProvider.future);
-    await prefs.setString(_storageKey, _assetsToJson());
+    await prefs.setString(_storageKey, _assetsToJson(assets));
   }
 
   void _updateState(VoidCallback fn) {
@@ -87,7 +88,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   }
 
   void _saveToHistory() {
-    _undoHistory.add(_assetsToJson());
+    _undoHistory.add(_assetsToJson(assets));
 
     if (_undoHistory.length > 50) {
       _undoHistory.removeAt(0);
@@ -127,16 +128,49 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     });
   }
 
+  void _handleCopy() {
+    if (_selectedAssets.isEmpty) return;
+    _copiedAssets = _assetsToJson(_selectedAssets.toList());
+  }
+
+  void _handlePaste() {
+    if (_copiedAssets == null) return;
+
+    _saveToHistory();
+    setState(() {
+      _selectedAssets.clear();
+
+      final copiedAssets = AssetRegistry.parse(jsonDecode(_copiedAssets!));
+
+      for (final asset in copiedAssets) {
+        asset.coordinates = Coordinates(
+          x: (asset.coordinates.x + 0.02).clamp(0.0, 1.0),
+          y: (asset.coordinates.y + 0.02).clamp(0.0, 1.0),
+          angle: asset.coordinates.angle,
+        );
+        assets.add(asset);
+        _selectedAssets.add(asset);
+      }
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     return Focus(
       autofocus: true,
       onKeyEvent: (node, event) {
         if (event is KeyDownEvent &&
-            _isModifierPressed(HardwareKeyboard.instance.logicalKeysPressed) &&
-            event.logicalKey == LogicalKeyboardKey.keyZ) {
-          _handleUndo();
-          return KeyEventResult.handled;
+            _isModifierPressed(HardwareKeyboard.instance.logicalKeysPressed)) {
+          if (event.logicalKey == LogicalKeyboardKey.keyZ) {
+            _handleUndo();
+            return KeyEventResult.handled;
+          } else if (event.logicalKey == LogicalKeyboardKey.keyC) {
+            _handleCopy();
+            return KeyEventResult.handled;
+          } else if (event.logicalKey == LogicalKeyboardKey.keyV) {
+            _handlePaste();
+            return KeyEventResult.handled;
+          }
         }
         return KeyEventResult.ignored;
       },
@@ -552,7 +586,6 @@ class _PageEditorState extends ConsumerState<PageEditor> {
         );
       }
     });
-    _saveToPrefs();
   }
 
   Widget _buildJsonEditor() {

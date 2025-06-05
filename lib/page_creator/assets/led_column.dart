@@ -55,6 +55,13 @@ class _LEDColumnConfigEditorState extends State<_LEDColumnConfigEditor> {
             initialValue: widget.config.size,
             onChanged: (size) => setState(() => widget.config.size = size),
           ),
+          const SizedBox(height: 10),
+          CoordinatesField(
+            initialValue: widget.config.coordinates,
+            onChanged: (coordinates) =>
+                setState(() => widget.config.coordinates = coordinates),
+          ),
+          const SizedBox(height: 10),
           TextFormField(
             initialValue: widget.config.spacing?.toString(),
             onChanged: (spacing) {
