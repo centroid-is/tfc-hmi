@@ -154,21 +154,38 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     });
   }
 
+  void _handleDelete() {
+    if (_selectedAssets.isEmpty) return;
+
+    _saveToHistory();
+    setState(() {
+      assets.removeWhere((asset) => _selectedAssets.contains(asset));
+      _selectedAssets.clear();
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     return Focus(
       autofocus: true,
       onKeyEvent: (node, event) {
-        if (event is KeyDownEvent &&
-            _isModifierPressed(HardwareKeyboard.instance.logicalKeysPressed)) {
-          if (event.logicalKey == LogicalKeyboardKey.keyZ) {
-            _handleUndo();
-            return KeyEventResult.handled;
-          } else if (event.logicalKey == LogicalKeyboardKey.keyC) {
-            _handleCopy();
-            return KeyEventResult.handled;
-          } else if (event.logicalKey == LogicalKeyboardKey.keyV) {
-            _handlePaste();
+        if (event is KeyDownEvent) {
+          if (_isModifierPressed(
+              HardwareKeyboard.instance.logicalKeysPressed)) {
+            if (event.logicalKey == LogicalKeyboardKey.keyZ) {
+              _handleUndo();
+              return KeyEventResult.handled;
+            } else if (event.logicalKey == LogicalKeyboardKey.keyC) {
+              _handleCopy();
+              return KeyEventResult.handled;
+            } else if (event.logicalKey == LogicalKeyboardKey.keyV) {
+              _handlePaste();
+              return KeyEventResult.handled;
+            }
+          } else if (event.logicalKey == LogicalKeyboardKey.delete ||
+              event.logicalKey == LogicalKeyboardKey.backspace) {
+            // Support both Delete and Backspace
+            _handleDelete();
             return KeyEventResult.handled;
           }
         }
