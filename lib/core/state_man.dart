@@ -195,6 +195,8 @@ class SingleWorker {
 class ClientWrapper {
   final Client client;
   final OpcUAConfig config;
+  int? subscriptionId;
+
   ClientWrapper(this.client, this.config);
 }
 
@@ -203,7 +205,6 @@ class StateMan {
   final StateManConfig config;
   final KeyMappings keyMappings;
   final List<ClientWrapper> clients;
-  int? subscriptionId;
   final SingleWorker _worker = SingleWorker();
   final Map<String, _SubscriptionEntry> _subscriptions = {};
   late final KeyCollectorManager _collectorManager;
@@ -249,7 +250,7 @@ class StateMan {
           logger.e('Session lost, resubscribing');
           // Session was lost, resubscribe
           sessionLost = false;
-          subscriptionId = null;
+          wrapper.subscriptionId = null;
           for (final entry in _subscriptions.values) {
             _monitor(entry.key, resub: true);
           }
@@ -316,19 +317,17 @@ class StateMan {
     return stateMan;
   }
 
-  Client _getClient(String key) {
+  ClientWrapper _getClientWrapper(String key) {
     // This throws if the key is not found
     // Be mindful that null == null is true
-    return clients
-        .firstWhere((wrapper) =>
-            wrapper.config.serverAlias == keyMappings.lookupServerAlias(key))
-        .client;
+    return clients.firstWhere((wrapper) =>
+        wrapper.config.serverAlias == keyMappings.lookupServerAlias(key));
   }
 
   /// Example: read("myKey")
   Future<DynamicValue> read(String key) async {
     try {
-      final client = _getClient(key);
+      final client = _getClientWrapper(key).client;
       final nodeId = lookupNodeId(key);
       if (nodeId == null) {
         await Future.delayed(const Duration(seconds: 1000));
@@ -345,7 +344,7 @@ class StateMan {
     final parameters = <Client, Map<NodeId, List<AttributeId>>>{};
 
     for (final key in keys) {
-      final client = _getClient(key);
+      final client = _getClientWrapper(key).client;
       final nodeId = lookupNodeId(key);
       if (nodeId == null) {
         throw StateManException("Key: \"$key\" not found");
@@ -375,7 +374,7 @@ class StateMan {
   /// Example: write("myKey", DynamicValue(value: 42, typeId: NodeId.int16))
   Future<void> write(String key, DynamicValue value) async {
     try {
-      final client = _getClient(key);
+      final client = _getClientWrapper(key).client;
       final nodeId = lookupNodeId(key);
       if (nodeId == null) {
         await Future.delayed(const Duration(seconds: 1000));
@@ -435,7 +434,7 @@ class StateMan {
       {bool resub = false}) async {
     late Client client;
     try {
-      client = _getClient(key);
+      client = _getClientWrapper(key).client;
       await client.awaitConnect();
     } catch (e) {
       throw StateManException(
@@ -461,20 +460,22 @@ class StateMan {
     while (true) {
       try {
         await client.awaitConnect();
-        if (subscriptionId == null && await _worker.doTheWork()) {
+        final wrapper = _getClientWrapper(key);
+
+        if (wrapper.subscriptionId == null && await _worker.doTheWork()) {
           try {
-            subscriptionId = await client.subscriptionCreate();
+            wrapper.subscriptionId = await client.subscriptionCreate();
           } catch (e) {
             logger.e('Failed to create subscription: $e');
           } finally {
             _worker.complete();
           }
         }
-        if (subscriptionId == null) {
+        if (wrapper.subscriptionId == null) {
           continue;
         }
         final stream =
-            client.monitor(nodeId, subscriptionId!).asBroadcastStream();
+            client.monitor(nodeId, wrapper.subscriptionId!).asBroadcastStream();
 
         // Test for first value
         final firstValue = await stream.first.timeout(
