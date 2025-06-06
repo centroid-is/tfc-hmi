@@ -194,7 +194,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
       child: BaseScaffold(
         title: 'Page Editor',
         body: ZoomableCanvas(
-          scaleEnabled: !_showJsonEditor,
+          scaleEnabled: !_showJsonEditor && !_showPalette,
           panEnabled: !_isSelectMode && !_showJsonEditor,
           child: LayoutBuilder(
             builder: (context, constraints) {

@@ -231,20 +231,20 @@ class _AssetStackState extends State<AssetStack> {
           }
 
           // C) add the red center dot
-          positionedChildren.add(
-            Positioned(
-              left: cx - 4,
-              top: cy - 4,
-              child: Container(
-                width: 8,
-                height: 8,
-                decoration: BoxDecoration(
-                  color: Colors.red,
-                  shape: BoxShape.circle,
-                ),
-              ),
-            ),
-          );
+          // positionedChildren.add(
+          //   Positioned(
+          //     left: cx - 4,
+          //     top: cy - 4,
+          //     child: Container(
+          //       width: 8,
+          //       height: 8,
+          //       decoration: BoxDecoration(
+          //         color: Colors.red,
+          //         shape: BoxShape.circle,
+          //       ),
+          //     ),
+          //   ),
+          // );
         }
 
         return Stack(
