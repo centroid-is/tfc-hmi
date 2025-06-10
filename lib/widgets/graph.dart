@@ -1,0 +1,263 @@
+import 'package:flutter/material.dart';
+import 'package:community_charts_flutter/community_charts_flutter.dart'
+    as charts;
+
+class GraphDataConfig {
+  final String label;
+
+  GraphDataConfig({
+    required this.label,
+  });
+}
+
+enum GraphType {
+  line,
+  bar,
+  scatter,
+}
+
+class GraphAxisConfig {
+  final String unit;
+  final double? min;
+  final double? max;
+  final double? step;
+
+  GraphAxisConfig({
+    required this.unit,
+    this.min,
+    this.max,
+    this.step,
+  });
+}
+
+class GraphConfig {
+  final GraphType type;
+  final GraphAxisConfig xAxis;
+  final GraphAxisConfig yAxis;
+  final GraphAxisConfig? yAxis2;
+
+  GraphConfig({
+    required this.type,
+    required this.xAxis,
+    required this.yAxis,
+    this.yAxis2,
+  });
+}
+
+class Graph extends StatelessWidget {
+  final GraphConfig config;
+  final List<Map<GraphDataConfig, List<List<double>>>> data;
+  final Function()? onPanCompleted;
+
+  const Graph({
+    super.key,
+    required this.config,
+    required this.data,
+    this.onPanCompleted,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    // If no data is provided, show an empty container with the same dimensions
+    if (data.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    // Configure behaviors
+    switch (config.type) {
+      case GraphType.line:
+        final behaviors = [
+          charts.PanAndZoomBehavior<num>(
+            panningCompletedCallback: () {
+              if (onPanCompleted != null) {
+                onPanCompleted!();
+              }
+            },
+          ),
+        ];
+        final series = _convertDataToNumericSeries();
+        // Return empty container if no valid series data
+        if (series.isEmpty) {
+          return const SizedBox.shrink();
+        }
+        return charts.LineChart(
+          series,
+          animate: false,
+          domainAxis: _buildAxisSpec(config.xAxis),
+          primaryMeasureAxis: _buildAxisSpec(config.yAxis),
+          secondaryMeasureAxis:
+              config.yAxis2 != null ? _buildAxisSpec(config.yAxis2!) : null,
+          behaviors: behaviors,
+        );
+
+      case GraphType.bar:
+        final behaviors = [
+          charts.PanAndZoomBehavior<String>(
+            panningCompletedCallback: () {
+              if (onPanCompleted != null) {
+                onPanCompleted!();
+              }
+            },
+          ),
+        ];
+        final series = _convertDataToBarSeries();
+        // Return empty container if no valid series data
+        if (series.isEmpty) {
+          return const SizedBox.shrink();
+        }
+        return charts.BarChart(
+          series,
+          animate: false,
+          domainAxis: _buildStringAxisSpec(config.xAxis),
+          primaryMeasureAxis: _buildAxisSpec(config.yAxis),
+          secondaryMeasureAxis:
+              config.yAxis2 != null ? _buildAxisSpec(config.yAxis2!) : null,
+          behaviors: behaviors,
+        );
+
+      case GraphType.scatter:
+        final behaviors = [
+          charts.PanAndZoomBehavior<num>(
+            panningCompletedCallback: () {
+              if (onPanCompleted != null) {
+                onPanCompleted!();
+              }
+            },
+          ),
+        ];
+        final series = _convertDataToNumericSeries();
+        // Return empty container if no valid series data
+        if (series.isEmpty) {
+          return const SizedBox.shrink();
+        }
+        return charts.ScatterPlotChart(
+          series,
+          animate: false,
+          domainAxis: _buildAxisSpec(config.xAxis),
+          primaryMeasureAxis: _buildAxisSpec(config.yAxis),
+          secondaryMeasureAxis:
+              config.yAxis2 != null ? _buildAxisSpec(config.yAxis2!) : null,
+          behaviors: behaviors,
+        );
+    }
+  }
+
+  // Helper to calculate delta between viewports
+  double _calculateDelta(
+    charts.NumericExtents previous,
+    charts.NumericExtents current,
+  ) {
+    final previousCenter = (previous.min! + previous.max!) / 2;
+    final currentCenter = (current.min! + current.max!) / 2;
+    return previousCenter - currentCenter;
+  }
+
+  // Convert input data to numeric series (for line and scatter charts)
+  List<charts.Series<_Point, num>> _convertDataToNumericSeries() {
+    final seriesList = <charts.Series<_Point, num>>[];
+    for (var seriesMap in data) {
+      seriesMap.forEach((config, points) {
+        final data = points.map((p) => _Point(p[0], p[1])).toList();
+        seriesList.add(
+          charts.Series<_Point, num>(
+            id: config.label,
+            data: data,
+            domainFn: (_Point point, _) => point.x,
+            measureFn: (_Point point, _) => point.y,
+          ),
+        );
+      });
+    }
+    return seriesList;
+  }
+
+  // Convert input data to bar series (for bar charts)
+  List<charts.Series<_BarPoint, String>> _convertDataToBarSeries() {
+    final seriesList = <charts.Series<_BarPoint, String>>[];
+    for (var seriesMap in data) {
+      seriesMap.forEach((config, points) {
+        final data =
+            points.map((p) => _BarPoint(p[0].toString(), p[1])).toList();
+        seriesList.add(
+          charts.Series<_BarPoint, String>(
+            id: config.label,
+            data: data,
+            domainFn: (_BarPoint point, _) => point.x,
+            measureFn: (_BarPoint point, _) => point.y,
+          ),
+        );
+      });
+    }
+    return seriesList;
+  }
+
+  // Build axis specification from configuration
+  charts.NumericAxisSpec _buildAxisSpec(GraphAxisConfig axisConfig) {
+    return charts.NumericAxisSpec(
+      viewport: axisConfig.min != null && axisConfig.max != null
+          ? charts.NumericExtents(axisConfig.min!, axisConfig.max!)
+          : null,
+      tickProviderSpec: axisConfig.step != null
+          ? charts.StaticNumericTickProviderSpec(
+              _generateTicks(axisConfig.min, axisConfig.max, axisConfig.step!),
+            )
+          : null,
+      renderSpec: charts.GridlineRendererSpec(
+        labelStyle: charts.TextStyleSpec(fontSize: 12),
+        lineStyle: charts.LineStyleSpec(
+          thickness: 1,
+          color: charts.MaterialPalette.gray.shade300,
+        ),
+      ),
+      showAxisLine: true,
+      tickFormatterSpec: charts.BasicNumericTickFormatterSpec(
+        (num? value) => value != null
+            ? '${value.toStringAsFixed(1)}${axisConfig.unit}'
+            : '',
+      ),
+    );
+  }
+
+  // Build string axis specification for bar charts
+  charts.AxisSpec<String> _buildStringAxisSpec(GraphAxisConfig axisConfig) {
+    return charts.AxisSpec<String>(
+      renderSpec: charts.GridlineRendererSpec(
+        labelStyle: charts.TextStyleSpec(fontSize: 12),
+        lineStyle: charts.LineStyleSpec(
+          thickness: 1,
+          color: charts.MaterialPalette.gray.shade300,
+        ),
+      ),
+      showAxisLine: true,
+    );
+  }
+
+  // Generate ticks for static axis configuration
+  List<charts.TickSpec<num>> _generateTicks(
+      double? min, double? max, double step) {
+    if (min == null || max == null) return [];
+    final ticks = <charts.TickSpec<num>>[];
+    double current = min;
+    while (current <= max) {
+      ticks.add(charts.TickSpec(current));
+      current += step;
+    }
+    return ticks;
+  }
+}
+
+// Internal class to represent a data point
+class _Point {
+  final double x;
+  final double y;
+
+  _Point(this.x, this.y);
+}
+
+// Internal class to represent a bar point
+class _BarPoint {
+  final String x;
+  final double y;
+
+  _BarPoint(this.x, this.y);
+}
