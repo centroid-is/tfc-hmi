@@ -1,11 +1,14 @@
 import 'dart:ui' show Color, Size;
 
+import 'dart:convert';
+
 import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/state_man.dart';
 import '../../providers/state_man.dart';
+import '../../providers/preferences.dart';
 part 'common.g.dart';
 
 const String constAssetName = "asset_name";
@@ -232,16 +235,25 @@ class _KeyFieldState extends ConsumerState<KeyField> {
     }
   }
 
-  void _openDialog() async {
-    final result = await showDialog<String>(
+  void _openKeyMappingDialog() async {
+    final result = await showDialog<Map<String, dynamic>>(
       context: context,
-      builder: (context) => _KeyFieldDialog(
-        initialValue: _controller.text,
+      builder: (context) => KeyMappingEntryDialog(
+        initialKey: _controller.text,
       ),
     );
+
     if (result != null) {
-      _controller.text = result;
-      widget.onChanged?.call(result);
+      final key = result['key'] as String;
+      final entry = result['entry'] as KeyMappingEntry;
+
+      final keyMappings = (await ref.read(stateManProvider.future)).keyMappings;
+      keyMappings.nodes[key] = entry;
+      final prefs = await ref.read(preferencesProvider.future);
+      await prefs.setString('key_mappings', jsonEncode(keyMappings.toJson()));
+
+      _controller.text = key;
+      widget.onChanged?.call(key);
       setState(() {});
     }
   }
@@ -249,34 +261,35 @@ class _KeyFieldState extends ConsumerState<KeyField> {
   @override
   Widget build(BuildContext context) {
     return FutureBuilder<StateMan>(
-        future: ref.watch(stateManProvider.future),
-        builder: (context, snapshot) {
-          if (snapshot.hasData) {
-            _allKeys = snapshot.data!.keys.toList();
-          }
-          return TextField(
-            controller: _controller,
-            focusNode: _focusNode,
-            decoration: InputDecoration(
-              labelText: widget.label,
-              suffixIcon: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  IconButton(
-                    icon: const Icon(Icons.search),
-                    onPressed: _openSearchDialog,
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.edit),
-                    onPressed: _openDialog,
-                  ),
-                ],
-              ),
+      future: ref.watch(stateManProvider.future),
+      builder: (context, snapshot) {
+        if (snapshot.hasData) {
+          _allKeys = snapshot.data!.keys.toList();
+        }
+        return TextField(
+          controller: _controller,
+          focusNode: _focusNode,
+          decoration: InputDecoration(
+            labelText: widget.label,
+            suffixIcon: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                IconButton(
+                  icon: const Icon(Icons.search),
+                  onPressed: _openSearchDialog,
+                ),
+                IconButton(
+                  icon: const Icon(Icons.add),
+                  onPressed: _openKeyMappingDialog,
+                ),
+              ],
             ),
-            onChanged: widget.onChanged,
-            onSubmitted: widget.onChanged,
-          );
-        });
+          ),
+          onChanged: widget.onChanged,
+          onSubmitted: widget.onChanged,
+        );
+      },
+    );
   }
 }
 
@@ -660,6 +673,196 @@ class _CoordinatesFieldState extends State<CoordinatesField> {
           ),
         ],
       ],
+    );
+  }
+}
+
+class KeyMappingEntryDialog extends ConsumerStatefulWidget {
+  final String? serverAlias;
+  final String? initialKey;
+
+  const KeyMappingEntryDialog({
+    super.key,
+    this.serverAlias,
+    this.initialKey,
+  });
+
+  @override
+  ConsumerState<KeyMappingEntryDialog> createState() =>
+      _KeyMappingEntryDialogState();
+}
+
+class _KeyMappingEntryDialogState extends ConsumerState<KeyMappingEntryDialog> {
+  late TextEditingController _keyController;
+  late TextEditingController _namespaceController;
+  late TextEditingController _identifierController;
+  late TextEditingController _collectSizeController;
+  late TextEditingController _collectIntervalController;
+  String? _selectedServerAlias;
+  bool _isCollecting = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _keyController = TextEditingController(text: widget.initialKey ?? '');
+    _namespaceController = TextEditingController(text: '0');
+    _identifierController = TextEditingController();
+    _collectSizeController = TextEditingController();
+    _collectIntervalController = TextEditingController();
+    _selectedServerAlias = widget.serverAlias;
+  }
+
+  @override
+  void dispose() {
+    _keyController.dispose();
+    _namespaceController.dispose();
+    _identifierController.dispose();
+    _collectSizeController.dispose();
+    _collectIntervalController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<StateMan>(
+      future: ref.watch(stateManProvider.future),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData) {
+          return const CircularProgressIndicator();
+        }
+
+        final stateMan = snapshot.data!;
+        final serverAliases = stateMan.config.opcua
+            .map((config) => config.serverAlias ?? "__default")
+            .toList();
+        serverAliases.sort();
+
+        return AlertDialog(
+          title: const Text('Configure Key Mapping'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextFormField(
+                  controller: _keyController,
+                  decoration: const InputDecoration(
+                    labelText: 'Key',
+                  ),
+                ),
+                const SizedBox(height: 16),
+                const Text('OPC UA Node Configuration',
+                    style: TextStyle(fontWeight: FontWeight.bold)),
+                DropdownButtonFormField<String>(
+                  value: _selectedServerAlias,
+                  decoration: const InputDecoration(
+                    labelText: 'Server',
+                  ),
+                  items: serverAliases.map((alias) {
+                    return DropdownMenuItem(
+                      value: alias,
+                      child: Text(alias),
+                    );
+                  }).toList(),
+                  onChanged: (value) {
+                    setState(() {
+                      if (value == "__default") {
+                        _selectedServerAlias = null;
+                      } else {
+                        _selectedServerAlias = value;
+                      }
+                    });
+                  },
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: _namespaceController,
+                  decoration: const InputDecoration(
+                    labelText: 'Namespace',
+                  ),
+                  keyboardType: TextInputType.number,
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: _identifierController,
+                  decoration: const InputDecoration(
+                    labelText: 'Identifier',
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Row(
+                  children: [
+                    const Text('Enable Data Collection'),
+                    const SizedBox(width: 8),
+                    Switch(
+                      value: _isCollecting,
+                      onChanged: (value) {
+                        setState(() {
+                          _isCollecting = value;
+                        });
+                      },
+                    ),
+                  ],
+                ),
+                if (_isCollecting) ...[
+                  TextField(
+                    controller: _collectSizeController,
+                    decoration: const InputDecoration(
+                      labelText: 'Collection Size',
+                    ),
+                    keyboardType: TextInputType.number,
+                  ),
+                  const SizedBox(height: 16),
+                  TextField(
+                    controller: _collectIntervalController,
+                    decoration: const InputDecoration(
+                      labelText: 'Collection Interval (microseconds)',
+                    ),
+                    keyboardType: TextInputType.number,
+                  ),
+                ],
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                final key = _keyController.text;
+                if (key.isEmpty) return;
+
+                final ns = int.tryParse(_namespaceController.text) ?? 0;
+                final id = _identifierController.text;
+                if (id.isEmpty) return;
+
+                final nodeConfig = OpcUANodeConfig(
+                  namespace: ns,
+                  identifier: id,
+                )..serverAlias = _selectedServerAlias;
+
+                final entry = KeyMappingEntry(
+                  opcuaNode: nodeConfig,
+                  collectSize: _isCollecting
+                      ? int.tryParse(_collectSizeController.text)
+                      : null,
+                )..collectInterval = _isCollecting
+                    ? Duration(
+                        microseconds:
+                            int.tryParse(_collectIntervalController.text) ?? 0)
+                    : null;
+
+                Navigator.of(context).pop({
+                  'key': key,
+                  'entry': entry,
+                });
+              },
+              child: const Text('OK'),
+            ),
+          ],
+        );
+      },
     );
   }
 }
