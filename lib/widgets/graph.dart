@@ -4,9 +4,11 @@ import 'package:community_charts_flutter/community_charts_flutter.dart'
 
 class GraphDataConfig {
   final String label;
+  final bool mainAxis; // Whether this is the main axis or a secondary axis
 
   GraphDataConfig({
     required this.label,
+    this.mainAxis = true,
   });
 }
 
@@ -14,6 +16,7 @@ enum GraphType {
   line,
   bar,
   scatter,
+  timeseries,
 }
 
 class GraphAxisConfig {
@@ -139,6 +142,9 @@ class Graph extends StatelessWidget {
               config.yAxis2 != null ? _buildAxisSpec(config.yAxis2!) : null,
           behaviors: behaviors,
         );
+
+      case GraphType.timeseries:
+        return const SizedBox.shrink(); //todo
     }
   }
 
@@ -152,12 +158,36 @@ class Graph extends StatelessWidget {
     return previousCenter - currentCenter;
   }
 
+  // Add these validation methods
+
+  bool _isValidNumber(double value) {
+    return !value.isNaN && !value.isInfinite;
+  }
+
+  bool _isValidDataPoint(List<double> point) {
+    return point.length == 2 &&
+        _isValidNumber(point[0]) &&
+        _isValidNumber(point[1]);
+  }
+
   // Convert input data to numeric series (for line and scatter charts)
   List<charts.Series<_Point, num>> _convertDataToNumericSeries() {
     final seriesList = <charts.Series<_Point, num>>[];
+    final usedLabels = <String>{};
+
     for (var seriesMap in data) {
       seriesMap.forEach((config, points) {
-        final data = points.map((p) => _Point(p[0], p[1])).toList();
+        // Validate label uniqueness
+        if (usedLabels.contains(config.label)) {
+          throw ArgumentError('Duplicate series label: ${config.label}');
+        }
+        usedLabels.add(config.label);
+
+        // Filter out invalid points
+        final validPoints = points.where(_isValidDataPoint).toList();
+        if (validPoints.isEmpty) return;
+
+        final data = validPoints.map((p) => _Point(p[0], p[1])).toList();
         seriesList.add(
           charts.Series<_Point, num>(
             id: config.label,
@@ -166,6 +196,10 @@ class Graph extends StatelessWidget {
             measureFn: (_Point point, _) => point.y,
           ),
         );
+        if (!config.mainAxis) {
+          seriesList.last.setAttribute(
+              charts.measureAxisIdKey, charts.Axis.secondaryMeasureAxisId);
+        }
       });
     }
     return seriesList;
@@ -193,6 +227,16 @@ class Graph extends StatelessWidget {
 
   // Build axis specification from configuration
   charts.NumericAxisSpec _buildAxisSpec(GraphAxisConfig axisConfig) {
+    // Validate axis configuration
+    if (axisConfig.min != null && axisConfig.max != null) {
+      if (axisConfig.min! >= axisConfig.max!) {
+        throw ArgumentError('Axis min must be less than max');
+      }
+    }
+    if (axisConfig.step != null && axisConfig.step! <= 0) {
+      throw ArgumentError('Axis step must be positive');
+    }
+
     return charts.NumericAxisSpec(
       viewport: axisConfig.min != null && axisConfig.max != null
           ? charts.NumericExtents(axisConfig.min!, axisConfig.max!)
@@ -212,7 +256,7 @@ class Graph extends StatelessWidget {
       showAxisLine: true,
       tickFormatterSpec: charts.BasicNumericTickFormatterSpec(
         (num? value) => value != null
-            ? '${value.toStringAsFixed(1)}${axisConfig.unit}'
+            ? '${value.toStringAsFixed(1)} ${axisConfig.unit}'
             : '',
       ),
     );

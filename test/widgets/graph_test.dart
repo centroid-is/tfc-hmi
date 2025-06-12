@@ -272,5 +272,263 @@ void main() {
         expect(axisConfig.step, 10);
       });
     });
+
+    testWidgets('throws ArgumentError for duplicate series labels',
+        (WidgetTester tester) async {
+      final config = GraphConfig(
+        type: GraphType.line,
+        xAxis: GraphAxisConfig(unit: 'x'),
+        yAxis: GraphAxisConfig(unit: 'y'),
+      );
+
+      final data = [
+        {
+          GraphDataConfig(label: 'Same Label'): [
+            [1.0, 2.0],
+            [2.0, 4.0],
+          ],
+        },
+        {
+          GraphDataConfig(label: 'Same Label'): [
+            [1.0, 3.0],
+            [2.0, 6.0],
+          ],
+        },
+      ];
+
+      // Build the widget tree
+      await tester.pumpWidget(
+        buildTestableWidget(
+          Graph(
+            config: config,
+            data: data,
+          ),
+        ),
+      );
+
+      // Get the exception that was thrown during the build
+      final dynamic exception = tester.takeException();
+      expect(exception, isA<ArgumentError>());
+      expect(
+        exception.toString(),
+        equals('Invalid argument(s): Duplicate series label: Same Label'),
+      );
+    });
+
+    testWidgets('throws ArgumentError for invalid axis configuration',
+        (WidgetTester tester) async {
+      final config = GraphConfig(
+        type: GraphType.line,
+        xAxis: GraphAxisConfig(
+          unit: 'x',
+          min: 10, // min > max
+          max: 0,
+          step: 2,
+        ),
+        yAxis: GraphAxisConfig(
+          unit: 'y',
+          min: 0,
+          max: 100,
+          step: -20, // negative step
+        ),
+      );
+
+      final data = [
+        {
+          GraphDataConfig(label: 'Test Series'): [
+            [1.0, 20.0],
+            [5.0, 60.0],
+          ],
+        },
+      ];
+
+      await tester.pumpWidget(
+        buildTestableWidget(
+          Graph(
+            config: config,
+            data: data,
+          ),
+        ),
+      );
+
+      final dynamic exception = tester.takeException();
+      expect(exception, isA<ArgumentError>());
+      expect(
+        exception.toString(),
+        equals('Invalid argument(s): Axis min must be less than max'),
+      );
+    });
+
+    testWidgets('throws ArgumentError for negative step',
+        (WidgetTester tester) async {
+      final config = GraphConfig(
+        type: GraphType.line,
+        xAxis: GraphAxisConfig(
+          unit: 'x',
+          min: 0,
+          max: 10,
+          step: -2, // negative step
+        ),
+        yAxis: GraphAxisConfig(unit: 'y'),
+      );
+
+      final data = [
+        {
+          GraphDataConfig(label: 'Test Series'): [
+            [1.0, 20.0],
+            [5.0, 60.0],
+          ],
+        },
+      ];
+
+      await tester.pumpWidget(
+        buildTestableWidget(
+          Graph(
+            config: config,
+            data: data,
+          ),
+        ),
+      );
+
+      final dynamic exception = tester.takeException();
+      expect(exception, isA<ArgumentError>());
+      expect(
+        exception.toString(),
+        equals('Invalid argument(s): Axis step must be positive'),
+      );
+    });
+  });
+
+  group('Graph Widget Edge Cases', () {
+    testWidgets('handles null values in data points',
+        (WidgetTester tester) async {
+      final config = GraphConfig(
+        type: GraphType.line,
+        xAxis: GraphAxisConfig(unit: 'x'),
+        yAxis: GraphAxisConfig(unit: 'y'),
+      );
+
+      final data = [
+        {
+          GraphDataConfig(label: 'Test Series'): [
+            [1.0, double.nan], // NaN value
+            [2.0, double.infinity], // Infinity value
+            [3.0, -double.infinity], // Negative infinity
+          ],
+        },
+      ];
+
+      await tester.pumpWidget(
+        buildTestableWidget(
+          Graph(
+            config: config,
+            data: data,
+          ),
+        ),
+      );
+
+      expect(find.byType(Graph), findsOneWidget);
+      await tester.pumpAndSettle();
+    });
+
+    testWidgets('handles mismatched data point lengths',
+        (WidgetTester tester) async {
+      final config = GraphConfig(
+        type: GraphType.line,
+        xAxis: GraphAxisConfig(unit: 'x'),
+        yAxis: GraphAxisConfig(unit: 'y'),
+      );
+
+      final data = [
+        {
+          GraphDataConfig(label: 'Test Series'): [
+            [1.0], // Missing y value
+            [2.0, 4.0, 5.0], // Extra value
+            [3.0, 6.0], // Correct length
+          ],
+        },
+      ];
+
+      await tester.pumpWidget(
+        buildTestableWidget(
+          Graph(
+            config: config,
+            data: data,
+          ),
+        ),
+      );
+
+      expect(find.byType(Graph), findsOneWidget);
+      await tester.pumpAndSettle();
+    });
+
+    testWidgets('handles data points outside axis range',
+        (WidgetTester tester) async {
+      final config = GraphConfig(
+        type: GraphType.line,
+        xAxis: GraphAxisConfig(
+          unit: 'x',
+          min: 0,
+          max: 10,
+        ),
+        yAxis: GraphAxisConfig(
+          unit: 'y',
+          min: 0,
+          max: 100,
+        ),
+      );
+
+      final data = [
+        {
+          GraphDataConfig(label: 'Test Series'): [
+            [-5.0, -20.0], // Points outside range
+            [15.0, 120.0], // Points outside range
+            [5.0, 50.0], // Points inside range
+          ],
+        },
+      ];
+
+      await tester.pumpWidget(
+        buildTestableWidget(
+          Graph(
+            config: config,
+            data: data,
+          ),
+        ),
+      );
+
+      expect(find.byType(Graph), findsOneWidget);
+      await tester.pumpAndSettle();
+    });
+
+    testWidgets('handles bar chart with non-numeric x values',
+        (WidgetTester tester) async {
+      final config = GraphConfig(
+        type: GraphType.bar,
+        xAxis: GraphAxisConfig(unit: ''),
+        yAxis: GraphAxisConfig(unit: 'y'),
+      );
+
+      final data = [
+        {
+          GraphDataConfig(label: 'Test Series'): [
+            [double.nan, 2.0], // NaN x value
+            [double.infinity, 4.0], // Infinity x value
+          ],
+        },
+      ];
+
+      await tester.pumpWidget(
+        buildTestableWidget(
+          Graph(
+            config: config,
+            data: data,
+          ),
+        ),
+      );
+
+      expect(find.byType(Graph), findsOneWidget);
+      await tester.pumpAndSettle();
+    });
   });
 }
