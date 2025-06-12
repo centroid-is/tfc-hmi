@@ -86,7 +86,7 @@ class Graph extends StatelessWidget {
         return charts.LineChart(
           series,
           animate: false,
-          domainAxis: _buildAxisSpec(config.xAxis),
+          domainAxis: _buildAxisSpec(config.xAxis, 15),
           primaryMeasureAxis: _buildAxisSpec(config.yAxis),
           secondaryMeasureAxis:
               config.yAxis2 != null ? _buildAxisSpec(config.yAxis2!) : null,
@@ -226,7 +226,8 @@ class Graph extends StatelessWidget {
   }
 
   // Build axis specification from configuration
-  charts.NumericAxisSpec _buildAxisSpec(GraphAxisConfig axisConfig) {
+  charts.NumericAxisSpec _buildAxisSpec(GraphAxisConfig axisConfig,
+      [int? offset]) {
     // Validate axis configuration
     if (axisConfig.min != null && axisConfig.max != null) {
       if (axisConfig.min! >= axisConfig.max!) {
@@ -252,6 +253,7 @@ class Graph extends StatelessWidget {
           thickness: 1,
           color: charts.MaterialPalette.gray.shade300,
         ),
+        labelOffsetFromAxisPx: offset,
       ),
       showAxisLine: true,
       tickFormatterSpec: charts.BasicNumericTickFormatterSpec(
