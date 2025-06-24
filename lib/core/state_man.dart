@@ -381,7 +381,7 @@ class StateMan {
         throw StateManException("Key: \"$key\" not found");
       }
       await client.awaitConnect();
-      await client.writeValue(nodeId, value);
+      await client.write(nodeId, value);
     } catch (e) {
       throw StateManException('Failed to write node: \"$key\": $e');
     }
