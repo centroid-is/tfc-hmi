@@ -1,71 +1,16 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:postgres/postgres.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:json_annotation/json_annotation.dart';
+
+import 'database.dart';
 
 part 'preferences.g.dart';
 
 class PreferencesException implements Exception {
   final String message;
   PreferencesException(this.message);
-}
-
-class EndpointConverter
-    implements JsonConverter<Endpoint, Map<String, dynamic>> {
-  const EndpointConverter();
-
-  @override
-  Endpoint fromJson(Map<String, dynamic> json) {
-    return Endpoint(
-      host: json['host'] as String,
-      port: json['port'] as int,
-      database: json['database'] as String,
-      username: json['username'] as String?,
-      password: json['password'] as String?,
-      isUnixSocket: json['isUnixSocket'] as bool? ?? false,
-    );
-  }
-
-  @override
-  Map<String, dynamic> toJson(Endpoint endpoint) => {
-        'host': endpoint.host,
-        'port': endpoint.port,
-        'database': endpoint.database,
-        'username': endpoint.username,
-        'password': endpoint.password,
-        'isUnixSocket': endpoint.isUnixSocket,
-      };
-}
-
-class SslModeConverter implements JsonConverter<SslMode, String> {
-  const SslModeConverter();
-
-  @override
-  SslMode fromJson(String json) {
-    return SslMode.values.firstWhere(
-      (mode) => mode.name == json,
-      orElse: () => SslMode.disable,
-    );
-  }
-
-  @override
-  String toJson(SslMode mode) => mode.name;
-}
-
-@JsonSerializable()
-class PreferencesConfig {
-  @EndpointConverter()
-  Endpoint? postgres;
-  @SslModeConverter()
-  SslMode? sslMode;
-
-  PreferencesConfig({this.postgres, this.sslMode});
-
-  factory PreferencesConfig.fromJson(Map<String, dynamic> json) =>
-      _$PreferencesConfigFromJson(json);
-  Map<String, dynamic> toJson() => _$PreferencesConfigToJson(this);
 }
 
 abstract class PreferencesApi {
@@ -142,16 +87,15 @@ abstract class PreferencesApi {
 }
 
 class Preferences implements PreferencesApi {
-  final PreferencesConfig config;
-  final Connection? connection;
+  final Database? database;
   final SharedPreferencesAsync sharedPreferences = SharedPreferencesAsync();
   final StreamController<String> _onPreferencesChanged =
       StreamController<String>.broadcast();
 
-  Preferences({required this.config, required this.connection});
+  Preferences({required this.database});
 
-  static Future<void> ensureTable(Connection connection) async {
-    await connection.execute('''
+  static Future<void> ensureTable(Database database) async {
+    await database.execute('''
       CREATE TABLE IF NOT EXISTS flutter_preferences (
         key TEXT PRIMARY KEY,
         value TEXT,
@@ -160,35 +104,33 @@ class Preferences implements PreferencesApi {
     ''');
   }
 
-  static Future<Preferences> create({required PreferencesConfig config}) async {
+  static Future<Preferences> create({required Database? db}) async {
     try {
-      if (config.postgres == null) {
-        return Preferences(config: config, connection: null);
+      if (db == null) {
+        return Preferences(database: null);
       }
-      final connection = await Connection.open(
-        config.postgres!,
-        settings: ConnectionSettings(sslMode: config.sslMode),
-      ).onError((error, stackTrace) {
+      await db.connect().onError((error, stackTrace) {
         throw PreferencesException(
           'Connection to Postgres failed: $error\n $stackTrace',
         );
       });
-      await ensureTable(connection);
-      final prefs = Preferences(config: config, connection: connection);
+
+      await ensureTable(db);
+      final prefs = Preferences(database: db);
       await prefs.loadFromPostgres();
       return prefs;
     } on PreferencesException catch (e) {
       stderr.writeln(e.message);
-      return Preferences(config: config, connection: null);
+      return Preferences(database: db);
     }
   }
 
-  bool get dbConnected => connection != null && connection!.isOpen;
+  bool get dbConnected => database != null && database!.connected;
 
   Future<void> _upsertToPostgres(String key, Object? value, String type) async {
     if (!dbConnected) return;
     final valStr = value is List<String> ? value.join(',') : value?.toString();
-    await connection!.execute(
+    await database!.execute(
       Sql.named(
         'INSERT INTO flutter_preferences (key, value, type) VALUES (@key, @value, @type) '
         'ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, type = EXCLUDED.type',
