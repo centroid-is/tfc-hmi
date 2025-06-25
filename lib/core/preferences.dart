@@ -6,8 +6,6 @@ import 'package:json_annotation/json_annotation.dart';
 
 import 'database.dart';
 
-part 'preferences.g.dart';
-
 class PreferencesException implements Exception {
   final String message;
   PreferencesException(this.message);
@@ -109,12 +107,6 @@ class Preferences implements PreferencesApi {
       if (db == null) {
         return Preferences(database: null);
       }
-      await db.connect().onError((error, stackTrace) {
-        throw PreferencesException(
-          'Connection to Postgres failed: $error\n $stackTrace',
-        );
-      });
-
       await ensureTable(db);
       final prefs = Preferences(database: db);
       await prefs.loadFromPostgres();
@@ -125,7 +117,7 @@ class Preferences implements PreferencesApi {
     }
   }
 
-  bool get dbConnected => database != null && database!.connected;
+  bool get dbConnected => database != null && database!.isOpen;
 
   Future<void> _upsertToPostgres(String key, Object? value, String type) async {
     if (!dbConnected) return;
@@ -231,7 +223,7 @@ class Preferences implements PreferencesApi {
 
   Future<bool> isKeyInDatabase(String key) async {
     if (!dbConnected) return false;
-    final result = await connection!.execute(
+    final result = await database!.execute(
       Sql.named(
           'SELECT EXISTS(SELECT 1 FROM flutter_preferences WHERE key = @key)'),
       parameters: {'key': key},
@@ -242,7 +234,7 @@ class Preferences implements PreferencesApi {
   /// Loads all preferences from Postgres into shared preferences.
   Future<void> loadFromPostgres() async {
     if (!dbConnected) return;
-    final result = await connection!.execute(
+    final result = await database!.execute(
       'SELECT key, value, type FROM flutter_preferences',
     );
     for (final row in result) {

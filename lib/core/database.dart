@@ -1,6 +1,8 @@
 import 'package:postgres/postgres.dart';
 import 'package:json_annotation/json_annotation.dart';
 
+export 'package:postgres/postgres.dart' show Sql;
+
 part 'database.g.dart';
 
 class EndpointConverter
@@ -51,6 +53,13 @@ class DatabaseConfig {
   Endpoint? postgres;
   @SslModeConverter()
   SslMode? sslMode;
+
+  DatabaseConfig({this.postgres, this.sslMode});
+
+  factory DatabaseConfig.fromJson(Map<String, dynamic> json) =>
+      _$DatabaseConfigFromJson(json);
+
+  Map<String, dynamic> toJson() => _$DatabaseConfigToJson(this);
 }
 
 class DatabaseException implements Exception {
@@ -59,11 +68,12 @@ class DatabaseException implements Exception {
   final String message;
 }
 
-class Database {
+class Database implements Session {
   Database(this.config);
 
   Connection? connection;
   final DatabaseConfig config;
+  static const configLocation = 'database_config';
 
   Future<void> connect() async {
     if (connection != null && connection!.isOpen) {
@@ -79,10 +89,32 @@ class Database {
     });
   }
 
-  Future<void> execute(String sql) async {
+  @override
+  bool get isOpen => connection != null && connection!.isOpen;
+
+  @override
+  Future<void> get closed => connection?.closed ?? Future.value();
+
+  @override
+  Future<Statement> prepare(Object /* String | Sql */ query) async {
     await connect();
-    await connection!.execute(sql);
+    return connection!.prepare(query);
   }
 
-  bool get connected => connection != null && connection!.isOpen;
+  @override
+  Future<Result> execute(
+    Object /* String | Sql */ query, {
+    Object? /* List<Object?|TypedValue> | Map<String, Object?|TypedValue> */
+        parameters,
+    bool ignoreRows = false,
+    QueryMode? queryMode,
+    Duration? timeout,
+  }) async {
+    await connect();
+    return connection!.execute(query,
+        parameters: parameters,
+        ignoreRows: ignoreRows,
+        queryMode: queryMode,
+        timeout: timeout);
+  }
 }
