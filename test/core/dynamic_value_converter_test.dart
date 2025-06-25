@@ -163,6 +163,195 @@ void main() {
       });
     });
 
+    group('slim mode tests', () {
+      test('slim mode for null value', () {
+        final value = DynamicValue();
+        final result = converter.toJson(value, true);
+        expect(result, null);
+      });
+
+      test('slim mode for string value', () {
+        final value = DynamicValue(value: 'test');
+        final result = converter.toJson(value, true);
+        expect(result, 'test');
+      });
+
+      test('slim mode for integer value', () {
+        final value = DynamicValue(value: 42);
+        final result = converter.toJson(value, true);
+        expect(result, 42);
+      });
+
+      test('slim mode for double value', () {
+        final value = DynamicValue(value: 3.14);
+        final result = converter.toJson(value, true);
+        expect(result, 3.14);
+      });
+
+      test('slim mode for boolean value', () {
+        final value = DynamicValue(value: true);
+        final result = converter.toJson(value, true);
+        expect(result, true);
+      });
+
+      test('slim mode for object value', () {
+        final value = DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from({
+          'key1': DynamicValue(value: 'value1'),
+          'key2': DynamicValue(value: 42)
+        }));
+        final result = converter.toJson(value, true);
+        expect(result, {'key1': 'value1', 'key2': 42});
+      });
+
+      test('slim mode for array value', () {
+        final value = DynamicValue.fromList(
+            [DynamicValue(value: 'item1'), DynamicValue(value: 42)]);
+        final result = converter.toJson(value, true);
+        expect(result, ['item1', 42]);
+      });
+
+      test('slim mode for nested object', () {
+        final value = DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from({
+          'key1': DynamicValue(value: 'value1'),
+          'key2': DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from(
+              {'nested': DynamicValue(value: 42)}))
+        }));
+        final result = converter.toJson(value, true);
+        expect(result, {
+          'key1': 'value1',
+          'key2': {'nested': 42}
+        });
+      });
+
+      test('slim mode for nested array', () {
+        final value = DynamicValue.fromList([
+          DynamicValue(value: 'string'),
+          DynamicValue.fromList(
+              [DynamicValue(value: 'nested1'), DynamicValue(value: 'nested2')])
+        ]);
+        final result = converter.toJson(value, true);
+        expect(result, [
+          'string',
+          ['nested1', 'nested2']
+        ]);
+      });
+
+      test('slim mode ignores metadata fields', () {
+        final value = DynamicValue(value: 'test')
+          ..typeId = NodeId.fromString(1, 'SomeType')
+          ..displayName = LocalizedText('Display Name', 'en')
+          ..description = LocalizedText('Description', 'en');
+
+        final result = converter.toJson(value, true);
+        expect(result, 'test');
+        expect(result, isNot(isA<Map<String, dynamic>>()));
+      });
+
+      test('slim mode for complex nested structure', () {
+        final value = DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from({
+          'users': DynamicValue.fromList([
+            DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from({
+              'name': DynamicValue(value: 'John'),
+              'age': DynamicValue(value: 30),
+              'active': DynamicValue(value: true)
+            })),
+            DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from({
+              'name': DynamicValue(value: 'Jane'),
+              'age': DynamicValue(value: 25),
+              'active': DynamicValue(value: false)
+            }))
+          ]),
+          'settings': DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from({
+            'theme': DynamicValue(value: 'dark'),
+            'notifications': DynamicValue(value: true)
+          }))
+        }));
+
+        final result = converter.toJson(value, true);
+        expect(result, {
+          'users': [
+            {'name': 'John', 'age': 30, 'active': true},
+            {'name': 'Jane', 'age': 25, 'active': false}
+          ],
+          'settings': {'theme': 'dark', 'notifications': true}
+        });
+      });
+
+      test('slim mode for array with mixed types', () {
+        final value = DynamicValue.fromList([
+          DynamicValue(value: 'string'),
+          DynamicValue(value: 42),
+          DynamicValue(value: true),
+          DynamicValue(value: 3.14),
+          DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from(
+              {'key': DynamicValue(value: 'value')}))
+        ]);
+
+        final result = converter.toJson(value, true);
+        expect(result, [
+          'string',
+          42,
+          true,
+          3.14,
+          {'key': 'value'}
+        ]);
+      });
+
+      test('slim mode for nested object', () {
+        final value = DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from({
+          'key1': DynamicValue(value: 'value1'),
+          'key2': DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from(
+              {'nested': DynamicValue(value: 42)}))
+        }));
+        final result = converter.toJson(value, true);
+        expect(result, {
+          'key1': 'value1',
+          'key2': {'nested': 42}
+        });
+      });
+
+      test('slim mode for empty object', () {
+        final value =
+            DynamicValue(value: LinkedHashMap<String, DynamicValue>.from({}));
+        final result = converter.toJson(value, true);
+        expect(result, {});
+      });
+
+      test('slim mode for empty array', () {
+        final value = DynamicValue(value: List<DynamicValue>.from([]));
+        final result = converter.toJson(value, true);
+        expect(result, []);
+      });
+
+      test('slim mode comparison with full mode', () {
+        final value = DynamicValue(value: 'test')
+          ..typeId = NodeId.fromString(1, 'SomeType')
+          ..displayName = LocalizedText('Display Name', 'en');
+
+        final slimResult = converter.toJson(value, true);
+        final fullResult = converter.toJson(value, false);
+
+        expect(slimResult, 'test');
+        expect(fullResult, {
+          'type': 'string',
+          'value': 'test',
+          'typeId': 'ns=1;s=SomeType',
+          'displayName': {'value': 'Display Name', 'locale': 'en'}
+        });
+      });
+
+      test('slim mode for unknown type', () {
+        // Create a DynamicValue with an unknown type by accessing the value directly
+        final value = DynamicValue();
+        // Set a value that doesn't match any of the known type checks
+        value.value = DateTime.now();
+
+        final result = converter.toJson(value, true);
+        expect(result, isA<String>());
+        expect(result, isNot(isA<DateTime>()));
+      });
+    });
+
     group('roundtrip tests', () {
       test('string value roundtrip', () {
         final original = DynamicValue(value: 'test');

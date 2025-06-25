@@ -6,12 +6,14 @@ import 'package:open62541/open62541.dart'
     show DynamicValue, NodeId, LocalizedText, EnumField;
 
 // JSON converter for DynamicValue
-class DynamicValueConverter
-    implements JsonConverter<DynamicValue, Map<String, dynamic>> {
+class DynamicValueConverter implements JsonConverter<DynamicValue, dynamic> {
   const DynamicValueConverter();
 
   @override
-  DynamicValue fromJson(Map<String, dynamic> json) {
+  DynamicValue fromJson(dynamic json) {
+    if (json is! Map<String, dynamic>) {
+      throw FormatException('Invalid DynamicValue format: $json');
+    }
     final type = json['type'] as String;
     final value = json['value'];
     final typeId = json['typeId'] != null
@@ -81,7 +83,45 @@ class DynamicValueConverter
   }
 
   @override
-  Map<String, dynamic> toJson(DynamicValue value) {
+  dynamic toJson(DynamicValue value, [bool slim = false]) {
+    dynamic serializedValue;
+    String type;
+
+    if (value.isNull) {
+      serializedValue = null;
+      type = 'null';
+    } else if (value.isObject) {
+      serializedValue = value.asObject.map(
+          (k, v) => MapEntry(k, const DynamicValueConverter().toJson(v, slim)));
+      type = 'object';
+    } else if (value.isArray) {
+      serializedValue = value.asArray
+          .map((v) => const DynamicValueConverter().toJson(v, slim))
+          .toList();
+      type = 'array';
+    } else if (value.isString) {
+      serializedValue = value.asString;
+      type = 'string';
+    } else if (value.isInteger) {
+      serializedValue = value.asInt;
+      type = 'integer';
+    } else if (value.isDouble) {
+      serializedValue = value.asDouble;
+      type = 'double';
+    } else if (value.isBoolean) {
+      serializedValue = value.asBool;
+      type = 'boolean';
+    } else {
+      serializedValue = value.value.toString();
+      type = 'unknown';
+    }
+
+    // Slim mode: only return the value
+    if (slim) {
+      return serializedValue;
+    }
+
+    // Full serialization: include metadata and type
     final base = {
       if (value.typeId != null)
         'typeId': const NodeIdConverter().toJson(value.typeId!),
@@ -98,37 +138,7 @@ class DynamicValueConverter
         ),
     };
 
-    if (value.isNull) return {...base, 'type': 'null', 'value': null};
-    if (value.isObject) {
-      return {
-        ...base,
-        'type': 'object',
-        'value': value.asObject.map(
-            (k, v) => MapEntry(k, const DynamicValueConverter().toJson(v))),
-      };
-    }
-    if (value.isArray) {
-      return {
-        ...base,
-        'type': 'array',
-        'value': value.asArray
-            .map((v) => const DynamicValueConverter().toJson(v))
-            .toList(),
-      };
-    }
-    if (value.isString) {
-      return {...base, 'type': 'string', 'value': value.asString};
-    }
-    if (value.isInteger) {
-      return {...base, 'type': 'integer', 'value': value.asInt};
-    }
-    if (value.isDouble) {
-      return {...base, 'type': 'double', 'value': value.asDouble};
-    }
-    if (value.isBoolean) {
-      return {...base, 'type': 'boolean', 'value': value.asBool};
-    }
-    return {...base, 'type': 'unknown', 'value': value.value.toString()};
+    return {...base, 'type': type, 'value': serializedValue};
   }
 }
 
