@@ -83,7 +83,7 @@ class DynamicValueConverter implements JsonConverter<DynamicValue, dynamic> {
   }
 
   @override
-  dynamic toJson(DynamicValue value, [bool slim = false]) {
+  dynamic toJson(DynamicValue value, {bool slim = false}) {
     dynamic serializedValue;
     String type;
 
@@ -91,12 +91,12 @@ class DynamicValueConverter implements JsonConverter<DynamicValue, dynamic> {
       serializedValue = null;
       type = 'null';
     } else if (value.isObject) {
-      serializedValue = value.asObject.map(
-          (k, v) => MapEntry(k, const DynamicValueConverter().toJson(v, slim)));
+      serializedValue = value.asObject.map((k, v) =>
+          MapEntry(k, const DynamicValueConverter().toJson(v, slim: slim)));
       type = 'object';
     } else if (value.isArray) {
       serializedValue = value.asArray
-          .map((v) => const DynamicValueConverter().toJson(v, slim))
+          .map((v) => const DynamicValueConverter().toJson(v, slim: slim))
           .toList();
       type = 'array';
     } else if (value.isString) {

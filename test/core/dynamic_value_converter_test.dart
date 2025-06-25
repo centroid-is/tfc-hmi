@@ -166,31 +166,31 @@ void main() {
     group('slim mode tests', () {
       test('slim mode for null value', () {
         final value = DynamicValue();
-        final result = converter.toJson(value, true);
+        final result = converter.toJson(value, slim: true);
         expect(result, null);
       });
 
       test('slim mode for string value', () {
         final value = DynamicValue(value: 'test');
-        final result = converter.toJson(value, true);
+        final result = converter.toJson(value, slim: true);
         expect(result, 'test');
       });
 
       test('slim mode for integer value', () {
         final value = DynamicValue(value: 42);
-        final result = converter.toJson(value, true);
+        final result = converter.toJson(value, slim: true);
         expect(result, 42);
       });
 
       test('slim mode for double value', () {
         final value = DynamicValue(value: 3.14);
-        final result = converter.toJson(value, true);
+        final result = converter.toJson(value, slim: true);
         expect(result, 3.14);
       });
 
       test('slim mode for boolean value', () {
         final value = DynamicValue(value: true);
-        final result = converter.toJson(value, true);
+        final result = converter.toJson(value, slim: true);
         expect(result, true);
       });
 
@@ -199,14 +199,14 @@ void main() {
           'key1': DynamicValue(value: 'value1'),
           'key2': DynamicValue(value: 42)
         }));
-        final result = converter.toJson(value, true);
+        final result = converter.toJson(value, slim: true);
         expect(result, {'key1': 'value1', 'key2': 42});
       });
 
       test('slim mode for array value', () {
         final value = DynamicValue.fromList(
             [DynamicValue(value: 'item1'), DynamicValue(value: 42)]);
-        final result = converter.toJson(value, true);
+        final result = converter.toJson(value, slim: true);
         expect(result, ['item1', 42]);
       });
 
@@ -216,7 +216,7 @@ void main() {
           'key2': DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from(
               {'nested': DynamicValue(value: 42)}))
         }));
-        final result = converter.toJson(value, true);
+        final result = converter.toJson(value, slim: true);
         expect(result, {
           'key1': 'value1',
           'key2': {'nested': 42}
@@ -229,7 +229,7 @@ void main() {
           DynamicValue.fromList(
               [DynamicValue(value: 'nested1'), DynamicValue(value: 'nested2')])
         ]);
-        final result = converter.toJson(value, true);
+        final result = converter.toJson(value, slim: true);
         expect(result, [
           'string',
           ['nested1', 'nested2']
@@ -242,7 +242,7 @@ void main() {
           ..displayName = LocalizedText('Display Name', 'en')
           ..description = LocalizedText('Description', 'en');
 
-        final result = converter.toJson(value, true);
+        final result = converter.toJson(value, slim: true);
         expect(result, 'test');
         expect(result, isNot(isA<Map<String, dynamic>>()));
       });
@@ -267,7 +267,7 @@ void main() {
           }))
         }));
 
-        final result = converter.toJson(value, true);
+        final result = converter.toJson(value, slim: true);
         expect(result, {
           'users': [
             {'name': 'John', 'age': 30, 'active': true},
@@ -287,7 +287,7 @@ void main() {
               {'key': DynamicValue(value: 'value')}))
         ]);
 
-        final result = converter.toJson(value, true);
+        final result = converter.toJson(value, slim: true);
         expect(result, [
           'string',
           42,
@@ -303,7 +303,7 @@ void main() {
           'key2': DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from(
               {'nested': DynamicValue(value: 42)}))
         }));
-        final result = converter.toJson(value, true);
+        final result = converter.toJson(value, slim: true);
         expect(result, {
           'key1': 'value1',
           'key2': {'nested': 42}
@@ -313,13 +313,13 @@ void main() {
       test('slim mode for empty object', () {
         final value =
             DynamicValue(value: LinkedHashMap<String, DynamicValue>.from({}));
-        final result = converter.toJson(value, true);
+        final result = converter.toJson(value, slim: true);
         expect(result, {});
       });
 
       test('slim mode for empty array', () {
         final value = DynamicValue(value: List<DynamicValue>.from([]));
-        final result = converter.toJson(value, true);
+        final result = converter.toJson(value, slim: true);
         expect(result, []);
       });
 
@@ -328,8 +328,8 @@ void main() {
           ..typeId = NodeId.fromString(1, 'SomeType')
           ..displayName = LocalizedText('Display Name', 'en');
 
-        final slimResult = converter.toJson(value, true);
-        final fullResult = converter.toJson(value, false);
+        final slimResult = converter.toJson(value, slim: true);
+        final fullResult = converter.toJson(value, slim: false);
 
         expect(slimResult, 'test');
         expect(fullResult, {
@@ -346,7 +346,7 @@ void main() {
         // Set a value that doesn't match any of the known type checks
         value.value = DateTime.now();
 
-        final result = converter.toJson(value, true);
+        final result = converter.toJson(value, slim: true);
         expect(result, isA<String>());
         expect(result, isNot(isA<DateTime>()));
       });
