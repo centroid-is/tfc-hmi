@@ -2,9 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:postgres/postgres.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:tfc/providers/database.dart';
 
 import '../providers/preferences.dart';
 import '../core/preferences.dart';
+import '../core/database.dart';
 import 'dart:convert';
 
 class PreferencesWidget extends ConsumerWidget {
@@ -19,24 +21,31 @@ class PreferencesWidget extends ConsumerWidget {
           return const Center(child: CircularProgressIndicator());
         }
         final preferences = snapshot.data!;
-        final config = preferences.config;
         final localPrefs =
             SharedPreferencesWrapper(preferences.sharedPreferences);
 
         return ListView(
           children: [
-            ExpansionTile(
-              title: const Text('(Local) Preferences Config'),
-              children: [
-                _ConfigEditor(
-                  config: config,
-                  onSave: (newConfig) async {
-                    await localPrefs.setString(
-                        'preferences_config', jsonEncode(newConfig.toJson()));
-                  },
-                ),
-              ],
-            ),
+            FutureBuilder<DatabaseConfig>(
+                future: readDatabaseConfig(),
+                builder: (context, snapshot) {
+                  if (!snapshot.hasData) {
+                    return const Center(child: CircularProgressIndicator());
+                  }
+                  return ExpansionTile(
+                    title: const Text('(Local) Preferences Config'),
+                    children: [
+                      _ConfigEditor(
+                        config: snapshot.data!,
+                        onSave: (newConfig) async {
+                          await localPrefs.setString(Database.configLocation,
+                              jsonEncode(newConfig.toJson()));
+                          ref.invalidate(databaseProvider);
+                        },
+                      ),
+                    ],
+                  );
+                }),
             ExpansionTile(
               title: const Text('Preferences Keys'),
               children: [
@@ -57,9 +66,7 @@ class PreferencesWidget extends ConsumerWidget {
                     }
                     return Column(
                       children: (() {
-                        final list = allPrefs.entries
-                            .where((e) => e.key != 'preferences_config')
-                            .toList();
+                        final list = allPrefs.entries.toList();
                         list.sort((a, b) => a.key.compareTo(b.key));
                         return list
                             .map((e) => FutureBuilder<bool>(
@@ -164,8 +171,8 @@ class PreferencesWidget extends ConsumerWidget {
 }
 
 class _ConfigEditor extends ConsumerStatefulWidget {
-  final PreferencesConfig config;
-  final ValueChanged<PreferencesConfig> onSave;
+  final DatabaseConfig config;
+  final ValueChanged<DatabaseConfig> onSave;
 
   const _ConfigEditor({required this.config, required this.onSave});
 
@@ -280,7 +287,7 @@ class _ConfigEditorState extends ConsumerState<_ConfigEditor> {
                 ),
                 ElevatedButton(
                   onPressed: () {
-                    final newConfig = PreferencesConfig(
+                    final newConfig = DatabaseConfig(
                       postgres: Endpoint(
                         host: hostController.text,
                         port: int.tryParse(portController.text) ?? 5432,

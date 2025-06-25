@@ -11,6 +11,7 @@ import 'package:postgres/postgres.dart' show Sql;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'preferences.dart';
+import 'database.dart';
 import 'state_man.dart';
 import 'ring_buffer.dart';
 part 'alarm.g.dart';
@@ -339,8 +340,8 @@ class AlarmMan {
   }
 
   Future<void> _addToDb(AlarmActive alarm) async {
-    if (preferences.connection == null) return;
-    await preferences.connection!.execute(
+    if (preferences.database == null) return;
+    await preferences.database!.execute(
       Sql.named('''
         INSERT INTO alarm_history (
           alarm_uid, alarm_title, alarm_description, alarm_level,
@@ -365,8 +366,8 @@ class AlarmMan {
   }
 
   Future<void> _ensureTable() async {
-    if (preferences.connection == null) return;
-    await preferences.connection!.execute('''
+    if (preferences.database == null) return;
+    await preferences.database!.execute('''
       CREATE TABLE IF NOT EXISTS alarm_history (
         id SERIAL PRIMARY KEY,
         alarm_uid TEXT NOT NULL,
@@ -384,9 +385,9 @@ class AlarmMan {
   }
 
   Future<List<AlarmActive>> getRecentAlarms({int limit = 1000}) async {
-    if (preferences.connection == null) return [];
+    if (preferences.database == null) return [];
 
-    final result = await preferences.connection!.execute(
+    final result = await preferences.database!.execute(
       Sql.named('''
         SELECT * FROM alarm_history 
         ORDER BY created_at DESC 

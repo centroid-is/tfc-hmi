@@ -1,20 +1,20 @@
 // GENERATED CODE - DO NOT MODIFY BY HAND
 
-part of 'preferences.dart';
+part of 'database.dart';
 
 // **************************************************************************
 // JsonSerializableGenerator
 // **************************************************************************
 
-PreferencesConfig _$PreferencesConfigFromJson(Map<String, dynamic> json) =>
-    PreferencesConfig(
+DatabaseConfig _$DatabaseConfigFromJson(Map<String, dynamic> json) =>
+    DatabaseConfig(
       postgres: _$JsonConverterFromJson<Map<String, dynamic>, Endpoint>(
           json['postgres'], const EndpointConverter().fromJson),
       sslMode: _$JsonConverterFromJson<String, SslMode>(
           json['sslMode'], const SslModeConverter().fromJson),
     );
 
-Map<String, dynamic> _$PreferencesConfigToJson(PreferencesConfig instance) =>
+Map<String, dynamic> _$DatabaseConfigToJson(DatabaseConfig instance) =>
     <String, dynamic>{
       'postgres': _$JsonConverterToJson<Map<String, dynamic>, Endpoint>(
           instance.postgres, const EndpointConverter().toJson),
