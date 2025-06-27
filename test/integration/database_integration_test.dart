@@ -2,6 +2,44 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:postgres/postgres.dart';
 import 'package:tfc/core/database.dart';
 
+import 'docker_compose.dart';
+
+/// Waits for the database to be ready by attempting connections
+Future<void> _waitForDatabaseReady() async {
+  const maxAttempts = 30;
+  const delay = Duration(seconds: 1);
+
+  for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      final testConfig = DatabaseConfig(
+        postgres: Endpoint(
+          host: 'localhost',
+          port: 5432,
+          database: 'testdb',
+          username: 'testuser',
+          password: 'testpass',
+        ),
+        sslMode: SslMode.disable,
+      );
+
+      final testDb = Database(testConfig);
+      await testDb.connect();
+      await testDb.close();
+
+      print('Database is ready after $attempt attempts');
+      return;
+    } catch (e) {
+      if (attempt == maxAttempts) {
+        throw Exception(
+            'Database failed to become ready after $maxAttempts attempts: $e');
+      }
+      print(
+          'Database not ready yet (attempt $attempt/$maxAttempts), waiting...');
+      await Future.delayed(delay);
+    }
+  }
+}
+
 void main() {
   group('Database Integration Tests', () {
     late Database database;
@@ -13,6 +51,9 @@ void main() {
     const databaseName = 'testdb';
 
     setUpAll(() async {
+      await startDockerCompose();
+      await _waitForDatabaseReady(); // More reliable than a fixed delay
+
       // Configure database connection for integration tests
       config = DatabaseConfig(
         postgres: Endpoint(
@@ -51,6 +92,7 @@ void main() {
 
     tearDownAll(() async {
       await database.close();
+      await stopDockerCompose();
     });
 
     group('Connection Tests', () {
