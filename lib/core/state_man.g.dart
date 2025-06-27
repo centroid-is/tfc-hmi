@@ -55,19 +55,16 @@ KeyMappingEntry _$KeyMappingEntryFromJson(Map<String, dynamic> json) =>
           ? null
           : OpcUANodeConfig.fromJson(
               json['opcua_node'] as Map<String, dynamic>),
-      collectSize: (json['collect_size'] as num?)?.toInt(),
-    )
-      ..collectInterval = const DurationMicrosecondsConverter()
-          .fromJson((json['collect_interval_us'] as num?)?.toInt())
-      ..io = json['io'] as bool?;
+      collect: json['collect'] == null
+          ? null
+          : CollectEntry.fromJson(json['collect'] as Map<String, dynamic>),
+    )..io = json['io'] as bool?;
 
 Map<String, dynamic> _$KeyMappingEntryToJson(KeyMappingEntry instance) =>
     <String, dynamic>{
       'opcua_node': instance.opcuaNode,
-      'collect_size': instance.collectSize,
-      'collect_interval_us': const DurationMicrosecondsConverter()
-          .toJson(instance.collectInterval),
       'io': instance.io,
+      'collect': instance.collect,
     };
 
 KeyMappings _$KeyMappingsFromJson(Map<String, dynamic> json) => KeyMappings(
