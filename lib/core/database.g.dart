@@ -36,14 +36,15 @@ Json? _$JsonConverterToJson<Json, Value>(
 
 RetentionPolicy _$RetentionPolicyFromJson(Map<String, dynamic> json) =>
     RetentionPolicy(
-      dropAfter: Duration(microseconds: (json['drop_after'] as num).toInt()),
+      dropAfter:
+          Duration(microseconds: (json['drop_after_min'] as num).toInt()),
       scheduleInterval: const DurationMinutesConverter()
-          .fromJson((json['schedule_interval'] as num?)?.toInt()),
+          .fromJson((json['schedule_interval_min'] as num?)?.toInt()),
     );
 
 Map<String, dynamic> _$RetentionPolicyToJson(RetentionPolicy instance) =>
     <String, dynamic>{
-      'drop_after': instance.dropAfter.inMicroseconds,
-      'schedule_interval':
+      'drop_after_min': instance.dropAfter.inMicroseconds,
+      'schedule_interval_min':
           const DurationMinutesConverter().toJson(instance.scheduleInterval),
     };

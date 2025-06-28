@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'dart:collection';
-
+import 'dart:math';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:open62541/open62541.dart' show DynamicValue;
 import 'package:tfc/core/collector.dart';
@@ -244,6 +244,64 @@ void main() {
       expect(collector.subscriptions.containsKey(testName), isTrue);
       expect(collector.subscriptions[testName],
           isA<StreamSubscription<DynamicValue>>());
+
+      // Clean up
+      streamController.close();
+      collector.stopCollect(testName);
+    });
+
+    test(
+        'collectImpl should respect sample interval and only collect latest value within interval',
+        () async {
+      // Arrange
+      const testName = 'sampling_test';
+      const sampleInterval = Duration(milliseconds: 50);
+
+      final values = [
+        DynamicValue(value: 'value1'),
+        DynamicValue(value: 'value2'),
+        DynamicValue(value: 'value3'),
+      ];
+      final streamController = StreamController<DynamicValue>();
+
+      // Act - Create collection with sample interval
+      await collector.collectEntryImpl(
+          CollectEntry(
+            key: testName,
+            name: testName,
+            sampleInterval: sampleInterval,
+          ),
+          streamController.stream);
+
+      // Add first value
+      streamController.add(values[0]);
+      await Future.delayed(sampleInterval * 3); // wait long enough
+
+      // Add second value (should be ignored due to sample interval)
+      streamController.add(values[1]);
+      await Future.delayed(const Duration(milliseconds: 1)); // Wait 10ms
+
+      // Add third value (should be ignored due to sample interval)
+      streamController.add(values[2]);
+      await Future.delayed(const Duration(milliseconds: 1)); // Wait 10ms
+
+      // Add another value after the interval (should be collected)
+      streamController.add(DynamicValue(value: 'value4'));
+
+      // Wait for async processing
+      await Future.delayed(sampleInterval * 3);
+
+      // Assert - Only the first and last values should be collected
+      final insertedData = await waitUntilInserted(testName);
+
+      // With proper sampling implementation, we should only see 2 values:
+      // 1. The first value (immediately collected)
+      // 2. The last value after the sample interval
+      expect(insertedData.length, 2);
+      expect(insertedData[0][1], 'value1'); // First value
+      expect(insertedData[1][1], 'value4'); // Last value after interval
+
+      // The intermediate values (value2, value3) should be dropped due to sampling
 
       // Clean up
       streamController.close();

@@ -15,7 +15,6 @@ part 'collector.g.dart';
 class CollectEntry {
   String key;
   String? name;
-  @JsonKey(name: 'retention_min')
   @DurationMinutesConverter()
   RetentionPolicy retention;
   @DurationMicrosecondsConverter()
@@ -30,7 +29,6 @@ class CollectEntry {
           dropAfter: Duration(days: 365), scheduleInterval: null)}) {
     name ??= key;
   }
-  @override
   Map<String, dynamic> toJson() => _$CollectEntryToJson(this);
   static CollectEntry fromJson(Map<String, dynamic> json) =>
       _$CollectEntryFromJson(json);
@@ -39,16 +37,12 @@ class CollectEntry {
 @JsonSerializable()
 class CollectTable {
   String name;
-  @JsonKey(name: 'retention_min')
-  @DurationMinutesConverter()
-  RetentionPolicy retention;
   List<CollectEntry> entries;
 
-  CollectTable(
-      {required this.name,
-      required this.entries,
-      this.retention = const RetentionPolicy(
-          dropAfter: Duration(days: 365), scheduleInterval: null)});
+  CollectTable({
+    required this.name,
+    required this.entries,
+  });
   Map<String, dynamic> toJson() => _$CollectTableToJson(this);
   static CollectTable fromJson(Map<String, dynamic> json) =>
       _$CollectTableFromJson(json);
@@ -103,13 +97,30 @@ class Collector {
     final name = entry.name ?? entry.key;
     await database.registerRetentionPolicy(name, entry.retention);
 
+    // Variables for sampling logic
+    Timer? sampleTimer;
+    DynamicValue? latestValue;
+
+    Future<void> insertValue(DynamicValue newValue) async {
+      print('inserting value ${newValue.value}');
+      await database.insertTimeseriesData(
+        name,
+        DateTime.now().toUtc(),
+        const DynamicValueConverter().toJson(newValue, slim: true),
+      );
+    }
+
     subscriptions[name] = subscription.listen(
       (value) async {
-        await database.insertTimeseriesData(
-          name,
-          DateTime.now().toUtc(),
-          const DynamicValueConverter().toJson(value, slim: true),
-        );
+        if (entry.sampleInterval == null) {
+          // No sampling - collect every value immediately
+          print('sample interval null, inserting value ${value.value}');
+          await insertValue(value);
+        } else {
+          // Store the latest value for periodic sampling
+          print('storing value ${value.value}');
+          latestValue = value;
+        }
       },
       onError: (error, stackTrace) {
         logger.e('Error collecting data for key $name',
@@ -117,8 +128,21 @@ class Collector {
       },
       onDone: () {
         logger.i('Collection for key $name done');
+        // Clean up timer when stream is done
+        sampleTimer?.cancel();
       },
     );
+
+    // Set up periodic sampling if sample interval is specified
+    if (entry.sampleInterval != null) {
+      sampleTimer = Timer.periodic(entry.sampleInterval!, (timer) async {
+        if (latestValue != null) {
+          final val = latestValue!;
+          latestValue = null;
+          await insertValue(val);
+        }
+      });
+    }
   }
 
   /// Ensure a table exists with the correct schema for all its entries

@@ -92,11 +92,11 @@ class DatabaseException implements Exception {
 @JsonSerializable()
 class RetentionPolicy {
   @DurationMinutesConverter()
-  @JsonKey(name: 'drop_after')
+  @JsonKey(name: 'drop_after_min')
   final Duration
       dropAfter; // Chunks fully older than this interval when the policy is run are dropped
   @DurationMinutesConverter()
-  @JsonKey(name: 'schedule_interval')
+  @JsonKey(name: 'schedule_interval_min')
   final Duration?
       scheduleInterval; // The interval between the finish time of the last execution and the next start. Defaults to NULL.
 
@@ -192,7 +192,6 @@ class Database implements Session {
     return (result.first[0] as bool);
   }
 
-  /// Create a TimescaleDB hypertable for time-series data
   Future<void> registerRetentionPolicy(
       String tableName, RetentionPolicy retention) async {
     retentionPolicies[tableName] = retention;
