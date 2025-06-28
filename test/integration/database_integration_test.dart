@@ -145,9 +145,9 @@ void main() {
       });
 
       test('should handle updating retention policy gracefully', () async {
-        var retention = RetentionPolicy(
-            dropAfter: const Duration(minutes: 10),
-            scheduleInterval: const Duration(minutes: 1));
+        var retention = const RetentionPolicy(
+            dropAfter: Duration(minutes: 10),
+            scheduleInterval: Duration(minutes: 1));
 
         // Create table twice - should not fail
         await database.registerRetentionPolicy(testTableName, retention);
@@ -156,9 +156,9 @@ void main() {
 
         expect(await database.getRetentionPolicy(testTableName), retention);
 
-        retention = RetentionPolicy(
-            dropAfter: const Duration(minutes: 30),
-            scheduleInterval: const Duration(minutes: 15));
+        retention = const RetentionPolicy(
+            dropAfter: Duration(minutes: 30),
+            scheduleInterval: Duration(minutes: 15));
 
         await database.registerRetentionPolicy(testTableName, retention);
 
@@ -233,6 +233,43 @@ void main() {
         expect(result.length, 1);
         expect(result[0][0], isA<DateTime>());
         expect(result[0][1], testData);
+      });
+
+      test('insert different types of data results in error', () async {
+        final now = DateTime.now();
+        const testData = true;
+        const testData2 = 42;
+
+        await database.insertTimeseriesData(testTableName, now, testData);
+
+        // Expect the second insert to throw an exception due to type mismatch
+        expect(
+          () => database.insertTimeseriesData(testTableName, now, testData2),
+          throwsA(isA<Exception>()),
+        );
+
+        // Verify only the first data point was inserted
+        final result = await database.queryTimeseriesData(testTableName, null);
+        expect(result.length, 1);
+        expect(result[0][0], isA<DateTime>());
+        expect(result[0][1], testData);
+      });
+
+      test('insert couple of strings', () async {
+        final now = DateTime.now();
+        const testData = "test_value";
+        const testData2 = true;
+        const testData3 = 42;
+
+        await database.insertTimeseriesData(testTableName, now, testData);
+        await database.insertTimeseriesData(testTableName, now, testData2);
+        await database.insertTimeseriesData(testTableName, now, testData3);
+
+        final result = await database.queryTimeseriesData(testTableName, null);
+        expect(result.length, 3);
+        expect(result[2][1], testData);
+        expect(result[1][1], testData2.toString().toUpperCase());
+        expect(result[0][1], testData3.toString());
       });
 
       test('should insert multiple data points', () async {
