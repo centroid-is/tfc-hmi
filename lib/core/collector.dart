@@ -7,40 +7,9 @@ import 'package:open62541/open62541.dart' show DynamicValue;
 import 'dynamic_value_converter.dart';
 import 'state_man.dart';
 import 'database.dart';
+import 'duration_converter.dart';
 
 part 'collector.g.dart';
-
-class DurationMicrosecondsConverter implements JsonConverter<Duration?, int?> {
-  const DurationMicrosecondsConverter();
-
-  @override
-  Duration? fromJson(int? json) {
-    if (json == null) return null;
-    return Duration(microseconds: json);
-  }
-
-  @override
-  int? toJson(Duration? duration) {
-    if (duration == null) return null;
-    return duration.inMicroseconds;
-  }
-}
-
-class DurationMinutesConverter implements JsonConverter<Duration?, int?> {
-  const DurationMinutesConverter();
-
-  @override
-  Duration? fromJson(int? json) {
-    if (json == null) return null;
-    return Duration(minutes: json);
-  }
-
-  @override
-  int? toJson(Duration? duration) {
-    if (duration == null) return null;
-    return duration.inMinutes;
-  }
-}
 
 @JsonSerializable()
 class CollectEntry {
@@ -48,12 +17,17 @@ class CollectEntry {
   String? name;
   @JsonKey(name: 'retention_min')
   @DurationMinutesConverter()
-  Duration retention = const Duration(days: 365);
+  RetentionPolicy retention;
   @DurationMicrosecondsConverter()
   @JsonKey(name: 'sample_interval_us')
   Duration? sampleInterval; // microseconds
 
-  CollectEntry({required this.key, this.name, this.sampleInterval}) {
+  CollectEntry(
+      {required this.key,
+      this.name,
+      this.sampleInterval,
+      this.retention = const RetentionPolicy(
+          dropAfter: Duration(days: 365), scheduleInterval: null)}) {
     name ??= key;
   }
   @override
@@ -67,10 +41,14 @@ class CollectTable {
   String name;
   @JsonKey(name: 'retention_min')
   @DurationMinutesConverter()
-  Duration retention = const Duration(days: 365);
+  RetentionPolicy retention;
   List<CollectEntry> entries;
 
-  CollectTable({required this.name, required this.entries});
+  CollectTable(
+      {required this.name,
+      required this.entries,
+      this.retention = const RetentionPolicy(
+          dropAfter: Duration(days: 365), scheduleInterval: null)});
   Map<String, dynamic> toJson() => _$CollectTableToJson(this);
   static CollectTable fromJson(Map<String, dynamic> json) =>
       _$CollectTableFromJson(json);
@@ -99,37 +77,46 @@ class Collector {
     required this.stateMan,
     required this.database,
   }) {
-    final keyMappings = stateMan.keyMappings;
-    for (var value in keyMappings.nodes.values) {
-      if (value.collect != null) {
-        collect(value.collect!);
-      }
-    }
+    // final keyMappings = stateMan.keyMappings;
+    // for (var value in keyMappings.nodes.values) {
+    //   if (value.collect != null) {
+    //     collect(value.collect!);
+    //   }
+    // }
+  }
+
+  Future<void> collectTable(CollectTable table) async {
+    await _ensureTableExists(table);
+    // Todo: combinelateststream
+    // Todo: insert into table
   }
 
   /// Initiate a collection of data from a node.
   /// Returns when the collection is started.
-  Future<void> collect(CollectEntry entry) async {
-    // Ensure the table exists with the correct schema
-    final table = CollectTable(name: entry.key, entries: [entry]);
-    await _ensureTableExists(table);
-
+  Future<void> collectEntry(CollectEntry entry) async {
     final subscription = await stateMan.subscribe(entry.key);
-    subscriptions[entry.key] = subscription.listen(
+    await collectEntryImpl(entry, subscription);
+  }
+
+  Future<void> collectEntryImpl(
+      CollectEntry entry, Stream<DynamicValue> subscription) async {
+    final name = entry.name ?? entry.key;
+    await database.registerRetentionPolicy(name, entry.retention);
+
+    subscriptions[name] = subscription.listen(
       (value) async {
-        // Insert into TimescaleDB
         await database.insertTimeseriesData(
-          table.name,
+          name,
           DateTime.now().toUtc(),
           const DynamicValueConverter().toJson(value, slim: true),
         );
       },
       onError: (error, stackTrace) {
-        logger.e('Error collecting data for key ${entry.key}',
+        logger.e('Error collecting data for key $name',
             error: error, stackTrace: stackTrace);
       },
       onDone: () {
-        logger.i('Collection for key ${entry.key} done');
+        logger.i('Collection for key $name done');
       },
     );
   }
@@ -138,27 +125,81 @@ class Collector {
   Future<void> _ensureTableExists(CollectTable table) async {
     final tableExists = await database.tableExists(table.name);
 
-    if (!tableExists) {
-      await database.createTimeseriesTable(table.name, table.retention);
-    }
+    if (!tableExists) {}
   }
 
   /// Returns a Stream of the collected data.
+  /// This stream provides both historical data and real-time updates.
   Stream<List<CollectedSample>> collectStream(String key,
-      {Duration howLongBack = const Duration(days: 1)}) async* {
+      {Duration since = const Duration(days: 1)}) async* {
     // Find which table this key belongs to
     final table = config.tables.firstWhere(
       (t) => t.entries.any((e) => e.key == key),
       orElse: () => throw Exception('No table for key $key'),
     );
 
-    final since = DateTime.now().toUtc().subtract(howLongBack);
-    final result = await database.queryTimeseriesData(table.name, since);
+    // Get historical data from database
+    final sinceTime = DateTime.now().toUtc().subtract(since);
+    final historicalData =
+        await database.queryTimeseriesData(table.name, sinceTime);
 
-    yield result.map((row) {
+    // Convert historical data to CollectedSample objects
+    final historicalSamples = historicalData.map((row) {
       final value = row[1]; // JSONB value
       return CollectedSample(value, row[0] as DateTime);
     }).toList();
+
+    // Create a stream controller for real-time updates
+    final streamController =
+        StreamController<List<CollectedSample>>.broadcast();
+
+    // Start with historical data
+    streamController.add(historicalSamples);
+
+    // Subscribe to real-time updates if we have an active subscription
+    StreamSubscription<DynamicValue>? realTimeSubscription;
+    if (subscriptions.containsKey(key)) {
+      // We already have a subscription, so we need to create a new one for this stream
+      try {
+        final realTimeStream = await stateMan.subscribe(key);
+        realTimeSubscription = realTimeStream.listen(
+          (value) {
+            final newSample = CollectedSample(
+              const DynamicValueConverter().toJson(value, slim: true),
+              DateTime.now().toUtc(),
+            );
+
+            // Add new sample to the list and emit updated list
+            final updatedSamples = List<CollectedSample>.from(historicalSamples)
+              ..add(newSample);
+
+            // Keep only samples within the retention period
+            final cutoffTime = DateTime.now().toUtc().subtract(since);
+            updatedSamples
+                .removeWhere((sample) => sample.time.isBefore(cutoffTime));
+
+            streamController.add(updatedSamples);
+          },
+          onError: (error, stackTrace) {
+            logger.e('Error in real-time collection stream for key $key',
+                error: error, stackTrace: stackTrace);
+            streamController.addError(error, stackTrace);
+          },
+        );
+      } catch (e) {
+        logger.e('Failed to subscribe to real-time updates for key $key: $e');
+        // Continue with historical data only
+      }
+    }
+
+    // Yield the stream
+    yield* streamController.stream;
+
+    // Clean up when the stream is cancelled
+    streamController.onCancel = () {
+      realTimeSubscription?.cancel();
+      streamController.close();
+    };
   }
 
   /// Stop a collection.

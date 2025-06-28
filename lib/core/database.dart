@@ -2,8 +2,9 @@ import 'dart:io';
 
 import 'package:postgres/postgres.dart';
 import 'package:json_annotation/json_annotation.dart';
-
 export 'package:postgres/postgres.dart' show Sql;
+
+import 'duration_converter.dart';
 
 part 'database.g.dart';
 
@@ -90,14 +91,16 @@ class DatabaseException implements Exception {
 // https://docs.tigerdata.com/api/latest/data-retention/add_retention_policy/
 @JsonSerializable()
 class RetentionPolicy {
+  @DurationMinutesConverter()
   @JsonKey(name: 'drop_after')
   final Duration
       dropAfter; // Chunks fully older than this interval when the policy is run are dropped
+  @DurationMinutesConverter()
   @JsonKey(name: 'schedule_interval')
   final Duration?
       scheduleInterval; // The interval between the finish time of the last execution and the next start. Defaults to NULL.
 
-  RetentionPolicy({required this.dropAfter, this.scheduleInterval});
+  const RetentionPolicy({required this.dropAfter, this.scheduleInterval});
 
   factory RetentionPolicy.fromJson(Map<String, dynamic> json) =>
       _$RetentionPolicyFromJson(json);

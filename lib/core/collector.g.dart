@@ -8,15 +8,21 @@ part of 'collector.dart';
 
 CollectEntry _$CollectEntryFromJson(Map<String, dynamic> json) => CollectEntry(
       key: json['key'] as String,
+      name: json['name'] as String?,
       sampleInterval: const DurationMicrosecondsConverter()
           .fromJson((json['sample_interval_us'] as num?)?.toInt()),
-    )..retention =
-        Duration(microseconds: (json['retention_min'] as num).toInt());
+      retention: json['retention_min'] == null
+          ? const RetentionPolicy(
+              dropAfter: Duration(days: 365), scheduleInterval: null)
+          : RetentionPolicy.fromJson(
+              json['retention_min'] as Map<String, dynamic>),
+    );
 
 Map<String, dynamic> _$CollectEntryToJson(CollectEntry instance) =>
     <String, dynamic>{
       'key': instance.key,
-      'retention_min': instance.retention.inMicroseconds,
+      'name': instance.name,
+      'retention_min': instance.retention,
       'sample_interval_us':
           const DurationMicrosecondsConverter().toJson(instance.sampleInterval),
     };
@@ -26,13 +32,17 @@ CollectTable _$CollectTableFromJson(Map<String, dynamic> json) => CollectTable(
       entries: (json['entries'] as List<dynamic>)
           .map((e) => CollectEntry.fromJson(e as Map<String, dynamic>))
           .toList(),
-    )..retention =
-        Duration(microseconds: (json['retention_min'] as num).toInt());
+      retention: json['retention_min'] == null
+          ? const RetentionPolicy(
+              dropAfter: Duration(days: 365), scheduleInterval: null)
+          : RetentionPolicy.fromJson(
+              json['retention_min'] as Map<String, dynamic>),
+    );
 
 Map<String, dynamic> _$CollectTableToJson(CollectTable instance) =>
     <String, dynamic>{
       'name': instance.name,
-      'retention_min': instance.retention.inMicroseconds,
+      'retention_min': instance.retention,
       'entries': instance.entries,
     };
 

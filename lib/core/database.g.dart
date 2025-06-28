@@ -37,13 +37,13 @@ Json? _$JsonConverterToJson<Json, Value>(
 RetentionPolicy _$RetentionPolicyFromJson(Map<String, dynamic> json) =>
     RetentionPolicy(
       dropAfter: Duration(microseconds: (json['drop_after'] as num).toInt()),
-      scheduleInterval: json['schedule_interval'] == null
-          ? null
-          : Duration(microseconds: (json['schedule_interval'] as num).toInt()),
+      scheduleInterval: const DurationMinutesConverter()
+          .fromJson((json['schedule_interval'] as num?)?.toInt()),
     );
 
 Map<String, dynamic> _$RetentionPolicyToJson(RetentionPolicy instance) =>
     <String, dynamic>{
       'drop_after': instance.dropAfter.inMicroseconds,
-      'schedule_interval': instance.scheduleInterval?.inMicroseconds,
+      'schedule_interval':
+          const DurationMinutesConverter().toJson(instance.scheduleInterval),
     };
