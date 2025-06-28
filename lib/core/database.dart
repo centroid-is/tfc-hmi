@@ -209,16 +209,22 @@ class Database implements Session {
   Future<void> insertTimeseriesData(
       String tableName, DateTime time, dynamic value) async {
     Future<void> insert() async {
-      await execute(
-        Sql.named('''
-      INSERT INTO "$tableName" (time, value)
-      VALUES (@time, @value)
-      '''),
-        parameters: {
-          'time': time,
-          'value': value,
-        },
-      );
+      if (value is Map<String, dynamic>) {
+        // Handle complex object - create columns for each key
+        await _insertComplexValue(tableName, time, value);
+      } else {
+        // Handle simple value
+        await execute(
+          Sql.named('''
+        INSERT INTO "$tableName" (time, value)
+        VALUES (@time, @value)
+        '''),
+          parameters: {
+            'time': time,
+            'value': value,
+          },
+        );
+      }
     }
 
     try {
@@ -232,22 +238,68 @@ class Database implements Session {
     }
   }
 
+  /// Insert complex value with separate columns for each key
+  Future<void> _insertComplexValue(
+      String tableName, DateTime time, Map<String, dynamic> value) async {
+    // Build dynamic SQL for complex object
+    final columns = ['time'];
+    final placeholders = ['@time'];
+    final parameters = <String, dynamic>{'time': time};
+
+    for (final entry in value.entries) {
+      final columnName = entry.key;
+      final columnValue = entry.value;
+      columns.add('"$columnName"');
+      placeholders.add('@$columnName');
+      parameters[columnName] = columnValue;
+    }
+
+    final sql = '''
+      INSERT INTO "$tableName" (${columns.join(', ')})
+      VALUES (${placeholders.join(', ')})
+    ''';
+
+    await execute(Sql.named(sql), parameters: parameters);
+  }
+
   /// Query time-series data
-  Future<List<List<dynamic>>> queryTimeseriesData(
+  Future<List<TimeseriesData<dynamic>>> queryTimeseriesData(
       String tableName, DateTime? since,
       {String? orderBy = 'time ASC'}) async {
     final result = await execute(
       since != null ? Sql.named('''
-            SELECT time, value FROM "$tableName"
+            SELECT * FROM "$tableName"
             WHERE time >= @since
             ORDER BY $orderBy
             ''') : Sql.named('''
-            SELECT time, value FROM "$tableName"
+            SELECT * FROM "$tableName"
             ORDER BY $orderBy
             '''),
       parameters: since != null ? {'since': since} : null,
     );
-    return result.toList();
+
+    // Map each row to a Map<String, dynamic>
+    final columnNames = result.schema.columns
+        .map((c) => c.columnName ?? 'unknown_column_${c.typeOid}')
+        .toList();
+    if (columnNames.contains('time')) {
+      DateTime? time;
+      return result.map((row) {
+        final map = <String, dynamic>{};
+        for (var i = 0; i < columnNames.length; i++) {
+          if (columnNames[i] == 'time') {
+            time = row[i] as DateTime;
+          } else {
+            map[columnNames[i]] = row[i];
+          }
+        }
+        if (map.length == 1 && map.containsKey('value')) {
+          return TimeseriesData(map['value'], time!);
+        }
+        return TimeseriesData(map, time!);
+      }).toList();
+    }
+    throw DatabaseException('Time column not found in table $tableName');
   }
 
   /// Get the retention duration for a hypertable
@@ -314,15 +366,98 @@ class Database implements Session {
   }
 
   Future<void> _createTimeseriesTable(
-      String tableName, RetentionPolicy retention, String valueType) async {
-    // Create the table with simple schema
-    await execute('''
+      String tableName, RetentionPolicy retention, dynamic value) async {
+    if (value is Map<String, dynamic>) {
+      // Create table with columns for each key in the complex object
+      await _createComplexTimeseriesTable(tableName, retention, value);
+    } else {
+      // Create simple table with time and value columns
+      String valueType;
+      switch (value) {
+        case int():
+          valueType = 'INTEGER';
+          break;
+        case double():
+          valueType = 'DOUBLE PRECISION';
+          break;
+        case bool():
+          valueType = 'BOOLEAN';
+          break;
+        case String():
+          valueType = 'TEXT';
+          break;
+        default:
+          valueType = 'JSONB';
+          break;
+      }
+      await execute('''
+        CREATE TABLE IF NOT EXISTS "$tableName" (
+          time TIMESTAMPTZ NOT NULL,
+          value $valueType NOT NULL
+        );
+      ''');
+      await _updateRetentionPolicy(tableName, retention);
+    }
+  }
+
+  /// Create table for complex objects with separate columns for each key
+  Future<void> _createComplexTimeseriesTable(String tableName,
+      RetentionPolicy retention, Map<String, dynamic> value) async {
+    final columns = ['time TIMESTAMPTZ NOT NULL'];
+
+    for (final entry in value.entries) {
+      final columnName = entry.key;
+      final columnValue = entry.value;
+      final columnType = _getPostgresType(columnValue);
+      columns.add('"$columnName" $columnType');
+    }
+
+    final createTableSql = '''
       CREATE TABLE IF NOT EXISTS "$tableName" (
-        time TIMESTAMPTZ NOT NULL,
-        value $valueType NOT NULL
+        ${columns.join(',\n        ')}
       );
-    ''');
+    ''';
+
+    await execute(createTableSql);
     await _updateRetentionPolicy(tableName, retention);
+  }
+
+  /// Get PostgreSQL type for a value
+  String _getPostgresType(dynamic value) {
+    if (value is List) {
+      // Infer array type from first element, default to TEXT[]
+      if (value.isEmpty) {
+        // todo this is error prone, I think we should just skip it, and create it by altering the table afterwards when there is a value
+        return 'TEXT[]';
+      }
+      final first = value.first;
+      switch (first) {
+        case int():
+          return 'INTEGER[]';
+        case double():
+          return 'DOUBLE PRECISION[]';
+        case bool():
+          return 'BOOLEAN[]';
+        case String():
+          return 'TEXT[]';
+        default:
+          return 'JSONB[]'; // fallback for complex/nested objects
+      }
+    }
+    switch (value) {
+      case int():
+        return 'INTEGER';
+      case double():
+        return 'DOUBLE PRECISION';
+      case bool():
+        return 'BOOLEAN';
+      case String():
+        return 'TEXT';
+      case null:
+        return 'TEXT'; // Allow NULL values, TODO: I DONT LIKE THIS
+      default:
+        return 'JSONB'; // For complex nested objects
+    }
   }
 
   Future<void> _updateRetentionPolicy(
@@ -362,27 +497,21 @@ class Database implements Session {
           'Table $tableName does not exist, and no retention policy is set');
       return false;
     }
-    String dataType;
 
-    switch (value) {
-      case int():
-        dataType = 'INTEGER';
-        break;
-      case double():
-        dataType = 'DOUBLE PRECISION';
-        break;
-      case bool():
-        dataType = 'BOOLEAN';
-        break;
-      case String():
-        dataType = 'TEXT';
-        break;
-      default:
-        dataType = 'JSONB';
-        break;
-    }
     await _createTimeseriesTable(
-        tableName, retentionPolicies[tableName]!, dataType);
+        tableName, retentionPolicies[tableName]!, value);
     return true;
   }
+}
+
+class TimeseriesData<T> {
+  final T value;
+  final DateTime time;
+
+  @override
+  String toString() {
+    return 'TimeseriesData(value: $value, time: $time)';
+  }
+
+  TimeseriesData(this.value, this.time);
 }

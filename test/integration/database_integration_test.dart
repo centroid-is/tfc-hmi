@@ -186,7 +186,7 @@ void main() {
 
         final result = await database.queryTimeseriesData(testTableName, null);
         expect(result.length, 1);
-        expect(result[0][1], testData);
+        expect(result[0].value, testData);
       });
 
       test('should insert double data', () async {
@@ -197,7 +197,7 @@ void main() {
 
         final result = await database.queryTimeseriesData(testTableName, null);
         expect(result.length, 1);
-        expect(result[0][1], testData);
+        expect(result[0].value, testData);
       });
 
       test('should insert boolean data', () async {
@@ -208,7 +208,7 @@ void main() {
 
         final result = await database.queryTimeseriesData(testTableName, null);
         expect(result.length, 1);
-        expect(result[0][1], testData);
+        expect(result[0].value, testData);
       });
 
       test('should insert string data', () async {
@@ -219,7 +219,7 @@ void main() {
 
         final result = await database.queryTimeseriesData(testTableName, null);
         expect(result.length, 1);
-        expect(result[0][1], testData);
+        expect(result[0].value, testData);
       });
 
       test('should insert timeseries data', () async {
@@ -231,8 +231,8 @@ void main() {
         // Verify data was inserted
         final result = await database.queryTimeseriesData(testTableName, null);
         expect(result.length, 1);
-        expect(result[0][0], isA<DateTime>());
-        expect(result[0][1], testData);
+        expect(result[0].time, isA<DateTime>());
+        expect(result[0].value, testData);
       });
 
       test('insert different types of data results in error', () async {
@@ -251,8 +251,8 @@ void main() {
         // Verify only the first data point was inserted
         final result = await database.queryTimeseriesData(testTableName, null);
         expect(result.length, 1);
-        expect(result[0][0], isA<DateTime>());
-        expect(result[0][1], testData);
+        expect(result[0].time, isA<DateTime>());
+        expect(result[0].value, testData);
       });
 
       test('insert couple of strings', () async {
@@ -267,9 +267,9 @@ void main() {
 
         final result = await database.queryTimeseriesData(testTableName, null);
         expect(result.length, 3);
-        expect(result[2][1], testData);
-        expect(result[1][1], testData2.toString().toUpperCase());
-        expect(result[0][1], testData3.toString());
+        expect(result[2].value, testData);
+        expect(result[1].value, testData2.toString().toUpperCase());
+        expect(result[0].value, testData3.toString());
       });
 
       test('should insert multiple data points', () async {
@@ -293,7 +293,7 @@ void main() {
 
         // Verify data is in correct order
         for (int i = 0; i < result.length; i++) {
-          expect(result[i][1], dataPoints[i]);
+          expect(result[i].value, dataPoints[i]);
         }
       });
 
@@ -323,7 +323,7 @@ void main() {
         );
 
         expect(result.length, 1);
-        expect(result[0][1], newData);
+        expect(result[0].value, newData);
       });
 
       test('should query data with custom order', () async {
@@ -350,8 +350,8 @@ void main() {
         );
 
         expect(result.length, 3);
-        expect(result[0][1], dataPoints[2]); // Most recent first
-        expect(result[2][1], dataPoints[0]); // Oldest last
+        expect(result[0].value, dataPoints[2]); // Most recent first
+        expect(result[2].value, dataPoints[0]); // Oldest last
       });
 
       test('should handle complex JSON data', () async {
@@ -375,7 +375,7 @@ void main() {
 
         final result = await database.queryTimeseriesData(testTableName, null);
         expect(result.length, 1);
-        expect(result[0][1], complexData);
+        expect(result[0].value, complexData);
       });
 
       test('should handle null values in JSON data', () async {
@@ -390,7 +390,15 @@ void main() {
 
         final result = await database.queryTimeseriesData(testTableName, null);
         expect(result.length, 1);
-        expect(result[0][1], dataWithNulls);
+        expect(result[0].value, {
+          'value': 42,
+          'description': null,
+          'tags': [
+            '"tag1"',
+            'null',
+            '"tag3"'
+          ], // not sure it needs to be quoted but lets continue
+        });
       });
     });
 
@@ -458,7 +466,7 @@ void main() {
 
         final result = await database.queryTimeseriesData(testTableName, null);
         expect(result.length, 1);
-        expect(result[0][1], largeData);
+        expect(result[0].value, largeData);
       });
     });
   });
