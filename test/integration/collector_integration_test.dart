@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'dart:collection';
-import 'dart:math';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:open62541/open62541.dart' show DynamicValue;
 import 'package:tfc/core/collector.dart';
@@ -211,12 +211,10 @@ void main() {
       streamController.add(complexValue);
 
       // Wait for async processing
-      await Future.delayed(Duration(milliseconds: 100));
+      await Future.delayed(const Duration(milliseconds: 100));
 
       // Assert - verify complex object was inserted correctly
-      final sinceTime = DateTime.now().toUtc().subtract(Duration(minutes: 1));
-      final insertedData =
-          await database.queryTimeseriesData(testName, sinceTime);
+      final insertedData = await waitUntilInserted(testName);
 
       expect(insertedData.length, 1);
       final insertedValue = insertedData[0][1];

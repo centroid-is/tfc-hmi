@@ -102,7 +102,6 @@ class Collector {
     DynamicValue? latestValue;
 
     Future<void> insertValue(DynamicValue newValue) async {
-      print('inserting value ${newValue.value}');
       await database.insertTimeseriesData(
         name,
         DateTime.now().toUtc(),
@@ -114,11 +113,9 @@ class Collector {
       (value) async {
         if (entry.sampleInterval == null) {
           // No sampling - collect every value immediately
-          print('sample interval null, inserting value ${value.value}');
           await insertValue(value);
         } else {
           // Store the latest value for periodic sampling
-          print('storing value ${value.value}');
           latestValue = value;
         }
       },
