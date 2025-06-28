@@ -26,27 +26,12 @@ Map<String, dynamic> _$CollectEntryToJson(CollectEntry instance) =>
           const DurationMicrosecondsConverter().toJson(instance.sampleInterval),
     };
 
-CollectTable _$CollectTableFromJson(Map<String, dynamic> json) => CollectTable(
-      name: json['name'] as String,
-      entries: (json['entries'] as List<dynamic>)
-          .map((e) => CollectEntry.fromJson(e as Map<String, dynamic>))
-          .toList(),
-    );
-
-Map<String, dynamic> _$CollectTableToJson(CollectTable instance) =>
-    <String, dynamic>{
-      'name': instance.name,
-      'entries': instance.entries,
-    };
-
 CollectorConfig _$CollectorConfigFromJson(Map<String, dynamic> json) =>
     CollectorConfig(
-      tables: (json['tables'] as List<dynamic>)
-          .map((e) => CollectTable.fromJson(e as Map<String, dynamic>))
-          .toList(),
+      collect: json['collect'] as bool? ?? true,
     );
 
 Map<String, dynamic> _$CollectorConfigToJson(CollectorConfig instance) =>
     <String, dynamic>{
-      'tables': instance.tables,
+      'collect': instance.collect,
     };

@@ -28,15 +28,7 @@ void main() {
 
     setUp(() {
       // Create a basic config for testing
-      config = CollectorConfig(tables: [
-        CollectTable(
-          name: 'test_table',
-          entries: [
-            CollectEntry(key: 'test_key', name: 'Test Key'),
-            CollectEntry(key: 'test_key2', name: 'Test Key 2'),
-          ],
-        ),
-      ]);
+      config = CollectorConfig();
 
       collector = Collector(
         config: config,
@@ -68,11 +60,6 @@ void main() {
       return insertedData;
     }
 
-    test('should initialize with empty key mappings', () {
-      expect(collector.config.tables.length, 1);
-      expect(collector.subscriptions, isEmpty);
-    });
-
     test('collectImpl should create subscription and handle data collection',
         () async {
       // Arrange
@@ -80,13 +67,13 @@ void main() {
       final testValue = DynamicValue(value: 'test_value');
       final streamController = StreamController<DynamicValue>();
 
+      final entry = CollectEntry(key: testName, name: testName);
       // Act
-      await collector.collectEntryImpl(
-          CollectEntry(key: testName, name: testName), streamController.stream);
+      await collector.collectEntryImpl(entry, streamController.stream);
 
       // Verify subscription was created
-      expect(collector.subscriptions.containsKey(testName), isTrue);
-      expect(collector.subscriptions[testName], isNotNull);
+      expect(collector.subscriptions.containsKey(entry), isTrue);
+      expect(collector.subscriptions[entry], isNotNull);
 
       // Simulate data stream
       streamController.add(testValue);
@@ -139,8 +126,8 @@ void main() {
       final testError = Exception('Test error');
 
       // Act
-      await collector.collectEntryImpl(
-          CollectEntry(key: testName, name: testName), streamController.stream);
+      final entry = CollectEntry(key: testName, name: testName);
+      await collector.collectEntryImpl(entry, streamController.stream);
 
       streamController
           .add(DynamicValue(value: 'test_value')); // Create the table
@@ -152,7 +139,7 @@ void main() {
       await Future.delayed(const Duration(milliseconds: 100));
 
       // Assert - error should be logged but not crash
-      expect(collector.subscriptions.containsKey(testName), isTrue);
+      expect(collector.subscriptions.containsKey(entry), isTrue);
 
       final insertedData = await waitUntilInserted(testName);
       expect(insertedData.length, 1);
@@ -168,8 +155,8 @@ void main() {
       final streamController = StreamController<DynamicValue>();
 
       // Act
-      await collector.collectEntryImpl(
-          CollectEntry(key: testName, name: testName), streamController.stream);
+      final entry = CollectEntry(key: testName, name: testName);
+      await collector.collectEntryImpl(entry, streamController.stream);
 
       streamController
           .add(DynamicValue(value: 'test_value')); // Create the table
@@ -181,7 +168,7 @@ void main() {
       await Future.delayed(const Duration(milliseconds: 100));
 
       // Assert - subscription should still exist but be done
-      expect(collector.subscriptions.containsKey(testName), isTrue);
+      expect(collector.subscriptions.containsKey(entry), isTrue);
 
       // Verify no data was inserted since no values were added
       final insertedData = await waitUntilInserted(testName);
@@ -235,12 +222,12 @@ void main() {
       final streamController = StreamController<DynamicValue>();
 
       // Act
-      await collector.collectEntryImpl(
-          CollectEntry(key: testName, name: testName), streamController.stream);
+      final entry = CollectEntry(key: testName, name: testName);
+      await collector.collectEntryImpl(entry, streamController.stream);
 
       // Assert
-      expect(collector.subscriptions.containsKey(testName), isTrue);
-      expect(collector.subscriptions[testName],
+      expect(collector.subscriptions.containsKey(entry), isTrue);
+      expect(collector.subscriptions[entry],
           isA<StreamSubscription<DynamicValue>>());
 
       // Clean up

@@ -34,25 +34,27 @@ class CollectEntry {
       _$CollectEntryFromJson(json);
 }
 
-@JsonSerializable()
-class CollectTable {
-  String name;
-  List<CollectEntry> entries;
+// TODO: implement this
+// @JsonSerializable()
+// class CollectTable {
+//   String name;
+//   List<CollectEntry> entries;
 
-  CollectTable({
-    required this.name,
-    required this.entries,
-  });
-  Map<String, dynamic> toJson() => _$CollectTableToJson(this);
-  static CollectTable fromJson(Map<String, dynamic> json) =>
-      _$CollectTableFromJson(json);
-}
+//   CollectTable({
+//     required this.name,
+//     required this.entries,
+//   });
+//   Map<String, dynamic> toJson() => _$CollectTableToJson(this);
+//   static CollectTable fromJson(Map<String, dynamic> json) =>
+//       _$CollectTableFromJson(json);
+// }
 
 @JsonSerializable()
 class CollectorConfig {
-  List<CollectTable> tables;
+  bool collect; // if false, no collection will be done
+  // List<CollectTable> tables;
 
-  CollectorConfig({required this.tables});
+  CollectorConfig({this.collect = true});
 
   Map<String, dynamic> toJson() => _$CollectorConfigToJson(this);
   static CollectorConfig fromJson(Map<String, dynamic> json) =>
@@ -63,7 +65,7 @@ class Collector {
   final CollectorConfig config;
   final StateMan stateMan;
   final Database database;
-  final Map<String, StreamSubscription<DynamicValue>> subscriptions = {};
+  final Map<CollectEntry, StreamSubscription<DynamicValue>> subscriptions = {};
   final Logger logger = Logger();
 
   Collector({
@@ -71,18 +73,12 @@ class Collector {
     required this.stateMan,
     required this.database,
   }) {
-    // final keyMappings = stateMan.keyMappings;
-    // for (var value in keyMappings.nodes.values) {
-    //   if (value.collect != null) {
-    //     collect(value.collect!);
-    //   }
-    // }
-  }
-
-  Future<void> collectTable(CollectTable table) async {
-    await _ensureTableExists(table);
-    // Todo: combinelateststream
-    // Todo: insert into table
+    final keyMappings = stateMan.keyMappings;
+    for (var value in keyMappings.nodes.values) {
+      if (value.collect != null) {
+        collectEntry(value.collect!);
+      }
+    }
   }
 
   /// Initiate a collection of data from a node.
@@ -109,7 +105,7 @@ class Collector {
       );
     }
 
-    subscriptions[name] = subscription.listen(
+    subscriptions[entry] = subscription.listen(
       (value) async {
         if (entry.sampleInterval == null) {
           // No sampling - collect every value immediately
@@ -142,27 +138,15 @@ class Collector {
     }
   }
 
-  /// Ensure a table exists with the correct schema for all its entries
-  Future<void> _ensureTableExists(CollectTable table) async {
-    final tableExists = await database.tableExists(table.name);
-
-    if (!tableExists) {}
-  }
-
   /// Returns a Stream of the collected data.
   /// This stream provides both historical data and real-time updates.
   Stream<List<CollectedSample>> collectStream(String key,
       {Duration since = const Duration(days: 1)}) async* {
-    // Find which table this key belongs to
-    final table = config.tables.firstWhere(
-      (t) => t.entries.any((e) => e.key == key),
-      orElse: () => throw Exception('No table for key $key'),
-    );
-
-    // Get historical data from database
+    final entry = subscriptions.keys.firstWhere((e) => e.key == key);
+    final stream = subscriptions[entry]!;
     final sinceTime = DateTime.now().toUtc().subtract(since);
     final historicalData =
-        await database.queryTimeseriesData(table.name, sinceTime);
+        await database.queryTimeseriesData(entry.name ?? entry.key, sinceTime);
 
     // Convert historical data to CollectedSample objects
     final historicalSamples = historicalData.map((row) {
