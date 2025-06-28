@@ -33,3 +33,17 @@ Json? _$JsonConverterToJson<Json, Value>(
   Json? Function(Value value) toJson,
 ) =>
     value == null ? null : toJson(value);
+
+RetentionPolicy _$RetentionPolicyFromJson(Map<String, dynamic> json) =>
+    RetentionPolicy(
+      dropAfter: Duration(microseconds: (json['drop_after'] as num).toInt()),
+      scheduleInterval: json['schedule_interval'] == null
+          ? null
+          : Duration(microseconds: (json['schedule_interval'] as num).toInt()),
+    );
+
+Map<String, dynamic> _$RetentionPolicyToJson(RetentionPolicy instance) =>
+    <String, dynamic>{
+      'drop_after': instance.dropAfter.inMicroseconds,
+      'schedule_interval': instance.scheduleInterval?.inMicroseconds,
+    };

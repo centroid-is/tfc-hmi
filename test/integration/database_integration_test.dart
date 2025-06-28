@@ -4,72 +4,21 @@ import 'package:tfc/core/database.dart';
 
 import 'docker_compose.dart';
 
-/// Waits for the database to be ready by attempting connections
-Future<void> _waitForDatabaseReady() async {
-  const maxAttempts = 30;
-  const delay = Duration(seconds: 1);
-
-  for (int attempt = 1; attempt <= maxAttempts; attempt++) {
-    try {
-      final testConfig = DatabaseConfig(
-        postgres: Endpoint(
-          host: 'localhost',
-          port: 5432,
-          database: 'testdb',
-          username: 'testuser',
-          password: 'testpass',
-        ),
-        sslMode: SslMode.disable,
-      );
-
-      final testDb = Database(testConfig);
-      await testDb.connect();
-      await testDb.close();
-
-      print('Database is ready after $attempt attempts');
-      return;
-    } catch (e) {
-      if (attempt == maxAttempts) {
-        throw Exception(
-            'Database failed to become ready after $maxAttempts attempts: $e');
-      }
-      print(
-          'Database not ready yet (attempt $attempt/$maxAttempts), waiting...');
-      await Future.delayed(delay);
-    }
-  }
-}
+// docker exec -it test-db /bin/ash -c "psql -d testdb --user testuser -c 'select * from test_timeseries;'"
 
 void main() {
   group('Database Integration Tests', () {
     late Database database;
-    late DatabaseConfig config;
 
     // Test table names
     const testTableName = 'test_timeseries';
     const testTableName2 = 'test_timeseries_2';
-    const databaseName = 'testdb';
 
     setUpAll(() async {
       await startDockerCompose();
-      await _waitForDatabaseReady(); // More reliable than a fixed delay
+      await waitForDatabaseReady(); // More reliable than a fixed delay
 
-      // Configure database connection for integration tests
-      config = DatabaseConfig(
-        postgres: Endpoint(
-          host: 'localhost', // Docker container host
-          port: 5432,
-          database: databaseName,
-          username: 'testuser',
-          password: 'testpass',
-        ),
-        sslMode: SslMode.disable,
-      );
-
-      database = Database(config);
-
-      // Connect to database
-      await database.connect();
+      database = await connectToDatabase();
 
       // Verify connection
       expect(database.isOpen, true);
@@ -165,7 +114,10 @@ void main() {
       test('should create timeseries table with retention policy', () async {
         const retention = Duration(minutes: 5);
 
-        await database.createTimeseriesTable(testTableName, retention);
+        await database.registerRetentionPolicy(
+            testTableName, RetentionPolicy(dropAfter: retention));
+        await database.insertTimeseriesData(
+            testTableName, DateTime.now(), 42); // This should create the table
 
         // Verify table exists
         expect(await database.tableExists(testTableName), true);
@@ -192,26 +144,33 @@ void main() {
         expect(retentionResult.first[0], true);
       });
 
-      test('should handle existing table gracefully', () async {
-        var retention = const Duration(minutes: 10);
+      test('should handle updating retention policy gracefully', () async {
+        var retention = RetentionPolicy(
+            dropAfter: const Duration(minutes: 10),
+            scheduleInterval: const Duration(minutes: 1));
 
         // Create table twice - should not fail
-        await database.createTimeseriesTable(testTableName2, retention);
+        await database.registerRetentionPolicy(testTableName, retention);
+        await database.insertTimeseriesData(
+            testTableName, DateTime.now(), 42); // This should create the table
 
-        expect(await database.getRetentionDuration(testTableName2), retention);
+        expect(await database.getRetentionPolicy(testTableName), retention);
 
-        retention = const Duration(minutes: 30);
+        retention = RetentionPolicy(
+            dropAfter: const Duration(minutes: 30),
+            scheduleInterval: const Duration(minutes: 15));
 
-        await database.createTimeseriesTable(testTableName2, retention);
+        await database.registerRetentionPolicy(testTableName, retention);
 
-        expect(await database.getRetentionDuration(testTableName2), retention);
+        expect(await database.getRetentionPolicy(testTableName), retention);
       });
     });
 
     group('Timeseries Data Operations', () {
       setUp(() async {
         // Create test table before each test
-        await database.createTimeseriesTable(testTableName, Duration(hours: 1));
+        await database.registerRetentionPolicy(
+            testTableName, RetentionPolicy(dropAfter: Duration(hours: 1)));
       });
 
       tearDown(() async {
@@ -219,9 +178,42 @@ void main() {
         await database.execute('DROP TABLE IF EXISTS "$testTableName" CASCADE');
       });
 
-      test('should insert trivial data', () async {
+      test('should insert int data', () async {
         final now = DateTime.now();
         const testData = 42;
+
+        await database.insertTimeseriesData(testTableName, now, testData);
+
+        final result = await database.queryTimeseriesData(testTableName, null);
+        expect(result.length, 1);
+        expect(result[0][1], testData);
+      });
+
+      test('should insert double data', () async {
+        final now = DateTime.now();
+        const testData = 24.5;
+
+        await database.insertTimeseriesData(testTableName, now, testData);
+
+        final result = await database.queryTimeseriesData(testTableName, null);
+        expect(result.length, 1);
+        expect(result[0][1], testData);
+      });
+
+      test('should insert boolean data', () async {
+        final now = DateTime.now();
+        const testData = true;
+
+        await database.insertTimeseriesData(testTableName, now, testData);
+
+        final result = await database.queryTimeseriesData(testTableName, null);
+        expect(result.length, 1);
+        expect(result[0][1], testData);
+      });
+
+      test('should insert string data', () async {
+        final now = DateTime.now();
+        const testData = "test_value";
 
         await database.insertTimeseriesData(testTableName, now, testData);
 
@@ -375,7 +367,8 @@ void main() {
       });
 
       test('should handle invalid JSON data', () async {
-        await database.createTimeseriesTable(testTableName, Duration(hours: 1));
+        await database.registerRetentionPolicy(
+            testTableName, RetentionPolicy(dropAfter: Duration(hours: 1)));
 
         // This should work - Dart handles JSON serialization
         await database.insertTimeseriesData(
@@ -388,7 +381,8 @@ void main() {
 
     group('Performance Tests', () {
       test('should handle bulk insertions', () async {
-        await database.createTimeseriesTable(testTableName, Duration(hours: 1));
+        await database.registerRetentionPolicy(
+            testTableName, RetentionPolicy(dropAfter: Duration(hours: 1)));
 
         final baseTime = DateTime.now();
         const numRecords = 100;
@@ -407,7 +401,8 @@ void main() {
       }, timeout: Timeout(Duration(minutes: 2)));
 
       test('should handle large JSON payloads', () async {
-        await database.createTimeseriesTable(testTableName, Duration(hours: 1));
+        await database.registerRetentionPolicy(
+            testTableName, RetentionPolicy(dropAfter: Duration(hours: 1)));
 
         final largeData = {
           'large_array': List.generate(1000, (i) => i),
