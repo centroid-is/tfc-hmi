@@ -41,7 +41,7 @@ void main() {
       await stopDockerCompose();
     });
 
-    Future<List<List<dynamic>>> waitUntilInserted(String tableName,
+    Future<List<TimeseriesData<dynamic>>> waitUntilInserted(String tableName,
         {DateTime? sinceTime}) async {
       late dynamic insertedData;
       for (var i = 0; i < 10; i++) {
@@ -79,12 +79,11 @@ void main() {
       streamController.add(testValue);
       final insertedData = await waitUntilInserted(testName);
       expect(insertedData.length, 1);
-      expect(insertedData[0][1],
-          'test_value'); // The value should be stored as JSON
+      expect(insertedData[0].value, 'test_value');
 
       // Clean up
       streamController.close();
-      collector.stopCollect(testName);
+      collector.stopCollect(entry);
     });
 
     test('collectImpl fail if value type is not same', () async {
@@ -98,8 +97,8 @@ void main() {
       final streamController = StreamController<DynamicValue>();
 
       // Act
-      await collector.collectEntryImpl(
-          CollectEntry(key: testName, name: testName), streamController.stream);
+      final entry = CollectEntry(key: testName, name: testName);
+      await collector.collectEntryImpl(entry, streamController.stream);
 
       // Add multiple values
       for (final value in values) {
@@ -110,13 +109,13 @@ void main() {
       final insertedData = await waitUntilInserted(testName);
 
       expect(insertedData.length, 3);
-      expect(insertedData[0][1], 'value1');
-      expect(insertedData[1][1], '42');
-      expect(insertedData[2][1], 'TRUE');
+      expect(insertedData[0].value, 'value1');
+      expect(insertedData[1].value, '42');
+      expect(insertedData[2].value, 'TRUE');
 
       // Clean up
       streamController.close();
-      collector.stopCollect(testName);
+      collector.stopCollect(entry);
     });
 
     test('collectImpl should handle stream errors', () async {
@@ -146,7 +145,7 @@ void main() {
 
       // Clean up
       streamController.close();
-      collector.stopCollect(testName);
+      collector.stopCollect(entry);
     });
 
     test('collectImpl should handle stream completion', () async {
@@ -175,7 +174,7 @@ void main() {
       expect(insertedData.length, 1);
 
       // Clean up
-      collector.stopCollect(testName);
+      collector.stopCollect(entry);
     });
 
     test('collectImpl should handle complex DynamicValue objects', () async {
@@ -193,8 +192,8 @@ void main() {
       final streamController = StreamController<DynamicValue>();
 
       // Act
-      await collector.collectEntryImpl(
-          CollectEntry(key: testName, name: testName), streamController.stream);
+      final entry = CollectEntry(key: testName, name: testName);
+      await collector.collectEntryImpl(entry, streamController.stream);
       streamController.add(complexValue);
 
       // Wait for async processing
@@ -204,7 +203,7 @@ void main() {
       final insertedData = await waitUntilInserted(testName);
 
       expect(insertedData.length, 1);
-      final insertedValue = insertedData[0][1];
+      final insertedValue = insertedData[0].value;
       expect(insertedValue, isA<Map>());
       expect(insertedValue['string'], 'hello');
       expect(insertedValue['number'], 123.45);
@@ -212,7 +211,7 @@ void main() {
 
       // Clean up
       streamController.close();
-      collector.stopCollect(testName);
+      collector.stopCollect(entry);
     });
 
     test('collectImpl should store subscription in subscriptions map',
@@ -232,7 +231,7 @@ void main() {
 
       // Clean up
       streamController.close();
-      collector.stopCollect(testName);
+      collector.stopCollect(entry);
     });
 
     test(
@@ -250,13 +249,12 @@ void main() {
       final streamController = StreamController<DynamicValue>();
 
       // Act - Create collection with sample interval
-      await collector.collectEntryImpl(
-          CollectEntry(
-            key: testName,
-            name: testName,
-            sampleInterval: sampleInterval,
-          ),
-          streamController.stream);
+      final entry = CollectEntry(
+        key: testName,
+        name: testName,
+        sampleInterval: sampleInterval,
+      );
+      await collector.collectEntryImpl(entry, streamController.stream);
 
       // Add first value
       streamController.add(values[0]);
@@ -283,14 +281,14 @@ void main() {
       // 1. The first value (immediately collected)
       // 2. The last value after the sample interval
       expect(insertedData.length, 2);
-      expect(insertedData[0][1], 'value1'); // First value
-      expect(insertedData[1][1], 'value4'); // Last value after interval
+      expect(insertedData[0].value, 'value1'); // First value
+      expect(insertedData[1].value, 'value4'); // Last value after interval
 
       // The intermediate values (value2, value3) should be dropped due to sampling
 
       // Clean up
       streamController.close();
-      collector.stopCollect(testName);
+      collector.stopCollect(entry);
     });
   });
 }
