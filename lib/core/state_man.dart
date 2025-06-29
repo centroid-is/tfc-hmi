@@ -8,7 +8,7 @@ import 'package:open62541/open62541.dart';
 import 'package:rxdart/rxdart.dart';
 import 'package:collection/collection.dart';
 
-import 'ring_buffer.dart';
+import 'collector.dart';
 
 part 'state_man.g.dart';
 
@@ -25,22 +25,6 @@ class FileConverter implements JsonConverter<File?, String?> {
   String? toJson(File? file) {
     if (file == null) return null;
     return file.path;
-  }
-}
-
-class DurationMicrosecondsConverter implements JsonConverter<Duration?, int?> {
-  const DurationMicrosecondsConverter();
-
-  @override
-  Duration? fromJson(int? json) {
-    if (json == null) return null;
-    return Duration(microseconds: json);
-  }
-
-  @override
-  int? toJson(Duration? duration) {
-    if (duration == null) return null;
-    return duration.inMicroseconds;
   }
 }
 
@@ -116,14 +100,10 @@ class OpcUANodeConfig {
 class KeyMappingEntry {
   @JsonKey(name: 'opcua_node')
   OpcUANodeConfig? opcuaNode;
-  @JsonKey(name: 'collect_size')
-  int? collectSize;
-  @DurationMicrosecondsConverter()
-  @JsonKey(name: 'collect_interval_us')
-  Duration? collectInterval; // microseconds
   bool? io; // if true, the key is an IO unit
+  CollectEntry? collect;
 
-  KeyMappingEntry({this.opcuaNode, this.collectSize});
+  KeyMappingEntry({this.opcuaNode, this.collect});
 
   factory KeyMappingEntry.fromJson(Map<String, dynamic> json) =>
       _$KeyMappingEntryFromJson(json);
@@ -131,7 +111,7 @@ class KeyMappingEntry {
 
   @override
   String toString() {
-    return 'KeyMappingEntry(opcuaNode: ${opcuaNode?.toString()}, collectSize: $collectSize, collectInterval: $collectInterval, io: $io)';
+    return 'KeyMappingEntry(opcuaNode: ${opcuaNode?.toString()}, collect: $collect, io: $io)';
   }
 }
 
@@ -206,8 +186,8 @@ class StateMan {
   final KeyMappings keyMappings;
   final List<ClientWrapper> clients;
   final SingleWorker _worker = SingleWorker();
-  final Map<String, _SubscriptionEntry> _subscriptions = {};
-  late final KeyCollectorManager _collectorManager;
+  final Map<String, AutoDisposingStream<DynamicValue>> _subscriptions = {};
+
   Timer? _healthCheckTimer;
   bool _shouldRun = true;
 
@@ -217,8 +197,6 @@ class StateMan {
     required this.keyMappings,
     required this.clients,
   }) {
-    _collectorManager = KeyCollectorManager(monitorFn: _monitor);
-
     for (final wrapper in clients) {
       // spawn a background task to keep the client active
       () async {
@@ -394,19 +372,6 @@ class StateMan {
     return _monitor(key);
   }
 
-  /// Initiate a collection of data from a node.
-  /// The data is collected in a ring buffer and stored in RAM.
-  /// Returns when the collection is started.
-  Future<void> collect(String key, int collectSize, Duration interval) =>
-      _collectorManager.collect(key, collectSize, interval);
-
-  /// Returns a Stream of the collected data.
-  Stream<List<CollectedSample>> collectStream(String key) =>
-      _collectorManager.collectStream(key);
-
-  /// Stop a collection.
-  void stopCollect(String key) => _collectorManager.stopCollect(key);
-
   List<String> get keys => keyMappings.keys.toList();
 
   /// Close the connection to the server.
@@ -416,7 +381,6 @@ class StateMan {
     for (final wrapper in clients) {
       wrapper.client.disconnect();
     }
-    _collectorManager.close();
     // Clean up subscriptions
     for (final entry in _subscriptions.values) {
       entry._rawSub?.cancel();
@@ -451,7 +415,7 @@ class StateMan {
     if (keyExists && !resub) {
       return _subscriptions[key]!.stream;
     } else if (!keyExists && !resub) {
-      _subscriptions[key] = _SubscriptionEntry(key, (key) {
+      _subscriptions[key] = AutoDisposingStream(key, (key) {
         _subscriptions.remove(key);
         logger.d('Unsubscribed from $key');
       });
@@ -497,28 +461,27 @@ class StateMan {
   }
 }
 
-class _SubscriptionEntry {
+class AutoDisposingStream<T> {
   final String key;
-  final ReplaySubject<DynamicValue> _subject;
+  final ReplaySubject<T> _subject;
   int _listenerCount = 0;
   Timer? _idleTimer;
-  StreamSubscription<DynamicValue>? _rawSub;
+  StreamSubscription<T>? _rawSub;
   final Function(String key) _onDispose;
-  DynamicValue? _lastValue;
-
-  _SubscriptionEntry(
-    this.key,
-    this._onDispose,
-  ) : _subject = ReplaySubject<DynamicValue>(maxSize: 1) {
+  T? _lastValue;
+  final Duration idleTimeout;
+  AutoDisposingStream(this.key, this._onDispose,
+      {this.idleTimeout = const Duration(minutes: 10)})
+      : _subject = ReplaySubject<T>(maxSize: 1) {
     // Count UI listeners for idle shutdown:
     _subject
       ..onListen = _handleListen
       ..onCancel = _handleCancel;
   }
 
-  Stream<DynamicValue> get stream => _subject.stream;
+  Stream<T> get stream => _subject.stream;
 
-  void subscribe(Stream<DynamicValue> raw, DynamicValue firstValue) {
+  void subscribe(Stream<T> raw, T? firstValue) {
     _rawSub?.cancel();
     // wire raw → subject
     _rawSub = raw.listen(
@@ -530,7 +493,9 @@ class _SubscriptionEntry {
       onDone: _subject.close,
     );
     _lastValue = firstValue;
-    _subject.add(firstValue);
+    if (firstValue != null) {
+      _subject.add(firstValue);
+    }
   }
 
   void _handleListen() {
@@ -541,7 +506,7 @@ class _SubscriptionEntry {
   void _handleCancel() {
     _listenerCount--;
     if (_listenerCount == 0) {
-      _idleTimer = Timer(const Duration(minutes: 10), () {
+      _idleTimer = Timer(idleTimeout, () {
         _rawSub?.cancel(); // tear down the OPC-UA monitoredItem
         _onDispose(key); // remove from StateMan._subscriptions
         _subject.close(); // close the replay buffer
@@ -553,92 +518,5 @@ class _SubscriptionEntry {
     if (_lastValue != null) {
       _subject.add(_lastValue!);
     }
-  }
-}
-
-class CollectedSample {
-  final DynamicValue value;
-  final DateTime time;
-
-  @override
-  String toString() {
-    return 'CollectedSample(value: $value, time: $time)';
-  }
-
-  CollectedSample(this.value, this.time);
-}
-
-class KeyCollectorManager {
-  final Future<Stream<DynamicValue>> Function(String key) monitorFn;
-  final Map<String, BehaviorSubject<List<CollectedSample>>> _collectors = {};
-  final Map<String, RingBuffer<CollectedSample>> _buffers = {};
-  final Map<String, StreamSubscription<DynamicValue>> _collectorSubs = {};
-
-  KeyCollectorManager({required this.monitorFn});
-
-  Future<void> collect(String key, int size, Duration interval) async {
-    if (_collectors.containsKey(key)) {
-      return;
-    }
-
-    final buffer = RingBuffer<CollectedSample>(size);
-    final subject = BehaviorSubject<List<CollectedSample>>();
-
-    DynamicValue? lastValue;
-    Timer? periodicTimer;
-    final sub = await monitorFn(key);
-    final subscription = sub.listen(
-      (value) {
-        lastValue = value;
-      },
-      onError: (e, s) {
-        periodicTimer?.cancel();
-        // TODO: handle error, I think I dont care about this error
-      },
-    );
-
-    periodicTimer = Timer.periodic(interval, (timer) {
-      if (lastValue != null) {
-        buffer.add(
-            CollectedSample(DynamicValue.from(lastValue!), DateTime.now()));
-        if (subject.isClosed) {
-          periodicTimer?.cancel();
-        } else {
-          subject.add(buffer.toList());
-        }
-      }
-    });
-
-    _collectors[key] = subject;
-    _buffers[key] = buffer;
-    _collectorSubs[key] = subscription;
-  }
-
-  Stream<List<CollectedSample>> collectStream(String key) {
-    final subject = _collectors[key];
-    if (subject == null) {
-      throw StateManException('No collection started for key: $key');
-    }
-    return subject.stream;
-  }
-
-  void stopCollect(String key) {
-    _collectorSubs[key]?.cancel();
-    _collectors[key]?.close();
-    _collectors.remove(key);
-    _buffers.remove(key);
-    _collectorSubs.remove(key);
-  }
-
-  void close() {
-    for (final sub in _collectorSubs.values) {
-      sub.cancel();
-    }
-    for (final subject in _collectors.values) {
-      subject.close();
-    }
-    _collectorSubs.clear();
-    _collectors.clear();
-    _buffers.clear();
   }
 }
