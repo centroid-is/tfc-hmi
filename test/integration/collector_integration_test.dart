@@ -179,7 +179,7 @@ void main() {
 
     test('collectImpl should handle complex DynamicValue objects', () async {
       // Arrange
-      const testName = 'complex_test';
+      const testName = 'complex_test2';
       final complexValue = DynamicValue.fromMap(
         LinkedHashMap<String, DynamicValue>.from(
           {
@@ -285,6 +285,322 @@ void main() {
       expect(insertedData[1].value, 'value4'); // Last value after interval
 
       // The intermediate values (value2, value3) should be dropped due to sampling
+
+      // Clean up
+      streamController.close();
+      collector.stopCollect(entry);
+    });
+
+    test('collectStream should return historical data initially', () async {
+      // Arrange
+      const testKey = 'historical_test';
+      const testName = 'historical_test';
+      final entry = CollectEntry(key: testKey, name: testName);
+
+      database.registerRetentionPolicy(
+          testName,
+          const RetentionPolicy(
+            dropAfter: Duration(days: 1),
+          ));
+
+      // Insert some historical data
+      final historicalData = [
+        TimeseriesData<dynamic>('value1',
+            DateTime.now().toUtc().subtract(const Duration(hours: 2))),
+        TimeseriesData<dynamic>('value2',
+            DateTime.now().toUtc().subtract(const Duration(hours: 1))),
+        TimeseriesData<dynamic>('value3',
+            DateTime.now().toUtc().subtract(const Duration(minutes: 30))),
+      ];
+
+      for (final data in historicalData) {
+        await database.insertTimeseriesData(testName, data.time, data.value);
+      }
+
+      // Act
+      await collector.collectEntryImpl(entry, const Stream.empty());
+      final stream =
+          collector.collectStream(testKey, since: const Duration(hours: 3));
+
+      // Assert
+      final result = await stream.first;
+      expect(result.length, 3);
+      expect(result[0].value, 'value1');
+      expect(result[1].value, 'value2');
+      expect(result[2].value, 'value3');
+
+      // Clean up
+      collector.stopCollect(entry);
+    });
+
+    test('collectStream should combine historical and real-time data',
+        () async {
+      // Arrange
+      const testKey = 'combined_test';
+      const testName = 'combined_test';
+      final entry = CollectEntry(key: testKey, name: testName);
+      final streamController = StreamController<DynamicValue>();
+
+      database.registerRetentionPolicy(
+          testName,
+          const RetentionPolicy(
+            dropAfter: Duration(days: 1),
+          ));
+
+      // Insert historical data
+      final historicalData = [
+        TimeseriesData<dynamic>('historical1',
+            DateTime.now().toUtc().subtract(const Duration(hours: 1))),
+        TimeseriesData<dynamic>('historical2',
+            DateTime.now().toUtc().subtract(const Duration(minutes: 30))),
+      ];
+
+      for (final data in historicalData) {
+        await database.insertTimeseriesData(testName, data.time, data.value);
+      }
+
+      // Act
+      await collector.collectEntryImpl(entry, streamController.stream);
+      final stream =
+          collector.collectStream(testKey, since: const Duration(hours: 2));
+
+      int count = 0;
+      stream.listen((data) {
+        count++;
+        if (count == 1) {
+          expect(data.length, 2);
+          expect(data[0].value, 'historical1');
+          expect(data[1].value, 'historical2');
+        } else if (count == 2) {
+          expect(data.length, 3);
+          expect(data[0].value, 'historical1');
+          expect(data[1].value, 'historical2');
+          expect(data[2].value, 'realtime1');
+        }
+      });
+
+      // wait for database query
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      streamController.add(DynamicValue(value: 'realtime1'));
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      expect(count, 2);
+      // Clean up
+      streamController.close();
+      collector.stopCollect(entry);
+    });
+
+    test('collectStream should respect since parameter for historical data',
+        () async {
+      // Arrange
+      const testKey = 'since_test';
+      const testName = 'since_test';
+      final entry = CollectEntry(key: testKey, name: testName);
+
+      database.registerRetentionPolicy(
+          testName,
+          const RetentionPolicy(
+            dropAfter: Duration(days: 1),
+          ));
+
+      // Insert data with different timestamps
+      final now = DateTime.now().toUtc();
+      final data = [
+        TimeseriesData<dynamic>('old', now.subtract(const Duration(hours: 3))),
+        TimeseriesData<dynamic>(
+            'recent', now.subtract(const Duration(hours: 1))),
+        TimeseriesData<dynamic>(
+            'very_recent', now.subtract(const Duration(minutes: 30))),
+      ];
+
+      for (final d in data) {
+        await database.insertTimeseriesData(testName, d.time, d.value);
+      }
+
+      // Act - query with since = 2 hours
+      await collector.collectEntryImpl(entry, Stream.empty());
+      final stream =
+          collector.collectStream(testKey, since: const Duration(hours: 2));
+
+      // Assert - should only get data from last 2 hours
+      final result = await stream.first;
+      expect(result.length, 2);
+      expect(result[0].value, 'recent');
+      expect(result[1].value, 'very_recent');
+
+      // Clean up
+      collector.stopCollect(entry);
+    });
+
+    test('collectStream should handle multiple real-time updates', () async {
+      // Arrange
+      const testKey = 'multiple_updates_test';
+      const testName = 'multiple_updates_test';
+      final entry = CollectEntry(key: testKey, name: testName);
+      final streamController = StreamController<DynamicValue>();
+
+      database.registerRetentionPolicy(
+          testName,
+          const RetentionPolicy(
+            dropAfter: Duration(days: 1),
+          ));
+
+      // Insert historical data
+      await database.insertTimeseriesData(
+          testName,
+          DateTime.now().toUtc().subtract(const Duration(hours: 1)),
+          'historical');
+
+      // Act
+      await collector.collectEntryImpl(entry, streamController.stream);
+      final stream =
+          collector.collectStream(testKey, since: const Duration(hours: 2));
+
+      int count = 0;
+      stream.listen((data) {
+        count++;
+        if (count == 1) {
+          expect(data.length, 1);
+          expect(data[0].value, 'historical');
+        } else if (count == 2) {
+          expect(data.length, 2);
+          expect(data[0].value, 'historical');
+          expect(data[1].value, 'update1');
+        } else if (count == 3) {
+          expect(data.length, 3);
+          expect(data[0].value, 'historical');
+          expect(data[1].value, 'update1');
+          expect(data[2].value, 'update2');
+        } else if (count == 4) {
+          expect(data.length, 4);
+          expect(data[0].value, 'historical');
+          expect(data[1].value, 'update1');
+          expect(data[2].value, 'update2');
+          expect(data[3].value, 'update3');
+        }
+      });
+      // wait for database query
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      // Add multiple real-time updates
+      streamController.add(DynamicValue(value: 'update1'));
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      streamController.add(DynamicValue(value: 'update2'));
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      streamController.add(DynamicValue(value: 'update3'));
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      expect(count, 4);
+
+      // Clean up
+      streamController.close();
+      collector.stopCollect(entry);
+    });
+
+    test('collectStream should handle complex DynamicValue objects', () async {
+      // Arrange
+      const testKey = 'complex_test';
+      const testName = 'complex_test';
+      final entry = CollectEntry(key: testKey, name: testName);
+      final streamController = StreamController<DynamicValue>();
+
+      database.registerRetentionPolicy(
+          testName,
+          const RetentionPolicy(
+            dropAfter: Duration(days: 1),
+          ));
+
+      // Insert historical complex data
+      final complexHistoricalData = {
+        'temperature': 25.5,
+        'humidity': 60.2,
+        'pressure': 1013.25,
+      };
+      await database.insertTimeseriesData(
+          testName,
+          DateTime.now().toUtc().subtract(const Duration(hours: 1)),
+          complexHistoricalData);
+
+      // Act
+      await collector.collectEntryImpl(entry, streamController.stream);
+      final stream =
+          collector.collectStream(testKey, since: const Duration(hours: 2));
+
+      int count = 0;
+      stream.listen((data) {
+        count++;
+        if (count == 1) {
+          expect(data.length, 1);
+          expect(data[0].value, complexHistoricalData);
+        } else if (count == 2) {
+          expect(data.length, 2);
+          expect(data[0].value, complexHistoricalData);
+          expect(data[1].value, isA<Map>());
+          expect(data[1].value['temperature'], 26.0);
+          expect(data[1].value['humidity'], 65.0);
+          expect(data[1].value['pressure'], 1012.0);
+        }
+      });
+
+      // wait for database query
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      // Add complex real-time data
+      final complexRealtimeData = DynamicValue.fromMap(
+        LinkedHashMap<String, DynamicValue>.from({
+          'temperature': DynamicValue(value: 26.0),
+          'humidity': DynamicValue(value: 65.0),
+          'pressure': DynamicValue(value: 1012.0),
+        }),
+      );
+      streamController.add(complexRealtimeData);
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      expect(count, 2);
+      // Clean up
+      streamController.close();
+      collector.stopCollect(entry);
+    });
+
+    test('collectStream should handle real-time stream errors', () async {
+      // Arrange
+      const testKey = 'stream_error_test';
+      const testName = 'stream_error_test';
+      final entry = CollectEntry(key: testKey, name: testName);
+      final streamController = StreamController<DynamicValue>();
+
+      database.registerRetentionPolicy(
+          testName,
+          const RetentionPolicy(
+            dropAfter: Duration(days: 1),
+          ));
+
+      // Insert historical data
+      await database.insertTimeseriesData(
+          testName,
+          DateTime.now().toUtc().subtract(const Duration(hours: 1)),
+          'historical');
+
+      // Act
+      await collector.collectEntryImpl(entry, streamController.stream);
+      final stream =
+          collector.collectStream(testKey, since: const Duration(hours: 2));
+
+      // Get initial data
+      final initialData = await stream.first;
+      expect(initialData.length, 1);
+      expect(initialData[0].value, 'historical');
+
+      // Add error to the stream
+      streamController.addError(Exception('Stream error'));
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      // Assert - stream should continue with historical data only
+      // The error should be logged but not crash the stream
+      expect(collector.subscriptions.containsKey(entry), isTrue);
 
       // Clean up
       streamController.close();

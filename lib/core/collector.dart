@@ -66,6 +66,7 @@ class Collector {
   final StateMan stateMan;
   final Database database;
   final Map<CollectEntry, StreamSubscription<DynamicValue>> subscriptions = {};
+  final Map<CollectEntry, Stream<DynamicValue>> realTimeStreams = {};
   final Logger logger = Logger();
 
   Collector({
@@ -92,6 +93,8 @@ class Collector {
       CollectEntry entry, Stream<DynamicValue> subscription) async {
     final name = entry.name ?? entry.key;
     await database.registerRetentionPolicy(name, entry.retention);
+
+    subscription = subscription.asBroadcastStream();
 
     // Variables for sampling logic
     Timer? sampleTimer;
@@ -136,75 +139,72 @@ class Collector {
         }
       });
     }
+
+    realTimeStreams[entry] = subscription;
   }
 
   /// Returns a Stream of the collected data.
   /// This stream provides both historical data and real-time updates.
   Stream<List<TimeseriesData<dynamic>>> collectStream(String key,
-      {Duration since = const Duration(days: 1)}) async* {
+      {Duration since = const Duration(days: 1)}) {
+    // Find the CollectEntry for this key
     final entry = subscriptions.keys.firstWhere((e) => e.key == key);
-    final stream = subscriptions[entry]!;
+    final rtStream = realTimeStreams[entry]!;
     final sinceTime = DateTime.now().toUtc().subtract(since);
-    // final historicalData =
-    //     await database.queryTimeseriesData(entry.name ?? entry.key, sinceTime);
 
-    // // Convert historical data to CollectedSample objects
-    // final historicalSamples = historicalData.map((row) {
-    //   final value = row[1]; // JSONB value
-    //   return CollectedSample(value, row[0] as DateTime);
-    // }).toList();
+    // Create a stream controller for real-time updates
+    final streamController =
+        StreamController<List<TimeseriesData<dynamic>>>.broadcast();
 
-    // // Create a stream controller for real-time updates
-    // final streamController =
-    //     StreamController<List<CollectedSample>>.broadcast();
+    StreamSubscription<DynamicValue>? realTimeSubscription;
 
-    // // Start with historical data
-    // streamController.add(historicalSamples);
+    streamController.onListen = () async {
+      try {
+        List<TimeseriesData<dynamic>>? historicalData = [];
+        final List<TimeseriesData<dynamic>> buffer = [];
+        realTimeSubscription = rtStream.listen(
+          (value) {
+            final newSample = TimeseriesData<dynamic>(
+              const DynamicValueConverter().toJson(value, slim: true),
+              DateTime.now().toUtc(),
+            );
+            if (historicalData == null) {
+              buffer.add(newSample);
+              return;
+            }
+            historicalData.add(newSample);
 
-    // // Subscribe to real-time updates if we have an active subscription
-    // StreamSubscription<DynamicValue>? realTimeSubscription;
-    // if (subscriptions.containsKey(key)) {
-    //   // We already have a subscription, so we need to create a new one for this stream
-    //   try {
-    //     final realTimeStream = await stateMan.subscribe(key);
-    //     realTimeSubscription = realTimeStream.listen(
-    //       (value) {
-    //         final newSample = CollectedSample(
-    //           const DynamicValueConverter().toJson(value, slim: true),
-    //           DateTime.now().toUtc(),
-    //         );
+            // Remove old data outside the retention window
+            final cutoffTime = DateTime.now().toUtc().subtract(since);
+            historicalData
+                .removeWhere((sample) => sample.time.isBefore(cutoffTime));
 
-    //         // Add new sample to the list and emit updated list
-    //         final updatedSamples = List<CollectedSample>.from(historicalSamples)
-    //           ..add(newSample);
+            streamController.add(historicalData);
+          },
+          onError: (error, stackTrace) {
+            logger.e('Error collecting data for key $key',
+                error: error, stackTrace: stackTrace);
+          },
+        );
+        historicalData = await database.queryTimeseriesData(
+            entry.name ?? entry.key, sinceTime);
+        historicalData.addAll(buffer);
+        buffer.clear();
 
-    //         // Keep only samples within the retention period
-    //         final cutoffTime = DateTime.now().toUtc().subtract(since);
-    //         updatedSamples
-    //             .removeWhere((sample) => sample.time.isBefore(cutoffTime));
+        streamController.add(historicalData);
+      } catch (e) {
+        logger.e('Failed to load historical data for key $key: $e');
+        streamController.addError(e);
+      }
+    };
 
-    //         streamController.add(updatedSamples);
-    //       },
-    //       onError: (error, stackTrace) {
-    //         logger.e('Error in real-time collection stream for key $key',
-    //             error: error, stackTrace: stackTrace);
-    //         streamController.addError(error, stackTrace);
-    //       },
-    //     );
-    //   } catch (e) {
-    //     logger.e('Failed to subscribe to real-time updates for key $key: $e');
-    //     // Continue with historical data only
-    //   }
-    // }
+    // Clean up when the stream is cancelled
+    streamController.onCancel = () {
+      realTimeSubscription?.cancel();
+      streamController.close();
+    };
 
-    // // Yield the stream
-    // yield* streamController.stream;
-
-    // // Clean up when the stream is cancelled
-    // streamController.onCancel = () {
-    //   realTimeSubscription?.cancel();
-    //   streamController.close();
-    // };
+    return streamController.stream;
   }
 
   /// Stop a collection.
