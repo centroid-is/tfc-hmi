@@ -60,10 +60,7 @@ class GraphAssetConfig extends BaseAsset {
 
   GraphAssetConfig.preview()
       : graphType = GraphType.line,
-        primarySeries = [
-          GraphSeriesConfig(key: 'key1', label: 'Label 1'),
-          GraphSeriesConfig(key: 'key2', label: 'Label 2'),
-        ],
+        primarySeries = [],
         secondarySeries = [],
         xAxis = GraphAxisConfig(unit: 's'),
         yAxis = GraphAxisConfig(unit: ''),

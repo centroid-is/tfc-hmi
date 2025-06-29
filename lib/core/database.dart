@@ -464,7 +464,7 @@ class Database implements Session {
       String tableName, RetentionPolicy retention) async {
     // Convert to hypertable
     await execute('''
-      SELECT create_hypertable('$tableName', 'time', if_not_exists => TRUE);
+      SELECT create_hypertable('"$tableName"', 'time', if_not_exists => TRUE, migrate_data => TRUE);
     ''');
 
     // Remove any existing retention policy first, then add new one
@@ -472,15 +472,15 @@ class Database implements Session {
     final scheduleInterval =
         durationToPostgresInterval(retention.scheduleInterval);
     await execute('''
-      SELECT remove_retention_policy('$tableName', if_exists => TRUE);
+      SELECT remove_retention_policy('"$tableName"', if_exists => TRUE);
     ''');
     if (scheduleInterval != null) {
       await execute('''
-        SELECT add_retention_policy('$tableName', drop_after => INTERVAL '$dropAfter', schedule_interval => INTERVAL '$scheduleInterval');
+        SELECT add_retention_policy('"$tableName"', drop_after => INTERVAL '$dropAfter', schedule_interval => INTERVAL '$scheduleInterval');
       ''');
     } else {
       await execute('''
-        SELECT add_retention_policy('$tableName', drop_after => INTERVAL '$dropAfter');
+        SELECT add_retention_policy('"$tableName"', drop_after => INTERVAL '$dropAfter');
       ''');
     }
   }
