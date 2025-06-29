@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:rxdart/rxdart.dart';
+import 'package:tfc/core/duration_converter.dart';
 
 import 'common.dart';
 import '../../providers/collector.dart';
@@ -38,8 +39,9 @@ class GraphAssetConfig extends BaseAsset {
   GraphAxisConfig yAxis;
   @JsonKey(name: 'y_axis2')
   GraphAxisConfig? yAxis2;
-  @JsonKey(name: 'time_window_minutes')
-  int timeWindowMinutes;
+  @DurationMinutesConverter()
+  @JsonKey(name: 'time_window_min')
+  Duration timeWindowMinutes;
 
   GraphAssetConfig({
     this.graphType = GraphType.line,
@@ -48,7 +50,7 @@ class GraphAssetConfig extends BaseAsset {
     GraphAxisConfig? xAxis,
     GraphAxisConfig? yAxis,
     this.yAxis2,
-    this.timeWindowMinutes = 10,
+    this.timeWindowMinutes = const Duration(minutes: 10),
   })  : primarySeries = primarySeries ?? [],
         secondarySeries = secondarySeries ?? [],
         xAxis = xAxis ?? GraphAxisConfig(unit: 's'),
@@ -64,7 +66,7 @@ class GraphAssetConfig extends BaseAsset {
         secondarySeries = [],
         xAxis = GraphAxisConfig(unit: 's'),
         yAxis = GraphAxisConfig(unit: ''),
-        timeWindowMinutes = 10;
+        timeWindowMinutes = const Duration(minutes: 10);
 
   @override
   Widget build(BuildContext context) => GraphAsset(this);
@@ -139,13 +141,15 @@ class _ConfigContentState extends State<_ConfigContent> {
             ),
             const SizedBox(height: 16),
             TextFormField(
-              initialValue: widget.config.timeWindowMinutes.toString(),
+              initialValue:
+                  widget.config.timeWindowMinutes.inMinutes.toString(),
               decoration:
                   const InputDecoration(labelText: 'Time Window (minutes)'),
               keyboardType: TextInputType.number,
               onChanged: (value) {
                 setState(() {
-                  widget.config.timeWindowMinutes = int.tryParse(value) ?? 10;
+                  widget.config.timeWindowMinutes =
+                      Duration(minutes: int.tryParse(value) ?? 10);
                 });
               },
             ),
@@ -342,7 +346,8 @@ class GraphAsset extends ConsumerWidget {
         final streams = allSeries.map((series) {
           return collector.collectStream(
             series.key,
-            since: Duration(minutes: config.timeWindowMinutes),
+            // TODO: make this as time window, when panning is implemented better
+            since: const Duration(days: 365),
           );
         }).toList();
 
@@ -391,6 +396,7 @@ class GraphAsset extends ConsumerWidget {
                 xAxis: config.xAxis,
                 yAxis: config.yAxis,
                 yAxis2: config.yAxis2,
+                xSpan: config.timeWindowMinutes,
               ),
               data: graphData,
             );

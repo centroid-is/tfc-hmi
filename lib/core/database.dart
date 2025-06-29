@@ -474,14 +474,18 @@ class Database implements Session {
     await execute('''
       SELECT remove_retention_policy('"$tableName"', if_exists => TRUE);
     ''');
-    if (scheduleInterval != null) {
-      await execute('''
+    try {
+      if (scheduleInterval != null) {
+        await execute('''
         SELECT add_retention_policy('"$tableName"', drop_after => INTERVAL '$dropAfter', schedule_interval => INTERVAL '$scheduleInterval');
       ''');
-    } else {
-      await execute('''
-        SELECT add_retention_policy('"$tableName"', drop_after => INTERVAL '$dropAfter');
-      ''');
+      } else {
+        await execute('''
+          SELECT add_retention_policy('"$tableName"', drop_after => INTERVAL '$dropAfter');
+        ''');
+      }
+    } catch (e) {
+      stderr.writeln('Error updating retention policy for $tableName: $e');
     }
   }
 

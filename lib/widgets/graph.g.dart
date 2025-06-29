@@ -41,6 +41,9 @@ GraphConfig _$GraphConfigFromJson(Map<String, dynamic> json) => GraphConfig(
       yAxis2: json['yAxis2'] == null
           ? null
           : GraphAxisConfig.fromJson(json['yAxis2'] as Map<String, dynamic>),
+      xSpan: json['xSpan'] == null
+          ? null
+          : Duration(microseconds: (json['xSpan'] as num).toInt()),
     );
 
 Map<String, dynamic> _$GraphConfigToJson(GraphConfig instance) =>
@@ -49,6 +52,7 @@ Map<String, dynamic> _$GraphConfigToJson(GraphConfig instance) =>
       'xAxis': instance.xAxis.toJson(),
       'yAxis': instance.yAxis.toJson(),
       'yAxis2': instance.yAxis2?.toJson(),
+      'xSpan': instance.xSpan?.inMicroseconds,
     };
 
 const _$GraphTypeEnumMap = {
