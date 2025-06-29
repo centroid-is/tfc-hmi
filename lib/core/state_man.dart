@@ -186,7 +186,7 @@ class StateMan {
   final KeyMappings keyMappings;
   final List<ClientWrapper> clients;
   final SingleWorker _worker = SingleWorker();
-  final Map<String, _SubscriptionEntry> _subscriptions = {};
+  final Map<String, AutoDisposingStream<DynamicValue>> _subscriptions = {};
 
   Timer? _healthCheckTimer;
   bool _shouldRun = true;
@@ -415,7 +415,7 @@ class StateMan {
     if (keyExists && !resub) {
       return _subscriptions[key]!.stream;
     } else if (!keyExists && !resub) {
-      _subscriptions[key] = _SubscriptionEntry(key, (key) {
+      _subscriptions[key] = AutoDisposingStream(key, (key) {
         _subscriptions.remove(key);
         logger.d('Unsubscribed from $key');
       });
@@ -461,28 +461,27 @@ class StateMan {
   }
 }
 
-class _SubscriptionEntry {
+class AutoDisposingStream<T> {
   final String key;
-  final ReplaySubject<DynamicValue> _subject;
+  final ReplaySubject<T> _subject;
   int _listenerCount = 0;
   Timer? _idleTimer;
-  StreamSubscription<DynamicValue>? _rawSub;
+  StreamSubscription<T>? _rawSub;
   final Function(String key) _onDispose;
-  DynamicValue? _lastValue;
-
-  _SubscriptionEntry(
-    this.key,
-    this._onDispose,
-  ) : _subject = ReplaySubject<DynamicValue>(maxSize: 1) {
+  T? _lastValue;
+  final Duration idleTimeout;
+  AutoDisposingStream(this.key, this._onDispose,
+      {this.idleTimeout = const Duration(minutes: 10)})
+      : _subject = ReplaySubject<T>(maxSize: 1) {
     // Count UI listeners for idle shutdown:
     _subject
       ..onListen = _handleListen
       ..onCancel = _handleCancel;
   }
 
-  Stream<DynamicValue> get stream => _subject.stream;
+  Stream<T> get stream => _subject.stream;
 
-  void subscribe(Stream<DynamicValue> raw, DynamicValue firstValue) {
+  void subscribe(Stream<T> raw, T? firstValue) {
     _rawSub?.cancel();
     // wire raw → subject
     _rawSub = raw.listen(
@@ -494,7 +493,9 @@ class _SubscriptionEntry {
       onDone: _subject.close,
     );
     _lastValue = firstValue;
-    _subject.add(firstValue);
+    if (firstValue != null) {
+      _subject.add(firstValue);
+    }
   }
 
   void _handleListen() {
@@ -505,7 +506,7 @@ class _SubscriptionEntry {
   void _handleCancel() {
     _listenerCount--;
     if (_listenerCount == 0) {
-      _idleTimer = Timer(const Duration(minutes: 10), () {
+      _idleTimer = Timer(idleTimeout, () {
         _rawSub?.cancel(); // tear down the OPC-UA monitoredItem
         _onDispose(key); // remove from StateMan._subscriptions
         _subject.close(); // close the replay buffer

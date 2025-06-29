@@ -71,10 +71,6 @@ void main() {
       // Act
       await collector.collectEntryImpl(entry, streamController.stream);
 
-      // Verify subscription was created
-      expect(collector.subscriptions.containsKey(entry), isTrue);
-      expect(collector.subscriptions[entry], isNotNull);
-
       // Simulate data stream
       streamController.add(testValue);
       final insertedData = await waitUntilInserted(testName);
@@ -137,9 +133,6 @@ void main() {
       // Wait for async processing
       await Future.delayed(const Duration(milliseconds: 100));
 
-      // Assert - error should be logged but not crash
-      expect(collector.subscriptions.containsKey(entry), isTrue);
-
       final insertedData = await waitUntilInserted(testName);
       expect(insertedData.length, 1);
 
@@ -165,9 +158,6 @@ void main() {
 
       // Wait for async processing
       await Future.delayed(const Duration(milliseconds: 100));
-
-      // Assert - subscription should still exist but be done
-      expect(collector.subscriptions.containsKey(entry), isTrue);
 
       // Verify no data was inserted since no values were added
       final insertedData = await waitUntilInserted(testName);
@@ -208,26 +198,6 @@ void main() {
       expect(insertedValue['string'], 'hello');
       expect(insertedValue['number'], 123.45);
       expect(insertedValue['boolean'], false);
-
-      // Clean up
-      streamController.close();
-      collector.stopCollect(entry);
-    });
-
-    test('collectImpl should store subscription in subscriptions map',
-        () async {
-      // Arrange
-      const testName = 'subscription_test';
-      final streamController = StreamController<DynamicValue>();
-
-      // Act
-      final entry = CollectEntry(key: testName, name: testName);
-      await collector.collectEntryImpl(entry, streamController.stream);
-
-      // Assert
-      expect(collector.subscriptions.containsKey(entry), isTrue);
-      expect(collector.subscriptions[entry],
-          isA<StreamSubscription<DynamicValue>>());
 
       // Clean up
       streamController.close();
@@ -597,10 +567,6 @@ void main() {
       // Add error to the stream
       streamController.addError(Exception('Stream error'));
       await Future.delayed(const Duration(milliseconds: 100));
-
-      // Assert - stream should continue with historical data only
-      // The error should be logged but not crash the stream
-      expect(collector.subscriptions.containsKey(entry), isTrue);
 
       // Clean up
       streamController.close();

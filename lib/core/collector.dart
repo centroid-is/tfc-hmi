@@ -65,8 +65,10 @@ class Collector {
   final CollectorConfig config;
   final StateMan stateMan;
   final Database database;
-  final Map<CollectEntry, StreamSubscription<DynamicValue>> subscriptions = {};
-  final Map<CollectEntry, Stream<DynamicValue>> realTimeStreams = {};
+  final Map<CollectEntry, StreamSubscription<DynamicValue>> _subscriptions = {};
+  final Map<CollectEntry, Stream<DynamicValue>> _realTimeStreams = {};
+  final Map<CollectEntry, AutoDisposingStream<List<TimeseriesData<dynamic>>>>
+      _collectStreams = {};
   final Logger logger = Logger();
 
   Collector({
@@ -108,7 +110,7 @@ class Collector {
       );
     }
 
-    subscriptions[entry] = subscription.listen(
+    _subscriptions[entry] = subscription.listen(
       (value) async {
         if (entry.sampleInterval == null) {
           // No sampling - collect every value immediately
@@ -140,7 +142,7 @@ class Collector {
       });
     }
 
-    realTimeStreams[entry] = subscription;
+    _realTimeStreams[entry] = subscription;
   }
 
   /// Returns a Stream of the collected data.
@@ -148,9 +150,26 @@ class Collector {
   Stream<List<TimeseriesData<dynamic>>> collectStream(String key,
       {Duration since = const Duration(days: 1)}) {
     // Find the CollectEntry for this key
-    final entry = subscriptions.keys.firstWhere((e) => e.key == key);
-    final rtStream = realTimeStreams[entry]!;
+    final entry = _subscriptions.keys.firstWhere((e) => e.key == key);
+    final rtStream = _realTimeStreams[entry]!;
     final sinceTime = DateTime.now().toUtc().subtract(since);
+
+    // Check if we already have a subscription entry for this key
+    if (_collectStreams.containsKey(entry)) {
+      return _collectStreams[entry]!.stream;
+    }
+
+    final subscriptionEntry =
+        AutoDisposingStream<List<TimeseriesData<dynamic>>>(
+      entry.name ?? entry.key,
+      (name) {
+        _collectStreams.remove(entry);
+        logger.d('Removed collect stream entry for $name');
+      },
+      idleTimeout: const Duration(minutes: 30),
+    );
+
+    _collectStreams[entry] = subscriptionEntry;
 
     // Create a stream controller for real-time updates
     final streamController =
@@ -198,18 +217,21 @@ class Collector {
       }
     };
 
+    // Use the raw stream to feed the subscription entry
+    subscriptionEntry.subscribe(streamController.stream, null);
+
     // Clean up when the stream is cancelled
     streamController.onCancel = () {
       realTimeSubscription?.cancel();
       streamController.close();
     };
 
-    return streamController.stream;
+    return subscriptionEntry.stream;
   }
 
   /// Stop a collection.
   void stopCollect(CollectEntry entry) {
-    subscriptions[entry]?.cancel();
-    subscriptions.remove(entry);
+    _subscriptions[entry]?.cancel();
+    _subscriptions.remove(entry);
   }
 }
