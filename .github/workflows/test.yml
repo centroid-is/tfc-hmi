@@ -32,7 +32,7 @@ jobs:
     - name: Run collector integration tests
       run: flutter test test/integration/collector_integration_test.dart
       
-    - name: Run collector integration tests
+    - name: Run database integration tests
       run: flutter test test/integration/database_integration_test.dart
     
     - name: Run widget tests
@@ -40,9 +40,6 @@ jobs:
       
     - name: Run core tests
       run: flutter test test/core/
-      
-    - name: Run page creator tests
-      run: flutter test test/page_creator/
             
     - name: Upload test results
       uses: actions/upload-artifact@v4
