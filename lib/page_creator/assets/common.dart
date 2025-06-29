@@ -7,6 +7,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/state_man.dart';
+import '../../core/collector.dart';
+import '../../core/database.dart';
 import '../../providers/state_man.dart';
 import '../../providers/preferences.dart';
 part 'common.g.dart';
@@ -696,8 +698,10 @@ class _KeyMappingEntryDialogState extends ConsumerState<KeyMappingEntryDialog> {
   late TextEditingController _keyController;
   late TextEditingController _namespaceController;
   late TextEditingController _identifierController;
-  late TextEditingController _collectSizeController;
+  late TextEditingController _collectNameController;
   late TextEditingController _collectIntervalController;
+  late TextEditingController _retentionDaysController;
+  late TextEditingController _scheduleIntervalController;
   String? _selectedServerAlias;
   bool _isCollecting = false;
 
@@ -707,8 +711,10 @@ class _KeyMappingEntryDialogState extends ConsumerState<KeyMappingEntryDialog> {
     _keyController = TextEditingController(text: widget.initialKey ?? '');
     _namespaceController = TextEditingController(text: '0');
     _identifierController = TextEditingController();
-    _collectSizeController = TextEditingController();
+    _collectNameController = TextEditingController();
     _collectIntervalController = TextEditingController();
+    _retentionDaysController = TextEditingController(text: '365');
+    _scheduleIntervalController = TextEditingController();
     _selectedServerAlias = widget.serverAlias;
   }
 
@@ -717,8 +723,10 @@ class _KeyMappingEntryDialogState extends ConsumerState<KeyMappingEntryDialog> {
     _keyController.dispose();
     _namespaceController.dispose();
     _identifierController.dispose();
-    _collectSizeController.dispose();
+    _collectNameController.dispose();
     _collectIntervalController.dispose();
+    _retentionDaysController.dispose();
+    _scheduleIntervalController.dispose();
     super.dispose();
   }
 
@@ -805,17 +813,39 @@ class _KeyMappingEntryDialogState extends ConsumerState<KeyMappingEntryDialog> {
                 ),
                 if (_isCollecting) ...[
                   TextField(
-                    controller: _collectSizeController,
+                    controller: _collectNameController,
                     decoration: const InputDecoration(
-                      labelText: 'Collection Size',
+                      labelText: 'Collection Name (optional)',
+                      hintText: 'Leave empty to use key name',
                     ),
-                    keyboardType: TextInputType.number,
                   ),
                   const SizedBox(height: 16),
                   TextField(
                     controller: _collectIntervalController,
                     decoration: const InputDecoration(
-                      labelText: 'Collection Interval (microseconds)',
+                      labelText: 'Sample Interval (microseconds)',
+                      hintText: 'Leave empty for no sampling',
+                    ),
+                    keyboardType: TextInputType.number,
+                  ),
+                  const SizedBox(height: 16),
+                  const Text('Retention Policy',
+                      style: TextStyle(fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: _retentionDaysController,
+                    decoration: const InputDecoration(
+                      labelText: 'Retention Period (days)',
+                      hintText: 'How long to keep data',
+                    ),
+                    keyboardType: TextInputType.number,
+                  ),
+                  const SizedBox(height: 16),
+                  TextField(
+                    controller: _scheduleIntervalController,
+                    decoration: const InputDecoration(
+                      labelText: 'Schedule Interval (minutes)',
+                      hintText: 'How often to run retention policy (optional)',
                     ),
                     keyboardType: TextInputType.number,
                   ),
@@ -842,16 +872,36 @@ class _KeyMappingEntryDialogState extends ConsumerState<KeyMappingEntryDialog> {
                   identifier: id,
                 )..serverAlias = _selectedServerAlias;
 
+                CollectEntry? collectEntry;
+                if (_isCollecting) {
+                  final retentionDays =
+                      int.tryParse(_retentionDaysController.text) ?? 365;
+                  final sampleIntervalUs =
+                      int.tryParse(_collectIntervalController.text);
+                  final scheduleIntervalMinutes =
+                      int.tryParse(_scheduleIntervalController.text);
+
+                  collectEntry = CollectEntry(
+                    key: key,
+                    name: _collectNameController.text.isEmpty
+                        ? null
+                        : _collectNameController.text,
+                    sampleInterval: sampleIntervalUs != null
+                        ? Duration(microseconds: sampleIntervalUs)
+                        : null,
+                    retention: RetentionPolicy(
+                      dropAfter: Duration(days: retentionDays),
+                      scheduleInterval: scheduleIntervalMinutes != null
+                          ? Duration(minutes: scheduleIntervalMinutes)
+                          : null,
+                    ),
+                  );
+                }
+
                 final entry = KeyMappingEntry(
                   opcuaNode: nodeConfig,
-                  collectSize: _isCollecting
-                      ? int.tryParse(_collectSizeController.text)
-                      : null,
-                )..collectInterval = _isCollecting
-                    ? Duration(
-                        microseconds:
-                            int.tryParse(_collectIntervalController.text) ?? 0)
-                    : null;
+                  collect: collectEntry,
+                );
 
                 Navigator.of(context).pop({
                   'key': key,

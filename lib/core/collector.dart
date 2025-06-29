@@ -71,6 +71,8 @@ class Collector {
       _collectStreams = {};
   final Logger logger = Logger();
 
+  static const configLocation = 'collector_config';
+
   Collector({
     required this.config,
     required this.stateMan,

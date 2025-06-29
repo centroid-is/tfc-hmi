@@ -1,7 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:json_annotation/json_annotation.dart';
 import 'package:community_charts_flutter/community_charts_flutter.dart'
     as charts;
 
+part 'graph.g.dart';
+
+@JsonSerializable(explicitToJson: true)
 class GraphDataConfig {
   final String label;
   final bool mainAxis; // Whether this is the main axis or a secondary axis
@@ -10,8 +14,13 @@ class GraphDataConfig {
     required this.label,
     this.mainAxis = true,
   });
+
+  factory GraphDataConfig.fromJson(Map<String, dynamic> json) =>
+      _$GraphDataConfigFromJson(json);
+  Map<String, dynamic> toJson() => _$GraphDataConfigToJson(this);
 }
 
+@JsonEnum()
 enum GraphType {
   line,
   bar,
@@ -19,6 +28,7 @@ enum GraphType {
   timeseries,
 }
 
+@JsonSerializable(explicitToJson: true)
 class GraphAxisConfig {
   final String unit;
   final double? min;
@@ -31,8 +41,13 @@ class GraphAxisConfig {
     this.max,
     this.step,
   });
+
+  factory GraphAxisConfig.fromJson(Map<String, dynamic> json) =>
+      _$GraphAxisConfigFromJson(json);
+  Map<String, dynamic> toJson() => _$GraphAxisConfigToJson(this);
 }
 
+@JsonSerializable(explicitToJson: true)
 class GraphConfig {
   final GraphType type;
   final GraphAxisConfig xAxis;
@@ -45,6 +60,10 @@ class GraphConfig {
     required this.yAxis,
     this.yAxis2,
   });
+
+  factory GraphConfig.fromJson(Map<String, dynamic> json) =>
+      _$GraphConfigFromJson(json);
+  Map<String, dynamic> toJson() => _$GraphConfigToJson(this);
 }
 
 class Graph extends StatelessWidget {
