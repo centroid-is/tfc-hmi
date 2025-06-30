@@ -42,6 +42,8 @@ class GraphAssetConfig extends BaseAsset {
   @DurationMinutesConverter()
   @JsonKey(name: 'time_window_min')
   Duration timeWindowMinutes;
+  @JsonKey(name: 'header_text')
+  String? headerText;
 
   GraphAssetConfig({
     this.graphType = GraphType.line,
@@ -51,6 +53,7 @@ class GraphAssetConfig extends BaseAsset {
     GraphAxisConfig? yAxis,
     this.yAxis2,
     this.timeWindowMinutes = const Duration(minutes: 10),
+    this.headerText,
   })  : primarySeries = primarySeries ?? [],
         secondarySeries = secondarySeries ?? [],
         xAxis = xAxis ?? GraphAxisConfig(unit: 's'),
@@ -72,18 +75,18 @@ class GraphAssetConfig extends BaseAsset {
   Widget build(BuildContext context) => GraphAsset(this);
 
   @override
-  Widget configure(BuildContext context) => _ConfigContent(config: this);
+  Widget configure(BuildContext context) => GraphContentConfig(config: this);
 }
 
-class _ConfigContent extends StatefulWidget {
+class GraphContentConfig extends StatefulWidget {
   final GraphAssetConfig config;
-  const _ConfigContent({required this.config});
+  const GraphContentConfig({required this.config});
 
   @override
-  State<_ConfigContent> createState() => _ConfigContentState();
+  State<GraphContentConfig> createState() => GraphContentConfigState();
 }
 
-class _ConfigContentState extends State<_ConfigContent> {
+class GraphContentConfigState extends State<GraphContentConfig> {
   @override
   Widget build(BuildContext context) {
     return SingleChildScrollView(
@@ -151,6 +154,14 @@ class _ConfigContentState extends State<_ConfigContent> {
                   widget.config.timeWindowMinutes =
                       Duration(minutes: int.tryParse(value) ?? 10);
                 });
+              },
+            ),
+            const SizedBox(height: 16),
+            TextFormField(
+              initialValue: widget.config.headerText,
+              decoration: const InputDecoration(labelText: 'Header Text'),
+              onChanged: (value) {
+                setState(() => widget.config.headerText = value);
               },
             ),
             const SizedBox(height: 16),

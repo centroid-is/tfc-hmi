@@ -40,6 +40,7 @@ GraphAssetConfig _$GraphAssetConfigFromJson(Map<String, dynamic> json) =>
       timeWindowMinutes: json['time_window_min'] == null
           ? const Duration(minutes: 10)
           : Duration(microseconds: (json['time_window_min'] as num).toInt()),
+      headerText: json['header_text'] as String?,
     )
       ..variant = json['asset_name'] as String
       ..pageName = json['page_name'] as String
@@ -65,6 +66,7 @@ Map<String, dynamic> _$GraphAssetConfigToJson(GraphAssetConfig instance) =>
       'y_axis': instance.yAxis.toJson(),
       'y_axis2': instance.yAxis2?.toJson(),
       'time_window_min': instance.timeWindowMinutes.inMicroseconds,
+      'header_text': instance.headerText,
     };
 
 const _$GraphTypeEnumMap = {

@@ -15,6 +15,10 @@ NumberConfig _$NumberConfigFromJson(Map<String, dynamic> json) => NumberConfig(
           ? Colors.black
           : const ColorConverter()
               .fromJson(json['textColor'] as Map<String, dynamic>),
+      graphConfig: json['graph_config'] == null
+          ? null
+          : GraphAssetConfig.fromJson(
+              json['graph_config'] as Map<String, dynamic>),
     )
       ..variant = json['asset_name'] as String
       ..pageName = json['page_name'] as String
@@ -37,6 +41,7 @@ Map<String, dynamic> _$NumberConfigToJson(NumberConfig instance) =>
       'decimalPlaces': instance.decimalPlaces,
       'units': instance.units,
       'textColor': const ColorConverter().toJson(instance.textColor),
+      'graph_config': instance.graphConfig,
     };
 
 const _$TextPosEnumMap = {
