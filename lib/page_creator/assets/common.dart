@@ -9,8 +9,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/state_man.dart';
 import '../../core/collector.dart';
 import '../../core/database.dart';
+import '../../core/boolean_expression.dart';
 import '../../providers/state_man.dart';
 import '../../providers/preferences.dart';
+import '../../widgets/boolean_expression.dart';
+
 part 'common.g.dart';
 
 const String constAssetName = "asset_name";
@@ -659,11 +662,13 @@ class _CoordinatesFieldState extends State<CoordinatesField> {
 class KeyMappingEntryDialog extends ConsumerStatefulWidget {
   final String? serverAlias;
   final String? initialKey;
+  final CollectEntry? initialCollectEntry;
 
   const KeyMappingEntryDialog({
     super.key,
     this.serverAlias,
     this.initialKey,
+    this.initialCollectEntry,
   });
 
   @override
@@ -681,6 +686,8 @@ class _KeyMappingEntryDialogState extends ConsumerState<KeyMappingEntryDialog> {
   late TextEditingController _scheduleIntervalController;
   String? _selectedServerAlias;
   bool _isCollecting = false;
+  ExpressionConfig? _sampleExpression;
+  bool _useSampleExpression = false;
 
   @override
   void initState() {
@@ -693,6 +700,12 @@ class _KeyMappingEntryDialogState extends ConsumerState<KeyMappingEntryDialog> {
     _retentionDaysController = TextEditingController(text: '365');
     _scheduleIntervalController = TextEditingController();
     _selectedServerAlias = widget.serverAlias;
+
+    // Initialize expression if editing an existing entry
+    if (widget.initialCollectEntry?.sampleExpression != null) {
+      _useSampleExpression = true;
+      _sampleExpression = widget.initialCollectEntry!.sampleExpression;
+    }
   }
 
   @override
@@ -826,6 +839,37 @@ class _KeyMappingEntryDialogState extends ConsumerState<KeyMappingEntryDialog> {
                     ),
                     keyboardType: TextInputType.number,
                   ),
+                  const SizedBox(height: 16),
+                  Row(
+                    children: [
+                      const Text('Use Sample Expression'),
+                      const SizedBox(width: 8),
+                      Switch(
+                        value: _useSampleExpression,
+                        onChanged: (value) {
+                          setState(() {
+                            _useSampleExpression = value;
+                            if (!value) {
+                              _sampleExpression = null;
+                            }
+                          });
+                        },
+                      ),
+                    ],
+                  ),
+                  if (_useSampleExpression) ...[
+                    const SizedBox(height: 16),
+                    ExpressionBuilder(
+                      value:
+                          _sampleExpression?.value ?? Expression(formula: ''),
+                      onChanged: (expression) {
+                        setState(() {
+                          _sampleExpression =
+                              ExpressionConfig(value: expression);
+                        });
+                      },
+                    ),
+                  ],
                 ],
               ],
             ),
@@ -866,6 +910,8 @@ class _KeyMappingEntryDialogState extends ConsumerState<KeyMappingEntryDialog> {
                     sampleInterval: sampleIntervalUs != null
                         ? Duration(microseconds: sampleIntervalUs)
                         : null,
+                    sampleExpression:
+                        _useSampleExpression ? _sampleExpression : null,
                     retention: RetentionPolicy(
                       dropAfter: Duration(days: retentionDays),
                       scheduleInterval: scheduleIntervalMinutes != null
