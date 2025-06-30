@@ -1033,8 +1033,6 @@ class _ConveyorStatsGraphState extends State<ConveyorStatsGraph> {
           xSpan: const Duration(minutes: 5),
         );
 
-        print(graphConfig.toJson());
-
         // Create data for the graph
         final graphData = [
           {
