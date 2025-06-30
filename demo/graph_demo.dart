@@ -29,6 +29,10 @@ class _GraphDemoState extends State<GraphDemo> {
   double _stepY2 = 100;
   bool _showY2 = true;
 
+  // Timeseries xSpan controls
+  Duration _xSpan = const Duration(hours: 1);
+  bool _useXSpan = true;
+
   @override
   void initState() {
     super.initState();
@@ -39,12 +43,14 @@ class _GraphDemoState extends State<GraphDemo> {
     // Create graph configuration
     _config = GraphConfig(
       type: _selectedType,
-      xAxis: GraphAxisConfig(
-        unit: 's',
-        min: _minX,
-        max: _maxX,
-        step: _stepX,
-      ),
+      xAxis: _selectedType == GraphType.timeseries
+          ? GraphAxisConfig(unit: 'time')
+          : GraphAxisConfig(
+              unit: 's',
+              min: _minX,
+              max: _maxX,
+              step: _stepX,
+            ),
       yAxis: GraphAxisConfig(
         unit: 'mA',
         min: _minY,
@@ -59,34 +65,71 @@ class _GraphDemoState extends State<GraphDemo> {
               step: _stepY2,
             )
           : null,
+      xSpan: _selectedType == GraphType.timeseries && _useXSpan ? _xSpan : null,
     );
 
-    // Generate sample data
-    _data = [
-      {
-        GraphDataConfig(label: 'Series 1'): List.generate(
-          10,
-          (i) => [i.toDouble(), (i * i).toDouble()],
-        ),
-      },
-      {
-        GraphDataConfig(label: 'Series 2'): List.generate(
-          10,
-          (i) => [i.toDouble(), (50 + i * 5).toDouble()],
-        ),
-      },
-      // Third series using second Y-axis (showing exponential growth)
-      if (_showY2)
+    if (_selectedType == GraphType.timeseries) {
+      final now = DateTime.now();
+      _data = [
         {
-          GraphDataConfig(
-            label: 'Exponential Series',
-            mainAxis: false,
-          ): List.generate(
+          GraphDataConfig(label: 'Series 1'): List.generate(
             10,
-            (i) => [i.toDouble(), (10 * pow(2, i)).toDouble()],
+            (i) => [
+              now.add(Duration(minutes: i)).millisecondsSinceEpoch.toDouble(),
+              (i * i).toDouble()
+            ],
           ),
         },
-    ];
+        {
+          GraphDataConfig(label: 'Series 2'): List.generate(
+            10,
+            (i) => [
+              now.add(Duration(minutes: i)).millisecondsSinceEpoch.toDouble(),
+              (50 + i * 5).toDouble()
+            ],
+          ),
+        },
+        if (_showY2)
+          {
+            GraphDataConfig(
+              label: 'Exponential Series',
+              mainAxis: false,
+            ): List.generate(
+              10,
+              (i) => [
+                now.add(Duration(minutes: i)).millisecondsSinceEpoch.toDouble(),
+                (10 * pow(2, i)).toDouble()
+              ],
+            ),
+          },
+      ];
+    } else {
+      _data = [
+        {
+          GraphDataConfig(label: 'Series 1'): List.generate(
+            10,
+            (i) => [i.toDouble(), (i * i).toDouble()],
+          ),
+        },
+        {
+          GraphDataConfig(label: 'Series 2'): List.generate(
+            10,
+            (i) => [i.toDouble(), (50 + i * 5).toDouble()],
+          ),
+        },
+        // Third series using second Y-axis (showing exponential growth)
+        if (_showY2)
+          {
+            GraphDataConfig(
+              label: 'Exponential Series',
+              mainAxis: false,
+            ): List.generate(
+              10,
+              (i) => [i.toDouble(), (10 * pow(2, i)).toDouble()],
+            ),
+          },
+      ];
+    }
 
     setState(() {});
   }
@@ -147,6 +190,76 @@ class _GraphDemoState extends State<GraphDemo> {
     );
   }
 
+  Widget _buildXSpanControls() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            const Text('Use X-Span',
+                style: TextStyle(fontWeight: FontWeight.bold)),
+            Switch(
+              value: _useXSpan,
+              onChanged: (value) {
+                setState(() {
+                  _useXSpan = value;
+                  _updateGraph();
+                });
+              },
+            ),
+          ],
+        ),
+        if (_useXSpan) ...[
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(
+                child: DropdownButton<Duration>(
+                  value: _xSpan,
+                  items: [
+                    const Duration(minutes: 5),
+                    const Duration(minutes: 15),
+                    const Duration(minutes: 30),
+                    const Duration(hours: 1),
+                    const Duration(hours: 2),
+                    const Duration(hours: 6),
+                    const Duration(hours: 12),
+                    const Duration(days: 1),
+                    const Duration(days: 7),
+                  ].map((duration) {
+                    String label;
+                    if (duration.inDays > 0) {
+                      label =
+                          '${duration.inDays} day${duration.inDays > 1 ? 's' : ''}';
+                    } else if (duration.inHours > 0) {
+                      label =
+                          '${duration.inHours} hour${duration.inHours > 1 ? 's' : ''}';
+                    } else {
+                      label =
+                          '${duration.inMinutes} minute${duration.inMinutes > 1 ? 's' : ''}';
+                    }
+                    return DropdownMenuItem(
+                      value: duration,
+                      child: Text(label),
+                    );
+                  }).toList(),
+                  onChanged: (value) {
+                    if (value != null) {
+                      setState(() {
+                        _xSpan = value;
+                        _updateGraph();
+                      });
+                    }
+                  },
+                ),
+              ),
+            ],
+          ),
+        ],
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return SingleChildScrollView(
@@ -198,24 +311,32 @@ class _GraphDemoState extends State<GraphDemo> {
             const SizedBox(height: 16),
 
             // X-axis controls
-            _buildAxisControls(
-              'X-Axis Configuration',
-              min: _minX,
-              max: _maxX,
-              step: _stepX,
-              onMinChanged: (value) => setState(() {
-                _minX = value;
-                _updateGraph();
-              }),
-              onMaxChanged: (value) => setState(() {
-                _maxX = value;
-                _updateGraph();
-              }),
-              onStepChanged: (value) => setState(() {
-                _stepX = value;
-                _updateGraph();
-              }),
-            ),
+            if (_selectedType != GraphType.timeseries)
+              _buildAxisControls(
+                'X-Axis Configuration',
+                min: _minX,
+                max: _maxX,
+                step: _stepX,
+                onMinChanged: (value) => setState(() {
+                  _minX = value;
+                  _updateGraph();
+                }),
+                onMaxChanged: (value) => setState(() {
+                  _maxX = value;
+                  _updateGraph();
+                }),
+                onStepChanged: (value) => setState(() {
+                  _stepX = value;
+                  _updateGraph();
+                }),
+              ),
+
+            // X-Span controls for timeseries
+            if (_selectedType == GraphType.timeseries) ...[
+              _buildXSpanControls(),
+              const SizedBox(height: 16),
+            ],
+
             const SizedBox(height: 16),
 
             // Primary Y-axis controls

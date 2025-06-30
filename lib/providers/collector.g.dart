@@ -1,26 +1,26 @@
 // GENERATED CODE - DO NOT MODIFY BY HAND
 
-part of 'state_man.dart';
+part of 'collector.dart';
 
 // **************************************************************************
 // RiverpodGenerator
 // **************************************************************************
 
-String _$stateManHash() => r'dffe238fd9eb129b4901d8c251b6436bdd74c38c';
+String _$collectorHash() => r'dd6f0b47f1dfd16e7f15f2070c5c01fc07085c86';
 
-/// See also [stateMan].
-@ProviderFor(stateMan)
-final stateManProvider = FutureProvider<StateMan>.internal(
-  stateMan,
-  name: r'stateManProvider',
+/// See also [collector].
+@ProviderFor(collector)
+final collectorProvider = FutureProvider<Collector?>.internal(
+  collector,
+  name: r'collectorProvider',
   debugGetCreateSourceHash:
-      const bool.fromEnvironment('dart.vm.product') ? null : _$stateManHash,
+      const bool.fromEnvironment('dart.vm.product') ? null : _$collectorHash,
   dependencies: null,
   allTransitiveDependencies: null,
 );
 
 @Deprecated('Will be removed in 3.0. Use Ref instead')
 // ignore: unused_element
-typedef StateManRef = FutureProviderRef<StateMan>;
+typedef CollectorRef = FutureProviderRef<Collector?>;
 // ignore_for_file: type=lint
 // ignore_for_file: subtype_of_sealed_class, invalid_use_of_internal_member, invalid_use_of_visible_for_testing_member, deprecated_member_use_from_same_package

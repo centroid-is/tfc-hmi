@@ -8,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/state_man.dart';
 import 'preferences.dart';
+import 'collector.dart';
 
 part 'state_man.g.dart';
 
@@ -51,13 +52,9 @@ Future<StateMan> stateMan(Ref ref) async {
   try {
     final stateMan =
         await StateMan.create(config: config, keyMappings: keyMappings);
-    for (var entry in keyMappings.nodes.entries) {
-      if (entry.value.collectSize != null &&
-          entry.value.collectInterval != null) {
-        await stateMan.collect(
-            entry.key, entry.value.collectSize!, entry.value.collectInterval!);
-      }
-    }
+
+    // Initialize collector
+    ref.read(collectorProvider.future);
 
     ref.onDispose(() async {
       listener.cancel();

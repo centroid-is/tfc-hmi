@@ -8,6 +8,7 @@ import 'led_column.dart';
 import 'drawn_box.dart';
 import 'number.dart';
 import 'checkweigher.dart';
+import 'graph.dart';
 
 class AssetRegistry {
   static final Logger _log = Logger();
@@ -23,6 +24,7 @@ class AssetRegistry {
     DrawnBoxConfig: DrawnBoxConfig.fromJson,
     NumberConfig: NumberConfig.fromJson,
     CheckweigherConfig: CheckweigherConfig.fromJson,
+    GraphAssetConfig: GraphAssetConfig.fromJson,
   };
 
   static final Map<Type, Asset Function()> defaultFactories = {
@@ -35,6 +37,7 @@ class AssetRegistry {
     DrawnBoxConfig: DrawnBoxConfig.preview,
     NumberConfig: NumberConfig.preview,
     CheckweigherConfig: CheckweigherConfig.preview,
+    GraphAssetConfig: GraphAssetConfig.preview,
   };
 
   static void registerFromJsonFactory<T extends Asset>(
