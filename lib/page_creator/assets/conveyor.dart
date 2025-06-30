@@ -4,15 +4,20 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/material.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:tfc/providers/collector.dart';
 import 'dart:math';
 import 'common.dart';
 import 'dart:async';
 import 'package:logger/logger.dart';
 import '../../providers/state_man.dart';
+import '../../providers/collector.dart';
 import '../../core/state_man.dart';
 import 'package:rxdart/rxdart.dart';
 import 'package:open62541/open62541.dart' show DynamicValue;
 import 'package:intl/intl.dart' as intl;
+import '../../widgets/graph.dart';
+import '../../core/database.dart';
+import '../../core/collector.dart';
 
 part 'conveyor.g.dart';
 
@@ -63,7 +68,7 @@ class ConveyorColorPalette extends StatelessWidget {
       height: size.height,
       child: Column(
         children: [
-          // ─── Top “title” row ───
+          // ─── Top "title" row ───
           const Expanded(
             flex: 1,
             child: Center(
@@ -84,7 +89,7 @@ class ConveyorColorPalette extends StatelessWidget {
               child: Column(
                 children: [
                   // Each of these five Expanded(...) blocks will receive 20% of
-                  // the “remaining” vertical space (because flex:1 + flex:1 + … = 5)
+                  // the "remaining" vertical space (because flex:1 + flex:1 + ... = 5)
                   _buildColorRow(Colors.green, 'Auto', textColor: Colors.white),
                   _buildColorRow(Colors.blue, 'Clean', textColor: Colors.white),
                   _buildColorRow(Colors.yellow, 'Manual',
@@ -723,9 +728,18 @@ class _ConveyorState extends ConsumerState<Conveyor> {
                   SizedBox(
                     width: MediaQuery.of(context).size.width * 0.3,
                     height: MediaQuery.of(context).size.height * 0.3,
-                    child: ConveyorStatsGraph(
-                      stateMan: stateMan,
-                      keyName: widget.config.key,
+                    child: FutureBuilder<Collector?>(
+                      future: ref.watch(collectorProvider.future),
+                      builder: (context, collectorSnapshot) {
+                        if (!collectorSnapshot.hasData) {
+                          return const Center(
+                              child: CircularProgressIndicator());
+                        }
+                        return ConveyorStatsGraph(
+                          collector: collectorSnapshot.data,
+                          keyName: widget.config.key,
+                        );
+                      },
                     ),
                   ),
                 ],
@@ -959,10 +973,10 @@ class _ConveyorPainter extends CustomPainter {
 }
 
 class ConveyorStatsGraph extends StatefulWidget {
-  final StateMan stateMan;
+  final Collector? collector;
   final String keyName;
   const ConveyorStatsGraph({
-    required this.stateMan,
+    required this.collector,
     required this.keyName,
     super.key,
   });
@@ -979,161 +993,61 @@ class _ConveyorStatsGraphState extends State<ConveyorStatsGraph> {
 
   @override
   Widget build(BuildContext context) {
-    final primary = Theme.of(context).colorScheme.primary;
-    final secondary = Theme.of(context).colorScheme.secondary;
-    return const Center(child: Text('Not implemented'));
-    // return StreamBuilder<List<CollectedSample>>(
-    //   stream: widget.stateMan
-    //       .collectStream(widget.keyName)
-    //       .throttleTime(const Duration(seconds: 1)),
-    //   builder: (context, snapshot) {
-    //     if (!snapshot.hasData || snapshot.data!.isEmpty) {
-    //       return const Center(child: Text('No data'));
-    //     }
-    //     final samples = snapshot.data!;
-    //     final currentSpots = <FlSpot>[];
-    //     final freqSpots = <FlSpot>[];
-    //     final minTime = samples.first.time.millisecondsSinceEpoch.toDouble();
-    //     final maxTime = samples.last.time.millisecondsSinceEpoch.toDouble();
-    //     for (final sample in samples) {
-    //       final v = sample.value;
-    //       final current = v['p_stat_Current']?.asDouble ?? 0.0;
-    //       final freq = v['p_stat_Frequency']?.asDouble ?? 0.0;
-    //       final time = sample.time.millisecondsSinceEpoch.toDouble();
-    //       currentSpots.add(FlSpot(time, current));
-    //       freqSpots.add(FlSpot(time, freq));
-    //     }
+    return StreamBuilder<List<TimeseriesData<dynamic>>>(
+      stream: widget.collector?.collectStream(widget.keyName),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData || snapshot.data!.isEmpty) {
+          return const Center(child: Text('No data'));
+        }
 
-    //     // Find min/max for axes
-    //     double minCurrent = currentSpots
-    //         .map((e) => e.y)
-    //         .fold<double>(double.infinity, (a, b) => a < b ? a : b);
-    //     double maxCurrent = currentSpots
-    //         .map((e) => e.y)
-    //         .fold<double>(-double.infinity, (a, b) => a > b ? a : b);
-    //     double minFreq = freqSpots
-    //         .map((e) => e.y)
-    //         .fold<double>(double.infinity, (a, b) => a < b ? a : b);
-    //     double maxFreq = freqSpots
-    //         .map((e) => e.y)
-    //         .fold<double>(-double.infinity, (a, b) => a > b ? a : b);
+        final samples = snapshot.data!;
+        final currentData = <List<double>>[];
+        final freqData = <List<double>>[];
 
-    //     // Add some padding
-    //     minCurrent = minCurrent.isFinite ? minCurrent : 0;
-    //     maxCurrent = maxCurrent.isFinite ? maxCurrent : 1;
-    //     minFreq = minFreq.isFinite ? minFreq : 0;
-    //     maxFreq = maxFreq.isFinite ? maxFreq : 1;
+        double minFreq = 1000;
+        double maxFreq = 0;
+        double minCurrent = 1000;
+        double maxCurrent = 0;
 
-    //     // For dual axes, fl_chart uses yAxis for each LineChartBarData (0=left, 1=right)
-    //     return Padding(
-    //       padding: const EdgeInsets.all(0),
-    //       child: SizedBox(
-    //         height: 200,
-    //         child: LineChart(
-    //           LineChartData(
-    //             // These are for the default (left) axis, but we set min/max for both axes below
-    //             minY: minCurrent < minFreq ? minCurrent : minFreq,
-    //             maxY: maxCurrent > maxFreq ? maxCurrent : maxFreq,
-    //             lineBarsData: [
-    //               // Current (primary color, left axis)
-    //               LineChartBarData(
-    //                 spots: currentSpots,
-    //                 isCurved: false,
-    //                 color: primary,
-    //                 barWidth: 2,
-    //                 dotData: const FlDotData(show: false),
-    //                 belowBarData: BarAreaData(show: false),
-    //                 //yAxis: 0,
-    //               ),
-    //               // Frequency (secondary color, right axis)
-    //               LineChartBarData(
-    //                 spots: freqSpots,
-    //                 isCurved: false,
-    //                 color: secondary,
-    //                 barWidth: 2,
-    //                 dotData: const FlDotData(show: false),
-    //                 belowBarData: BarAreaData(show: false),
-    //                 //yAxis: 1,
-    //               ),
-    //             ],
-    //             lineTouchData: const LineTouchData(enabled: true),
-    //             titlesData: FlTitlesData(
-    //               leftTitles: AxisTitles(
-    //                 axisNameWidget: Padding(
-    //                   padding: const EdgeInsets.only(right: 8.0),
-    //                   child: Text(
-    //                     'Current (A)',
-    //                     style: TextStyle(
-    //                       color: primary,
-    //                       fontWeight: FontWeight.bold,
-    //                     ),
-    //                   ),
-    //                 ),
-    //                 sideTitles: SideTitles(
-    //                   showTitles: true,
-    //                   getTitlesWidget: (value, meta) => Text(
-    //                     value.toStringAsFixed(1),
-    //                     style: TextStyle(color: primary, fontSize: 10),
-    //                   ),
-    //                 ),
-    //               ),
-    //               rightTitles: AxisTitles(
-    //                 axisNameWidget: Padding(
-    //                   padding: const EdgeInsets.only(left: 8.0),
-    //                   child: Text(
-    //                     'Frequency (Hz)',
-    //                     style: TextStyle(
-    //                       color: secondary,
-    //                       fontWeight: FontWeight.bold,
-    //                     ),
-    //                   ),
-    //                 ),
-    //                 sideTitles: SideTitles(
-    //                   showTitles: true,
-    //                   getTitlesWidget: (value, meta) => Text(
-    //                     value.toStringAsFixed(1),
-    //                     style: TextStyle(color: secondary, fontSize: 10),
-    //                   ),
-    //                 ),
-    //               ),
-    //               bottomTitles: AxisTitles(
-    //                 axisNameWidget: const Text('Time'),
-    //                 sideTitles: SideTitles(
-    //                   showTitles: true,
-    //                   reservedSize: 24,
-    //                   getTitlesWidget: (value, meta) {
-    //                     // Only show labels for min and max values
-    //                     if (value != minTime && value != maxTime) {
-    //                       return const SizedBox.shrink();
-    //                     }
+        for (final sample in samples) {
+          final v = sample.value;
+          final current = v['p_stat_Current'] ?? 0.0;
+          final freq = v['p_stat_Frequency'] ?? 0.0;
+          final time = sample.time.millisecondsSinceEpoch.toDouble();
 
-    //                     final dt = DateTime.fromMillisecondsSinceEpoch(
-    //                       value.toInt(),
-    //                     );
-    //                     final formatted = intl.DateFormat.Hms().format(dt);
-    //                     return Padding(
-    //                       padding: const EdgeInsets.only(top: 8.0),
-    //                       child: Text(
-    //                         formatted,
-    //                         style: const TextStyle(fontSize: 10),
-    //                       ),
-    //                     );
-    //                   },
-    //                 ),
-    //               ),
-    //               topTitles: AxisTitles(
-    //                 sideTitles: SideTitles(showTitles: false),
-    //               ),
-    //             ),
-    //             gridData: FlGridData(show: true),
-    //             borderData: FlBorderData(show: true),
-    //             //minYForEachAxis: [minCurrent, minFreq],
-    //             //maxYForEachAxis: [maxCurrent, maxFreq],
-    //           ),
-    //         ),
-    //       ),
-    //     );
-    //   },
-    // );
+          currentData.add([time, current]);
+          freqData.add([time, freq]);
+
+          if (freq < minFreq) minFreq = freq;
+          if (freq > maxFreq) maxFreq = freq;
+          if (current < minCurrent) minCurrent = current;
+          if (current > maxCurrent) maxCurrent = current;
+        }
+
+        // Create graph configuration
+        final graphConfig = GraphConfig(
+          type: GraphType.timeseries,
+          xAxis: GraphAxisConfig(unit: 'Time'),
+          yAxis: GraphAxisConfig(unit: 'A', min: minCurrent, max: maxCurrent),
+          yAxis2: GraphAxisConfig(unit: 'Hz', min: minFreq, max: maxFreq),
+          xSpan: const Duration(minutes: 5),
+        );
+
+        print(graphConfig.toJson());
+
+        // Create data for the graph
+        final graphData = [
+          {
+            GraphDataConfig(label: 'Current', mainAxis: true): currentData,
+            GraphDataConfig(label: 'Frequency', mainAxis: false): freqData,
+          }
+        ];
+
+        return Graph(
+          config: graphConfig,
+          data: graphData,
+        );
+      },
+    );
   }
 }

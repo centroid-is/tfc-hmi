@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:collection/collection.dart';
 
 import 'package:logger/logger.dart';
 import 'package:json_annotation/json_annotation.dart';
@@ -136,11 +137,11 @@ class Collector {
     // Set up periodic sampling if sample interval is specified
     if (entry.sampleInterval != null) {
       sampleTimer = Timer.periodic(entry.sampleInterval!, (timer) async {
-        if (latestValue != null) {
-          final val = latestValue!;
-          latestValue = null;
-          await insertValue(val);
-        }
+        // if (latestValue != null) {
+        final val = latestValue!;
+        // latestValue = null;
+        await insertValue(val);
+        // }
       });
     }
 
@@ -152,7 +153,12 @@ class Collector {
   Stream<List<TimeseriesData<dynamic>>> collectStream(String key,
       {Duration since = const Duration(days: 1)}) {
     // Find the CollectEntry for this key
-    final entry = _subscriptions.keys.firstWhere((e) => e.key == key);
+    final entry = _subscriptions.keys.firstWhereOrNull((e) => e.key == key);
+
+    if (entry == null) {
+      return Stream.error(StateError('No collection configured for key: $key'));
+    }
+
     final rtStream = _realTimeStreams[entry]!;
     final sinceTime = DateTime.now().toUtc().subtract(since);
 

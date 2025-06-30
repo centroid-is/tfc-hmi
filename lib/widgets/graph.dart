@@ -68,7 +68,7 @@ class GraphConfig {
   Map<String, dynamic> toJson() => _$GraphConfigToJson(this);
 }
 
-class Graph extends StatelessWidget {
+class Graph extends StatefulWidget {
   final GraphConfig config;
   final List<Map<GraphDataConfig, List<List<double>>>> data;
   final Function()? onPanCompleted;
@@ -81,25 +81,68 @@ class Graph extends StatelessWidget {
   });
 
   @override
+  State<Graph> createState() => _GraphState();
+}
+
+class _GraphState extends State<Graph> {
+  final Set<String> _hiddenSeries = {};
+  Offset _legendOffset = const Offset(16, 16); // left, top
+
+  @override
   Widget build(BuildContext context) {
+    // Filter out hidden series
+    final filteredData = widget.data.map((seriesMap) {
+      return Map.fromEntries(
+        seriesMap.entries.where((e) => !_hiddenSeries.contains(e.key.label)),
+      );
+    }).toList();
+
+    Widget chart = _buildChart(filteredData);
+
+    return Stack(
+      children: [
+        chart,
+        Positioned(
+          left: _legendOffset.dx,
+          top: _legendOffset.dy,
+          child: GestureDetector(
+            onPanUpdate: (details) {
+              setState(() {
+                _legendOffset += details.delta;
+                // Optionally clamp to keep within bounds
+                if (_legendOffset.dx < 0)
+                  _legendOffset = Offset(0, _legendOffset.dy);
+                if (_legendOffset.dy < 0)
+                  _legendOffset = Offset(_legendOffset.dx, 0);
+              });
+            },
+            child: _buildLegend(context),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildChart(
+      List<Map<GraphDataConfig, List<List<double>>>> filteredData) {
     // If no data is provided, show an empty container with the same dimensions
-    if (data.isEmpty) {
+    if (filteredData.isEmpty || filteredData.every((m) => m.isEmpty)) {
       return const SizedBox.shrink();
     }
 
     // Configure behaviors
-    switch (config.type) {
+    switch (widget.config.type) {
       case GraphType.line:
         final behaviors = [
           charts.PanAndZoomBehavior<num>(
             panningCompletedCallback: () {
-              if (onPanCompleted != null) {
-                onPanCompleted!();
+              if (widget.onPanCompleted != null) {
+                widget.onPanCompleted!();
               }
             },
           ),
         ];
-        final series = _convertDataToNumericSeries();
+        final series = _convertDataToNumericSeries(filteredData);
         // Return empty container if no valid series data
         if (series.isEmpty) {
           return const SizedBox.shrink();
@@ -107,10 +150,11 @@ class Graph extends StatelessWidget {
         return charts.LineChart(
           series,
           animate: false,
-          domainAxis: _buildAxisSpec(config.xAxis, 15),
-          primaryMeasureAxis: _buildAxisSpec(config.yAxis),
-          secondaryMeasureAxis:
-              config.yAxis2 != null ? _buildAxisSpec(config.yAxis2!) : null,
+          domainAxis: _buildAxisSpec(widget.config.xAxis, 15),
+          primaryMeasureAxis: _buildAxisSpec(widget.config.yAxis),
+          secondaryMeasureAxis: widget.config.yAxis2 != null
+              ? _buildAxisSpec(widget.config.yAxis2!)
+              : null,
           behaviors: behaviors,
         );
 
@@ -118,13 +162,13 @@ class Graph extends StatelessWidget {
         final behaviors = [
           charts.PanAndZoomBehavior<String>(
             panningCompletedCallback: () {
-              if (onPanCompleted != null) {
-                onPanCompleted!();
+              if (widget.onPanCompleted != null) {
+                widget.onPanCompleted!();
               }
             },
           ),
         ];
-        final series = _convertDataToBarSeries();
+        final series = _convertDataToBarSeries(filteredData);
         // Return empty container if no valid series data
         if (series.isEmpty) {
           return const SizedBox.shrink();
@@ -132,10 +176,11 @@ class Graph extends StatelessWidget {
         return charts.BarChart(
           series,
           animate: false,
-          domainAxis: _buildStringAxisSpec(config.xAxis),
-          primaryMeasureAxis: _buildAxisSpec(config.yAxis),
-          secondaryMeasureAxis:
-              config.yAxis2 != null ? _buildAxisSpec(config.yAxis2!) : null,
+          domainAxis: _buildStringAxisSpec(widget.config.xAxis),
+          primaryMeasureAxis: _buildAxisSpec(widget.config.yAxis),
+          secondaryMeasureAxis: widget.config.yAxis2 != null
+              ? _buildAxisSpec(widget.config.yAxis2!)
+              : null,
           behaviors: behaviors,
         );
 
@@ -143,13 +188,13 @@ class Graph extends StatelessWidget {
         final behaviors = [
           charts.PanAndZoomBehavior<num>(
             panningCompletedCallback: () {
-              if (onPanCompleted != null) {
-                onPanCompleted!();
+              if (widget.onPanCompleted != null) {
+                widget.onPanCompleted!();
               }
             },
           ),
         ];
-        final series = _convertDataToNumericSeries();
+        final series = _convertDataToNumericSeries(filteredData);
         // Return empty container if no valid series data
         if (series.isEmpty) {
           return const SizedBox.shrink();
@@ -157,10 +202,11 @@ class Graph extends StatelessWidget {
         return charts.ScatterPlotChart(
           series,
           animate: false,
-          domainAxis: _buildAxisSpec(config.xAxis),
-          primaryMeasureAxis: _buildAxisSpec(config.yAxis),
-          secondaryMeasureAxis:
-              config.yAxis2 != null ? _buildAxisSpec(config.yAxis2!) : null,
+          domainAxis: _buildAxisSpec(widget.config.xAxis),
+          primaryMeasureAxis: _buildAxisSpec(widget.config.yAxis),
+          secondaryMeasureAxis: widget.config.yAxis2 != null
+              ? _buildAxisSpec(widget.config.yAxis2!)
+              : null,
           behaviors: behaviors,
         );
 
@@ -168,31 +214,103 @@ class Graph extends StatelessWidget {
         final behaviors = [
           charts.PanAndZoomBehavior<DateTime>(
             panningCompletedCallback: () {
-              if (onPanCompleted != null) onPanCompleted!();
+              if (widget.onPanCompleted != null) widget.onPanCompleted!();
             },
           ),
         ];
-        final series = _convertDataToTimeSeries();
+        final series = _convertDataToTimeSeries(filteredData);
         if (series.isEmpty) {
           return const SizedBox.shrink();
         }
-        final mychart = charts.TimeSeriesChart(
+        return charts.TimeSeriesChart(
           series,
           animate: false,
           defaultRenderer: charts.LineRendererConfig<DateTime>(),
           behaviors: behaviors,
           dateTimeFactory: const charts.LocalDateTimeFactory(),
-
-          //  ── 1) hook up your measure axes so those 0–100 / 0–1000 settings apply ──
-          primaryMeasureAxis: _buildAxisSpec(config.yAxis),
-          secondaryMeasureAxis:
-              config.yAxis2 != null ? _buildAxisSpec(config.yAxis2!) : null,
-
-          //  ── 2) a DateTimeAxisSpec with tick formatting ──
-          domainAxis: _buildDateTimeAxisSpec(config.xAxis, config.xSpan),
+          primaryMeasureAxis: _buildAxisSpec(widget.config.yAxis),
+          secondaryMeasureAxis: widget.config.yAxis2 != null
+              ? _buildAxisSpec(widget.config.yAxis2!)
+              : null,
+          domainAxis:
+              _buildDateTimeAxisSpec(widget.config.xAxis, widget.config.xSpan),
         );
-        return mychart;
     }
+  }
+
+  Widget _buildLegend(BuildContext context) {
+    // Collect all series configs
+    final configs = <GraphDataConfig>{};
+    for (final map in widget.data) {
+      configs.addAll(map.keys);
+    }
+    if (configs.isEmpty) return const SizedBox.shrink();
+
+    // Use the same color palette as charts
+    final palette = charts.MaterialPalette.getOrderedPalettes(configs.length);
+
+    return Card(
+      color: Theme.of(context).colorScheme.surfaceBright.withAlpha(200),
+      elevation: 2,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: configs.toList().asMap().entries.map((entry) {
+            final i = entry.key;
+            final config = entry.value;
+            final isHidden = _hiddenSeries.contains(config.label);
+            final chartColor = palette[i].shadeDefault.darker;
+            final color = Color.fromARGB(
+                chartColor.a, chartColor.r, chartColor.g, chartColor.b);
+
+            return InkWell(
+              onTap: () {
+                setState(() {
+                  if (isHidden) {
+                    _hiddenSeries.remove(config.label);
+                  } else {
+                    _hiddenSeries.add(config.label);
+                  }
+                });
+              },
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 4),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // Color dot
+                    Container(
+                      width: 14,
+                      height: 14,
+                      margin: const EdgeInsets.only(right: 8),
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: isHidden ? color.withAlpha(128) : color,
+                        border: Border.all(
+                          color: color,
+                          width: 2,
+                        ),
+                      ),
+                    ),
+                    Text(
+                      config.label,
+                      style: TextStyle(
+                        decoration:
+                            isHidden ? TextDecoration.lineThrough : null,
+                        color: isHidden ? Colors.grey : color,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 15,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          }).toList(),
+        ),
+      ),
+    );
   }
 
   // Helper to calculate delta between viewports
@@ -218,7 +336,8 @@ class Graph extends StatelessWidget {
   }
 
   // Convert input data to numeric series (for line and scatter charts)
-  List<charts.Series<_Point, num>> _convertDataToNumericSeries() {
+  List<charts.Series<_Point, num>> _convertDataToNumericSeries(
+      List<Map<GraphDataConfig, List<List<double>>>> data) {
     final seriesList = <charts.Series<_Point, num>>[];
     final usedLabels = <String>{};
 
@@ -235,45 +354,49 @@ class Graph extends StatelessWidget {
         if (validPoints.isEmpty) return;
 
         final data = validPoints.map((p) => _Point(p[0], p[1])).toList();
-        seriesList.add(
-          charts.Series<_Point, num>(
-            id: config.label,
-            data: data,
-            domainFn: (_Point point, _) => point.x,
-            measureFn: (_Point point, _) => point.y,
-          ),
+        final series = charts.Series<_Point, num>(
+          id: config.label,
+          data: data,
+          domainFn: (_Point point, _) => point.x,
+          measureFn: (_Point point, _) => point.y,
         );
         if (!config.mainAxis) {
-          seriesList.last.setAttribute(
+          series.setAttribute(
               charts.measureAxisIdKey, charts.Axis.secondaryMeasureAxisId);
         }
+        seriesList.add(series);
       });
     }
     return seriesList;
   }
 
   // Convert input data to bar series (for bar charts)
-  List<charts.Series<_BarPoint, String>> _convertDataToBarSeries() {
+  List<charts.Series<_BarPoint, String>> _convertDataToBarSeries(
+      List<Map<GraphDataConfig, List<List<double>>>> data) {
     final seriesList = <charts.Series<_BarPoint, String>>[];
     for (var seriesMap in data) {
       seriesMap.forEach((config, points) {
         final data =
             points.map((p) => _BarPoint(p[0].toString(), p[1])).toList();
-        seriesList.add(
-          charts.Series<_BarPoint, String>(
-            id: config.label,
-            data: data,
-            domainFn: (_BarPoint point, _) => point.x,
-            measureFn: (_BarPoint point, _) => point.y,
-          ),
+        final series = charts.Series<_BarPoint, String>(
+          id: config.label,
+          data: data,
+          domainFn: (_BarPoint point, _) => point.x,
+          measureFn: (_BarPoint point, _) => point.y,
         );
+        if (!config.mainAxis) {
+          series.setAttribute(
+              charts.measureAxisIdKey, charts.Axis.secondaryMeasureAxisId);
+        }
+        seriesList.add(series);
       });
     }
     return seriesList;
   }
 
   // Convert input data to time series (for timeseries charts)
-  List<charts.Series<_TimePoint, DateTime>> _convertDataToTimeSeries() {
+  List<charts.Series<_TimePoint, DateTime>> _convertDataToTimeSeries(
+      List<Map<GraphDataConfig, List<List<double>>>> data) {
     final seriesList = <charts.Series<_TimePoint, DateTime>>[];
     for (var seriesMap in data) {
       seriesMap.forEach((config, points) {
@@ -283,14 +406,17 @@ class Graph extends StatelessWidget {
                 DateTime.fromMillisecondsSinceEpoch(p[0].toInt()), p[1]))
             .toList();
         if (data.isNotEmpty) {
-          seriesList.add(
-            charts.Series<_TimePoint, DateTime>(
-              id: config.label,
-              data: data,
-              domainFn: (_TimePoint point, _) => point.time,
-              measureFn: (_TimePoint point, _) => point.value,
-            ),
+          final series = charts.Series<_TimePoint, DateTime>(
+            id: config.label,
+            data: data,
+            domainFn: (_TimePoint point, _) => point.time,
+            measureFn: (_TimePoint point, _) => point.value,
           );
+          if (!config.mainAxis) {
+            series.setAttribute(
+                charts.measureAxisIdKey, charts.Axis.secondaryMeasureAxisId);
+          }
+          seriesList.add(series);
         }
       });
     }
@@ -364,7 +490,7 @@ class Graph extends StatelessWidget {
     } else if (xSpan != null) {
       // Use xSpan to calculate viewport from the latest data point
       final allTimePoints = <DateTime>[];
-      for (var seriesMap in data) {
+      for (var seriesMap in widget.data) {
         seriesMap.forEach((config, points) {
           for (var point in points) {
             if (point.length == 2) {
