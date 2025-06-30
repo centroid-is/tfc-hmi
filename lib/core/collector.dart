@@ -70,6 +70,7 @@ class Collector {
   final CollectorConfig config;
   final StateMan stateMan;
   final Database database;
+  final Map<String, CollectEntry> _collectEntries = {};
   final Map<CollectEntry, StreamSubscription<DynamicValue>> _subscriptions = {};
   final Map<CollectEntry, Stream<DynamicValue>> _realTimeStreams = {};
   final Map<CollectEntry, AutoDisposingStream<List<TimeseriesData<dynamic>>>>
@@ -95,6 +96,11 @@ class Collector {
   /// Initiate a collection of data from a node.
   /// Returns when the collection is started.
   Future<void> collectEntry(CollectEntry entry) async {
+    _collectEntries[entry.key] = entry;
+    if (!config.collect) {
+      return;
+    }
+
     Stream<DynamicValue> subscription;
     if (entry.sampleExpression != null) {
       _evaluators[entry] = Evaluator(
@@ -174,8 +180,7 @@ class Collector {
   /// This stream provides both historical data and real-time updates.
   Stream<List<TimeseriesData<dynamic>>> collectStream(String key,
       {Duration since = const Duration(days: 1)}) {
-    // Find the CollectEntry for this key
-    final entry = _subscriptions.keys.firstWhereOrNull((e) => e.key == key);
+    final entry = _collectEntries[key];
 
     if (entry == null) {
       return Stream.error(StateError('No collection configured for key: $key'));
