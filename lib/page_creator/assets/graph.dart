@@ -61,6 +61,7 @@ class GraphAssetConfig extends BaseAsset {
 
   factory GraphAssetConfig.fromJson(Map<String, dynamic> json) =>
       _$GraphAssetConfigFromJson(json);
+  @override
   Map<String, dynamic> toJson() => _$GraphAssetConfigToJson(this);
 
   GraphAssetConfig.preview()
@@ -396,7 +397,8 @@ class GraphAsset extends ConsumerWidget {
               graphData.add({
                 GraphDataConfig(
                   label: series.label,
-                  mainAxis: i == 0,
+                  mainAxis: config.primarySeries.contains(series),
+                  color: GraphConfig.colors[i],
                 ): points,
               });
             }

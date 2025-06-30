@@ -9,10 +9,12 @@ part 'graph.g.dart';
 class GraphDataConfig {
   final String label;
   final bool mainAxis; // Whether this is the main axis or a secondary axis
+  final Color? color;
 
   GraphDataConfig({
     required this.label,
     this.mainAxis = true,
+    this.color,
   });
 
   factory GraphDataConfig.fromJson(Map<String, dynamic> json) =>
@@ -54,6 +56,27 @@ class GraphConfig {
   final GraphAxisConfig yAxis;
   final GraphAxisConfig? yAxis2;
   final Duration? xSpan; // New field for timeseries span
+
+  static const List<Color> colors = [
+    Colors.blue,
+    Colors.red,
+    Colors.green,
+    Colors.yellow,
+    Colors.purple,
+    Colors.orange,
+    Colors.pink,
+    Colors.brown,
+    Colors.grey,
+    Colors.teal,
+    Colors.lime,
+    Colors.indigo,
+    Colors.cyan,
+    Colors.amber,
+    Colors.deepPurple,
+    Colors.deepOrange,
+    Colors.deepOrange,
+    Colors.deepOrange,
+  ];
 
   GraphConfig({
     required this.type,
@@ -109,11 +132,12 @@ class _GraphState extends State<Graph> {
             onPanUpdate: (details) {
               setState(() {
                 _legendOffset += details.delta;
-                // Optionally clamp to keep within bounds
-                if (_legendOffset.dx < 0)
+                if (_legendOffset.dx < 0) {
                   _legendOffset = Offset(0, _legendOffset.dy);
-                if (_legendOffset.dy < 0)
+                }
+                if (_legendOffset.dy < 0) {
                   _legendOffset = Offset(_legendOffset.dx, 0);
+                }
               });
             },
             child: _buildLegend(context),
@@ -261,8 +285,9 @@ class _GraphState extends State<Graph> {
             final config = entry.value;
             final isHidden = _hiddenSeries.contains(config.label);
             final chartColor = palette[i].shadeDefault.darker;
-            final color = Color.fromARGB(
-                chartColor.a, chartColor.r, chartColor.g, chartColor.b);
+            final color = config.color ??
+                Color.fromARGB(
+                    chartColor.a, chartColor.r, chartColor.g, chartColor.b);
 
             return InkWell(
               onTap: () {
@@ -335,6 +360,10 @@ class _GraphState extends State<Graph> {
         _isValidNumber(point[1]);
   }
 
+  static int _floatToInt8(double x) {
+    return (x * 255.0).round() & 0xff;
+  }
+
   // Convert input data to numeric series (for line and scatter charts)
   List<charts.Series<_Point, num>> _convertDataToNumericSeries(
       List<Map<GraphDataConfig, List<List<double>>>> data) {
@@ -354,11 +383,20 @@ class _GraphState extends State<Graph> {
         if (validPoints.isEmpty) return;
 
         final data = validPoints.map((p) => _Point(p[0], p[1])).toList();
+
         final series = charts.Series<_Point, num>(
           id: config.label,
           data: data,
           domainFn: (_Point point, _) => point.x,
           measureFn: (_Point point, _) => point.y,
+          seriesColor: config.color != null
+              ? charts.Color(
+                  a: _floatToInt8(config.color!.a),
+                  r: _floatToInt8(config.color!.r),
+                  g: _floatToInt8(config.color!.g),
+                  b: _floatToInt8(config.color!.b),
+                )
+              : null,
         );
         if (!config.mainAxis) {
           series.setAttribute(
@@ -383,6 +421,14 @@ class _GraphState extends State<Graph> {
           data: data,
           domainFn: (_BarPoint point, _) => point.x,
           measureFn: (_BarPoint point, _) => point.y,
+          seriesColor: config.color != null
+              ? charts.Color(
+                  a: _floatToInt8(config.color!.a),
+                  r: _floatToInt8(config.color!.r),
+                  g: _floatToInt8(config.color!.g),
+                  b: _floatToInt8(config.color!.b),
+                )
+              : null,
         );
         if (!config.mainAxis) {
           series.setAttribute(
@@ -411,6 +457,14 @@ class _GraphState extends State<Graph> {
             data: data,
             domainFn: (_TimePoint point, _) => point.time,
             measureFn: (_TimePoint point, _) => point.value,
+            seriesColor: config.color != null
+                ? charts.Color(
+                    a: _floatToInt8(config.color!.a),
+                    r: _floatToInt8(config.color!.r),
+                    g: _floatToInt8(config.color!.g),
+                    b: _floatToInt8(config.color!.b),
+                  )
+                : null,
           );
           if (!config.mainAxis) {
             series.setAttribute(

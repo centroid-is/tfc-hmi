@@ -10,11 +10,9 @@ import 'common.dart';
 import 'dart:async';
 import 'package:logger/logger.dart';
 import '../../providers/state_man.dart';
-import '../../providers/collector.dart';
 import '../../core/state_man.dart';
 import 'package:rxdart/rxdart.dart';
 import 'package:open62541/open62541.dart' show DynamicValue;
-import 'package:intl/intl.dart' as intl;
 import '../../widgets/graph.dart';
 import '../../core/database.dart';
 import '../../core/collector.dart';
@@ -1023,6 +1021,12 @@ class _ConveyorStatsGraphState extends State<ConveyorStatsGraph> {
           if (current < minCurrent) minCurrent = current;
           if (current > maxCurrent) maxCurrent = current;
         }
+        if (minCurrent == maxCurrent) {
+          maxCurrent++;
+        }
+        if (minFreq == maxFreq) {
+          maxFreq++;
+        }
 
         // Create graph configuration
         final graphConfig = GraphConfig(
@@ -1036,8 +1040,14 @@ class _ConveyorStatsGraphState extends State<ConveyorStatsGraph> {
         // Create data for the graph
         final graphData = [
           {
-            GraphDataConfig(label: 'Current', mainAxis: true): currentData,
-            GraphDataConfig(label: 'Frequency', mainAxis: false): freqData,
+            GraphDataConfig(
+                label: 'Current',
+                mainAxis: true,
+                color: Colors.blue): currentData,
+            GraphDataConfig(
+                label: 'Frequency',
+                mainAxis: false,
+                color: Colors.red): freqData,
           }
         ];
 
