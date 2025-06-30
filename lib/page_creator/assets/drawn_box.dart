@@ -9,7 +9,7 @@ import 'package:flutter/material.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter_colorpicker/flutter_colorpicker.dart';
 import 'common.dart';
-
+import '../../converter/color_converter.dart';
 part 'drawn_box.g.dart';
 
 @JsonSerializable()

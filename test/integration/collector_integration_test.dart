@@ -6,6 +6,7 @@ import 'package:open62541/open62541.dart' show DynamicValue;
 import 'package:tfc/core/collector.dart';
 import 'package:tfc/core/state_man.dart';
 import 'package:tfc/core/database.dart';
+import 'package:tfc/core/boolean_expression.dart';
 
 import 'docker_compose.dart';
 
@@ -570,6 +571,95 @@ void main() {
 
       // Clean up
       streamController.close();
+      collector.stopCollect(entry);
+    });
+
+    test('should collect data only when sample expression evaluates to true',
+        () async {
+      // Arrange
+      const testKey = 'temperature_sensor';
+      const testName = 'temperature_data';
+      const conditionKey = 'system_running';
+
+      // Create streams for the condition and data
+      final conditionController = StreamController<DynamicValue>();
+      final dataController = StreamController<DynamicValue>();
+
+      // Stub the StateMan to return our test streams
+      stateMan.addSubscription(
+        key: conditionKey,
+        subscription: conditionController.stream,
+        firstValue: DynamicValue(value: false),
+      );
+
+      stateMan.addSubscription(
+        key: testKey,
+        subscription: dataController.stream,
+        firstValue: DynamicValue(value: 25.0),
+      );
+
+      // Create sample expression: "system_running == true AND temperature_sensor > 20"
+      final entry = CollectEntry(
+        key: testKey,
+        name: testName,
+        sampleExpression: ExpressionConfig(
+          value: Expression(formula: '$conditionKey == true AND $testKey > 20'),
+        ),
+      );
+
+      // Act
+      await collector.collectEntry(entry);
+
+      // Insert random data to make sure the table is created
+      database.insertTimeseriesData(testName, DateTime.now().toUtc(), 25.0);
+
+      // Test 1: System not running, data should not be collected
+      dataController.add(DynamicValue(value: 30.0));
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      var insertedData =
+          await waitUntilInserted(testName).timeout(const Duration(seconds: 1));
+      expect(insertedData.length, 1,
+          reason: 'Data should not be collected when system is not running');
+
+      // Set to value that should not be collected
+      dataController.add(DynamicValue(value: 19.0));
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      // System starts, the data shouldnt be collected
+      conditionController.add(DynamicValue(value: true));
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      insertedData =
+          await waitUntilInserted(testName).timeout(const Duration(seconds: 1));
+      expect(insertedData.length, 1,
+          reason:
+              'Data should not be collected when system is running and the data is below 20');
+
+      // BAAAAAM
+      dataController.add(DynamicValue(value: 35.0));
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      insertedData =
+          await waitUntilInserted(testName).timeout(const Duration(seconds: 1));
+      expect(insertedData.length, 2,
+          reason:
+              'Data should be collected when system is running and the data is above 20');
+      expect(insertedData[0].value, 25.0);
+      expect(insertedData[1].value, 35.0);
+
+      // Test 3: System stops running, data should not be collected
+      conditionController.add(DynamicValue(value: false));
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      insertedData =
+          await waitUntilInserted(testName).timeout(const Duration(seconds: 1));
+      expect(insertedData.length, 2,
+          reason: 'Data should not be collected when system is not running');
+
+      // Clean up
+      conditionController.close();
+      dataController.close();
       collector.stopCollect(entry);
     });
   });

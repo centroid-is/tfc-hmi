@@ -1,4 +1,3 @@
-import 'dart:ui' show Color, Size;
 import 'dart:math';
 import 'dart:async';
 
@@ -13,7 +12,7 @@ import 'package:open62541/open62541.dart' show DynamicValue, NodeId;
 import 'common.dart';
 import '../../providers/state_man.dart';
 import '../../core/state_man.dart';
-
+import '../../converter/color_converter.dart';
 part 'button.g.dart';
 
 @JsonSerializable()

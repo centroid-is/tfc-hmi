@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tfc/core/alarm.dart';
+import 'package:tfc/core/boolean_expression.dart';
 import 'package:open62541/open62541.dart' show DynamicValue;
 
 void main() {
