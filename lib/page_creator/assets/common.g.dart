@@ -6,12 +6,6 @@ part of 'common.dart';
 // JsonSerializableGenerator
 // **************************************************************************
 
-ColorConverter _$ColorConverterFromJson(Map<String, dynamic> json) =>
-    ColorConverter();
-
-Map<String, dynamic> _$ColorConverterToJson(ColorConverter instance) =>
-    <String, dynamic>{};
-
 Coordinates _$CoordinatesFromJson(Map<String, dynamic> json) => Coordinates(
       x: (json['x'] as num).toDouble(),
       y: (json['y'] as num).toDouble(),

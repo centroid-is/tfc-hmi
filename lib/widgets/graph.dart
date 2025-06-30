@@ -3,12 +3,15 @@ import 'package:json_annotation/json_annotation.dart';
 import 'package:community_charts_flutter/community_charts_flutter.dart'
     as charts;
 
+import '../converter/color_converter.dart';
+
 part 'graph.g.dart';
 
 @JsonSerializable(explicitToJson: true)
 class GraphDataConfig {
   final String label;
   final bool mainAxis; // Whether this is the main axis or a secondary axis
+  @OptionalColorConverter()
   final Color? color;
 
   GraphDataConfig({

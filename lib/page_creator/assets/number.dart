@@ -13,6 +13,7 @@ import 'package:rxdart/rxdart.dart';
 
 import 'common.dart';
 import '../../providers/state_man.dart';
+import '../../converter/color_converter.dart';
 import 'graph.dart';
 
 part 'number.g.dart';

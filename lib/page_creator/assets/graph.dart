@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:rxdart/rxdart.dart';
-import 'package:tfc/core/duration_converter.dart';
+import 'package:tfc/converter/duration_converter.dart';
 
 import 'common.dart';
 import '../../providers/collector.dart';

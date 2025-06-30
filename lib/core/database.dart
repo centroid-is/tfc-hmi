@@ -4,7 +4,7 @@ import 'package:postgres/postgres.dart';
 import 'package:json_annotation/json_annotation.dart';
 export 'package:postgres/postgres.dart' show Sql;
 
-import 'duration_converter.dart';
+import '../converter/duration_converter.dart';
 
 part 'database.g.dart';
 

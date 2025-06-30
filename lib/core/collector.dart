@@ -1,14 +1,15 @@
 import 'dart:async';
 import 'package:collection/collection.dart';
-
+import 'package:rxdart/rxdart.dart';
 import 'package:logger/logger.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:open62541/open62541.dart' show DynamicValue;
 
-import 'dynamic_value_converter.dart';
+import '../converter/dynamic_value_converter.dart';
+import '../converter/duration_converter.dart';
+import '../core/boolean_expression.dart';
 import 'state_man.dart';
 import 'database.dart';
-import 'duration_converter.dart';
 
 part 'collector.g.dart';
 
@@ -21,11 +22,14 @@ class CollectEntry {
   @DurationMicrosecondsConverter()
   @JsonKey(name: 'sample_interval_us')
   Duration? sampleInterval; // microseconds
+  @JsonKey(name: 'sample_expression')
+  ExpressionConfig? sampleExpression;
 
   CollectEntry(
       {required this.key,
       this.name,
       this.sampleInterval,
+      this.sampleExpression,
       this.retention = const RetentionPolicy(
           dropAfter: Duration(days: 365), scheduleInterval: null)}) {
     name ??= key;
@@ -70,6 +74,7 @@ class Collector {
   final Map<CollectEntry, Stream<DynamicValue>> _realTimeStreams = {};
   final Map<CollectEntry, AutoDisposingStream<List<TimeseriesData<dynamic>>>>
       _collectStreams = {};
+  final Map<CollectEntry, Evaluator> _evaluators = {};
   final Logger logger = Logger();
 
   static const configLocation = 'collector_config';
@@ -90,7 +95,24 @@ class Collector {
   /// Initiate a collection of data from a node.
   /// Returns when the collection is started.
   Future<void> collectEntry(CollectEntry entry) async {
-    final subscription = await stateMan.subscribe(entry.key);
+    Stream<DynamicValue> subscription;
+    if (entry.sampleExpression != null) {
+      _evaluators[entry] = Evaluator(
+        stateMan: stateMan,
+        expression: entry.sampleExpression!,
+      );
+      final shouldSampleStream = _evaluators[entry]!.state();
+      final dataStream = await stateMan.subscribe(entry.key);
+
+      // Combine streams: emit latest data value when sample condition is not null
+      subscription = shouldSampleStream
+          .where((sampleCondition) => sampleCondition != null)
+          .switchMap((_) => dataStream.take(1))
+          .asBroadcastStream();
+    } else {
+      subscription = await stateMan.subscribe(entry.key);
+    }
+
     await collectEntryImpl(entry, subscription);
   }
 
@@ -241,5 +263,7 @@ class Collector {
   void stopCollect(CollectEntry entry) {
     _subscriptions[entry]?.cancel();
     _subscriptions.remove(entry);
+    _evaluators[entry]?.cancel();
+    _evaluators.remove(entry);
   }
 }

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:meta/meta.dart'; // Add this import at the top
 import 'package:logger/logger.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:open62541/open62541.dart';
@@ -394,8 +395,27 @@ class StateMan {
     return keyMappings.lookupNodeId(key);
   }
 
+  @visibleForTesting
+  void addSubscription({
+    required String key,
+    required Stream<DynamicValue> subscription,
+    required DynamicValue? firstValue,
+  }) {
+    _subscriptions[key] = AutoDisposingStream(key, (key) {
+      _subscriptions.remove(key);
+      logger.d('Unsubscribed from $key');
+    });
+    _subscriptions[key]!.subscribe(subscription, firstValue);
+  }
+
   Future<Stream<DynamicValue>> _monitor(String key,
       {bool resub = false}) async {
+    bool keyExists = _subscriptions.containsKey(key);
+
+    if (keyExists && !resub) {
+      return _subscriptions[key]!.stream;
+    }
+
     late Client client;
     try {
       client = _getClientWrapper(key).client;
@@ -410,11 +430,10 @@ class StateMan {
       throw StateManException('Key: "$key" not found');
     }
 
-    bool keyExists = _subscriptions.containsKey(key);
+    // async boundary between the last check, let's make sure the key still exists or not
+    keyExists = _subscriptions.containsKey(key);
 
-    if (keyExists && !resub) {
-      return _subscriptions[key]!.stream;
-    } else if (!keyExists && !resub) {
+    if (!keyExists && !resub) {
       _subscriptions[key] = AutoDisposingStream(key, (key) {
         _subscriptions.remove(key);
         logger.d('Unsubscribed from $key');

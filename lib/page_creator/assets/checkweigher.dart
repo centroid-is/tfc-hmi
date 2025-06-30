@@ -21,7 +21,7 @@ import 'package:community_charts_flutter/community_charts_flutter.dart'
 
 import 'common.dart';
 import '../../providers/state_man.dart';
-
+import '../../converter/color_converter.dart';
 part 'checkweigher.g.dart';
 
 class WeightSample {
