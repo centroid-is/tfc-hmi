@@ -16,8 +16,6 @@ import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:open62541/open62541.dart' show DynamicValue;
 import 'package:rxdart/rxdart.dart';
-import 'package:community_charts_flutter/community_charts_flutter.dart'
-    as charts;
 
 import 'common.dart';
 import '../../providers/state_man.dart';
@@ -259,29 +257,28 @@ class _CheckweigherWidgetState extends ConsumerState<CheckweigherWidget> {
   }
 
   Widget _buildGraph() {
-    final data = [
-      charts.Series<WeightSample, DateTime>(
-        id: 'Accepted',
-        colorFn: (_, __) => charts.MaterialPalette.green.shadeDefault,
-        domainFn: (WeightSample sample, _) => sample.timestamp,
-        measureFn: (WeightSample sample, _) => sample.weight,
-        data: _samples.where((s) => s.accepted).toList(),
-      ),
-      charts.Series<WeightSample, DateTime>(
-        id: 'Rejected',
-        colorFn: (_, __) => charts.MaterialPalette.red.shadeDefault,
-        domainFn: (WeightSample sample, _) => sample.timestamp,
-        measureFn: (WeightSample sample, _) => sample.weight,
-        data: _samples.where((s) => !s.accepted).toList(),
-      ),
-    ];
+    // final data = [
+    //   charts.Series<WeightSample, DateTime>(
+    //     id: 'Accepted',
+    //     colorFn: (_, __) => charts.MaterialPalette.green.shadeDefault,
+    //     domainFn: (WeightSample sample, _) => sample.timestamp,
+    //     measureFn: (WeightSample sample, _) => sample.weight,
+    //     data: _samples.where((s) => s.accepted).toList(),
+    //   ),
+    //   charts.Series<WeightSample, DateTime>(
+    //     id: 'Rejected',
+    //     colorFn: (_, __) => charts.MaterialPalette.red.shadeDefault,
+    //     domainFn: (WeightSample sample, _) => sample.timestamp,
+    //     measureFn: (WeightSample sample, _) => sample.weight,
+    //     data: _samples.where((s) => !s.accepted).toList(),
+    //   ),
+    // ];
 
-    return SizedBox(
-      height: 300,
-      child: charts.TimeSeriesChart(
-        data,
-        animate: true,
-        defaultRenderer: charts.PointRendererConfig<DateTime>(),
+    return SizedBox(height: 300, child: CircularProgressIndicator()
+        // charts.TimeSeriesChart(
+        //   data,
+        //   animate: true,
+        //   defaultRenderer: charts.PointRendererConfig<DateTime>(),
         // behaviors: [
         //   charts.RangeAnnotation([
         //     charts.LineAnnotationSegment(
@@ -304,8 +301,8 @@ class _CheckweigherWidgetState extends ConsumerState<CheckweigherWidget> {
         //     ),
         //   ]),
         // ],
-      ),
-    );
+        // ),
+        );
   }
 
   Widget _buildStats() {
