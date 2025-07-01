@@ -93,15 +93,7 @@ class Collector {
     }
   }
 
-  /// Initiate a collection of data from a node.
-  /// Returns when the collection is started.
-  Future<void> collectEntry(CollectEntry entry) async {
-    _collectEntries[entry.key] = entry;
-    if (!config.collect) {
-      return;
-    }
-
-    Stream<DynamicValue> subscription;
+  Future<Stream<DynamicValue>> _toBeCollected(CollectEntry entry) async {
     if (entry.sampleExpression != null) {
       _evaluators[entry] = Evaluator(
         stateMan: stateMan,
@@ -111,14 +103,23 @@ class Collector {
       final dataStream = await stateMan.subscribe(entry.key);
 
       // Combine streams: emit latest data value when sample condition is not null
-      subscription = shouldSampleStream
+      return shouldSampleStream
           .where((sampleCondition) => sampleCondition != null)
           .switchMap((_) => dataStream.take(1))
           .asBroadcastStream();
-    } else {
-      subscription = await stateMan.subscribe(entry.key);
+    }
+    return await stateMan.subscribe(entry.key);
+  }
+
+  /// Initiate a collection of data from a node.
+  /// Returns when the collection is started.
+  Future<void> collectEntry(CollectEntry entry) async {
+    _collectEntries[entry.key] = entry;
+    if (!config.collect) {
+      return;
     }
 
+    final subscription = await _toBeCollected(entry);
     await collectEntryImpl(entry, subscription);
   }
 
@@ -186,7 +187,6 @@ class Collector {
       return Stream.error(StateError('No collection configured for key: $key'));
     }
 
-    final rtStream = _realTimeStreams[entry]!;
     final sinceTime = DateTime.now().toUtc().subtract(since);
 
     // Check if we already have a subscription entry for this key
@@ -216,6 +216,7 @@ class Collector {
       try {
         List<TimeseriesData<dynamic>>? historicalData = [];
         final List<TimeseriesData<dynamic>> buffer = [];
+        final rtStream = _realTimeStreams[entry] ?? await _toBeCollected(entry);
         realTimeSubscription = rtStream.listen(
           (value) {
             final newSample = TimeseriesData<dynamic>(
