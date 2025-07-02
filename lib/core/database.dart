@@ -260,7 +260,6 @@ class Database implements Session {
       'time': time,
       'value': value,
     });
-    print('inserted $tableName $value took ${DateTime.now().difference(now)}');
   }
 
   /// Insert complex value with separate columns for each key

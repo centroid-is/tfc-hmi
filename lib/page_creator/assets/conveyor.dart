@@ -136,11 +136,18 @@ class ConveyorColorPalette extends StatelessWidget {
 
 @JsonSerializable(explicitToJson: true)
 class ConveyorConfig extends BaseAsset {
-  String key;
+  String? key;
   String? batchesKey;
+  String? frequencyKey;
+  String? tripKey;
   bool? simulateBatches;
 
-  ConveyorConfig({required this.key, this.batchesKey, this.simulateBatches});
+  ConveyorConfig(
+      {this.key,
+      this.batchesKey,
+      this.frequencyKey,
+      this.tripKey,
+      this.simulateBatches});
 
   static const previewStr = 'Conveyor Preview';
 
@@ -183,12 +190,25 @@ class _ConveyorConfigContentState extends State<_ConveyorConfigContent> {
         KeyField(
           initialValue: widget.config.key,
           onChanged: (val) => setState(() => widget.config.key = val),
+          label: 'Main key (optional)',
         ),
         const SizedBox(height: 8),
         KeyField(
           initialValue: widget.config.batchesKey,
           onChanged: (val) => setState(() => widget.config.batchesKey = val),
           label: 'Batches key',
+        ),
+        const SizedBox(height: 8),
+        KeyField(
+          initialValue: widget.config.frequencyKey,
+          onChanged: (val) => setState(() => widget.config.frequencyKey = val),
+          label: 'Frequency key',
+        ),
+        const SizedBox(height: 8),
+        KeyField(
+          initialValue: widget.config.tripKey,
+          onChanged: (val) => setState(() => widget.config.tripKey = val),
+          label: 'Trip key',
         ),
         const SizedBox(height: 16),
         Row(
@@ -265,23 +285,57 @@ class _ConveyorState extends ConsumerState<Conveyor> {
     _simulateBatchesTimer?.cancel();
   }
 
-  Color _getConveyorColor(DynamicValue dynValue) {
+  Color _getConveyorColor(
+      {DynamicValue? driveValue,
+      DynamicValue? frequencyValue,
+      DynamicValue? tripValue}) {
     try {
-      final state = dynValue['p_stat_RunMode'].asInt;
-      final fields = dynValue['p_stat_RunMode'].enumFields;
-      final name = fields?[state]?.name;
-      if (name == 'fault') {
-        return Colors.red;
-      } else if (name == 'stopped') {
-        return Colors.grey;
-      } else if (name == 'auto') {
-        return Colors.green;
-      } else if (name == 'manual') {
-        return Colors.yellow;
-      } else if (name == 'clean') {
-        return Colors.blue;
+      // Check trip condition first if trip key is provided
+      if (tripValue != null) {
+        try {
+          final isTripped = tripValue.asBool;
+          if (isTripped) {
+            return Colors.red; // Trip condition overrides everything
+          }
+        } catch (_) {
+          // If trip value can't be read as bool, continue with normal logic
+        }
       }
-      return Colors.pink;
+
+      // If we have drive value, use the original logic
+      if (driveValue != null) {
+        final state = driveValue['p_stat_RunMode'].asInt;
+        final fields = driveValue['p_stat_RunMode'].enumFields;
+        final name = fields?[state]?.name;
+        if (name == 'fault') {
+          return Colors.red;
+        } else if (name == 'stopped') {
+          return Colors.grey;
+        } else if (name == 'auto') {
+          return Colors.green;
+        } else if (name == 'manual') {
+          return Colors.yellow;
+        } else if (name == 'clean') {
+          return Colors.blue;
+        }
+        return Colors.pink;
+      }
+
+      // If we only have frequency and trip, use frequency-based logic
+      if (frequencyValue != null) {
+        try {
+          final frequency = frequencyValue.asDouble;
+          if (frequency > 0) {
+            return Colors.green; // Running
+          } else {
+            return Colors.grey; // Stopped
+          }
+        } catch (_) {
+          return Colors.purple; // Error reading frequency
+        }
+      }
+
+      return Colors.grey; // Default fallback
     } catch (_) {
       return Colors.purple;
     }
@@ -300,39 +354,90 @@ class _ConveyorState extends ConsumerState<Conveyor> {
         ],
       );
     }
+
+    // Determine which streams to subscribe to
+    final streams = <Stream<DynamicValue>>[];
+    final streamLabels = <String>[];
+
+    if (widget.config.key != null) {
+      streams.add(ref.watch(stateManProvider.future).asStream().switchMap(
+            (stateMan) => stateMan
+                .subscribe(widget.config.key!)
+                .asStream()
+                .switchMap((s) => s),
+          ));
+      streamLabels.add('drive');
+    }
+
+    if (widget.config.batchesKey != null) {
+      streams.add(ref.watch(stateManProvider.future).asStream().switchMap(
+            (stateMan) => stateMan
+                .subscribe(widget.config.batchesKey!)
+                .asStream()
+                .switchMap((s) => s),
+          ));
+      streamLabels.add('batches');
+    }
+
+    if (widget.config.frequencyKey != null) {
+      streams.add(ref.watch(stateManProvider.future).asStream().switchMap(
+            (stateMan) => stateMan
+                .subscribe(widget.config.frequencyKey!)
+                .asStream()
+                .switchMap((s) => s),
+          ));
+      streamLabels.add('frequency');
+    }
+
+    if (widget.config.tripKey != null) {
+      streams.add(ref.watch(stateManProvider.future).asStream().switchMap(
+            (stateMan) => stateMan
+                .subscribe(widget.config.tripKey!)
+                .asStream()
+                .switchMap((s) => s),
+          ));
+      streamLabels.add('trip');
+    }
+
+    // If no streams are configured, show error state
+    if (streams.isEmpty) {
+      return _buildConveyorVisual(context, Colors.grey, true);
+    }
+
     return StreamBuilder<Map<String, DynamicValue>>(
-      stream: ref.watch(stateManProvider.future).asStream().asyncExpand(
-            (stateMan) => CombineLatestStream(
-              [
-                stateMan
-                    .subscribe(widget.config.key)
-                    .asStream()
-                    .switchMap((s) => s),
-                if (widget.config.batchesKey != null)
-                  stateMan
-                      .subscribe(widget.config.batchesKey!)
-                      .asStream()
-                      .switchMap((s) => s),
-              ],
-              (List<DynamicValue> values) => {
-                'drive': values[0],
-                if (widget.config.batchesKey != null) 'batches': values[1],
-              },
-            ),
-          ),
+      stream: CombineLatestStream(
+        streams,
+        (List<DynamicValue> values) {
+          final result = <String, DynamicValue>{};
+          for (int i = 0; i < streamLabels.length; i++) {
+            if (streamLabels[i] == 'frequency') {
+              print('frequency: ${values[i]}');
+            }
+            result[streamLabels[i]] = values[i];
+          }
+          return result;
+        },
+      ),
       builder: (context, snapshot) {
+        if (widget.config.key == null || widget.config.key == '') {
+          print('no key');
+        }
         if (snapshot.hasError) {
           _log.e(
-            'Error fetching dynamic value for ${widget.config.key}, error: ${snapshot.error}',
+            'Error fetching dynamic values, error: ${snapshot.error}',
           );
           return _buildConveyorVisual(context, Colors.grey, true);
         }
         if (!snapshot.hasData) {
           return _buildConveyorVisual(context, Colors.grey, true);
         }
-        // _log.d('Dynamic value for ${widget.config.key}: ${snapshot.data}');
+
         final dynValue = snapshot.data!;
-        final color = _getConveyorColor(dynValue['drive'] as DynamicValue);
+        final color = _getConveyorColor(
+          driveValue: dynValue['drive'],
+          frequencyValue: dynValue['frequency'],
+          tripValue: dynValue['trip'],
+        );
 
         if (widget.config.simulateBatches ?? false) {
           _startSimulateBatchesTimer();
@@ -340,8 +445,8 @@ class _ConveyorState extends ConsumerState<Conveyor> {
           _stopSimulateBatchesTimer();
         }
 
-        if (snapshot.data!['batches'] != null) {
-          _updateBatches(snapshot.data!['batches']!);
+        if (dynValue['batches'] != null) {
+          _updateBatches(dynValue['batches']!);
         }
 
         return GestureDetector(
@@ -400,7 +505,7 @@ class _ConveyorState extends ConsumerState<Conveyor> {
       builder: (_) => StreamBuilder<(StateMan, DynamicValue)>(
         stream: ref.watch(stateManProvider.future).asStream().switchMap(
               (stateMan) => stateMan
-                  .subscribe(widget.config.key)
+                  .subscribe(widget.config.key!)
                   .asStream()
                   .map(
                     (stream) => Rx.combineLatest2(
@@ -429,7 +534,7 @@ class _ConveyorState extends ConsumerState<Conveyor> {
           var (stateMan, dynValue) = snapshot.data!;
 
           return AlertDialog(
-            title: Text(widget.config.key),
+            title: Text(widget.config.key!),
             content: SingleChildScrollView(
               child: Column(
                 mainAxisSize: MainAxisSize.min,
@@ -448,7 +553,7 @@ class _ConveyorState extends ConsumerState<Conveyor> {
                               final newValue = DynamicValue.from(dynValue);
                               newValue['p_cmd_JogBwd'] = isPressed;
                               await stateMan.write(
-                                widget.config.key,
+                                widget.config.key!,
                                 newValue,
                               );
                             }
@@ -458,7 +563,7 @@ class _ConveyorState extends ConsumerState<Conveyor> {
                                 .asBool) {
                               final newValue = DynamicValue.from(dynValue);
                               newValue['p_cmd_JogBwd'] = true;
-                              stateMan.write(widget.config.key, newValue);
+                              stateMan.write(widget.config.key!, newValue);
                             }
                           },
                           child: Icon(
@@ -481,7 +586,7 @@ class _ConveyorState extends ConsumerState<Conveyor> {
                               final newValue = DynamicValue.from(dynValue);
                               newValue['p_cmd_JogFwd'] = isPressed;
                               await stateMan.write(
-                                widget.config.key,
+                                widget.config.key!,
                                 newValue,
                               );
                             }
@@ -491,7 +596,7 @@ class _ConveyorState extends ConsumerState<Conveyor> {
                                 .asBool) {
                               final newValue = DynamicValue.from(dynValue);
                               newValue['p_cmd_JogFwd'] = true;
-                              stateMan.write(widget.config.key, newValue);
+                              stateMan.write(widget.config.key!, newValue);
                             }
                           },
                           child: Icon(
@@ -517,7 +622,7 @@ class _ConveyorState extends ConsumerState<Conveyor> {
                         onPressed: () {
                           final newValue = DynamicValue.from(dynValue);
                           newValue['p_cmd_FaultReset'] = true;
-                          stateMan.write(widget.config.key, newValue);
+                          stateMan.write(widget.config.key!, newValue);
                         },
                         child: Icon(
                           Icons.circle,
@@ -544,7 +649,7 @@ class _ConveyorState extends ConsumerState<Conveyor> {
                         onPressed: () {
                           final newValue = DynamicValue.from(dynValue);
                           newValue['p_cmd_ManualStopOnRelease'] = true;
-                          stateMan.write(widget.config.key, newValue);
+                          stateMan.write(widget.config.key!, newValue);
                         },
                         child: Icon(
                           Icons.circle,
@@ -573,7 +678,7 @@ class _ConveyorState extends ConsumerState<Conveyor> {
                         onPressed: () {
                           final newValue = DynamicValue.from(dynValue);
                           newValue['p_cmd_ResetRunHours'] = true;
-                          stateMan.write(widget.config.key, newValue);
+                          stateMan.write(widget.config.key!, newValue);
                         },
                         child: const Icon(
                           Icons.circle,
@@ -657,7 +762,7 @@ class _ConveyorState extends ConsumerState<Conveyor> {
                                   final newValue = DynamicValue.from(dynValue);
                                   newValue['p_cfg_AutoFreq'] =
                                       double.parse(value);
-                                  stateMan.write(widget.config.key, newValue);
+                                  stateMan.write(widget.config.key!, newValue);
                                 },
                               ),
                             ),
@@ -683,7 +788,7 @@ class _ConveyorState extends ConsumerState<Conveyor> {
                                   final newValue = DynamicValue.from(dynValue);
                                   newValue['p_cfg_CleaningFreq'] =
                                       double.parse(value);
-                                  stateMan.write(widget.config.key, newValue);
+                                  stateMan.write(widget.config.key!, newValue);
                                 },
                               ),
                             ),
@@ -710,7 +815,7 @@ class _ConveyorState extends ConsumerState<Conveyor> {
                                   final newValue = DynamicValue.from(dynValue);
                                   newValue['p_cfg_ManualFreq'] =
                                       double.parse(value);
-                                  stateMan.write(widget.config.key, newValue);
+                                  stateMan.write(widget.config.key!, newValue);
                                 },
                               ),
                             ),
@@ -735,7 +840,7 @@ class _ConveyorState extends ConsumerState<Conveyor> {
                         }
                         return ConveyorStatsGraph(
                           collector: collectorSnapshot.data,
-                          keyName: widget.config.key,
+                          keyName: widget.config.key!,
                         );
                       },
                     ),

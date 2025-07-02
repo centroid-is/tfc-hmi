@@ -40,8 +40,10 @@ const _$TextPosEnumMap = {
 
 ConveyorConfig _$ConveyorConfigFromJson(Map<String, dynamic> json) =>
     ConveyorConfig(
-      key: json['key'] as String,
+      key: json['key'] as String?,
       batchesKey: json['batchesKey'] as String?,
+      frequencyKey: json['frequencyKey'] as String?,
+      tripKey: json['tripKey'] as String?,
       simulateBatches: json['simulateBatches'] as bool?,
     )
       ..variant = json['asset_name'] as String
@@ -62,5 +64,7 @@ Map<String, dynamic> _$ConveyorConfigToJson(ConveyorConfig instance) =>
       'textPos': _$TextPosEnumMap[instance.textPos],
       'key': instance.key,
       'batchesKey': instance.batchesKey,
+      'frequencyKey': instance.frequencyKey,
+      'tripKey': instance.tripKey,
       'simulateBatches': instance.simulateBatches,
     };
