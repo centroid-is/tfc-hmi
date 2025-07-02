@@ -1,5 +1,5 @@
 import 'dart:io';
-
+import 'dart:async';
 import 'package:postgres/postgres.dart';
 import 'package:json_annotation/json_annotation.dart';
 export 'package:postgres/postgres.dart' show Sql;
@@ -127,39 +127,47 @@ class RetentionPolicy {
 class Database implements Session {
   Database(this.config);
 
-  Connection? connection;
+  Connection? conn;
   final DatabaseConfig config;
   static const configLocation = 'database_config';
   Map<String, RetentionPolicy> retentionPolicies = {};
 
+  // Add a cache for prepared statements
+  final Map<String, Statement> _preparedStatements = {};
+
   Future<void> connect() async {
-    if (connection != null && connection!.isOpen) {
+    if (conn != null && conn!.isOpen) {
       return;
     }
-    connection = await Connection.open(
+    conn = await Connection.open(
       config.postgres!,
-      settings: ConnectionSettings(sslMode: config.sslMode),
+      settings: PoolSettings(
+        sslMode: config.sslMode,
+        maxConnectionCount: 20,
+        maxConnectionAge: const Duration(minutes: 10),
+        maxSessionUse: const Duration(minutes: 10),
+      ),
     ).onError((error, stackTrace) {
       throw DatabaseException(
-        'Connection to Postgres failed: $error\n $stackTrace',
+        'conn to Postgres failed: $error\n $stackTrace',
       );
     });
   }
 
   @override
-  bool get isOpen => connection != null && connection!.isOpen;
+  bool get isOpen => conn != null && conn!.isOpen;
 
   @override
-  Future<void> get closed => connection?.closed ?? Future.value();
+  Future<void> get closed => conn?.closed ?? Future.value();
 
   Future<void> close() async {
-    await connection?.close();
+    await conn?.close();
   }
 
   @override
   Future<Statement> prepare(Object /* String | Sql */ query) async {
     await connect();
-    return connection!.prepare(query);
+    return conn!.prepare(query);
   }
 
   @override
@@ -172,7 +180,7 @@ class Database implements Session {
     Duration? timeout,
   }) async {
     await connect();
-    return connection!.execute(query,
+    return conn!.execute(query,
         parameters: parameters,
         ignoreRows: ignoreRows,
         queryMode: queryMode,
@@ -213,23 +221,15 @@ class Database implements Session {
         // Handle complex object - create columns for each key
         await _insertComplexValue(tableName, time, value);
       } else {
-        // Handle simple value
-        await execute(
-          Sql.named('''
-        INSERT INTO "$tableName" (time, value)
-        VALUES (@time, @value)
-        '''),
-          parameters: {
-            'time': time,
-            'value': value,
-          },
-        );
+        // Handle simple value using prepared statement
+        await _insertSimpleValue(tableName, time, value);
       }
     }
 
     try {
       await insert();
     } catch (e) {
+      print('error inserting $tableName $value: $e');
       if (await _tryToCreateTimeseriesTable(tableName, value)) {
         await insert();
       } else {
@@ -238,28 +238,68 @@ class Database implements Session {
     }
   }
 
+  /// Insert simple value using prepared statement
+  Future<void> _insertSimpleValue(
+      String tableName, DateTime time, dynamic value) async {
+    final statementKey = 'insert_simple_$tableName';
+
+    // Get or create prepared statement
+    Statement statement =
+        _preparedStatements[statementKey] ?? await prepare(Sql.named('''
+          INSERT INTO "$tableName" (time, value)
+          VALUES (@time, @value)
+        '''));
+
+    // Cache the statement for reuse
+    if (!_preparedStatements.containsKey(statementKey)) {
+      _preparedStatements[statementKey] = statement;
+    }
+
+    final now = DateTime.now();
+    await statement.run({
+      'time': time,
+      'value': value,
+    });
+    print('inserted $tableName $value took ${DateTime.now().difference(now)}');
+  }
+
   /// Insert complex value with separate columns for each key
   Future<void> _insertComplexValue(
       String tableName, DateTime time, Map<String, dynamic> value) async {
-    // Build dynamic SQL for complex object
-    final columns = ['time'];
-    final placeholders = ['@time'];
-    final parameters = <String, dynamic>{'time': time};
+    // Create a unique key based on the column structure
+    final columnNames = value.keys.toList()..sort(); // Sort for consistent key
+    final statementKey = 'insert_complex_${tableName}_${columnNames.join('_')}';
 
-    for (final entry in value.entries) {
-      final columnName = entry.key;
-      final columnValue = entry.value;
-      columns.add('"$columnName"');
-      placeholders.add('@$columnName');
-      parameters[columnName] = columnValue;
+    // Get or create prepared statement
+    Statement statement = _preparedStatements[statementKey] ??
+        await _createComplexInsertStatement(tableName, columnNames);
+
+    // Cache the statement for reuse
+    if (!_preparedStatements.containsKey(statementKey)) {
+      _preparedStatements[statementKey] = statement;
     }
+
+    // Build parameters map
+    final parameters = <String, dynamic>{'time': time};
+    for (final entry in value.entries) {
+      parameters[entry.key] = entry.value;
+    }
+
+    await statement.run(parameters);
+  }
+
+  /// Create a prepared statement for complex insert with specific columns
+  Future<Statement> _createComplexInsertStatement(
+      String tableName, List<String> columnNames) async {
+    final columns = ['time', ...columnNames.map((name) => '"$name"')];
+    final placeholders = ['@time', ...columnNames.map((name) => '@$name')];
 
     final sql = '''
       INSERT INTO "$tableName" (${columns.join(', ')})
       VALUES (${placeholders.join(', ')})
     ''';
 
-    await execute(Sql.named(sql), parameters: parameters);
+    return await prepare(Sql.named(sql));
   }
 
   /// Query time-series data
@@ -300,6 +340,55 @@ class Database implements Session {
       }).toList();
     }
     throw DatabaseException('Time column not found in table $tableName');
+  }
+
+  /// Count time-series data points in regular time intervals
+  /// Returns a map of counts for each interval, from oldest to newest {bucketStart: count, ...}
+  /// [interval] is the duration of each bucket
+  /// [howMany] is the number of buckets to count
+  /// [since] is the end time for the buckets (defaults to now)
+  Future<Map<DateTime, int>> countTimeseriesDataMultiple(
+      String tableName, Duration interval, int howMany,
+      {DateTime? since}) async {
+    if (howMany <= 0) {
+      return {};
+    }
+
+    final endTime = since ?? DateTime.now();
+    final sinceTimes = <DateTime>[];
+
+    // Generate time buckets from oldest to newest
+    for (int i = howMany - 1; i >= 0; i--) {
+      final bucketStart = endTime.subtract(interval * (i + 1));
+      sinceTimes.add(bucketStart);
+    }
+
+    // Build a UNION query for all intervals
+    final unionQueries = <String>[];
+    final parameters = <String, dynamic>{};
+
+    for (int i = 0; i < sinceTimes.length; i++) {
+      final paramName = 'since$i';
+      final nextParamName = 'since${i + 1}';
+      final bucketEnd = i < sinceTimes.length - 1 ? sinceTimes[i + 1] : endTime;
+
+      unionQueries.add('''
+        SELECT COUNT(*) as count_$i FROM "$tableName"
+        WHERE time >= @$paramName AND time < @$nextParamName
+      ''');
+      parameters[paramName] = sinceTimes[i];
+      parameters[nextParamName] = bucketEnd;
+    }
+
+    final sql = unionQueries.join(' UNION ALL ');
+    final result = await execute(Sql.named(sql), parameters: parameters);
+
+    // Extract counts from result rows
+    final counts = <DateTime, int>{};
+    for (int i = 0; i < result.length; i++) {
+      counts[sinceTimes[i]] = result[i][0] as int;
+    }
+    return counts;
   }
 
   /// Get the retention duration for a hypertable

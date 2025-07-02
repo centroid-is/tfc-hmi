@@ -74,6 +74,7 @@ const _$GraphTypeEnumMap = {
   GraphType.bar: 'bar',
   GraphType.scatter: 'scatter',
   GraphType.timeseries: 'timeseries',
+  GraphType.barTimeseries: 'barTimeseries',
 };
 
 const _$TextPosEnumMap = {

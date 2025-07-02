@@ -400,6 +400,53 @@ void main() {
           ], // not sure it needs to be quoted but lets continue
         });
       });
+
+      test('should count timeseries data in regular time intervals', () async {
+        final baseTime = DateTime.now();
+
+        // Insert data at different times
+        await database.insertTimeseriesData(testTableName,
+            baseTime.subtract(const Duration(hours: 3, minutes: 30)), 1);
+        await database.insertTimeseriesData(testTableName,
+            baseTime.subtract(const Duration(hours: 2, minutes: 30)), 2);
+        await database.insertTimeseriesData(testTableName,
+            baseTime.subtract(const Duration(hours: 1, minutes: 30)), 3);
+        await database.insertTimeseriesData(
+            testTableName, baseTime.subtract(const Duration(minutes: 30)), 4);
+
+        // Count in 1-hour intervals for the last 4 hours from baseTime
+        final counts = await database.countTimeseriesDataMultiple(
+          testTableName,
+          const Duration(hours: 1),
+          6,
+          since: baseTime,
+        );
+
+        // Extract just the count values from the map, maintaining order
+        final countValues = counts.values.toList();
+
+        // Should return [0, 0, 1, 1] - counts from oldest to newest bucket
+        // Bucket 0 (3-4 hours ago): 0 records (no data in this range)
+        // Bucket 1 (2-3 hours ago): 0 records (no data in this range)
+        // Bucket 2 (1-2 hours ago): 1 record
+        // Bucket 3 (0-1 hours ago): 1 record
+        expect(countValues, [0, 0, 1, 1, 1, 1]);
+
+        // Test with a different end time
+        final pastTime = baseTime.subtract(const Duration(hours: 1));
+        final countsFromPast = await database.countTimeseriesDataMultiple(
+          testTableName,
+          const Duration(hours: 1),
+          2,
+          since: pastTime,
+        );
+
+        // Extract count values
+        final pastCountValues = countsFromPast.values.toList();
+
+        // Should return [0, 1] - counts from 2-3 hours ago and 1-2 hours ago
+        expect(pastCountValues, [1, 1]);
+      });
     });
 
     group('Error Handling', () {

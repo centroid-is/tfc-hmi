@@ -359,7 +359,7 @@ class GraphAsset extends ConsumerWidget {
           return collector.collectStream(
             series.key,
             // TODO: make this as time window, when panning is implemented better
-            since: const Duration(days: 365),
+            since: const Duration(days: 2),
           );
         }).toList();
 

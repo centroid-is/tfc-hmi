@@ -368,43 +368,49 @@ class AlarmMan {
       parameters: {'limit': limit},
     );
 
-    return result.map((row) {
-      // Find the corresponding alarm config from our current alarms
-      final alarmConfig = alarms.firstWhere(
-        (a) => a.config.uid == row[1] as String, // alarm_uid is at index 1
-        orElse: () =>
-            throw Exception('Alarm config not found for uid: ${row[1]}'),
-      );
+    return result
+        .map((row) {
+          // Find the corresponding alarm config from our current alarms
+          final alarmConfig = alarms.firstWhereOrNull(
+            (a) => a.config.uid == row[1] as String, // alarm_uid is at index 1
+          );
 
-      // Create AlarmRule from stored data
-      final rule = AlarmRule(
-        level: AlarmLevel.values.firstWhere(
-          (l) => l.name == row[4] as String, // alarm_level is at index 4
-        ),
-        expression: ExpressionConfig(
-          value: Expression(
-              formula: row[5] as String? ?? ''), // expression is at index 5
-        ),
-        acknowledgeRequired: false, // We don't store this in history
-      );
+          // Skip this alarm if config is not found
+          if (alarmConfig == null) {
+            return null;
+          }
 
-      // Create AlarmNotification
-      final notification = AlarmNotification(
-        uid: row[1] as String, // alarm_uid
-        active: row[6] as bool, // active
-        expression: row[5] as String?, // expression
-        rule: rule,
-        timestamp: row[8] as DateTime, // created_at
-      );
+          // Create AlarmRule from stored data
+          final rule = AlarmRule(
+            level: AlarmLevel.values.firstWhere(
+              (l) => l.name == row[4] as String, // alarm_level is at index 4
+            ),
+            expression: ExpressionConfig(
+              value: Expression(
+                  formula: row[5] as String? ?? ''), // expression is at index 5
+            ),
+            acknowledgeRequired: false, // We don't store this in history
+          );
 
-      // Create and return AlarmActive
-      return AlarmActive(
-        alarm: alarmConfig,
-        notification: notification,
-        pendingAck: row[7] as bool, // pending_ack
-        deactivated: row[9] as DateTime?, // deactivated_at
-      );
-    }).toList();
+          // Create AlarmNotification
+          final notification = AlarmNotification(
+            uid: row[1] as String, // alarm_uid
+            active: row[6] as bool, // active
+            expression: row[5] as String?, // expression
+            rule: rule,
+            timestamp: row[8] as DateTime, // created_at
+          );
+
+          // Create and return AlarmActive
+          return AlarmActive(
+            alarm: alarmConfig,
+            notification: notification,
+            pendingAck: row[7] as bool, // pending_ack
+            deactivated: row[9] as DateTime?, // deactivated_at
+          );
+        })
+        .whereType<AlarmActive>()
+        .toList();
   }
 }
 

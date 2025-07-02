@@ -992,7 +992,8 @@ class _ConveyorStatsGraphState extends State<ConveyorStatsGraph> {
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<List<TimeseriesData<dynamic>>>(
-      stream: widget.collector?.collectStream(widget.keyName),
+      stream: widget.collector
+          ?.collectStream(widget.keyName, since: const Duration(hours: 2)),
       builder: (context, snapshot) {
         if (!snapshot.hasData || snapshot.data!.isEmpty) {
           return const Center(child: Text('No data'));

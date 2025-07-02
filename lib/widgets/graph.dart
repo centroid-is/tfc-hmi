@@ -31,6 +31,7 @@ enum GraphType {
   bar,
   scatter,
   timeseries,
+  barTimeseries,
 }
 
 @JsonSerializable(explicitToJson: true)
@@ -159,21 +160,32 @@ class _GraphState extends State<Graph> {
 
     // Configure behaviors
     switch (widget.config.type) {
+      case GraphType.timeseries:
+        // Use DateTime as x-axis
+        final series = _convertDataToTimeSeries(filteredData);
+        return charts.TimeSeriesChart(
+          series,
+          animate: false,
+          defaultRenderer: charts.LineRendererConfig<DateTime>(),
+          domainAxis:
+              _buildDateTimeAxisSpec(widget.config.xAxis, widget.config.xSpan),
+          primaryMeasureAxis: _buildAxisSpec(widget.config.yAxis),
+          secondaryMeasureAxis: widget.config.yAxis2 != null
+              ? _buildAxisSpec(widget.config.yAxis2!)
+              : null,
+          behaviors: [
+            charts.PanAndZoomBehavior<DateTime>(
+              panningCompletedCallback: () {
+                if (widget.onPanCompleted != null) {
+                  widget.onPanCompleted!();
+                }
+              },
+            ),
+          ],
+        );
       case GraphType.line:
-        final behaviors = [
-          charts.PanAndZoomBehavior<num>(
-            panningCompletedCallback: () {
-              if (widget.onPanCompleted != null) {
-                widget.onPanCompleted!();
-              }
-            },
-          ),
-        ];
+        // Use numeric x-axis
         final series = _convertDataToNumericSeries(filteredData);
-        // Return empty container if no valid series data
-        if (series.isEmpty) {
-          return const SizedBox.shrink();
-        }
         return charts.LineChart(
           series,
           animate: false,
@@ -182,35 +194,60 @@ class _GraphState extends State<Graph> {
           secondaryMeasureAxis: widget.config.yAxis2 != null
               ? _buildAxisSpec(widget.config.yAxis2!)
               : null,
-          behaviors: behaviors,
+          behaviors: [
+            charts.PanAndZoomBehavior<num>(
+              panningCompletedCallback: () {
+                if (widget.onPanCompleted != null) {
+                  widget.onPanCompleted!();
+                }
+              },
+            ),
+          ],
         );
-
-      case GraphType.bar:
-        final behaviors = [
-          charts.PanAndZoomBehavior<String>(
-            panningCompletedCallback: () {
-              if (widget.onPanCompleted != null) {
-                widget.onPanCompleted!();
-              }
-            },
-          ),
-        ];
-        final series = _convertDataToBarSeries(filteredData);
-        // Return empty container if no valid series data
-        if (series.isEmpty) {
-          return const SizedBox.shrink();
-        }
-        return charts.BarChart(
+      case GraphType.barTimeseries:
+        // Use DateTime as x-axis for bar chart
+        final series = _convertDataToTimeBarSeries(filteredData);
+        return charts.TimeSeriesChart(
           series,
+          defaultRenderer: charts.BarRendererConfig<DateTime>(),
           animate: false,
-          domainAxis: _buildStringAxisSpec(widget.config.xAxis),
+          domainAxis:
+              _buildDateTimeAxisSpec(widget.config.xAxis, widget.config.xSpan),
           primaryMeasureAxis: _buildAxisSpec(widget.config.yAxis),
           secondaryMeasureAxis: widget.config.yAxis2 != null
               ? _buildAxisSpec(widget.config.yAxis2!)
               : null,
-          behaviors: behaviors,
+          behaviors: [
+            charts.PanAndZoomBehavior<DateTime>(
+              panningCompletedCallback: () {
+                if (widget.onPanCompleted != null) {
+                  widget.onPanCompleted!();
+                }
+              },
+            ),
+          ],
         );
-
+      case GraphType.bar:
+        // Use string x-axis
+        final series = _convertDataToBarSeries(filteredData);
+        return charts.BarChart(
+          series,
+          animate: false,
+          domainAxis: _buildAxisSpec(widget.config.xAxis),
+          primaryMeasureAxis: _buildAxisSpec(widget.config.yAxis),
+          secondaryMeasureAxis: widget.config.yAxis2 != null
+              ? _buildAxisSpec(widget.config.yAxis2!)
+              : null,
+          behaviors: [
+            charts.PanAndZoomBehavior<String>(
+              panningCompletedCallback: () {
+                if (widget.onPanCompleted != null) {
+                  widget.onPanCompleted!();
+                }
+              },
+            ),
+          ],
+        );
       case GraphType.scatter:
         final behaviors = [
           charts.PanAndZoomBehavior<num>(
@@ -235,32 +272,6 @@ class _GraphState extends State<Graph> {
               ? _buildAxisSpec(widget.config.yAxis2!)
               : null,
           behaviors: behaviors,
-        );
-
-      case GraphType.timeseries:
-        final behaviors = [
-          charts.PanAndZoomBehavior<DateTime>(
-            panningCompletedCallback: () {
-              if (widget.onPanCompleted != null) widget.onPanCompleted!();
-            },
-          ),
-        ];
-        final series = _convertDataToTimeSeries(filteredData);
-        if (series.isEmpty) {
-          return const SizedBox.shrink();
-        }
-        return charts.TimeSeriesChart(
-          series,
-          animate: false,
-          defaultRenderer: charts.LineRendererConfig<DateTime>(),
-          behaviors: behaviors,
-          dateTimeFactory: const charts.LocalDateTimeFactory(),
-          primaryMeasureAxis: _buildAxisSpec(widget.config.yAxis),
-          secondaryMeasureAxis: widget.config.yAxis2 != null
-              ? _buildAxisSpec(widget.config.yAxis2!)
-              : null,
-          domainAxis:
-              _buildDateTimeAxisSpec(widget.config.xAxis, widget.config.xSpan),
         );
     }
   }
@@ -406,6 +417,42 @@ class _GraphState extends State<Graph> {
               charts.measureAxisIdKey, charts.Axis.secondaryMeasureAxisId);
         }
         seriesList.add(series);
+      });
+    }
+    return seriesList;
+  }
+
+  List<charts.Series<_TimePoint, DateTime>> _convertDataToTimeBarSeries(
+      List<Map<GraphDataConfig, List<List<double>>>> data) {
+    final seriesList = <charts.Series<_TimePoint, DateTime>>[];
+    for (var seriesMap in data) {
+      seriesMap.forEach((config, points) {
+        final data = points
+            .where((p) => p.length == 2)
+            .map((p) => _TimePoint(
+                DateTime.fromMillisecondsSinceEpoch(p[0].toInt()), p[1]))
+            .toList();
+        if (data.isNotEmpty) {
+          final series = charts.Series<_TimePoint, DateTime>(
+            id: config.label,
+            data: data,
+            domainFn: (_TimePoint point, _) => point.time,
+            measureFn: (_TimePoint point, _) => point.value,
+            seriesColor: config.color != null
+                ? charts.Color(
+                    a: _floatToInt8(config.color!.a),
+                    r: _floatToInt8(config.color!.r),
+                    g: _floatToInt8(config.color!.g),
+                    b: _floatToInt8(config.color!.b),
+                  )
+                : null,
+          );
+          if (!config.mainAxis) {
+            series.setAttribute(
+                charts.measureAxisIdKey, charts.Axis.secondaryMeasureAxisId);
+          }
+          seriesList.add(series);
+        }
       });
     }
     return seriesList;
