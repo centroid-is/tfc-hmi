@@ -18,10 +18,12 @@ void main() {
       await startDockerCompose();
       await waitForDatabaseReady(); // More reliable than a fixed delay
 
-      database = await connectToDatabase();
-
       // Verify connection
       expect(database.isOpen, true);
+    });
+
+    setUp(() async {
+      database = await connectToDatabase();
     });
 
     tearDown(() async {
@@ -184,7 +186,8 @@ void main() {
 
         await database.insertTimeseriesData(testTableName, now, testData);
 
-        final result = await database.queryTimeseriesData(testTableName, null);
+        final result = await database.queryTimeseriesData(
+            testTableName, now.subtract(const Duration(days: 1)));
         expect(result.length, 1);
         expect(result[0].value, testData);
       });
@@ -195,7 +198,8 @@ void main() {
 
         await database.insertTimeseriesData(testTableName, now, testData);
 
-        final result = await database.queryTimeseriesData(testTableName, null);
+        final result = await database.queryTimeseriesData(
+            testTableName, now.subtract(const Duration(days: 1)));
         expect(result.length, 1);
         expect(result[0].value, testData);
       });
@@ -206,7 +210,8 @@ void main() {
 
         await database.insertTimeseriesData(testTableName, now, testData);
 
-        final result = await database.queryTimeseriesData(testTableName, null);
+        final result = await database.queryTimeseriesData(
+            testTableName, now.subtract(const Duration(days: 1)));
         expect(result.length, 1);
         expect(result[0].value, testData);
       });
@@ -217,7 +222,8 @@ void main() {
 
         await database.insertTimeseriesData(testTableName, now, testData);
 
-        final result = await database.queryTimeseriesData(testTableName, null);
+        final result = await database.queryTimeseriesData(
+            testTableName, now.subtract(const Duration(days: 1)));
         expect(result.length, 1);
         expect(result[0].value, testData);
       });
@@ -229,7 +235,8 @@ void main() {
         await database.insertTimeseriesData(testTableName, now, testData);
 
         // Verify data was inserted
-        final result = await database.queryTimeseriesData(testTableName, null);
+        final result = await database.queryTimeseriesData(
+            testTableName, now.subtract(const Duration(days: 1)));
         expect(result.length, 1);
         expect(result[0].time, isA<DateTime>());
         expect(result[0].value, testData);
@@ -249,7 +256,8 @@ void main() {
         );
 
         // Verify only the first data point was inserted
-        final result = await database.queryTimeseriesData(testTableName, null);
+        final result = await database.queryTimeseriesData(
+            testTableName, now.subtract(const Duration(days: 1)));
         expect(result.length, 1);
         expect(result[0].time, isA<DateTime>());
         expect(result[0].value, testData);
@@ -265,7 +273,8 @@ void main() {
         await database.insertTimeseriesData(testTableName, now, testData2);
         await database.insertTimeseriesData(testTableName, now, testData3);
 
-        final result = await database.queryTimeseriesData(testTableName, null);
+        final result = await database.queryTimeseriesData(
+            testTableName, now.subtract(const Duration(days: 1)));
         expect(result.length, 3);
         expect(result[2].value, testData);
         expect(result[1].value, testData2.toString().toUpperCase());
@@ -288,7 +297,8 @@ void main() {
           );
         }
 
-        final result = await database.queryTimeseriesData(testTableName, null);
+        final result = await database.queryTimeseriesData(
+            testTableName, baseTime.subtract(const Duration(days: 1)));
         expect(result.length, 3);
 
         // Verify data is in correct order
@@ -345,7 +355,7 @@ void main() {
         // Query in descending order
         final result = await database.queryTimeseriesData(
           testTableName,
-          null,
+          baseTime.subtract(const Duration(days: 1)),
           orderBy: 'time DESC',
         );
 
@@ -373,7 +383,8 @@ void main() {
 
         await database.insertTimeseriesData(testTableName, now, complexData);
 
-        final result = await database.queryTimeseriesData(testTableName, null);
+        final result = await database.queryTimeseriesData(
+            testTableName, now.subtract(const Duration(days: 1)));
         expect(result.length, 1);
         expect(result[0].value, complexData);
       });
@@ -388,7 +399,8 @@ void main() {
 
         await database.insertTimeseriesData(testTableName, now, dataWithNulls);
 
-        final result = await database.queryTimeseriesData(testTableName, null);
+        final result = await database.queryTimeseriesData(
+            testTableName, now.subtract(const Duration(days: 1)));
         expect(result.length, 1);
         expect(result[0].value, {
           'value': 42,
@@ -488,7 +500,8 @@ void main() {
           );
         }
 
-        final result = await database.queryTimeseriesData(testTableName, null);
+        final result = await database.queryTimeseriesData(
+            testTableName, baseTime.subtract(const Duration(days: 1)));
         expect(result.length, numRecords);
       }, timeout: Timeout(Duration(minutes: 2)));
 
@@ -511,7 +524,8 @@ void main() {
         await database.insertTimeseriesData(
             testTableName, DateTime.now(), largeData);
 
-        final result = await database.queryTimeseriesData(testTableName, null);
+        final result = await database.queryTimeseriesData(
+            testTableName, DateTime.now().subtract(const Duration(days: 1)));
         expect(result.length, 1);
         expect(result[0].value, largeData);
       });

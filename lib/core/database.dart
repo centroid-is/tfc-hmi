@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:postgres/postgres.dart';
 import 'package:json_annotation/json_annotation.dart';
 export 'package:postgres/postgres.dart' show Sql;
+import 'package:logger/logger.dart';
 
 import '../converter/duration_converter.dart';
 
@@ -134,6 +135,7 @@ class Database implements Session {
 
   // Add a cache for prepared statements
   final Map<String, Statement> _preparedStatements = {};
+  static final Logger logger = Logger();
 
   Future<void> connect() async {
     if (conn != null && conn!.isOpen) {
@@ -229,7 +231,7 @@ class Database implements Session {
     try {
       await insert();
     } catch (e) {
-      print('error inserting $tableName $value: $e');
+      logger.e('error inserting $tableName $value: $e');
       if (await _tryToCreateTimeseriesTable(tableName, value)) {
         await insert();
       } else {
@@ -260,7 +262,8 @@ class Database implements Session {
       'time': time,
       'value': value,
     });
-    print('inserted $tableName $value took ${DateTime.now().difference(now)}');
+    logger
+        .i('inserted $tableName $value took ${DateTime.now().difference(now)}');
   }
 
   /// Insert complex value with separate columns for each key
@@ -304,19 +307,26 @@ class Database implements Session {
 
   /// Query time-series data
   Future<List<TimeseriesData<dynamic>>> queryTimeseriesData(
-      String tableName, DateTime? since,
+      String tableName, DateTime since,
       {String? orderBy = 'time ASC'}) async {
-    final result = await execute(
-      since != null ? Sql.named('''
+    // Create unique key for prepared statement based on table
+    final statementKey = 'stream/query_timeseries_$tableName';
+
+    // Get or create prepared statement
+    Statement statement;
+    if (_preparedStatements.containsKey(statementKey)) {
+      statement = _preparedStatements[statementKey]!;
+    } else {
+      statement = await prepare(Sql.named('''
             SELECT * FROM "$tableName"
             WHERE time >= @since
-            ORDER BY $orderBy
-            ''') : Sql.named('''
-            SELECT * FROM "$tableName"
-            ORDER BY $orderBy
-            '''),
-      parameters: since != null ? {'since': since} : null,
-    );
+            ORDER BY time ASC
+            '''));
+      _preparedStatements[statementKey] = statement;
+    }
+
+    // Execute the prepared statement
+    final result = await statement.run({'since': since});
 
     // Map each row to a Map<String, dynamic>
     final columnNames = result.schema.columns
@@ -342,6 +352,82 @@ class Database implements Session {
     throw DatabaseException('Time column not found in table $tableName');
   }
 
+  Stream<List<TimeseriesData<dynamic>>> streamTimeseriesData(
+      String tableName, DateTime since,
+      {String? orderBy = 'time ASC'}) {
+    // Create unique key for prepared statement based on table
+    final statementKey = 'stream/query_timeseries_$tableName';
+
+    // Bind the statement with parameters to get a stream
+    late ResultStream stream;
+
+    final controller = StreamController<List<TimeseriesData<dynamic>>>();
+    controller.onListen = () async {
+      try {
+        // Get or create prepared statement
+        Statement statement;
+        if (_preparedStatements.containsKey(statementKey)) {
+          statement = _preparedStatements[statementKey]!;
+        } else {
+          statement = await prepare(Sql.named('''
+            SELECT * FROM "$tableName"
+            WHERE time >= @since
+            ORDER BY time ASC
+            '''));
+          _preparedStatements[statementKey] = statement;
+        }
+        stream = statement.bind({'since': since});
+      } catch (e, stackTrace) {
+        logger.e('Error streaming timeseries data for $tableName',
+            error: e, stackTrace: stackTrace);
+        controller.addError(e);
+        controller.close();
+        return;
+      }
+      List<String>? columnNames;
+      List<TimeseriesData<dynamic>> result = [];
+
+      final subscription = stream.listen((row) {
+        try {
+          if (controller.isClosed) return;
+          columnNames ??= row.schema.columns
+              .map((c) => c.columnName ?? 'unknown_column_${c.typeOid}')
+              .toList();
+          final map = <String, dynamic>{};
+          DateTime? time;
+          for (var i = 0; i < columnNames!.length; i++) {
+            if (columnNames![i] == 'time') {
+              time = row[i] as DateTime;
+            } else {
+              map[columnNames![i]] = row[i];
+            }
+          }
+          if (map.length == 1 && map.containsKey('value')) {
+            result.add(TimeseriesData(map['value'], time!));
+          } else {
+            result.add(TimeseriesData(map, time!));
+          }
+          controller.add(result);
+        } catch (e, stackTrace) {
+          logger.e('Error streaming timeseries data for $tableName',
+              error: e, stackTrace: stackTrace);
+          controller.addError(e);
+          controller.close();
+        }
+      });
+      subscription.onError((error, stackTrace) {
+        logger.e('Error streaming timeseries data for $tableName',
+            error: error, stackTrace: stackTrace);
+        controller.addError(error);
+      });
+      subscription.onDone(() {
+        controller.close();
+      });
+    };
+
+    return controller.stream;
+  }
+
   /// Count time-series data points in regular time intervals
   /// Returns a map of counts for each interval, from oldest to newest {bucketStart: count, ...}
   /// [interval] is the duration of each bucket
@@ -363,25 +449,42 @@ class Database implements Session {
       sinceTimes.add(bucketStart);
     }
 
-    // Build a UNION query for all intervals
-    final unionQueries = <String>[];
-    final parameters = <String, dynamic>{};
+    // Create unique key for prepared statement based on table and number of intervals
+    final statementKey = 'count_timeseries_${tableName}_$howMany';
 
+    // Get or create prepared statement
+    Statement statement;
+    if (_preparedStatements.containsKey(statementKey)) {
+      statement = _preparedStatements[statementKey]!;
+    } else {
+      // Build a UNION query for the specific number of intervals
+      final unionQueries = <String>[];
+      for (int i = 0; i < howMany; i++) {
+        final paramName = 'since$i';
+        final nextParamName = 'since${i + 1}';
+        unionQueries.add('''
+          SELECT COUNT(*) as count_$i FROM "$tableName"
+          WHERE time >= @$paramName AND time < @$nextParamName
+        ''');
+      }
+      final sql = unionQueries.join(' UNION ALL ');
+      statement = await prepare(Sql.named(sql));
+      _preparedStatements[statementKey] = statement;
+    }
+
+    // Build parameters map
+    final parameters = <String, dynamic>{};
     for (int i = 0; i < sinceTimes.length; i++) {
       final paramName = 'since$i';
       final nextParamName = 'since${i + 1}';
       final bucketEnd = i < sinceTimes.length - 1 ? sinceTimes[i + 1] : endTime;
 
-      unionQueries.add('''
-        SELECT COUNT(*) as count_$i FROM "$tableName"
-        WHERE time >= @$paramName AND time < @$nextParamName
-      ''');
       parameters[paramName] = sinceTimes[i];
       parameters[nextParamName] = bucketEnd;
     }
 
-    final sql = unionQueries.join(' UNION ALL ');
-    final result = await execute(Sql.named(sql), parameters: parameters);
+    // Execute the prepared statement
+    final result = await statement.run(parameters);
 
     // Extract counts from result rows
     final counts = <DateTime, int>{};

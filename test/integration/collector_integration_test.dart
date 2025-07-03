@@ -45,6 +45,7 @@ void main() {
     Future<List<TimeseriesData<dynamic>>> waitUntilInserted(String tableName,
         {DateTime? sinceTime}) async {
       late dynamic insertedData;
+      sinceTime ??= DateTime.now().subtract(const Duration(days: 1));
       for (var i = 0; i < 10; i++) {
         // Wait for async processing
         try {
