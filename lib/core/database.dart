@@ -293,7 +293,7 @@ class Database {
         final queryString = '''
             SELECT * FROM "$tableName"
             WHERE time >= @since
-            ORDER BY time ASC
+            ORDER BY $orderBy
             ''';
         stream = await queryStream(queryString, parameters: {'since': since});
       } catch (e, stackTrace) {
@@ -417,11 +417,11 @@ class Database {
       return null;
     }
     final dropAfter = result.first[0] as String;
-    final scheduleInterval = result.first[1] as Interval?;
+    final scheduleInterval = result.first[1] as String?;
 
     return RetentionPolicy(
       dropAfter: parsePostgresInterval(dropAfter)!,
-      scheduleInterval: scheduleInterval?.toDuration(),
+      scheduleInterval: parsePostgresInterval(scheduleInterval),
     );
   }
 

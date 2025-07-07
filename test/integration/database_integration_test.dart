@@ -1,5 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:postgres/postgres.dart';
+import 'package:postgres/postgres.dart' as pg1;
+import 'package:postgresql2/postgresql.dart';
+
 import 'package:tfc/core/database.dart';
 
 import 'docker_compose.dart';
@@ -17,9 +19,9 @@ void main() {
     setUpAll(() async {
       await startDockerCompose();
       await waitForDatabaseReady(); // More reliable than a fixed delay
-
+      database = await connectToDatabase();
       // Verify connection
-      expect(database.isOpen, true);
+      expect(database.conn!.state, ConnectionState.idle);
     });
 
     setUp(() async {
@@ -31,10 +33,10 @@ void main() {
       try {
         // Remove retention policies first
         await database
-            .execute('DROP TABLE IF EXISTS $testTableName CASCADE')
+            .query('DROP TABLE IF EXISTS $testTableName CASCADE')
             .timeout(const Duration(seconds: 5));
         await database
-            .execute('DROP TABLE IF EXISTS $testTableName2 CASCADE')
+            .query('DROP TABLE IF EXISTS $testTableName2 CASCADE')
             .timeout(const Duration(seconds: 5));
       } catch (e) {
         // Ignore cleanup errors
@@ -48,16 +50,16 @@ void main() {
 
     group('Connection Tests', () {
       test('should connect to PostgreSQL database', () async {
-        expect(database.isOpen, true);
+        expect(database.conn!.state, ConnectionState.idle);
 
         // Test basic query
-        final result = await database.execute('SELECT 1 as test_value');
+        final result = await database.query('SELECT 1 as test_value');
         expect(result.first[0], 1);
       });
 
       test('should handle connection errors gracefully', () async {
         final badConfig = DatabaseConfig(
-          postgres: Endpoint(
+          postgres: pg1.Endpoint(
             host: 'invalid-host',
             port: 5432,
             database: 'testdb',
@@ -81,7 +83,7 @@ void main() {
         expect(await database.tableExists(testTableName), false);
 
         // Create table
-        await database.execute('''
+        await database.query('''
           CREATE TABLE "$testTableName" (
             id SERIAL PRIMARY KEY,
             name TEXT NOT NULL
@@ -92,7 +94,7 @@ void main() {
         expect(await database.tableExists(testTableName), true);
 
         // Clean up
-        await database.execute('DROP TABLE "$testTableName"');
+        await database.query('DROP TABLE "$testTableName"');
       });
 
       test('should handle table operations with special characters', () async {
@@ -100,7 +102,7 @@ void main() {
 
         expect(await database.tableExists(specialTableName), false);
 
-        await database.execute('''
+        await database.query('''
           CREATE TABLE "$specialTableName" (
             id SERIAL PRIMARY KEY
           )
@@ -108,7 +110,7 @@ void main() {
 
         expect(await database.tableExists(specialTableName), true);
 
-        await database.execute('DROP TABLE "$specialTableName"');
+        await database.query('DROP TABLE "$specialTableName"');
       });
     });
 
@@ -125,23 +127,23 @@ void main() {
         expect(await database.tableExists(testTableName), true);
 
         // Verify it's a hypertable (TimescaleDB specific)
-        final hypertableResult = await database.execute(Sql.named('''
+        final hypertableResult = await database.query('''
           SELECT EXISTS (
             SELECT FROM timescaledb_information.hypertables 
             WHERE hypertable_name = @tableName
           )
-        '''), parameters: {'tableName': testTableName});
+        ''', parameters: {'tableName': testTableName});
 
         expect(hypertableResult.first[0], true);
 
         // Verify retention policy
-        final retentionResult = await database.execute(Sql.named('''
+        final retentionResult = await database.query('''
           SELECT EXISTS (
             SELECT FROM timescaledb_information.jobs 
             WHERE hypertable_name = @tableName 
             AND proc_name = 'policy_retention'
           )
-        '''), parameters: {'tableName': testTableName});
+        ''', parameters: {'tableName': testTableName});
 
         expect(retentionResult.first[0], true);
       });
@@ -177,7 +179,7 @@ void main() {
 
       tearDown(() async {
         // Clean up after each test
-        await database.execute('DROP TABLE IF EXISTS "$testTableName" CASCADE');
+        await database.query('DROP TABLE IF EXISTS "$testTableName" CASCADE');
       });
 
       test('should insert int data', () async {
@@ -277,7 +279,7 @@ void main() {
             testTableName, now.subtract(const Duration(days: 1)));
         expect(result.length, 3);
         expect(result[2].value, testData);
-        expect(result[1].value, testData2.toString().toUpperCase());
+        expect(result[1].value, testData2.toString());
         expect(result[0].value, testData3.toString());
       });
 
@@ -402,15 +404,7 @@ void main() {
         final result = await database.queryTimeseriesData(
             testTableName, now.subtract(const Duration(days: 1)));
         expect(result.length, 1);
-        expect(result[0].value, {
-          'value': 42,
-          'description': null,
-          'tags': [
-            '"tag1"',
-            'null',
-            '"tag3"'
-          ], // not sure it needs to be quoted but lets continue
-        });
+        expect(result[0].value, dataWithNulls);
       });
 
       test('should count timeseries data in regular time intervals', () async {
