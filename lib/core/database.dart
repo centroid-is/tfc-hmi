@@ -240,8 +240,7 @@ class Database {
       'time': time,
       'value': value,
     });
-    logger
-        .w('inserted $tableName $value took ${DateTime.now().difference(now)}');
+    print('inserted $tableName $value took ${DateTime.now().difference(now)}');
   }
 
   /// Insert complex value with separate columns for each key
