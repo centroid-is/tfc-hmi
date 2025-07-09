@@ -136,7 +136,9 @@ class Database {
   static final Logger logger = Logger();
 
   Future<void> connect() async {
-    if (conn != null && conn!.state != pg.ConnectionState.notConnected) {
+    if (conn != null &&
+        conn!.state != pg.ConnectionState.notConnected &&
+        conn!.state != pg.ConnectionState.closed) {
       return;
     }
     var uri =
