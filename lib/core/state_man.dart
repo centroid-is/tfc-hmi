@@ -205,8 +205,14 @@ class StateMan {
           wrapper.client.connect(wrapper.config.endpoint).onError((e,
                   stacktrace) =>
               logger.e('Failed to connect to ${wrapper.config.endpoint}: $e'));
+          DateTime now = DateTime.now();
           while (wrapper.client.runIterate(const Duration(milliseconds: 10)) &&
               _shouldRun) {
+            final diff = DateTime.now().difference(now).inSeconds;
+            if (diff > 1) {
+              print('Client is taking too long to iterate: $diff seconds');
+            }
+            now = DateTime.now();
             await Future.delayed(const Duration(milliseconds: 10));
           }
           logger.e('Disconnecting client');
