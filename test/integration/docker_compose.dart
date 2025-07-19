@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:postgres/postgres.dart';
 import 'package:tfc/core/database.dart';
+import 'package:tfc/core/database_drift.dart';
 
 final dockerComposePath = '${Directory.current.path}/test/integration';
 const databaseName = 'testdb';
@@ -58,6 +59,33 @@ Future<void> stopDockerCompose() async {
   }
 }
 
+DatabaseConfig getTestConfig() {
+  return DatabaseConfig(
+    postgres: Endpoint(
+      host: 'localhost',
+      port: 5432,
+      database: 'testdb',
+      username: 'testuser',
+      password: 'testpass',
+    ),
+    sslMode: SslMode.disable,
+    debug: true,
+  );
+}
+
+Future<Connection> getTestConnection() async {
+  final testConfig = getTestConfig();
+
+  final testDb = await Connection.open(
+    testConfig.postgres!,
+    settings: ConnectionSettings(
+      sslMode: testConfig.sslMode,
+    ),
+  );
+
+  return testDb;
+}
+
 /// Waits for the database to be ready by attempting connections
 Future<void> waitForDatabaseReady() async {
   const maxAttempts = 30;
@@ -65,19 +93,7 @@ Future<void> waitForDatabaseReady() async {
 
   for (int attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
-      final testConfig = DatabaseConfig(
-        postgres: Endpoint(
-          host: 'localhost',
-          port: 5432,
-          database: 'testdb',
-          username: 'testuser',
-          password: 'testpass',
-        ),
-        sslMode: SslMode.disable,
-      );
-
-      final testDb = Database(testConfig);
-      await testDb.connect();
+      final testDb = await getTestConnection();
       await testDb.close();
 
       print('Database is ready after $attempt attempts');
@@ -88,24 +104,14 @@ Future<void> waitForDatabaseReady() async {
             'Database failed to become ready after $maxAttempts attempts: $e');
       }
       print(
-          'Database not ready yet (attempt $attempt/$maxAttempts), waiting...');
+          'Database not ready yet (attempt $attempt/$maxAttempts), waiting..., $e');
       await Future.delayed(delay);
     }
   }
 }
 
 Future<Database> connectToDatabase() async {
-  final testConfig = DatabaseConfig(
-    postgres: Endpoint(
-      host: 'localhost',
-      port: 5432,
-      database: databaseName,
-      username: 'testuser',
-      password: 'testpass',
-    ),
-    sslMode: SslMode.disable,
-  );
-  final db = Database(testConfig);
-  await db.connect();
+  final db = Database(await AppDatabase.spawn(getTestConfig()));
+  await db.db.open();
   return db;
 }

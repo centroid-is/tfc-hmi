@@ -114,7 +114,8 @@ class Collector {
   /// Initiate a collection of data from a node.
   /// Returns when the collection is started.
   Future<void> collectEntry(CollectEntry entry) async {
-    _collectEntries[entry.key] = entry;
+    _collectEntries[entry.key] =
+        entry; // needs to be here for non collection client, but fetching data from other collectors
     if (!config.collect) {
       return;
     }
@@ -125,6 +126,7 @@ class Collector {
 
   Future<void> collectEntryImpl(
       CollectEntry entry, Stream<DynamicValue> subscription) async {
+    _collectEntries[entry.key] = entry; // todo: duplicated for testing
     final name = entry.name ?? entry.key;
     await database.registerRetentionPolicy(name, entry.retention);
 
