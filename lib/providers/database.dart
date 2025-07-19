@@ -1,40 +1,35 @@
-import 'dart:convert';
-import 'package:logger/logger.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'dart:io' as io;
+import 'dart:async';
 import 'package:riverpod/riverpod.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
+
 import '../core/database.dart';
+import '../core/database_drift.dart';
 
 part 'database.g.dart';
 
-Future<DatabaseConfig> readDatabaseConfig() async {
-  final prefs = SharedPreferencesAsync();
-  var configJson = await prefs.getString(Database.configLocation);
-  DatabaseConfig config;
-  if (configJson == null) {
-    // If not found, create default config
-    config = DatabaseConfig(
-        postgres: null); // Or provide a default Endpoint if needed
-    configJson = jsonEncode(config.toJson());
-    await prefs.setString(Database.configLocation, configJson);
-  } else {
-    config = DatabaseConfig.fromJson(jsonDecode(configJson));
-  }
-  return config;
-}
-
 @Riverpod(keepAlive: true)
 Future<Database?> database(Ref ref) async {
-  final config = await readDatabaseConfig();
-  if (config.postgres == null) {
-    return null;
-  }
-  final db = Database(config);
+  final config = await DatabaseConfig.fromPreferences();
+  final db = Database(await AppDatabase.spawn(config));
   try {
-    await db.connect();
+    await db.db.open();
     return db;
-  } catch (error, stackTrace) {
-    Logger().e('Connection to Postgres failed: $error\n $stackTrace');
-    return null;
+  } catch (e) {
+    io.stderr.writeln('Error opening database: $e');
+    _scheduleRetry(ref, db);
   }
+  return null;
+}
+
+void _scheduleRetry(Ref ref, Database db) {
+  Timer.periodic(const Duration(seconds: 2), (timer) async {
+    try {
+      await db.db.open();
+      timer.cancel();
+      ref.invalidateSelf();
+    } catch (e) {
+      // io.stderr.writeln('Error opening database: $e');
+    }
+  });
 }

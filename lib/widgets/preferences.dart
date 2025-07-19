@@ -27,7 +27,7 @@ class PreferencesWidget extends ConsumerWidget {
         return ListView(
           children: [
             FutureBuilder<DatabaseConfig>(
-                future: readDatabaseConfig(),
+                future: DatabaseConfig.fromPreferences(),
                 builder: (context, snapshot) {
                   if (!snapshot.hasData) {
                     return const Center(child: CircularProgressIndicator());
@@ -38,7 +38,8 @@ class PreferencesWidget extends ConsumerWidget {
                       _ConfigEditor(
                         config: snapshot.data!,
                         onSave: (newConfig) async {
-                          await localPrefs.setString(Database.configLocation,
+                          await localPrefs.setString(
+                              DatabaseConfig.configLocation,
                               jsonEncode(newConfig.toJson()));
                           ref.invalidate(databaseProvider);
                         },
@@ -70,7 +71,9 @@ class PreferencesWidget extends ConsumerWidget {
                         list.sort((a, b) => a.key.compareTo(b.key));
                         return list
                             .map((e) => FutureBuilder<bool>(
-                                future: preferences.isKeyInDatabase(e.key),
+                                future: preferences
+                                    .isKeyInDatabase(e.key)
+                                    .timeout(const Duration(seconds: 2)),
                                 builder: (context, snapshot) {
                                   if (!snapshot.hasData) {
                                     return const Padding(
@@ -226,9 +229,14 @@ class _ConfigEditorState extends ConsumerState<_ConfigEditor> {
             padding: const EdgeInsets.all(8.0),
             child: Column(
               children: [
-                Text(
-                  'Connection Status: ${prefs.dbConnected}',
-                  style: const TextStyle(fontSize: 12),
+                FutureBuilder<bool>(
+                  future: prefs.database?.db.isOpen,
+                  builder: (context, snapshot) {
+                    return Text(
+                      'Connection Status: ${snapshot.data ?? false}',
+                      style: const TextStyle(fontSize: 12),
+                    );
+                  },
                 ),
                 TextField(
                     controller: hostController,

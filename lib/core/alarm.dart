@@ -6,11 +6,11 @@ import 'package:collection/collection.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:rxdart/rxdart.dart';
 import 'package:flutter/material.dart';
-import 'package:postgres/postgres.dart' show Sql;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:tfc/core/database_drift.dart' show AlarmHistoryCompanion;
+import 'package:drift/drift.dart' show Value, OrderingTerm, OrderingMode;
 
 import 'preferences.dart';
-import 'database.dart';
 import 'state_man.dart';
 import 'ring_buffer.dart';
 import 'boolean_expression.dart';
@@ -86,6 +86,21 @@ class AlarmConfig {
   @override
   String toString() {
     return 'AlarmConfig(uid: $uid, key: $key, title: $title, description: $description, rules: $rules)';
+  }
+
+  factory AlarmConfig.fromDb({
+    required String uid,
+    String? key,
+    required String title,
+    required String description,
+    required String rules,
+  }) {
+    return AlarmConfig(
+        uid: uid,
+        key: key,
+        title: title,
+        description: description,
+        rules: jsonDecode(rules).map((e) => AlarmRule.fromJson(e)).toList());
   }
 
   factory AlarmConfig.fromJson(Map<String, dynamic> json) =>
@@ -217,7 +232,6 @@ class AlarmMan {
         stateMan: stateMan,
         localConfig: localConfig);
     try {
-      await alarmMan._ensureTable();
       alarmMan._history.addAll(await alarmMan.getRecentAlarms());
       alarmMan._historyController.add(alarmMan._history.buffer);
     } catch (e) {
@@ -313,66 +327,42 @@ class AlarmMan {
 
   Future<void> _addToDb(AlarmActive alarm) async {
     if (preferences.database == null) return;
-    await preferences.database!.execute(
-      Sql.named('''
-        INSERT INTO alarm_history (
-          alarm_uid, alarm_title, alarm_description, alarm_level,
-          expression, active, pending_ack, created_at, deactivated_at
-        ) VALUES (
-          @uid, @title, @description, @level,
-          @expression, @active, @pending_ack, @created_at, @deactivated_at
-        )
-      '''),
-      parameters: {
-        'uid': alarm.alarm.config.uid,
-        'title': alarm.alarm.config.title,
-        'description': alarm.alarm.config.description,
-        'level': alarm.notification.rule.level.name,
-        'expression': alarm.notification.expression,
-        'active': alarm.notification.active,
-        'pending_ack': alarm.pendingAck,
-        'created_at': alarm.notification.timestamp,
-        'deactivated_at': alarm.deactivated,
-      },
-    );
-  }
-
-  Future<void> _ensureTable() async {
-    if (preferences.database == null) return;
-    await preferences.database!.execute('''
-      CREATE TABLE IF NOT EXISTS alarm_history (
-        id SERIAL PRIMARY KEY,
-        alarm_uid TEXT NOT NULL,
-        alarm_title TEXT NOT NULL,
-        alarm_description TEXT NOT NULL,
-        alarm_level TEXT NOT NULL,
-        expression TEXT,
-        active BOOLEAN NOT NULL,
-        pending_ack BOOLEAN NOT NULL,
-        created_at TIMESTAMP NOT NULL,
-        deactivated_at TIMESTAMP,
-        acknowledged_at TIMESTAMP
-      )
-    ''');
+    final db = preferences.database!.db;
+    await db.into(db.alarmHistory).insert(AlarmHistoryCompanion.insert(
+          alarmUid: alarm.alarm.config.uid,
+          alarmTitle: alarm.alarm.config.title,
+          alarmDescription: alarm.alarm.config.description,
+          alarmLevel: alarm.notification.rule.level.name,
+          expression: alarm.notification.expression != null
+              ? Value(alarm.notification.expression!)
+              : const Value.absent(),
+          active: alarm.notification.active,
+          pendingAck: alarm.pendingAck,
+          createdAt: alarm.notification.timestamp,
+          deactivatedAt: alarm.deactivated != null
+              ? Value(alarm.deactivated!)
+              : const Value.absent(),
+        ));
   }
 
   Future<List<AlarmActive>> getRecentAlarms({int limit = 1000}) async {
     if (preferences.database == null) return [];
 
-    final result = await preferences.database!.execute(
-      Sql.named('''
-        SELECT * FROM alarm_history 
-        ORDER BY created_at DESC 
-        LIMIT @limit
-      '''),
-      parameters: {'limit': limit},
-    );
+    final db = preferences.database!.db;
+
+    final result = await (db.select(db.alarmHistory)
+          ..orderBy([
+            (t) =>
+                OrderingTerm(expression: t.createdAt, mode: OrderingMode.desc)
+          ])
+          ..limit(limit))
+        .get();
 
     return result
         .map((row) {
           // Find the corresponding alarm config from our current alarms
           final alarmConfig = alarms.firstWhereOrNull(
-            (a) => a.config.uid == row[1] as String, // alarm_uid is at index 1
+            (a) => a.config.uid == row.alarmUid,
           );
 
           // Skip this alarm if config is not found
@@ -383,30 +373,29 @@ class AlarmMan {
           // Create AlarmRule from stored data
           final rule = AlarmRule(
             level: AlarmLevel.values.firstWhere(
-              (l) => l.name == row[4] as String, // alarm_level is at index 4
+              (l) => l.name == row.alarmLevel,
             ),
             expression: ExpressionConfig(
-              value: Expression(
-                  formula: row[5] as String? ?? ''), // expression is at index 5
+              value: Expression(formula: row.expression ?? ''),
             ),
             acknowledgeRequired: false, // We don't store this in history
           );
 
           // Create AlarmNotification
           final notification = AlarmNotification(
-            uid: row[1] as String, // alarm_uid
-            active: row[6] as bool, // active
-            expression: row[5] as String?, // expression
+            uid: row.alarmUid,
+            active: row.active,
+            expression: row.expression,
             rule: rule,
-            timestamp: row[8] as DateTime, // created_at
+            timestamp: row.createdAt,
           );
 
           // Create and return AlarmActive
           return AlarmActive(
             alarm: alarmConfig,
             notification: notification,
-            pendingAck: row[7] as bool, // pending_ack
-            deactivated: row[9] as DateTime?, // deactivated_at
+            pendingAck: row.pendingAck,
+            deactivated: row.deactivatedAt,
           );
         })
         .whereType<AlarmActive>()
