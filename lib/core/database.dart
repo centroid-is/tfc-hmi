@@ -439,13 +439,6 @@ class Database {
     // TimescaleDB might return intervals in different formats
     // Let's handle the most common cases:
 
-    // Format: "1 day", "10 days", etc.
-    final daysMatch = RegExp(r'(\d+)\s*day').firstMatch(interval);
-    if (daysMatch != null) {
-      final days = int.parse(daysMatch.group(1)!);
-      return Duration(days: days);
-    }
-
     // Format: "10 minutes", "1 hour", etc.
     final minutesMatch = RegExp(r'(\d+)\s*minute').firstMatch(interval);
     if (minutesMatch != null) {

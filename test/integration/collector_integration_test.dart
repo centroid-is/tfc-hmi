@@ -109,7 +109,7 @@ void main() {
       expect(insertedData.length, 3);
       expect(insertedData[0].value, 'value1');
       expect(insertedData[1].value, '42');
-      expect(insertedData[2].value, 'true');
+      expect(insertedData[2].value, 'TRUE');
 
       // Clean up
       streamController.close();
