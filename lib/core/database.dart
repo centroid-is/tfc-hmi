@@ -1,8 +1,8 @@
 import 'dart:io';
 import 'dart:async';
-import 'package:postgres/postgres.dart' show Endpoint, SslMode, Interval;
-import 'package:postgresql2/postgresql.dart' as pg;
+import 'package:postgres/postgres.dart';
 import 'package:json_annotation/json_annotation.dart';
+export 'package:postgres/postgres.dart' show Sql;
 import 'package:logger/logger.dart';
 
 import '../converter/duration_converter.dart';
@@ -125,66 +125,79 @@ class RetentionPolicy {
       'RetentionPolicy(dropAfter: $dropAfter, scheduleInterval: $scheduleInterval)';
 }
 
-class Database {
+class Database implements Session {
   Database(this.config);
 
-  pg.Connection? conn;
+  Connection? conn;
   final DatabaseConfig config;
   static const configLocation = 'database_config';
   Map<String, RetentionPolicy> retentionPolicies = {};
 
+  // Add a cache for prepared statements
+  final Map<String, Statement> _preparedStatements = {};
   static final Logger logger = Logger();
 
   Future<void> connect() async {
-    if (conn != null && conn!.state != pg.ConnectionState.notConnected) {
+    if (conn != null && conn!.isOpen) {
       return;
     }
-    var uri =
-        'postgres://${config.postgres!.username}:${config.postgres!.password}@${config.postgres!.host}:${config.postgres!.port}/${config.postgres!.database}';
-    conn = await pg
-        .connect(uri, connectionTimeout: const Duration(seconds: 30))
-        .onError((error, stackTrace) {
+    conn = await Connection.open(
+      config.postgres!,
+      settings: PoolSettings(
+        sslMode: config.sslMode,
+        maxConnectionCount: 20,
+        maxConnectionAge: const Duration(minutes: 10),
+        maxSessionUse: const Duration(minutes: 10),
+      ),
+    ).onError((error, stackTrace) {
       throw DatabaseException(
         'conn to Postgres failed: $error\n $stackTrace',
       );
     });
   }
 
-  // @override
-  // bool get isOpen => conn != null && conn!.isOpen;
+  @override
+  bool get isOpen => conn != null && conn!.isOpen;
 
-  // @override
-  // Future<void> get closed => conn?.closed ?? Future.value();
+  @override
+  Future<void> get closed => conn?.closed ?? Future.value();
 
   Future<void> close() async {
-    conn?.close();
-    await Future.delayed(const Duration(milliseconds: 1));
+    await conn?.close();
   }
 
-  Future<Stream<pg.Row>> queryStream(
-    String query, {
-    Map? parameters,
+  @override
+  Future<Statement> prepare(Object /* String | Sql */ query) async {
+    await connect();
+    return conn!.prepare(query);
+  }
+
+  @override
+  Future<Result> execute(
+    Object /* String | Sql */ query, {
+    Object? /* List<Object?|TypedValue> | Map<String, Object?|TypedValue> */
+        parameters,
+    bool ignoreRows = false,
+    QueryMode? queryMode,
+    Duration? timeout,
   }) async {
     await connect();
-    return conn!.query(query, parameters);
-  }
-
-  Future<List<pg.Row>> query(
-    String query, {
-    Map? parameters,
-  }) async {
-    return (await queryStream(query, parameters: parameters)).toList();
+    return conn!.execute(query,
+        parameters: parameters,
+        ignoreRows: ignoreRows,
+        queryMode: queryMode,
+        timeout: timeout);
   }
 
   /// Check if a table exists
   Future<bool> tableExists(String tableName) async {
-    final result = await query('''
+    final result = await execute(Sql.named('''
       SELECT EXISTS (
         SELECT FROM information_schema.tables 
         WHERE table_schema = 'public' 
         AND table_name = @tableName
       );
-    ''', parameters: {'tableName': tableName});
+    '''), parameters: {'tableName': tableName});
 
     return (result.first[0] as bool);
   }
@@ -230,13 +243,22 @@ class Database {
   /// Insert simple value using prepared statement
   Future<void> _insertSimpleValue(
       String tableName, DateTime time, dynamic value) async {
-    final queryString = '''
+    final statementKey = 'insert_simple_$tableName';
+
+    // Get or create prepared statement
+    Statement statement =
+        _preparedStatements[statementKey] ?? await prepare(Sql.named('''
           INSERT INTO "$tableName" (time, value)
           VALUES (@time, @value)
-        ''';
+        '''));
+
+    // Cache the statement for reuse
+    if (!_preparedStatements.containsKey(statementKey)) {
+      _preparedStatements[statementKey] = statement;
+    }
 
     final now = DateTime.now();
-    await query(queryString, parameters: {
+    await statement.run({
       'time': time,
       'value': value,
     });
@@ -247,8 +269,18 @@ class Database {
   /// Insert complex value with separate columns for each key
   Future<void> _insertComplexValue(
       String tableName, DateTime time, Map<String, dynamic> value) async {
-    final columnNames = value.keys.toList()..sort();
-    final queryString = _createComplexInsertStatement(tableName, columnNames);
+    // Create a unique key based on the column structure
+    final columnNames = value.keys.toList()..sort(); // Sort for consistent key
+    final statementKey = 'insert_complex_${tableName}_${columnNames.join('_')}';
+
+    // Get or create prepared statement
+    Statement statement = _preparedStatements[statementKey] ??
+        await _createComplexInsertStatement(tableName, columnNames);
+
+    // Cache the statement for reuse
+    if (!_preparedStatements.containsKey(statementKey)) {
+      _preparedStatements[statementKey] = statement;
+    }
 
     // Build parameters map
     final parameters = <String, dynamic>{'time': time};
@@ -256,46 +288,95 @@ class Database {
       parameters[entry.key] = entry.value;
     }
 
-    await query(queryString, parameters: parameters);
+    await statement.run(parameters);
   }
 
   /// Create a prepared statement for complex insert with specific columns
-  String _createComplexInsertStatement(
-      String tableName, List<String> columnNames) {
+  Future<Statement> _createComplexInsertStatement(
+      String tableName, List<String> columnNames) async {
     final columns = ['time', ...columnNames.map((name) => '"$name"')];
     final placeholders = ['@time', ...columnNames.map((name) => '@$name')];
 
-    return '''
+    final sql = '''
       INSERT INTO "$tableName" (${columns.join(', ')})
       VALUES (${placeholders.join(', ')})
     ''';
+
+    return await prepare(Sql.named(sql));
   }
 
   /// Query time-series data
   Future<List<TimeseriesData<dynamic>>> queryTimeseriesData(
       String tableName, DateTime since,
       {String? orderBy = 'time ASC'}) async {
-    final result =
-        await streamTimeseriesData(tableName, since, orderBy: orderBy).toList();
-    return result
-        .last; // I think this is correct, because it accumulates the data
+    // Create unique key for prepared statement based on table
+    final statementKey = 'stream/query_timeseries_$tableName';
+
+    // Get or create prepared statement
+    Statement statement;
+    if (_preparedStatements.containsKey(statementKey)) {
+      statement = _preparedStatements[statementKey]!;
+    } else {
+      statement = await prepare(Sql.named('''
+            SELECT * FROM "$tableName"
+            WHERE time >= @since
+            ORDER BY time ASC
+            '''));
+      _preparedStatements[statementKey] = statement;
+    }
+
+    // Execute the prepared statement
+    final result = await statement.run({'since': since});
+
+    // Map each row to a Map<String, dynamic>
+    final columnNames = result.schema.columns
+        .map((c) => c.columnName ?? 'unknown_column_${c.typeOid}')
+        .toList();
+    if (columnNames.contains('time')) {
+      DateTime? time;
+      return result.map((row) {
+        final map = <String, dynamic>{};
+        for (var i = 0; i < columnNames.length; i++) {
+          if (columnNames[i] == 'time') {
+            time = row[i] as DateTime;
+          } else {
+            map[columnNames[i]] = row[i];
+          }
+        }
+        if (map.length == 1 && map.containsKey('value')) {
+          return TimeseriesData(map['value'], time!);
+        }
+        return TimeseriesData(map, time!);
+      }).toList();
+    }
+    throw DatabaseException('Time column not found in table $tableName');
   }
 
   Stream<List<TimeseriesData<dynamic>>> streamTimeseriesData(
       String tableName, DateTime since,
       {String? orderBy = 'time ASC'}) {
+    // Create unique key for prepared statement based on table
+    final statementKey = 'stream/query_timeseries_$tableName';
+
     // Bind the statement with parameters to get a stream
-    late Stream<pg.Row> stream;
+    late ResultStream stream;
 
     final controller = StreamController<List<TimeseriesData<dynamic>>>();
     controller.onListen = () async {
       try {
-        final queryString = '''
+        // Get or create prepared statement
+        Statement statement;
+        if (_preparedStatements.containsKey(statementKey)) {
+          statement = _preparedStatements[statementKey]!;
+        } else {
+          statement = await prepare(Sql.named('''
             SELECT * FROM "$tableName"
             WHERE time >= @since
             ORDER BY time ASC
-            ''';
-        stream = await queryStream(queryString, parameters: {'since': since});
+            '''));
+          _preparedStatements[statementKey] = statement;
+        }
+        stream = statement.bind({'since': since});
       } catch (e, stackTrace) {
         logger.e('Error streaming timeseries data for $tableName',
             error: e, stackTrace: stackTrace);
@@ -305,30 +386,26 @@ class Database {
       }
       List<String>? columnNames;
       List<TimeseriesData<dynamic>> result = [];
-      late StreamSubscription<pg.Row> subscription;
 
-      controller.onCancel = () {
-        subscription.cancel();
-      };
-
-      subscription = stream.listen((row) {
+      final subscription = stream.listen((row) {
         try {
           if (controller.isClosed) return;
-          columnNames ??= row.getColumns().map((c) => c.name).toList();
-          final map = row.toMap();
+          columnNames ??= row.schema.columns
+              .map((c) => c.columnName ?? 'unknown_column_${c.typeOid}')
+              .toList();
+          final map = <String, dynamic>{};
           DateTime? time;
-          if (map.containsKey('time')) {
-            time = map['time'] as DateTime;
-            map.remove('time');
-          } else {
-            throw DatabaseException(
-                'Time column not found in table $tableName');
+          for (var i = 0; i < columnNames!.length; i++) {
+            if (columnNames![i] == 'time') {
+              time = row[i] as DateTime;
+            } else {
+              map[columnNames![i]] = row[i];
+            }
           }
-
           if (map.length == 1 && map.containsKey('value')) {
-            result.add(TimeseriesData(map['value'], time));
+            result.add(TimeseriesData(map['value'], time!));
           } else {
-            result.add(TimeseriesData(map, time));
+            result.add(TimeseriesData(map, time!));
           }
           controller.add(result);
         } catch (e, stackTrace) {
@@ -372,16 +449,28 @@ class Database {
       sinceTimes.add(bucketStart);
     }
 
-    final unionQueries = <String>[];
-    for (int i = 0; i < howMany; i++) {
-      final paramName = 'since$i';
-      final nextParamName = 'since${i + 1}';
-      unionQueries.add('''
+    // Create unique key for prepared statement based on table and number of intervals
+    final statementKey = 'count_timeseries_${tableName}_$howMany';
+
+    // Get or create prepared statement
+    Statement statement;
+    if (_preparedStatements.containsKey(statementKey)) {
+      statement = _preparedStatements[statementKey]!;
+    } else {
+      // Build a UNION query for the specific number of intervals
+      final unionQueries = <String>[];
+      for (int i = 0; i < howMany; i++) {
+        final paramName = 'since$i';
+        final nextParamName = 'since${i + 1}';
+        unionQueries.add('''
           SELECT COUNT(*) as count_$i FROM "$tableName"
           WHERE time >= @$paramName AND time < @$nextParamName
         ''');
+      }
+      final sql = unionQueries.join(' UNION ALL ');
+      statement = await prepare(Sql.named(sql));
+      _preparedStatements[statementKey] = statement;
     }
-    final sql = unionQueries.join(' UNION ALL ');
 
     // Build parameters map
     final parameters = <String, dynamic>{};
@@ -395,7 +484,7 @@ class Database {
     }
 
     // Execute the prepared statement
-    final result = await query(sql, parameters: parameters);
+    final result = await statement.run(parameters);
 
     // Extract counts from result rows
     final counts = <DateTime, int>{};
@@ -407,12 +496,10 @@ class Database {
 
   /// Get the retention duration for a hypertable
   Future<RetentionPolicy?> getRetentionPolicy(String tableName) async {
-    const queryString = '''
+    final result = await execute(Sql.named('''
       SELECT config ->> 'drop_after' AS drop_after, schedule_interval FROM timescaledb_information.jobs
       WHERE proc_name = 'policy_retention' AND hypertable_name = @tableName
-    ''';
-    final result =
-        await query(queryString, parameters: {'tableName': tableName});
+    '''), parameters: {'tableName': tableName});
     if (result.isEmpty) {
       return null;
     }
@@ -495,7 +582,7 @@ class Database {
           valueType = 'JSONB';
           break;
       }
-      await query('''
+      await execute('''
         CREATE TABLE IF NOT EXISTS "$tableName" (
           time TIMESTAMPTZ NOT NULL,
           value $valueType NOT NULL
@@ -523,7 +610,7 @@ class Database {
       );
     ''';
 
-    await query(createTableSql);
+    await execute(createTableSql);
     await _updateRetentionPolicy(tableName, retention);
   }
 
@@ -568,7 +655,7 @@ class Database {
   Future<void> _updateRetentionPolicy(
       String tableName, RetentionPolicy retention) async {
     // Convert to hypertable
-    await query('''
+    await execute('''
       SELECT create_hypertable('"$tableName"', 'time', if_not_exists => TRUE, migrate_data => TRUE);
     ''');
 
@@ -576,16 +663,16 @@ class Database {
     final dropAfter = durationToPostgresInterval(retention.dropAfter);
     final scheduleInterval =
         durationToPostgresInterval(retention.scheduleInterval);
-    await query('''
+    await execute('''
       SELECT remove_retention_policy('"$tableName"', if_exists => TRUE);
     ''');
     try {
       if (scheduleInterval != null) {
-        await query('''
+        await execute('''
         SELECT add_retention_policy('"$tableName"', drop_after => INTERVAL '$dropAfter', schedule_interval => INTERVAL '$scheduleInterval');
       ''');
       } else {
-        await query('''
+        await execute('''
           SELECT add_retention_policy('"$tableName"', drop_after => INTERVAL '$dropAfter');
         ''');
       }

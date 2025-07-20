@@ -93,7 +93,7 @@ class Preferences implements PreferencesApi {
   Preferences({required this.database});
 
   static Future<void> ensureTable(Database database) async {
-    await database.query('''
+    await database.execute('''
       CREATE TABLE IF NOT EXISTS flutter_preferences (
         key TEXT PRIMARY KEY,
         value TEXT,
@@ -117,14 +117,16 @@ class Preferences implements PreferencesApi {
     }
   }
 
-  bool get dbConnected => database != null && database!.conn != null;
+  bool get dbConnected => database != null && database!.isOpen;
 
   Future<void> _upsertToPostgres(String key, Object? value, String type) async {
     if (!dbConnected) return;
     final valStr = value is List<String> ? value.join(',') : value?.toString();
-    await database!.query(
-      'INSERT INTO flutter_preferences (key, value, type) VALUES (@key, @value, @type) '
-      'ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, type = EXCLUDED.type',
+    await database!.execute(
+      Sql.named(
+        'INSERT INTO flutter_preferences (key, value, type) VALUES (@key, @value, @type) '
+        'ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, type = EXCLUDED.type',
+      ),
       parameters: {'key': key, 'value': valStr, 'type': type},
     );
   }
@@ -221,8 +223,9 @@ class Preferences implements PreferencesApi {
 
   Future<bool> isKeyInDatabase(String key) async {
     if (!dbConnected) return false;
-    final result = await database!.query(
-      'SELECT EXISTS(SELECT 1 FROM flutter_preferences WHERE key = @key)',
+    final result = await database!.execute(
+      Sql.named(
+          'SELECT EXISTS(SELECT 1 FROM flutter_preferences WHERE key = @key)'),
       parameters: {'key': key},
     );
     return result[0][0] as bool;
@@ -231,7 +234,7 @@ class Preferences implements PreferencesApi {
   /// Loads all preferences from Postgres into shared preferences.
   Future<void> loadFromPostgres() async {
     if (!dbConnected) return;
-    final result = await database!.query(
+    final result = await database!.execute(
       'SELECT key, value, type FROM flutter_preferences',
     );
     for (final row in result) {
