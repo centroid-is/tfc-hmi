@@ -3,6 +3,8 @@ import 'dart:io';
 
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:json_annotation/json_annotation.dart';
+import 'package:tfc/core/database_drift.dart';
+import 'package:drift/drift.dart' show Value;
 
 import 'database.dart';
 
@@ -84,30 +86,26 @@ abstract class PreferencesApi {
   Future<void> clear({Set<String>? allowList});
 }
 
+class KeyCache {
+  Set<String> keys = {};
+  DateTime lastUpdated = DateTime.now().subtract(const Duration(days: 100));
+  Future<void>? cacheUpdate;
+}
+
 class Preferences implements PreferencesApi {
   final Database? database;
+  final KeyCache keyCache = KeyCache();
   final SharedPreferencesAsync sharedPreferences = SharedPreferencesAsync();
   final StreamController<String> _onPreferencesChanged =
       StreamController<String>.broadcast();
 
   Preferences({required this.database});
 
-  static Future<void> ensureTable(Database database) async {
-    await database.query('''
-      CREATE TABLE IF NOT EXISTS flutter_preferences (
-        key TEXT PRIMARY KEY,
-        value TEXT,
-        type TEXT NOT NULL
-      )
-    ''');
-  }
-
   static Future<Preferences> create({required Database? db}) async {
     try {
       if (db == null) {
         return Preferences(database: null);
       }
-      await ensureTable(db);
       final prefs = Preferences(database: db);
       await prefs.loadFromPostgres();
       return prefs;
@@ -117,16 +115,16 @@ class Preferences implements PreferencesApi {
     }
   }
 
-  bool get dbConnected => database != null && database!.conn != null;
-
   Future<void> _upsertToPostgres(String key, Object? value, String type) async {
-    if (!dbConnected) return;
     final valStr = value is List<String> ? value.join(',') : value?.toString();
-    await database!.query(
-      'INSERT INTO flutter_preferences (key, value, type) VALUES (@key, @value, @type) '
-      'ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, type = EXCLUDED.type',
-      parameters: {'key': key, 'value': valStr, 'type': type},
-    );
+    final db = database!.db;
+    await db.into(db.flutterPreferences).insert(
+          FlutterPreferencesCompanion.insert(
+            key: key,
+            value: valStr != null ? Value(valStr) : const Value.absent(),
+            type: type,
+          ),
+        );
   }
 
   @override
@@ -220,24 +218,40 @@ class Preferences implements PreferencesApi {
   Stream<String> get onPreferencesChanged => _onPreferencesChanged.stream;
 
   Future<bool> isKeyInDatabase(String key) async {
-    if (!dbConnected) return false;
-    final result = await database!.query(
-      'SELECT EXISTS(SELECT 1 FROM flutter_preferences WHERE key = @key)',
-      parameters: {'key': key},
-    );
-    return result[0][0] as bool;
+    if (keyCache.lastUpdated
+        .isBefore(DateTime.now().subtract(const Duration(minutes: 10)))) {
+      if (keyCache.cacheUpdate != null) {
+        await keyCache.cacheUpdate!;
+      } else {
+        // Start the update
+        keyCache.cacheUpdate = _updateCache();
+        await keyCache.cacheUpdate!;
+        keyCache.cacheUpdate = null;
+      }
+    }
+    return keyCache.keys.contains(key);
+  }
+
+  Future<void> _updateCache() async {
+    final db = database!.db;
+    final select = db.selectOnly(db.flutterPreferences)
+      ..addColumns([db.flutterPreferences.key]);
+    final result = await select.get();
+    keyCache.keys = result
+        .map((e) => e.read(db.flutterPreferences.key))
+        .whereType<String>()
+        .toSet();
+    keyCache.lastUpdated = DateTime.now();
   }
 
   /// Loads all preferences from Postgres into shared preferences.
   Future<void> loadFromPostgres() async {
-    if (!dbConnected) return;
-    final result = await database!.query(
-      'SELECT key, value, type FROM flutter_preferences',
-    );
+    final db = database!.db;
+    final result = await db.select(db.flutterPreferences).get();
     for (final row in result) {
-      final key = row[0] as String;
-      final value = row[1] as String?;
-      final type = row[2] as String;
+      final key = row.key;
+      final value = row.value;
+      final type = row.type;
       switch (type) {
         case 'bool':
           if (value != null) {

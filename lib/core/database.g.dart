@@ -12,6 +12,7 @@ DatabaseConfig _$DatabaseConfigFromJson(Map<String, dynamic> json) =>
           json['postgres'], const EndpointConverter().fromJson),
       sslMode: _$JsonConverterFromJson<String, SslMode>(
           json['sslMode'], const SslModeConverter().fromJson),
+      debug: json['debug'] as bool? ?? false,
     );
 
 Map<String, dynamic> _$DatabaseConfigToJson(DatabaseConfig instance) =>
@@ -20,6 +21,7 @@ Map<String, dynamic> _$DatabaseConfigToJson(DatabaseConfig instance) =>
           instance.postgres, const EndpointConverter().toJson),
       'sslMode': _$JsonConverterToJson<String, SslMode>(
           instance.sslMode, const SslModeConverter().toJson),
+      'debug': instance.debug,
     };
 
 Value? _$JsonConverterFromJson<Json, Value>(
