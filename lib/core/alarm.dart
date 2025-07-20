@@ -313,8 +313,8 @@ class AlarmMan {
 
   Future<void> _addToDb(AlarmActive alarm) async {
     if (preferences.database == null) return;
-    await preferences.database!.query(
-      '''
+    await preferences.database!.execute(
+      Sql.named('''
         INSERT INTO alarm_history (
           alarm_uid, alarm_title, alarm_description, alarm_level,
           expression, active, pending_ack, created_at, deactivated_at
@@ -322,7 +322,7 @@ class AlarmMan {
           @uid, @title, @description, @level,
           @expression, @active, @pending_ack, @created_at, @deactivated_at
         )
-      ''',
+      '''),
       parameters: {
         'uid': alarm.alarm.config.uid,
         'title': alarm.alarm.config.title,
@@ -339,7 +339,7 @@ class AlarmMan {
 
   Future<void> _ensureTable() async {
     if (preferences.database == null) return;
-    await preferences.database!.query('''
+    await preferences.database!.execute('''
       CREATE TABLE IF NOT EXISTS alarm_history (
         id SERIAL PRIMARY KEY,
         alarm_uid TEXT NOT NULL,
@@ -359,12 +359,12 @@ class AlarmMan {
   Future<List<AlarmActive>> getRecentAlarms({int limit = 1000}) async {
     if (preferences.database == null) return [];
 
-    final result = await preferences.database!.query(
-      '''
+    final result = await preferences.database!.execute(
+      Sql.named('''
         SELECT * FROM alarm_history 
         ORDER BY created_at DESC 
         LIMIT @limit
-      ''',
+      '''),
       parameters: {'limit': limit},
     );
 
