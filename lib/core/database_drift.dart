@@ -74,16 +74,26 @@ class AppDatabase extends _$AppDatabase {
   /// Factory: creates an [AppDatabase], spawning a DriftIsolate.
   static Future<AppDatabase> spawn(DatabaseConfig config) async {
     if (config.postgres != null) {
+      Future<void> warmUp<P>(pg.Pool<P> pool, int minCount,
+          {P? locality}) async {
+        await Future.wait(List.generate(minCount, (_) {
+          return pool.withConnection((_) async {
+            // tiny await so calls overlap, ensuring separate connections
+            await Future<void>.delayed(Duration(milliseconds: 1));
+          }, locality: locality);
+        }));
+      }
+
       // Spawn a DriftIsolate handling the Postgres connection off the main isolate.
-      final isolate = await DriftIsolate.spawn(
-        () => PgDatabase(
-          endpoint: config.postgres!,
-          settings: pg.ConnectionSettings(
-            sslMode: config.sslMode,
-          ),
-          logStatements: config.debug,
-        ),
-      );
+      final isolate = await DriftIsolate.spawn(() {
+        final pool = pg.Pool.withEndpoints([config.postgres!],
+            settings: pg.PoolSettings(
+              maxConnectionCount: 20,
+              sslMode: config.sslMode,
+            ));
+        warmUp(pool, 10);
+        return PgDatabase.opened(pool, logStatements: true);
+      });
       final executor = await isolate.connect();
       return AppDatabase._(config, executor);
     } else {
@@ -150,7 +160,7 @@ class AppDatabase extends _$AppDatabase {
     );
   }
 
-  /// Query data from a dynamic table
+  /// Query data from a dynamic table with detailed analysis
   Future<List<QueryRow>> tableQuery(
     String tableName, {
     List<String>? columns,
@@ -158,15 +168,49 @@ class AppDatabase extends _$AppDatabase {
     List<dynamic>? whereArgs,
     String? orderBy,
   }) async {
+    // await testRawPostgresConnection();
+    // final startnet = DateTime.now();
+    // await testConnectionLatency();
+    // final durationnet = DateTime.now().difference(startnet);
+    // print('⏱️  tableQuery: Network latency: ${durationnet.inMilliseconds}ms');
+
+    final start = DateTime.now();
+    // print('🔍 tableQuery: Building query for table $tableName');
+
     final cols = columns?.join(', ') ?? '*';
     final whereClause = where != null ? ' WHERE $where' : '';
     final orderByClause = orderBy != null ? ' ORDER BY $orderBy' : '';
 
+    final sql = 'SELECT $cols FROM "$tableName"$whereClause$orderByClause';
+    // print(' tableQuery: SQL: $sql');
+
+    // // Add EXPLAIN ANALYZE to see what PostgreSQL is doing
+    // final explainSql = 'EXPLAIN (ANALYZE, BUFFERS, FORMAT TEXT) $sql';
+    // print('🔬 tableQuery: Running EXPLAIN ANALYZE...');
+
+    // try {
+    //   final explainResult = await customSelect(
+    //     explainSql,
+    //     variables:
+    //         whereArgs != null ? [for (var arg in whereArgs) Variable(arg)] : [],
+    //   ).get();
+
+    //   print('📊 tableQuery: Query Plan:');
+    //   for (final row in explainResult) {
+    //     print('   ${row.data.values.first}');
+    //   }
+    // } catch (e) {
+    //   print('⚠️  tableQuery: Could not get query plan: $e');
+    // }
+
     final result = await customSelect(
-      'SELECT $cols FROM "$tableName"$whereClause$orderByClause',
+      sql,
       variables:
           whereArgs != null ? [for (var arg in whereArgs) Variable(arg)] : [],
     ).get();
+
+    final duration = DateTime.now().difference(start);
+    print('⏱️  tableQuery: Query execution took ${duration.inMilliseconds}ms');
 
     return result;
   }
@@ -287,5 +331,195 @@ class AppDatabase extends _$AppDatabase {
     }
 
     throw FormatException('Unable to parse PostgreSQL interval: $interval');
+  }
+
+  /// Get table statistics for performance analysis
+  Future<void> analyzeTablePerformance(String tableName) async {
+    print('📊 Analyzing table performance for $tableName');
+
+    try {
+      // Get table size
+      final sizeResult = await customSelect('''
+        SELECT 
+          pg_size_pretty(pg_total_relation_size('"$tableName"')) as table_size,
+          pg_size_pretty(pg_relation_size('"$tableName"')) as data_size,
+          pg_size_pretty(pg_total_relation_size('"$tableName"') - pg_relation_size('"$tableName"')) as index_size
+      ''').getSingle();
+
+      print(
+          ' Table size: ${sizeResult.data['table_size']} (data: ${sizeResult.data['data_size']}, indexes: ${sizeResult.data['index_size']})');
+
+      // Get row count
+      final countResult =
+          await customSelect('SELECT COUNT(*) as row_count FROM "$tableName"')
+              .getSingle();
+      print(' Row count: ${countResult.data['row_count']}');
+
+      // Get time range
+      final timeRangeResult = await customSelect('''
+        SELECT 
+          MIN(time) as min_time,
+          MAX(time) as max_time,
+          MAX(time) - MIN(time) as time_span
+        FROM "$tableName"
+      ''').getSingle();
+
+      print(
+          '⏰ Time range: ${timeRangeResult.data['min_time']} to ${timeRangeResult.data['max_time']}');
+      print('⏱️  Time span: ${timeRangeResult.data['time_span']}');
+
+      // Check for indexes
+      final indexResult = await customSelect('''
+        SELECT indexname, indexdef 
+        FROM pg_indexes 
+        WHERE tablename = '$tableName'
+      ''').get();
+
+      print('🔍 Indexes:');
+      for (final index in indexResult) {
+        print('   ${index.data['indexname']}: ${index.data['indexdef']}');
+      }
+    } catch (e) {
+      print('⚠️  Could not analyze table: $e');
+    }
+  }
+
+  /// Check if time column has proper indexing
+  Future<void> checkTimeIndex(String tableName) async {
+    print('🔍 Checking time index for $tableName');
+
+    try {
+      final indexResult = await customSelect('''
+        SELECT indexname 
+        FROM pg_indexes 
+        WHERE tablename = '$tableName' 
+        AND indexdef LIKE '%time%'
+      ''').get();
+
+      if (indexResult.isEmpty) {
+        print(
+            '⚠️  WARNING: No time-based index found! This could be causing slow queries.');
+        print(
+            '💡 Consider creating an index: CREATE INDEX ON "$tableName" (time);');
+      } else {
+        print(
+            '✅ Time index found: ${indexResult.map((r) => r.data['indexname']).join(', ')}');
+      }
+    } catch (e) {
+      print('⚠️  Could not check indexes: $e');
+    }
+  }
+
+  /// Test connection latency with detailed breakdown
+  Future<void> testConnectionLatency() async {
+    print(' Testing connection latency with detailed breakdown...');
+
+    // Test 1: Simple connection test with timing
+    final start1 = DateTime.now();
+    print('🔍 Step 1: About to call customSelect("SELECT 1")');
+
+    // Add timing around the actual database call
+    final dbStart = DateTime.now();
+    print('🔍 Step 1a: About to call .getSingle()');
+    await customSelect('SELECT 1').getSingle();
+    final dbDuration = DateTime.now().difference(dbStart);
+
+    final totalDuration = DateTime.now().difference(start1);
+    print('⏱️  Step 1: Database call took ${dbDuration.inMilliseconds}ms');
+    print(
+        '⏱️  Step 1: Total time including overhead: ${totalDuration.inMilliseconds}ms');
+    print(
+        '⏱️  Step 1: Drift isolate overhead: ${(totalDuration - dbDuration).inMilliseconds}ms');
+
+    // Test 2: Test with a more complex query
+    final start2 = DateTime.now();
+    print('🔍 Step 2: About to call customSelect("SELECT NOW()")');
+
+    final dbStart2 = DateTime.now();
+    await customSelect('SELECT NOW()').getSingle();
+    final dbDuration2 = DateTime.now().difference(dbStart2);
+
+    final totalDuration2 = DateTime.now().difference(start2);
+    print('⏱️  Step 2: Database call took ${dbDuration2.inMilliseconds}ms');
+    print(
+        '⏱️  Step 2: Total time including overhead: ${totalDuration2.inMilliseconds}ms');
+    print(
+        '⏱️  Step 2: Drift isolate overhead: ${(totalDuration2 - dbDuration2).inMilliseconds}ms');
+
+    print(' Connection latency summary:');
+    print('   Database call 1: ${dbDuration.inMilliseconds}ms');
+    print('   Database call 2: ${dbDuration2.inMilliseconds}ms');
+    print(
+        '   Drift overhead 1: ${(totalDuration - dbDuration).inMilliseconds}ms');
+    print(
+        '   Drift overhead 2: ${(totalDuration2 - dbDuration2).inMilliseconds}ms');
+
+    if ((totalDuration - dbDuration).inMilliseconds > 100) {
+      print('⚠️  High Drift isolate overhead detected! The issue is likely:');
+      print('   1. Drift isolate communication is slow');
+      print('   2. Serialization/deserialization overhead');
+      print('   3. Isolate message passing bottleneck');
+      print('   4. Memory pressure causing isolate slowdown');
+    }
+  }
+
+  /// Test Drift isolate performance
+  Future<void> testDriftIsolatePerformance() async {
+    print('🔍 Testing Drift isolate performance...');
+
+    // Test 1: Simple operation
+    final start1 = DateTime.now();
+    print('🔍 Test 1: Simple customSelect');
+    await customSelect('SELECT 1').getSingle();
+    final duration1 = DateTime.now().difference(start1);
+    print('⏱️  Test 1 took: ${duration1.inMilliseconds}ms');
+
+    // Test 2: Multiple operations
+    final start2 = DateTime.now();
+    print('🔍 Test 2: Multiple operations');
+    for (int i = 0; i < 3; i++) {
+      await customSelect('SELECT $i').getSingle();
+    }
+    final duration2 = DateTime.now().difference(start2);
+    print(
+        '⏱️  Test 2 took: ${duration2.inMilliseconds}ms (avg: ${duration2.inMilliseconds / 3}ms per operation)');
+
+    // Test 3: Check if it's a one-time overhead
+    final start3 = DateTime.now();
+    print('🔍 Test 3: Repeated operation');
+    await customSelect('SELECT 1').getSingle();
+    final duration3 = DateTime.now().difference(start3);
+    print('⏱️  Test 3 took: ${duration3.inMilliseconds}ms');
+  }
+
+  Future<void> testRawPostgresConnection() async {
+    print('🔍 Testing raw PostgreSQL connection...');
+
+    if (config.postgres == null) {
+      print('❌ No PostgreSQL config available');
+      return;
+    }
+
+    final start = DateTime.now();
+    print('🔍 Creating raw PostgreSQL connection...');
+
+    try {
+      // Create a direct connection without the pool
+      final connection = await pg.Connection.open(config.postgres!);
+      final connectDuration = DateTime.now().difference(start);
+      print(
+          '⏱️  Raw connection creation took ${connectDuration.inMilliseconds}ms');
+
+      // Test a simple query
+      final queryStart = DateTime.now();
+      final result = await connection.execute('SELECT 1');
+      final queryDuration = DateTime.now().difference(queryStart);
+      print('⏱️  Raw query execution took ${queryDuration.inMilliseconds}ms');
+
+      await connection.close();
+      print('✅ Raw connection test completed');
+    } catch (e) {
+      print('❌ Raw connection test failed: $e');
+    }
   }
 }

@@ -198,19 +198,34 @@ class Database {
     }
   }
 
-  /// Query time-series data
+  /// Query time-series data with performance analysis
   Future<List<TimeseriesData<dynamic>>> queryTimeseriesData(
       String tableName, DateTime since,
       {String? orderBy = 'time ASC'}) async {
+    // final totalStart = DateTime.now();
+    // print('🔍 queryTimeseriesData: Starting query for table $tableName');
+    // print('📅 queryTimeseriesData: Querying since $since');
+
+    // // Analyze table performance first
+    // await db.analyzeTablePerformance(tableName);
+
+    // final queryStart = DateTime.now();
     final result = await db.tableQuery(tableName,
         where: r'time >= $1::timestamptz',
         whereArgs: [since],
         orderBy: orderBy);
+    // final queryDuration = DateTime.now().difference(queryStart);
+    // print(
+    //     '⏱️  queryTimeseriesData: Database query took ${queryDuration.inMilliseconds}ms, returned ${result.length} rows');
+
+    // final processStart = DateTime.now();
     if (result.isEmpty) {
+      print('📊 queryTimeseriesData: No results found');
       return [];
     }
+
     if (result.first.data.containsKey('time')) {
-      return result.map((row) {
+      final processed = result.map((row) {
         final time = row.read<DateTime>('time');
         if (row.data.length == 2 && row.data.containsKey('value')) {
           return TimeseriesData(row.data['value'], time);
@@ -218,7 +233,16 @@ class Database {
         row.data.remove('time');
         return TimeseriesData(row.data, time);
       }).toList();
+
+      // final processDuration = DateTime.now().difference(processStart);
+      // final totalDuration = DateTime.now().difference(totalStart);
+      // print(
+      //     '⏱️  queryTimeseriesData: Data processing took ${processDuration.inMilliseconds}ms');
+      // print(
+      //     '⏱️  queryTimeseriesData: Total operation took ${totalDuration.inMilliseconds}ms');
+      return processed;
     }
+
     throw DatabaseException('Time column not found in table $tableName');
   }
 

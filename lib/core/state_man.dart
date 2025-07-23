@@ -174,7 +174,7 @@ class SingleWorker {
 }
 
 class ClientWrapper {
-  final Client client;
+  final ClientIsolate client;
   final OpcUAConfig config;
   int? subscriptionId;
 
@@ -190,7 +190,6 @@ class StateMan {
   final Map<String, AutoDisposingStream<DynamicValue>> _subscriptions = {};
 
   Timer? _healthCheckTimer;
-  bool _shouldRun = true;
 
   /// Constructor requires the server endpoint.
   StateMan._({
@@ -199,25 +198,11 @@ class StateMan {
     required this.clients,
   }) {
     for (final wrapper in clients) {
-      // spawn a background task to keep the client active
-      () async {
-        while (_shouldRun) {
-          wrapper.client.connect(wrapper.config.endpoint).onError((e,
-                  stacktrace) =>
-              logger.e('Failed to connect to ${wrapper.config.endpoint}: $e'));
-          while (wrapper.client.runIterate(const Duration(milliseconds: 10)) &&
-              _shouldRun) {
-            await Future.delayed(const Duration(milliseconds: 10));
-          }
-          logger.e('Disconnecting client');
-          wrapper.client.disconnect();
-          await Future.delayed(const Duration(milliseconds: 1000));
-        }
-        logger.e('StateMan background task exited');
-      }();
+      wrapper.client.connect(wrapper.config.endpoint).onError((e, stacktrace) =>
+          logger.e('Failed to connect to ${wrapper.config.endpoint}: $e'));
 
       bool sessionLost = false;
-      wrapper.client.config.stateStream.listen((value) {
+      wrapper.client.stateStream.listen((value) {
         if (value.sessionState ==
                 SessionState.UA_SESSIONSTATE_CREATE_REQUESTED &&
             _subscriptions.isNotEmpty) {
@@ -276,8 +261,8 @@ class StateMan {
         password = opcuaConfig.password;
       }
       clients.add(ClientWrapper(
-        Client(
-          loadOpen62541Library(staticLinking: true),
+        await ClientIsolate.create(
+          libraryPath: '', // empty is static linking
           username: username,
           password: password,
           certificate: cert,
@@ -320,7 +305,7 @@ class StateMan {
   }
 
   Future<Map<String, DynamicValue>> readMany(List<String> keys) async {
-    final parameters = <Client, Map<NodeId, List<AttributeId>>>{};
+    final parameters = <ClientIsolate, Map<NodeId, List<AttributeId>>>{};
 
     for (final key in keys) {
       final client = _getClientWrapper(key).client;
@@ -378,7 +363,6 @@ class StateMan {
   /// Close the connection to the server.
   void close() {
     logger.d('Closing connection');
-    _shouldRun = false;
     for (final wrapper in clients) {
       wrapper.client.disconnect();
     }
@@ -416,7 +400,7 @@ class StateMan {
       return _subscriptions[key]!.stream;
     }
 
-    late Client client;
+    late ClientIsolate client;
     try {
       client = _getClientWrapper(key).client;
       await client.awaitConnect();

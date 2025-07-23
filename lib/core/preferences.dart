@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:tfc/core/database_drift.dart';
 import 'package:drift/drift.dart' show Value;
+import 'package:drift/drift.dart' show Variable;
 
 import 'database.dart';
 
@@ -118,13 +119,18 @@ class Preferences implements PreferencesApi {
   Future<void> _upsertToPostgres(String key, Object? value, String type) async {
     final valStr = value is List<String> ? value.join(',') : value?.toString();
     final db = database!.db;
-    await db.into(db.flutterPreferences).insert(
-          FlutterPreferencesCompanion.insert(
-            key: key,
-            value: valStr != null ? Value(valStr) : const Value.absent(),
-            type: type,
-          ),
-        );
+    // TODO: track changes, like have a timestamp and then we can revert to the previous value if we want
+    // then we can do a insert with primary key as timestamp
+    // and use drift instead of custom insert
+    await db.customInsert(
+      r'''INSERT INTO flutter_preferences (key, value, type) VALUES ($1, $2, $3) 
+      ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, type = EXCLUDED.type''',
+      variables: [
+        Variable.withString(key),
+        Variable.withString(valStr ?? ''),
+        Variable.withString(type),
+      ],
+    );
   }
 
   @override
