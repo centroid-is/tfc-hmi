@@ -104,6 +104,8 @@ class KeyMappingEntry {
   bool? io; // if true, the key is an IO unit
   CollectEntry? collect;
 
+  String? get server => opcuaNode?.serverAlias;
+
   KeyMappingEntry({this.opcuaNode, this.collect});
 
   factory KeyMappingEntry.fromJson(Map<String, dynamic> json) =>

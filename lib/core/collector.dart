@@ -64,6 +64,10 @@ class CollectorConfig {
   Map<String, dynamic> toJson() => _$CollectorConfigToJson(this);
   static CollectorConfig fromJson(Map<String, dynamic> json) =>
       _$CollectorConfigFromJson(json);
+
+  CollectorConfig copyWith({bool? collect}) => CollectorConfig(
+        collect: collect ?? this.collect,
+      );
 }
 
 class Collector {
@@ -273,5 +277,17 @@ class Collector {
     _subscriptions.remove(entry);
     _evaluators[entry]?.cancel();
     _evaluators.remove(entry);
+  }
+
+  void close() {
+    for (final subscription in _subscriptions.values) {
+      subscription.cancel();
+    }
+    _subscriptions.clear();
+
+    for (final evaluator in _evaluators.values) {
+      evaluator.cancel();
+    }
+    _evaluators.clear();
   }
 }

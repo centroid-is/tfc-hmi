@@ -7,6 +7,7 @@ import '../core/collector.dart';
 
 import 'state_man.dart';
 import 'database.dart';
+import 'data_acquisition.dart';
 
 part 'collector.g.dart';
 
@@ -28,8 +29,13 @@ Future<Collector?> collector(Ref ref) async {
   } else {
     config = CollectorConfig.fromJson(jsonDecode(configJson));
   }
+
+  // Start data acquisition in a separate isolate
+  final _ = await ref.watch(dataAcquisitionProvider.future);
+
   return Collector(
-    config: config,
+    config:
+        config.copyWith(collect: false), // do not collect data in main isolate
     stateMan: stateMan,
     database: database,
   );
