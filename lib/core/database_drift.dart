@@ -103,7 +103,7 @@ class AppDatabase extends _$AppDatabase {
               maxConnectionCount: 20,
               sslMode: config.sslMode,
             ));
-        return PgDatabase.opened(pool, logStatements: true);
+        return PgDatabase.opened(pool, logStatements: config.debug);
       });
       final executor = await isolate.connect();
       return AppDatabase._(config, executor);
