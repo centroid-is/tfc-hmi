@@ -1,11 +1,14 @@
 import 'dart:math' as math;
-
+import 'dart:async';
+import 'dart:io' show stderr;
 import 'package:flutter/material.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:open62541/open62541.dart' show DynamicValue;
 
 import 'common.dart';
 import '../../providers/database.dart';
+import '../../providers/state_man.dart';
 import '../../widgets/graph.dart';
 import '../../converter/color_converter.dart';
 import '../../converter/duration_converter.dart';
@@ -214,25 +217,154 @@ class _RatioNumberConfigEditorState extends State<_RatioNumberConfigEditor> {
   }
 }
 
-class RatioNumberWidget extends ConsumerWidget {
+class RatioNumberWidget extends ConsumerStatefulWidget {
   final RatioNumberConfig config;
   const RatioNumberWidget({super.key, required this.config});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    if (config.key1 == "key1" && config.key2 == "key2") {
+  ConsumerState<RatioNumberWidget> createState() => _RatioNumberWidgetState();
+}
+
+class _RatioNumberWidgetState extends ConsumerState<RatioNumberWidget> {
+  // Local queues to store data points
+  final List<TimeseriesData<dynamic>> _key1Queue = [];
+  final List<TimeseriesData<dynamic>> _key2Queue = [];
+
+  // Stream subscriptions
+  StreamSubscription<DynamicValue>? _key1Subscription;
+  StreamSubscription<DynamicValue>? _key2Subscription;
+
+  // Timer for periodic cleanup
+  Timer? _cleanupTimer;
+
+  // Flags to ignore first data point from each subscription
+  bool _key1FirstDataReceived = false;
+  bool _key2FirstDataReceived = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _initializeData();
+  }
+
+  @override
+  void dispose() {
+    _key1Subscription?.cancel();
+    _key2Subscription?.cancel();
+    _cleanupTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _initializeData() async {
+    try {
+      // Get initial data from database
+      final database = await ref.read(databaseProvider.future);
+      if (database != null) {
+        await _loadInitialData(database);
+      }
+
+      // Subscribe to real-time updates from StateMan
+      await _subscribeToRealTimeData();
+
+      // Start periodic cleanup
+      _startCleanupTimer();
+    } catch (e) {
+      stderr.writeln('Error initializing ratio number widget: $e');
+    }
+  }
+
+  Future<void> _loadInitialData(Database database) async {
+    try {
+      // Calculate the time window: howMany * sinceMinutes
+      final timeWindow = widget.config.sinceMinutes * widget.config.howMany;
+      final since = DateTime.now().subtract(timeWindow);
+
+      // Load historical data for both keys
+      final key1Data = await database
+          .queryTimeseriesData(widget.config.key1, since, orderBy: 'time DESC');
+      final key2Data = await database
+          .queryTimeseriesData(widget.config.key2, since, orderBy: 'time DESC');
+
+      // Add to queues
+      _key1Queue.addAll(key1Data);
+      _key2Queue.addAll(key2Data);
+      _cleanupOldData();
+    } catch (e) {
+      stderr.writeln('Error loading initial data: $e');
+    }
+  }
+
+  Future<void> _subscribeToRealTimeData() async {
+    try {
+      final stateMan = await ref.read(stateManProvider.future);
+
+      // Subscribe to key1
+      final key1Stream = await stateMan.subscribe(widget.config.key1);
+      _key1Subscription = key1Stream.listen((value) {
+        // Ignore the first data point (initial data from StateMan)
+        if (!_key1FirstDataReceived) {
+          _key1FirstDataReceived = true;
+          return;
+        }
+
+        final dataPoint = TimeseriesData(
+          value.value,
+          DateTime.now(),
+        );
+        _key1Queue.add(dataPoint);
+        _cleanupOldData();
+      });
+
+      // Subscribe to key2
+      final key2Stream = await stateMan.subscribe(widget.config.key2);
+      _key2Subscription = key2Stream.listen((value) {
+        // Ignore the first data point (initial data from StateMan)
+        if (!_key2FirstDataReceived) {
+          _key2FirstDataReceived = true;
+          return;
+        }
+
+        final dataPoint = TimeseriesData(
+          value.value,
+          DateTime.now(),
+        );
+        _key2Queue.add(dataPoint);
+        _cleanupOldData();
+      });
+    } catch (e) {
+      stderr.writeln('Error subscribing to real-time data: $e');
+    }
+  }
+
+  void _startCleanupTimer() {
+    _cleanupTimer = Timer.periodic(widget.config.pollInterval, (_) {
+      _cleanupOldData();
+    });
+  }
+
+  void _cleanupOldData() {
+    final cutoffTime = DateTime.now()
+        .subtract(widget.config.sinceMinutes * widget.config.howMany);
+
+    _key1Queue.removeWhere((point) => point.time.isBefore(cutoffTime));
+    _key2Queue.removeWhere((point) => point.time.isBefore(cutoffTime));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (widget.config.key1 == "key1" && widget.config.key2 == "key2") {
       return _buildDisplay(context, "75.0%");
     }
 
     return StreamBuilder<Map<String, int>>(
-      stream: _getCountsStream(ref),
+      stream: _getCountsStream(),
       builder: (context, snapshot) {
         String displayValue = "---";
 
         if (snapshot.hasData) {
           final counts = snapshot.data!;
-          final count1 = counts[config.key1] ?? 0;
-          final count2 = counts[config.key2] ?? 0;
+          final count1 = counts[widget.config.key1] ?? 0;
+          final count2 = counts[widget.config.key2] ?? 0;
           final total = count1 + count2;
 
           if (total > 0) {
@@ -249,31 +381,24 @@ class RatioNumberWidget extends ConsumerWidget {
     );
   }
 
-  Stream<Map<String, int>> _getCountsStream(WidgetRef ref) {
-    final databaseAsync = ref.watch(databaseProvider);
+  Stream<Map<String, int>> _getCountsStream() {
+    return Stream.periodic(
+      widget.config.pollInterval,
+      (_) {
+        // Count data points within the sinceMinutes window
+        final cutoffTime = DateTime.now().subtract(widget.config.sinceMinutes);
 
-    return databaseAsync.when(
-      data: (database) {
-        if (database == null) {
-          return Stream.value({});
-        }
+        final count1 =
+            _key1Queue.where((point) => point.time.isAfter(cutoffTime)).length;
 
-        return Stream.periodic(
-          config.pollInterval,
-          (_) async {
-            final count1 = await database.countTimeseriesDataMultiple(
-                config.key1, config.sinceMinutes, 1);
-            final count2 = await database.countTimeseriesDataMultiple(
-                config.key2, config.sinceMinutes, 1);
-            return {
-              config.key1: count1.values.first,
-              config.key2: count2.values.first,
-            };
-          },
-        ).asyncMap((future) => future);
+        final count2 =
+            _key2Queue.where((point) => point.time.isAfter(cutoffTime)).length;
+
+        return {
+          widget.config.key1: count1,
+          widget.config.key2: count2,
+        };
       },
-      loading: () => Stream.value({}),
-      error: (e, st) => Stream.value({}),
     );
   }
 
@@ -281,11 +406,11 @@ class RatioNumberWidget extends ConsumerWidget {
     Widget displayWidget = FittedBox(
       fit: BoxFit.contain,
       child: Transform.rotate(
-        angle: (config.coordinates.angle ?? 0) * math.pi / 180,
+        angle: (widget.config.coordinates.angle ?? 0) * math.pi / 180,
         child: Text(
           value,
           style: TextStyle(
-            color: config.textColor,
+            color: widget.config.textColor,
           ),
         ),
       ),
@@ -314,7 +439,9 @@ class RatioNumberWidget extends ConsumerWidget {
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   Text(
-                    config.graphHeader ?? config.text ?? 'Ratio Analysis',
+                    widget.config.graphHeader ??
+                        widget.config.text ??
+                        'Ratio Analysis',
                     style: Theme.of(context).textTheme.titleLarge,
                   ),
                   IconButton(
@@ -325,7 +452,7 @@ class RatioNumberWidget extends ConsumerWidget {
               ),
               const SizedBox(height: 16),
               Expanded(
-                child: RatioBarChart(config: config),
+                child: RatioBarChart(config: widget.config),
               ),
             ],
           ),
