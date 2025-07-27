@@ -452,7 +452,11 @@ class _RatioNumberWidgetState extends ConsumerState<RatioNumberWidget> {
               ),
               const SizedBox(height: 16),
               Expanded(
-                child: RatioBarChart(config: widget.config),
+                child: RatioBarChart(
+                  config: widget.config,
+                  key1Queue: _key1Queue,
+                  key2Queue: _key2Queue,
+                ),
               ),
             ],
           ),
@@ -464,89 +468,91 @@ class _RatioNumberWidgetState extends ConsumerState<RatioNumberWidget> {
 
 class RatioBarChart extends ConsumerWidget {
   final RatioNumberConfig config;
+  final List<TimeseriesData<dynamic>> key1Queue;
+  final List<TimeseriesData<dynamic>> key2Queue;
 
-  const RatioBarChart({super.key, required this.config});
+  const RatioBarChart({
+    super.key,
+    required this.config,
+    required this.key1Queue,
+    required this.key2Queue,
+  });
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final databaseAsync = ref.watch(databaseProvider);
+    // Create time buckets for the historical data
+    final buckets = _createTimeBuckets();
+    final key1Data = _aggregateDataByBucket(key1Queue, buckets);
+    final key2Data = _aggregateDataByBucket(key2Queue, buckets);
 
-    return databaseAsync.when(
-      data: (database) {
-        if (database == null) {
-          return const Center(child: Text('No database available'));
-        }
+    final graphData = <Map<GraphDataConfig, List<List<double>>>>[];
 
-        return FutureBuilder<Map<String, Map<DateTime, int>>>(
-          future: _getHistoricalCounts(database),
-          builder: (context, snapshot) {
-            if (!snapshot.hasData) {
-              return const Center(child: CircularProgressIndicator());
-            }
+    // Create data for key1
+    final key1GraphData = <List<double>>[];
+    for (final entry in key1Data.entries) {
+      key1GraphData.add([
+        entry.key.millisecondsSinceEpoch.toDouble(),
+        entry.value.toDouble(),
+      ]);
+    }
+    graphData.add({
+      GraphDataConfig(
+        label: config.getDisplayLabel(config.key1),
+        color: Colors.blue,
+      ): key1GraphData,
+    });
 
-            final historicalData = snapshot.data!;
-            final graphData = <Map<GraphDataConfig, List<List<double>>>>[];
+    // Create data for key2
+    final key2GraphData = <List<double>>[];
+    for (final entry in key2Data.entries) {
+      key2GraphData.add([
+        entry.key.millisecondsSinceEpoch.toDouble(),
+        entry.value.toDouble(),
+      ]);
+    }
+    graphData.add({
+      GraphDataConfig(
+        label: config.getDisplayLabel(config.key2),
+        color: Colors.red,
+      ): key2GraphData,
+    });
 
-            // Create data for key1 using actual DateTime values
-            final key1Data = <List<double>>[];
-            final key1SortedKeys = historicalData[config.key1]!.keys.toList()
-              ..sort();
-            for (final bucketStart in key1SortedKeys) {
-              key1Data.add([
-                bucketStart.millisecondsSinceEpoch.toDouble(),
-                historicalData[config.key1]![bucketStart]?.toDouble() ?? 0.0
-              ]);
-            }
-            graphData.add({
-              GraphDataConfig(
-                label: config.getDisplayLabel(config.key1),
-                color: Colors.blue,
-              ): key1Data,
-            });
-
-            // Create data for key2 using actual DateTime values
-            final key2Data = <List<double>>[];
-            final key2SortedKeys = historicalData[config.key2]!.keys.toList()
-              ..sort();
-            for (final bucketStart in key2SortedKeys) {
-              key2Data.add([
-                bucketStart.millisecondsSinceEpoch.toDouble(),
-                historicalData[config.key2]![bucketStart]?.toDouble() ?? 0.0
-              ]);
-            }
-            graphData.add({
-              GraphDataConfig(
-                label: config.getDisplayLabel(config.key2),
-                color: Colors.red,
-              ): key2Data,
-            });
-
-            return Graph(
-              config: GraphConfig(
-                type: GraphType.barTimeseries,
-                xAxis: GraphAxisConfig(unit: ''),
-                yAxis: GraphAxisConfig(unit: 'Count'),
-              ),
-              data: graphData,
-            );
-          },
-        );
-      },
-      loading: () => const Center(child: CircularProgressIndicator()),
-      error: (e, st) => Center(child: Text('Error: $e')),
+    return Graph(
+      config: GraphConfig(
+        type: GraphType.barTimeseries,
+        xAxis: GraphAxisConfig(unit: ''),
+        yAxis: GraphAxisConfig(unit: 'Count'),
+      ),
+      data: graphData,
     );
   }
 
-  Future<Map<String, Map<DateTime, int>>> _getHistoricalCounts(
-      Database database) async {
-    final key1Counts = await database.countTimeseriesDataMultiple(
-        config.key1, config.sinceMinutes, config.howMany);
-    final key2Counts = await database.countTimeseriesDataMultiple(
-        config.key2, config.sinceMinutes, config.howMany);
+  List<DateTime> _createTimeBuckets() {
+    final buckets = <DateTime>[];
+    final bucketDuration = config.sinceMinutes;
+    final endTime = DateTime.now();
 
-    return {
-      config.key1: key1Counts,
-      config.key2: key2Counts,
-    };
+    for (int i = config.howMany - 1; i >= 0; i--) {
+      final bucketStart = endTime.subtract(bucketDuration * (i + 1));
+      buckets.add(bucketStart);
+    }
+
+    return buckets;
+  }
+
+  Map<DateTime, int> _aggregateDataByBucket(
+      List<TimeseriesData<dynamic>> dataPoints, List<DateTime> buckets) {
+    final result = <DateTime, int>{};
+
+    for (final bucket in buckets) {
+      final bucketEnd = bucket.add(config.sinceMinutes);
+      final count = dataPoints
+          .where((point) =>
+              point.time.isAfter(bucket) && point.time.isBefore(bucketEnd))
+          .length;
+      result[bucket] = count;
+    }
+
+    return result;
   }
 }
