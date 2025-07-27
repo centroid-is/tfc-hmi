@@ -30,8 +30,10 @@ Future<Collector?> collector(Ref ref) async {
     config = CollectorConfig.fromJson(jsonDecode(configJson));
   }
 
-  // Start data acquisition in a separate isolate
-  final _ = await ref.watch(dataAcquisitionProvider.future);
+  if (config.collect) {
+    // Start data acquisition in a separate isolate
+    final _ = await ref.watch(dataAcquisitionProvider.future);
+  }
 
   return Collector(
     config:
