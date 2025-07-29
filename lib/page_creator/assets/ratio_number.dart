@@ -1,5 +1,5 @@
 import 'dart:math' as math;
-
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -78,16 +78,17 @@ class RatioNumberConfig extends BaseAsset {
       _RatioNumberConfigEditor(config: this);
 }
 
-class _RatioNumberConfigEditor extends StatefulWidget {
+class _RatioNumberConfigEditor extends ConsumerStatefulWidget {
   final RatioNumberConfig config;
   const _RatioNumberConfigEditor({required this.config});
 
   @override
-  State<_RatioNumberConfigEditor> createState() =>
+  ConsumerState<_RatioNumberConfigEditor> createState() =>
       _RatioNumberConfigEditorState();
 }
 
-class _RatioNumberConfigEditorState extends State<_RatioNumberConfigEditor> {
+class _RatioNumberConfigEditorState
+    extends ConsumerState<_RatioNumberConfigEditor> {
   @override
   Widget build(BuildContext context) {
     return SingleChildScrollView(
@@ -214,13 +215,18 @@ class _RatioNumberConfigEditorState extends State<_RatioNumberConfigEditor> {
   }
 }
 
-class RatioNumberWidget extends ConsumerWidget {
+class RatioNumberWidget extends ConsumerStatefulWidget {
   final RatioNumberConfig config;
   const RatioNumberWidget({super.key, required this.config});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    if (config.key1 == "key1" && config.key2 == "key2") {
+  ConsumerState<RatioNumberWidget> createState() => _RatioNumberWidgetState();
+}
+
+class _RatioNumberWidgetState extends ConsumerState<RatioNumberWidget> {
+  @override
+  Widget build(BuildContext context) {
+    if (widget.config.key1 == "key1" && widget.config.key2 == "key2") {
       return _buildDisplay(context, "75.0%");
     }
 
@@ -231,8 +237,8 @@ class RatioNumberWidget extends ConsumerWidget {
 
         if (snapshot.hasData) {
           final counts = snapshot.data!;
-          final count1 = counts[config.key1] ?? 0;
-          final count2 = counts[config.key2] ?? 0;
+          final count1 = counts[widget.config.key1] ?? 0;
+          final count2 = counts[widget.config.key2] ?? 0;
           final total = count1 + count2;
 
           if (total > 0) {
@@ -259,15 +265,15 @@ class RatioNumberWidget extends ConsumerWidget {
         }
 
         return Stream.periodic(
-          config.pollInterval,
+          widget.config.pollInterval,
           (_) async {
             final count1 = await database.countTimeseriesDataMultiple(
-                config.key1, config.sinceMinutes, 1);
+                widget.config.key1, widget.config.sinceMinutes, 1);
             final count2 = await database.countTimeseriesDataMultiple(
-                config.key2, config.sinceMinutes, 1);
+                widget.config.key2, widget.config.sinceMinutes, 1);
             return {
-              config.key1: count1.values.first,
-              config.key2: count2.values.first,
+              widget.config.key1: count1.values.first,
+              widget.config.key2: count2.values.first,
             };
           },
         ).asyncMap((future) => future);
@@ -281,11 +287,11 @@ class RatioNumberWidget extends ConsumerWidget {
     Widget displayWidget = FittedBox(
       fit: BoxFit.contain,
       child: Transform.rotate(
-        angle: (config.coordinates.angle ?? 0) * math.pi / 180,
+        angle: (widget.config.coordinates.angle ?? 0) * math.pi / 180,
         child: Text(
           value,
           style: TextStyle(
-            color: config.textColor,
+            color: widget.config.textColor,
           ),
         ),
       ),
@@ -300,126 +306,445 @@ class RatioNumberWidget extends ConsumerWidget {
     return displayWidget;
   }
 
+  Future<List<TimeseriesData<dynamic>>> _getQueue(
+      Database db, String key) async {
+    return await db.queryTimeseriesData(
+        key,
+        DateTime.now()
+            .subtract(widget.config.sinceMinutes * widget.config.howMany),
+        orderBy: 'time DESC');
+  }
+
   void _showBarChartDialog(BuildContext context) {
     showDialog(
       context: context,
-      builder: (context) => Dialog(
-        child: Container(
-          width: 800,
-          height: 600,
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text(
-                    config.graphHeader ?? config.text ?? 'Ratio Analysis',
-                    style: Theme.of(context).textTheme.titleLarge,
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.close),
-                    onPressed: () => Navigator.of(context).pop(),
-                  ),
-                ],
+      builder: (context) => FutureBuilder<Database?>(
+        future: ref.read(databaseProvider.future),
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Dialog(
+              child: Padding(
+                padding: EdgeInsets.all(16),
+                child: Center(child: CircularProgressIndicator()),
               ),
-              const SizedBox(height: 16),
-              Expanded(
-                child: RatioBarChart(config: config),
+            );
+          }
+
+          if (snapshot.hasError || !snapshot.hasData || snapshot.data == null) {
+            return Dialog(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child:
+                    Text('Database not found: ${snapshot.error ?? "No data"}'),
               ),
-            ],
-          ),
-        ),
+            );
+          }
+
+          final database = snapshot.data!;
+          return FutureBuilder<List<List<TimeseriesData<dynamic>>>>(
+            future: Future.wait([
+              _getQueue(database, widget.config.key1),
+              _getQueue(database, widget.config.key2),
+            ]),
+            builder: (context, queueSnapshot) {
+              if (queueSnapshot.connectionState == ConnectionState.waiting) {
+                return const Dialog(
+                  child: Padding(
+                    padding: EdgeInsets.all(16),
+                    child: Center(child: CircularProgressIndicator()),
+                  ),
+                );
+              }
+
+              if (queueSnapshot.hasError) {
+                return Dialog(
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Text('Error loading data: ${queueSnapshot.error}'),
+                  ),
+                );
+              }
+
+              final queues = queueSnapshot.data!;
+              final key1Queue = queues[0];
+              final key2Queue = queues[1];
+
+              return Dialog(
+                child: Container(
+                  width: 800,
+                  height: 600,
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            widget.config.graphHeader ??
+                                widget.config.text ??
+                                'Ratio Analysis',
+                            style: Theme.of(context).textTheme.titleLarge,
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.close),
+                            onPressed: () => Navigator.of(context).pop(),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                      Expanded(
+                        child: RatioAnalysisView(
+                          config: widget.config,
+                          key1Queue: key1Queue,
+                          key2Queue: key2Queue,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          );
+        },
       ),
     );
   }
 }
 
-class RatioBarChart extends ConsumerWidget {
+class RatioAnalysisView extends StatefulWidget {
   final RatioNumberConfig config;
+  final List<TimeseriesData<dynamic>> key1Queue;
+  final List<TimeseriesData<dynamic>> key2Queue;
 
-  const RatioBarChart({super.key, required this.config});
+  const RatioAnalysisView({
+    super.key,
+    required this.config,
+    required this.key1Queue,
+    required this.key2Queue,
+  });
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final databaseAsync = ref.watch(databaseProvider);
+  State<RatioAnalysisView> createState() => _RatioAnalysisViewState();
+}
 
-    return databaseAsync.when(
-      data: (database) {
-        if (database == null) {
-          return const Center(child: Text('No database available'));
-        }
+class _RatioAnalysisViewState extends State<RatioAnalysisView> {
+  bool _showChart = true;
 
-        return FutureBuilder<Map<String, Map<DateTime, int>>>(
-          future: _getHistoricalCounts(database),
-          builder: (context, snapshot) {
-            if (!snapshot.hasData) {
-              return const Center(child: CircularProgressIndicator());
-            }
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        // Toggle button row
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            ToggleButtons(
+              isSelected: [_showChart, !_showChart],
+              onPressed: (index) {
+                setState(() {
+                  _showChart = index == 0;
+                });
+              },
+              borderRadius: BorderRadius.circular(8),
+              children: const [
+                Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.bar_chart),
+                      SizedBox(width: 8),
+                      Text('Chart'),
+                    ],
+                  ),
+                ),
+                Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.table_chart),
+                      SizedBox(width: 8),
+                      Text('Table'),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+        const SizedBox(height: 16),
+        // Content area
+        Expanded(
+          child: _showChart
+              ? RatioBarChart(
+                  config: widget.config,
+                  key1Queue: widget.key1Queue,
+                  key2Queue: widget.key2Queue,
+                )
+              : RatioTableView(
+                  config: widget.config,
+                  key1Queue: widget.key1Queue,
+                  key2Queue: widget.key2Queue,
+                ),
+        ),
+      ],
+    );
+  }
+}
 
-            final historicalData = snapshot.data!;
-            final graphData = <Map<GraphDataConfig, List<List<double>>>>[];
+class RatioTableView extends StatelessWidget {
+  final RatioNumberConfig config;
+  final List<TimeseriesData<dynamic>> key1Queue;
+  final List<TimeseriesData<dynamic>> key2Queue;
 
-            // Create data for key1 using actual DateTime values
-            final key1Data = <List<double>>[];
-            final key1SortedKeys = historicalData[config.key1]!.keys.toList()
-              ..sort();
-            for (final bucketStart in key1SortedKeys) {
-              key1Data.add([
-                bucketStart.millisecondsSinceEpoch.toDouble(),
-                historicalData[config.key1]![bucketStart]?.toDouble() ?? 0.0
-              ]);
-            }
-            graphData.add({
-              GraphDataConfig(
-                label: config.getDisplayLabel(config.key1),
-                color: Colors.blue,
-              ): key1Data,
-            });
+  const RatioTableView({
+    super.key,
+    required this.config,
+    required this.key1Queue,
+    required this.key2Queue,
+  });
 
-            // Create data for key2 using actual DateTime values
-            final key2Data = <List<double>>[];
-            final key2SortedKeys = historicalData[config.key2]!.keys.toList()
-              ..sort();
-            for (final bucketStart in key2SortedKeys) {
-              key2Data.add([
-                bucketStart.millisecondsSinceEpoch.toDouble(),
-                historicalData[config.key2]![bucketStart]?.toDouble() ?? 0.0
-              ]);
-            }
-            graphData.add({
-              GraphDataConfig(
-                label: config.getDisplayLabel(config.key2),
-                color: Colors.red,
-              ): key2Data,
-            });
+  @override
+  Widget build(BuildContext context) {
+    // Combine and sort all data points by time
+    final allData = <_TableRow>[];
 
-            return Graph(
-              config: GraphConfig(
-                type: GraphType.barTimeseries,
-                xAxis: GraphAxisConfig(unit: ''),
-                yAxis: GraphAxisConfig(unit: 'Count'),
+    for (final dataPoint in key1Queue) {
+      allData.add(_TableRow(
+        time: dataPoint.time,
+        key: config.getDisplayLabel(config.key1),
+        value: dataPoint.value.toString(),
+        color: Colors.blue,
+      ));
+    }
+
+    for (final dataPoint in key2Queue) {
+      allData.add(_TableRow(
+        time: dataPoint.time,
+        key: config.getDisplayLabel(config.key2),
+        value: dataPoint.value.toString(),
+        color: Colors.red,
+      ));
+    }
+
+    // Sort by time (newest first)
+    allData.sort((a, b) => b.time.compareTo(a.time));
+
+    return SingleChildScrollView(
+      child: Column(
+        children: [
+          // Summary row
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceAround,
+                children: [
+                  _buildSummaryItem(
+                    context,
+                    config.getDisplayLabel(config.key1),
+                    key1Queue.length,
+                    Colors.blue,
+                  ),
+                  _buildSummaryItem(
+                    context,
+                    config.getDisplayLabel(config.key2),
+                    key2Queue.length,
+                    Colors.red,
+                  ),
+                  _buildSummaryItem(
+                    context,
+                    'Total',
+                    key1Queue.length + key2Queue.length,
+                    Colors.grey,
+                  ),
+                ],
               ),
-              data: graphData,
-            );
-          },
-        );
-      },
-      loading: () => const Center(child: CircularProgressIndicator()),
-      error: (e, st) => Center(child: Text('Error: $e')),
+            ),
+          ),
+          const SizedBox(height: 16),
+          // Data table - now spans full width
+          Card(
+            child: SizedBox(
+              width: double.infinity,
+              child: DataTable(
+                columnSpacing: 20,
+                columns: const [
+                  DataColumn(label: Text('Time')),
+                  DataColumn(label: Text('Key')),
+                  DataColumn(label: Text('Value')),
+                ],
+                rows: allData.map((row) {
+                  return DataRow(
+                    cells: [
+                      DataCell(Text(_formatDateTime(row.time))),
+                      DataCell(
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: row.color.withOpacity(0.1),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: row.color),
+                          ),
+                          child: Text(
+                            row.key,
+                            style: TextStyle(
+                              color: row.color,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ),
+                      DataCell(Text(row.value)),
+                    ],
+                  );
+                }).toList(),
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
-  Future<Map<String, Map<DateTime, int>>> _getHistoricalCounts(
-      Database database) async {
-    final key1Counts = await database.countTimeseriesDataMultiple(
-        config.key1, config.sinceMinutes, config.howMany);
-    final key2Counts = await database.countTimeseriesDataMultiple(
-        config.key2, config.sinceMinutes, config.howMany);
+  Widget _buildSummaryItem(
+      BuildContext context, String label, int count, Color color) {
+    return Column(
+      children: [
+        Text(
+          label,
+          style: Theme.of(context).textTheme.titleSmall,
+        ),
+        const SizedBox(height: 4),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+          decoration: BoxDecoration(
+            color: color.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: color),
+          ),
+          child: Text(
+            '$count',
+            style: TextStyle(
+              color: color,
+              fontWeight: FontWeight.bold,
+              fontSize: 18,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
 
-    return {
-      config.key1: key1Counts,
-      config.key2: key2Counts,
-    };
+  String _formatDateTime(DateTime dateTime) {
+    return '${dateTime.hour.toString().padLeft(2, '0')}:${dateTime.minute.toString().padLeft(2, '0')}:${dateTime.second.toString().padLeft(2, '0')}';
+  }
+}
+
+// Helper class for table rows
+class _TableRow {
+  final DateTime time;
+  final String key;
+  final String value;
+  final Color color;
+
+  _TableRow({
+    required this.time,
+    required this.key,
+    required this.value,
+    required this.color,
+  });
+}
+
+class RatioBarChart extends ConsumerWidget {
+  final RatioNumberConfig config;
+  final List<TimeseriesData<dynamic>> key1Queue;
+  final List<TimeseriesData<dynamic>> key2Queue;
+
+  const RatioBarChart({
+    super.key,
+    required this.config,
+    required this.key1Queue,
+    required this.key2Queue,
+  });
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    // Create time buckets for the historical data
+    final buckets = _createTimeBuckets();
+    final key1Data = _aggregateDataByBucket(key1Queue, buckets);
+    final key2Data = _aggregateDataByBucket(key2Queue, buckets);
+
+    final graphData = <Map<GraphDataConfig, List<List<double>>>>[];
+
+    // Create data for key1
+    final key1GraphData = <List<double>>[];
+    for (final entry in key1Data.entries) {
+      key1GraphData.add([
+        entry.key.millisecondsSinceEpoch.toDouble(),
+        entry.value.toDouble(),
+      ]);
+    }
+    graphData.add({
+      GraphDataConfig(
+        label: config.getDisplayLabel(config.key1),
+        color: Colors.blue,
+      ): key1GraphData,
+    });
+
+    // Create data for key2
+    final key2GraphData = <List<double>>[];
+    for (final entry in key2Data.entries) {
+      key2GraphData.add([
+        entry.key.millisecondsSinceEpoch.toDouble(),
+        entry.value.toDouble(),
+      ]);
+    }
+    graphData.add({
+      GraphDataConfig(
+        label: config.getDisplayLabel(config.key2),
+        color: Colors.red,
+      ): key2GraphData,
+    });
+
+    return Graph(
+      config: GraphConfig(
+        type: GraphType.barTimeseries,
+        xAxis: GraphAxisConfig(unit: ''),
+        yAxis: GraphAxisConfig(unit: 'Count'),
+      ),
+      data: graphData,
+    );
+  }
+
+  List<DateTime> _createTimeBuckets() {
+    final buckets = <DateTime>[];
+    final bucketDuration = config.sinceMinutes;
+    final endTime = DateTime.now();
+
+    for (int i = config.howMany - 1; i >= 0; i--) {
+      final bucketStart = endTime.subtract(bucketDuration * (i + 1));
+      buckets.add(bucketStart);
+    }
+
+    return buckets;
+  }
+
+  Map<DateTime, int> _aggregateDataByBucket(
+      List<TimeseriesData<dynamic>> dataPoints, List<DateTime> buckets) {
+    final result = <DateTime, int>{};
+
+    for (final bucket in buckets) {
+      final bucketEnd = bucket.add(config.sinceMinutes);
+      final count = dataPoints
+          .where((point) =>
+              point.time.isAfter(bucket) && point.time.isBefore(bucketEnd))
+          .length;
+      result[bucket] = count;
+    }
+
+    return result;
   }
 }

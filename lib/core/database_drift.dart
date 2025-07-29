@@ -71,19 +71,31 @@ class AppDatabase extends _$AppDatabase {
     await executor.ensureOpen(this);
   }
 
+  /// Factory: creates an [AppDatabase], in the current isolate.
+  /// sqlite: will be created in the background, if postgres is not provided
+  static Future<AppDatabase> create(DatabaseConfig config) async {
+    if (config.postgres != null) {
+      final pool = pg.Pool.withEndpoints([config.postgres!],
+          settings: pg.PoolSettings(
+            maxConnectionCount: 20,
+            sslMode: config.sslMode,
+          ));
+      return AppDatabase._(
+          config, PgDatabase.opened(pool, logStatements: config.debug));
+    }
+    final dbFolder = await getApplicationDocumentsDirectory();
+    final file = File(p.join(dbFolder.path, 'db.sqlite'));
+    // Use a local NativeDatabase (or FlutterQueryExecutor).
+    final executor = NativeDatabase.createInBackground(
+      file,
+      logStatements: config.debug,
+    );
+    return AppDatabase._(config, executor);
+  }
+
   /// Factory: creates an [AppDatabase], spawning a DriftIsolate.
   static Future<AppDatabase> spawn(DatabaseConfig config) async {
     if (config.postgres != null) {
-      Future<void> warmUp<P>(pg.Pool<P> pool, int minCount,
-          {P? locality}) async {
-        await Future.wait(List.generate(minCount, (_) {
-          return pool.withConnection((_) async {
-            // tiny await so calls overlap, ensuring separate connections
-            await Future<void>.delayed(Duration(milliseconds: 1));
-          }, locality: locality);
-        }));
-      }
-
       // Spawn a DriftIsolate handling the Postgres connection off the main isolate.
       final isolate = await DriftIsolate.spawn(() {
         final pool = pg.Pool.withEndpoints([config.postgres!],
@@ -91,8 +103,7 @@ class AppDatabase extends _$AppDatabase {
               maxConnectionCount: 20,
               sslMode: config.sslMode,
             ));
-        warmUp(pool, 10);
-        return PgDatabase.opened(pool, logStatements: true);
+        return PgDatabase.opened(pool, logStatements: config.debug);
       });
       final executor = await isolate.connect();
       return AppDatabase._(config, executor);

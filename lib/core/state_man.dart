@@ -104,6 +104,8 @@ class KeyMappingEntry {
   bool? io; // if true, the key is an IO unit
   CollectEntry? collect;
 
+  String? get server => opcuaNode?.serverAlias;
+
   KeyMappingEntry({this.opcuaNode, this.collect});
 
   factory KeyMappingEntry.fromJson(Map<String, dynamic> json) =>
@@ -174,9 +176,10 @@ class SingleWorker {
 }
 
 class ClientWrapper {
-  final ClientIsolate client;
+  final ClientApi client;
   final OpcUAConfig config;
   int? subscriptionId;
+  final SingleWorker worker = SingleWorker();
 
   ClientWrapper(this.client, this.config);
 }
@@ -186,7 +189,6 @@ class StateMan {
   final StateManConfig config;
   final KeyMappings keyMappings;
   final List<ClientWrapper> clients;
-  final SingleWorker _worker = SingleWorker();
   final Map<String, AutoDisposingStream<DynamicValue>> _subscriptions = {};
 
   Timer? _healthCheckTimer;
@@ -240,6 +242,7 @@ class StateMan {
   static Future<StateMan> create({
     required StateManConfig config,
     required KeyMappings keyMappings,
+    bool useIsolate = true,
   }) async {
     // Example directory: /Users/jonb/Library/Containers/is.centroid.sildarvinnsla.skammtalina/Data/Documents/certs
     List<ClientWrapper> clients = [];
@@ -261,17 +264,26 @@ class StateMan {
         password = opcuaConfig.password;
       }
       clients.add(ClientWrapper(
-        await ClientIsolate.create(
-          libraryPath: '', // empty is static linking
-          username: username,
-          password: password,
-          certificate: cert,
-          privateKey: key,
-          securityMode: securityMode,
-          logLevel: LogLevel.UA_LOGLEVEL_ERROR,
-        ),
-        opcuaConfig,
-      ));
+          useIsolate
+              ? await ClientIsolate.create(
+                  libraryPath: '', // empty is static linking
+                  username: username,
+                  password: password,
+                  certificate: cert,
+                  privateKey: key,
+                  securityMode: securityMode,
+                  logLevel: LogLevel.UA_LOGLEVEL_ERROR,
+                )
+              : Client(
+                  loadOpen62541Library(staticLinking: true),
+                  username: username,
+                  password: password,
+                  certificate: cert,
+                  privateKey: key,
+                  securityMode: securityMode,
+                  logLevel: LogLevel.UA_LOGLEVEL_ERROR,
+                ),
+          opcuaConfig));
     }
     final stateMan = StateMan._(
       config: config,
@@ -305,7 +317,7 @@ class StateMan {
   }
 
   Future<Map<String, DynamicValue>> readMany(List<String> keys) async {
-    final parameters = <ClientIsolate, Map<NodeId, List<AttributeId>>>{};
+    final parameters = <ClientApi, Map<NodeId, List<AttributeId>>>{};
 
     for (final key in keys) {
       final client = _getClientWrapper(key).client;
@@ -364,7 +376,7 @@ class StateMan {
   void close() {
     logger.d('Closing connection');
     for (final wrapper in clients) {
-      wrapper.client.disconnect();
+      wrapper.client.delete();
     }
     // Clean up subscriptions
     for (final entry in _subscriptions.values) {
@@ -400,7 +412,7 @@ class StateMan {
       return _subscriptions[key]!.stream;
     }
 
-    late ClientIsolate client;
+    late ClientApi client;
     try {
       client = _getClientWrapper(key).client;
       await client.awaitConnect();
@@ -429,13 +441,14 @@ class StateMan {
         await client.awaitConnect();
         final wrapper = _getClientWrapper(key);
 
-        if (wrapper.subscriptionId == null && await _worker.doTheWork()) {
+        if (wrapper.subscriptionId == null &&
+            await wrapper.worker.doTheWork()) {
           try {
             wrapper.subscriptionId = await client.subscriptionCreate();
           } catch (e) {
             logger.e('Failed to create subscription: $e');
           } finally {
-            _worker.complete();
+            wrapper.worker.complete();
           }
         }
         if (wrapper.subscriptionId == null) {
