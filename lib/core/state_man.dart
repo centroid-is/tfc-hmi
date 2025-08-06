@@ -190,6 +190,7 @@ class StateMan {
   final KeyMappings keyMappings;
   final List<ClientWrapper> clients;
   final Map<String, AutoDisposingStream<DynamicValue>> _subscriptions = {};
+  bool _shouldRun = true;
 
   Timer? _healthCheckTimer;
 
@@ -203,8 +204,41 @@ class StateMan {
       wrapper.client.connect(wrapper.config.endpoint).onError((e, stacktrace) =>
           logger.e('Failed to connect to ${wrapper.config.endpoint}: $e'));
 
+      if (wrapper.client is Client) {
+        // spawn a background task to keep the client active
+        () async {
+          final clientref = wrapper.client as Client;
+          while (_shouldRun) {
+            clientref.connect(wrapper.config.endpoint).onError(
+                (e, stacktrace) => logger
+                    .e('Failed to connect to ${wrapper.config.endpoint}: $e'));
+            while (clientref.runIterate(const Duration(milliseconds: 10)) &&
+                _shouldRun) {
+              await Future.delayed(const Duration(milliseconds: 10));
+            }
+            logger.e('Disconnecting client');
+            clientref.disconnect();
+            await Future.delayed(const Duration(milliseconds: 1000));
+          }
+          logger.e('StateMan background run iterate task exited');
+        }();
+      }
+
       bool sessionLost = false;
       wrapper.client.stateStream.listen((value) {
+        if (value.channelState ==
+            SecureChannelState.UA_SECURECHANNELSTATE_CLOSED) {
+          logger
+              .e('Channel closed, reconnecting to ${wrapper.config.endpoint}');
+          // throttle slightly the reconnecting
+          Future.delayed(
+              const Duration(seconds: 1),
+              () => {
+                    wrapper.client.connect(wrapper.config.endpoint).onError(
+                        (e, stacktrace) => logger.e(
+                            'Failed to connect to ${wrapper.config.endpoint}: $e'))
+                  });
+        }
         if (value.sessionState ==
                 SessionState.UA_SESSIONSTATE_CREATE_REQUESTED &&
             _subscriptions.isNotEmpty) {
@@ -374,6 +408,7 @@ class StateMan {
 
   /// Close the connection to the server.
   void close() {
+    _shouldRun = false;
     logger.d('Closing connection');
     for (final wrapper in clients) {
       wrapper.client.delete();
