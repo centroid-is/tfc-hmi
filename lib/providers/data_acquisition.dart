@@ -62,6 +62,7 @@ void entryPoint(IsolateMessage isolateMessage) async {
       stateMan: await StateMan.create(
         config: isolateMessage.stateManConfig,
         keyMappings: isolateMessage.keyMappings,
+        useIsolate: false,
       ),
       database: database,
     );

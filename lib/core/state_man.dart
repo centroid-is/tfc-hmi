@@ -190,6 +190,7 @@ class StateMan {
   final KeyMappings keyMappings;
   final List<ClientWrapper> clients;
   final Map<String, AutoDisposingStream<DynamicValue>> _subscriptions = {};
+  bool _shouldRun = true;
 
   Timer? _healthCheckTimer;
 
@@ -202,6 +203,26 @@ class StateMan {
     for (final wrapper in clients) {
       wrapper.client.connect(wrapper.config.endpoint).onError((e, stacktrace) =>
           logger.e('Failed to connect to ${wrapper.config.endpoint}: $e'));
+
+      if (wrapper.client is Client) {
+        // spawn a background task to keep the client active
+        () async {
+          final clientref = wrapper.client as Client;
+          while (_shouldRun) {
+            clientref.connect(wrapper.config.endpoint).onError(
+                (e, stacktrace) => logger
+                    .e('Failed to connect to ${wrapper.config.endpoint}: $e'));
+            while (clientref.runIterate(const Duration(milliseconds: 10)) &&
+                _shouldRun) {
+              await Future.delayed(const Duration(milliseconds: 10));
+            }
+            logger.e('Disconnecting client');
+            clientref.disconnect();
+            await Future.delayed(const Duration(milliseconds: 1000));
+          }
+          logger.e('StateMan background run iterate task exited');
+        }();
+      }
 
       bool sessionLost = false;
       wrapper.client.stateStream.listen((value) {
@@ -255,8 +276,7 @@ class StateMan {
   static Future<StateMan> create({
     required StateManConfig config,
     required KeyMappings keyMappings,
-    // todo we need to handle reconnect logic differently and run iterate
-    // bool useIsolate = true,
+    bool useIsolate = true,
   }) async {
     // Example directory: /Users/jonb/Library/Containers/is.centroid.sildarvinnsla.skammtalina/Data/Documents/certs
     List<ClientWrapper> clients = [];
@@ -278,27 +298,26 @@ class StateMan {
         password = opcuaConfig.password;
       }
       clients.add(ClientWrapper(
-          // useIsolate ?
-          await ClientIsolate.create(
-            libraryPath: '', // empty is static linking
-            username: username,
-            password: password,
-            certificate: cert,
-            privateKey: key,
-            securityMode: securityMode,
-            logLevel: LogLevel.UA_LOGLEVEL_ERROR,
-          )
-          // todo we need to handle reconnect logic differently
-          // : Client(
-          //     loadOpen62541Library(staticLinking: true),
-          //     username: username,
-          //     password: password,
-          //     certificate: cert,
-          //     privateKey: key,
-          //     securityMode: securityMode,
-          //     logLevel: LogLevel.UA_LOGLEVEL_ERROR,
-          //   )
-          ,
+          useIsolate
+              ? await ClientIsolate.create(
+                  libraryPath: '', // empty is static linking
+                  username: username,
+                  password: password,
+                  certificate: cert,
+                  privateKey: key,
+                  securityMode: securityMode,
+                  logLevel: LogLevel.UA_LOGLEVEL_ERROR,
+                )
+              // todo we need to handle reconnect logic differently
+              : Client(
+                  loadOpen62541Library(staticLinking: true),
+                  username: username,
+                  password: password,
+                  certificate: cert,
+                  privateKey: key,
+                  securityMode: securityMode,
+                  logLevel: LogLevel.UA_LOGLEVEL_ERROR,
+                ),
           opcuaConfig));
     }
     final stateMan = StateMan._(
@@ -390,6 +409,7 @@ class StateMan {
 
   /// Close the connection to the server.
   void close() {
+    _shouldRun = false;
     logger.d('Closing connection');
     for (final wrapper in clients) {
       wrapper.client.delete();
