@@ -180,9 +180,11 @@ class Database {
       String tableName, DateTime time, dynamic value) async {
     Future<void> insert() async {
       if (value is Map<String, dynamic>) {
-        await db.tableInsert(tableName, {"time": time, ...value});
+        await db
+            .tableInsert(tableName, {"time": time.toIso8601String(), ...value});
       } else {
-        await db.tableInsert(tableName, {'time': time, 'value': value});
+        await db.tableInsert(
+            tableName, {'time': time.toIso8601String(), 'value': value});
       }
     }
 
