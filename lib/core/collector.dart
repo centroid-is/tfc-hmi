@@ -148,9 +148,15 @@ class Collector {
       );
     }
 
+    bool skipFirstSample = true;
+
     _subscriptions[entry] = subscription.listen(
       (value) async {
         if (entry.sampleInterval == null) {
+          if (skipFirstSample) {
+            skipFirstSample = false;
+            return;
+          }
           // No sampling - collect every value immediately
           await insertValue(value);
         } else {
