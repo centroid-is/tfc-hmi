@@ -205,6 +205,19 @@ class StateMan {
 
       bool sessionLost = false;
       wrapper.client.stateStream.listen((value) {
+        if (value.channelState ==
+            SecureChannelState.UA_SECURECHANNELSTATE_CLOSED) {
+          logger
+              .e('Channel closed, reconnecting to ${wrapper.config.endpoint}');
+          // throttle slightly the reconnecting
+          Future.delayed(
+              const Duration(seconds: 1),
+              () => {
+                    wrapper.client.connect(wrapper.config.endpoint).onError(
+                        (e, stacktrace) => logger.e(
+                            'Failed to connect to ${wrapper.config.endpoint}: $e'))
+                  });
+        }
         if (value.sessionState ==
                 SessionState.UA_SESSIONSTATE_CREATE_REQUESTED &&
             _subscriptions.isNotEmpty) {
@@ -242,7 +255,8 @@ class StateMan {
   static Future<StateMan> create({
     required StateManConfig config,
     required KeyMappings keyMappings,
-    bool useIsolate = true,
+    // todo we need to handle reconnect logic differently and run iterate
+    // bool useIsolate = true,
   }) async {
     // Example directory: /Users/jonb/Library/Containers/is.centroid.sildarvinnsla.skammtalina/Data/Documents/certs
     List<ClientWrapper> clients = [];
@@ -264,25 +278,27 @@ class StateMan {
         password = opcuaConfig.password;
       }
       clients.add(ClientWrapper(
-          useIsolate
-              ? await ClientIsolate.create(
-                  libraryPath: '', // empty is static linking
-                  username: username,
-                  password: password,
-                  certificate: cert,
-                  privateKey: key,
-                  securityMode: securityMode,
-                  logLevel: LogLevel.UA_LOGLEVEL_ERROR,
-                )
-              : Client(
-                  loadOpen62541Library(staticLinking: true),
-                  username: username,
-                  password: password,
-                  certificate: cert,
-                  privateKey: key,
-                  securityMode: securityMode,
-                  logLevel: LogLevel.UA_LOGLEVEL_ERROR,
-                ),
+          // useIsolate ?
+          await ClientIsolate.create(
+            libraryPath: '', // empty is static linking
+            username: username,
+            password: password,
+            certificate: cert,
+            privateKey: key,
+            securityMode: securityMode,
+            logLevel: LogLevel.UA_LOGLEVEL_ERROR,
+          )
+          // todo we need to handle reconnect logic differently
+          // : Client(
+          //     loadOpen62541Library(staticLinking: true),
+          //     username: username,
+          //     password: password,
+          //     certificate: cert,
+          //     privateKey: key,
+          //     securityMode: securityMode,
+          //     logLevel: LogLevel.UA_LOGLEVEL_ERROR,
+          //   )
+          ,
           opcuaConfig));
     }
     final stateMan = StateMan._(
