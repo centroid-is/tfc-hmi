@@ -7,8 +7,7 @@ import 'package:json_annotation/json_annotation.dart';
 import 'package:rxdart/rxdart.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:tfc/core/database_drift.dart' show AlarmHistoryCompanion;
-import 'package:drift/drift.dart' show Value, OrderingTerm, OrderingMode;
+import 'package:drift/drift.dart' show OrderingTerm, OrderingMode, Variable;
 
 import 'preferences.dart';
 import 'state_man.dart';
@@ -326,23 +325,44 @@ class AlarmMan {
   }
 
   Future<void> _addToDb(AlarmActive alarm) async {
+    // todo this should work but timestamp does not propagate correctly through drift
+    // see the casting below
+    // await db.into(db.alarmHistory).insert(AlarmHistoryCompanion.insert(
+    //   alarmUid: alarm.alarm.config.uid,
+    //   alarmTitle: alarm.alarm.config.title,
+    //   alarmDescription: alarm.alarm.config.description,
+    //   alarmLevel: alarm.notification.rule.level.name,
+    //   expression: alarm.notification.expression != null
+    //       ? Value(alarm.notification.expression!)
+    //       : const Value.absent(),
+    //   active: alarm.notification.active,
+    //   pendingAck: alarm.pendingAck,
+    //   createdAt: alarm.notification.timestamp,
+    //   deactivatedAt: alarm.deactivated != null
+    //       ? Value(alarm.deactivated!)
+    //       : const Value.absent(),
+    // ));
+
     if (preferences.database == null) return;
     final db = preferences.database!.db;
-    await db.into(db.alarmHistory).insert(AlarmHistoryCompanion.insert(
-          alarmUid: alarm.alarm.config.uid,
-          alarmTitle: alarm.alarm.config.title,
-          alarmDescription: alarm.alarm.config.description,
-          alarmLevel: alarm.notification.rule.level.name,
-          expression: alarm.notification.expression != null
-              ? Value(alarm.notification.expression!)
-              : const Value.absent(),
-          active: alarm.notification.active,
-          pendingAck: alarm.pendingAck,
-          createdAt: alarm.notification.timestamp,
-          deactivatedAt: alarm.deactivated != null
-              ? Value(alarm.deactivated!)
-              : const Value.absent(),
-        ));
+
+    // Use custom SQL with proper timestamp casting for PostgreSQL
+    await db.customInsert(r'''
+      INSERT INTO alarm_history (
+        alarm_uid, alarm_title, alarm_description, alarm_level, 
+        expression, active, pending_ack, created_at, deactivated_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::timestamp, $9::timestamp)
+    ''', variables: [
+      Variable.withString(alarm.alarm.config.uid),
+      Variable.withString(alarm.alarm.config.title),
+      Variable.withString(alarm.alarm.config.description),
+      Variable.withString(alarm.notification.rule.level.name),
+      Variable.withString(alarm.notification.expression ?? ''),
+      Variable.withBool(alarm.notification.active),
+      Variable.withBool(alarm.pendingAck),
+      Variable.withString(alarm.notification.timestamp.toIso8601String()),
+      Variable.withString(alarm.deactivated?.toIso8601String() ?? ''),
+    ]);
   }
 
   Future<List<AlarmActive>> getRecentAlarms({int limit = 1000}) async {

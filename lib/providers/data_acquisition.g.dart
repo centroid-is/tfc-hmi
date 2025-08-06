@@ -6,7 +6,7 @@ part of 'data_acquisition.dart';
 // RiverpodGenerator
 // **************************************************************************
 
-String _$dataAcquisitionHash() => r'9fc45616ad68b66b56e9b834836f41fc11d55b3e';
+String _$dataAcquisitionHash() => r'794ff96c0493e5784cb09189e18550c511770e46';
 
 /// See also [dataAcquisition].
 @ProviderFor(dataAcquisition)
