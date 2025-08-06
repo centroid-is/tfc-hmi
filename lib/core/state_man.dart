@@ -308,7 +308,6 @@ class StateMan {
                   securityMode: securityMode,
                   logLevel: LogLevel.UA_LOGLEVEL_ERROR,
                 )
-              // todo we need to handle reconnect logic differently
               : Client(
                   loadOpen62541Library(staticLinking: true),
                   username: username,
