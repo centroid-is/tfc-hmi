@@ -493,7 +493,7 @@ class _RatioAnalysisViewState extends State<RatioAnalysisView> {
   }
 }
 
-class RatioTableView extends StatelessWidget {
+class RatioTableView extends StatefulWidget {
   final RatioNumberConfig config;
   final List<TimeseriesData<dynamic>> key1Queue;
   final List<TimeseriesData<dynamic>> key2Queue;
@@ -506,30 +506,45 @@ class RatioTableView extends StatelessWidget {
   });
 
   @override
+  State<RatioTableView> createState() => _RatioTableViewState();
+}
+
+class _RatioTableViewState extends State<RatioTableView> {
+  String?
+      _activeFilter; // null = no filter, 'key1' = filter by key1, 'key2' = filter by key2
+
+  @override
   Widget build(BuildContext context) {
     // Combine and sort all data points by time
     final allData = <_TableRow>[];
 
-    for (final dataPoint in key1Queue) {
+    for (final dataPoint in widget.key1Queue) {
       allData.add(_TableRow(
         time: dataPoint.time,
-        key: config.getDisplayLabel(config.key1),
+        key: widget.config.getDisplayLabel(widget.config.key1),
         value: dataPoint.value.toString(),
         color: Colors.blue,
+        keyType: 'key1',
       ));
     }
 
-    for (final dataPoint in key2Queue) {
+    for (final dataPoint in widget.key2Queue) {
       allData.add(_TableRow(
         time: dataPoint.time,
-        key: config.getDisplayLabel(config.key2),
+        key: widget.config.getDisplayLabel(widget.config.key2),
         value: dataPoint.value.toString(),
         color: Colors.red,
+        keyType: 'key2',
       ));
     }
 
     // Sort by time (newest first)
     allData.sort((a, b) => b.time.compareTo(a.time));
+
+    // Apply filter if active
+    final filteredData = _activeFilter == null
+        ? allData
+        : allData.where((row) => row.keyType == _activeFilter).toList();
 
     return SingleChildScrollView(
       child: Column(
@@ -543,21 +558,24 @@ class RatioTableView extends StatelessWidget {
                 children: [
                   _buildSummaryItem(
                     context,
-                    config.getDisplayLabel(config.key1),
-                    key1Queue.length,
+                    widget.config.getDisplayLabel(widget.config.key1),
+                    widget.key1Queue.length,
                     Colors.blue,
+                    'key1',
                   ),
                   _buildSummaryItem(
                     context,
-                    config.getDisplayLabel(config.key2),
-                    key2Queue.length,
+                    widget.config.getDisplayLabel(widget.config.key2),
+                    widget.key2Queue.length,
                     Colors.red,
+                    'key2',
                   ),
                   _buildSummaryItem(
                     context,
                     'Total',
-                    key1Queue.length + key2Queue.length,
+                    widget.key1Queue.length + widget.key2Queue.length,
                     Colors.grey,
+                    null,
                   ),
                 ],
               ),
@@ -575,7 +593,7 @@ class RatioTableView extends StatelessWidget {
                   DataColumn(label: Text('Key')),
                   DataColumn(label: Text('Value')),
                 ],
-                rows: allData.map((row) {
+                rows: filteredData.map((row) {
                   return DataRow(
                     cells: [
                       DataCell(Text(_formatDateTime(row.time))),
@@ -609,32 +627,43 @@ class RatioTableView extends StatelessWidget {
     );
   }
 
-  Widget _buildSummaryItem(
-      BuildContext context, String label, int count, Color color) {
-    return Column(
-      children: [
-        Text(
-          label,
-          style: Theme.of(context).textTheme.titleSmall,
-        ),
-        const SizedBox(height: 4),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-          decoration: BoxDecoration(
-            color: color.withOpacity(0.1),
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: color),
+  Widget _buildSummaryItem(BuildContext context, String label, int count,
+      Color color, String? filterKey) {
+    final isActive = _activeFilter == filterKey;
+
+    return GestureDetector(
+      onTap: () {
+        setState(() {
+          _activeFilter = isActive ? null : filterKey;
+        });
+      },
+      child: Column(
+        children: [
+          Text(
+            label,
+            style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                  fontWeight: isActive ? FontWeight.bold : FontWeight.normal,
+                ),
           ),
-          child: Text(
-            '$count',
-            style: TextStyle(
-              color: color,
-              fontWeight: FontWeight.bold,
-              fontSize: 18,
+          const SizedBox(height: 4),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+            decoration: BoxDecoration(
+              color: isActive ? color : color.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: color),
+            ),
+            child: Text(
+              '$count',
+              style: TextStyle(
+                color: isActive ? Colors.white : color,
+                fontWeight: FontWeight.bold,
+                fontSize: 18,
+              ),
             ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 
@@ -649,12 +678,14 @@ class _TableRow {
   final String key;
   final String value;
   final Color color;
+  final String keyType; // 'key1' or 'key2' for filtering
 
   _TableRow({
     required this.time,
     required this.key,
     required this.value,
     required this.color,
+    required this.keyType,
   });
 }
 
