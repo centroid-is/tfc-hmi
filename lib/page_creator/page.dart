@@ -19,24 +19,22 @@ class AssetPage {
 
   AssetPage({required this.menuItem, required this.assets});
 
-  factory AssetPage.fromJson(Map<String, dynamic> json) => _$PageFromJson(json);
-  Map<String, dynamic> toJson() => _$PageToJson(this);
+  factory AssetPage.fromJson(Map<String, dynamic> json) =>
+      _$AssetPageFromJson(json);
+  Map<String, dynamic> toJson() => _$AssetPageToJson(this);
 }
 
-class AssetListConverter
-    implements JsonConverter<List<Asset>, Map<String, dynamic>> {
+class AssetListConverter implements JsonConverter<List<Asset>, List<dynamic>> {
   const AssetListConverter();
 
   @override
-  List<Asset> fromJson(Map<String, dynamic> json) {
-    return AssetRegistry.parse(json);
+  List<Asset> fromJson(List<dynamic> json) {
+    return AssetRegistry.parse({'assets': json});
   }
 
   @override
-  Map<String, dynamic> toJson(List<Asset> assets) {
-    return {
-      'assets': assets.map((asset) => asset.toJson()).toList(),
-    };
+  List<dynamic> toJson(List<Asset> assets) {
+    return assets.map((asset) => asset.toJson()).toList();
   }
 }
 

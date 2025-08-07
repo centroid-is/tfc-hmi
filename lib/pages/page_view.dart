@@ -1,13 +1,16 @@
 import 'dart:convert';
 import 'dart:math' as math;
+
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:logger/logger.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:tfc/core/preferences.dart';
+import 'package:tfc/page_creator/page.dart';
 
+import '../providers/page_manager.dart';
 import '../page_creator/assets/common.dart'; // your Asset, Coordinates, RelativeSize, TextPos, etc.
-import '../page_creator/assets/registry.dart';
 import '../widgets/base_scaffold.dart';
 import '../widgets/zoomable_canvas.dart';
 
@@ -256,31 +259,35 @@ class _AssetStackState extends State<AssetStack> {
   }
 }
 
-class AssetViewConfig {
-  final List<Asset> widgets;
-  AssetViewConfig({required this.widgets});
-  factory AssetViewConfig.fromJson(Map<String, dynamic> json) {
-    final widgets = AssetRegistry.parse(json);
-    _log.d('Found ${widgets.length} widgets');
-    return AssetViewConfig(widgets: widgets);
-  }
-}
-
-class AssetView extends StatelessWidget {
-  final AssetViewConfig config;
-  const AssetView({Key? key, required this.config}) : super(key: key);
+class AssetView extends ConsumerWidget {
+  final String pageName;
+  const AssetView({Key? key, required this.pageName}) : super(key: key);
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     return BaseScaffold(
       title: 'Asset View',
       body: ZoomableCanvas(
         child: LayoutBuilder(
-          builder: (context, constraints) => AssetStack(
-            assets: config.widgets,
-            constraints: constraints,
-            absorb: false,
-            selectedAssets: {},
+          builder: (context, constraints) => FutureBuilder<PageManager>(
+            future: ref.watch(pageManagerProvider.future),
+            builder: (context, snap) {
+              final pageManager = snap.data;
+              if (pageManager == null) {
+                return const SizedBox.shrink();
+              }
+              if (pageManager.pages[pageName] == null) {
+                return Center(
+                  child: Text('Page: "$pageName" not found'),
+                );
+              }
+              return AssetStack(
+                assets: pageManager.pages[pageName]?.assets ?? [],
+                constraints: constraints,
+                absorb: false,
+                selectedAssets: const {},
+              );
+            },
           ),
         ),
       ),

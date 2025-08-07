@@ -8,7 +8,6 @@ import '../page_creator/assets/common.dart';
 import '../page_creator/assets/registry.dart';
 import '../widgets/base_scaffold.dart';
 import 'page_view.dart';
-import '../providers/preferences.dart';
 import '../widgets/zoomable_canvas.dart';
 import '../page_creator/page.dart';
 
@@ -570,6 +569,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
 
   Widget _buildPageSelector() {
     final pages = _temporaryPages;
+    final currentPage = _currentPage ?? pages.keys.firstOrNull ?? 'Empty';
 
     return PopupMenuButton<String>(
       child: Container(
@@ -582,7 +582,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(pages.keys.firstOrNull ?? 'Empty'),
+            Text(currentPage),
             const SizedBox(width: 8),
             const Icon(Icons.arrow_drop_down),
           ],
@@ -618,7 +618,9 @@ class _PageEditorState extends ConsumerState<PageEditor> {
         if (value == 'add') {
           _showCreatePageDialog();
         } else {
-          _currentPage = value;
+          setState(() {
+            _currentPage = value;
+          });
         }
       },
     );
