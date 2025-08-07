@@ -47,26 +47,20 @@ class PageManager {
 
   Future<void> load() async {
     final String? jsonString = await prefs.getString(storageKey);
+    final defaultPages = {
+      'Home': AssetPage(
+        menuItem: const MenuItem(label: 'Home', path: '/', icon: Icons.home),
+        assets: [],
+      ),
+    };
     if (jsonString != null) {
       try {
         fromJson(jsonString);
         if (pages.isEmpty) {
-          pages = {
-            'Home': AssetPage(
-              menuItem:
-                  const MenuItem(label: 'Home', path: '/', icon: Icons.home),
-              assets: [],
-            ),
-          };
+          pages = defaultPages;
         }
       } catch (e) {
-        pages = {
-          'Home': AssetPage(
-            menuItem:
-                const MenuItem(label: 'Home', path: '/', icon: Icons.home),
-            assets: [],
-          ),
-        };
+        pages = defaultPages;
       }
     }
   }
