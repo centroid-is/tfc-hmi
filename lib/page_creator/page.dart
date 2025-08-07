@@ -80,11 +80,7 @@ class PageManager {
   }
 
   void fromJson(String jsonString) {
-    final json = jsonDecode(jsonString) as Map<String, dynamic>;
-    pages = json.map((name, pageJson) => MapEntry(
-          name,
-          AssetPage.fromJson(pageJson as Map<String, dynamic>),
-        ));
+    pages = PageManager._fromJson(jsonString);
   }
 
   PageManager copyWith({
@@ -97,6 +93,20 @@ class PageManager {
     final json = manager.toJson();
     manager.fromJson(json);
     return manager;
+  }
+
+  static Map<String, AssetPage> copyPages(Map<String, AssetPage> otherPages) {
+    final json = jsonEncode(
+        otherPages.map((name, page) => MapEntry(name, page.toJson())));
+    return _fromJson(json);
+  }
+
+  static Map<String, AssetPage> _fromJson(String jsonString) {
+    final json = jsonDecode(jsonString) as Map<String, dynamic>;
+    return json.map((name, pageJson) => MapEntry(
+          name,
+          AssetPage.fromJson(pageJson as Map<String, dynamic>),
+        ));
   }
 }
 

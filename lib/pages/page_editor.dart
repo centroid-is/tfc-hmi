@@ -60,9 +60,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
 
   Future<void> _saveToPrefs() async {
     final pageManager = await ref.read(pageManagerProvider.future);
-    final newPageManager =
-        pageManager.copyWith(otherPages: _temporaryPages); // deep copy
-    pageManager.pages = newPageManager.pages;
+    pageManager.pages = PageManager.copyPages(_temporaryPages);
     await pageManager.save();
   }
 
@@ -73,7 +71,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   }
 
   void _saveToHistory() {
-    _undoHistory.add(_temporaryPages);
+    _undoHistory.add(PageManager.copyPages(_temporaryPages));
 
     if (_undoHistory.length > 50) {
       _undoHistory.removeAt(0);
