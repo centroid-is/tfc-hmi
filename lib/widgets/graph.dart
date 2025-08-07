@@ -99,12 +99,14 @@ class Graph extends StatefulWidget {
   final GraphConfig config;
   final List<Map<GraphDataConfig, List<List<double>>>> data;
   final Function()? onPanCompleted;
+  final bool showDate; // Simple boolean flag
 
   const Graph({
     super.key,
     required this.config,
     required this.data,
     this.onPanCompleted,
+    this.showDate = false,
   });
 
   @override
@@ -617,27 +619,21 @@ class _GraphState extends State<Graph> {
 
     return charts.DateTimeAxisSpec(
       viewport: extents,
-
-      // let the chart pick sensible tick locations at minute/hour/day granularity:
       tickProviderSpec: const charts.AutoDateTimeTickProviderSpec(),
-
-      // and format them nicely:
-      tickFormatterSpec: const charts.AutoDateTimeTickFormatterSpec(
-        // if your data is minutes apart, show "HH:mm"
+      tickFormatterSpec: charts.AutoDateTimeTickFormatterSpec(
         minute: charts.TimeFormatterSpec(
-          format: 'HH:mm',
-          transitionFormat: 'HH:mm',
+          format: widget.showDate ? 'MM/dd HH:mm' : 'HH:mm',
+          transitionFormat: widget.showDate ? 'MM/dd HH:mm' : 'HH:mm',
         ),
         hour: charts.TimeFormatterSpec(
-          format: 'HH:mm',
-          transitionFormat: 'HH:mm',
+          format: widget.showDate ? 'MM/dd HH:mm' : 'HH:mm',
+          transitionFormat: widget.showDate ? 'MM/dd HH:mm' : 'HH:mm',
         ),
         day: charts.TimeFormatterSpec(
           format: 'MM/dd',
           transitionFormat: 'yyyy-MM-dd',
         ),
       ),
-
       showAxisLine: true,
     );
   }
