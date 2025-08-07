@@ -639,6 +639,10 @@ void main() {
 
       // BAAAAAM
       dataController.add(DynamicValue(value: 35.0));
+      // Insert the same data again because the first value is skipped
+      // That is because the first value is a value that we do not know when arrived,
+      // the stream controller caches always the last value, so we skip the first value
+      dataController.add(DynamicValue(value: 35.0));
       await Future.delayed(const Duration(milliseconds: 100));
 
       insertedData =
