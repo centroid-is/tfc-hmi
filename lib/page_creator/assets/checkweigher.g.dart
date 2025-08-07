@@ -25,7 +25,6 @@ CheckweigherConfig _$CheckweigherConfigFromJson(Map<String, dynamic> json) =>
               .fromJson(json['textColor'] as Map<String, dynamic>),
     )
       ..variant = json['asset_name'] as String
-      ..pageName = json['page_name'] as String
       ..coordinates =
           Coordinates.fromJson(json['coordinates'] as Map<String, dynamic>)
       ..size = RelativeSize.fromJson(json['size'] as Map<String, dynamic>)
@@ -35,7 +34,6 @@ CheckweigherConfig _$CheckweigherConfigFromJson(Map<String, dynamic> json) =>
 Map<String, dynamic> _$CheckweigherConfigToJson(CheckweigherConfig instance) =>
     <String, dynamic>{
       'asset_name': instance.variant,
-      'page_name': instance.pageName,
       'coordinates': instance.coordinates,
       'size': instance.size,
       'text': instance.text,

@@ -33,7 +33,6 @@ Map<String, dynamic> _$RelativeSizeToJson(RelativeSize instance) =>
 Map<String, dynamic> _$BaseAssetToJson(BaseAsset instance) => <String, dynamic>{
       'assetName': instance.assetName,
       'asset_name': instance.variant,
-      'page_name': instance.pageName,
       'coordinates': instance.coordinates.toJson(),
       'size': instance.size.toJson(),
       'text': instance.text,

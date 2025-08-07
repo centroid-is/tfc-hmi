@@ -21,7 +21,6 @@ NumberConfig _$NumberConfigFromJson(Map<String, dynamic> json) => NumberConfig(
               json['graph_config'] as Map<String, dynamic>),
     )
       ..variant = json['asset_name'] as String
-      ..pageName = json['page_name'] as String
       ..coordinates =
           Coordinates.fromJson(json['coordinates'] as Map<String, dynamic>)
       ..size = RelativeSize.fromJson(json['size'] as Map<String, dynamic>)
@@ -31,7 +30,6 @@ NumberConfig _$NumberConfigFromJson(Map<String, dynamic> json) => NumberConfig(
 Map<String, dynamic> _$NumberConfigToJson(NumberConfig instance) =>
     <String, dynamic>{
       'asset_name': instance.variant,
-      'page_name': instance.pageName,
       'coordinates': instance.coordinates,
       'size': instance.size,
       'text': instance.text,
