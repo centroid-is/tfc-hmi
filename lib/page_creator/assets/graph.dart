@@ -334,12 +334,21 @@ class GraphContentConfigState extends State<GraphContentConfig> {
 }
 
 // The actual widget that displays the graph using the configuration
-class GraphAsset extends ConsumerWidget {
+class GraphAsset extends ConsumerStatefulWidget {
   final GraphAssetConfig config;
   const GraphAsset(this.config, {super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<GraphAsset> createState() => _GraphAssetState();
+}
+
+class _GraphAssetState extends ConsumerState<GraphAsset> {
+  bool _isRealTimePaused = false;
+  DateTime? _pausedAt;
+  List<List<dynamic>>? _pausedData;
+
+  @override
+  Widget build(BuildContext context) {
     final collectorAsync = ref.watch(collectorProvider);
 
     return collectorAsync.when(
@@ -350,8 +359,8 @@ class GraphAsset extends ConsumerWidget {
 
         // Gather all keys from both series lists
         final allSeries = [
-          ...config.primarySeries,
-          ...config.secondarySeries,
+          ...widget.config.primarySeries,
+          ...widget.config.secondarySeries,
         ];
 
         // For each key, get a stream of timeseries data
@@ -364,13 +373,21 @@ class GraphAsset extends ConsumerWidget {
         }).toList();
 
         return StreamBuilder<List<List<dynamic>>>(
-          stream: Rx.combineLatestList(streams),
+          stream: _isRealTimePaused ? null : Rx.combineLatestList(streams),
           builder: (context, snapshot) {
-            if (!snapshot.hasData) {
+            List<List<dynamic>> data;
+
+            if (_isRealTimePaused && _pausedData != null) {
+              // Use paused data when real-time is paused
+              data = _pausedData!;
+            } else if (snapshot.hasData) {
+              // Use live data and store it for potential pause
+              data = snapshot.data!;
+              _pausedData = data;
+            } else {
               return const Center(child: CircularProgressIndicator());
             }
-            final data = snapshot.data!;
-            // Each entry in data is a list of TimeseriesData for a series
+
             // Convert to the format expected by the Graph widget
             final graphData = <Map<GraphDataConfig, List<List<double>>>>[];
 
@@ -397,27 +414,116 @@ class GraphAsset extends ConsumerWidget {
               graphData.add({
                 GraphDataConfig(
                   label: series.label,
-                  mainAxis: config.primarySeries.contains(series),
+                  mainAxis: widget.config.primarySeries.contains(series),
                   color: GraphConfig.colors[i],
                 ): points,
               });
             }
 
-            return Graph(
-              config: GraphConfig(
-                type: config.graphType,
-                xAxis: config.xAxis,
-                yAxis: config.yAxis,
-                yAxis2: config.yAxis2,
-                xSpan: config.timeWindowMinutes,
-              ),
-              data: graphData,
+            return Stack(
+              children: [
+                // Wrap the graph in a GestureDetector for interaction detection
+                GestureDetector(
+                  onTapDown: (_) => _pauseRealTime(),
+                  onPanStart: (_) => _pauseRealTime(),
+                  child: Graph(
+                    config: GraphConfig(
+                      type: widget.config.graphType,
+                      xAxis: widget.config.xAxis,
+                      yAxis: widget.config.yAxis,
+                      yAxis2: widget.config.yAxis2,
+                      xSpan: widget.config.timeWindowMinutes,
+                    ),
+                    data: graphData,
+                    showDate: _isRealTimePaused,
+                  ),
+                ),
+                // Resume button
+                if (_isRealTimePaused)
+                  Positioned(
+                    top: 16,
+                    right: 16,
+                    child: _buildResumeButton(),
+                  ),
+                // Date indicator when paused
+                if (_isRealTimePaused && _pausedAt != null)
+                  Positioned(
+                    bottom: 16,
+                    right: 16,
+                    child: _buildDateIndicator(),
+                  ),
+              ],
             );
           },
         );
       },
       loading: () => const Center(child: CircularProgressIndicator()),
       error: (e, st) => Center(child: Text('Error: $e')),
+    );
+  }
+
+  void _pauseRealTime() {
+    if (!_isRealTimePaused) {
+      setState(() {
+        _isRealTimePaused = true;
+        _pausedAt = DateTime.now();
+      });
+    }
+  }
+
+  void _resumeRealTime() {
+    setState(() {
+      _isRealTimePaused = false;
+      _pausedAt = null;
+      _pausedData = null; // Clear paused data to force fresh data load
+    });
+  }
+
+  Widget _buildResumeButton() {
+    return Card(
+      color: Theme.of(context).colorScheme.primaryContainer,
+      child: InkWell(
+        onTap: _resumeRealTime,
+        borderRadius: BorderRadius.circular(8),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.play_arrow,
+                color: Theme.of(context).colorScheme.onPrimaryContainer,
+                size: 20,
+              ),
+              const SizedBox(width: 4),
+              Text(
+                'Resume',
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.onPrimaryContainer,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDateIndicator() {
+    return Card(
+      color: Theme.of(context).colorScheme.surfaceVariant.withAlpha(200),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        child: Text(
+          'Paused at ${_pausedAt!.toString().substring(11, 19)}',
+          style: TextStyle(
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
+            fontSize: 12,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+      ),
     );
   }
 }

@@ -71,7 +71,8 @@ void main() {
 
       final entry = CollectEntry(key: testName, name: testName);
       // Act
-      await collector.collectEntryImpl(entry, streamController.stream);
+      await collector.collectEntryImpl(entry, streamController.stream,
+          skipFirstSample: false);
 
       // Simulate data stream
       streamController.add(testValue);
@@ -96,7 +97,8 @@ void main() {
 
       // Act
       final entry = CollectEntry(key: testName, name: testName);
-      await collector.collectEntryImpl(entry, streamController.stream);
+      await collector.collectEntryImpl(entry, streamController.stream,
+          skipFirstSample: false);
 
       // Add multiple values
       for (final value in values) {
@@ -124,7 +126,8 @@ void main() {
 
       // Act
       final entry = CollectEntry(key: testName, name: testName);
-      await collector.collectEntryImpl(entry, streamController.stream);
+      await collector.collectEntryImpl(entry, streamController.stream,
+          skipFirstSample: false);
 
       streamController
           .add(DynamicValue(value: 'test_value')); // Create the table
@@ -150,7 +153,8 @@ void main() {
 
       // Act
       final entry = CollectEntry(key: testName, name: testName);
-      await collector.collectEntryImpl(entry, streamController.stream);
+      await collector.collectEntryImpl(entry, streamController.stream,
+          skipFirstSample: false);
 
       streamController
           .add(DynamicValue(value: 'test_value')); // Create the table
@@ -185,7 +189,8 @@ void main() {
 
       // Act
       final entry = CollectEntry(key: testName, name: testName);
-      await collector.collectEntryImpl(entry, streamController.stream);
+      await collector.collectEntryImpl(entry, streamController.stream,
+          skipFirstSample: false);
       streamController.add(complexValue);
 
       // Wait for async processing
@@ -226,7 +231,8 @@ void main() {
         name: testName,
         sampleInterval: sampleInterval,
       );
-      await collector.collectEntryImpl(entry, streamController.stream);
+      await collector.collectEntryImpl(entry, streamController.stream,
+          skipFirstSample: false);
 
       // Add first value
       streamController.add(values[0]);
@@ -638,6 +644,10 @@ void main() {
               'Data should not be collected when system is running and the data is below 20');
 
       // BAAAAAM
+      dataController.add(DynamicValue(value: 35.0));
+      // Insert the same data again because the first value is skipped
+      // That is because the first value is a value that we do not know when arrived,
+      // the stream controller caches always the last value, so we skip the first value
       dataController.add(DynamicValue(value: 35.0));
       await Future.delayed(const Duration(milliseconds: 100));
 
