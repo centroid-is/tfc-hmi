@@ -129,7 +129,8 @@ class Collector {
   }
 
   Future<void> collectEntryImpl(
-      CollectEntry entry, Stream<DynamicValue> subscription) async {
+      CollectEntry entry, Stream<DynamicValue> subscription,
+      {bool skipFirstSample = true}) async {
     _collectEntries[entry.key] = entry; // todo: duplicated for testing
     final name = entry.name ?? entry.key;
     await database.registerRetentionPolicy(name, entry.retention);
@@ -147,8 +148,6 @@ class Collector {
         const DynamicValueConverter().toJson(newValue, slim: true),
       );
     }
-
-    bool skipFirstSample = true;
 
     _subscriptions[entry] = subscription.listen(
       (value) async {
