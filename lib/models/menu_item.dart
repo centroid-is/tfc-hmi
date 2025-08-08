@@ -38,6 +38,9 @@ class MenuItem {
 }
 
 class IconDataConverter implements JsonConverter<IconData, String> {
+  static const IconData baadericon =
+      IconData(0xe800, fontFamily: "Baader", fontPackage: "tfc");
+
   const IconDataConverter();
 
   @override
@@ -271,6 +274,8 @@ class IconDataConverter implements JsonConverter<IconData, String> {
         return Icons.view_agenda_rounded;
       case 'view_agenda_sharp':
         return Icons.view_agenda_sharp;
+      case 'baader':
+        return baadericon;
       default:
         return Icons.help; // fallback icon
     }
@@ -389,6 +394,7 @@ class IconDataConverter implements JsonConverter<IconData, String> {
     if (iconData == Icons.view_agenda_outlined) return 'view_agenda_outlined';
     if (iconData == Icons.view_agenda_rounded) return 'view_agenda_rounded';
     if (iconData == Icons.view_agenda_sharp) return 'view_agenda_sharp';
+    if (iconData == baadericon) return 'baader';
     return 'help'; // fallback
   }
 }

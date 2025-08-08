@@ -57,7 +57,10 @@ dev_dependencies:
 flutter:
   assets:
     - assets/centroid.svg
-
+  fonts:
+    - family: Baader
+      fonts:
+        - asset: assets/fonts/Baader.ttf
   # To add assets to your package, add an assets section, like this:
   # assets:
   #   - images/a_dot_burr.jpeg
