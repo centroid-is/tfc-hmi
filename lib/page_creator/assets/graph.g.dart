@@ -43,7 +43,6 @@ GraphAssetConfig _$GraphAssetConfigFromJson(Map<String, dynamic> json) =>
       headerText: json['header_text'] as String?,
     )
       ..variant = json['asset_name'] as String
-      ..pageName = json['page_name'] as String
       ..coordinates =
           Coordinates.fromJson(json['coordinates'] as Map<String, dynamic>)
       ..size = RelativeSize.fromJson(json['size'] as Map<String, dynamic>)
@@ -53,7 +52,6 @@ GraphAssetConfig _$GraphAssetConfigFromJson(Map<String, dynamic> json) =>
 Map<String, dynamic> _$GraphAssetConfigToJson(GraphAssetConfig instance) =>
     <String, dynamic>{
       'asset_name': instance.variant,
-      'page_name': instance.pageName,
       'coordinates': instance.coordinates.toJson(),
       'size': instance.size.toJson(),
       'text': instance.text,

@@ -195,29 +195,14 @@ final simpleLocationBuilder = RoutesLocationBuilder(routes: {
         child: SystemsPage(),
       ),
   '/asset-view': (context, state, args) => BeamPage(
-        key: const ValueKey('/asset-view'),
-        title: 'Asset View',
+        key: const ValueKey('/'),
+        title: 'Home',
         child: Consumer(
-          builder: (context, ref, _) => FutureBuilder<SharedPreferences>(
-            future: SharedPreferences.getInstance(),
-            builder: (context, snapshot) {
-              if (!snapshot.hasData) {
-                return const Center(child: CircularProgressIndicator());
-              }
-
-              final prefs = snapshot.data!;
-              final jsonString = prefs.getString('page_editor_data');
-              print('jsonString: $jsonString');
-              if (jsonString == null) {
-                return const Center(child: Text('No saved layout found'));
-              }
-
-              final json = jsonDecode(jsonString);
-              return AssetView(
-                config: AssetViewConfig.fromJson(json),
-              );
-            },
-          ),
+          builder: (context, ref, _) {
+            return const AssetView(
+              pageName: 'Home',
+            );
+          },
         ),
       ),
   '/page-editor': (context, state, args) => BeamPage(

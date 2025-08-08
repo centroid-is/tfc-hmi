@@ -30,7 +30,29 @@ class RouteRegistry {
   }
 
   void addMenuItem(MenuItem menuItem) {
-    menuItems.add(menuItem);
+    _mergeMenuItemRecursive(menuItems, menuItem);
+  }
+
+  void _mergeMenuItemRecursive(List<MenuItem> targetList, MenuItem newItem) {
+    // Check if item with same path already exists
+    bool exists = false;
+    for (var existingItem in targetList) {
+      if (existingItem.path == newItem.path) {
+        exists = true;
+        // If it exists, merge its children recursively
+        if (newItem.children.isNotEmpty) {
+          for (var child in newItem.children) {
+            _mergeMenuItemRecursive(existingItem.children, child);
+          }
+        }
+        break;
+      }
+    }
+
+    // If not found, add it
+    if (!exists) {
+      targetList.add(newItem);
+    }
   }
 
   int? getNodeIndex(MenuItem nodeItem) {

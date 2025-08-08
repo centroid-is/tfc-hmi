@@ -81,8 +81,6 @@ abstract class Asset {
   set textPos(TextPos? textPos);
   Coordinates get coordinates;
   set coordinates(Coordinates coordinates);
-  String get pageName;
-  set pageName(String pageName);
   RelativeSize get size;
   set size(RelativeSize size);
   Widget build(BuildContext context);
@@ -102,18 +100,6 @@ abstract class BaseAsset implements Asset {
     if (variant == 'unknown') {
       variant = runtimeType.toString();
     }
-  }
-
-  @JsonKey(name: 'page_name')
-  String _pageName = 'main';
-
-  @override
-  @JsonKey(name: 'page_name')
-  String get pageName => _pageName;
-
-  @override
-  set pageName(String pageName) {
-    _pageName = pageName;
   }
 
   @JsonKey(name: 'coordinates')

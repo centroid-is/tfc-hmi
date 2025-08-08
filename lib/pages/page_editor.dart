@@ -3,12 +3,14 @@ import 'dart:io' show Platform;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:tfc/providers/page_manager.dart';
 import '../page_creator/assets/common.dart';
 import '../page_creator/assets/registry.dart';
 import '../widgets/base_scaffold.dart';
 import 'page_view.dart';
-import '../providers/preferences.dart';
 import '../widgets/zoomable_canvas.dart';
+import '../page_creator/page.dart';
+
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/services.dart';
 
@@ -18,46 +20,36 @@ class PageEditor extends ConsumerStatefulWidget {
 }
 
 class _PageEditorState extends ConsumerState<PageEditor> {
-  static const String _storageKey = 'page_editor_data';
-  List<Asset> assets = [];
-  final List<String> _undoHistory = [];
+  final List<Map<String, AssetPage>> _undoHistory = [];
   bool _showPalette = false;
-  bool _showJsonEditor = false;
-  String? _jsonError;
-  final TextEditingController _jsonController = TextEditingController();
   bool _isSelectMode = false;
   Offset? _selectionStart;
   Offset? _selectionCurrent;
   Set<Asset> _selectedAssets = {};
   bool _isDraggingAsset = false;
   String? _copiedAssets;
+  Map<String, AssetPage> _temporaryPages = {};
+  String? _currentPage;
+
+  List<Asset> get assets {
+    if (_currentPage == null) {
+      return [];
+    }
+    if (_temporaryPages[_currentPage] == null) {
+      return [];
+    }
+    return _temporaryPages[_currentPage]!.assets;
+  }
 
   @override
   void initState() {
     super.initState();
-    _loadFromPrefs();
-  }
-
-  Future<void> _loadFromPrefs() async {
-    final prefs = await ref.read(preferencesProvider.future);
-    final String? jsonString = await prefs.getString(_storageKey);
-    if (jsonString != null) {
-      try {
-        final json = jsonDecode(jsonString);
-        final newAssets = AssetRegistry.parse(json);
-        setState(() {
-          assets = newAssets;
-          _showJsonEditor = false;
-          _jsonError = null;
-        });
-      } catch (e) {
-        setState(() {
-          _showJsonEditor = true;
-          _jsonError = e.toString();
-          _jsonController.text = jsonString;
-        });
-      }
-    }
+    ref.read(pageManagerProvider.future).then((pageManager) {
+      setState(() {
+        _temporaryPages = pageManager.copyWith().pages;
+        _currentPage = pageManager.pages.keys.first;
+      });
+    });
   }
 
   String _assetsToJson(List<Asset> theAssets) {
@@ -67,8 +59,9 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   }
 
   Future<void> _saveToPrefs() async {
-    final prefs = await ref.read(preferencesProvider.future);
-    await prefs.setString(_storageKey, _assetsToJson(assets));
+    final pageManager = await ref.read(pageManagerProvider.future);
+    pageManager.pages = PageManager.copyPages(_temporaryPages);
+    await pageManager.save();
   }
 
   void _updateState(VoidCallback fn) {
@@ -77,18 +70,8 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     });
   }
 
-  String _formatJson(String jsonString) {
-    try {
-      var json = jsonDecode(jsonString);
-      return JsonEncoder.withIndent('  ').convert(json);
-    } catch (e) {
-      // If we can't parse the JSON, return the original string
-      return jsonString;
-    }
-  }
-
   void _saveToHistory() {
-    _undoHistory.add(_assetsToJson(assets));
+    _undoHistory.add(PageManager.copyPages(_temporaryPages));
 
     if (_undoHistory.length > 50) {
       _undoHistory.removeAt(0);
@@ -98,7 +81,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   void _handleUndo() {
     if (_undoHistory.isNotEmpty) {
       setState(() {
-        assets = AssetRegistry.parse(jsonDecode(_undoHistory.removeLast()));
+        _temporaryPages = _undoHistory.removeLast();
       });
     }
   }
@@ -194,13 +177,10 @@ class _PageEditorState extends ConsumerState<PageEditor> {
       child: BaseScaffold(
         title: 'Page Editor',
         body: ZoomableCanvas(
-          scaleEnabled: !_showJsonEditor && !_showPalette,
-          panEnabled: !_isSelectMode && !_showJsonEditor,
+          scaleEnabled: !_showPalette,
+          panEnabled: !_isSelectMode,
           child: LayoutBuilder(
             builder: (context, constraints) {
-              if (_showJsonEditor) {
-                return _buildJsonEditor();
-              }
               return Stack(
                 fit: StackFit.expand,
                 children: [
@@ -347,6 +327,11 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                       ),
                     ),
                   Positioned(
+                    top: 16,
+                    right: 16,
+                    child: _buildPageSelector(),
+                  ),
+                  Positioned(
                     left: 16,
                     bottom: 16,
                     child: Row(
@@ -367,31 +352,6 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                               Theme.of(context).colorScheme.primary,
                           onPressed: _saveToPrefs,
                           child: const Icon(Icons.save, color: Colors.white),
-                        ),
-                        const SizedBox(width: 8),
-                        FloatingActionButton(
-                          mini: true,
-                          heroTag: 'json',
-                          backgroundColor:
-                              Theme.of(context).colorScheme.primary,
-                          onPressed: () {
-                            setState(() {
-                              if (!_showJsonEditor) {
-                                _jsonController.text = _formatJson(jsonEncode({
-                                  'assets':
-                                      assets.map((a) => a.toJson()).toList(),
-                                }));
-                                _showJsonEditor = true;
-                              } else {
-                                _showJsonEditor = false;
-                              }
-                              _jsonError = null;
-                            });
-                          },
-                          child: Icon(
-                            _showJsonEditor ? Icons.edit : Icons.code,
-                            color: Colors.white,
-                          ),
                         ),
                       ],
                     ),
@@ -605,164 +565,89 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     });
   }
 
-  Widget _buildJsonEditor() {
-    final scrollController = ScrollController();
+  Widget _buildPageSelector() {
+    final pages = _temporaryPages;
+    final currentPage = _currentPage ?? pages.keys.firstOrNull ?? 'Empty';
 
-    return Card(
-      margin: EdgeInsets.all(16),
-      child: Padding(
-        padding: EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
+    return PopupMenuButton<String>(
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.surface,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: Theme.of(context).colorScheme.outline),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(
-                  'JSON Editor',
-                  style: Theme.of(context).textTheme.headlineSmall,
-                ),
-                TextButton.icon(
-                  onPressed: () {
-                    final formatted = _formatJson(_jsonController.text);
-                    _jsonController.value = TextEditingValue(
-                      text: formatted,
-                      selection:
-                          TextSelection.collapsed(offset: formatted.length),
-                    );
-                  },
-                  icon: Icon(Icons.format_align_left),
-                  label: Text('Format JSON'),
-                ),
-              ],
-            ),
-            if (_jsonError != null) ...[
-              SizedBox(height: 8),
-              Container(
-                padding: EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: Colors.red.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(4),
-                ),
-                child: Text(
-                  _jsonError!,
-                  style: TextStyle(
-                    color: Colors.red,
-                    fontFamily: 'monospace',
-                  ),
-                ),
-              ),
-            ],
-            SizedBox(height: 16),
-            Expanded(
-              child: Container(
-                decoration: BoxDecoration(
-                  color: Theme.of(context).colorScheme.surfaceVariant,
-                  borderRadius: BorderRadius.circular(4),
-                ),
-                child: SingleChildScrollView(
-                  controller: scrollController,
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Container(
-                        width: 48,
-                        decoration: BoxDecoration(
-                          color: Theme.of(context)
-                              .colorScheme
-                              .surfaceVariant
-                              .withOpacity(0.7),
-                          borderRadius:
-                              BorderRadius.horizontal(left: Radius.circular(4)),
-                        ),
-                        child: ValueListenableBuilder<TextEditingValue>(
-                          valueListenable: _jsonController,
-                          builder: (context, value, child) {
-                            final lineCount =
-                                '\n'.allMatches(value.text).length + 1;
-                            return Column(
-                              crossAxisAlignment: CrossAxisAlignment.end,
-                              children: [
-                                for (var i = 1; i <= lineCount; i++)
-                                  Padding(
-                                    padding: EdgeInsets.symmetric(
-                                        horizontal: 8, vertical: 1),
-                                    child: SizedBox(
-                                      height: 21,
-                                      child: Text(
-                                        '$i',
-                                        style: TextStyle(
-                                          color: Theme.of(context)
-                                              .colorScheme
-                                              .onSurfaceVariant
-                                              .withOpacity(0.5),
-                                          fontFamily: 'monospace',
-                                          fontSize: 14,
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                              ],
-                            );
-                          },
-                        ),
-                      ),
-                      Container(
-                        width: 1,
-                        color: Theme.of(context)
-                            .colorScheme
-                            .onSurfaceVariant
-                            .withOpacity(0.1),
-                      ),
-                      Expanded(
-                        child: TextField(
-                          controller: _jsonController,
-                          maxLines: null,
-                          style: TextStyle(
-                            fontFamily: 'monospace',
-                            fontSize: 14,
-                            height: 1.5,
-                          ),
-                          decoration: InputDecoration(
-                            border: InputBorder.none,
-                            contentPadding: EdgeInsets.all(8),
-                            hintText: 'Edit JSON configuration',
-                            fillColor: Colors.transparent,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-            SizedBox(height: 16),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                SizedBox(width: 8),
-                ElevatedButton(
-                  onPressed: () {
-                    try {
-                      final json = jsonDecode(_jsonController.text);
-                      final newAssets = AssetRegistry.parse(json);
-                      setState(() {
-                        assets = newAssets;
-                        _showJsonEditor = false;
-                        _jsonError = null;
-                      });
-                      _saveToPrefs();
-                    } catch (e) {
-                      setState(() {
-                        _jsonError = e.toString();
-                      });
-                    }
-                  },
-                  child: Text('Save Configuration'),
-                ),
-              ],
-            ),
+            Text(currentPage),
+            const SizedBox(width: 8),
+            const Icon(Icons.arrow_drop_down),
           ],
+        ),
+      ),
+      itemBuilder: (context) => [
+        ...pages.keys.map((pageName) => PopupMenuItem(
+              value: pageName,
+              child: Row(
+                children: [
+                  Expanded(child: Text(pageName)),
+                  IconButton(
+                    icon: const Icon(Icons.edit, size: 16),
+                    onPressed: () =>
+                        _showEditPageDialog(pageName, pages[pageName]!),
+                  ),
+                ],
+              ),
+            )),
+        const PopupMenuDivider(),
+        const PopupMenuItem(
+          value: 'add',
+          child: Row(
+            children: [
+              Icon(Icons.add),
+              SizedBox(width: 8),
+              Text('Add Page'),
+            ],
+          ),
+        ),
+      ],
+      onSelected: (value) {
+        if (value == 'add') {
+          _showCreatePageDialog();
+        } else {
+          setState(() {
+            _currentPage = value;
+          });
+        }
+      },
+    );
+  }
+
+  void _showCreatePageDialog() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Create Page'),
+        content: CreatePageWidget(
+          onSave: (page) {
+            _temporaryPages[page.menuItem.label] = page;
+          },
+        ),
+      ),
+    );
+  }
+
+  void _showEditPageDialog(String pageName, AssetPage page) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Edit Page'),
+        content: CreatePageWidget(
+          initialPage: page,
+          onSave: (updatedPage) {
+            _temporaryPages[pageName] = updatedPage;
+          },
         ),
       ),
     );

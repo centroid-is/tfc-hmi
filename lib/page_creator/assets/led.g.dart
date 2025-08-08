@@ -14,7 +14,6 @@ LEDConfig _$LEDConfigFromJson(Map<String, dynamic> json) => LEDConfig(
           .fromJson(json['off_color'] as Map<String, dynamic>),
     )
       ..variant = json['asset_name'] as String
-      ..pageName = json['page_name'] as String
       ..coordinates =
           Coordinates.fromJson(json['coordinates'] as Map<String, dynamic>)
       ..size = RelativeSize.fromJson(json['size'] as Map<String, dynamic>)
@@ -24,7 +23,6 @@ LEDConfig _$LEDConfigFromJson(Map<String, dynamic> json) => LEDConfig(
 
 Map<String, dynamic> _$LEDConfigToJson(LEDConfig instance) => <String, dynamic>{
       'asset_name': instance.variant,
-      'page_name': instance.pageName,
       'coordinates': instance.coordinates.toJson(),
       'size': instance.size.toJson(),
       'text': instance.text,
