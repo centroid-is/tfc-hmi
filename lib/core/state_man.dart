@@ -191,6 +191,7 @@ class StateMan {
   final List<ClientWrapper> clients;
   final Map<String, AutoDisposingStream<DynamicValue>> _subscriptions = {};
   bool _shouldRun = true;
+  final Map<String, String> _substitutions = {};
 
   Timer? _healthCheckTimer;
 
@@ -334,8 +335,36 @@ class StateMan {
         wrapper.config.serverAlias == keyMappings.lookupServerAlias(key));
   }
 
+  void setSubstitution(String key, String value) {
+    _substitutions[key] = value;
+    logger.d('Substitution set: $key = $value');
+  }
+
+  String _resolveKey(String key) {
+    if (!key.contains('\$')) return key;
+
+    String resolvedKey = key;
+    for (final entry in _substitutions.entries) {
+      final variablePattern = '\$${entry.key}';
+      if (resolvedKey.contains(variablePattern)) {
+        resolvedKey = resolvedKey.replaceAll(variablePattern, entry.value);
+      }
+    }
+
+    if (resolvedKey != key) {
+      logger.d('Resolved key: $key -> $resolvedKey');
+    }
+
+    if (resolvedKey.contains('\$')) {
+      logger.e('Resolved key still contains \$: $resolvedKey');
+    }
+
+    return resolvedKey;
+  }
+
   /// Example: read("myKey")
   Future<DynamicValue> read(String key) async {
+    key = _resolveKey(key);
     try {
       final client = _getClientWrapper(key).client;
       final nodeId = lookupNodeId(key);
@@ -353,7 +382,8 @@ class StateMan {
   Future<Map<String, DynamicValue>> readMany(List<String> keys) async {
     final parameters = <ClientApi, Map<NodeId, List<AttributeId>>>{};
 
-    for (final key in keys) {
+    for (final keyToResolve in keys) {
+      final key = _resolveKey(keyToResolve);
       final client = _getClientWrapper(key).client;
       final nodeId = lookupNodeId(key);
       if (nodeId == null) {
@@ -383,6 +413,7 @@ class StateMan {
 
   /// Example: write("myKey", DynamicValue(value: 42, typeId: NodeId.int16))
   Future<void> write(String key, DynamicValue value) async {
+    key = _resolveKey(key);
     try {
       final client = _getClientWrapper(key).client;
       final nodeId = lookupNodeId(key);
@@ -401,6 +432,7 @@ class StateMan {
   /// Returns a Stream that can be cancelled to stop the subscription.
   /// Example: subscribe("myIntKey") or subscribe("myStringKey")
   Future<Stream<DynamicValue>> subscribe(String key) async {
+    key = _resolveKey(key);
     return _monitor(key);
   }
 

@@ -12,6 +12,7 @@ import 'graph.dart';
 import 'ratio_number.dart';
 import 'baader.dart';
 import 'analog_box.dart';
+import 'option_variable.dart';
 
 class AssetRegistry {
   static final Logger _log = Logger();
@@ -31,6 +32,7 @@ class AssetRegistry {
     RatioNumberConfig: RatioNumberConfig.fromJson,
     Baader221Config: Baader221Config.fromJson,
     AnalogBoxConfig: AnalogBoxConfig.fromJson,
+    OptionVariableConfig: OptionVariableConfig.fromJson,
   };
 
   static final Map<Type, Asset Function()> defaultFactories = {
@@ -47,6 +49,7 @@ class AssetRegistry {
     RatioNumberConfig: RatioNumberConfig.preview,
     Baader221Config: Baader221Config.preview,
     AnalogBoxConfig: AnalogBoxConfig.preview,
+    OptionVariableConfig: OptionVariableConfig.preview,
   };
 
   static void registerFromJsonFactory<T extends Asset>(
