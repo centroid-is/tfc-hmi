@@ -11,6 +11,7 @@ import 'checkweigher.dart';
 import 'graph.dart';
 import 'ratio_number.dart';
 import 'baader.dart';
+import 'analog_box.dart';
 
 class AssetRegistry {
   static final Logger _log = Logger();
@@ -29,6 +30,7 @@ class AssetRegistry {
     GraphAssetConfig: GraphAssetConfig.fromJson,
     RatioNumberConfig: RatioNumberConfig.fromJson,
     Baader221Config: Baader221Config.fromJson,
+    AnalogBoxConfig: AnalogBoxConfig.fromJson,
   };
 
   static final Map<Type, Asset Function()> defaultFactories = {
@@ -44,6 +46,7 @@ class AssetRegistry {
     GraphAssetConfig: GraphAssetConfig.preview,
     RatioNumberConfig: RatioNumberConfig.preview,
     Baader221Config: Baader221Config.preview,
+    AnalogBoxConfig: AnalogBoxConfig.preview,
   };
 
   static void registerFromJsonFactory<T extends Asset>(

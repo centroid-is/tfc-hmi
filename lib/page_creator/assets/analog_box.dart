@@ -1,0 +1,884 @@
+import 'dart:math' as math;
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:json_annotation/json_annotation.dart';
+import 'package:rxdart/rxdart.dart';
+import 'package:open62541/open62541.dart' show DynamicValue, NodeId;
+
+import 'common.dart';
+import '../../providers/state_man.dart';
+import '../../core/collector.dart';
+import '../../core/database.dart';
+import 'graph.dart';
+import '../../converter/color_converter.dart';
+import '../../providers/collector.dart';
+import '../../widgets/graph.dart';
+
+part 'analog_box.g.dart';
+
+/// CONFIG
+
+@JsonSerializable(explicitToJson: true)
+class AnalogBoxConfig extends BaseAsset {
+  /// Live analog value source
+  @JsonKey(name: 'analog_key')
+  String analogKey;
+
+  /// Optional keys for setpoints / hysteresis (writeable)
+  @JsonKey(name: 'setpoint1_key')
+  String? setpoint1Key;
+  @JsonKey(name: 'setpoint1_hysteresis_key')
+  String? setpoint1HysteresisKey; // +/- around setpoint1
+  @JsonKey(name: 'setpoint2_key')
+  String? setpoint2Key;
+
+  /// Min/max scaling
+  @JsonKey(name: 'min_value')
+  double minValue;
+  @JsonKey(name: 'max_value')
+  double maxValue;
+
+  /// Visual / UX
+  String? units;
+  @JsonKey(name: 'border_radius_pct')
+  double borderRadiusPct; // relative to shortest side (0..0.5)
+  bool vertical; // vertical tank-style; if false, horizontal bar
+  @JsonKey(name: 'reverse_fill')
+  bool
+      reverseFill; // low at bottom vs top (for vertical), left vs right (horizontal)
+
+  /// Colors
+  @JsonKey(name: 'bg_color')
+  @ColorConverter()
+  Color bgColor;
+  @JsonKey(name: 'fill_color')
+  @ColorConverter()
+  Color fillColor;
+  @JsonKey(name: 'sp1_color')
+  @ColorConverter()
+  Color setpoint1Color;
+  @JsonKey(name: 'sp2_color')
+  @ColorConverter()
+  Color setpoint2Color;
+  @JsonKey(name: 'hyst_color')
+  @ColorConverter()
+  Color hysteresisColor;
+
+  /// Dialog: include mini-graph
+  @JsonKey(name: 'graph_config')
+  GraphAssetConfig? graphConfig;
+
+  AnalogBoxConfig({
+    required this.analogKey,
+    this.setpoint1Key,
+    this.setpoint1HysteresisKey,
+    this.setpoint2Key,
+    this.minValue = 0,
+    this.maxValue = 100,
+    this.units,
+    this.borderRadiusPct = .15,
+    this.vertical = true,
+    this.reverseFill = false,
+    this.bgColor = const Color(0xFFEFEFEF),
+    this.fillColor = const Color(0xFF6EC1E4),
+    this.setpoint1Color = Colors.red,
+    this.setpoint2Color = Colors.orange,
+    this.hysteresisColor = const Color(0x44FF0000),
+    this.graphConfig,
+  });
+
+  AnalogBoxConfig.preview()
+      : analogKey = 'AnalogBox preview',
+        minValue = 0,
+        maxValue = 100,
+        units = 'bar',
+        borderRadiusPct = .18,
+        vertical = true,
+        reverseFill = false,
+        bgColor = const Color(0xFFEFEFEF),
+        fillColor = const Color(0xFF6EC1E4),
+        setpoint1Color = Colors.red,
+        setpoint2Color = Colors.orange,
+        hysteresisColor = const Color(0x44FF0000),
+        graphConfig = GraphAssetConfig.preview();
+
+  factory AnalogBoxConfig.fromJson(Map<String, dynamic> json) =>
+      _$AnalogBoxConfigFromJson(json);
+  Map<String, dynamic> toJson() => _$AnalogBoxConfigToJson(this);
+
+  @override
+  Widget build(BuildContext context) => AnalogBox(config: this);
+
+  @override
+  Widget configure(BuildContext context) =>
+      _AnalogBoxConfigEditor(config: this);
+}
+
+/// CONFIG UI
+
+class _AnalogBoxConfigEditor extends StatefulWidget {
+  final AnalogBoxConfig config;
+  const _AnalogBoxConfigEditor({required this.config});
+
+  @override
+  State<_AnalogBoxConfigEditor> createState() => _AnalogBoxConfigEditorState();
+}
+
+class _AnalogBoxConfigEditorState extends State<_AnalogBoxConfigEditor> {
+  bool showGraph = false;
+
+  @override
+  void initState() {
+    super.initState();
+    showGraph = widget.config.graphConfig != null;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // LEFT: core config
+          Expanded(
+            flex: 2,
+            child: Column(
+              children: [
+                KeyField(
+                  initialValue: widget.config.analogKey,
+                  onChanged: (v) => setState(() => widget.config.analogKey = v),
+                  label: 'Analog value key',
+                ),
+                const SizedBox(height: 12),
+                KeyField(
+                  initialValue: widget.config.setpoint1Key,
+                  onChanged: (v) =>
+                      setState(() => widget.config.setpoint1Key = v),
+                  label: 'Setpoint 1 key (optional)',
+                ),
+                const SizedBox(height: 8),
+                KeyField(
+                  initialValue: widget.config.setpoint1HysteresisKey,
+                  onChanged: (v) =>
+                      setState(() => widget.config.setpoint1HysteresisKey = v),
+                  label: 'Setpoint 1 hysteresis key (optional, ±)',
+                ),
+                const SizedBox(height: 8),
+                KeyField(
+                  initialValue: widget.config.setpoint2Key,
+                  onChanged: (v) =>
+                      setState(() => widget.config.setpoint2Key = v),
+                  label: 'Setpoint 2 key (optional)',
+                ),
+                const SizedBox(height: 16),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextFormField(
+                        initialValue: widget.config.minValue.toString(),
+                        decoration:
+                            const InputDecoration(labelText: 'Min value'),
+                        keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true),
+                        onChanged: (v) {
+                          final d = double.tryParse(v);
+                          if (d != null) {
+                            setState(() => widget.config.minValue = d);
+                          }
+                        },
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: TextFormField(
+                        initialValue: widget.config.maxValue.toString(),
+                        decoration:
+                            const InputDecoration(labelText: 'Max value'),
+                        keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true),
+                        onChanged: (v) {
+                          final d = double.tryParse(v);
+                          if (d != null) {
+                            setState(() => widget.config.maxValue = d);
+                          }
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  initialValue: widget.config.units,
+                  decoration: const InputDecoration(labelText: 'Units'),
+                  onChanged: (v) => setState(() => widget.config.units = v),
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Slider(
+                        min: 0,
+                        max: .5,
+                        divisions: 50,
+                        label:
+                            'Radius ${(widget.config.borderRadiusPct * 100).toStringAsFixed(0)}%',
+                        value: widget.config.borderRadiusPct,
+                        onChanged: (v) =>
+                            setState(() => widget.config.borderRadiusPct = v),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                SwitchListTile(
+                  title: const Text('Vertical'),
+                  value: widget.config.vertical,
+                  onChanged: (b) => setState(() => widget.config.vertical = b),
+                ),
+                SwitchListTile(
+                  title: const Text('Reverse fill direction'),
+                  subtitle: const Text(
+                      'Top→bottom (vertical) / Right→left (horizontal)'),
+                  value: widget.config.reverseFill,
+                  onChanged: (b) =>
+                      setState(() => widget.config.reverseFill = b),
+                ),
+                const SizedBox(height: 12),
+                CoordinatesField(
+                  initialValue: widget.config.coordinates,
+                  onChanged: (c) =>
+                      setState(() => widget.config.coordinates = c),
+                  enableAngle: true,
+                ),
+                const SizedBox(height: 12),
+                SizeField(
+                  initialValue: widget.config.size,
+                  onChanged: (s) => setState(() => widget.config.size = s),
+                ),
+                const SizedBox(height: 12),
+                SwitchListTile(
+                  title: const Text('Include Graph in dialog'),
+                  value: showGraph,
+                  onChanged: (v) => setState(() {
+                    showGraph = v;
+                    if (v && widget.config.graphConfig == null) {
+                      widget.config.graphConfig = GraphAssetConfig.preview();
+                    }
+                    if (!v) widget.config.graphConfig = null;
+                  }),
+                ),
+              ],
+            ),
+          ),
+
+          // RIGHT: graph config (optional)
+          if (showGraph && widget.config.graphConfig != null) ...[
+            const SizedBox(width: 24),
+            Expanded(
+              flex: 3,
+              child: Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: GraphContentConfig(config: widget.config.graphConfig!),
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// WIDGET
+
+class AnalogBox extends ConsumerWidget {
+  final AnalogBoxConfig config;
+  const AnalogBox({required this.config, super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final size = config.size.toSize(MediaQuery.of(context).size);
+
+    // Preview
+    if (config.analogKey == 'AnalogBox preview') {
+      return SizedBox(
+        width: size.width,
+        height: size.height,
+        child: GestureDetector(
+          onTap: () => _showConfigDialog(context, ref),
+          child: CustomPaint(
+            painter: _AnalogBoxPainter(
+              percent: .62,
+              min: config.minValue,
+              max: config.maxValue,
+              units: config.units,
+              bgColor: config.bgColor,
+              fillColor: config.fillColor,
+              setpoint1: 60,
+              setpoint1Hyst: 4,
+              setpoint2: 80,
+              setpoint1Color: config.setpoint1Color,
+              setpoint2Color: config.setpoint2Color,
+              hysteresisColor: config.hysteresisColor,
+              vertical: config.vertical,
+              reverseFill: config.reverseFill,
+              borderRadiusPct: config.borderRadiusPct,
+              labelAngleDeg: config.coordinates.angle ?? 0,
+            ),
+          ),
+        ),
+      );
+    }
+
+    // Live streams
+    final streams = <Stream<(String, DynamicValue)>>[];
+
+    void addKey(String? key, String tag) {
+      if (key == null || key.isEmpty) return;
+      final s = ref
+          .watch(stateManProvider.future)
+          .asStream()
+          .switchMap((sm) => sm.subscribe(key).asStream().switchMap((s) => s))
+          .map((dv) => (tag, dv));
+      streams.add(s);
+    }
+
+    addKey(config.analogKey, 'analog');
+    addKey(config.setpoint1Key, 'sp1');
+    addKey(config.setpoint1HysteresisKey, 'hyst');
+    addKey(config.setpoint2Key, 'sp2');
+
+    if (streams.isEmpty) {
+      // nothing configured
+      return SizedBox(
+        width: size.width,
+        height: size.height,
+        child: CustomPaint(
+          painter: _AnalogBoxPainter(
+            percent: 0,
+            min: config.minValue,
+            max: config.maxValue,
+            units: config.units,
+            bgColor: config.bgColor,
+            fillColor: config.fillColor,
+            setpoint1: null,
+            setpoint1Hyst: null,
+            setpoint2: null,
+            setpoint1Color: config.setpoint1Color,
+            setpoint2Color: config.setpoint2Color,
+            hysteresisColor: config.hysteresisColor,
+            vertical: config.vertical,
+            reverseFill: config.reverseFill,
+            borderRadiusPct: config.borderRadiusPct,
+            labelAngleDeg: config.coordinates.angle ?? 0,
+          ),
+        ),
+      );
+    }
+
+    final combined = CombineLatestStream.list(streams).map((list) {
+      final map = <String, DynamicValue>{};
+      for (final e in list) {
+        map[e.$1] = e.$2;
+      }
+      return map;
+    });
+
+    return StreamBuilder<Map<String, DynamicValue>>(
+      stream: combined,
+      builder: (context, snapshot) {
+        double? analog;
+        double? sp1;
+        double? hyst;
+        double? sp2;
+
+        if (snapshot.hasData) {
+          final m = snapshot.data!;
+          if (m['analog'] case final v?) {
+            if (v.isDouble || v.isInteger) analog = v.asDouble;
+          }
+          if (m['sp1'] case final v?) {
+            if (v.isDouble || v.isInteger) sp1 = v.asDouble;
+          }
+          if (m['hyst'] case final v?) {
+            if (v.isDouble || v.isInteger) hyst = v.asDouble;
+          }
+          if (m['sp2'] case final v?) {
+            if (v.isDouble || v.isInteger) sp2 = v.asDouble;
+          }
+        }
+
+        final pct = _toPercent(
+          analog,
+          config.minValue,
+          config.maxValue,
+        );
+
+        return GestureDetector(
+          onTap: () => _showConfigDialog(context, ref),
+          child: SizedBox(
+            width: size.width,
+            height: size.height,
+            child: CustomPaint(
+              painter: _AnalogBoxPainter(
+                percent: pct,
+                min: config.minValue,
+                max: config.maxValue,
+                units: config.units,
+                bgColor: config.bgColor,
+                fillColor: config.fillColor,
+                setpoint1: sp1,
+                setpoint1Hyst: hyst,
+                setpoint2: sp2,
+                setpoint1Color: config.setpoint1Color,
+                setpoint2Color: config.setpoint2Color,
+                hysteresisColor: config.hysteresisColor,
+                vertical: config.vertical,
+                reverseFill: config.reverseFill,
+                borderRadiusPct: config.borderRadiusPct,
+                labelAngleDeg: config.coordinates.angle ?? 0,
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  static double _toPercent(double? value, double min, double max) {
+    if (value == null || max <= min) return 0;
+    final p = (value - min) / (max - min);
+    return p.clamp(0, 1);
+  }
+
+  void _showConfigDialog(BuildContext context, WidgetRef ref) {
+    showDialog(
+      context: context,
+      builder: (_) => _AnalogBoxDialog(config: config),
+    );
+  }
+}
+
+/// DIALOG (user config + graph)
+
+class _AnalogBoxDialog extends ConsumerWidget {
+  final AnalogBoxConfig config;
+  const _AnalogBoxDialog({required this.config});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    // Build separate streams for values we want to show/edit
+    Stream<DynamicValue>? streamFor(String? key) {
+      if (key == null || key.isEmpty) return null;
+      return ref
+          .watch(stateManProvider.future)
+          .asStream()
+          .switchMap((sm) => sm.subscribe(key).asStream().switchMap((s) => s));
+    }
+
+    final sp1$ = streamFor(config.setpoint1Key);
+    final hyst$ = streamFor(config.setpoint1HysteresisKey);
+    final sp2$ = streamFor(config.setpoint2Key);
+    final analog$ = streamFor(config.analogKey);
+
+    Future<void> writeValue(String key, double val) async {
+      final sm = await ref.read(stateManProvider.future);
+      await sm.write(key, DynamicValue(value: val, typeId: NodeId.double));
+    }
+
+    Widget valueField({
+      required String label,
+      required double? current,
+      required void Function(double) onSubmitted,
+    }) {
+      final controller = TextEditingController(
+        text: current?.toStringAsFixed(3) ?? '',
+      );
+      return SizedBox(
+        width: 220,
+        child: TextFormField(
+          controller: controller,
+          decoration: InputDecoration(
+            labelText: label,
+            suffixText: config.units,
+          ),
+          keyboardType: const TextInputType.numberWithOptions(
+              decimal: true, signed: false),
+          onFieldSubmitted: (v) {
+            final d = double.tryParse(v);
+            if (d != null) onSubmitted(d);
+          },
+        ),
+      );
+    }
+
+    return AlertDialog(
+      title: Text(config.text?.isNotEmpty == true
+          ? config.text!
+          : (config.analogKey ?? 'AnalogBox')),
+      content: SingleChildScrollView(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Current value row
+            if (analog$ != null)
+              StreamBuilder<DynamicValue>(
+                stream: analog$,
+                builder: (ctx, snap) {
+                  final dv = (snap.data);
+                  final val = (dv != null && (dv.isDouble || dv.isInteger))
+                      ? dv.asDouble
+                      : null;
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: Text(
+                      'Current: ${val?.toStringAsFixed(3) ?? '---'} ${config.units ?? ''}',
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                  );
+                },
+              ),
+
+            // Editable setpoints
+            if (config.setpoint1Key != null || config.setpoint2Key != null)
+              Row(
+                children: [
+                  if (config.setpoint1Key != null)
+                    StreamBuilder<DynamicValue>(
+                      stream: sp1$,
+                      builder: (ctx, snap) {
+                        final val = (snap.data != null &&
+                                (snap.data!.isDouble || snap.data!.isInteger))
+                            ? snap.data!.asDouble
+                            : null;
+                        return Padding(
+                          padding: const EdgeInsets.only(right: 16),
+                          child: valueField(
+                            label: 'Setpoint 1',
+                            current: val,
+                            onSubmitted: (d) =>
+                                writeValue(config.setpoint1Key!, d),
+                          ),
+                        );
+                      },
+                    ),
+                  if (config.setpoint1HysteresisKey != null)
+                    StreamBuilder<DynamicValue>(
+                      stream: hyst$,
+                      builder: (ctx, snap) {
+                        final val = (snap.data != null &&
+                                (snap.data!.isDouble || snap.data!.isInteger))
+                            ? snap.data!.asDouble
+                            : null;
+                        return Padding(
+                          padding: const EdgeInsets.only(right: 16),
+                          child: valueField(
+                            label: 'SP1 Hysteresis (±)',
+                            current: val,
+                            onSubmitted: (d) =>
+                                writeValue(config.setpoint1HysteresisKey!, d),
+                          ),
+                        );
+                      },
+                    ),
+                  if (config.setpoint2Key != null)
+                    StreamBuilder<DynamicValue>(
+                      stream: sp2$,
+                      builder: (ctx, snap) {
+                        final val = (snap.data != null &&
+                                (snap.data!.isDouble || snap.data!.isInteger))
+                            ? snap.data!.asDouble
+                            : null;
+                        return valueField(
+                          label: 'Setpoint 2',
+                          current: val,
+                          onSubmitted: (d) =>
+                              writeValue(config.setpoint2Key!, d),
+                        );
+                      },
+                    ),
+                ],
+              ),
+
+            const SizedBox(height: 16),
+
+            // Graph (simple: one series of analogKey)
+            if (config.graphConfig != null && config.analogKey != null)
+              SizedBox(
+                width: 600,
+                height: 280,
+                child: _AnalogBoxGraph(
+                  keyName: config.analogKey!,
+                  units: config.units,
+                ),
+              ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Close'),
+        ),
+      ],
+    );
+  }
+}
+
+/// MINI GRAPH (timeseries of analogKey)
+
+class _AnalogBoxGraph extends ConsumerWidget {
+  final String keyName;
+  final String? units;
+  const _AnalogBoxGraph({required this.keyName, this.units});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return FutureBuilder<Collector?>(
+      future: ref.watch(collectorProvider.future),
+      builder: (context, collectorSnapshot) {
+        if (!collectorSnapshot.hasData) {
+          return const Center(child: CircularProgressIndicator());
+        }
+        final collector = collectorSnapshot.data!;
+        return StreamBuilder<List<TimeseriesData<dynamic>>>(
+          stream:
+              collector.collectStream(keyName, since: const Duration(hours: 2)),
+          builder: (context, snapshot) {
+            if (!snapshot.hasData || snapshot.data!.isEmpty) {
+              return const Center(child: Text('No data'));
+            }
+            final samples = snapshot.data!;
+            final series = <List<double>>[];
+            double vmin = double.infinity, vmax = -double.infinity;
+            for (final s in samples) {
+              final v = s.value;
+              double? val;
+              if (v is num) {
+                val = v.toDouble();
+              } else if (v is DynamicValue && (v.isDouble || v.isInteger)) {
+                val = v.asDouble;
+              }
+              if (val == null) continue;
+              final t = s.time.millisecondsSinceEpoch.toDouble();
+              series.add([t, val]);
+              if (val < vmin) vmin = val;
+              if (val > vmax) vmax = val;
+            }
+            if (vmin == double.infinity) {
+              return const Center(child: Text('No numeric data'));
+            }
+            if (vmin == vmax) vmax = vmin + 1;
+
+            final cfg = GraphConfig(
+              type: GraphType.timeseries,
+              xAxis: GraphAxisConfig(unit: 'Time'),
+              yAxis: GraphAxisConfig(unit: units ?? '', min: vmin, max: vmax),
+              xSpan: const Duration(minutes: 15),
+            );
+
+            final data = [
+              {GraphDataConfig(label: keyName, mainAxis: true): series}
+            ];
+
+            return Graph(config: cfg, data: data);
+          },
+        );
+      },
+    );
+  }
+}
+
+/// PAINTER
+
+class _AnalogBoxPainter extends CustomPainter {
+  final double percent; // 0..1
+  final double min;
+  final double max;
+  final String? units;
+
+  final Color bgColor;
+  final Color fillColor;
+
+  final double? setpoint1;
+  final double? setpoint1Hyst; // +/- around sp1
+  final double? setpoint2;
+
+  final Color setpoint1Color;
+  final Color setpoint2Color;
+  final Color hysteresisColor;
+
+  final bool vertical;
+  final bool reverseFill;
+  final double borderRadiusPct;
+  final double labelAngleDeg;
+
+  _AnalogBoxPainter({
+    required this.percent,
+    required this.min,
+    required this.max,
+    required this.units,
+    required this.bgColor,
+    required this.fillColor,
+    required this.setpoint1,
+    required this.setpoint1Hyst,
+    required this.setpoint2,
+    required this.setpoint1Color,
+    required this.setpoint2Color,
+    required this.hysteresisColor,
+    required this.vertical,
+    required this.reverseFill,
+    required this.borderRadiusPct,
+    required this.labelAngleDeg,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final r = Radius.circular(size.shortestSide * borderRadiusPct.clamp(0, .5));
+    final rect = Offset.zero & size;
+    final rrect = RRect.fromRectAndRadius(rect, r);
+
+    // Background
+    final bg = Paint()..color = bgColor;
+    canvas.drawRRect(rrect, bg);
+
+    // Fill clip
+    final p = percent.clamp(0.0, 1.0);
+    Rect fillRect;
+    if (vertical) {
+      final h = size.height * p.toDouble();
+      final y = reverseFill ? 0.0 : size.height - h;
+      fillRect = Rect.fromLTWH(0, y, size.width, h);
+    } else {
+      final w = size.width * p.toDouble();
+      final x = reverseFill ? size.width - w : 0.0;
+      fillRect = Rect.fromLTWH(x, 0, w, size.height);
+    }
+    final fill = Paint()..color = fillColor;
+    canvas.save();
+    canvas.clipRRect(rrect);
+    canvas.drawRect(fillRect, fill);
+    canvas.restore();
+
+    // Hysteresis band around SP1
+    if (setpoint1 != null && setpoint1Hyst != null && max > min) {
+      final lo = ((setpoint1! - setpoint1Hyst!) - min) / (max - min);
+      final hi = ((setpoint1! + setpoint1Hyst!) - min) / (max - min);
+      _drawBand(canvas, size, lo.clamp(0.0, 1.0), hi.clamp(0.0, 1.0),
+          hysteresisColor);
+    }
+
+    // Setpoint lines
+    if (setpoint1 != null) {
+      _drawSetpoint(canvas, size, setpoint1!, setpoint1Color);
+    }
+    if (setpoint2 != null) {
+      _drawSetpoint(canvas, size, setpoint2!, setpoint2Color, dashed: true);
+    }
+
+    // Border
+    final border = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2
+      ..color = Colors.black;
+    canvas.drawRRect(rrect, border);
+
+    // Units / angle label (small)
+    if (units != null && units!.isNotEmpty) {
+      final tp = TextPainter(
+        text: TextSpan(
+          text: units,
+          style: const TextStyle(fontSize: 12, color: Colors.black54),
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout(maxWidth: size.width);
+      canvas.save();
+      // anchor bottom-right area; rotate by labelAngle
+      final cx = size.width - tp.width / 2 - 6;
+      final cy = size.height - tp.height / 2 - 4;
+      canvas.translate(cx, cy);
+      canvas.rotate(labelAngleDeg * math.pi / 180);
+      tp.paint(canvas, Offset(-tp.width / 2, -tp.height / 2));
+      canvas.restore();
+    }
+  }
+
+  void _drawSetpoint(Canvas canvas, Size size, double sp, Color color,
+      {bool dashed = false}) {
+    if (max <= min) return;
+    final t = ((sp - min) / (max - min)).clamp(0.0, 1.0);
+    final p1 = Paint()
+      ..color = color
+      ..strokeWidth = 2;
+
+    if (vertical) {
+      final y = size.height * (reverseFill ? t : 1 - t);
+      if (dashed) {
+        _drawDashedLine(canvas, Offset(0, y), Offset(size.width, y), p1);
+      } else {
+        canvas.drawLine(Offset(0, y), Offset(size.width, y), p1);
+      }
+    } else {
+      final x = size.width * (reverseFill ? 1 - t : t);
+      if (dashed) {
+        _drawDashedLine(canvas, Offset(x, 0), Offset(x, size.height), p1);
+      } else {
+        canvas.drawLine(Offset(x, 0), Offset(x, size.height), p1);
+      }
+    }
+  }
+
+  void _drawBand(Canvas canvas, Size size, double lo, double hi, Color color) {
+    final paint = Paint()..color = color;
+    if (vertical) {
+      final y1 = size.height * (reverseFill ? lo : 1 - lo);
+      final y2 = size.height * (reverseFill ? hi : 1 - hi);
+      final top = math.min(y1, y2);
+      final height = (y2 - y1).abs();
+      canvas.drawRect(Rect.fromLTWH(0, top, size.width, height), paint);
+    } else {
+      final x1 = size.width * (reverseFill ? 1 - lo : lo);
+      final x2 = size.width * (reverseFill ? 1 - hi : hi);
+      final left = math.min(x1, x2);
+      final width = (x2 - x1).abs();
+      canvas.drawRect(Rect.fromLTWH(left, 0, width, size.height), paint);
+    }
+  }
+
+  void _drawDashedLine(
+    Canvas canvas,
+    Offset a,
+    Offset b,
+    Paint paint, {
+    double dash = 6,
+    double gap = 4,
+  }) {
+    final total = (b - a).distance;
+    final dir = (b - a) / total;
+    double t = 0;
+    while (t < total) {
+      final t2 = math.min(t + dash, total);
+      final p = a + dir * t;
+      final q = a + dir * t2;
+      canvas.drawLine(p, q, paint);
+      t = t2 + gap;
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _AnalogBoxPainter old) {
+    return percent != old.percent ||
+        min != old.min ||
+        max != old.max ||
+        bgColor != old.bgColor ||
+        fillColor != old.fillColor ||
+        setpoint1 != old.setpoint1 ||
+        setpoint1Hyst != old.setpoint1Hyst ||
+        setpoint2 != old.setpoint2 ||
+        vertical != old.vertical ||
+        reverseFill != old.reverseFill ||
+        borderRadiusPct != old.borderRadiusPct ||
+        labelAngleDeg != old.labelAngleDeg;
+  }
+}
