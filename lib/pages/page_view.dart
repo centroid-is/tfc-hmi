@@ -87,7 +87,7 @@ class AssetStack extends ConsumerStatefulWidget {
   final void Function(Asset asset, DragStartDetails details)? onPanStart;
   final bool absorb;
   final Set<Asset> selectedAssets;
-
+  final bool mirroringDisabled;
   const AssetStack({
     Key? key,
     required this.assets,
@@ -97,6 +97,7 @@ class AssetStack extends ConsumerStatefulWidget {
     this.onPanStart,
     this.absorb = false,
     required this.selectedAssets,
+    required this.mirroringDisabled,
   }) : super(key: key);
 
   @override
@@ -109,7 +110,7 @@ class _AssetStackState extends ConsumerState<AssetStack> {
   @override
   Widget build(BuildContext context) {
     // This will trigger a rebuild when the substitutions change
-    final foo = ref.watch(substitutionsChangedProvider);
+    ref.watch(substitutionsChangedProvider);
 
     final W = widget.constraints.maxWidth;
     final H = widget.constraints.maxHeight;
@@ -125,6 +126,11 @@ class _AssetStackState extends ConsumerState<AssetStack> {
       }),
       builder: (context, snap) {
         final cfg = snap.data ?? AssetStackConfig();
+
+        if (widget.mirroringDisabled) {
+          cfg.xMirror = false;
+          cfg.yMirror = false;
+        }
 
         // We'll accumulate all Positioned children here
         final positionedChildren = <Widget>[];
@@ -290,6 +296,8 @@ class AssetView extends ConsumerWidget {
                 constraints: constraints,
                 absorb: false,
                 selectedAssets: const {},
+                mirroringDisabled:
+                    pageManager.pages[pageName]?.mirroringDisabled ?? false,
               );
             },
           ),

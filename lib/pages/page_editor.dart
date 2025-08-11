@@ -228,6 +228,9 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                         },
                         absorb: true,
                         selectedAssets: _selectedAssets,
+                        mirroringDisabled:
+                            _temporaryPages[_currentPage]?.mirroringDisabled ??
+                                false,
                       );
                     },
                   ),

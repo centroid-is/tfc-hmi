@@ -16,8 +16,13 @@ class AssetPage {
   final MenuItem menuItem;
   @AssetListConverter()
   final List<Asset> assets;
+  @JsonKey(name: 'mirroring_disabled')
+  bool mirroringDisabled;
 
-  AssetPage({required this.menuItem, required this.assets});
+  AssetPage(
+      {required this.menuItem,
+      required this.assets,
+      required this.mirroringDisabled});
 
   factory AssetPage.fromJson(Map<String, dynamic> json) =>
       _$AssetPageFromJson(json);
@@ -51,6 +56,7 @@ class PageManager {
       'Home': AssetPage(
         menuItem: const MenuItem(label: 'Home', path: '/', icon: Icons.home),
         assets: [],
+        mirroringDisabled: false,
       ),
     };
     if (jsonString != null) {
@@ -226,6 +232,18 @@ class _CreatePageWidgetState extends State<CreatePageWidget> {
             ],
           ),
           const SizedBox(height: 16),
+          Row(
+            children: [
+              const Text('Mirroring Disabled: '),
+              Switch(
+                  value: widget.initialPage?.mirroringDisabled ?? false,
+                  onChanged: (value) {
+                    setState(() {
+                      widget.initialPage?.mirroringDisabled = value;
+                    });
+                  }),
+            ],
+          ),
           // Child management section
           Row(
             children: [
@@ -266,6 +284,8 @@ class _CreatePageWidgetState extends State<CreatePageWidget> {
                   final page = AssetPage(
                     menuItem: menuItem,
                     assets: widget.initialPage?.assets ?? [],
+                    mirroringDisabled:
+                        widget.initialPage?.mirroringDisabled ?? false,
                   );
                   widget.onSave(page);
                   Navigator.pop(context);
