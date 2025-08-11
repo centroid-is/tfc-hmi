@@ -10,6 +10,7 @@ Baader221Config _$Baader221ConfigFromJson(Map<String, dynamic> json) =>
     Baader221Config(
       color: const ColorConverter()
           .fromJson(json['color'] as Map<String, dynamic>),
+      strokeWidth: (json['stroke_width'] as num?)?.toDouble() ?? 2.0,
     )
       ..variant = json['asset_name'] as String
       ..coordinates =
@@ -26,6 +27,7 @@ Map<String, dynamic> _$Baader221ConfigToJson(Baader221Config instance) =>
       'text': instance.text,
       'textPos': _$TextPosEnumMap[instance.textPos],
       'color': const ColorConverter().toJson(instance.color),
+      'stroke_width': instance.strokeWidth,
     };
 
 const _$TextPosEnumMap = {

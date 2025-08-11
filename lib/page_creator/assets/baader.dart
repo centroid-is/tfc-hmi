@@ -14,8 +14,10 @@ part 'baader.g.dart';
 class Baader221Config extends BaseAsset {
   @ColorConverter()
   Color color;
+  @JsonKey(name: 'stroke_width')
+  double strokeWidth;
 
-  Baader221Config({required this.color});
+  Baader221Config({required this.color, this.strokeWidth = 2.0});
 
   @override
   Widget build(BuildContext context) {
@@ -25,6 +27,7 @@ class Baader221Config extends BaseAsset {
         size: size.toSize(MediaQuery.of(context).size),
         painter: Baader221CustomPainter(
           color: color,
+          strokeWidth: strokeWidth,
         ),
       ),
     );
@@ -60,7 +63,9 @@ class Baader221Config extends BaseAsset {
 
   static const previewStr = 'Baader221 preview';
 
-  Baader221Config.preview() : color = Colors.blue;
+  Baader221Config.preview()
+      : color = Colors.blue,
+        strokeWidth = 0.5;
 
   factory Baader221Config.fromJson(Map<String, dynamic> json) =>
       _$Baader221ConfigFromJson(json);
@@ -97,6 +102,30 @@ class _ConfigContentState extends State<_ConfigContent> {
         ColorPicker(
           pickerColor: widget.config.color,
           onColorChanged: (color) => widget.config.color = color,
+        ),
+        const SizedBox(height: 16),
+        Row(
+          children: [
+            const Text('Stroke Width: '),
+            Expanded(
+              child: TextFormField(
+                initialValue: widget.config.strokeWidth.toString(),
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(
+                  hintText: 'Enter stroke width',
+                  border: OutlineInputBorder(),
+                ),
+                onChanged: (value) {
+                  final doubleValue = double.tryParse(value);
+                  if (doubleValue != null &&
+                      doubleValue >= 0.0 &&
+                      doubleValue <= 10.0) {
+                    widget.config.strokeWidth = doubleValue;
+                  }
+                },
+              ),
+            ),
+          ],
         ),
       ],
     );
