@@ -484,7 +484,9 @@ class _AnalogBoxDialog extends ConsumerWidget {
 
     Future<void> writeValue(String key, double val) async {
       final sm = await ref.read(stateManProvider.future);
-      await sm.write(key, DynamicValue(value: val, typeId: NodeId.double));
+      final currValue = await sm.read(key);
+      currValue.value = val;
+      await sm.write(key, currValue);
     }
 
     Widget valueField({
