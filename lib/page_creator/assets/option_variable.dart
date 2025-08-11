@@ -175,24 +175,24 @@ class _OptionVariableWidgetState extends ConsumerState<OptionVariableWidget> {
 
     _overlayEntry = OverlayEntry(
       builder: (context) => Positioned(
-        width: 200, // Fixed width for dropdown
+        width: 250, // Fixed width for dropdown
         child: CompositedTransformFollower(
           link: _layerLink,
           showWhenUnlinked: false,
-          offset: const Offset(0, 40), // Position below the button
+          offset: const Offset(0, 40),
           child: Material(
             elevation: 8,
             borderRadius: BorderRadius.circular(8),
             child: Container(
               decoration: BoxDecoration(
-                color: Colors.white,
+                color: Theme.of(context).colorScheme.onPrimaryContainer,
                 borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: Colors.grey.shade300),
+                border: Border.all(color: Theme.of(context).dividerColor),
               ),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  // Search field (if enabled)
+                  // Search field
                   if (widget.config.showSearch)
                     Container(
                       padding: const EdgeInsets.all(8),
@@ -269,14 +269,15 @@ class _OptionVariableWidgetState extends ConsumerState<OptionVariableWidget> {
                                       Text(
                                         option.label,
                                         style: TextStyle(
-                                          fontSize: 13,
-                                          fontWeight: isSelected
-                                              ? FontWeight.w600
-                                              : FontWeight.w500,
-                                          color: isSelected
-                                              ? Colors.blue.shade800
-                                              : Colors.grey.shade800,
-                                        ),
+                                            fontSize: 13,
+                                            fontWeight: isSelected
+                                                ? FontWeight.w600
+                                                : FontWeight.w500,
+                                            color: Theme.of(context)
+                                                .colorScheme
+                                                .primary),
+                                        overflow: TextOverflow.ellipsis,
+                                        maxLines: 1,
                                       ),
                                       if (option.description != null) ...[
                                         const SizedBox(height: 2),
@@ -286,6 +287,8 @@ class _OptionVariableWidgetState extends ConsumerState<OptionVariableWidget> {
                                             fontSize: 11,
                                             color: Colors.grey.shade600,
                                           ),
+                                          overflow: TextOverflow.ellipsis,
+                                          maxLines: 1,
                                         ),
                                       ],
                                     ],
@@ -354,31 +357,34 @@ class _OptionVariableWidgetState extends ConsumerState<OptionVariableWidget> {
       (option) => option.value == _selectedValue,
       orElse: () => OptionItem(value: '', label: ''),
     );
-    return selectedOption.label;
+
+    // Truncate label if it's too long to prevent overflow
+    final label = selectedOption.label;
+    if (label.length > 20) {
+      return '${label.substring(0, 17)}...';
+    }
+    return label;
   }
 
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        final availableWidth = constraints.maxWidth;
-        final availableHeight = constraints.maxHeight;
-
         return CompositedTransformTarget(
           link: _layerLink,
           child: Container(
-            width: availableWidth,
-            height: availableHeight,
+            width: constraints.maxWidth,
+            height: constraints.maxHeight,
             decoration: BoxDecoration(
-              color: Colors.white,
+              color: Theme.of(context).colorScheme.onPrimaryContainer,
               borderRadius: BorderRadius.circular(6),
-              border: Border.all(color: Colors.grey.shade300),
+              border: Border.all(color: Theme.of(context).dividerColor),
             ),
             child: InkWell(
               onTap: _toggleDropdown,
               borderRadius: BorderRadius.circular(6),
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(4, 2, 0, 0),
                 child: Row(
                   children: [
                     Expanded(
@@ -386,40 +392,58 @@ class _OptionVariableWidgetState extends ConsumerState<OptionVariableWidget> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Text(
-                            widget.config.customLabel ??
-                                widget.config.variableName,
-                            style: TextStyle(
-                              fontSize: 11,
-                              fontWeight: FontWeight.w500,
-                              color: Colors.grey.shade700,
-                            ),
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          if (_selectedValue != null) ...[
-                            const SizedBox(height: 2),
-                            Text(
-                              _getSelectedLabel(),
-                              style: TextStyle(
-                                fontSize: 10,
-                                color: Colors.blue.shade600,
-                                fontWeight: FontWeight.w600,
+                          if (_selectedValue == null) ...[
+                            SizedBox(
+                              width: constraints.maxWidth *
+                                  0.7, // Give it 70% of available width
+                              height: constraints.maxHeight * 0.7,
+                              child: FittedBox(
+                                fit: BoxFit.contain,
+                                alignment: Alignment.centerLeft,
+                                child: Text(
+                                  widget.config.customLabel ??
+                                      widget.config.variableName,
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.w500,
+                                    color: Colors.grey.shade700,
+                                  ),
+                                ),
                               ),
-                              overflow: TextOverflow.ellipsis,
+                            )
+                          ],
+                          if (_selectedValue != null) ...[
+                            SizedBox(
+                              width: constraints.maxWidth *
+                                  0.7, // Give it 70% of available width
+                              height: constraints.maxHeight * 0.7,
+                              child: FittedBox(
+                                fit: BoxFit.contain,
+                                alignment: Alignment.centerLeft,
+                                child: Text(
+                                  _getSelectedLabel(),
+                                  style: TextStyle(
+                                    color:
+                                        Theme.of(context).colorScheme.primary,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ),
                             ),
                           ],
                         ],
                       ),
                     ),
-                    // Single arrow indicator on the right
-                    Icon(
-                      _isExpanded
-                          ? Icons.keyboard_arrow_up
-                          : Icons.keyboard_arrow_down,
-                      size: 20,
-                      color: _isExpanded
-                          ? Colors.blue.shade600
-                          : Colors.grey.shade600,
+                    // Arrow indicator - also make it scale
+                    FittedBox(
+                      fit: BoxFit.contain,
+                      child: Icon(
+                        _isExpanded
+                            ? Icons.keyboard_arrow_up
+                            : Icons.keyboard_arrow_down,
+                        color: _isExpanded
+                            ? Colors.blue.shade600
+                            : Colors.grey.shade600,
+                      ),
                     ),
                   ],
                 ),
@@ -527,9 +551,9 @@ class _ConfigContent extends ConsumerWidget {
                   margin: const EdgeInsets.only(bottom: 4),
                   padding: const EdgeInsets.all(8),
                   decoration: BoxDecoration(
-                    color: Colors.white,
+                    color: Theme.of(context).colorScheme.onPrimaryContainer,
                     borderRadius: BorderRadius.circular(4),
-                    border: Border.all(color: Colors.grey.shade200),
+                    border: Border.all(color: Theme.of(context).dividerColor),
                   ),
                   child: Row(
                     children: [
