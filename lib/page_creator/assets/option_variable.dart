@@ -142,6 +142,29 @@ class _OptionVariableWidgetState extends ConsumerState<OptionVariableWidget> {
     super.initState();
     _selectedValue = widget.config.selectedValue;
     _searchController.text = _searchQuery;
+
+    // Set the initial variable substitution in StateMan only if not already set
+    _initializeVariable();
+  }
+
+  void _initializeVariable() async {
+    if (_selectedValue != null) {
+      try {
+        final stateMan = await ref.read(stateManProvider.future);
+
+        // Only set if not already set
+        if (stateMan.getSubstitution(widget.config.variableName) == null) {
+          stateMan.setSubstitution(widget.config.variableName, _selectedValue!);
+          _logger.d(
+              'Initialized variable ${widget.config.variableName} = $_selectedValue');
+        } else {
+          _logger.d(
+              'Variable ${widget.config.variableName} already set, skipping initialization');
+        }
+      } catch (e) {
+        _logger.e('Failed to initialize variable: $e');
+      }
+    }
   }
 
   @override

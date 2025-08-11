@@ -192,6 +192,7 @@ class Collector {
   /// This stream provides both historical data and real-time updates.
   Stream<List<TimeseriesData<dynamic>>> collectStream(String key,
       {Duration since = const Duration(days: 1)}) {
+    key = stateMan.resolveKey(key);
     final entry = _collectEntries[key];
 
     if (entry == null) {

@@ -10,6 +10,7 @@ import 'package:tfc/core/preferences.dart';
 import 'package:tfc/page_creator/page.dart';
 
 import '../providers/page_manager.dart';
+import '../providers/state_man.dart';
 import '../page_creator/assets/common.dart'; // your Asset, Coordinates, RelativeSize, TextPos, etc.
 import '../widgets/base_scaffold.dart';
 import '../widgets/zoomable_canvas.dart';
@@ -78,7 +79,7 @@ Offset _labelOffset(
   }
 }
 
-class AssetStack extends StatefulWidget {
+class AssetStack extends ConsumerStatefulWidget {
   final List<Asset> assets;
   final BoxConstraints constraints;
   final void Function(Asset asset)? onTap;
@@ -99,14 +100,17 @@ class AssetStack extends StatefulWidget {
   }) : super(key: key);
 
   @override
-  State<AssetStack> createState() => _AssetStackState();
+  ConsumerState<AssetStack> createState() => _AssetStackState();
 }
 
-class _AssetStackState extends State<AssetStack> {
+class _AssetStackState extends ConsumerState<AssetStack> {
   final prefs = SharedPreferencesWrapper(SharedPreferencesAsync());
 
   @override
   Widget build(BuildContext context) {
+    // This will trigger a rebuild when the substitutions change
+    final foo = ref.watch(substitutionsChangedProvider);
+
     final W = widget.constraints.maxWidth;
     final H = widget.constraints.maxHeight;
 

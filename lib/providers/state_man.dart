@@ -67,3 +67,9 @@ Future<StateMan> stateMan(Ref ref) async {
     rethrow;
   }
 }
+
+final substitutionsChangedProvider =
+    StreamProvider<Map<String, String>>((ref) async* {
+  final sm = await ref.watch(stateManProvider.future);
+  yield* sm.substitutionsChanged;
+});

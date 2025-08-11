@@ -192,6 +192,7 @@ class StateMan {
   final Map<String, AutoDisposingStream<DynamicValue>> _subscriptions = {};
   bool _shouldRun = true;
   final Map<String, String> _substitutions = {};
+  final _subsMap$ = BehaviorSubject<Map<String, String>>.seeded(const {});
 
   Timer? _healthCheckTimer;
 
@@ -338,9 +339,16 @@ class StateMan {
   void setSubstitution(String key, String value) {
     _substitutions[key] = value;
     logger.d('Substitution set: $key = $value');
+    _subsMap$.add(Map.unmodifiable(_substitutions));
   }
 
-  String _resolveKey(String key) {
+  Stream<Map<String, String>> get substitutionsChanged => _subsMap$.stream;
+
+  String? getSubstitution(String key) {
+    return _substitutions[key];
+  }
+
+  String resolveKey(String key) {
     if (!key.contains('\$')) return key;
 
     String resolvedKey = key;
@@ -364,7 +372,7 @@ class StateMan {
 
   /// Example: read("myKey")
   Future<DynamicValue> read(String key) async {
-    key = _resolveKey(key);
+    key = resolveKey(key);
     try {
       final client = _getClientWrapper(key).client;
       final nodeId = lookupNodeId(key);
@@ -383,7 +391,7 @@ class StateMan {
     final parameters = <ClientApi, Map<NodeId, List<AttributeId>>>{};
 
     for (final keyToResolve in keys) {
-      final key = _resolveKey(keyToResolve);
+      final key = resolveKey(keyToResolve);
       final client = _getClientWrapper(key).client;
       final nodeId = lookupNodeId(key);
       if (nodeId == null) {
@@ -413,7 +421,7 @@ class StateMan {
 
   /// Example: write("myKey", DynamicValue(value: 42, typeId: NodeId.int16))
   Future<void> write(String key, DynamicValue value) async {
-    key = _resolveKey(key);
+    key = resolveKey(key);
     try {
       final client = _getClientWrapper(key).client;
       final nodeId = lookupNodeId(key);
@@ -432,7 +440,7 @@ class StateMan {
   /// Returns a Stream that can be cancelled to stop the subscription.
   /// Example: subscribe("myIntKey") or subscribe("myStringKey")
   Future<Stream<DynamicValue>> subscribe(String key) async {
-    key = _resolveKey(key);
+    key = resolveKey(key);
     return _monitor(key);
   }
 
@@ -452,6 +460,8 @@ class StateMan {
     }
     _subscriptions.clear();
     _healthCheckTimer?.cancel();
+
+    _subsMap$.close();
   }
 
   NodeId? lookupNodeId(String key) {
