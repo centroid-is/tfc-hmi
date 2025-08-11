@@ -341,12 +341,12 @@ class _ConveyorState extends ConsumerState<Conveyor> {
   @override
   Widget build(BuildContext context) {
     if (widget.config.key == ConveyorConfig.previewStr) {
-      return Row(
+      return Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           _buildConveyorVisual(context, Colors.grey),
-          const SizedBox(width: 12), // spacing between box and text
+          const SizedBox(height: 12), // spacing between box and text
           const Text('Conveyor preview'),
         ],
       );
