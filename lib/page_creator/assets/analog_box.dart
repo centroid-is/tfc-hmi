@@ -334,7 +334,6 @@ class AnalogBox extends ConsumerWidget {
               percent: .62,
               min: config.minValue,
               max: config.maxValue,
-              units: config.units,
               bgColor: config.bgColor,
               fillColor: config.fillColor,
               setpoint1: 60,
@@ -383,7 +382,6 @@ class AnalogBox extends ConsumerWidget {
             percent: 0,
             min: config.minValue,
             max: config.maxValue,
-            units: config.units,
             bgColor: config.bgColor,
             fillColor: config.fillColor,
             setpoint1: null,
@@ -449,7 +447,6 @@ class AnalogBox extends ConsumerWidget {
                 percent: pct,
                 min: config.minValue,
                 max: config.maxValue,
-                units: config.units,
                 bgColor: config.bgColor,
                 fillColor: config.fillColor,
                 setpoint1: sp1,
@@ -890,7 +887,6 @@ class _AnalogBoxPainter extends CustomPainter {
   final double percent; // 0..1
   final double min;
   final double max;
-  final String? units;
 
   final Color bgColor;
   final Color fillColor;
@@ -912,7 +908,6 @@ class _AnalogBoxPainter extends CustomPainter {
     required this.percent,
     required this.min,
     required this.max,
-    required this.units,
     required this.bgColor,
     required this.fillColor,
     required this.setpoint1,
@@ -977,25 +972,6 @@ class _AnalogBoxPainter extends CustomPainter {
       ..strokeWidth = 2
       ..color = Colors.black;
     canvas.drawRRect(rrect, border);
-
-    // Units / angle label (small)
-    if (units != null && units!.isNotEmpty) {
-      final tp = TextPainter(
-        text: TextSpan(
-          text: units,
-          style: const TextStyle(fontSize: 12, color: Colors.black54),
-        ),
-        textDirection: TextDirection.ltr,
-      )..layout(maxWidth: size.width);
-      canvas.save();
-      // anchor bottom-right area; rotate by labelAngle
-      final cx = size.width - tp.width / 2 - 6;
-      final cy = size.height - tp.height / 2 - 4;
-      canvas.translate(cx, cy);
-      canvas.rotate(labelAngleDeg * math.pi / 180);
-      tp.paint(canvas, Offset(-tp.width / 2, -tp.height / 2));
-      canvas.restore();
-    }
   }
 
   void _drawSetpoint(Canvas canvas, Size size, double sp, Color color,
