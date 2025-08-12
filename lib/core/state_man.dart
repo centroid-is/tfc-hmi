@@ -513,7 +513,7 @@ class StateMan {
       });
     }
 
-    while (true) {
+    for (int i = 0; i < 100; i++) {
       try {
         await client.awaitConnect();
         final wrapper = _getClientWrapper(key);
@@ -548,9 +548,11 @@ class StateMan {
         return _subscriptions[key]!.stream;
       } catch (e) {
         logger.w('Failed to get initial value for $key: $e');
+        await Future.delayed(const Duration(seconds: 1));
         continue;
       }
     }
+    throw StateManException('Failed to get initial value for $key');
   }
 }
 
