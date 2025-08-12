@@ -9,6 +9,8 @@ part of 'analog_box.dart';
 AnalogBoxConfig _$AnalogBoxConfigFromJson(Map<String, dynamic> json) =>
     AnalogBoxConfig(
       analogKey: json['analog_key'] as String,
+      analogSensorRangeMinKey: json['analog_sensor_range_min_key'] as String?,
+      analogSensorRangeMaxKey: json['analog_sensor_range_max_key'] as String?,
       setpoint1Key: json['setpoint1_key'] as String?,
       setpoint1HysteresisKey: json['setpoint1_hysteresis_key'] as String?,
       setpoint2Key: json['setpoint2_key'] as String?,
@@ -58,6 +60,8 @@ Map<String, dynamic> _$AnalogBoxConfigToJson(AnalogBoxConfig instance) =>
       'text': instance.text,
       'textPos': _$TextPosEnumMap[instance.textPos],
       'analog_key': instance.analogKey,
+      'analog_sensor_range_min_key': instance.analogSensorRangeMinKey,
+      'analog_sensor_range_max_key': instance.analogSensorRangeMaxKey,
       'setpoint1_key': instance.setpoint1Key,
       'setpoint1_hysteresis_key': instance.setpoint1HysteresisKey,
       'setpoint2_key': instance.setpoint2Key,

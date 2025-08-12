@@ -3,10 +3,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:rxdart/rxdart.dart';
-import 'package:open62541/open62541.dart' show DynamicValue, NodeId;
+import 'package:open62541/open62541.dart' show DynamicValue;
 
 import 'common.dart';
 import '../../providers/state_man.dart';
+import '../../core/state_man.dart';
 import '../../core/collector.dart';
 import '../../core/database.dart';
 import 'graph.dart';
@@ -23,6 +24,11 @@ class AnalogBoxConfig extends BaseAsset {
   /// Live analog value source
   @JsonKey(name: 'analog_key')
   String analogKey;
+
+  @JsonKey(name: 'analog_sensor_range_min_key')
+  String? analogSensorRangeMinKey;
+  @JsonKey(name: 'analog_sensor_range_max_key')
+  String? analogSensorRangeMaxKey;
 
   /// Optional keys for setpoints / hysteresis (writeable)
   @JsonKey(name: 'setpoint1_key')
@@ -70,6 +76,8 @@ class AnalogBoxConfig extends BaseAsset {
 
   AnalogBoxConfig({
     required this.analogKey,
+    this.analogSensorRangeMinKey,
+    this.analogSensorRangeMaxKey,
     this.setpoint1Key,
     this.setpoint1HysteresisKey,
     this.setpoint2Key,
@@ -150,6 +158,20 @@ class _AnalogBoxConfigEditorState extends State<_AnalogBoxConfigEditor> {
                   label: 'Analog value key',
                 ),
                 const SizedBox(height: 12),
+                KeyField(
+                  initialValue: widget.config.analogSensorRangeMinKey,
+                  onChanged: (v) =>
+                      setState(() => widget.config.analogSensorRangeMinKey = v),
+                  label: 'Analog sensor range min key (optional)',
+                ),
+                const SizedBox(height: 8),
+                KeyField(
+                  initialValue: widget.config.analogSensorRangeMaxKey,
+                  onChanged: (v) =>
+                      setState(() => widget.config.analogSensorRangeMaxKey = v),
+                  label: 'Analog sensor range max key (optional)',
+                ),
+                const SizedBox(height: 8),
                 KeyField(
                   initialValue: widget.config.setpoint1Key,
                   onChanged: (v) =>
@@ -345,6 +367,8 @@ class AnalogBox extends ConsumerWidget {
     }
 
     addKey(config.analogKey, 'analog');
+    addKey(config.analogSensorRangeMinKey, 'min');
+    addKey(config.analogSensorRangeMaxKey, 'max');
     addKey(config.setpoint1Key, 'sp1');
     addKey(config.setpoint1HysteresisKey, 'hyst');
     addKey(config.setpoint2Key, 'sp2');
@@ -462,12 +486,19 @@ class AnalogBox extends ConsumerWidget {
 
 /// DIALOG (user config + graph)
 
-class _AnalogBoxDialog extends ConsumerWidget {
+class _AnalogBoxDialog extends ConsumerStatefulWidget {
   final AnalogBoxConfig config;
   const _AnalogBoxDialog({required this.config});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_AnalogBoxDialog> createState() => _AnalogBoxDialogState();
+}
+
+class _AnalogBoxDialogState extends ConsumerState<_AnalogBoxDialog> {
+  bool showAdvanced = false;
+
+  @override
+  Widget build(BuildContext context) {
     // Build separate streams for values we want to show/edit
     Stream<DynamicValue>? streamFor(String? key) {
       if (key == null || key.isEmpty) return null;
@@ -477,10 +508,12 @@ class _AnalogBoxDialog extends ConsumerWidget {
           .switchMap((sm) => sm.subscribe(key).asStream().switchMap((s) => s));
     }
 
-    final sp1$ = streamFor(config.setpoint1Key);
-    final hyst$ = streamFor(config.setpoint1HysteresisKey);
-    final sp2$ = streamFor(config.setpoint2Key);
-    final analog$ = streamFor(config.analogKey);
+    final sp1$ = streamFor(widget.config.setpoint1Key);
+    final hyst$ = streamFor(widget.config.setpoint1HysteresisKey);
+    final sp2$ = streamFor(widget.config.setpoint2Key);
+    final analog$ = streamFor(widget.config.analogKey);
+    final min$ = streamFor(widget.config.analogSensorRangeMinKey);
+    final max$ = streamFor(widget.config.analogSensorRangeMaxKey);
 
     Future<void> writeValue(String key, double val) async {
       final sm = await ref.read(stateManProvider.future);
@@ -503,7 +536,7 @@ class _AnalogBoxDialog extends ConsumerWidget {
           controller: controller,
           decoration: InputDecoration(
             labelText: label,
-            suffixText: config.units,
+            suffixText: widget.config.units,
           ),
           keyboardType: const TextInputType.numberWithOptions(
               decimal: true, signed: false),
@@ -516,14 +549,23 @@ class _AnalogBoxDialog extends ConsumerWidget {
     }
 
     return AlertDialog(
-      title: Text(config.text?.isNotEmpty == true
-          ? config.text!
-          : (config.analogKey ?? 'AnalogBox')),
+      title: FutureBuilder<StateMan>(
+        future: ref.watch(stateManProvider.future),
+        builder: (context, snapshot) {
+          final resolvedKey = snapshot.hasData
+              ? snapshot.data!.resolveKey(widget.config.analogKey)
+              : widget.config.analogKey;
+
+          return Text(widget.config.text?.isNotEmpty == true
+              ? widget.config.text!
+              : (resolvedKey ?? 'AnalogBox'));
+        },
+      ),
       content: SingleChildScrollView(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Current value row
+            // Current value row with advanced toggle
             if (analog$ != null)
               StreamBuilder<DynamicValue>(
                 stream: analog$,
@@ -533,88 +575,238 @@ class _AnalogBoxDialog extends ConsumerWidget {
                       ? dv.asDouble
                       : null;
                   return Padding(
-                    padding: const EdgeInsets.only(bottom: 12),
-                    child: Text(
-                      'Current: ${val?.toStringAsFixed(3) ?? '---'} ${config.units ?? ''}',
-                      style: Theme.of(context).textTheme.titleMedium,
+                    padding: const EdgeInsets.only(bottom: 16),
+                    child: Card(
+                      child: Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Row(
+                          children: [
+                            Icon(Icons.speed,
+                                color: Theme.of(context).primaryColor),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Text(
+                                'Current: ${val?.toStringAsFixed(3) ?? '---'} ${widget.config.units ?? ''}',
+                                style: Theme.of(context).textTheme.titleMedium,
+                              ),
+                            ),
+                            if (widget.config.analogSensorRangeMinKey != null ||
+                                widget.config.analogSensorRangeMaxKey != null)
+                              _AdvancedSwitch(
+                                value: showAdvanced,
+                                onChanged: (value) {
+                                  setState(() {
+                                    showAdvanced = value;
+                                  });
+                                },
+                              ),
+                          ],
+                        ),
+                      ),
                     ),
                   );
                 },
               ),
 
             // Editable setpoints
-            if (config.setpoint1Key != null || config.setpoint2Key != null)
-              Row(
-                children: [
-                  if (config.setpoint1Key != null)
-                    StreamBuilder<DynamicValue>(
-                      stream: sp1$,
-                      builder: (ctx, snap) {
-                        final val = (snap.data != null &&
-                                (snap.data!.isDouble || snap.data!.isInteger))
-                            ? snap.data!.asDouble
-                            : null;
-                        return Padding(
-                          padding: const EdgeInsets.only(right: 16),
-                          child: valueField(
-                            label: 'Setpoint 1',
-                            current: val,
-                            onSubmitted: (d) =>
-                                writeValue(config.setpoint1Key!, d),
+            if (widget.config.setpoint1Key != null ||
+                widget.config.setpoint2Key != null)
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(Icons.tune,
+                              color: Theme.of(context).primaryColor),
+                          const SizedBox(width: 8),
+                          Text(
+                            'Setpoints',
+                            style: Theme.of(context)
+                                .textTheme
+                                .titleSmall
+                                ?.copyWith(
+                                  fontWeight: FontWeight.bold,
+                                ),
                           ),
-                        );
-                      },
-                    ),
-                  if (config.setpoint1HysteresisKey != null)
-                    StreamBuilder<DynamicValue>(
-                      stream: hyst$,
-                      builder: (ctx, snap) {
-                        final val = (snap.data != null &&
-                                (snap.data!.isDouble || snap.data!.isInteger))
-                            ? snap.data!.asDouble
-                            : null;
-                        return Padding(
-                          padding: const EdgeInsets.only(right: 16),
-                          child: valueField(
-                            label: 'SP1 Hysteresis (±)',
-                            current: val,
-                            onSubmitted: (d) =>
-                                writeValue(config.setpoint1HysteresisKey!, d),
-                          ),
-                        );
-                      },
-                    ),
-                  if (config.setpoint2Key != null)
-                    StreamBuilder<DynamicValue>(
-                      stream: sp2$,
-                      builder: (ctx, snap) {
-                        final val = (snap.data != null &&
-                                (snap.data!.isDouble || snap.data!.isInteger))
-                            ? snap.data!.asDouble
-                            : null;
-                        return valueField(
-                          label: 'Setpoint 2',
-                          current: val,
-                          onSubmitted: (d) =>
-                              writeValue(config.setpoint2Key!, d),
-                        );
-                      },
-                    ),
-                ],
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      Wrap(
+                        spacing: 16,
+                        runSpacing: 12,
+                        children: [
+                          if (widget.config.setpoint1Key != null)
+                            StreamBuilder<DynamicValue>(
+                              stream: sp1$,
+                              builder: (ctx, snap) {
+                                final val = (snap.data != null &&
+                                        (snap.data!.isDouble ||
+                                            snap.data!.isInteger))
+                                    ? snap.data!.asDouble
+                                    : null;
+                                return valueField(
+                                  label: 'Setpoint 1',
+                                  current: val,
+                                  onSubmitted: (d) => writeValue(
+                                      widget.config.setpoint1Key!, d),
+                                );
+                              },
+                            ),
+                          if (widget.config.setpoint1HysteresisKey != null)
+                            StreamBuilder<DynamicValue>(
+                              stream: hyst$,
+                              builder: (ctx, snap) {
+                                final val = (snap.data != null &&
+                                        (snap.data!.isDouble ||
+                                            snap.data!.isInteger))
+                                    ? snap.data!.asDouble
+                                    : null;
+                                return valueField(
+                                  label: 'SP1 Hysteresis (±)',
+                                  current: val,
+                                  onSubmitted: (d) => writeValue(
+                                      widget.config.setpoint1HysteresisKey!, d),
+                                );
+                              },
+                            ),
+                          if (widget.config.setpoint2Key != null)
+                            StreamBuilder<DynamicValue>(
+                              stream: sp2$,
+                              builder: (ctx, snap) {
+                                final val = (snap.data != null &&
+                                        (snap.data!.isDouble ||
+                                            snap.data!.isInteger))
+                                    ? snap.data!.asDouble
+                                    : null;
+                                return valueField(
+                                  label: 'Setpoint 2',
+                                  current: val,
+                                  onSubmitted: (d) => writeValue(
+                                      widget.config.setpoint2Key!, d),
+                                );
+                              },
+                            ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
               ),
 
             const SizedBox(height: 16),
 
-            // Graph (simple: one series of analogKey)
-            if (config.graphConfig != null && config.analogKey != null)
-              SizedBox(
-                width: 600,
-                height: 280,
-                child: _AnalogBoxGraph(
-                  keyName: config.analogKey!,
-                  units: config.units,
+            // Advanced: editable range keys (appears when toggle is on)
+            if (showAdvanced &&
+                (widget.config.analogSensorRangeMinKey != null ||
+                    widget.config.analogSensorRangeMaxKey != null))
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(Icons.tune,
+                              color: Theme.of(context).primaryColor),
+                          const SizedBox(width: 8),
+                          const Text(
+                            'Sensor range values',
+                            style: TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      Wrap(
+                        spacing: 16,
+                        runSpacing: 12,
+                        children: [
+                          if (widget.config.analogSensorRangeMinKey != null)
+                            StreamBuilder<DynamicValue>(
+                              stream: min$,
+                              builder: (ctx, snap) {
+                                final val = (snap.data != null &&
+                                        (snap.data!.isDouble ||
+                                            snap.data!.isInteger))
+                                    ? snap.data!.asDouble
+                                    : null;
+                                return valueField(
+                                  label: 'Range Min',
+                                  current: val,
+                                  onSubmitted: (d) => writeValue(
+                                      widget.config.analogSensorRangeMinKey!,
+                                      d),
+                                );
+                              },
+                            ),
+                          if (widget.config.analogSensorRangeMaxKey != null)
+                            StreamBuilder<DynamicValue>(
+                              stream: max$,
+                              builder: (ctx, snap) {
+                                final val = (snap.data != null &&
+                                        (snap.data!.isDouble ||
+                                            snap.data!.isInteger))
+                                    ? snap.data!.asDouble
+                                    : null;
+                                return valueField(
+                                  label: 'Range Max',
+                                  current: val,
+                                  onSubmitted: (d) => writeValue(
+                                      widget.config.analogSensorRangeMaxKey!,
+                                      d),
+                                );
+                              },
+                            ),
+                        ],
+                      ),
+                    ],
+                  ),
                 ),
               ),
+
+            // Graph (simple: one series of analogKey)
+            if (widget.config.graphConfig != null &&
+                widget.config.analogKey != null) ...[
+              const SizedBox(height: 16),
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(Icons.show_chart,
+                              color: Theme.of(context).primaryColor),
+                          const SizedBox(width: 8),
+                          Text(
+                            'Historical Data',
+                            style: Theme.of(context)
+                                .textTheme
+                                .titleSmall
+                                ?.copyWith(
+                                  fontWeight: FontWeight.bold,
+                                ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      SizedBox(
+                        width: 600,
+                        height: 280,
+                        child: _AnalogBoxGraph(
+                          keyName: widget.config.analogKey!,
+                          units: widget.config.units,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
           ],
         ),
       ),
@@ -882,5 +1074,76 @@ class _AnalogBoxPainter extends CustomPainter {
         reverseFill != old.reverseFill ||
         borderRadiusPct != old.borderRadiusPct ||
         labelAngleDeg != old.labelAngleDeg;
+  }
+}
+
+/// Custom switch with embedded text
+class _AdvancedSwitch extends StatelessWidget {
+  final bool value;
+  final ValueChanged<bool> onChanged;
+
+  const _AdvancedSwitch({
+    required this.value,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: () => onChanged(!value),
+      child: Container(
+        width: 110,
+        height: 32,
+        decoration: BoxDecoration(
+          color: value ? Theme.of(context).primaryColor : Colors.grey.shade300,
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: Stack(
+          children: [
+            // Text positioned dynamically based on switch state
+            Positioned(
+              left: value ? 12 : null, // Left side when ON
+              right: value ? null : 12, // Right side when OFF
+              top: 0,
+              bottom: 0,
+              child: Center(
+                child: Text(
+                  'Advanced',
+                  style: TextStyle(
+                    color: value ? Colors.white : Colors.grey.shade600,
+                    fontSize: 10,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            ),
+            // Sliding circle
+            AnimatedAlign(
+              alignment: value ? Alignment.centerRight : Alignment.centerLeft,
+              duration: const Duration(milliseconds: 200),
+              child: Container(
+                width: 28,
+                height: 28,
+                margin: EdgeInsets.only(
+                  left: value ? 0 : 2,
+                  right: value ? 2 : 0,
+                ),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  shape: BoxShape.circle,
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.2),
+                      blurRadius: 2,
+                      offset: const Offset(0, 1),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
