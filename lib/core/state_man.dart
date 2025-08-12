@@ -513,7 +513,7 @@ class StateMan {
       });
     }
 
-    for (int i = 0; i < 100; i++) {
+    while (true) {
       try {
         await client.awaitConnect();
         final wrapper = _getClientWrapper(key);
@@ -552,7 +552,6 @@ class StateMan {
         continue;
       }
     }
-    throw StateManException('Failed to get initial value for $key');
   }
 }
 
