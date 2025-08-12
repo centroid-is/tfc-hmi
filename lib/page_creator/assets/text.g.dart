@@ -11,6 +11,9 @@ TextAssetConfig _$TextAssetConfigFromJson(Map<String, dynamic> json) =>
       textContent: json['textContent'] as String,
       textColor: const OptionalColorConverter()
           .fromJson(json['textColor'] as Map<String, dynamic>?),
+      enableVariableSubstitution:
+          json['enableVariableSubstitution'] as bool? ?? true,
+      decimalPlaces: (json['decimalPlaces'] as num?)?.toInt() ?? 2,
     )
       ..variant = json['asset_name'] as String
       ..coordinates =
@@ -28,6 +31,8 @@ Map<String, dynamic> _$TextAssetConfigToJson(TextAssetConfig instance) =>
       'textPos': _$TextPosEnumMap[instance.textPos],
       'textContent': instance.textContent,
       'textColor': const OptionalColorConverter().toJson(instance.textColor),
+      'enableVariableSubstitution': instance.enableVariableSubstitution,
+      'decimalPlaces': instance.decimalPlaces,
     };
 
 const _$TextPosEnumMap = {

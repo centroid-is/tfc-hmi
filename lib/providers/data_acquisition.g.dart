@@ -6,9 +6,11 @@ part of 'data_acquisition.dart';
 // RiverpodGenerator
 // **************************************************************************
 
-String _$dataAcquisitionHash() => r'794ff96c0493e5784cb09189e18550c511770e46';
+String _$dataAcquisitionHash() => r'4b5a493d5e73fcf01ff74b7f9b2a4b50f19bdee7';
 
-/// See also [dataAcquisition].
+/// Supervisor: spawns N workers (one per server with collect-entries), and restarts whichever dies.
+///
+/// Copied from [dataAcquisition].
 @ProviderFor(dataAcquisition)
 final dataAcquisitionProvider = FutureProvider<DataAcquisition>.internal(
   dataAcquisition,

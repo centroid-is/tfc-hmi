@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'package:collection/collection.dart';
 import 'package:rxdart/rxdart.dart';
 import 'package:logger/logger.dart';
 import 'package:json_annotation/json_annotation.dart';
