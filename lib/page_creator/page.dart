@@ -18,11 +18,14 @@ class AssetPage {
   final List<Asset> assets;
   @JsonKey(name: 'mirroring_disabled')
   bool mirroringDisabled;
+  @JsonKey(name: 'navigation_priority')
+  int? navigationPriority;
 
   AssetPage(
       {required this.menuItem,
       required this.assets,
-      required this.mirroringDisabled});
+      required this.mirroringDisabled,
+      this.navigationPriority});
 
   factory AssetPage.fromJson(Map<String, dynamic> json) =>
       _$AssetPageFromJson(json);
@@ -127,6 +130,7 @@ class CreatePageWidget extends StatefulWidget {
 class _CreatePageWidgetState extends State<CreatePageWidget> {
   late TextEditingController _labelController;
   late TextEditingController _pathController;
+  late TextEditingController _navigationPriorityController;
   late IconData _selectedIcon;
   late MenuItem? _child;
 
@@ -137,6 +141,8 @@ class _CreatePageWidgetState extends State<CreatePageWidget> {
         TextEditingController(text: widget.initialPage?.menuItem.label ?? '');
     _pathController =
         TextEditingController(text: widget.initialPage?.menuItem.path ?? '/');
+    _navigationPriorityController = TextEditingController(
+        text: widget.initialPage?.navigationPriority?.toString() ?? '');
     _selectedIcon = widget.initialPage?.menuItem.icon ?? Icons.pageview;
     // Get the first child if it exists, otherwise null
     _child = widget.initialPage?.menuItem.children.isNotEmpty == true
@@ -148,6 +154,7 @@ class _CreatePageWidgetState extends State<CreatePageWidget> {
   void dispose() {
     _labelController.dispose();
     _pathController.dispose();
+    _navigationPriorityController.dispose();
     super.dispose();
   }
 
@@ -221,6 +228,15 @@ class _CreatePageWidgetState extends State<CreatePageWidget> {
             decoration: const InputDecoration(labelText: 'Path'),
           ),
           const SizedBox(height: 16),
+          TextField(
+            controller: _navigationPriorityController,
+            decoration: const InputDecoration(
+              labelText: 'Navigation Priority',
+              hintText: 'Lower numbers = higher priority (optional)',
+            ),
+            keyboardType: TextInputType.number,
+          ),
+          const SizedBox(height: 16),
           Row(
             children: [
               const Text('Icon: '),
@@ -275,6 +291,11 @@ class _CreatePageWidgetState extends State<CreatePageWidget> {
               ),
               ElevatedButton(
                 onPressed: () {
+                  final navigationPriority =
+                      _navigationPriorityController.text.isNotEmpty
+                          ? int.tryParse(_navigationPriorityController.text)
+                          : null;
+
                   final menuItem = MenuItem(
                     label: _labelController.text,
                     path: _pathController.text,
@@ -286,6 +307,7 @@ class _CreatePageWidgetState extends State<CreatePageWidget> {
                     assets: widget.initialPage?.assets ?? [],
                     mirroringDisabled:
                         widget.initialPage?.mirroringDisabled ?? false,
+                    navigationPriority: navigationPriority,
                   );
                   widget.onSave(page);
                   Navigator.pop(context);
