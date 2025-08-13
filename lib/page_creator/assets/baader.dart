@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_colorpicker/flutter_colorpicker.dart';
+import 'package:beamer/beamer.dart';
 
 import 'common.dart';
 import '../../widgets/baader.dart';
@@ -16,12 +17,18 @@ class Baader221Config extends BaseAsset {
   Color color;
   @JsonKey(name: 'stroke_width')
   double strokeWidth;
+  @JsonKey(name: 'beam_url')
+  String? beamUrl;
 
-  Baader221Config({required this.color, this.strokeWidth = 2.0});
+  Baader221Config({
+    required this.color,
+    this.strokeWidth = 2.0,
+    this.beamUrl, // Add to constructor
+  });
 
   @override
   Widget build(BuildContext context) {
-    return LayoutRotatedBox(
+    final widget = LayoutRotatedBox(
       angle: (coordinates.angle ?? 0.0) * math.pi / 180,
       child: CustomPaint(
         size: size.toSize(MediaQuery.of(context).size),
@@ -31,6 +38,14 @@ class Baader221Config extends BaseAsset {
         ),
       ),
     );
+    if (beamUrl != null) {
+      return GestureDetector(
+        onTap: () => context.beamToNamed(beamUrl!),
+        child: widget,
+      );
+    }
+
+    return widget;
   }
 
   @override
@@ -65,7 +80,8 @@ class Baader221Config extends BaseAsset {
 
   Baader221Config.preview()
       : color = Colors.blue,
-        strokeWidth = 0.5;
+        strokeWidth = 0.5,
+        beamUrl = null;
 
   factory Baader221Config.fromJson(Map<String, dynamic> json) =>
       _$Baader221ConfigFromJson(json);
@@ -102,6 +118,24 @@ class _ConfigContentState extends State<_ConfigContent> {
         ColorPicker(
           pickerColor: widget.config.color,
           onColorChanged: (color) => widget.config.color = color,
+        ),
+        const SizedBox(height: 16),
+        Row(
+          children: [
+            const Text('Beam URL: '),
+            Expanded(
+              child: TextFormField(
+                initialValue: widget.config.beamUrl ?? '',
+                decoration: const InputDecoration(
+                  hintText: 'Enter route (e.g., /settings?color=red)',
+                  border: OutlineInputBorder(),
+                ),
+                onChanged: (value) {
+                  widget.config.beamUrl = value.isEmpty ? null : value;
+                },
+              ),
+            ),
+          ],
         ),
         const SizedBox(height: 16),
         Row(

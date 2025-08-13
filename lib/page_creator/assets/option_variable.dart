@@ -2,10 +2,9 @@ import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/material.dart';
 import 'package:logger/logger.dart';
-
+import 'package:beamer/beamer.dart';
 import 'common.dart';
 import '../../providers/state_man.dart';
-
 part 'option_variable.g.dart';
 
 @JsonSerializable()
@@ -136,14 +135,28 @@ class _OptionVariableWidgetState extends ConsumerState<OptionVariableWidget> {
   bool _isExpanded = false;
   final LayerLink _layerLink = LayerLink();
   OverlayEntry? _overlayEntry;
+  String? _queryParam;
 
   @override
   void initState() {
     super.initState();
     _selectedValue = widget.config.selectedValue;
     _searchController.text = _searchQuery;
+  }
 
-    // Set the initial variable substitution in StateMan only if not already set
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+
+    String? getQueryParam(BuildContext context, String name) {
+      final uri =
+          Beamer.of(context).currentBeamLocation.state.routeInformation.uri;
+      return uri.queryParameters[name];
+    }
+
+    _queryParam = getQueryParam(context, widget.config.variableName);
+    _selectedValue = _queryParam ?? widget.config.selectedValue;
+
     _initializeVariable();
   }
 
@@ -151,6 +164,12 @@ class _OptionVariableWidgetState extends ConsumerState<OptionVariableWidget> {
     if (_selectedValue != null) {
       try {
         final stateMan = await ref.read(stateManProvider.future);
+
+        if (_queryParam != null) {
+          _logger.d(
+              'Setting variable ${widget.config.variableName} = $_selectedValue from query param $_queryParam');
+          stateMan.setSubstitution(widget.config.variableName, _selectedValue!);
+        }
 
         // Only set if not already set
         if (stateMan.getSubstitution(widget.config.variableName) == null) {
