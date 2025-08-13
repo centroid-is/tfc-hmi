@@ -14,6 +14,7 @@ import 'baader.dart';
 import 'analog_box.dart';
 import 'option_variable.dart';
 import 'text.dart';
+import 'beckhoff.dart';
 
 class AssetRegistry {
   static final Logger _log = Logger();
@@ -35,6 +36,12 @@ class AssetRegistry {
     AnalogBoxConfig: AnalogBoxConfig.fromJson,
     OptionVariableConfig: OptionVariableConfig.fromJson,
     TextAssetConfig: TextAssetConfig.fromJson,
+    BeckhoffCX5010Config: BeckhoffCX5010Config.fromJson,
+    BeckhoffEL1008Config: BeckhoffEL1008Config.fromJson,
+    BeckhoffEL2008Config: BeckhoffEL2008Config.fromJson,
+    BeckhoffEL9222Config: BeckhoffEL9222Config.fromJson,
+    BeckhoffEL9186Config: BeckhoffEL9186Config.fromJson,
+    BeckhoffEL9187Config: BeckhoffEL9187Config.fromJson,
   };
 
   static final Map<Type, Asset Function()> defaultFactories = {
@@ -53,6 +60,12 @@ class AssetRegistry {
     AnalogBoxConfig: AnalogBoxConfig.preview,
     OptionVariableConfig: OptionVariableConfig.preview,
     TextAssetConfig: TextAssetConfig.preview,
+    BeckhoffCX5010Config: BeckhoffCX5010Config.preview,
+    BeckhoffEL1008Config: BeckhoffEL1008Config.preview,
+    BeckhoffEL2008Config: BeckhoffEL2008Config.preview,
+    BeckhoffEL9222Config: BeckhoffEL9222Config.preview,
+    BeckhoffEL9186Config: BeckhoffEL9186Config.preview,
+    BeckhoffEL9187Config: BeckhoffEL9187Config.preview,
   };
 
   static void registerFromJsonFactory<T extends Asset>(

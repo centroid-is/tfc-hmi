@@ -10,6 +10,7 @@ import '../widgets/base_scaffold.dart';
 import 'page_view.dart';
 import '../widgets/zoomable_canvas.dart';
 import '../page_creator/page.dart';
+import '../page_creator/assets/beckhoff.dart';
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/services.dart';
@@ -520,7 +521,12 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                       ),
                     ),
                     TextButton(
-                      onPressed: () => Navigator.pop(context),
+                      onPressed: () {
+                        print('close');
+                        print(asset);
+                        final foo = asset as BeckhoffCX5010Config;
+                        Navigator.pop(context);
+                      },
                       child: const Text('Close'),
                     ),
                   ],

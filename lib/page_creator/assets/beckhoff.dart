@@ -1,0 +1,1483 @@
+import 'dart:math' as math;
+import 'dart:collection' show LinkedHashMap;
+
+import 'package:json_annotation/json_annotation.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:rxdart/rxdart.dart';
+import 'package:open62541/open62541.dart' show DynamicValue;
+
+import 'common.dart';
+import '../../painter/beckhoff/cx5010.dart';
+import '../../painter/beckhoff/io8.dart';
+import '../../core/state_man.dart';
+import '../../providers/state_man.dart';
+import '../page.dart';
+
+part 'beckhoff.g.dart';
+
+@JsonSerializable()
+class BeckhoffCX5010Config extends BaseAsset {
+  @AssetListConverter()
+  List<Asset> subdevices = [];
+  BeckhoffCX5010Config();
+
+  static const Map<String, Asset Function()> availableSubdevices = {
+    "EL1008": BeckhoffEL1008Config.preview,
+    "EL2008": BeckhoffEL2008Config.preview,
+    "EL9222": BeckhoffEL9222Config.preview,
+    "EL9187": BeckhoffEL9187Config.preview,
+    "EL9186": BeckhoffEL9186Config.preview,
+  };
+
+  /// Native painter size for the CX5010 drawing (keeps 105.5:100 aspect).
+  static const Size _cxNativeSize = Size(1055, 1000);
+
+  @override
+  Widget build(BuildContext context) {
+    final targetSize = size.toSize(MediaQuery.of(context).size);
+
+    // **Important**: the entire asset is bounded to `targetSize`.
+    // Everything inside is laid out at its "native" size and then
+    // uniformly scaled by FittedBox to fit exactly within targetSize.
+    return LayoutRotatedBox(
+      angle: (coordinates.angle ?? 0.0) * math.pi / 180,
+      child: SizedBox.fromSize(
+        size: targetSize,
+        child: FittedBox(
+          fit: BoxFit.contain,
+          alignment: Alignment.center,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              // Main CX5010 device at native size; outer FittedBox scales it.
+              CustomPaint(
+                size: _cxNativeSize,
+                painter: CXxxxx(
+                  name: "CX5010",
+                  pwrColor: Colors.green,
+                  tcColor: Colors.green,
+                ),
+              ),
+              // Subdevices to the right, normalized to match CX height
+              if (subdevices.isNotEmpty) ...[
+                for (final sub in subdevices)
+                  _SubdeviceNormalized(
+                    child: sub.build(context),
+                    targetHeight: _cxNativeSize.height,
+                  ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget configure(BuildContext context) {
+    final media = MediaQuery.of(context).size;
+    final maxWidth = media.width * 0.9;
+    final maxHeight = media.height * 0.8;
+
+    final dialogW = math.min(maxWidth, 960.0);
+    final dialogH = math.min(maxHeight, 600.0);
+
+    return Dialog(
+      insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          minWidth: 560,
+          minHeight: 360,
+          maxWidth: maxWidth,
+          maxHeight: maxHeight,
+        ),
+        child: SizedBox(
+          width: dialogW,
+          height: dialogH,
+          child: _CXxxxxConfigContent(
+              config: this), // unchanged name, refactored below
+        ),
+      ),
+    );
+  }
+
+  static const previewStr = 'Baader221 preview';
+
+  BeckhoffCX5010Config.preview() : super();
+
+  factory BeckhoffCX5010Config.fromJson(Map<String, dynamic> json) =>
+      _$BeckhoffCX5010ConfigFromJson(json);
+  Map<String, dynamic> toJson() => _$BeckhoffCX5010ConfigToJson(this);
+}
+
+/// Wraps a subdevice widget and normalizes its visual height so it lines up
+/// with the CX5010. The outer FittedBox (in build()) then scales the *whole row*.
+class _SubdeviceNormalized extends StatelessWidget {
+  final Widget child;
+  final double targetHeight;
+  const _SubdeviceNormalized({
+    required this.child,
+    required this.targetHeight,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: targetHeight,
+      // Fit the subdevice to the same height as the CX painter.
+      child: FittedBox(
+        fit: BoxFit.fitHeight,
+        alignment: Alignment.centerLeft,
+        child: child,
+      ),
+    );
+  }
+}
+
+class _CXxxxxConfigContent extends StatefulWidget {
+  final BeckhoffCX5010Config config;
+
+  const _CXxxxxConfigContent({required this.config});
+
+  @override
+  State<_CXxxxxConfigContent> createState() => _CXxxxxConfigContentState();
+}
+
+class _CXxxxxConfigContentState extends State<_CXxxxxConfigContent> {
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        // LEFT: fields (independent scroll)
+        Expanded(
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('CX5010', style: Theme.of(context).textTheme.titleMedium),
+                const SizedBox(height: 12),
+                SizeField(
+                  initialValue: widget.config.size,
+                  onChanged: (size) => widget.config.size = size,
+                ),
+                const SizedBox(height: 16),
+                CoordinatesField(
+                  initialValue: widget.config.coordinates,
+                  onChanged: (c) => widget.config.coordinates = c,
+                  enableAngle: true,
+                ),
+              ],
+            ),
+          ),
+        ),
+
+        const VerticalDivider(width: 1),
+
+        // RIGHT: subdevice manager
+        Expanded(
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Text('Subdevices',
+                        style: Theme.of(context).textTheme.titleMedium),
+                    const Spacer(),
+                    FilledButton.icon(
+                      onPressed: () => Navigator.of(context).maybePop(),
+                      icon: const Icon(Icons.check),
+                      label: const Text('Done'),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                DropdownButtonFormField<String>(
+                  decoration: const InputDecoration(
+                    border: OutlineInputBorder(),
+                    labelText: 'Add Subdevice',
+                  ),
+                  value: null,
+                  hint: const Text('Select a subdevice to add'),
+                  items: BeckhoffCX5010Config.availableSubdevices.keys
+                      .map((k) => DropdownMenuItem(value: k, child: Text(k)))
+                      .toList(),
+                  onChanged: (v) {
+                    if (v == null) return;
+                    setState(() {
+                      final mk = BeckhoffCX5010Config.availableSubdevices[v]!;
+                      widget.config.subdevices.add(mk());
+                    });
+                  },
+                ),
+                const SizedBox(height: 16),
+                if (widget.config.subdevices.isEmpty)
+                  Expanded(
+                    child: Center(
+                      child: Text(
+                        'No subdevices yet',
+                        style: Theme.of(context).textTheme.bodyMedium,
+                      ),
+                    ),
+                  )
+                else ...[
+                  Row(
+                    children: [
+                      Text('Current Subdevices',
+                          style: Theme.of(context).textTheme.titleSmall),
+                      const SizedBox(width: 8),
+                      Chip(label: Text('${widget.config.subdevices.length}')),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+
+                  // Take remaining height of the dialog
+                  Expanded(
+                    child: Card(
+                      clipBehavior: Clip.antiAlias,
+                      child: ReorderableListView.builder(
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        buildDefaultDragHandles: false,
+                        itemCount: widget.config.subdevices.length,
+                        onReorder: (oldIndex, newIndex) {
+                          setState(() {
+                            if (newIndex > oldIndex) newIndex -= 1;
+                            final item =
+                                widget.config.subdevices.removeAt(oldIndex);
+                            widget.config.subdevices.insert(newIndex, item);
+                          });
+                        },
+                        itemBuilder: (context, index) {
+                          final sub = widget.config.subdevices[index];
+                          return ListTile(
+                            key: ObjectKey(sub),
+                            leading: ReorderableDragStartListener(
+                              index: index,
+                              child: const Icon(Icons.drag_indicator),
+                            ),
+                            title: Text(sub.runtimeType.toString()),
+                            onTap: () => showDialog(
+                              context: context,
+                              builder: (_) => sub.configure(context),
+                            ),
+                            trailing: IconButton(
+                              icon: const Icon(Icons.delete),
+                              onPressed: () {
+                                setState(() =>
+                                    widget.config.subdevices.removeAt(index));
+                              },
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+@JsonSerializable()
+class BeckhoffEL1008Config extends BaseAsset {
+  String nameOrId;
+  String? descriptionsKey;
+  String? rawStateKey;
+  String? processedStateKey;
+  String? forceValuesKey;
+  String? onFiltersKey;
+  String? offFiltersKey;
+
+  BeckhoffEL1008Config({
+    required this.nameOrId,
+    this.descriptionsKey,
+    this.rawStateKey,
+    this.processedStateKey,
+    this.forceValuesKey,
+    this.onFiltersKey,
+    this.offFiltersKey,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return _BeckhoffEL1008(config: this);
+  }
+
+  @override
+  Widget configure(BuildContext context) {
+    final media = MediaQuery.of(context).size;
+    final maxWidth = media.width * 0.9; // Use 90% of screen width
+    final maxHeight = media.height * 0.8; // Use 80% of screen height
+
+    return Center(
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxWidth: maxWidth,
+          maxHeight: maxHeight,
+          minWidth: 320,
+          minHeight: 200,
+        ),
+        child: Material(
+          borderRadius: BorderRadius.circular(24),
+          color: Theme.of(context).dialogBackgroundColor,
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: SingleChildScrollView(
+              child: _EL1008ConfigContent(config: this),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  BeckhoffEL1008Config.preview()
+      : nameOrId = "1",
+        descriptionsKey = null,
+        rawStateKey = null,
+        processedStateKey = null,
+        forceValuesKey = null,
+        onFiltersKey = null,
+        offFiltersKey = null,
+        super();
+
+  factory BeckhoffEL1008Config.fromJson(Map<String, dynamic> json) =>
+      _$BeckhoffEL1008ConfigFromJson(json);
+  @override
+  Map<String, dynamic> toJson() => _$BeckhoffEL1008ConfigToJson(this);
+}
+
+class _EL1008ConfigContent extends StatefulWidget {
+  final BeckhoffEL1008Config config;
+
+  const _EL1008ConfigContent({required this.config});
+
+  @override
+  State<_EL1008ConfigContent> createState() => _EL1008ConfigContentState();
+}
+
+class _EL1008ConfigContentState extends State<_EL1008ConfigContent> {
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizeField(
+          initialValue: widget.config.size,
+          onChanged: (size) => widget.config.size = size,
+        ),
+        const SizedBox(height: 16),
+        CoordinatesField(
+          initialValue: widget.config.coordinates,
+          onChanged: (coordinates) => widget.config.coordinates = coordinates,
+          enableAngle: false,
+        ),
+        const SizedBox(height: 16),
+        TextFormField(
+          decoration: const InputDecoration(
+            labelText: 'Name or ID',
+            border: OutlineInputBorder(),
+          ),
+          initialValue: widget.config.nameOrId,
+          onChanged: (value) => widget.config.nameOrId = value,
+        ),
+        const SizedBox(height: 16),
+        KeyField(
+          initialValue: widget.config.descriptionsKey,
+          onChanged: (value) => widget.config.descriptionsKey = value,
+          label: 'Descriptions Key',
+        ),
+        const SizedBox(height: 16),
+        KeyField(
+          initialValue: widget.config.rawStateKey,
+          onChanged: (value) => widget.config.rawStateKey = value,
+          label: 'Raw State Key',
+        ),
+        const SizedBox(height: 16),
+        KeyField(
+          initialValue: widget.config.processedStateKey,
+          onChanged: (value) => widget.config.processedStateKey = value,
+          label: 'Processed State Key',
+        ),
+        const SizedBox(height: 16),
+        KeyField(
+          initialValue: widget.config.forceValuesKey,
+          onChanged: (value) => widget.config.forceValuesKey = value,
+          label: 'Force Values Key',
+        ),
+        const SizedBox(height: 16),
+        KeyField(
+          initialValue: widget.config.onFiltersKey,
+          onChanged: (value) => widget.config.onFiltersKey = value,
+          label: 'On Filters Key',
+        ),
+        const SizedBox(height: 16),
+        KeyField(
+          initialValue: widget.config.offFiltersKey,
+          onChanged: (value) => widget.config.offFiltersKey = value,
+          label: 'Off Filters Key',
+        ),
+      ],
+    );
+  }
+}
+
+@JsonSerializable()
+class BeckhoffEL2008Config extends BaseAsset {
+  String nameOrId;
+  String? descriptionsKey;
+  String? rawStateKey;
+  String? processedStateKey;
+  String? forceValuesKey;
+
+  BeckhoffEL2008Config({
+    required this.nameOrId,
+    this.descriptionsKey,
+    this.rawStateKey,
+    this.processedStateKey,
+    this.forceValuesKey,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return _BeckhoffEL2008(config: this);
+  }
+
+  @override
+  Widget configure(BuildContext context) {
+    final media = MediaQuery.of(context).size;
+    final maxWidth = media.width * 0.9; // Use 90% of screen width
+    final maxHeight = media.height * 0.8; // Use 80% of screen height
+
+    return Center(
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxWidth: maxWidth,
+          maxHeight: maxHeight,
+          minWidth: 320,
+          minHeight: 200,
+        ),
+        child: Material(
+          borderRadius: BorderRadius.circular(24),
+          color: Theme.of(context).dialogBackgroundColor,
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: SingleChildScrollView(
+              child: _EL2008ConfigContent(config: this),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  BeckhoffEL2008Config.preview()
+      : nameOrId = "1",
+        descriptionsKey = null,
+        rawStateKey = null,
+        processedStateKey = null,
+        forceValuesKey = null,
+        super();
+
+  factory BeckhoffEL2008Config.fromJson(Map<String, dynamic> json) =>
+      _$BeckhoffEL2008ConfigFromJson(json);
+  @override
+  Map<String, dynamic> toJson() => _$BeckhoffEL2008ConfigToJson(this);
+}
+
+class _EL2008ConfigContent extends StatefulWidget {
+  final BeckhoffEL2008Config config;
+
+  const _EL2008ConfigContent({required this.config});
+
+  @override
+  State<_EL2008ConfigContent> createState() => _EL2008ConfigContentState();
+}
+
+class _EL2008ConfigContentState extends State<_EL2008ConfigContent> {
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizeField(
+          initialValue: widget.config.size,
+          onChanged: (size) => widget.config.size = size,
+        ),
+        const SizedBox(height: 16),
+        CoordinatesField(
+          initialValue: widget.config.coordinates,
+          onChanged: (coordinates) => widget.config.coordinates = coordinates,
+          enableAngle: false,
+        ),
+        const SizedBox(height: 16),
+        TextFormField(
+          decoration: const InputDecoration(
+            labelText: 'Name or ID',
+            border: OutlineInputBorder(),
+          ),
+          initialValue: widget.config.nameOrId,
+          onChanged: (value) => widget.config.nameOrId = value,
+        ),
+        const SizedBox(height: 16),
+        KeyField(
+          initialValue: widget.config.descriptionsKey,
+          onChanged: (value) => widget.config.descriptionsKey = value,
+          label: 'Descriptions Key',
+        ),
+        const SizedBox(height: 16),
+        KeyField(
+          initialValue: widget.config.rawStateKey,
+          onChanged: (value) => widget.config.rawStateKey = value,
+          label: 'Raw State Key',
+        ),
+        const SizedBox(height: 16),
+        KeyField(
+          initialValue: widget.config.processedStateKey,
+          onChanged: (value) => widget.config.processedStateKey = value,
+          label: 'Processed State Key',
+        ),
+        const SizedBox(height: 16),
+        KeyField(
+          initialValue: widget.config.forceValuesKey,
+          onChanged: (value) => widget.config.forceValuesKey = value,
+          label: 'Force Values Key',
+        ),
+      ],
+    );
+  }
+}
+
+class _BeckhoffEL2008 extends ConsumerWidget {
+  static const String name = 'EL2008';
+  final BeckhoffEL2008Config config;
+  final Animation<int> animation = const AlwaysStoppedAnimation(0);
+
+  const _BeckhoffEL2008({required this.config});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return FutureBuilder<StateMan>(
+      future: ref.watch(stateManProvider.future),
+      builder: (context, snap) {
+        final stateMan = snap.data;
+
+        // Helper to build the current LEDs (works even before data arrives)
+        Widget buildBody(Map<String, DynamicValue>? data) {
+          final leds =
+              (data == null) ? List.filled(8, IOState.low) : _ledStates(data);
+          return IO8Widget(
+            ledStates: leds,
+            name: name,
+            animation: animation,
+            ioLabels: const ['O1', 'O2', 'O3', 'O4', 'O5', 'O6', 'O7', 'O8'],
+          );
+        }
+
+        return StreamBuilder<Map<String, DynamicValue>>(
+          stream: (stateMan == null)
+              ? const Stream.empty()
+              : _combinedStream(
+                  LinkedHashMap.fromEntries([
+                    MapEntry("raw", config.rawStateKey),
+                    MapEntry("force", config.forceValuesKey),
+                  ]),
+                  stateMan,
+                ),
+          builder: (context, s) {
+            final data = (s.hasData && !s.hasError) ? s.data! : null;
+
+            return GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () {
+                if (stateMan == null) return;
+                showDialog(
+                  context: context,
+                  builder: (_) => _statusDialog(context, stateMan),
+                );
+              },
+              child: buildBody(data),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Widget _statusDialog(BuildContext context, StateMan stateMan) {
+    return AlertDialog(
+      title: Text(config.nameOrId),
+      content: StreamBuilder<Map<String, DynamicValue>>(
+        stream: _combinedStream(
+          LinkedHashMap.fromEntries([
+            MapEntry("raw", config.rawStateKey),
+            MapEntry("processed", config.processedStateKey),
+            MapEntry("force", config.forceValuesKey),
+            MapEntry("descriptions", config.descriptionsKey),
+          ]),
+          stateMan,
+        ),
+        builder: (context, snapshot) {
+          if (!snapshot.hasData || snapshot.hasError) {
+            return const SizedBox.shrink();
+          }
+          final map = snapshot.data!;
+          List<bool>? rawStates = map["raw"] != null
+              ? List.generate(8, (i) => (map["raw"]!.asInt & (1 << i)) != 0)
+              : null;
+          List<bool>? processedStates = map["processed"] != null
+              ? List.generate(
+                  8, (i) => (map["processed"]!.asInt & (1 << i)) != 0)
+              : null;
+
+          return Column(
+            children: [
+              for (int i = 0; i < 8; i = i + 2)
+                Column(
+                  children: [
+                    RowIOView(
+                      leftRaw: rawStates?[i] ?? false,
+                      rightRaw: rawStates?[i + 1] ?? false,
+                      leftProcessed: processedStates?[i],
+                      rightProcessed: processedStates?[i + 1],
+                      leftSelected: map["force"]?[i].asInt ?? 0,
+                      rightSelected: map["force"]?[i + 1].asInt ?? 0,
+                      animationValue: animation,
+                      leftOnChanged: (value) async {
+                        map["force"]![i].value = value;
+                        await stateMan.write(
+                            config.forceValuesKey!, map["force"]!);
+                      },
+                      rightOnChanged: (value) async {
+                        map["force"]![i + 1].value = value;
+                        await stateMan.write(
+                            config.forceValuesKey!, map["force"]!);
+                      },
+                      leftDescription: map["descriptions"]?[i].asString,
+                      rightDescription: map["descriptions"]?[i + 1].asString,
+                      leftFilterEdit: null,
+                      rightFilterEdit: null,
+                    ),
+                    const SizedBox(height: 6),
+                  ],
+                ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+@JsonSerializable()
+class BeckhoffEL9222Config extends BaseAsset {
+  String nameOrId;
+  String? descriptionsKey;
+
+  BeckhoffEL9222Config({
+    required this.nameOrId,
+    this.descriptionsKey,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return _BeckhoffEL9222(config: this);
+  }
+
+  @override
+  Widget configure(BuildContext context) {
+    final media = MediaQuery.of(context).size;
+    final maxWidth = media.width * 0.9;
+    final maxHeight = media.height * 0.8;
+
+    return Center(
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxWidth: maxWidth,
+          maxHeight: maxHeight,
+          minWidth: 320,
+          minHeight: 200,
+        ),
+        child: Material(
+          borderRadius: BorderRadius.circular(24),
+          color: Theme.of(context).dialogBackgroundColor,
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: SingleChildScrollView(
+              child: _EL9222ConfigContent(config: this),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  BeckhoffEL9222Config.preview()
+      : nameOrId = "1",
+        descriptionsKey = null,
+        super();
+
+  factory BeckhoffEL9222Config.fromJson(Map<String, dynamic> json) =>
+      _$BeckhoffEL9222ConfigFromJson(json);
+  @override
+  Map<String, dynamic> toJson() => _$BeckhoffEL9222ConfigToJson(this);
+}
+
+class _EL9222ConfigContent extends StatefulWidget {
+  final BeckhoffEL9222Config config;
+
+  const _EL9222ConfigContent({required this.config});
+
+  @override
+  State<_EL9222ConfigContent> createState() => _EL9222ConfigContentState();
+}
+
+class _EL9222ConfigContentState extends State<_EL9222ConfigContent> {
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizeField(
+          initialValue: widget.config.size,
+          onChanged: (size) => widget.config.size = size,
+        ),
+        const SizedBox(height: 16),
+        CoordinatesField(
+          initialValue: widget.config.coordinates,
+          onChanged: (coordinates) => widget.config.coordinates = coordinates,
+          enableAngle: false,
+        ),
+        const SizedBox(height: 16),
+        TextFormField(
+          decoration: const InputDecoration(
+            labelText: 'Name or ID',
+            border: OutlineInputBorder(),
+          ),
+          initialValue: widget.config.nameOrId,
+          onChanged: (value) => widget.config.nameOrId = value,
+        ),
+        const SizedBox(height: 16),
+        KeyField(
+          initialValue: widget.config.descriptionsKey,
+          onChanged: (value) => widget.config.descriptionsKey = value,
+          label: 'Descriptions Key',
+        ),
+      ],
+    );
+  }
+}
+
+class _BeckhoffEL9222 extends StatelessWidget {
+  static const String name = 'EL9222';
+  final BeckhoffEL9222Config config;
+
+  const _BeckhoffEL9222({required this.config});
+
+  @override
+  Widget build(BuildContext context) {
+    final leds = List.filled(6, IOState.low);
+
+    return IO8Widget(
+      ledStates: leds,
+      name: name,
+      animation: const AlwaysStoppedAnimation(0),
+      ioLabels: const ['I1', 'O1', '+', '+', '-', '-', 'I2', 'O2'],
+      ioLabelColors: const [
+        ioLabelColor,
+        ioLabelColor,
+        Colors.red,
+        Colors.red,
+        Colors.blue,
+        Colors.blue,
+        ioLabelColor,
+        ioLabelColor,
+      ],
+    );
+  }
+}
+
+@JsonSerializable()
+class BeckhoffEL9187Config extends BaseAsset {
+  BeckhoffEL9187Config();
+
+  @override
+  Widget build(BuildContext context) {
+    return _BeckhoffEL9187(config: this);
+  }
+
+  @override
+  Widget configure(BuildContext context) {
+    final media = MediaQuery.of(context).size;
+    final maxWidth = media.width * 0.9;
+    final maxHeight = media.height * 0.8;
+
+    return Center(
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxWidth: maxWidth,
+          maxHeight: maxHeight,
+          minWidth: 320,
+          minHeight: 200,
+        ),
+        child: Material(
+          borderRadius: BorderRadius.circular(24),
+          color: Theme.of(context).dialogBackgroundColor,
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: SingleChildScrollView(
+              child: _EL9187ConfigContent(config: this),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  BeckhoffEL9187Config.preview() : super();
+
+  factory BeckhoffEL9187Config.fromJson(Map<String, dynamic> json) =>
+      _$BeckhoffEL9187ConfigFromJson(json);
+  @override
+  Map<String, dynamic> toJson() => _$BeckhoffEL9187ConfigToJson(this);
+}
+
+class _EL9187ConfigContent extends StatefulWidget {
+  final BeckhoffEL9187Config config;
+
+  const _EL9187ConfigContent({required this.config});
+
+  @override
+  State<_EL9187ConfigContent> createState() => _EL9187ConfigContentState();
+}
+
+class _EL9187ConfigContentState extends State<_EL9187ConfigContent> {
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizeField(
+          initialValue: widget.config.size,
+          onChanged: (size) => widget.config.size = size,
+        ),
+        const SizedBox(height: 16),
+        CoordinatesField(
+          initialValue: widget.config.coordinates,
+          onChanged: (coordinates) => widget.config.coordinates = coordinates,
+          enableAngle: false,
+        ),
+      ],
+    );
+  }
+}
+
+class _BeckhoffEL9187 extends StatelessWidget {
+  static const String name = 'EL9187';
+  final BeckhoffEL9187Config config;
+
+  const _BeckhoffEL9187({required this.config});
+
+  @override
+  Widget build(BuildContext context) {
+    final leds = List.filled(8, IOState.low);
+
+    return IO8Widget(
+      ledStates: leds,
+      name: name,
+      animation: const AlwaysStoppedAnimation(0),
+      ioLabels: const ['OV', 'OV', 'OV', 'OV', 'OV', 'OV', 'OV', 'OV'],
+      ioLabelColors: const [
+        Colors.blue,
+        Colors.blue,
+        Colors.blue,
+        Colors.blue,
+        Colors.blue,
+        Colors.blue,
+        Colors.blue,
+        Colors.blue,
+      ],
+    );
+  }
+}
+
+@JsonSerializable()
+class BeckhoffEL9186Config extends BaseAsset {
+  BeckhoffEL9186Config();
+
+  @override
+  Widget build(BuildContext context) {
+    return _BeckhoffEL9186(config: this);
+  }
+
+  @override
+  Widget configure(BuildContext context) {
+    final media = MediaQuery.of(context).size;
+    final maxWidth = media.width * 0.9;
+    final maxHeight = media.height * 0.8;
+
+    return Center(
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxWidth: maxWidth,
+          maxHeight: maxHeight,
+          minWidth: 320,
+          minHeight: 200,
+        ),
+        child: Material(
+          borderRadius: BorderRadius.circular(24),
+          color: Theme.of(context).dialogBackgroundColor,
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: SingleChildScrollView(
+              child: _EL9186ConfigContent(config: this),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  BeckhoffEL9186Config.preview() : super();
+
+  factory BeckhoffEL9186Config.fromJson(Map<String, dynamic> json) =>
+      _$BeckhoffEL9186ConfigFromJson(json);
+  @override
+  Map<String, dynamic> toJson() => _$BeckhoffEL9186ConfigToJson(this);
+}
+
+class _EL9186ConfigContent extends StatefulWidget {
+  final BeckhoffEL9186Config config;
+
+  const _EL9186ConfigContent({required this.config});
+
+  @override
+  State<_EL9186ConfigContent> createState() => _EL9186ConfigContentState();
+}
+
+class _EL9186ConfigContentState extends State<_EL9186ConfigContent> {
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizeField(
+          initialValue: widget.config.size,
+          onChanged: (size) => widget.config.size = size,
+        ),
+        const SizedBox(height: 16),
+        CoordinatesField(
+          initialValue: widget.config.coordinates,
+          onChanged: (coordinates) => widget.config.coordinates = coordinates,
+          enableAngle: false,
+        ),
+      ],
+    );
+  }
+}
+
+class _BeckhoffEL9186 extends StatelessWidget {
+  static const String name = 'EL9186';
+  final BeckhoffEL9186Config config;
+
+  const _BeckhoffEL9186({required this.config});
+
+  @override
+  Widget build(BuildContext context) {
+    final leds = List.filled(8, IOState.low);
+
+    return IO8Widget(
+      ledStates: leds,
+      name: name,
+      animation: const AlwaysStoppedAnimation(0),
+      ioLabels: const ['24V', '24V', '24V', '24V', '24V', '24V', '24V', '24V'],
+      ioLabelColors: const [
+        Colors.red,
+        Colors.red,
+        Colors.red,
+        Colors.red,
+        Colors.red,
+        Colors.red,
+        Colors.red,
+        Colors.red,
+      ],
+    );
+  }
+}
+
+CombineLatestStream<DynamicValue, Map<String, DynamicValue>> _combinedStream(
+    LinkedHashMap<String, String?> keys, StateMan stateMan) {
+  return CombineLatestStream([
+    for (var entry in keys.entries)
+      if (entry.value != null)
+        stateMan.subscribe(entry.value!).asStream().asyncExpand((s) => s),
+  ], (values) {
+    final map = <String, DynamicValue>{};
+    int i = 0;
+    for (var entry in keys.entries) {
+      if (entry.value != null) {
+        map[entry.key] = values[i++];
+      }
+    }
+    return map;
+  });
+}
+
+List<IOState> _ledStates(Map<String, DynamicValue> data) {
+  return List.generate(8, (i) {
+    final forceValue = data["force"]?.asInt;
+    if (forceValue == 1) return IOState.forcedLow;
+    if (forceValue == 2) return IOState.forcedHigh;
+    if (data["raw"]?.asInt == null) {
+      return IOState.low;
+    }
+    return (data["raw"]!.asInt & (1 << i)) != 0 ? IOState.high : IOState.low;
+  });
+}
+
+class _BeckhoffEL1008 extends ConsumerWidget {
+  static const String name = 'EL1008';
+  final BeckhoffEL1008Config config;
+  final Animation<int> animation = const AlwaysStoppedAnimation(0);
+
+  const _BeckhoffEL1008({required this.config});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return FutureBuilder<StateMan>(
+      future: ref.watch(stateManProvider.future),
+      builder: (context, snap) {
+        final stateMan = snap.data;
+
+        // Helper to build the current LEDs (works even before data arrives)
+        Widget buildBody(Map<String, DynamicValue>? data) {
+          final leds =
+              (data == null) ? List.filled(8, IOState.low) : _ledStates(data);
+          return IO8Widget(ledStates: leds, name: name, animation: animation);
+        }
+
+        return StreamBuilder<Map<String, DynamicValue>>(
+          stream: (stateMan == null)
+              ? const Stream.empty()
+              : _combinedStream(
+                  LinkedHashMap.fromEntries([
+                    MapEntry("raw", config.rawStateKey),
+                    MapEntry("force", config.forceValuesKey),
+                  ]),
+                  stateMan,
+                ),
+          builder: (context, s) {
+            final data = (s.hasData && !s.hasError) ? s.data! : null;
+
+            return GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () {
+                if (stateMan == null) return;
+                showDialog(
+                  context: context,
+                  builder: (_) => _statusDialog(context, stateMan),
+                );
+              },
+              child: buildBody(data),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Widget _statusDialog(BuildContext context, StateMan stateMan) {
+    return AlertDialog(
+      title: Text(config.nameOrId),
+      content: StreamBuilder<Map<String, DynamicValue>>(
+        stream: _combinedStream(
+          LinkedHashMap.fromEntries([
+            MapEntry("raw", config.rawStateKey),
+            MapEntry("processed", config.processedStateKey),
+            MapEntry("force", config.forceValuesKey),
+            MapEntry("descriptions", config.descriptionsKey),
+            MapEntry("on_filters", config.onFiltersKey),
+            MapEntry("off_filters", config.offFiltersKey),
+          ]),
+          stateMan,
+        ),
+        builder: (context, snapshot) {
+          if (!snapshot.hasData || snapshot.hasError) {
+            return const SizedBox.shrink();
+          }
+          final map = snapshot.data!;
+          List<bool>? rawStates = map["raw"] != null
+              ? List.generate(8, (i) => (map["raw"]!.asInt & (1 << i)) != 0)
+              : null;
+          List<bool>? processedStates = map["processed"] != null
+              ? List.generate(
+                  8, (i) => (map["processed"]!.asInt & (1 << i)) != 0)
+              : null;
+
+          return Column(
+            children: [
+              for (int i = 0; i < 8; i = i + 2)
+                Column(
+                  children: [
+                    RowIOView(
+                      leftRaw: rawStates?[i] ?? false,
+                      rightRaw: rawStates?[i + 1] ?? false,
+                      leftProcessed: processedStates?[i],
+                      rightProcessed: processedStates?[i + 1],
+                      leftSelected: map["force"]?[i].asInt ?? 0,
+                      rightSelected: map["force"]?[i + 1].asInt ?? 0,
+                      animationValue: animation,
+                      leftOnChanged: (value) async {
+                        map["force"]![i].value = value;
+                        await stateMan.write(
+                            config.forceValuesKey!, map["force"]!);
+                      },
+                      rightOnChanged: (value) async {
+                        map["force"]![i + 1].value = value;
+                        await stateMan.write(
+                            config.forceValuesKey!, map["force"]!);
+                      },
+                      leftDescription: map["descriptions"]?[i].asString,
+                      rightDescription: map["descriptions"]?[i + 1].asString,
+                      leftFilterEdit: map.containsKey("on_filters") &&
+                              map.containsKey("off_filters")
+                          ? FilterEdit(
+                              onFilter: map["on_filters"]?[i].asInt ?? 0,
+                              offFilter: map["off_filters"]?[i].asInt ?? 0,
+                              onChangedOnFilter: (value) async {
+                                map["on_filters"]![i].value = value;
+                                await stateMan.write(
+                                    config.onFiltersKey!, map["on_filters"]!);
+                              },
+                              onChangedOffFilter: (value) async {
+                                map["off_filters"]![i].value = value;
+                                await stateMan.write(
+                                    config.offFiltersKey!, map["off_filters"]!);
+                              },
+                            )
+                          : null,
+                      rightFilterEdit: map.containsKey("on_filters") &&
+                              map.containsKey("off_filters")
+                          ? FilterEdit(
+                              onFilter: map["on_filters"]?[i + 1].asInt ?? 0,
+                              offFilter: map["off_filters"]?[i + 1].asInt ?? 0,
+                              onChangedOnFilter: (value) async {
+                                map["on_filters"]![i + 1].value = value;
+                                await stateMan.write(
+                                    config.onFiltersKey!, map["on_filters"]!);
+                              },
+                              onChangedOffFilter: (value) async {
+                                map["off_filters"]![i + 1].value = value;
+                                await stateMan.write(
+                                    config.offFiltersKey!, map["off_filters"]!);
+                              },
+                            )
+                          : null,
+                    ),
+                    const SizedBox(height: 6),
+                  ],
+                ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+class IOForceButton extends StatelessWidget {
+  const IOForceButton(
+      {super.key, required this.onChanged, required this.selected});
+  final void Function(int) onChanged;
+  final int selected;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 200,
+      child: SegmentedButton(
+        showSelectedIcon: false,
+        segments: const [
+          ButtonSegment(
+            value: 0,
+            label: Text('Auto'),
+          ),
+          ButtonSegment(
+            value: 1,
+            label: Text('Low '),
+          ),
+          ButtonSegment(
+            value: 2,
+            label: Text('High'),
+          ),
+        ],
+        selected: {selected},
+        onSelectionChanged: (value) {
+          onChanged(value.first);
+        },
+      ),
+    );
+  }
+}
+
+class FilterEdit extends StatelessWidget {
+  final int onFilter;
+  final int offFilter;
+  final void Function(int) onChangedOnFilter;
+  final void Function(int) onChangedOffFilter;
+  const FilterEdit(
+      {super.key,
+      required this.onFilter,
+      required this.offFilter,
+      required this.onChangedOnFilter,
+      required this.onChangedOffFilter});
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            SizedBox(
+              width: 100,
+              child: TextFormField(
+                decoration: const InputDecoration(
+                  labelText: 'On filter',
+                  suffixText: 'ms',
+                ),
+                initialValue: onFilter.toString(),
+                onChanged: (value) {
+                  if (value.isNotEmpty) {
+                    onChangedOnFilter(int.parse(value));
+                  }
+                },
+              ),
+            ),
+            const SizedBox(width: 16),
+            SizedBox(
+              width: 100,
+              child: TextFormField(
+                decoration: const InputDecoration(
+                  labelText: 'Off filter',
+                  suffixText: 'ms',
+                ),
+                initialValue: offFilter.toString(),
+                onChanged: (value) {
+                  if (value.isNotEmpty) {
+                    onChangedOffFilter(int.parse(value));
+                  }
+                },
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+class RowControl extends StatelessWidget {
+  final String? description;
+  final int selected;
+  final void Function(int) onChanged;
+  final FilterEdit? filterEdit;
+  const RowControl(
+      {super.key,
+      required this.description,
+      required this.selected,
+      required this.onChanged,
+      this.filterEdit});
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 250,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        mainAxisAlignment: MainAxisAlignment.center,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (description != null)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 4),
+              child: Text(
+                description!.isNotEmpty
+                    ? description![0].toUpperCase() + description!.substring(1)
+                    : description!,
+                style: TextStyle(
+                  fontSize: 14,
+                  color: Theme.of(context).colorScheme.tertiary,
+                ),
+                textAlign: TextAlign.center,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          IOForceButton(
+            selected: selected,
+            onChanged: onChanged,
+          ),
+          if (filterEdit != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 10),
+              child: filterEdit!,
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class RowIOView extends AnimatedWidget {
+  const RowIOView({
+    super.key,
+    required this.leftRaw,
+    required this.rightRaw,
+    required this.leftProcessed,
+    required this.rightProcessed,
+    required this.leftSelected,
+    required this.rightSelected,
+    required this.leftOnChanged,
+    required this.rightOnChanged,
+    this.leftDescription,
+    this.rightDescription,
+    this.leftFilterEdit,
+    this.rightFilterEdit,
+    required Animation<int> animationValue,
+  }) : super(listenable: animationValue);
+  final int leftSelected;
+  final int rightSelected;
+  final bool leftRaw;
+  final bool rightRaw;
+  final bool? leftProcessed;
+  final bool? rightProcessed;
+  final void Function(int) leftOnChanged;
+  final void Function(int) rightOnChanged;
+  final String? leftDescription;
+  final String? rightDescription;
+  final FilterEdit? leftFilterEdit;
+  final FilterEdit? rightFilterEdit;
+
+  @override
+  Widget build(BuildContext context) {
+    final animation = listenable as Animation<int>;
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        // LEFT COLUMN: description + button
+        RowControl(
+          description: leftDescription,
+          selected: leftSelected,
+          onChanged: leftOnChanged,
+          filterEdit: leftFilterEdit,
+        ),
+        const SizedBox(width: 16),
+        // MIDDLE: the three boxes in a row
+        Row(
+          mainAxisAlignment: MainAxisAlignment.end,
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            CustomPaint(
+              size: const Size(120, 120),
+              painter: TriangleBoxPainter(
+                colorLeft: leftRaw ? Colors.green : Colors.grey,
+                colorRight:
+                    (leftProcessed ?? leftRaw) ? Colors.green : Colors.grey,
+                animationValue: leftSelected == 0 ? 0 : animation.value,
+              ),
+            ),
+            Container(
+              width: 120,
+              height: 120,
+              color: Colors.grey,
+            ),
+            CustomPaint(
+              size: const Size(120, 120),
+              painter: TriangleBoxPainter(
+                colorLeft: rightRaw ? Colors.green : Colors.grey,
+                colorRight:
+                    (rightProcessed ?? rightRaw) ? Colors.green : Colors.grey,
+                animationValue: rightSelected == 0 ? 0 : animation.value,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(width: 16),
+        // RIGHT COLUMN: description + button
+        RowControl(
+          description: rightDescription,
+          selected: rightSelected,
+          onChanged: rightOnChanged,
+          filterEdit: rightFilterEdit,
+        ),
+      ],
+    );
+  }
+}
+
+class TriangleBoxPainter extends CustomPainter {
+  final Color colorLeft;
+  final Color colorRight;
+  final int animationValue;
+
+  TriangleBoxPainter({
+    required this.colorLeft,
+    required this.colorRight,
+    required this.animationValue,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paintLeft = Paint()
+      ..color = colorLeft
+      ..style = PaintingStyle.fill;
+    final paintRight = Paint()
+      ..color = colorRight
+      ..style = PaintingStyle.fill;
+
+    // Draw first triangle
+    final path1 = Path()
+      ..moveTo(0, 0)
+      ..lineTo(size.width, 0)
+      ..lineTo(0, size.height)
+      ..close();
+    canvas.drawPath(path1, paintLeft);
+
+    // Draw second triangle
+    final path2 = Path()
+      ..moveTo(size.width, 0)
+      ..lineTo(size.width, size.height)
+      ..lineTo(0, size.height)
+      ..close();
+    canvas.drawPath(path2, paintRight);
+
+    const strokeWidth = 3.0;
+    final rect = Rect.fromLTWH(strokeWidth / 2, strokeWidth / 2,
+        size.width - strokeWidth, size.height - strokeWidth);
+    final paint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = strokeWidth
+      ..color = Colors.red.withAlpha(animationValue);
+    canvas.drawRect(rect, paint);
+  }
+
+  @override
+  bool shouldRepaint(TriangleBoxPainter oldDelegate) => true;
+}
