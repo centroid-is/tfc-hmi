@@ -78,7 +78,6 @@ BeckhoffEL2008Config _$BeckhoffEL2008ConfigFromJson(
       nameOrId: json['nameOrId'] as String,
       descriptionsKey: json['descriptionsKey'] as String?,
       rawStateKey: json['rawStateKey'] as String?,
-      processedStateKey: json['processedStateKey'] as String?,
       forceValuesKey: json['forceValuesKey'] as String?,
     )
       ..variant = json['asset_name'] as String
@@ -99,7 +98,6 @@ Map<String, dynamic> _$BeckhoffEL2008ConfigToJson(
       'nameOrId': instance.nameOrId,
       'descriptionsKey': instance.descriptionsKey,
       'rawStateKey': instance.rawStateKey,
-      'processedStateKey': instance.processedStateKey,
       'forceValuesKey': instance.forceValuesKey,
     };
 

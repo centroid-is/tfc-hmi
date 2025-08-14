@@ -40,36 +40,33 @@ class BeckhoffCX5010Config extends BaseAsset {
     // **Important**: the entire asset is bounded to `targetSize`.
     // Everything inside is laid out at its "native" size and then
     // uniformly scaled by FittedBox to fit exactly within targetSize.
-    return LayoutRotatedBox(
-      angle: (coordinates.angle ?? 0.0) * math.pi / 180,
-      child: SizedBox.fromSize(
-        size: targetSize,
-        child: FittedBox(
-          fit: BoxFit.contain,
-          alignment: Alignment.center,
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              // Main CX5010 device at native size; outer FittedBox scales it.
-              CustomPaint(
-                size: _cxNativeSize,
-                painter: CXxxxx(
-                  name: "CX5010",
-                  pwrColor: Colors.green,
-                  tcColor: Colors.green,
-                ),
+    return SizedBox.fromSize(
+      size: targetSize,
+      child: FittedBox(
+        fit: BoxFit.contain,
+        alignment: Alignment.center,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            // Main CX5010 device at native size; outer FittedBox scales it.
+            CustomPaint(
+              size: _cxNativeSize,
+              painter: CXxxxx(
+                name: "CX5010",
+                pwrColor: Colors.green,
+                tcColor: Colors.green,
               ),
-              // Subdevices to the right, normalized to match CX height
-              if (subdevices.isNotEmpty) ...[
-                for (final sub in subdevices)
-                  _SubdeviceNormalized(
-                    child: sub.build(context),
-                    targetHeight: _cxNativeSize.height,
-                  ),
-              ],
+            ),
+            // Subdevices to the right, normalized to match CX height
+            if (subdevices.isNotEmpty) ...[
+              for (final sub in subdevices)
+                _SubdeviceNormalized(
+                  child: sub.build(context),
+                  targetHeight: _cxNativeSize.height,
+                ),
             ],
-          ),
+          ],
         ),
       ),
     );
@@ -116,11 +113,11 @@ class BeckhoffCX5010Config extends BaseAsset {
 /// Wraps a subdevice widget and normalizes its visual height so it lines up
 /// with the CX5010. The outer FittedBox (in build()) then scales the *whole row*.
 class _SubdeviceNormalized extends StatelessWidget {
-  final Widget child;
   final double targetHeight;
+  final Widget child;
   const _SubdeviceNormalized({
-    required this.child,
     required this.targetHeight,
+    required this.child,
   });
 
   @override
@@ -438,14 +435,12 @@ class BeckhoffEL2008Config extends BaseAsset {
   String nameOrId;
   String? descriptionsKey;
   String? rawStateKey;
-  String? processedStateKey;
   String? forceValuesKey;
 
   BeckhoffEL2008Config({
     required this.nameOrId,
     this.descriptionsKey,
     this.rawStateKey,
-    this.processedStateKey,
     this.forceValuesKey,
   });
 
@@ -486,7 +481,6 @@ class BeckhoffEL2008Config extends BaseAsset {
       : nameOrId = "1",
         descriptionsKey = null,
         rawStateKey = null,
-        processedStateKey = null,
         forceValuesKey = null,
         super();
 
@@ -542,12 +536,6 @@ class _EL2008ConfigContentState extends State<_EL2008ConfigContent> {
           initialValue: widget.config.rawStateKey,
           onChanged: (value) => widget.config.rawStateKey = value,
           label: 'Raw State Key',
-        ),
-        const SizedBox(height: 16),
-        KeyField(
-          initialValue: widget.config.processedStateKey,
-          onChanged: (value) => widget.config.processedStateKey = value,
-          label: 'Processed State Key',
         ),
         const SizedBox(height: 16),
         KeyField(
@@ -623,7 +611,6 @@ class _BeckhoffEL2008 extends ConsumerWidget {
         stream: _combinedStream(
           LinkedHashMap.fromEntries([
             MapEntry("raw", config.rawStateKey),
-            MapEntry("processed", config.processedStateKey),
             MapEntry("force", config.forceValuesKey),
             MapEntry("descriptions", config.descriptionsKey),
           ]),
@@ -637,21 +624,19 @@ class _BeckhoffEL2008 extends ConsumerWidget {
           List<bool>? rawStates = map["raw"] != null
               ? List.generate(8, (i) => (map["raw"]!.asInt & (1 << i)) != 0)
               : null;
-          List<bool>? processedStates = map["processed"] != null
-              ? List.generate(
-                  8, (i) => (map["processed"]!.asInt & (1 << i)) != 0)
-              : null;
 
           return Column(
+            mainAxisSize: MainAxisSize.min,
             children: [
               for (int i = 0; i < 8; i = i + 2)
                 Column(
+                  mainAxisSize: MainAxisSize.min,
                   children: [
                     RowIOView(
                       leftRaw: rawStates?[i] ?? false,
                       rightRaw: rawStates?[i + 1] ?? false,
-                      leftProcessed: processedStates?[i],
-                      rightProcessed: processedStates?[i + 1],
+                      leftProcessed: null,
+                      rightProcessed: null,
                       leftSelected: map["force"]?[i].asInt ?? 0,
                       rightSelected: map["force"]?[i + 1].asInt ?? 0,
                       animationValue: animation,
@@ -1132,65 +1117,66 @@ class _BeckhoffEL1008 extends ConsumerWidget {
           return Column(
             children: [
               for (int i = 0; i < 8; i = i + 2)
-                Column(
-                  children: [
-                    RowIOView(
-                      leftRaw: rawStates?[i] ?? false,
-                      rightRaw: rawStates?[i + 1] ?? false,
-                      leftProcessed: processedStates?[i],
-                      rightProcessed: processedStates?[i + 1],
-                      leftSelected: map["force"]?[i].asInt ?? 0,
-                      rightSelected: map["force"]?[i + 1].asInt ?? 0,
-                      animationValue: animation,
-                      leftOnChanged: (value) async {
-                        map["force"]![i].value = value;
-                        await stateMan.write(
-                            config.forceValuesKey!, map["force"]!);
-                      },
-                      rightOnChanged: (value) async {
-                        map["force"]![i + 1].value = value;
-                        await stateMan.write(
-                            config.forceValuesKey!, map["force"]!);
-                      },
-                      leftDescription: map["descriptions"]?[i].asString,
-                      rightDescription: map["descriptions"]?[i + 1].asString,
-                      leftFilterEdit: map.containsKey("on_filters") &&
-                              map.containsKey("off_filters")
-                          ? FilterEdit(
-                              onFilter: map["on_filters"]?[i].asInt ?? 0,
-                              offFilter: map["off_filters"]?[i].asInt ?? 0,
-                              onChangedOnFilter: (value) async {
-                                map["on_filters"]![i].value = value;
-                                await stateMan.write(
-                                    config.onFiltersKey!, map["on_filters"]!);
-                              },
-                              onChangedOffFilter: (value) async {
-                                map["off_filters"]![i].value = value;
-                                await stateMan.write(
-                                    config.offFiltersKey!, map["off_filters"]!);
-                              },
-                            )
-                          : null,
-                      rightFilterEdit: map.containsKey("on_filters") &&
-                              map.containsKey("off_filters")
-                          ? FilterEdit(
-                              onFilter: map["on_filters"]?[i + 1].asInt ?? 0,
-                              offFilter: map["off_filters"]?[i + 1].asInt ?? 0,
-                              onChangedOnFilter: (value) async {
-                                map["on_filters"]![i + 1].value = value;
-                                await stateMan.write(
-                                    config.onFiltersKey!, map["on_filters"]!);
-                              },
-                              onChangedOffFilter: (value) async {
-                                map["off_filters"]![i + 1].value = value;
-                                await stateMan.write(
-                                    config.offFiltersKey!, map["off_filters"]!);
-                              },
-                            )
-                          : null,
-                    ),
-                    const SizedBox(height: 6),
-                  ],
+                Padding(
+                  padding: EdgeInsets.only(
+                      bottom: i < 6
+                          ? 2.0
+                          : 0.0), // Reduced spacing, no padding on last item
+                  child: RowIOView(
+                    leftRaw: rawStates?[i] ?? false,
+                    rightRaw: rawStates?[i + 1] ?? false,
+                    leftProcessed: null,
+                    rightProcessed: null,
+                    leftSelected: map["force"]?[i].asInt ?? 0,
+                    rightSelected: map["force"]?[i + 1].asInt ?? 0,
+                    animationValue: animation,
+                    leftOnChanged: (value) async {
+                      map["force"]![i].value = value;
+                      await stateMan.write(
+                          config.forceValuesKey!, map["force"]!);
+                    },
+                    rightOnChanged: (value) async {
+                      map["force"]![i + 1].value = value;
+                      await stateMan.write(
+                          config.forceValuesKey!, map["force"]!);
+                    },
+                    leftDescription: map["descriptions"]?[i].asString,
+                    rightDescription: map["descriptions"]?[i + 1].asString,
+                    leftFilterEdit: map.containsKey("on_filters") &&
+                            map.containsKey("off_filters")
+                        ? FilterEdit(
+                            onFilter: map["on_filters"]?[i].asInt ?? 0,
+                            offFilter: map["off_filters"]?[i].asInt ?? 0,
+                            onChangedOnFilter: (value) async {
+                              map["on_filters"]![i].value = value;
+                              await stateMan.write(
+                                  config.onFiltersKey!, map["on_filters"]!);
+                            },
+                            onChangedOffFilter: (value) async {
+                              map["off_filters"]![i].value = value;
+                              await stateMan.write(
+                                  config.offFiltersKey!, map["off_filters"]!);
+                            },
+                          )
+                        : null,
+                    rightFilterEdit: map.containsKey("on_filters") &&
+                            map.containsKey("off_filters")
+                        ? FilterEdit(
+                            onFilter: map["on_filters"]?[i + 1].asInt ?? 0,
+                            offFilter: map["off_filters"]?[i + 1].asInt ?? 0,
+                            onChangedOnFilter: (value) async {
+                              map["on_filters"]![i + 1].value = value;
+                              await stateMan.write(
+                                  config.onFiltersKey!, map["on_filters"]!);
+                            },
+                            onChangedOffFilter: (value) async {
+                              map["off_filters"]![i + 1].value = value;
+                              await stateMan.write(
+                                  config.offFiltersKey!, map["off_filters"]!);
+                            },
+                          )
+                        : null,
+                  ),
                 ),
             ],
           );
