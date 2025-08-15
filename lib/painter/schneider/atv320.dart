@@ -19,64 +19,8 @@ class ATV320 extends CustomPainter {
     this.topLabel = '',
   }); // Add topLabel parameter
 
-  // 7-segment mapping for letters and numbers
+// Segment order: [top, top-right, bottom-right, bottom, bottom-left, top-left, middle]
   static const Map<String, List<bool>> sevenSegmentMap = {
-    // Uppercase letters
-    'A': [true, true, true, false, true, true, true],
-    'B': [false, false, true, true, true, true, true],
-    'C': [true, false, false, true, true, true, false],
-    'D': [false, false, true, true, true, true, false],
-    'E': [true, false, false, true, true, true, true],
-    'F': [true, false, false, false, true, true, true],
-    'G': [true, false, true, true, true, true, true],
-    'H': [false, true, true, false, true, true, true],
-    'I': [false, false, false, false, true, true, false],
-    'J': [false, true, true, true, false, false, false],
-    'K': [true, false, false, false, true, true, true],
-    'L': [false, false, false, true, true, true, false],
-    'M': [true, true, true, false, true, true, false],
-    'N': [true, true, true, false, true, true, false],
-    'O': [true, true, true, true, true, true, false],
-    'P': [true, true, false, false, true, true, true],
-    'Q': [true, true, true, false, false, true, true],
-    'R': [true, true, false, false, true, true, true],
-    'S': [true, false, true, true, false, true, true],
-    'T': [true, false, false, false, false, false, false],
-    'U': [false, true, true, true, true, true, false],
-    'V': [false, true, true, true, true, true, false],
-    'W': [false, true, true, true, true, true, false],
-    'X': [false, true, true, false, true, true, false],
-    'Y': [false, true, true, true, false, true, true],
-    'Z': [true, true, false, true, true, false, true],
-
-    // Lowercase letters
-    'a': [true, true, true, true, false, true, true],
-    'b': [false, false, true, true, true, true, true],
-    'c': [true, false, false, true, true, true, false],
-    'd': [false, true, true, true, true, true, true],
-    'e': [true, false, false, true, true, true, true],
-    'f': [true, false, false, false, true, true, true],
-    'g': [true, false, true, true, false, true, true],
-    'h': [false, true, true, false, true, true, true],
-    'i': [false, false, false, false, true, true, false],
-    'j': [false, true, true, true, false, false, false],
-    'k': [true, false, false, false, true, true, true],
-    'l': [false, false, false, true, true, true, false],
-    'm': [true, true, true, false, true, true, false],
-    'n': [false, false, true, false, true, true, true],
-    'o': [true, true, true, true, true, true, false],
-    'p': [true, true, false, false, true, true, true],
-    'q': [true, true, true, false, false, true, true],
-    'r': [false, false, true, false, true, true, true],
-    's': [true, false, true, true, false, true, true],
-    't': [true, false, false, false, false, false, false],
-    'u': [false, true, true, true, true, true, false],
-    'v': [false, true, true, true, true, true, false],
-    'w': [false, true, true, true, true, true, false],
-    'x': [false, true, true, false, true, true, false],
-    'y': [false, true, true, true, false, true, true],
-    'z': [true, true, false, true, true, false, true],
-
     // Numbers
     '0': [true, true, true, true, true, true, false],
     '1': [false, true, true, false, false, false, false],
@@ -92,6 +36,42 @@ class ATV320 extends CustomPainter {
     // Symbols
     '-': [false, false, false, false, false, false, true],
     ' ': [false, false, false, false, false, false, false],
+
+    // Uppercase letters that make sense on 7-seg
+    'A': [true, true, true, false, true, true, true],
+    'C': [true, false, false, true, true, true, false],
+    'E': [true, false, false, true, true, true, true],
+    'F': [true, false, false, false, true, true, true],
+    'H': [false, true, true, false, true, true, true],
+    'I': [false, true, true, false, false, false, false], // like "1"
+    'J': [false, true, true, true, false, false, false],
+    'L': [false, false, false, true, true, true, false],
+    'O': [true, true, true, true, true, true, false], // same shape as "0"
+    'P': [true, true, false, false, true, true, true],
+    'S': [true, false, true, true, false, true, true],
+    'U': [false, true, true, true, true, true, false],
+    'Y': [false, true, true, true, false, true, true],
+    'Z': [true, true, false, true, true, false, true],
+
+    // Lowercase letters that make sense on 7-seg
+    'a': [true, true, true, true, true, false, true],
+    'b': [false, false, true, true, true, true, true],
+    'c': [false, false, false, true, true, false, true],
+    'd': [false, true, true, true, true, false, true],
+    'e': [true, false, false, true, true, true, true],
+    'f': [true, false, false, false, true, true, true],
+    'h': [false, false, true, false, true, true, true],
+    'i': [false, false, true, false, false, false, false],
+    'j': [false, true, true, true, false, false, false],
+    'l': [false, false, false, true, true, true, false],
+    'n': [false, false, true, false, true, false, true],
+    'o': [false, true, true, true, true, false, false],
+    'p': [true, true, false, false, true, true, true],
+    'q': [true, true, true, true, false, true, true],
+    'r': [false, false, false, false, true, false, true],
+    't': [false, false, false, true, true, true, true],
+    'u': [false, false, true, true, true, false, false],
+    'y': [false, true, true, true, false, true, true],
   };
 
   // Draw a single 7-segment character
@@ -103,8 +83,7 @@ class ATV320 extends CustomPainter {
     double width,
     double height,
   ) {
-    final segments =
-        sevenSegmentMap[char.toUpperCase()] ?? sevenSegmentMap[' ']!;
+    final segments = sevenSegmentMap[char] ?? sevenSegmentMap[' ']!;
 
     final segmentPaint = Paint()
       ..color = const Color(0xFF00FF00) // Green segments
@@ -308,7 +287,8 @@ class ATV320 extends CustomPainter {
         bool hasMoreWords = false; // Flag to track if there are more words
 
         for (final word in words) {
-          if (line1.length + word.length + 1 <= maxCharsPerLine) {
+          if (line1.length + word.length + 1 <= maxCharsPerLine &&
+              line2.isEmpty) {
             line1 += (line1.isEmpty ? '' : ' ') + word;
           } else if (line2.length + word.length + 1 <= maxCharsPerLine) {
             line2 += (line2.isEmpty ? '' : ' ') + word;
@@ -428,16 +408,25 @@ class ATV320 extends CustomPainter {
     final double charY = screenTop + (screenHeight - charHeight) / 2;
 
     // Add spacing between characters
-    final double spacing = 2.0 * pxPerMm; // 2mm spacing between characters
+    const double spacing = 4.0 * pxPerMm; // 4mm spacing between characters
     final double totalSpacing =
         spacing * (maxChars - 1); // Total spacing for all gaps
     final double availableWidth = screenWidth - totalSpacing;
     final double adjustedCharWidth = availableWidth / maxChars;
 
-    // Take only first 4 characters, pad with spaces if needed
-    final String displayChars =
-        displayText.padRight(maxChars, ' ').substring(0, maxChars);
+    // Find decimal point position and remove it from text
+    int? decimalIndex;
+    String textWithoutDot = displayText;
+    if (displayText.contains('.')) {
+      decimalIndex = displayText.indexOf('.');
+      textWithoutDot = displayText.replaceAll('.', '');
+    }
 
+    // Take only first 4 characters (excluding the dot), pad with spaces if needed
+    final String displayChars =
+        textWithoutDot.padLeft(maxChars, ' ').substring(0, maxChars);
+
+    // Draw characters from right to left for right alignment
     for (int i = 0; i < maxChars; i++) {
       final double charX = screenLeft + i * (adjustedCharWidth + spacing);
       _drawSevenSegment(
@@ -448,6 +437,29 @@ class ATV320 extends CustomPainter {
         adjustedCharWidth,
         charHeight,
       );
+    }
+
+    // Draw decimal point at the correct position if it exists
+    if (decimalIndex != null) {
+      final dotPaint = Paint()
+        ..color = const Color(0xFF00FF00) // Green dot
+        ..style = PaintingStyle.fill;
+
+      const double dotRadius = 1.0 * pxPerMm; // 1mm radius
+
+      // Calculate dot position based on the actual decimal index
+      // Adjust for the fact that we're showing maxChars characters
+      final int adjustedIndex = decimalIndex.clamp(0, maxChars - 1);
+      final double dotX = screenLeft +
+          adjustedIndex * (adjustedCharWidth + spacing) +
+          adjustedCharWidth +
+          (spacing / 2); // Between characters
+
+      final double dotY = screenTop +
+          screenHeight -
+          (4.0 * pxPerMm); // Positioned near bottom of screen
+
+      canvas.drawCircle(Offset(dotX, dotY), dotRadius, dotPaint);
     }
 
     // Add circular ESC button on the right side, 5mm from edge
