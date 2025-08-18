@@ -65,7 +65,6 @@ class GraphConfig {
     Colors.blue,
     Colors.red,
     Colors.green,
-    Colors.yellow,
     Colors.purple,
     Colors.orange,
     Colors.pink,
@@ -80,6 +79,7 @@ class GraphConfig {
     Colors.deepOrange,
     Colors.deepOrange,
     Colors.deepOrange,
+    Colors.yellow,
   ];
 
   GraphConfig({
