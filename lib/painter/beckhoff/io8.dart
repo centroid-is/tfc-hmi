@@ -4,7 +4,7 @@ import 'package:flutter/foundation.dart';
 const bodyColor = Color(0xFFF7F5E6);
 const ioLabelColor = Color(0xFFC0C040);
 
-enum IOState { low, high, forcedLow, forcedHigh }
+enum IOState { low, high, forcedLow, forcedHigh, error }
 
 class IO8Widget extends AnimatedWidget {
   final List<IOState> ledStates;
@@ -376,9 +376,12 @@ abstract class BaseLedBlockPainter extends CustomPainter {
     final activeColor = Color(0xFF6CA545);
     final inactiveTopColor = Color(0xFFF0F0F0);
     final inactiveBottomColor = Color(0xFFCCCCCC);
+    const errorColor = Colors.red;
 
     // Draw LED fill
-    if (state == IOState.high || state == IOState.forcedHigh) {
+    if (state == IOState.error) {
+      canvas.drawRect(rect, Paint()..color = errorColor);
+    } else if (state == IOState.high || state == IOState.forcedHigh) {
       canvas.drawRect(rect, Paint()..color = activeColor);
     } else {
       canvas.drawRect(

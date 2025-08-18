@@ -37,6 +37,29 @@ const _$TextPosEnumMap = {
   TextPos.inside: 'inside',
 };
 
+BeckhoffEK1100Config _$BeckhoffEK1100ConfigFromJson(
+        Map<String, dynamic> json) =>
+    BeckhoffEK1100Config()
+      ..variant = json['asset_name'] as String
+      ..coordinates =
+          Coordinates.fromJson(json['coordinates'] as Map<String, dynamic>)
+      ..size = RelativeSize.fromJson(json['size'] as Map<String, dynamic>)
+      ..text = json['text'] as String?
+      ..textPos = $enumDecodeNullable(_$TextPosEnumMap, json['textPos'])
+      ..subdevices =
+          const AssetListConverter().fromJson(json['subdevices'] as List);
+
+Map<String, dynamic> _$BeckhoffEK1100ConfigToJson(
+        BeckhoffEK1100Config instance) =>
+    <String, dynamic>{
+      'asset_name': instance.variant,
+      'coordinates': instance.coordinates,
+      'size': instance.size,
+      'text': instance.text,
+      'textPos': _$TextPosEnumMap[instance.textPos],
+      'subdevices': const AssetListConverter().toJson(instance.subdevices),
+    };
+
 BeckhoffEL1008Config _$BeckhoffEL1008ConfigFromJson(
         Map<String, dynamic> json) =>
     BeckhoffEL1008Config(
@@ -164,4 +187,33 @@ Map<String, dynamic> _$BeckhoffEL9186ConfigToJson(
       'size': instance.size,
       'text': instance.text,
       'textPos': _$TextPosEnumMap[instance.textPos],
+    };
+
+BeckhoffEL3054Config _$BeckhoffEL3054ConfigFromJson(
+        Map<String, dynamic> json) =>
+    BeckhoffEL3054Config(
+      nameOrId: json['nameOrId'] as String,
+      descriptionsKey: json['descriptionsKey'] as String?,
+      stateKey: json['stateKey'] as String?,
+      errorsKey: json['errorsKey'] as String?,
+    )
+      ..variant = json['asset_name'] as String
+      ..coordinates =
+          Coordinates.fromJson(json['coordinates'] as Map<String, dynamic>)
+      ..size = RelativeSize.fromJson(json['size'] as Map<String, dynamic>)
+      ..text = json['text'] as String?
+      ..textPos = $enumDecodeNullable(_$TextPosEnumMap, json['textPos']);
+
+Map<String, dynamic> _$BeckhoffEL3054ConfigToJson(
+        BeckhoffEL3054Config instance) =>
+    <String, dynamic>{
+      'asset_name': instance.variant,
+      'coordinates': instance.coordinates,
+      'size': instance.size,
+      'text': instance.text,
+      'textPos': _$TextPosEnumMap[instance.textPos],
+      'nameOrId': instance.nameOrId,
+      'descriptionsKey': instance.descriptionsKey,
+      'stateKey': instance.stateKey,
+      'errorsKey': instance.errorsKey,
     };

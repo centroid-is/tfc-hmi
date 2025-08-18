@@ -522,9 +522,6 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                     ),
                     TextButton(
                       onPressed: () {
-                        print('close');
-                        print(asset);
-                        final foo = asset as BeckhoffCX5010Config;
                         Navigator.pop(context);
                       },
                       child: const Text('Close'),

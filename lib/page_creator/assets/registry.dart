@@ -43,6 +43,8 @@ class AssetRegistry {
     BeckhoffEL9222Config: BeckhoffEL9222Config.fromJson,
     BeckhoffEL9186Config: BeckhoffEL9186Config.fromJson,
     BeckhoffEL9187Config: BeckhoffEL9187Config.fromJson,
+    BeckhoffEK1100Config: BeckhoffEK1100Config.fromJson,
+    BeckhoffEL3054Config: BeckhoffEL3054Config.fromJson,
     SchneiderATV320Config: SchneiderATV320Config.fromJson,
   };
 
@@ -68,6 +70,8 @@ class AssetRegistry {
     BeckhoffEL9222Config: BeckhoffEL9222Config.preview,
     BeckhoffEL9186Config: BeckhoffEL9186Config.preview,
     BeckhoffEL9187Config: BeckhoffEL9187Config.preview,
+    BeckhoffEK1100Config: BeckhoffEK1100Config.preview,
+    BeckhoffEL3054Config: BeckhoffEL3054Config.preview,
     SchneiderATV320Config: SchneiderATV320Config.preview,
   };
 
