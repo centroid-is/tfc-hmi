@@ -1896,12 +1896,14 @@ class _BeckhoffEL3054 extends ConsumerWidget {
     // For analog inputs, we show error state if there are errors
     // Otherwise show low state (no LED) since these are analog, not digital
     return List.generate(8, (i) {
-      if (i < 4) {
+      if (i >= 2 && i < 6) {
         // Only first 4 positions are actual inputs
-        if (data["errors"]?.asInt != null &&
-            (data["errors"]!.asInt & (1 << i)) != 0) {
+        if (data["errors"] != null &&
+            data["errors"]!.isArray &&
+            data["errors"]![i - 2].asInt != 0) {
           return IOState.error;
         }
+
         return IOState.low; // No LED for analog inputs
       }
       return IOState.low; // Red + positions
