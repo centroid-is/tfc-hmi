@@ -40,12 +40,15 @@ OpcUANodeConfig _$OpcUANodeConfigFromJson(Map<String, dynamic> json) =>
     OpcUANodeConfig(
       namespace: (json['namespace'] as num).toInt(),
       identifier: json['identifier'] as String,
-    )..serverAlias = json['server_alias'] as String?;
+    )
+      ..arrayIndex = (json['array_index'] as num?)?.toInt()
+      ..serverAlias = json['server_alias'] as String?;
 
 Map<String, dynamic> _$OpcUANodeConfigToJson(OpcUANodeConfig instance) =>
     <String, dynamic>{
       'namespace': instance.namespace,
       'identifier': instance.identifier,
+      'array_index': instance.arrayIndex,
       'server_alias': instance.serverAlias,
     };
 

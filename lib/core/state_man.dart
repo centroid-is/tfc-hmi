@@ -75,16 +75,19 @@ class StateManConfig {
 class OpcUANodeConfig {
   int namespace;
   String identifier;
+  // I only want to support one dimension arrays, I dont think it is relevant to support multi-dimensional arrays
+  @JsonKey(name: 'array_index')
+  int? arrayIndex;
   @JsonKey(name: 'server_alias')
   String? serverAlias;
 
   OpcUANodeConfig({required this.namespace, required this.identifier});
 
-  NodeId toNodeId() {
+  (NodeId, int?) toNodeId() {
     if (int.tryParse(identifier) != null) {
-      return NodeId.fromNumeric(namespace, int.parse(identifier));
+      return (NodeId.fromNumeric(namespace, int.parse(identifier)), arrayIndex);
     }
-    return NodeId.fromString(namespace, identifier);
+    return (NodeId.fromString(namespace, identifier), arrayIndex);
   }
 
   factory OpcUANodeConfig.fromJson(Map<String, dynamic> json) =>
@@ -124,7 +127,7 @@ class KeyMappings {
 
   KeyMappings({required this.nodes});
 
-  NodeId? lookupNodeId(String key) {
+  (NodeId, int?)? lookupNodeId(String key) {
     return nodes[key]?.opcuaNode?.toNodeId();
   }
 
@@ -133,10 +136,12 @@ class KeyMappings {
   }
 
   String? lookupKey(NodeId nodeId) {
-    return nodes.entries
-        .firstWhereOrNull(
-            (entry) => entry.value.opcuaNode?.toNodeId() == nodeId)
-        ?.key;
+    return nodes.entries.firstWhereOrNull((entry) {
+      final result = entry.value.opcuaNode?.toNodeId();
+      if (result == null) return false;
+      final (entryNodeId, _) = result;
+      return entryNodeId == nodeId;
+    })?.key;
   }
 
   Iterable<String> get keys => nodes.keys;
@@ -375,13 +380,18 @@ class StateMan {
     key = resolveKey(key);
     try {
       final client = _getClientWrapper(key).client;
-      final nodeId = lookupNodeId(key);
+      final nodeId = _lookupNodeId(key);
       if (nodeId == null) {
         await Future.delayed(const Duration(seconds: 1000));
         throw StateManException("Key: \"$key\" not found");
       }
+      final (id, idx) = nodeId;
       await client.awaitConnect();
-      return await client.read(nodeId);
+      final value = await client.read(id);
+      if (idx != null) {
+        return value[idx];
+      }
+      return value;
     } catch (e) {
       throw StateManException('Failed to read key: \"$key\": $e');
     }
@@ -393,12 +403,13 @@ class StateMan {
     for (final keyToResolve in keys) {
       final key = resolveKey(keyToResolve);
       final client = _getClientWrapper(key).client;
-      final nodeId = lookupNodeId(key);
+      final nodeId = _lookupNodeId(key);
       if (nodeId == null) {
         throw StateManException("Key: \"$key\" not found");
       }
+      final (id, idx) = nodeId;
       parameters[client] = {
-        nodeId: [
+        id: [
           AttributeId.UA_ATTRIBUTEID_DESCRIPTION,
           AttributeId.UA_ATTRIBUTEID_DISPLAYNAME,
           AttributeId.UA_ATTRIBUTEID_DATATYPE,
@@ -413,8 +424,22 @@ class StateMan {
       final parameters = pair.value;
       await client.awaitConnect();
       final res = await client.readAttribute(parameters);
-      results.addAll(res
-          .map((key, value) => MapEntry(keyMappings.lookupKey(key)!, value)));
+      results.addAll(res.map((nodeId, value) {
+        final key = keyMappings.lookupKey(nodeId);
+        if (key == null) {
+          throw StateManException("Key: \"$key\" not found");
+        }
+        // todo refactor this to not be so ugly
+        final foo = _lookupNodeId(key);
+        if (foo == null) {
+          throw StateManException("Weird error:Key: \"$key\" not found");
+        }
+        final (_, idx) = foo;
+        if (idx != null) {
+          return MapEntry(key, value[idx]);
+        }
+        return MapEntry(key, value);
+      }));
     }
     return results;
   }
@@ -424,13 +449,22 @@ class StateMan {
     key = resolveKey(key);
     try {
       final client = _getClientWrapper(key).client;
-      final nodeId = lookupNodeId(key);
+      final nodeId = _lookupNodeId(key);
       if (nodeId == null) {
         await Future.delayed(const Duration(seconds: 1000));
         throw StateManException("Key: \"$key\" not found");
       }
+      final (id, idx) = nodeId;
       await client.awaitConnect();
-      await client.write(nodeId, value);
+      if (idx != null) {
+        // a bit special, we need to read to be able to write
+        // not sure I like this
+        final readValue = await client.read(id);
+        readValue[idx] = value;
+        await client.write(id, readValue);
+        return;
+      }
+      await client.write(id, value);
     } catch (e) {
       throw StateManException('Failed to write node: \"$key\": $e');
     }
@@ -464,7 +498,7 @@ class StateMan {
     _subsMap$.close();
   }
 
-  NodeId? lookupNodeId(String key) {
+  (NodeId, int?)? _lookupNodeId(String key) {
     return keyMappings.lookupNodeId(key);
   }
 
@@ -498,10 +532,11 @@ class StateMan {
           'Failed to connect to client for key: "$key": $e');
     }
 
-    final nodeId = lookupNodeId(key);
+    final nodeId = _lookupNodeId(key);
     if (nodeId == null) {
       throw StateManException('Key: "$key" not found');
     }
+    final (id, idx) = nodeId;
 
     // async boundary between the last check, let's make sure the key still exists or not
     keyExists = _subscriptions.containsKey(key);
@@ -531,8 +566,11 @@ class StateMan {
         if (wrapper.subscriptionId == null) {
           continue;
         }
-        final stream =
-            client.monitor(nodeId, wrapper.subscriptionId!).asBroadcastStream();
+        var stream =
+            client.monitor(id, wrapper.subscriptionId!).asBroadcastStream();
+        if (idx != null) {
+          stream = stream.map((value) => value[idx]);
+        }
 
         // Test for first value
         final firstValue = await stream.first.timeout(
