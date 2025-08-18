@@ -90,92 +90,96 @@ class GraphContentConfig extends StatefulWidget {
 class GraphContentConfigState extends State<GraphContentConfig> {
   @override
   Widget build(BuildContext context) {
-    return SingleChildScrollView(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            DropdownButton<GraphType>(
-              value: widget.config.graphType,
-              onChanged: (value) {
-                setState(() {
-                  widget.config.graphType = value!;
-                });
-              },
-              items: GraphType.values
-                  .map((e) => DropdownMenuItem(
-                        value: e,
-                        child:
-                            Text(e.name[0].toUpperCase() + e.name.substring(1)),
-                      ))
-                  .toList(),
-            ),
-            const SizedBox(height: 16),
-            _buildSeriesSection(
-              'Primary Y Series',
-              widget.config.primarySeries,
-              (updated) =>
-                  setState(() => widget.config.primarySeries = updated),
-            ),
-            const SizedBox(height: 16),
-            _buildSeriesSection(
-              'Secondary Y Series',
-              widget.config.secondarySeries,
-              (updated) =>
-                  setState(() => widget.config.secondarySeries = updated),
-            ),
-            const SizedBox(height: 16),
-            _buildAxisConfig(
-              'X Axis',
-              widget.config.xAxis,
-              (updated) => setState(() => widget.config.xAxis = updated!),
-            ),
-            const SizedBox(height: 16),
-            _buildAxisConfig(
-              'Y Axis',
-              widget.config.yAxis,
-              (updated) => setState(() => widget.config.yAxis = updated!),
-            ),
-            const SizedBox(height: 16),
-            _buildAxisConfig(
-              'Y Axis 2 (optional)',
-              widget.config.yAxis2,
-              (updated) => setState(() => widget.config.yAxis2 = updated),
-            ),
-            const SizedBox(height: 16),
-            TextFormField(
-              initialValue:
-                  widget.config.timeWindowMinutes.inMinutes.toString(),
-              decoration:
-                  const InputDecoration(labelText: 'Time Window (minutes)'),
-              keyboardType: TextInputType.number,
-              onChanged: (value) {
-                setState(() {
-                  widget.config.timeWindowMinutes =
-                      Duration(minutes: int.tryParse(value) ?? 10);
-                });
-              },
-            ),
-            const SizedBox(height: 16),
-            TextFormField(
-              initialValue: widget.config.headerText,
-              decoration: const InputDecoration(labelText: 'Header Text'),
-              onChanged: (value) {
-                setState(() => widget.config.headerText = value);
-              },
-            ),
-            const SizedBox(height: 16),
-            SizeField(
-              initialValue: widget.config.size,
-              onChanged: (value) => setState(() => widget.config.size = value),
-            ),
-            const SizedBox(height: 16),
-            CoordinatesField(
-              initialValue: widget.config.coordinates,
-              onChanged: (c) => setState(() => widget.config.coordinates = c),
-            ),
-          ],
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxHeight: 900),
+      child: SingleChildScrollView(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              DropdownButton<GraphType>(
+                value: widget.config.graphType,
+                onChanged: (value) {
+                  setState(() {
+                    widget.config.graphType = value!;
+                  });
+                },
+                items: GraphType.values
+                    .map((e) => DropdownMenuItem(
+                          value: e,
+                          child: Text(
+                              e.name[0].toUpperCase() + e.name.substring(1)),
+                        ))
+                    .toList(),
+              ),
+              const SizedBox(height: 16),
+              _buildSeriesSection(
+                'Primary Y Series',
+                widget.config.primarySeries,
+                (updated) =>
+                    setState(() => widget.config.primarySeries = updated),
+              ),
+              const SizedBox(height: 16),
+              _buildSeriesSection(
+                'Secondary Y Series',
+                widget.config.secondarySeries,
+                (updated) =>
+                    setState(() => widget.config.secondarySeries = updated),
+              ),
+              const SizedBox(height: 16),
+              _buildAxisConfig(
+                'X Axis',
+                widget.config.xAxis,
+                (updated) => setState(() => widget.config.xAxis = updated!),
+              ),
+              const SizedBox(height: 16),
+              _buildAxisConfig(
+                'Y Axis',
+                widget.config.yAxis,
+                (updated) => setState(() => widget.config.yAxis = updated!),
+              ),
+              const SizedBox(height: 16),
+              _buildAxisConfig(
+                'Y Axis 2 (optional)',
+                widget.config.yAxis2,
+                (updated) => setState(() => widget.config.yAxis2 = updated),
+              ),
+              const SizedBox(height: 16),
+              TextFormField(
+                initialValue:
+                    widget.config.timeWindowMinutes.inMinutes.toString(),
+                decoration:
+                    const InputDecoration(labelText: 'Time Window (minutes)'),
+                keyboardType: TextInputType.number,
+                onChanged: (value) {
+                  setState(() {
+                    widget.config.timeWindowMinutes =
+                        Duration(minutes: int.tryParse(value) ?? 10);
+                  });
+                },
+              ),
+              const SizedBox(height: 16),
+              TextFormField(
+                initialValue: widget.config.headerText,
+                decoration: const InputDecoration(labelText: 'Header Text'),
+                onChanged: (value) {
+                  setState(() => widget.config.headerText = value);
+                },
+              ),
+              const SizedBox(height: 16),
+              SizeField(
+                initialValue: widget.config.size,
+                onChanged: (value) =>
+                    setState(() => widget.config.size = value),
+              ),
+              const SizedBox(height: 16),
+              CoordinatesField(
+                initialValue: widget.config.coordinates,
+                onChanged: (c) => setState(() => widget.config.coordinates = c),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -262,9 +266,14 @@ class GraphContentConfigState extends State<GraphContentConfig> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(label, style: const TextStyle(fontWeight: FontWeight.bold)),
-        Row(
+        const SizedBox(height: 8),
+        // Use Wrap for better responsive behavior
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
           children: [
-            Expanded(
+            SizedBox(
+              width: 120,
               child: TextFormField(
                 initialValue: axis.unit,
                 decoration: const InputDecoration(labelText: 'Unit'),
@@ -278,8 +287,8 @@ class GraphContentConfigState extends State<GraphContentConfig> {
                 },
               ),
             ),
-            const SizedBox(width: 8),
-            Expanded(
+            SizedBox(
+              width: 120,
               child: TextFormField(
                 initialValue: axis.min?.toString() ?? '',
                 decoration: const InputDecoration(labelText: 'Min'),
@@ -294,8 +303,8 @@ class GraphContentConfigState extends State<GraphContentConfig> {
                 },
               ),
             ),
-            const SizedBox(width: 8),
-            Expanded(
+            SizedBox(
+              width: 120,
               child: TextFormField(
                 initialValue: axis.max?.toString() ?? '',
                 decoration: const InputDecoration(labelText: 'Max'),
@@ -310,8 +319,8 @@ class GraphContentConfigState extends State<GraphContentConfig> {
                 },
               ),
             ),
-            const SizedBox(width: 8),
-            Expanded(
+            SizedBox(
+              width: 120,
               child: TextFormField(
                 initialValue: axis.step?.toString() ?? '',
                 decoration: const InputDecoration(labelText: 'Step'),
