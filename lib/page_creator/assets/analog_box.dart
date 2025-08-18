@@ -198,8 +198,17 @@ class _AnalogBoxConfigEditorState extends State<_AnalogBoxConfigEditor> {
                     Expanded(
                       child: TextFormField(
                         initialValue: widget.config.minValue.toString(),
-                        decoration:
-                            const InputDecoration(labelText: 'Min value'),
+                        decoration: InputDecoration(
+                          labelText: 'Min value',
+                          helperText: widget.config.analogSensorRangeMinKey
+                                      ?.isNotEmpty ==
+                                  true
+                              ? 'Using dynamic value from ${widget.config.analogSensorRangeMinKey}'
+                              : null,
+                        ),
+                        enabled:
+                            widget.config.analogSensorRangeMinKey?.isEmpty ??
+                                true,
                         keyboardType: const TextInputType.numberWithOptions(
                             decimal: true),
                         onChanged: (v) {
@@ -214,8 +223,17 @@ class _AnalogBoxConfigEditorState extends State<_AnalogBoxConfigEditor> {
                     Expanded(
                       child: TextFormField(
                         initialValue: widget.config.maxValue.toString(),
-                        decoration:
-                            const InputDecoration(labelText: 'Max value'),
+                        decoration: InputDecoration(
+                          labelText: 'Max value',
+                          helperText: widget.config.analogSensorRangeMaxKey
+                                      ?.isNotEmpty ==
+                                  true
+                              ? 'Using dynamic value from ${widget.config.analogSensorRangeMaxKey}'
+                              : null,
+                        ),
+                        enabled:
+                            widget.config.analogSensorRangeMaxKey?.isEmpty ??
+                                true,
                         keyboardType: const TextInputType.numberWithOptions(
                             decimal: true),
                         onChanged: (v) {
@@ -414,6 +432,8 @@ class AnalogBox extends ConsumerWidget {
         double? sp1;
         double? hyst;
         double? sp2;
+        double? dynamicMin;
+        double? dynamicMax;
 
         if (snapshot.hasData) {
           final m = snapshot.data!;
@@ -429,12 +449,22 @@ class AnalogBox extends ConsumerWidget {
           if (m['sp2'] case final v?) {
             if (v.isDouble || v.isInteger) sp2 = v.asDouble;
           }
+          if (m['min'] case final v?) {
+            if (v.isDouble || v.isInteger) dynamicMin = v.asDouble;
+          }
+          if (m['max'] case final v?) {
+            if (v.isDouble || v.isInteger) dynamicMax = v.asDouble;
+          }
         }
+
+        // Use dynamic min/max if available, otherwise fall back to config values
+        final effectiveMin = dynamicMin ?? config.minValue;
+        final effectiveMax = dynamicMax ?? config.maxValue;
 
         final pct = _toPercent(
           analog,
-          config.minValue,
-          config.maxValue,
+          effectiveMin,
+          effectiveMax,
         );
 
         return GestureDetector(
@@ -445,8 +475,8 @@ class AnalogBox extends ConsumerWidget {
             child: CustomPaint(
               painter: _AnalogBoxPainter(
                 percent: pct,
-                min: config.minValue,
-                max: config.maxValue,
+                min: effectiveMin,
+                max: effectiveMax,
                 bgColor: config.bgColor,
                 fillColor: config.fillColor,
                 setpoint1: sp1,
