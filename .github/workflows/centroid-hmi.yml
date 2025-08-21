@@ -18,6 +18,8 @@ jobs:
     outputs:
       centroid_hmi_sha: ${{ steps.get_sha.outputs.sha }}
     steps:
+      - name: Make safe directory
+        run: git config --system --add safe.directory '*'
       - name: Checkout centroid-hmi
         uses: actions/checkout@v4
 
