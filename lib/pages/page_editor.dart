@@ -48,7 +48,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     ref.read(pageManagerProvider.future).then((pageManager) {
       setState(() {
         _temporaryPages = pageManager.copyWith().pages;
-        _currentPage = pageManager.pages.keys.first;
+        _currentPage = pageManager.pages.keys.firstOrNull;
       });
     });
   }

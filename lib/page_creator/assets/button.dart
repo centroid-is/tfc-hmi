@@ -68,7 +68,8 @@ class ButtonConfig extends BaseAsset {
         ),
         child: Material(
           borderRadius: BorderRadius.circular(24),
-          color: Theme.of(context).dialogBackgroundColor,
+          color: DialogTheme.of(context).backgroundColor ??
+              Theme.of(context).colorScheme.surface,
           child: Padding(
             padding: const EdgeInsets.all(20),
             child: SingleChildScrollView(

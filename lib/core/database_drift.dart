@@ -42,6 +42,9 @@ class AlarmHistory extends Table {
 }
 
 class FlutterPreferences extends Table {
+  @override
+  Set<Column> get primaryKey => {key};
+
   TextColumn get key => text()();
   TextColumn get value => text().nullable()();
   TextColumn get type => text()();
@@ -83,7 +86,7 @@ class AppDatabase extends _$AppDatabase {
       return AppDatabase._(
           config, PgDatabase.opened(pool, logStatements: config.debug));
     }
-    final dbFolder = await getApplicationDocumentsDirectory();
+    final dbFolder = await getApplicationSupportDirectory();
     final file = File(p.join(dbFolder.path, 'db.sqlite'));
     // Use a local NativeDatabase (or FlutterQueryExecutor).
     final executor = NativeDatabase.createInBackground(
@@ -108,7 +111,7 @@ class AppDatabase extends _$AppDatabase {
       final executor = await isolate.connect();
       return AppDatabase._(config, executor);
     } else {
-      final dbFolder = await getApplicationDocumentsDirectory();
+      final dbFolder = await getApplicationSupportDirectory();
       final file = File(p.join(dbFolder.path, 'db.sqlite'));
       // Use a local NativeDatabase (or FlutterQueryExecutor).
       final executor = NativeDatabase.createInBackground(

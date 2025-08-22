@@ -19,6 +19,7 @@ NumberConfig _$NumberConfigFromJson(Map<String, dynamic> json) => NumberConfig(
           ? null
           : GraphAssetConfig.fromJson(
               json['graph_config'] as Map<String, dynamic>),
+      scale: (json['scale'] as num?)?.toDouble(),
     )
       ..variant = json['asset_name'] as String
       ..coordinates =
@@ -37,6 +38,7 @@ Map<String, dynamic> _$NumberConfigToJson(NumberConfig instance) =>
       'key': instance.key,
       'showDecimalPoint': instance.showDecimalPoint,
       'decimalPlaces': instance.decimalPlaces,
+      'scale': instance.scale,
       'units': instance.units,
       'textColor': const ColorConverter().toJson(instance.textColor),
       'graph_config': instance.graphConfig,

@@ -1,7 +1,7 @@
 {
-description = "Bleeding edge Flutter version supporting native assets";
+description = "Flutter dev environment";
 inputs = {
-  nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+  nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.05";
   flake-utils.url = "github:numtide/flake-utils";
 };
 outputs = { self, nixpkgs, flake-utils }:

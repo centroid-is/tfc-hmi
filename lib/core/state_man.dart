@@ -192,7 +192,7 @@ class ClientWrapper {
 class StateMan {
   final logger = Logger();
   final StateManConfig config;
-  final KeyMappings keyMappings;
+  KeyMappings keyMappings;
   final List<ClientWrapper> clients;
   final Map<String, AutoDisposingStream<DynamicValue>> _subscriptions = {};
   bool _shouldRun = true;
@@ -478,6 +478,10 @@ class StateMan {
     return _monitor(key);
   }
 
+  void updateKeyMappings(KeyMappings newKeyMappings) {
+    keyMappings = newKeyMappings;
+  }
+
   List<String> get keys => keyMappings.keys.toList();
 
   /// Close the connection to the server.
@@ -528,8 +532,9 @@ class StateMan {
       client = _getClientWrapper(key).client;
       await client.awaitConnect();
     } catch (e) {
-      throw StateManException(
-          'Failed to connect to client for key: "$key": $e');
+      logger.e('Failed to connect to client for key: "$key": $e');
+      return Stream.error(
+          StateManException('Failed to connect to client for key: "$key": $e'));
     }
 
     final nodeId = _lookupNodeId(key);

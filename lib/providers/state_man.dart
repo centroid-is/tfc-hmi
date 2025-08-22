@@ -7,10 +7,24 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/state_man.dart';
+import '../core/preferences.dart';
 import 'preferences.dart';
 import 'collector.dart';
 
 part 'state_man.g.dart';
+
+Future<KeyMappings> fetchKeyMappings(PreferencesApi prefs) async {
+  var keyMappingsJson = await prefs.getString('key_mappings');
+  if (keyMappingsJson == null) {
+    final defaultKeyMappings = KeyMappings(nodes: {
+      "exampleKey": KeyMappingEntry(
+          opcuaNode: OpcUANodeConfig(namespace: 42, identifier: "identifier"))
+    });
+    keyMappingsJson = jsonEncode(defaultKeyMappings.toJson());
+    await prefs.setString('key_mappings', keyMappingsJson);
+  }
+  return KeyMappings.fromJson(jsonDecode(keyMappingsJson));
+}
 
 @Riverpod(keepAlive: true)
 Future<StateMan> stateMan(Ref ref) async {
@@ -26,22 +40,17 @@ Future<StateMan> stateMan(Ref ref) async {
 
   final prefs = await ref.watch(preferencesProvider.future);
 
-  var keyMappingsJson = await prefs.getString('key_mappings');
-  if (keyMappingsJson == null) {
-    final defaultKeyMappings = KeyMappings(nodes: {
-      "exampleKey": KeyMappingEntry(
-          opcuaNode: OpcUANodeConfig(namespace: 42, identifier: "identifier"))
-    });
-    keyMappingsJson = jsonEncode(defaultKeyMappings.toJson());
-    await prefs.setString('key_mappings', keyMappingsJson);
-  }
-  final keyMappings = KeyMappings.fromJson(jsonDecode(keyMappingsJson));
+  final keyMappings = await fetchKeyMappings(prefs);
 
   // Watch for changes in specific preferences
   final listener = prefs.onPreferencesChanged.listen(
     (key) {
       if (key == 'key_mappings') {
-        ref.invalidateSelf();
+        ref.read(stateManProvider.future).then((stateMan) async {
+          ref.read(preferencesProvider.future).then((newPrefs) async {
+            stateMan.updateKeyMappings(await fetchKeyMappings(newPrefs));
+          });
+        });
       }
     },
     onError: (error) {

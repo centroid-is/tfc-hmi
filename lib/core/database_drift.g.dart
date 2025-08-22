@@ -841,7 +841,7 @@ class $FlutterPreferencesTable extends FlutterPreferences
   }
 
   @override
-  Set<GeneratedColumn> get $primaryKey => const {};
+  Set<GeneratedColumn> get $primaryKey => {key};
   @override
   FlutterPreference map(Map<String, dynamic> data, {String? tablePrefix}) {
     final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
