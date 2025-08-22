@@ -6,6 +6,7 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:open62541/open62541.dart' show DynamicValue;
@@ -13,6 +14,7 @@ import 'package:rxdart/rxdart.dart';
 
 import 'common.dart';
 import '../../providers/state_man.dart';
+import '../../core/state_man.dart';
 import '../../converter/color_converter.dart';
 import 'graph.dart';
 
@@ -31,6 +33,11 @@ class NumberConfig extends BaseAsset {
   @JsonKey(name: 'graph_config')
   GraphAssetConfig? graphConfig;
 
+  /// If true, number is editable by tapping it (dialog opens).
+  /// When true, graphConfig must be null.
+  @JsonKey(defaultValue: false)
+  bool writable;
+
   NumberConfig({
     required this.key,
     this.showDecimalPoint = true,
@@ -39,6 +46,7 @@ class NumberConfig extends BaseAsset {
     this.textColor = Colors.black,
     this.graphConfig,
     this.scale,
+    this.writable = false,
   });
 
   NumberConfig.preview()
@@ -47,7 +55,8 @@ class NumberConfig extends BaseAsset {
         decimalPlaces = 2,
         units = "units",
         textColor = Colors.black,
-        graphConfig = GraphAssetConfig.preview();
+        graphConfig = GraphAssetConfig.preview(),
+        writable = false;
 
   factory NumberConfig.fromJson(Map<String, dynamic> json) =>
       _$NumberConfigFromJson(json);
@@ -192,6 +201,21 @@ class _NumberConfigEditorState extends State<_NumberConfigEditor> {
                       setState(() => widget.config.size = size),
                 ),
                 const SizedBox(height: 16),
+
+                // Writable toggle (mutually exclusive with graph)
+                SwitchListTile(
+                  title: const Text('Writable (tap number to edit)'),
+                  subtitle: const Text('Disables graph'),
+                  value: widget.config.writable,
+                  onChanged: (v) => setState(() {
+                    widget.config.writable = v;
+                    if (v) {
+                      showGraph = false;
+                      widget.config.graphConfig = null;
+                    }
+                  }),
+                ),
+
                 // Graph toggle
                 SwitchListTile(
                   title: const Text('Include Graph'),
@@ -199,10 +223,13 @@ class _NumberConfigEditorState extends State<_NumberConfigEditor> {
                   value: showGraph,
                   onChanged: (value) => setState(() {
                     showGraph = value;
-                    if (value && widget.config.graphConfig == null) {
-                      widget.config.graphConfig = GraphAssetConfig.preview();
-                    } else if (!value) {
-                      widget.config.graphConfig = null; // Add this line
+                    if (value) {
+                      widget.config.writable = false; // enforce exclusivity
+                      if (widget.config.graphConfig == null) {
+                        widget.config.graphConfig = GraphAssetConfig.preview();
+                      }
+                    } else {
+                      widget.config.graphConfig = null;
                     }
                   }),
                 ),
@@ -279,12 +306,14 @@ class NumberWidget extends ConsumerWidget {
           }
         }
 
-        return _buildDisplay(context, displayValue);
+        return _buildDisplay(context, displayValue,
+            ref: ref, rawSnapshot: snapshot.data);
       },
     );
   }
 
-  Widget _buildDisplay(BuildContext context, String value) {
+  Widget _buildDisplay(BuildContext context, String value,
+      {WidgetRef? ref, DynamicValue? rawSnapshot}) {
     final displayText = config.units != null ? '$value ${config.units}' : value;
 
     Widget displayWidget = FittedBox(
@@ -300,8 +329,13 @@ class NumberWidget extends ConsumerWidget {
       ),
     );
 
-    // Make clickable if graph is enabled
-    if (config.graphConfig != null) {
+    // Make clickable: writable OR graph (mutually exclusive in config UI)
+    if (config.writable) {
+      displayWidget = GestureDetector(
+        onTap: () => _showWriteDialog(context, ref!),
+        child: displayWidget,
+      );
+    } else if (config.graphConfig != null) {
       displayWidget = GestureDetector(
         onTap: () => _showGraphDialog(context),
         child: displayWidget,
@@ -346,6 +380,268 @@ class NumberWidget extends ConsumerWidget {
           ),
         ),
       ),
+    );
+  }
+
+  void _showWriteDialog(BuildContext context, WidgetRef ref) {
+    if (config.key == "Number preview") return;
+
+    showDialog(
+      context: context,
+      builder: (_) => _NumberWriteDialog(config: config),
+    );
+  }
+}
+
+class _NumberWriteDialog extends ConsumerStatefulWidget {
+  final NumberConfig config;
+  const _NumberWriteDialog({required this.config});
+
+  @override
+  ConsumerState<_NumberWriteDialog> createState() => _NumberWriteDialogState();
+}
+
+class _NumberWriteDialogState extends ConsumerState<_NumberWriteDialog> {
+  final _formKey = GlobalKey<FormState>();
+  late final TextEditingController _controller;
+  bool _isInteger = false; // inferred from current value type
+  double? _currentRaw; // raw value (unscaled)
+  bool _hasValue = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Future<void> _writeValue() async {
+    final key = widget.config.key;
+    if (_controller.text.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Enter a value to write.')),
+      );
+      return;
+    }
+
+    num? parsed;
+    if (_isInteger) {
+      parsed = int.tryParse(_controller.text.trim());
+    } else {
+      parsed = double.tryParse(_controller.text.trim());
+    }
+    if (parsed == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Invalid number.')),
+      );
+      return;
+    }
+
+    final sm = await ref.read(stateManProvider.future);
+    final dv = await sm.read(key);
+
+    // preserve underlying type when possible
+    if (_isInteger) {
+      dv.value = parsed as int;
+    } else {
+      dv.value = parsed as double;
+    }
+    await sm.write(key, dv);
+
+    if (mounted) Navigator.of(context).pop();
+  }
+
+  String _formatDisplayed(double raw) {
+    final scale = widget.config.scale ?? 1.0;
+    final v = raw * scale;
+    if (!widget.config.showDecimalPoint) {
+      return v.toInt().toString();
+    }
+    final fixed = v.toStringAsFixed(widget.config.decimalPlaces);
+    final parts = fixed.split('.');
+    final integerPart = parts[0].padLeft(widget.config.decimalPlaces - 1, '0');
+    final decimalPart =
+        parts.length > 1 ? parts[1] : '0' * widget.config.decimalPlaces;
+    return '$integerPart.$decimalPart';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    Stream<DynamicValue> value$ = ref
+        .watch(stateManProvider.future)
+        .asStream()
+        .switchMap((sm) =>
+            sm.subscribe(widget.config.key).asStream().switchMap((s) => s));
+
+    return AlertDialog(
+      title: FutureBuilder<StateMan>(
+        future: ref.watch(stateManProvider.future),
+        builder: (context, snapshot) {
+          final resolvedKey = snapshot.hasData
+              ? snapshot.data!.resolveKey(widget.config.key)
+              : widget.config.key;
+          return Text(widget.config.text?.isNotEmpty == true
+              ? widget.config.text!
+              : (resolvedKey ?? 'Number'));
+        },
+      ),
+      content: StreamBuilder<DynamicValue>(
+        stream: value$,
+        builder: (context, snap) {
+          _hasValue =
+              snap.hasData && (snap.data!.isDouble || snap.data!.isInteger);
+          if (_hasValue) {
+            _currentRaw = snap.data!.asDouble;
+            _isInteger = snap.data!.isInteger;
+          }
+
+          final units = widget.config.units ?? '';
+          final rawText = _hasValue
+              ? _currentRaw!.toStringAsFixed(_isInteger ? 0 : 3)
+              : '---';
+          final displayedText =
+              _hasValue ? _formatDisplayed(_currentRaw!) : '---';
+          final typeText =
+              _hasValue ? (_isInteger ? 'Integer' : 'Double') : 'Unknown';
+
+          // prefill once
+          if (_hasValue && _controller.text.isEmpty) {
+            _controller.text = _isInteger
+                ? _currentRaw!.toStringAsFixed(0)
+                : _currentRaw!.toStringAsFixed(3);
+          }
+
+          final inputFormatters = <TextInputFormatter>[
+            FilteringTextInputFormatter.allow(
+              _isInteger ? RegExp(r'[0-9-]') : RegExp(r'[0-9\.\-]'),
+            ),
+          ];
+
+          return SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Current value card (RAW + Displayed)
+                Card(
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Row(
+                      children: [
+                        Icon(Icons.speed,
+                            color: Theme.of(context).primaryColor),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Current (raw): $rawText ${units.isNotEmpty && widget.config.scale == null ? units : ''}',
+                                style: Theme.of(context).textTheme.titleMedium,
+                              ),
+                              const SizedBox(height: 4),
+                              Row(
+                                children: [
+                                  const Icon(Icons.visibility, size: 16),
+                                  const SizedBox(width: 6),
+                                  Text(
+                                    'Displayed: $displayedText ${units.isNotEmpty ? units : ''}',
+                                    style:
+                                        Theme.of(context).textTheme.bodyMedium,
+                                  ),
+                                ],
+                              ),
+                              if (widget.config.scale != null)
+                                Padding(
+                                  padding: const EdgeInsets.only(top: 4),
+                                  child: Text(
+                                    'Scale: ×${widget.config.scale}',
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .bodySmall
+                                        ?.copyWith(color: Colors.grey[700]),
+                                  ),
+                                ),
+                              Padding(
+                                padding: const EdgeInsets.only(top: 6),
+                                child: Text(
+                                  'Type: $typeText',
+                                  style: Theme.of(context)
+                                      .textTheme
+                                      .bodySmall
+                                      ?.copyWith(fontStyle: FontStyle.italic),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+
+                const SizedBox(height: 16),
+
+                // Input field
+                Form(
+                  key: _formKey,
+                  child: TextFormField(
+                    controller: _controller,
+                    keyboardType: TextInputType.numberWithOptions(
+                      decimal: !_isInteger,
+                      signed: true,
+                    ),
+                    inputFormatters: inputFormatters,
+                    decoration: InputDecoration(
+                      labelText: 'New value',
+                      helperText:
+                          _isInteger ? 'Enter an integer' : 'Enter a decimal',
+                      suffixText: units,
+                    ),
+                    validator: (v) {
+                      if (v == null || v.trim().isEmpty) {
+                        return 'Enter a value';
+                      }
+                      return _isInteger
+                          ? (int.tryParse(v.trim()) == null
+                              ? 'Invalid integer'
+                              : null)
+                          : (double.tryParse(v.trim()) == null
+                              ? 'Invalid number'
+                              : null);
+                    },
+                    onFieldSubmitted: (_) async {
+                      if (_formKey.currentState?.validate() == true) {
+                        await _writeValue();
+                      }
+                    },
+                  ),
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        ElevatedButton.icon(
+          icon: const Icon(Icons.save),
+          label: const Text('Write'),
+          onPressed: () async {
+            if (_formKey.currentState?.validate() == true) {
+              await _writeValue();
+            }
+          },
+        ),
+      ],
     );
   }
 }

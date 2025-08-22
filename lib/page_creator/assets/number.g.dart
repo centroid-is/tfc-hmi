@@ -20,6 +20,7 @@ NumberConfig _$NumberConfigFromJson(Map<String, dynamic> json) => NumberConfig(
           : GraphAssetConfig.fromJson(
               json['graph_config'] as Map<String, dynamic>),
       scale: (json['scale'] as num?)?.toDouble(),
+      writable: json['writable'] as bool? ?? false,
     )
       ..variant = json['asset_name'] as String
       ..coordinates =
@@ -42,6 +43,7 @@ Map<String, dynamic> _$NumberConfigToJson(NumberConfig instance) =>
       'units': instance.units,
       'textColor': const ColorConverter().toJson(instance.textColor),
       'graph_config': instance.graphConfig,
+      'writable': instance.writable,
     };
 
 const _$TextPosEnumMap = {
