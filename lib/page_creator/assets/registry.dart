@@ -16,6 +16,7 @@ import 'option_variable.dart';
 import 'text.dart';
 import 'beckhoff.dart';
 import 'schneider.dart';
+import 'icon.dart';
 
 class AssetRegistry {
   static final Logger _log = Logger();
@@ -46,6 +47,7 @@ class AssetRegistry {
     BeckhoffEK1100Config: BeckhoffEK1100Config.fromJson,
     BeckhoffEL3054Config: BeckhoffEL3054Config.fromJson,
     SchneiderATV320Config: SchneiderATV320Config.fromJson,
+    IconConfig: IconConfig.fromJson,
   };
 
   static final Map<Type, Asset Function()> defaultFactories = {
@@ -73,6 +75,7 @@ class AssetRegistry {
     BeckhoffEK1100Config: BeckhoffEK1100Config.preview,
     BeckhoffEL3054Config: BeckhoffEL3054Config.preview,
     SchneiderATV320Config: SchneiderATV320Config.preview,
+    IconConfig: IconConfig.preview,
   };
 
   static void registerFromJsonFactory<T extends Asset>(
