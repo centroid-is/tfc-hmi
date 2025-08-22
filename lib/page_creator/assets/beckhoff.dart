@@ -566,7 +566,7 @@ class BeckhoffEL1008Config extends BaseAsset {
         ),
         child: Material(
           borderRadius: BorderRadius.circular(24),
-          color: Theme.of(context).dialogBackgroundColor,
+          color: DialogTheme.of(context).backgroundColor ?? Theme.of(context).colorScheme.surface,
           child: Padding(
             padding: const EdgeInsets.all(20),
             child: SingleChildScrollView(
@@ -705,7 +705,7 @@ class BeckhoffEL2008Config extends BaseAsset {
         ),
         child: Material(
           borderRadius: BorderRadius.circular(24),
-          color: Theme.of(context).dialogBackgroundColor,
+          color: DialogTheme.of(context).backgroundColor ?? Theme.of(context).colorScheme.surface,
           child: Padding(
             padding: const EdgeInsets.all(20),
             child: SingleChildScrollView(
@@ -937,7 +937,7 @@ class BeckhoffEL9222Config extends BaseAsset {
         ),
         child: Material(
           borderRadius: BorderRadius.circular(24),
-          color: Theme.of(context).dialogBackgroundColor,
+          color: DialogTheme.of(context).backgroundColor ?? Theme.of(context).colorScheme.surface,
           child: Padding(
             padding: const EdgeInsets.all(20),
             child: SingleChildScrollView(
@@ -1060,7 +1060,7 @@ class BeckhoffEL9187Config extends BaseAsset {
         ),
         child: Material(
           borderRadius: BorderRadius.circular(24),
-          color: Theme.of(context).dialogBackgroundColor,
+          color: DialogTheme.of(context).backgroundColor ?? Theme.of(context).colorScheme.surface,
           child: Padding(
             padding: const EdgeInsets.all(20),
             child: SingleChildScrollView(
@@ -1165,7 +1165,7 @@ class BeckhoffEL9186Config extends BaseAsset {
         ),
         child: Material(
           borderRadius: BorderRadius.circular(24),
-          color: Theme.of(context).dialogBackgroundColor,
+          color: DialogTheme.of(context).backgroundColor ?? Theme.of(context).colorScheme.surface,
           child: Padding(
             padding: const EdgeInsets.all(20),
             child: SingleChildScrollView(
@@ -1743,7 +1743,7 @@ class BeckhoffEL3054Config extends BaseAsset {
         ),
         child: Material(
           borderRadius: BorderRadius.circular(24),
-          color: Theme.of(context).dialogBackgroundColor,
+          color: DialogTheme.of(context).backgroundColor ?? Theme.of(context).colorScheme.surface,
           child: Padding(
             padding: const EdgeInsets.all(20),
             child: SingleChildScrollView(
