@@ -25,16 +25,19 @@ ButtonConfig _$ButtonConfigFromJson(Map<String, dynamic> json) => ButtonConfig(
       inwardColor: const ColorConverter()
           .fromJson(json['inward_color'] as Map<String, dynamic>),
       buttonType: $enumDecode(_$ButtonTypeEnumMap, json['button_type']),
+      icon: json['icon'] == null
+          ? null
+          : IconConfig.fromJson(json['icon'] as Map<String, dynamic>),
+      feedback: json['feedback'] == null
+          ? null
+          : FeedbackConfig.fromJson(json['feedback'] as Map<String, dynamic>),
     )
       ..variant = json['asset_name'] as String
       ..coordinates =
           Coordinates.fromJson(json['coordinates'] as Map<String, dynamic>)
       ..size = RelativeSize.fromJson(json['size'] as Map<String, dynamic>)
       ..text = json['text'] as String?
-      ..textPos = $enumDecodeNullable(_$TextPosEnumMap, json['textPos'])
-      ..feedback = json['feedback'] == null
-          ? null
-          : FeedbackConfig.fromJson(json['feedback'] as Map<String, dynamic>);
+      ..textPos = $enumDecodeNullable(_$TextPosEnumMap, json['textPos']);
 
 Map<String, dynamic> _$ButtonConfigToJson(ButtonConfig instance) =>
     <String, dynamic>{
@@ -45,6 +48,7 @@ Map<String, dynamic> _$ButtonConfigToJson(ButtonConfig instance) =>
       'textPos': _$TextPosEnumMap[instance.textPos],
       'key': instance.key,
       'feedback': instance.feedback,
+      'icon': instance.icon,
       'outward_color': const ColorConverter().toJson(instance.outwardColor),
       'inward_color': const ColorConverter().toJson(instance.inwardColor),
       'button_type': _$ButtonTypeEnumMap[instance.buttonType]!,

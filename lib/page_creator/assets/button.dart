@@ -10,9 +10,11 @@ import 'package:rxdart/rxdart.dart';
 import 'package:open62541/open62541.dart' show DynamicValue, NodeId;
 
 import 'common.dart';
+import 'icon.dart'; // Reuse IconConfig + IconAsset
 import '../../providers/state_man.dart';
 import '../../core/state_man.dart';
 import '../../converter/color_converter.dart';
+
 part 'button.g.dart';
 
 @JsonSerializable()
@@ -37,13 +39,22 @@ enum ButtonType {
 @JsonSerializable()
 class ButtonConfig extends BaseAsset {
   String key;
+
+  /// Optional live feedback indicator (key + color)
   FeedbackConfig? feedback;
+
+  /// Optional icon rendered on top of the button (centered, scaled)
+  @JsonKey(name: 'icon')
+  IconConfig? icon;
+
   @ColorConverter()
   @JsonKey(name: 'outward_color')
   Color outwardColor;
+
   @ColorConverter()
   @JsonKey(name: 'inward_color')
   Color inwardColor;
+
   @JsonKey(name: 'button_type')
   ButtonType buttonType;
 
@@ -86,6 +97,8 @@ class ButtonConfig extends BaseAsset {
     required this.outwardColor,
     required this.inwardColor,
     required this.buttonType,
+    this.icon,
+    this.feedback,
   });
 
   static const previewStr = 'Button preview';
@@ -94,7 +107,9 @@ class ButtonConfig extends BaseAsset {
       : key = previewStr,
         outwardColor = Colors.green,
         inwardColor = Colors.green,
-        buttonType = ButtonType.circle {
+        buttonType = ButtonType.circle,
+        icon = null,
+        feedback = null {
     textPos = TextPos.right;
   }
 
@@ -214,12 +229,41 @@ class _ButtonState extends ConsumerState<Button> {
             _log.e('Error writing button cancel', error: e);
           }
         },
-        child: CustomPaint(
-          painter: ButtonPainter(
-            color: color,
-            isPressed: _isPressed,
-            buttonType: widget.config.buttonType,
-          ),
+        child: Stack(
+          alignment: Alignment.center,
+          fit: StackFit.expand,
+          children: [
+            // Button face
+            CustomPaint(
+              painter: ButtonPainter(
+                color: color,
+                isPressed: _isPressed,
+                buttonType: widget.config.buttonType,
+              ),
+            ),
+
+            // Icon overlay (non-interactive), sized from the face
+            if (widget.config.icon != null)
+              LayoutBuilder(
+                builder: (context, constraints) {
+                  final minSide = constraints.biggest.shortestSide;
+                  final faceScale = _isPressed ? 0.95 : 1.0;
+                  final iconSide =
+                      (minSide * 0.60 * faceScale).clamp(0.0, minSide);
+
+                  final iconCfg = widget.config.icon!;
+                  final iconColor =
+                      iconCfg.color ?? Theme.of(context).iconTheme.color;
+
+                  // No Center/FittedBox/SizedBox. A plain Icon aligned by the Stack.
+                  return Icon(
+                    iconCfg.iconData,
+                    size: iconSide,
+                    color: iconColor,
+                  );
+                },
+              ),
+          ],
         ),
       ),
     );
@@ -260,10 +304,10 @@ class ButtonPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final center = Offset(size.width / 2, size.height / 2);
     final radius = min(size.width, size.height) / 2;
-    final borderRadius = Radius.circular(
-        size.shortestSide * 0.2); // 20% of shortest side like LED and conveyor
+    final borderRadius =
+        Radius.circular(size.shortestSide * 0.2); // 20% like LED/conveyor
 
-    // Draw shadow
+    // Shadow
     final shadowPaint = Paint()
       ..color = Colors.black
       ..maskFilter = MaskFilter.blur(
@@ -271,7 +315,6 @@ class ButtonPainter extends CustomPainter {
         isPressed ? 2 : 4,
       );
 
-    // Draw button and shadow based on type
     if (buttonType == ButtonType.circle) {
       canvas.drawCircle(
         center + Offset(0, isPressed ? 1 : 2),
@@ -288,7 +331,7 @@ class ButtonPainter extends CustomPainter {
       canvas.drawRRect(shadowRRect, shadowPaint);
     }
 
-    // Draw button fill
+    // Fill
     final buttonPaint = Paint()
       ..color = color
       ..style = PaintingStyle.fill;
@@ -309,7 +352,7 @@ class ButtonPainter extends CustomPainter {
       canvas.drawRRect(rrect, buttonPaint);
     }
 
-    // Draw border
+    // Border
     final borderPaint = Paint()
       ..color = Colors.black.withOpacity(0.1)
       ..style = PaintingStyle.stroke
@@ -349,8 +392,22 @@ class _ConfigContent extends StatefulWidget {
 }
 
 class _ConfigContentState extends State<_ConfigContent> {
+  Future<void> _openIconEditor() async {
+    // Ensure an icon exists to edit
+    widget.config.icon ??= IconConfig.preview();
+    // Reuse the icon asset's own configure UI in a dialog
+    await showDialog(
+      context: context,
+      barrierDismissible: true,
+      builder: (ctx) => widget.config.icon!.configure(ctx),
+    );
+    setState(() {}); // Refresh after closing
+  }
+
   @override
   Widget build(BuildContext context) {
+    final hasIcon = widget.config.icon != null;
+
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -360,16 +417,21 @@ class _ConfigContentState extends State<_ConfigContent> {
           onChanged: (value) => setState(() => widget.config.key = value),
         ),
         const SizedBox(height: 16),
+
         TextFormField(
           initialValue: widget.config.text,
+          decoration: const InputDecoration(labelText: 'Text'),
           onChanged: (value) => setState(() => widget.config.text = value),
         ),
         const SizedBox(height: 16),
+
         CoordinatesField(
           initialValue: widget.config.coordinates,
           onChanged: (c) => setState(() => widget.config.coordinates = c),
         ),
         const SizedBox(height: 16),
+
+        // Colors
         Row(
           children: [
             const Text('Outward Color'),
@@ -387,6 +449,7 @@ class _ConfigContentState extends State<_ConfigContent> {
           ],
         ),
         const SizedBox(height: 16),
+
         Row(
           children: [
             const Text('Inward Color'),
@@ -404,6 +467,8 @@ class _ConfigContentState extends State<_ConfigContent> {
           ],
         ),
         const SizedBox(height: 16),
+
+        // Text position
         DropdownButton<TextPos>(
           value: widget.config.textPos,
           isExpanded: true,
@@ -413,11 +478,16 @@ class _ConfigContentState extends State<_ConfigContent> {
             });
           },
           items: TextPos.values
-              .map((e) =>
-                  DropdownMenuItem<TextPos>(value: e, child: Text(e.name)))
+              .map(
+                (e) => DropdownMenuItem<TextPos>(
+                  value: e,
+                  child: Text(e.name),
+                ),
+              )
               .toList(),
         ),
         const SizedBox(height: 16),
+
         // Button type selector
         DropdownButton<ButtonType>(
           value: widget.config.buttonType,
@@ -425,7 +495,7 @@ class _ConfigContentState extends State<_ConfigContent> {
           onChanged: (value) {
             setState(() {
               widget.config.buttonType = value!;
-              // Optionally, sync height and width if switching to circle
+              // If switching to circle, normalize width/height
               if (value == ButtonType.circle) {
                 final avg =
                     (widget.config.size.width + widget.config.size.height) / 2;
@@ -434,13 +504,17 @@ class _ConfigContentState extends State<_ConfigContent> {
             });
           },
           items: ButtonType.values
-              .map((e) => DropdownMenuItem<ButtonType>(
-                    value: e,
-                    child: Text(e.name[0].toUpperCase() + e.name.substring(1)),
-                  ))
+              .map(
+                (e) => DropdownMenuItem<ButtonType>(
+                  value: e,
+                  child: Text(e.name[0].toUpperCase() + e.name.substring(1)),
+                ),
+              )
               .toList(),
         ),
         const SizedBox(height: 16),
+
+        // Size controls
         Row(
           children: [
             Text(widget.config.buttonType == ButtonType.square
@@ -507,6 +581,7 @@ class _ConfigContentState extends State<_ConfigContent> {
           ],
         ),
         const SizedBox(height: 16),
+
         // Feedback config fields
         Row(
           children: [
@@ -517,9 +592,7 @@ class _ConfigContentState extends State<_ConfigContent> {
                 initialValue: widget.config.feedback?.key ?? '',
                 onChanged: (value) {
                   setState(() {
-                    if (widget.config.feedback == null) {
-                      widget.config.feedback = FeedbackConfig();
-                    }
+                    widget.config.feedback ??= FeedbackConfig();
                     widget.config.feedback!.key = value;
                   });
                 },
@@ -537,9 +610,7 @@ class _ConfigContentState extends State<_ConfigContent> {
                 pickerColor: widget.config.feedback?.color ?? Colors.green,
                 onColorChanged: (value) {
                   setState(() {
-                    if (widget.config.feedback == null) {
-                      widget.config.feedback = FeedbackConfig();
-                    }
+                    widget.config.feedback ??= FeedbackConfig();
                     widget.config.feedback!.color = value;
                   });
                 },
@@ -547,6 +618,48 @@ class _ConfigContentState extends State<_ConfigContent> {
             ),
           ],
         ),
+        const SizedBox(height: 24),
+
+        // ----- Icon (optional) -----
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          title: const Text('Show Icon'),
+          value: hasIcon,
+          onChanged: (v) {
+            setState(() {
+              widget.config.icon = v ? IconConfig.preview() : null;
+            });
+          },
+        ),
+        if (hasIcon) ...[
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  icon: const Icon(Icons.edit),
+                  label: const Text('Edit Icon'),
+                  onPressed: _openIconEditor,
+                ),
+              ),
+              const SizedBox(width: 12),
+              OutlinedButton.icon(
+                icon: const Icon(Icons.clear),
+                label: const Text('Remove'),
+                onPressed: () => setState(() => widget.config.icon = null),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          // Small inline preview
+          SizedBox(
+            width: 64,
+            height: 64,
+            child: IgnorePointer(
+              child: IconAsset(widget.config.icon!),
+            ),
+          ),
+        ],
       ],
     );
   }

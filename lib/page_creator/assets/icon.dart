@@ -74,20 +74,21 @@ class IconAsset extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        // Use the available space provided by the page layout system
-        final availableSize = Size(constraints.maxWidth, constraints.maxHeight);
+        // Fall back to a sane finite size when an axis is unbounded.
+        final hasW =
+            constraints.hasBoundedWidth && constraints.maxWidth.isFinite;
+        final hasH =
+            constraints.hasBoundedHeight && constraints.maxHeight.isFinite;
 
-        return SizedBox.fromSize(
-          size: availableSize,
-          child: FittedBox(
-            fit: BoxFit.contain,
-            alignment: Alignment.center,
-            child: Icon(
-              config.iconData,
-              color: config.color ?? Theme.of(context).iconTheme.color,
-              // Use a reasonable base size that will be scaled by FittedBox
-              size: 48.0,
-            ),
+        final double w = hasW ? constraints.maxWidth : 48.0;
+        final double h = hasH ? constraints.maxHeight : 48.0;
+        final double size = w.isFinite && h.isFinite ? (w < h ? w : h) : 48.0;
+
+        return Center(
+          child: Icon(
+            config.iconData,
+            color: config.color ?? Theme.of(context).iconTheme.color,
+            size: size,
           ),
         );
       },
