@@ -23,6 +23,7 @@ class NumberConfig extends BaseAsset {
   String key;
   bool showDecimalPoint;
   int decimalPlaces;
+  double? scale;
   String? units; // Optional units to display after the number
   @ColorConverter()
   Color textColor;
@@ -37,6 +38,7 @@ class NumberConfig extends BaseAsset {
     this.units,
     this.textColor = Colors.black,
     this.graphConfig,
+    this.scale,
   });
 
   NumberConfig.preview()
@@ -130,6 +132,27 @@ class _NumberConfigEditorState extends State<_NumberConfigEditor> {
                     ),
                   ],
                 ),
+                Row(
+                  children: [
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: TextFormField(
+                        initialValue: widget.config.scale?.toString(),
+                        decoration: const InputDecoration(
+                          labelText: 'Scale',
+                          helperText: 'Scale the number, 1.0 is normal',
+                        ),
+                        keyboardType: TextInputType.number,
+                        onChanged: (value) {
+                          final scale = double.tryParse(value);
+                          if (scale != null) {
+                            setState(() => widget.config.scale = scale);
+                          }
+                        },
+                      ),
+                    ),
+                  ],
+                ),
                 const SizedBox(height: 16),
                 TextFormField(
                   controller: _unitsController,
@@ -178,6 +201,8 @@ class _NumberConfigEditorState extends State<_NumberConfigEditor> {
                     showGraph = value;
                     if (value && widget.config.graphConfig == null) {
                       widget.config.graphConfig = GraphAssetConfig.preview();
+                    } else if (!value) {
+                      widget.config.graphConfig = null; // Add this line
                     }
                   }),
                 ),
@@ -220,6 +245,9 @@ class NumberWidget extends ConsumerWidget {
   String _formatNumber(num value) {
     if (!config.showDecimalPoint) {
       return value.toInt().toString();
+    }
+    if (config.scale != null) {
+      value = value * config.scale!;
     }
 
     final formatted = value.toStringAsFixed(config.decimalPlaces);
