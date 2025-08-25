@@ -18,6 +18,7 @@ import 'beckhoff.dart';
 import 'schneider.dart';
 import 'icon.dart';
 import 'table.dart';
+import 'start_stop_button.dart';
 
 class AssetRegistry {
   static final Logger _log = Logger();
@@ -50,6 +51,7 @@ class AssetRegistry {
     SchneiderATV320Config: SchneiderATV320Config.fromJson,
     IconConfig: IconConfig.fromJson,
     TableAssetConfig: TableAssetConfig.fromJson,
+    StartStopPillButtonConfig: StartStopPillButtonConfig.fromJson,
   };
 
   static final Map<Type, Asset Function()> defaultFactories = {
@@ -79,6 +81,7 @@ class AssetRegistry {
     SchneiderATV320Config: SchneiderATV320Config.preview,
     IconConfig: IconConfig.preview,
     TableAssetConfig: TableAssetConfig.preview,
+    StartStopPillButtonConfig: StartStopPillButtonConfig.preview,
   };
 
   static void registerFromJsonFactory<T extends Asset>(
