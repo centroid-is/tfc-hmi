@@ -707,7 +707,9 @@ class GraphDisplayConfig {
   int get hashCode => Object.hash(index, yAxisUnit, yAxis2Unit);
 }
 
-// Add these classes at the top level (before HistoryViewPage)
+// -----------------------------------------------------------------------------
+// Tree node model
+// -----------------------------------------------------------------------------
 class KeyTreeNode {
   final String name;
   final String? fullKey; // null for folder nodes, non-null for leaf nodes
@@ -725,242 +727,44 @@ class KeyTreeNode {
   bool get isFolder => !isLeaf;
 }
 
-class _KeyFolderTile extends StatefulWidget {
-  final KeyTreeNode node;
-  final Set<String> collected;
-  final String search;
-  final bool onlyCollected;
-  final Set<String> selected;
-  final Function(String) onKeyToggle;
-  final Widget Function(
-          KeyTreeNode, Set<String>, String, bool, Set<String>, Function(String))
-      buildKeyTreeView;
-
-  const _KeyFolderTile({
-    required this.node,
-    required this.collected,
-    required this.search,
-    required this.onlyCollected,
-    required this.selected,
-    required this.onKeyToggle,
-    required this.buildKeyTreeView,
-  });
-
-  @override
-  State<_KeyFolderTile> createState() => _KeyFolderTileState();
-}
-
-class _KeyFolderTileState extends State<_KeyFolderTile> {
-  late bool _isExpanded;
-
-  @override
-  void initState() {
-    super.initState();
-    _isExpanded = widget.node.isExpanded;
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    // Count how many keys are in this folder (recursively)
-    int _countKeys(KeyTreeNode node) {
-      int count = 0;
-      for (final child in node.children.values) {
-        if (child.isLeaf) {
-          count++;
-        } else {
-          count += _countKeys(child);
-        }
-      }
-      return count;
-    }
-
-    final keyCount = _countKeys(widget.node);
-
-    // Check if this folder has any visible children
-    final hasVisibleChildren = widget.node.children.values.any((child) {
-      if (widget.search.isNotEmpty) {
-        final fullKey = child.fullKey ?? child.name;
-        if (!fullKey.toLowerCase().contains(widget.search.toLowerCase())) {
-          return false;
-        }
-      }
-
-      if (widget.onlyCollected && child.isLeaf) {
-        return widget.collected.contains(child.fullKey);
-      }
-
-      return true;
-    });
-
-    if (!hasVisibleChildren) {
-      return const SizedBox.shrink();
-    }
-
-    return Column(
-      children: [
-        ListTile(
-          dense: true,
-          leading: Icon(
-            _isExpanded ? Icons.expand_more : Icons.chevron_right,
-            size: 20,
-          ),
-          title: Row(
-            children: [
-              Icon(
-                Icons.folder,
-                size: 18,
-                color: Theme.of(context).colorScheme.primary,
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  widget.node.name,
-                  style: TextStyle(
-                    fontWeight: FontWeight.w600,
-                    color:
-                        Theme.of(context).colorScheme.onSurface, // Better color
-                  ),
-                ),
-              ),
-              Text(
-                '($keyCount)',
-                style: TextStyle(
-                  fontSize: 12,
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                ),
-              ),
-            ],
-          ),
-          onTap: () {
-            setState(() {
-              _isExpanded = !_isExpanded;
-            });
-          },
-        ),
-        if (_isExpanded)
-          Padding(
-            padding: const EdgeInsets.only(left: 24),
-            child: Column(
-              children: widget.node.children.values.map((child) {
-                // For leaf nodes, render the key row directly
-                if (child.isLeaf) {
-                  final keyName = child.fullKey!;
-                  final isCollected = widget.collected.contains(keyName);
-
-                  if (widget.onlyCollected && !isCollected) {
-                    return const SizedBox.shrink();
-                  }
-
-                  // Extract just the key name part (skip the folder prefix)
-                  final displayName = keyName.split('.').last;
-
-                  return ListTile(
-                    dense: true,
-                    title: Text(
-                      displayName, // Use displayName instead of keyName
-                      style: const TextStyle(fontWeight: FontWeight.w500),
-                    ),
-                    trailing: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        SizedBox(
-                          width: 90,
-                          child: _CollectorToggle(keyName: keyName),
-                        ),
-                        const SizedBox(width: 8),
-                        Checkbox(
-                          value: widget.selected.contains(keyName),
-                          onChanged: (v) => widget.onKeyToggle(keyName),
-                        ),
-                      ],
-                    ),
-                    onTap: () => widget.onKeyToggle(keyName),
-                  );
-                }
-
-                // For folder nodes, render them recursively
-                return _KeyFolderTile(
-                  node: child,
-                  collected: widget.collected,
-                  search: widget.search,
-                  onlyCollected: widget.onlyCollected,
-                  selected: widget.selected,
-                  onKeyToggle: widget.onKeyToggle,
-                  buildKeyTreeView: widget.buildKeyTreeView,
-                );
-              }).toList(),
-            ),
-          ),
-      ],
-    );
-  }
-}
-
-// Add this provider at the top level
+// Build a hierarchical tree from dotted keys: "plc.motor.speed"
 final keyTreeProvider = FutureProvider<KeyTreeNode>((ref) async {
   final sm = await ref.watch(stateManProvider.future);
   final keys = List<String>.from(sm.keys);
   keys.sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
-
-  // Debug: Print some sample keys
-  print('🔑 Sample keys: ${keys.take(10).toList()}');
-
-  // Debug: Check if keys actually contain dots
-  final keysWithDots = keys.where((k) => k.contains('.')).take(5).toList();
-  print('🔑 Keys with dots: $keysWithDots');
-
   return _buildKeyTree(keys);
 });
 
-// Add this helper function at the top level
 KeyTreeNode _buildKeyTree(List<String> keys) {
-  print('🔗 Building tree from ${keys.length} keys');
   final root = KeyTreeNode(name: 'root', children: {});
-
   for (final key in keys) {
     final parts = key.split('.');
-    print('  🔑 Processing key: $key -> parts: $parts');
-
-    // Start from root
     KeyTreeNode current = root;
-
-    // Build the path step by step
     for (int i = 0; i < parts.length; i++) {
       final part = parts[i];
       final isLast = i == parts.length - 1;
-
-      // Create the node if it doesn't exist
-      if (!current.children.containsKey(part)) {
-        current.children[part] = KeyTreeNode(
-          name: part,
-          fullKey: isLast ? key : null, // Only set fullKey for the final part
-          children: {},
-        );
-        print('    Created ${isLast ? 'leaf' : 'folder'}: $part');
-      }
-
-      // Move to the next level
+      current.children.putIfAbsent(
+        part,
+        () =>
+            KeyTreeNode(name: part, fullKey: isLast ? key : null, children: {}),
+      );
       current = current.children[part]!;
+      // If an intermediate node was created as a leaf by a weird key, force folder
+      if (!isLast && current.fullKey != null) {
+        current.children.putIfAbsent(
+          '__leaf__${current.fullKey}',
+          () => KeyTreeNode(
+            name: current.name,
+            fullKey: current.fullKey,
+            children: {},
+          ),
+        );
+        current = KeyTreeNode(
+            name: current.name, fullKey: null, children: current.children);
+      }
     }
   }
-
-  // Debug: Print the actual tree structure
-  print('🌳 Tree structure:');
-  _printTree(root, 0);
-
   return root;
-}
-
-// Add this helper function to debug the tree structure
-void _printTree(KeyTreeNode node, int depth) {
-  final indent = '  ' * depth;
-  final type = node.isLeaf ? '📄' : '📁';
-  final key = node.isLeaf ? ' (${node.fullKey})' : '';
-  print('$indent$type ${node.name}$key - ${node.children.length} children');
-
-  for (final child in node.children.values) {
-    _printTree(child, depth + 1);
-  }
 }
 
 // -----------------------------------------------------------------------------
@@ -981,6 +785,11 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage>
   DateTimeRange? _range;
   SavedHistoryView? _activeView;
   bool _onlyCollected = true;
+
+  // Maintain expand/collapse per folder path (e.g., "root/plc/motor")
+  final Set<String> _expandedPaths = {'root'};
+
+  // Left pane collapse
   bool _leftPaneExpanded = true;
 
   // Rename to avoid conflict with the widget's GraphConfig
@@ -994,7 +803,7 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage>
   void initState() {
     super.initState();
     _updateGraphConfigs();
-    _updateKeyConfigs(); // Add this method
+    _updateKeyConfigs();
   }
 
   void _updateKeyConfigs() {
@@ -1017,13 +826,10 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage>
   void _updateGraphConfigs() {
     // Initialize default graph configs for graphs 0-4
     for (int i = 0; i < 5; i++) {
-      if (!_graphConfigs.containsKey(i)) {
-        _graphConfigs[i] = GraphDisplayConfig(
-          index: i,
-          yAxisUnit: '',
-          yAxis2Unit: '',
-        );
-      }
+      _graphConfigs.putIfAbsent(
+        i,
+        () => GraphDisplayConfig(index: i, yAxisUnit: '', yAxis2Unit: ''),
+      );
     }
   }
 
@@ -1042,18 +848,18 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage>
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Left pane: Key search + list (now foldable)
-            AnimatedContainer(
-              duration: const Duration(milliseconds: 300),
-              curve: Curves.easeInOut,
-              width: _leftPaneExpanded ? null : 60,
-              child: _leftPaneExpanded
-                  ? Expanded(
-                      flex: 2,
-                      child: _buildKeyPicker(context),
-                    )
-                  : _buildCollapsedLeftPane(context),
-            ),
+            // Left pane: Key search + tree (now properly recursive)
+            if (_leftPaneExpanded)
+              Expanded(
+                flex: 2,
+                child: _buildKeyPicker(context),
+              )
+            else
+              SizedBox(
+                width: 60,
+                child: _buildCollapsedLeftPane(context),
+              ),
+
             // Collapse/expand button
             Container(
               margin: const EdgeInsets.symmetric(horizontal: 8),
@@ -1079,6 +885,7 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage>
               ),
             ),
             const SizedBox(width: 16),
+
             // Right pane: Controls + Graph/Table
             Expanded(
               flex: 5,
@@ -1123,7 +930,7 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage>
     );
   }
 
-  // Add this new method for the collapsed left pane
+  // Collapsed left pane
   Widget _buildCollapsedLeftPane(BuildContext context) {
     return Container(
       width: 60,
@@ -1243,9 +1050,8 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage>
     );
   }
 
-  // Replace the existing _buildKeyPicker method with this tree-based version
+  // Left pane: search + filters + header + recursive tree
   Widget _buildKeyPicker(BuildContext context) {
-    final keysAsync = ref.watch(stateKeysProvider);
     final collectedAsync = ref.watch(collectedKeysProvider);
     final dbAsync = ref.watch(databaseProvider);
     final keyTreeAsync = ref.watch(keyTreeProvider);
@@ -1295,59 +1101,75 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage>
           ),
           child: Row(
             children: [
-              Expanded(
+              const Expanded(
                 flex: 3,
                 child: Text(
                   'Key Name',
                   style: TextStyle(
                     fontWeight: FontWeight.bold,
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
                   ),
                 ),
               ),
-              SizedBox(
+              const SizedBox(
                 width: 90,
                 child: Text(
                   'Collected',
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
-                  ),
+                  style: TextStyle(fontWeight: FontWeight.bold),
                 ),
               ),
-              SizedBox(
+              const SizedBox(
                 width: 48,
                 child: Text(
                   'View',
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
-                  ),
+                  style: TextStyle(fontWeight: FontWeight.bold),
                 ),
+              ),
+              IconButton(
+                tooltip: 'Expand all',
+                onPressed: () => setState(() => _expandedPaths.add('__ALL__')),
+                icon: const Icon(Icons.unfold_more),
+              ),
+              IconButton(
+                tooltip: 'Collapse all',
+                onPressed: () => setState(() => _expandedPaths
+                  ..clear()
+                  ..add('root')),
+                icon: const Icon(Icons.unfold_less),
               ),
             ],
           ),
         ),
-        // Tree-based keys list
+        // Recursive tree
         Expanded(
           child: keyTreeAsync.when(
-            data: (keyTree) {
-              final Set<String> collected =
-                  collectedAsync.valueOrNull ?? const <String>{};
-
-              return _buildKeyTreeView(
-                keyTree,
-                collected,
-                _search,
-                _onlyCollected,
-                _selected,
-                (key) => setState(() {
-                  if (_selected.contains(key)) {
-                    _selected.remove(key);
-                  } else {
-                    _selected.add(key);
-                  }
-                }),
+            data: (root) {
+              final collected = collectedAsync.valueOrNull ?? const <String>{};
+              return _KeyTreeList(
+                root: root,
+                collected: collected,
+                search: _search,
+                onlyCollected: _onlyCollected,
+                selected: _selected,
+                expandedPaths: _expandedPaths,
+                onToggleFolder: (path) {
+                  setState(() {
+                    if (_expandedPaths.contains(path)) {
+                      _expandedPaths.remove(path);
+                    } else {
+                      _expandedPaths.add(path);
+                    }
+                  });
+                },
+                onToggleKey: (key) {
+                  setState(() {
+                    if (_selected.contains(key)) {
+                      _selected.remove(key);
+                    } else {
+                      _selected.add(key);
+                    }
+                    _updateKeyConfigs();
+                  });
+                },
               );
             },
             loading: () =>
@@ -1355,6 +1177,7 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage>
             error: (e, _) => Center(child: Text('Error loading keys: $e')),
           ),
         ),
+
         const SizedBox(height: 12),
         Row(
           children: [
@@ -1401,110 +1224,7 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage>
     );
   }
 
-  // Add this new method to build the tree view
-  Widget _buildKeyTreeView(
-    KeyTreeNode node,
-    Set<String> collected,
-    String search,
-    bool onlyCollected,
-    Set<String> selected,
-    Function(String) onKeyToggle,
-  ) {
-    // Add debug logging
-    print(
-        '🔗 Building tree view for: ${node.name} (isLeaf: ${node.isLeaf}, children: ${node.children.length})');
-
-    // Skip root node
-    if (node.name == 'root') {
-      print('  📁 Root node, building ${node.children.length} children');
-      return ListView.builder(
-        itemCount: node.children.length,
-        itemBuilder: (context, index) {
-          final child = node.children.values.elementAt(index);
-          print('    🔗 Building child: ${child.name}');
-          return _buildKeyTreeView(
-            child,
-            collected,
-            search,
-            onlyCollected,
-            selected,
-            onKeyToggle,
-          );
-        },
-      );
-    }
-
-    // Filter children based on search and collection status
-    final filteredChildren = node.children.values.where((child) {
-      if (search.isNotEmpty) {
-        final fullKey = child.fullKey ?? child.name;
-        if (!fullKey.toLowerCase().contains(search.toLowerCase())) {
-          return false;
-        }
-      }
-
-      if (onlyCollected && child.isLeaf) {
-        return collected.contains(child.fullKey);
-      }
-
-      return true;
-    }).toList();
-
-    print(
-        '  🔗 Filtered children: ${filteredChildren.length} out of ${node.children.length}');
-
-    if (filteredChildren.isEmpty) {
-      print('  📁 No visible children, returning empty');
-      return const SizedBox.shrink();
-    }
-
-    // If this is a leaf node (actual key), show the key row
-    if (node.isLeaf) {
-      print('  📄 Leaf node: ${node.fullKey}');
-      final keyName = node.fullKey!;
-      final isCollected = collected.contains(keyName);
-
-      if (onlyCollected && !isCollected) {
-        return const SizedBox.shrink();
-      }
-
-      return ListTile(
-        dense: true,
-        title: Text(
-          keyName,
-          style: const TextStyle(fontWeight: FontWeight.w500),
-        ),
-        trailing: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            SizedBox(
-              width: 90,
-              child: _CollectorToggle(keyName: keyName),
-            ),
-            const SizedBox(width: 8),
-            Checkbox(
-              value: selected.contains(keyName),
-              onChanged: (v) => onKeyToggle(keyName),
-            ),
-          ],
-        ),
-        onTap: () => onKeyToggle(keyName),
-      );
-    }
-
-    // If this is a folder node, show expandable folder
-    print('  📁 Folder node: ${node.name}, building folder tile');
-    return _KeyFolderTile(
-      node: node,
-      collected: collected,
-      search: search,
-      onlyCollected: onlyCollected,
-      selected: selected,
-      onKeyToggle: onKeyToggle,
-      buildKeyTreeView: _buildKeyTreeView,
-    );
-  }
-
+  // Top controls (right pane header)
   Widget _buildTopControls(BuildContext context) {
     final viewsAsync = ref.watch(savedViewsProvider);
 
@@ -1523,7 +1243,6 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage>
                   // Filter out any duplicate views to prevent the assertion error
                   final uniqueViews = <SavedHistoryView>[];
                   final seenIds = <int>{};
-
                   for (final view in views) {
                     if (!seenIds.contains(view.id)) {
                       seenIds.add(view.id);
@@ -1534,14 +1253,16 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage>
                   // Find the matching view instance from the list to avoid assertion error
                   SavedHistoryView? dropdownValue;
                   if (_activeView != null) {
-                    dropdownValue = uniqueViews
-                        .where((v) => v.id == _activeView!.id)
-                        .firstOrNull;
+                    for (final v in uniqueViews) {
+                      if (v.id == _activeView!.id) {
+                        dropdownValue = v;
+                        break;
+                      }
+                    }
                   }
 
                   return DropdownButton<SavedHistoryView?>(
-                    value:
-                        dropdownValue, // Use the found instance instead of _activeView
+                    value: dropdownValue,
                     hint: const Text('Load saved view…'),
                     onChanged: (v) {
                       setState(() {
@@ -1549,11 +1270,13 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage>
                         _selected
                           ..clear()
                           ..addAll(v?.keys ?? const []);
+                        _updateKeyConfigs();
                         // Load graph configs from database
                         if (v != null) {
                           _loadGraphConfigsFromView(v.id);
                         } else {
                           _graphConfigs.clear();
+                          _updateGraphConfigs();
                         }
                       });
                     },
@@ -1573,7 +1296,7 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage>
                 ),
                 error: (e, _) => Text('Views err: $e'),
               ),
-              // Configure button (new)
+              // Configure button
               ElevatedButton.icon(
                 icon: const Icon(Icons.settings),
                 label: const Text('Configure'),
@@ -1654,6 +1377,8 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage>
       ],
     );
   }
+
+  // ---- DB ops & dialogs ------------------------------------------------------
 
   Future<void> _deleteView() async {
     final v = _activeView!;
@@ -1769,7 +1494,7 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage>
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
 
-  // Add method to load graph configs from database
+  // Load graph configs for a saved view
   Future<void> _loadGraphConfigsFromView(int viewId) async {
     final dbWrap = await ref.read(databaseProvider.future);
     if (dbWrap == null) return;
@@ -1777,19 +1502,15 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage>
     final rawKeyConfigs = await dbWrap.db.getHistoryViewKeys(viewId);
     final rawGraphConfigs = await dbWrap.db.getHistoryViewGraphs(viewId);
 
-    print('🔍 Loading configs for view $viewId:');
-    print('  Key configs: $rawKeyConfigs');
-    print('  Graph configs: $rawGraphConfigs');
-
     setState(() {
       _keyConfigs.clear();
       for (final entry in rawKeyConfigs.entries) {
         final raw = entry.value;
         _keyConfigs[entry.key] = GraphKeyConfig(
-          key: raw['key'] as String,
-          alias: raw['alias'] as String,
-          useSecondYAxis: raw['useSecondYAxis'] as bool,
-          graphIndex: raw['graphIndex'] as int,
+          key: raw['key'] as String? ?? entry.key,
+          alias: (raw['alias'] as String?) ?? entry.key,
+          useSecondYAxis: (raw['useSecondYAxis'] as bool?) ?? false,
+          graphIndex: (raw['graphIndex'] as int?) ?? 0,
         );
       }
 
@@ -1798,14 +1519,12 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage>
         final raw = entry.value;
         _graphConfigs[entry.key] = GraphDisplayConfig(
           index: entry.key,
-          yAxisUnit: raw['yAxisUnit'] as String,
-          yAxis2Unit: raw['yAxis2Unit'] as String,
+          yAxisUnit: (raw['yAxisUnit'] as String?) ?? '',
+          yAxis2Unit: (raw['yAxis2Unit'] as String?) ?? '',
         );
       }
+      _updateGraphConfigs(); // ensure 0..4 exist
     });
-
-    print('  Loaded key configs: $_keyConfigs');
-    print('  Loaded graph configs: $_graphConfigs');
   }
 
   Future<void> _saveAsNewView() async {
@@ -1892,16 +1611,16 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage>
     setState(() => _activeView = SavedHistoryView(
         id: _activeView!.id, name: name, keys: _selected.toList()));
     ref.invalidate(savedViewsProvider);
-    _toast(context, 'Updated "${name}"');
+    _toast(context, 'Updated "$name"');
   }
 
-  // Add this new method for the configuration dialog
+  // Configuration dialog
   Future<void> _showConfigureDialog() async {
     if (_selected.isEmpty) return;
 
     // Update configs to match current selection
     _updateGraphConfigs();
-    _updateKeyConfigs(); // Update key configs as well
+    _updateKeyConfigs();
 
     if (!context.mounted) return;
 
@@ -1912,10 +1631,12 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage>
         graphConfigs: Map.from(_graphConfigs),
         onSave: (keyConfigs, graphConfigs) async {
           setState(() {
-            _keyConfigs.clear();
-            _keyConfigs.addAll(keyConfigs);
-            _graphConfigs.clear();
-            _graphConfigs.addAll(graphConfigs);
+            _keyConfigs
+              ..clear()
+              ..addAll(keyConfigs);
+            _graphConfigs
+              ..clear()
+              ..addAll(graphConfigs);
           });
 
           // Save configurations to database if we have an active view
@@ -1927,7 +1648,7 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage>
     );
   }
 
-  // Add this new method for the page help dialog
+  // Page help dialog
   void _showPageHelpDialog(BuildContext context) {
     showDialog<void>(
       context: context,
@@ -2004,7 +1725,188 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage>
   }
 }
 
-// Update the dialog to handle both configurations
+// -----------------------------------------------------------------------------
+// Recursive tree list (flat ListView built from recursion)
+// -----------------------------------------------------------------------------
+class _KeyTreeList extends StatelessWidget {
+  final KeyTreeNode root;
+  final Set<String> collected;
+  final String search;
+  final bool onlyCollected;
+  final Set<String> selected;
+  final Set<String> expandedPaths;
+  final void Function(String path) onToggleFolder;
+  final void Function(String key) onToggleKey;
+
+  const _KeyTreeList({
+    required this.root,
+    required this.collected,
+    required this.search,
+    required this.onlyCollected,
+    required this.selected,
+    required this.expandedPaths,
+    required this.onToggleFolder,
+    required this.onToggleKey,
+  });
+
+  bool _leafVisible(KeyTreeNode node) {
+    if (!node.isLeaf) return false;
+    if (search.isNotEmpty) {
+      final hit =
+          (node.fullKey ?? '').toLowerCase().contains(search.toLowerCase());
+      if (!hit) return false;
+    }
+    if (onlyCollected) {
+      return collected.contains(node.fullKey);
+    }
+    return true;
+  }
+
+  /// Returns (visibleCount, anyVisible)
+  (int, bool) _countVisibleLeaves(KeyTreeNode node) {
+    if (node.isLeaf) {
+      final v = _leafVisible(node) ? 1 : 0;
+      return (v, v > 0);
+    }
+    int count = 0;
+    bool any = false;
+    for (final child in node.children.values) {
+      final (c, a) = _countVisibleLeaves(child);
+      count += c;
+      any = any || a;
+    }
+    return (count, any);
+  }
+
+  List<Widget> _buildItems(
+    BuildContext context,
+    KeyTreeNode node, {
+    required String path,
+    required int depth,
+  }) {
+    // Skip root: build its children directly
+    if (path == 'root') {
+      final children = node.children.values.toList()
+        ..sort((a, b) {
+          // Folders first, then leaves, then alpha
+          if (a.isFolder != b.isFolder) return a.isFolder ? -1 : 1;
+          return a.name.toLowerCase().compareTo(b.name.toLowerCase());
+        });
+
+      final items = <Widget>[];
+      for (final child in children) {
+        items.addAll(_buildItems(
+          context,
+          child,
+          path: '$path/${child.name}',
+          depth: depth,
+        ));
+      }
+      return items;
+    }
+
+    // Leaf
+    if (node.isLeaf) {
+      if (!_leafVisible(node)) return const <Widget>[];
+      final keyName = node.fullKey!;
+      final displayName = keyName.split('.').last;
+      return [
+        ListTile(
+          dense: true,
+          contentPadding: EdgeInsets.only(left: 16.0 * depth, right: 8),
+          title: Text(
+            displayName,
+            style: const TextStyle(fontWeight: FontWeight.w500),
+          ),
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SizedBox(width: 90, child: _CollectorToggle(keyName: keyName)),
+              const SizedBox(width: 8),
+              Checkbox(
+                value: selected.contains(keyName),
+                onChanged: (_) => onToggleKey(keyName),
+              ),
+            ],
+          ),
+          onTap: () => onToggleKey(keyName),
+        )
+      ];
+    }
+
+    // Folder
+    final (visibleCount, anyVisible) = _countVisibleLeaves(node);
+    if (!anyVisible) return const <Widget>[];
+
+    // auto-expand when searching to show matches
+    final autoExpandedFromSearch = search.isNotEmpty;
+    final expanded = autoExpandedFromSearch ||
+        expandedPaths.contains('__ALL__') ||
+        expandedPaths.contains(path);
+
+    final header = ListTile(
+      dense: true,
+      contentPadding: EdgeInsets.only(left: 16.0 * depth, right: 8),
+      leading:
+          Icon(expanded ? Icons.expand_more : Icons.chevron_right, size: 20),
+      title: Row(
+        children: [
+          Icon(Icons.folder,
+              size: 18, color: Theme.of(context).colorScheme.primary),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              node.name,
+              style: const TextStyle(fontWeight: FontWeight.w600),
+            ),
+          ),
+          Text(
+            '($visibleCount)',
+            style: TextStyle(
+              fontSize: 12,
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
+          ),
+        ],
+      ),
+      onTap: () => onToggleFolder(path),
+    );
+
+    final items = <Widget>[header];
+    if (expanded) {
+      final children = node.children.values.toList()
+        ..sort((a, b) {
+          if (a.isFolder != b.isFolder) return a.isFolder ? -1 : 1;
+          return a.name.toLowerCase().compareTo(b.name.toLowerCase());
+        });
+      for (final child in children) {
+        items.addAll(_buildItems(
+          context,
+          child,
+          path: '$path/${child.name}',
+          depth: depth + 1,
+        ));
+      }
+    }
+    return items;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final items = _buildItems(context, root, path: 'root', depth: 0);
+    if (items.isEmpty) {
+      return const Center(child: Text('No keys match the current filters.'));
+    }
+    return ListView.builder(
+      itemCount: items.length,
+      itemBuilder: (context, i) => items[i],
+    );
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Graph configuration dialog
+// -----------------------------------------------------------------------------
 class _GraphConfigurationDialog extends StatefulWidget {
   final Map<String, GraphKeyConfig> keyConfigs;
   final Map<int, GraphDisplayConfig> graphConfigs;
@@ -2048,8 +1950,8 @@ class _GraphConfigurationDialogState extends State<_GraphConfigurationDialog> {
         ],
       ),
       content: SizedBox(
-        width: 1000, // Increased width for graph configs
-        height: 600, // Increased height
+        width: 1000,
+        height: 600,
         child: Form(
           key: _formKey,
           child: Column(
@@ -2061,7 +1963,7 @@ class _GraphConfigurationDialogState extends State<_GraphConfigurationDialog> {
                   children: [
                     // Graph Configuration section (left side - 1/3 width)
                     SizedBox(
-                      width: 333, // Fixed width: 1000 * 0.33 ≈ 333
+                      width: 333,
                       child: Card(
                         child: Padding(
                           padding: const EdgeInsets.all(12),
@@ -2347,7 +2249,6 @@ class _GraphConfigurationDialogState extends State<_GraphConfigurationDialog> {
     );
   }
 
-  // Helper method to determine how many graphs to show
   int _getActiveGraphCount() {
     final usedGraphs = <int>{};
     for (final config in _keyConfigs.values) {
