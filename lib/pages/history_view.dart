@@ -73,11 +73,12 @@ class SavedHistoryView {
 final savedViewsProvider = FutureProvider<List<SavedHistoryView>>((ref) async {
   final dbWrap = await ref.watch(databaseProvider.future);
   if (dbWrap == null) return [];
-  final adb = dbWrap.db; // AppDatabase helpers you added
+  final adb = dbWrap.db;
   final rows = await adb.selectHistoryViews();
   final out = <SavedHistoryView>[];
   for (final v in rows) {
-    final keys = await adb.getHistoryViewKeys(v.id);
+    final keys =
+        await adb.getHistoryViewKeyNames(v.id); // Use the key names method
     out.add(SavedHistoryView(id: v.id, name: v.name, keys: keys));
   }
   out.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
@@ -237,11 +238,13 @@ class _HistoryGraphPane extends ConsumerStatefulWidget {
   final List<String> keys;
   final bool realtime;
   final DateTimeRange? range;
+  final Map<String, GraphKeyConfig> graphConfigs; // Add this parameter
 
   const _HistoryGraphPane({
     required this.keys,
     required this.realtime,
     required this.range,
+    required this.graphConfigs, // Add this parameter
   });
 
   @override
@@ -293,10 +296,17 @@ class _HistoryGraphPaneState extends ConsumerState<_HistoryGraphPane> {
               return const Center(child: CircularProgressIndicator());
             }
 
-            final List<Map<GraphDataConfig, List<List<double>>>> graphData = [];
+            // Group data by graph index
+            final Map<int, List<Map<GraphDataConfig, List<List<double>>>>>
+                graphDataByIndex = {};
+
             for (int i = 0; i < widget.keys.length; i++) {
               final seriesKey = widget.keys[i];
               final seriesData = data[i];
+              final config = widget.graphConfigs[seriesKey];
+
+              if (config == null) continue;
+
               final points = <List<double>>[];
 
               for (final sample in seriesData) {
@@ -321,13 +331,17 @@ class _HistoryGraphPaneState extends ConsumerState<_HistoryGraphPane> {
                 }
               }
 
-              graphData.add({
+              final graphData = {
                 GraphDataConfig(
-                  label: seriesKey,
-                  mainAxis: true,
+                  label: config.alias,
+                  mainAxis: !config.useSecondYAxis,
                   color: GraphConfig.colors[i % GraphConfig.colors.length],
                 ): points,
-              });
+              };
+
+              graphDataByIndex
+                  .putIfAbsent(config.graphIndex, () => [])
+                  .add(graphData);
             }
 
             final Duration xSpan = widget.realtime
@@ -363,7 +377,8 @@ class _HistoryGraphPaneState extends ConsumerState<_HistoryGraphPane> {
                       yAxis2: null,
                       xSpan: xSpan,
                     ),
-                    data: graphData,
+                    data: graphDataByIndex[0] ??
+                        [], // Only show one graph for now
                     showDate: _paused,
                   ),
                 ),
@@ -614,6 +629,84 @@ class _HistoryTablePane extends ConsumerWidget {
   }
 }
 
+class GraphKeyConfig {
+  final String key;
+  final String alias;
+  final bool useSecondYAxis;
+  final int graphIndex; // 0-4 for up to 5 graphs
+
+  GraphKeyConfig({
+    required this.key,
+    required this.alias,
+    this.useSecondYAxis = false,
+    this.graphIndex = 0,
+  });
+
+  GraphKeyConfig copyWith({
+    String? key,
+    String? alias,
+    bool? useSecondYAxis,
+    int? graphIndex,
+  }) {
+    return GraphKeyConfig(
+      key: key ?? this.key,
+      alias: alias ?? this.alias,
+      useSecondYAxis: useSecondYAxis ?? this.useSecondYAxis,
+      graphIndex: graphIndex ?? this.graphIndex,
+    );
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    return other is GraphKeyConfig &&
+        other.key == key &&
+        other.alias == alias &&
+        other.useSecondYAxis == useSecondYAxis &&
+        other.graphIndex == graphIndex;
+  }
+
+  @override
+  int get hashCode => Object.hash(key, alias, useSecondYAxis, graphIndex);
+}
+
+// Rename to avoid conflict with imported GraphConfig
+class GraphDisplayConfig {
+  final int index;
+  final String yAxisUnit;
+  final String yAxis2Unit;
+
+  GraphDisplayConfig({
+    required this.index,
+    this.yAxisUnit = '',
+    this.yAxis2Unit = '',
+  });
+
+  GraphDisplayConfig copyWith({
+    int? index,
+    String? yAxisUnit,
+    String? yAxis2Unit,
+  }) {
+    return GraphDisplayConfig(
+      index: index ?? this.index,
+      yAxisUnit: yAxisUnit ?? this.yAxisUnit,
+      yAxis2Unit: yAxis2Unit ?? this.yAxis2Unit,
+    );
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    return other is GraphDisplayConfig &&
+        other.index == index &&
+        other.yAxisUnit == yAxisUnit &&
+        other.yAxis2Unit == yAxis2Unit;
+  }
+
+  @override
+  int get hashCode => Object.hash(index, yAxisUnit, yAxis2Unit);
+}
+
 // -----------------------------------------------------------------------------
 // Main Page
 // -----------------------------------------------------------------------------
@@ -632,8 +725,51 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage>
   DateTimeRange? _range;
   SavedHistoryView? _activeView;
   bool _onlyCollected = true;
+  bool _leftPaneExpanded = true;
+
+  // Rename to avoid conflict with the widget's GraphConfig
+  final Map<String, GraphKeyConfig> _keyConfigs = <String, GraphKeyConfig>{};
+  final Map<int, GraphDisplayConfig> _graphConfigs =
+      <int, GraphDisplayConfig>{};
 
   late final TabController _tab = TabController(length: 2, vsync: this);
+
+  @override
+  void initState() {
+    super.initState();
+    _updateGraphConfigs();
+    _updateKeyConfigs(); // Add this method
+  }
+
+  void _updateKeyConfigs() {
+    // Remove configs for keys that are no longer selected
+    _keyConfigs.removeWhere((key, _) => !_selected.contains(key));
+
+    // Add default configs for newly selected keys
+    for (final key in _selected) {
+      if (!_keyConfigs.containsKey(key)) {
+        _keyConfigs[key] = GraphKeyConfig(
+          key: key,
+          alias: key,
+          useSecondYAxis: false,
+          graphIndex: 0,
+        );
+      }
+    }
+  }
+
+  void _updateGraphConfigs() {
+    // Initialize default graph configs for graphs 0-4
+    for (int i = 0; i < 5; i++) {
+      if (!_graphConfigs.containsKey(i)) {
+        _graphConfigs[i] = GraphDisplayConfig(
+          index: i,
+          yAxisUnit: '',
+          yAxis2Unit: '',
+        );
+      }
+    }
+  }
 
   @override
   void dispose() {
@@ -650,12 +786,43 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage>
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Left pane: Key search + list
-            Expanded(
-              flex: 2,
-              child: _buildKeyPicker(context),
+            // Left pane: Key search + list (now foldable)
+            AnimatedContainer(
+              duration: const Duration(milliseconds: 300),
+              curve: Curves.easeInOut,
+              width: _leftPaneExpanded ? null : 60,
+              child: _leftPaneExpanded
+                  ? Expanded(
+                      flex: 2,
+                      child: _buildKeyPicker(context),
+                    )
+                  : _buildCollapsedLeftPane(context),
             ),
-            const SizedBox(width: 24),
+            // Collapse/expand button
+            Container(
+              margin: const EdgeInsets.symmetric(horizontal: 8),
+              child: IconButton(
+                onPressed: () {
+                  setState(() {
+                    _leftPaneExpanded = !_leftPaneExpanded;
+                  });
+                },
+                icon: Icon(
+                  _leftPaneExpanded ? Icons.chevron_left : Icons.chevron_right,
+                  size: 20,
+                ),
+                tooltip: _leftPaneExpanded
+                    ? 'Collapse left pane'
+                    : 'Expand left pane',
+                style: IconButton.styleFrom(
+                  backgroundColor:
+                      Theme.of(context).colorScheme.surfaceContainerHighest,
+                  foregroundColor:
+                      Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ),
+            const SizedBox(width: 16),
             // Right pane: Controls + Graph/Table
             Expanded(
               flex: 5,
@@ -680,6 +847,7 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage>
                           keys: _selected.toList(),
                           realtime: _realtime,
                           range: _range,
+                          graphConfigs: _keyConfigs,
                         ),
                         _HistoryTablePane(
                           keys: _selected.toList(),
@@ -695,6 +863,126 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage>
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  // Add this new method for the collapsed left pane
+  Widget _buildCollapsedLeftPane(BuildContext context) {
+    return Container(
+      width: 60,
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        children: [
+          const SizedBox(height: 16),
+          // Selected count indicator
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.primaryContainer,
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: Text(
+              '${_selected.length}',
+              style: TextStyle(
+                color: Theme.of(context).colorScheme.onPrimaryContainer,
+                fontWeight: FontWeight.bold,
+                fontSize: 16,
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+          // Active view indicator (if any)
+          if (_activeView != null) ...[
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.secondaryContainer,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Text(
+                _activeView!.name.length > 8
+                    ? '${_activeView!.name.substring(0, 8)}...'
+                    : _activeView!.name,
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.onSecondaryContainer,
+                  fontSize: 10,
+                  fontWeight: FontWeight.w500,
+                ),
+                textAlign: TextAlign.center,
+              ),
+            ),
+            const SizedBox(height: 16),
+          ],
+          // Collection status indicator
+          Consumer(
+            builder: (context, ref, child) {
+              final collectedAsync = ref.watch(collectedKeysProvider);
+              return collectedAsync.when(
+                data: (collected) {
+                  final collectedCount =
+                      _selected.where((k) => collected.contains(k)).length;
+                  final totalCount = _selected.length;
+                  if (totalCount == 0) return const SizedBox.shrink();
+
+                  return Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: collectedCount == totalCount
+                          ? Theme.of(context).colorScheme.tertiaryContainer
+                          : Theme.of(context).colorScheme.errorContainer,
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Icon(
+                      collectedCount == totalCount
+                          ? Icons.check_circle
+                          : Icons.warning,
+                      color: collectedCount == totalCount
+                          ? Theme.of(context).colorScheme.onTertiaryContainer
+                          : Theme.of(context).colorScheme.onErrorContainer,
+                      size: 20,
+                    ),
+                  );
+                },
+                loading: () => const SizedBox.shrink(),
+                error: (_, __) => const SizedBox.shrink(),
+              );
+            },
+          ),
+          const Spacer(),
+          // Quick actions
+          if (_selected.isNotEmpty) ...[
+            IconButton(
+              onPressed: () => _saveAsNewView(),
+              icon: const Icon(Icons.save, size: 20),
+              tooltip: 'Save as new view',
+              style: IconButton.styleFrom(
+                backgroundColor: Theme.of(context).colorScheme.primaryContainer,
+                foregroundColor:
+                    Theme.of(context).colorScheme.onPrimaryContainer,
+              ),
+            ),
+            const SizedBox(height: 8),
+          ],
+          if (_activeView != null) ...[
+            IconButton(
+              onPressed: () => _updateView(),
+              icon: const Icon(Icons.update, size: 20),
+              tooltip: 'Update view',
+              style: IconButton.styleFrom(
+                backgroundColor:
+                    Theme.of(context).colorScheme.secondaryContainer,
+                foregroundColor:
+                    Theme.of(context).colorScheme.onSecondaryContainer,
+              ),
+            ),
+            const SizedBox(height: 8),
+          ],
+          const SizedBox(height: 16),
+        ],
       ),
     );
   }
@@ -901,140 +1189,151 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage>
   Widget _buildTopControls(BuildContext context) {
     final viewsAsync = ref.watch(savedViewsProvider);
 
-    return Wrap(
-      spacing: 12,
-      runSpacing: 8,
-      crossAxisAlignment: WrapCrossAlignment.center,
+    return Row(
       children: [
-        // Saved view picker
-        viewsAsync.when(
-          data: (views) {
-            // Filter out any duplicate views to prevent the assertion error
-            final uniqueViews = <SavedHistoryView>[];
-            final seenIds = <int>{};
+        // Left side: existing controls
+        Expanded(
+          child: Wrap(
+            spacing: 12,
+            runSpacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              // Saved view picker
+              viewsAsync.when(
+                data: (views) {
+                  // Filter out any duplicate views to prevent the assertion error
+                  final uniqueViews = <SavedHistoryView>[];
+                  final seenIds = <int>{};
 
-            for (final view in views) {
-              if (!seenIds.contains(view.id)) {
-                seenIds.add(view.id);
-                uniqueViews.add(view);
-              }
-            }
+                  for (final view in views) {
+                    if (!seenIds.contains(view.id)) {
+                      seenIds.add(view.id);
+                      uniqueViews.add(view);
+                    }
+                  }
 
-            // Find the matching view instance from the list to avoid assertion error
-            SavedHistoryView? dropdownValue;
-            if (_activeView != null) {
-              dropdownValue =
-                  uniqueViews.where((v) => v.id == _activeView!.id).firstOrNull;
-            }
+                  // Find the matching view instance from the list to avoid assertion error
+                  SavedHistoryView? dropdownValue;
+                  if (_activeView != null) {
+                    dropdownValue = uniqueViews
+                        .where((v) => v.id == _activeView!.id)
+                        .firstOrNull;
+                  }
 
-            return DropdownButton<SavedHistoryView?>(
-              value:
-                  dropdownValue, // Use the found instance instead of _activeView
-              hint: const Text('Load saved view…'),
-              onChanged: (v) {
-                setState(() {
-                  _activeView = v;
-                  _selected
-                    ..clear()
-                    ..addAll(v?.keys ?? const []);
-                });
-              },
-              items: [
-                for (final v in uniqueViews)
-                  DropdownMenuItem(
-                    value: v,
-                    child: Text(v.name),
-                  ),
-              ],
-            );
-          },
-          loading: () => const SizedBox(
-            width: 140,
-            height: 20,
-            child: LinearProgressIndicator(minHeight: 2),
-          ),
-          error: (e, _) => Text('Views err: $e'),
-        ),
-        // Delete view
-        ElevatedButton.icon(
-          icon: const Icon(Icons.delete),
-          label: const Text('Delete view'),
-          onPressed: _activeView == null ? null : _deleteView,
-          style: ElevatedButton.styleFrom(
-            backgroundColor: Theme.of(context).colorScheme.errorContainer,
-            foregroundColor: Theme.of(context).colorScheme.onErrorContainer,
-          ),
-        ),
-        const SizedBox(width: 12),
-        // Realtime toggle
-        Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Switch(
-              value: _realtime,
-              onChanged: (v) => setState(() {
-                _realtime = v;
-                if (v) _range = null;
-              }),
-            ),
-            const Text('Realtime'),
-          ],
-        ),
-        // DateRange when NOT realtime
-        if (!_realtime)
-          OutlinedButton.icon(
-            icon: const Icon(Icons.calendar_today),
-            label: Text(_range == null
-                ? 'Pick range'
-                : '${_range!.start.toLocal()} → ${_range!.end.toLocal()}'),
-            onPressed: () async {
-              final now = DateTime.now();
-              final initial = _range ??
-                  DateTimeRange(
-                    start: now.subtract(const Duration(hours: 1)),
-                    end: now,
+                  return DropdownButton<SavedHistoryView?>(
+                    value:
+                        dropdownValue, // Use the found instance instead of _activeView
+                    hint: const Text('Load saved view…'),
+                    onChanged: (v) {
+                      setState(() {
+                        _activeView = v;
+                        _selected
+                          ..clear()
+                          ..addAll(v?.keys ?? const []);
+                        // Load graph configs from database
+                        if (v != null) {
+                          _loadGraphConfigsFromView(v.id);
+                        } else {
+                          _graphConfigs.clear();
+                        }
+                      });
+                    },
+                    items: [
+                      for (final v in uniqueViews)
+                        DropdownMenuItem(
+                          value: v,
+                          child: Text(v.name),
+                        ),
+                    ],
                   );
-              final picked = await showDateRangePicker(
-                context: context,
-                firstDate: DateTime(2000),
-                lastDate: now.add(const Duration(days: 1)),
-                initialDateRange: initial,
-              );
-              if (picked != null) {
-                setState(() => _range = picked);
-              }
-            },
+                },
+                loading: () => const SizedBox(
+                  width: 140,
+                  height: 20,
+                  child: LinearProgressIndicator(minHeight: 2),
+                ),
+                error: (e, _) => Text('Views err: $e'),
+              ),
+              // Configure button (new)
+              ElevatedButton.icon(
+                icon: const Icon(Icons.settings),
+                label: const Text('Configure'),
+                onPressed: _selected.isEmpty ? null : _showConfigureDialog,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor:
+                      Theme.of(context).colorScheme.tertiaryContainer,
+                  foregroundColor:
+                      Theme.of(context).colorScheme.onTertiaryContainer,
+                ),
+              ),
+              // Delete view
+              ElevatedButton.icon(
+                icon: const Icon(Icons.delete),
+                label: const Text('Delete view'),
+                onPressed: _activeView == null ? null : _deleteView,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Theme.of(context).colorScheme.errorContainer,
+                  foregroundColor:
+                      Theme.of(context).colorScheme.onErrorContainer,
+                ),
+              ),
+              const SizedBox(width: 12),
+              // Realtime toggle
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Switch(
+                    value: _realtime,
+                    onChanged: (v) => setState(() {
+                      _realtime = v;
+                      if (v) _range = null;
+                    }),
+                  ),
+                  const Text('Realtime'),
+                ],
+              ),
+              // DateRange when NOT realtime
+              if (!_realtime)
+                OutlinedButton.icon(
+                  icon: const Icon(Icons.calendar_today),
+                  label: Text(_range == null
+                      ? 'Pick range'
+                      : '${_range!.start.toLocal()} → ${_range!.end.toLocal()}'),
+                  onPressed: () async {
+                    final now = DateTime.now();
+                    final initial = _range ??
+                        DateTimeRange(
+                          start: now.subtract(const Duration(hours: 1)),
+                          end: now,
+                        );
+                    final picked = await showDateRangePicker(
+                      context: context,
+                      firstDate: DateTime(2000),
+                      lastDate: now.add(const Duration(days: 1)),
+                      initialDateRange: initial,
+                    );
+                    if (picked != null) {
+                      setState(() => _range = picked);
+                    }
+                  },
+                ),
+            ],
           ),
+        ),
+
+        // Right side: info button
+        IconButton(
+          icon: const Icon(Icons.info_outline),
+          onPressed: () => _showPageHelpDialog(context),
+          tooltip: 'How this page works',
+          style: IconButton.styleFrom(
+            backgroundColor:
+                Theme.of(context).colorScheme.surfaceContainerHighest,
+            foregroundColor: Theme.of(context).colorScheme.onSurfaceVariant,
+          ),
+        ),
       ],
     );
-  }
-
-  Future<void> _saveView() async {
-    final dbWrap = await ref.read(databaseProvider.future);
-    if (!context.mounted) return;
-    if (dbWrap == null) {
-      _toast(context, 'Database not ready yet.');
-      return;
-    }
-    final adb = dbWrap.db;
-
-    final name = await _askName(context,
-        initial: _activeView?.name ?? '',
-        title: _activeView == null ? 'Save View' : 'Update View');
-    if (name == null || name.trim().isEmpty) return;
-
-    if (_activeView == null) {
-      final id = await adb.createHistoryView(name.trim(), _selected.toList());
-      setState(() => _activeView = SavedHistoryView(
-          id: id, name: name.trim(), keys: _selected.toList()));
-    } else {
-      await adb.updateHistoryView(
-          _activeView!.id, name.trim(), _selected.toList());
-      setState(() => _activeView = SavedHistoryView(
-          id: _activeView!.id, name: name.trim(), keys: _selected.toList()));
-    }
-    ref.invalidate(savedViewsProvider);
-    _toast(context, 'Saved "${name.trim()}"');
   }
 
   Future<void> _deleteView() async {
@@ -1151,6 +1450,45 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage>
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
 
+  // Add method to load graph configs from database
+  Future<void> _loadGraphConfigsFromView(int viewId) async {
+    final dbWrap = await ref.read(databaseProvider.future);
+    if (dbWrap == null) return;
+
+    final rawKeyConfigs = await dbWrap.db.getHistoryViewKeys(viewId);
+    final rawGraphConfigs = await dbWrap.db.getHistoryViewGraphs(viewId);
+
+    print('🔍 Loading configs for view $viewId:');
+    print('  Key configs: $rawKeyConfigs');
+    print('  Graph configs: $rawGraphConfigs');
+
+    setState(() {
+      _keyConfigs.clear();
+      for (final entry in rawKeyConfigs.entries) {
+        final raw = entry.value;
+        _keyConfigs[entry.key] = GraphKeyConfig(
+          key: raw['key'] as String,
+          alias: raw['alias'] as String,
+          useSecondYAxis: raw['useSecondYAxis'] as bool,
+          graphIndex: raw['graphIndex'] as int,
+        );
+      }
+
+      _graphConfigs.clear();
+      for (final entry in rawGraphConfigs.entries) {
+        final raw = entry.value;
+        _graphConfigs[entry.key] = GraphDisplayConfig(
+          index: entry.key,
+          yAxisUnit: raw['yAxisUnit'] as String,
+          yAxis2Unit: raw['yAxis2Unit'] as String,
+        );
+      }
+    });
+
+    print('  Loaded key configs: $_keyConfigs');
+    print('  Loaded graph configs: $_graphConfigs');
+  }
+
   Future<void> _saveAsNewView() async {
     final dbWrap = await ref.read(databaseProvider.future);
     if (!context.mounted) return;
@@ -1164,7 +1502,29 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage>
         await _askName(context, initial: '', title: 'Save as new view');
     if (name == null || name.trim().isEmpty) return;
 
-    final id = await adb.createHistoryView(name.trim(), _selected.toList());
+    // Convert GraphKeyConfig objects to primitive maps for database
+    final rawKeyConfigs = <String, Map<String, dynamic>>{};
+    for (final entry in _keyConfigs.entries) {
+      final config = entry.value;
+      rawKeyConfigs[entry.key] = {
+        'alias': config.alias,
+        'useSecondYAxis': config.useSecondYAxis,
+        'graphIndex': config.graphIndex,
+      };
+    }
+
+    // Convert GraphConfig objects to primitive maps for database
+    final rawGraphConfigs = <String, Map<String, dynamic>>{};
+    for (final entry in _graphConfigs.entries) {
+      final config = entry.value;
+      rawGraphConfigs[entry.key.toString()] = {
+        'yAxisUnit': config.yAxisUnit,
+        'yAxis2Unit': config.yAxis2Unit,
+      };
+    }
+
+    final id = await adb.createHistoryView(
+        name.trim(), _selected.toList(), rawKeyConfigs, rawGraphConfigs);
     final newView =
         SavedHistoryView(id: id, name: name.trim(), keys: _selected.toList());
 
@@ -1186,11 +1546,496 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage>
 
     final name = _activeView!.name;
 
-    await adb.updateHistoryView(_activeView!.id, name, _selected.toList());
+    // Convert GraphKeyConfig objects to primitive maps for database
+    final rawKeyConfigs = <String, Map<String, dynamic>>{};
+    for (final entry in _keyConfigs.entries) {
+      final config = entry.value;
+      rawKeyConfigs[entry.key] = {
+        'alias': config.alias,
+        'useSecondYAxis': config.useSecondYAxis,
+        'graphIndex': config.graphIndex,
+      };
+    }
+
+    // Convert GraphConfig objects to primitive maps for database
+    final rawGraphConfigs = <String, Map<String, dynamic>>{};
+    for (final entry in _graphConfigs.entries) {
+      final config = entry.value;
+      rawGraphConfigs[entry.key.toString()] = {
+        'yAxisUnit': config.yAxisUnit,
+        'yAxis2Unit': config.yAxis2Unit,
+      };
+    }
+
+    await adb.updateHistoryView(_activeView!.id, name, _selected.toList(),
+        rawKeyConfigs, rawGraphConfigs);
 
     setState(() => _activeView = SavedHistoryView(
         id: _activeView!.id, name: name, keys: _selected.toList()));
     ref.invalidate(savedViewsProvider);
     _toast(context, 'Updated "${name}"');
+  }
+
+  // Add this new method for the configuration dialog
+  Future<void> _showConfigureDialog() async {
+    if (_selected.isEmpty) return;
+
+    // Update configs to match current selection
+    _updateGraphConfigs();
+    _updateKeyConfigs(); // Update key configs as well
+
+    if (!context.mounted) return;
+
+    await showDialog<void>(
+      context: context,
+      builder: (context) => _GraphConfigurationDialog(
+        keyConfigs: Map.from(_keyConfigs),
+        graphConfigs: Map.from(_graphConfigs),
+        onSave: (keyConfigs, graphConfigs) async {
+          setState(() {
+            _keyConfigs.clear();
+            _keyConfigs.addAll(keyConfigs);
+            _graphConfigs.clear();
+            _graphConfigs.addAll(graphConfigs);
+          });
+
+          // Save configurations to database if we have an active view
+          if (_activeView != null) {
+            await _updateView();
+          }
+        },
+      ),
+    );
+  }
+
+  // Add this new method for the page help dialog
+  void _showPageHelpDialog(BuildContext context) {
+    showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('How the History Page Works'),
+        content: const SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Overview:',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+              ),
+              SizedBox(height: 8),
+              Text(
+                'This page allows you to view historical data from your system in real-time or for specific time ranges. You can save different views with custom configurations.',
+              ),
+              SizedBox(height: 16),
+              Text(
+                'Left Pane - Key Selection:',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+              ),
+              SizedBox(height: 8),
+              Text('• Search and filter available system keys'),
+              Text('• Toggle collection on/off for individual keys'),
+              Text('• Select which keys to include in your view'),
+              Text('• Use the collapse button to save space'),
+              SizedBox(height: 16),
+              Text(
+                'Top Controls:',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+              ),
+              SizedBox(height: 8),
+              Text('• Load saved views from the dropdown'),
+              Text(
+                  '• Configure how keys are displayed (aliases, graphs, Y-axes)'),
+              Text('• Save current selection as a new view'),
+              Text('• Update existing views'),
+              Text('• Toggle between real-time and historical data'),
+              Text('• Pick specific date ranges for historical data'),
+              SizedBox(height: 16),
+              Text(
+                'Graph & Table Views:',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+              ),
+              SizedBox(height: 8),
+              Text('• Graph tab: Visual representation of data over time'),
+              Text('• Table tab: Tabular data with timestamps'),
+              Text('• Click/tap on real-time graphs to pause'),
+              Text('• Resume button appears when paused'),
+              SizedBox(height: 16),
+              Text(
+                'Configuration:',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+              ),
+              SizedBox(height: 8),
+              Text('• Set friendly aliases for keys'),
+              Text('• Organize keys into up to 5 separate graphs'),
+              Text('• Configure Y-axis units for each graph'),
+              Text('• Use secondary Y-axes for different value scales'),
+              Text('• All configurations are saved with your view'),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Got it'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// Update the dialog to handle both configurations
+class _GraphConfigurationDialog extends StatefulWidget {
+  final Map<String, GraphKeyConfig> keyConfigs;
+  final Map<int, GraphDisplayConfig> graphConfigs;
+  final Function(Map<String, GraphKeyConfig>, Map<int, GraphDisplayConfig>)
+      onSave;
+
+  const _GraphConfigurationDialog({
+    required this.keyConfigs,
+    required this.graphConfigs,
+    required this.onSave,
+  });
+
+  @override
+  State<_GraphConfigurationDialog> createState() =>
+      _GraphConfigurationDialogState();
+}
+
+class _GraphConfigurationDialogState extends State<_GraphConfigurationDialog> {
+  late Map<String, GraphKeyConfig> _keyConfigs;
+  late Map<int, GraphDisplayConfig> _graphConfigs;
+  final _formKey = GlobalKey<FormState>();
+
+  @override
+  void initState() {
+    super.initState();
+    _keyConfigs = Map.from(widget.keyConfigs);
+    _graphConfigs = Map.from(widget.graphConfigs);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Row(
+        children: [
+          const Expanded(child: Text('Configure Graph Display')),
+          IconButton(
+            icon: const Icon(Icons.info_outline),
+            onPressed: () => _showHelpDialog(context),
+            tooltip: 'Help',
+          ),
+        ],
+      ),
+      content: SizedBox(
+        width: 1000, // Increased width for graph configs
+        height: 600, // Increased height
+        child: Form(
+          key: _formKey,
+          child: Column(
+            children: [
+              // Key and Graph configuration sections side by side
+              Expanded(
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Graph Configuration section (left side - 1/3 width)
+                    SizedBox(
+                      width: 333, // Fixed width: 1000 * 0.33 ≈ 333
+                      child: Card(
+                        child: Padding(
+                          padding: const EdgeInsets.all(12),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Graph Configuration',
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .titleMedium
+                                    ?.copyWith(fontWeight: FontWeight.bold),
+                              ),
+                              const SizedBox(height: 16),
+                              Expanded(
+                                child: ListView.builder(
+                                  itemCount: _getActiveGraphCount(),
+                                  itemBuilder: (context, graphIndex) {
+                                    final graphConfig =
+                                        _graphConfigs[graphIndex]!;
+                                    return Padding(
+                                      padding:
+                                          const EdgeInsets.only(bottom: 16),
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            'Graph ${graphIndex + 1}:',
+                                            style: const TextStyle(
+                                                fontWeight: FontWeight.w500),
+                                          ),
+                                          const SizedBox(height: 8),
+                                          TextFormField(
+                                            initialValue: graphConfig.yAxisUnit,
+                                            decoration: const InputDecoration(
+                                              labelText: 'Primary Y-Axis Unit',
+                                              border: OutlineInputBorder(),
+                                              hintText: 'e.g., °C, RPM, %',
+                                            ),
+                                            onChanged: (value) {
+                                              setState(() {
+                                                _graphConfigs[graphIndex] =
+                                                    graphConfig.copyWith(
+                                                  yAxisUnit: value,
+                                                );
+                                              });
+                                            },
+                                          ),
+                                          const SizedBox(height: 8),
+                                          TextFormField(
+                                            initialValue:
+                                                graphConfig.yAxis2Unit,
+                                            decoration: const InputDecoration(
+                                              labelText:
+                                                  'Secondary Y-Axis Unit',
+                                              border: OutlineInputBorder(),
+                                              hintText: 'e.g., bar, V',
+                                            ),
+                                            onChanged: (value) {
+                                              setState(() {
+                                                _graphConfigs[graphIndex] =
+                                                    graphConfig.copyWith(
+                                                  yAxis2Unit: value,
+                                                );
+                                              });
+                                            },
+                                          ),
+                                        ],
+                                      ),
+                                    );
+                                  },
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 16),
+                    // Key Configuration section (right side - 2/3 width)
+                    Expanded(
+                      child: Card(
+                        child: Padding(
+                          padding: const EdgeInsets.all(12),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Key Configuration',
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .titleMedium
+                                    ?.copyWith(fontWeight: FontWeight.bold),
+                              ),
+                              const SizedBox(height: 16),
+                              Expanded(
+                                child: ListView.builder(
+                                  itemCount: _keyConfigs.length,
+                                  itemBuilder: (context, index) {
+                                    final key =
+                                        _keyConfigs.keys.elementAt(index);
+                                    final config = _keyConfigs[key]!;
+
+                                    return Card(
+                                      margin: const EdgeInsets.only(bottom: 8),
+                                      child: Padding(
+                                        padding: const EdgeInsets.all(12),
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              'Key: $key',
+                                              style: Theme.of(context)
+                                                  .textTheme
+                                                  .titleMedium
+                                                  ?.copyWith(
+                                                    fontWeight: FontWeight.bold,
+                                                  ),
+                                            ),
+                                            const SizedBox(height: 12),
+                                            Row(
+                                              children: [
+                                                Expanded(
+                                                  child: TextFormField(
+                                                    initialValue: config.alias,
+                                                    decoration:
+                                                        const InputDecoration(
+                                                      labelText:
+                                                          'Display Alias',
+                                                      border:
+                                                          OutlineInputBorder(),
+                                                    ),
+                                                    onChanged: (value) {
+                                                      setState(() {
+                                                        _keyConfigs[key] =
+                                                            config.copyWith(
+                                                                alias: value);
+                                                      });
+                                                    },
+                                                  ),
+                                                ),
+                                                const SizedBox(width: 16),
+                                                Expanded(
+                                                  child:
+                                                      DropdownButtonFormField<
+                                                          int>(
+                                                    value: config.graphIndex,
+                                                    decoration:
+                                                        const InputDecoration(
+                                                      labelText: 'Graph',
+                                                      border:
+                                                          OutlineInputBorder(),
+                                                    ),
+                                                    items: List.generate(
+                                                      5,
+                                                      (index) =>
+                                                          DropdownMenuItem(
+                                                        value: index,
+                                                        child: Text(
+                                                            'Graph ${index + 1}'),
+                                                      ),
+                                                    ),
+                                                    onChanged: (value) {
+                                                      if (value != null) {
+                                                        setState(() {
+                                                          _keyConfigs[key] =
+                                                              config.copyWith(
+                                                                  graphIndex:
+                                                                      value);
+                                                        });
+                                                      }
+                                                    },
+                                                  ),
+                                                ),
+                                                const SizedBox(width: 16),
+                                                SizedBox(
+                                                  width: 120,
+                                                  child: CheckboxListTile(
+                                                    title: const Text(
+                                                        '2nd Y-Axis'),
+                                                    value:
+                                                        config.useSecondYAxis,
+                                                    onChanged: (value) {
+                                                      setState(() {
+                                                        _keyConfigs[key] =
+                                                            config.copyWith(
+                                                          useSecondYAxis:
+                                                              value ?? false,
+                                                        );
+                                                      });
+                                                    },
+                                                    contentPadding:
+                                                        EdgeInsets.zero,
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    );
+                                  },
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        ElevatedButton(
+          onPressed: () {
+            if (_formKey.currentState!.validate()) {
+              widget.onSave(_keyConfigs, _graphConfigs);
+              Navigator.pop(context);
+            }
+          },
+          child: const Text('Save'),
+        ),
+      ],
+    );
+  }
+
+  void _showHelpDialog(BuildContext context) {
+    showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Configuration Help'),
+        content: const Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Graph Configuration:',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+            Text('• Set units for each graph\'s Y-axes'),
+            Text('• Primary Y-Axis Unit: Units for keys using the main Y-axis'),
+            Text(
+                '• Secondary Y-Axis Unit: Units for keys using the 2nd Y-axis'),
+            Text('• Examples: °C, RPM, %, bar, V, A, m/s²'),
+            SizedBox(height: 16),
+            Text(
+              'Key Configuration:',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+            Text(
+                '• Display Alias: Set a friendly name for this key that will appear on graphs and tables'),
+            Text('• Leave empty to use the original key name'),
+            SizedBox(height: 8),
+            Text(
+                '• Graph: Choose which of the 5 graph panes this key should appear in'),
+            Text('• Keys in the same graph will share the same time axis'),
+            Text('• Graphs will be stacked vertically (one above the other)'),
+            Text('• Graph 1 appears at the top, Graph 5 at the bottom'),
+            SizedBox(height: 8),
+            Text(
+                '• 2nd Y-Axis: Enable to display this key on a secondary Y-axis'),
+            Text('• Useful when combining values with different scales'),
+            Text('• Primary Y-axis keys are shown in blue, secondary in green'),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Got it'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // Helper method to determine how many graphs to show
+  int _getActiveGraphCount() {
+    final usedGraphs = <int>{};
+    for (final config in _keyConfigs.values) {
+      usedGraphs.add(config.graphIndex);
+    }
+    return usedGraphs.isEmpty
+        ? 1
+        : (usedGraphs.reduce((a, b) => a > b ? a : b) + 1);
   }
 }

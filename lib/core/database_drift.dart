@@ -63,6 +63,21 @@ class HistoryViewKey extends Table {
   IntColumn get viewId =>
       integer().references(HistoryView, #id, onDelete: KeyAction.cascade)();
   TextColumn get key => text()();
+  TextColumn get alias => text().nullable()(); // Add alias column
+  BoolColumn get useSecondYAxis =>
+      boolean().withDefault(const Constant(false))(); // Add Y-axis choice
+  IntColumn get graphIndex =>
+      integer().withDefault(const Constant(0))(); // Add graph index
+}
+
+/// Graph-level configuration (Y-axis units)
+class HistoryViewGraph extends Table {
+  IntColumn get id => integer().autoIncrement()();
+  IntColumn get viewId =>
+      integer().references(HistoryView, #id, onDelete: KeyAction.cascade)();
+  IntColumn get graphIndex => integer()();
+  TextColumn get yAxisUnit => text().nullable()();
+  TextColumn get yAxis2Unit => text().nullable()();
 }
 
 // Register all tables here
@@ -71,14 +86,15 @@ class HistoryViewKey extends Table {
   AlarmHistory,
   FlutterPreferences,
   HistoryView,
-  HistoryViewKey
+  HistoryViewKey,
+  HistoryViewGraph, // Add the new table
 ])
 class AppDatabase extends _$AppDatabase {
   final DatabaseConfig config;
   AppDatabase._(this.config, QueryExecutor executor) : super(executor);
 
   @override
-  int get schemaVersion => 2;
+  int get schemaVersion => 4; // Increment schema version
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -89,6 +105,16 @@ class AppDatabase extends _$AppDatabase {
           if (from < 2) {
             await m.createTable(historyView);
             await m.createTable(historyViewKey);
+          }
+          if (from < 3) {
+            // Add new columns for graph configuration
+            await m.addColumn(historyViewKey, historyViewKey.alias);
+            await m.addColumn(historyViewKey, historyViewKey.useSecondYAxis);
+            await m.addColumn(historyViewKey, historyViewKey.graphIndex);
+          }
+          if (from < 4) {
+            // Add new table for graph-level configuration
+            await m.createTable(historyViewGraph);
           }
         },
       );
@@ -161,27 +187,53 @@ class AppDatabase extends _$AppDatabase {
   // Convenience API for History Views
   // ----------------------------
 
-  Future<int> createHistoryView(String name, List<String> keys) async {
+  // Update the convenience methods to handle both configs
+  Future<int> createHistoryView(String name, List<String> keys,
+      [Map<String, Map<String, dynamic>>? keyConfigs,
+      Map<String, Map<String, dynamic>>? graphConfigs]) async {
     return transaction(() async {
       final id = await into(historyView).insert(HistoryViewCompanion.insert(
         name: name,
-        // createdAt default,
-        // updatedAt: const Value.absent(),
       ));
+
+      // Save key configurations
       if (keys.isNotEmpty) {
-        // Fallback to individual inserts for SQLite
         for (final key in keys) {
+          final config = keyConfigs?[key];
           await into(historyViewKey).insert(HistoryViewKeyCompanion.insert(
             viewId: id,
             key: key,
+            alias: Value(config?['alias'] ?? key),
+            useSecondYAxis: Value(config?['useSecondYAxis'] ?? false),
+            graphIndex: Value(config?['graphIndex'] ?? 0),
           ));
         }
       }
+
+      // Save graph configurations
+      if (graphConfigs != null) {
+        for (final entry in graphConfigs.entries) {
+          final graphIndex = int.tryParse(entry.key);
+          if (graphIndex != null) {
+            final config = entry.value;
+            await into(historyViewGraph)
+                .insert(HistoryViewGraphCompanion.insert(
+              viewId: id,
+              graphIndex: graphIndex,
+              yAxisUnit: Value(config['yAxisUnit'] ?? ''),
+              yAxis2Unit: Value(config['yAxis2Unit'] ?? ''),
+            ));
+          }
+        }
+      }
+
       return id;
     });
   }
 
-  Future<void> updateHistoryView(int id, String name, List<String> keys) async {
+  Future<void> updateHistoryView(int id, String name, List<String> keys,
+      [Map<String, Map<String, dynamic>>? keyConfigs,
+      Map<String, Map<String, dynamic>>? graphConfigs]) async {
     await transaction(() async {
       await (update(historyView)..where((t) => t.id.equals(id))).write(
         HistoryViewCompanion(
@@ -191,12 +243,31 @@ class AppDatabase extends _$AppDatabase {
       );
       await (delete(historyViewKey)..where((t) => t.viewId.equals(id))).go();
       if (keys.isNotEmpty) {
-        // Use individual inserts instead of batch for PostgreSQL compatibility
         for (final key in keys) {
+          final config = keyConfigs?[key];
           await into(historyViewKey).insert(HistoryViewKeyCompanion.insert(
             viewId: id,
             key: key,
+            alias: Value(config?['alias'] ?? key),
+            useSecondYAxis: Value(config?['useSecondYAxis'] ?? false),
+            graphIndex: Value(config?['graphIndex'] ?? 0),
           ));
+        }
+      }
+      await (delete(historyViewGraph)..where((t) => t.viewId.equals(id))).go();
+      if (graphConfigs != null) {
+        for (final entry in graphConfigs.entries) {
+          final graphIndex = int.tryParse(entry.key);
+          if (graphIndex != null) {
+            final config = entry.value;
+            await into(historyViewGraph)
+                .insert(HistoryViewGraphCompanion.insert(
+              viewId: id,
+              graphIndex: graphIndex,
+              yAxisUnit: Value(config['yAxisUnit'] ?? ''),
+              yAxis2Unit: Value(config['yAxis2Unit'] ?? ''),
+            ));
+          }
         }
       }
     });
@@ -205,13 +276,52 @@ class AppDatabase extends _$AppDatabase {
   Future<void> deleteHistoryView(int id) async {
     await (delete(historyView)..where((t) => t.id.equals(id))).go();
     // keys cascade due to FK
+    await (delete(historyViewKey)..where((t) => t.viewId.equals(id))).go();
+    await (delete(historyViewGraph)..where((t) => t.viewId.equals(id))).go();
   }
 
   Future<List<HistoryViewData>> selectHistoryViews() {
     return (select(historyView)).get();
   }
 
-  Future<List<String>> getHistoryViewKeys(int viewId) async {
+  // Return primitive data, let the UI layer convert to objects
+  Future<Map<String, Map<String, dynamic>>> getHistoryViewKeys(
+      int viewId) async {
+    final rows = await (select(historyViewKey)
+          ..where((t) => t.viewId.equals(viewId)))
+        .get();
+
+    final configs = <String, Map<String, dynamic>>{};
+    for (final row in rows) {
+      configs[row.key] = {
+        'key': row.key,
+        'alias': row.alias ?? row.key,
+        'useSecondYAxis': row.useSecondYAxis,
+        'graphIndex': row.graphIndex,
+      };
+    }
+    return configs;
+  }
+
+  // Add method to get graph configurations
+  Future<Map<int, Map<String, dynamic>>> getHistoryViewGraphs(
+      int viewId) async {
+    final rows = await (select(historyViewGraph)
+          ..where((t) => t.viewId.equals(viewId)))
+        .get();
+
+    final configs = <int, Map<String, dynamic>>{};
+    for (final row in rows) {
+      configs[row.graphIndex] = {
+        'yAxisUnit': row.yAxisUnit ?? '',
+        'yAxis2Unit': row.yAxis2Unit ?? '',
+      };
+    }
+    return configs;
+  }
+
+  // Add method to get just the keys (for backward compatibility)
+  Future<List<String>> getHistoryViewKeyNames(int viewId) async {
     final rows = await (select(historyViewKey)
           ..where((t) => t.viewId.equals(viewId)))
         .get();
