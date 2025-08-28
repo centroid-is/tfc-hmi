@@ -31,6 +31,7 @@ ButtonConfig _$ButtonConfigFromJson(Map<String, dynamic> json) => ButtonConfig(
       feedback: json['feedback'] == null
           ? null
           : FeedbackConfig.fromJson(json['feedback'] as Map<String, dynamic>),
+      isToggle: json['is_toggle'] as bool? ?? false,
     )
       ..variant = json['asset_name'] as String
       ..coordinates =
@@ -52,6 +53,7 @@ Map<String, dynamic> _$ButtonConfigToJson(ButtonConfig instance) =>
       'outward_color': const ColorConverter().toJson(instance.outwardColor),
       'inward_color': const ColorConverter().toJson(instance.inwardColor),
       'button_type': _$ButtonTypeEnumMap[instance.buttonType]!,
+      'is_toggle': instance.isToggle,
     };
 
 const _$ButtonTypeEnumMap = {

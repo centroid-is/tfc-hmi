@@ -1019,6 +1019,485 @@ class FlutterPreferencesCompanion extends UpdateCompanion<FlutterPreference> {
   }
 }
 
+class $HistoryViewTable extends HistoryView
+    with TableInfo<$HistoryViewTable, HistoryViewData> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $HistoryViewTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<int> id = GeneratedColumn<int>(
+      'id', aliasedName, false,
+      hasAutoIncrement: true,
+      type: DriftSqlType.int,
+      requiredDuringInsert: false,
+      defaultConstraints:
+          GeneratedColumn.constraintIsAlways('PRIMARY KEY AUTOINCREMENT'));
+  static const VerificationMeta _nameMeta = const VerificationMeta('name');
+  @override
+  late final GeneratedColumn<String> name = GeneratedColumn<String>(
+      'name', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _createdAtMeta =
+      const VerificationMeta('createdAt');
+  @override
+  late final GeneratedColumn<DateTime> createdAt = GeneratedColumn<DateTime>(
+      'created_at', aliasedName, false,
+      type: DriftSqlType.dateTime,
+      requiredDuringInsert: false,
+      defaultValue: currentDateAndTime);
+  static const VerificationMeta _updatedAtMeta =
+      const VerificationMeta('updatedAt');
+  @override
+  late final GeneratedColumn<DateTime> updatedAt = GeneratedColumn<DateTime>(
+      'updated_at', aliasedName, true,
+      type: DriftSqlType.dateTime, requiredDuringInsert: false);
+  @override
+  List<GeneratedColumn> get $columns => [id, name, createdAt, updatedAt];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'history_view';
+  @override
+  VerificationContext validateIntegrity(Insertable<HistoryViewData> instance,
+      {bool isInserting = false}) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    }
+    if (data.containsKey('name')) {
+      context.handle(
+          _nameMeta, name.isAcceptableOrUnknown(data['name']!, _nameMeta));
+    } else if (isInserting) {
+      context.missing(_nameMeta);
+    }
+    if (data.containsKey('created_at')) {
+      context.handle(_createdAtMeta,
+          createdAt.isAcceptableOrUnknown(data['created_at']!, _createdAtMeta));
+    }
+    if (data.containsKey('updated_at')) {
+      context.handle(_updatedAtMeta,
+          updatedAt.isAcceptableOrUnknown(data['updated_at']!, _updatedAtMeta));
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  HistoryViewData map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return HistoryViewData(
+      id: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}id'])!,
+      name: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}name'])!,
+      createdAt: attachedDatabase.typeMapping
+          .read(DriftSqlType.dateTime, data['${effectivePrefix}created_at'])!,
+      updatedAt: attachedDatabase.typeMapping
+          .read(DriftSqlType.dateTime, data['${effectivePrefix}updated_at']),
+    );
+  }
+
+  @override
+  $HistoryViewTable createAlias(String alias) {
+    return $HistoryViewTable(attachedDatabase, alias);
+  }
+}
+
+class HistoryViewData extends DataClass implements Insertable<HistoryViewData> {
+  final int id;
+  final String name;
+  final DateTime createdAt;
+  final DateTime? updatedAt;
+  const HistoryViewData(
+      {required this.id,
+      required this.name,
+      required this.createdAt,
+      this.updatedAt});
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<int>(id);
+    map['name'] = Variable<String>(name);
+    map['created_at'] = Variable<DateTime>(createdAt);
+    if (!nullToAbsent || updatedAt != null) {
+      map['updated_at'] = Variable<DateTime>(updatedAt);
+    }
+    return map;
+  }
+
+  HistoryViewCompanion toCompanion(bool nullToAbsent) {
+    return HistoryViewCompanion(
+      id: Value(id),
+      name: Value(name),
+      createdAt: Value(createdAt),
+      updatedAt: updatedAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(updatedAt),
+    );
+  }
+
+  factory HistoryViewData.fromJson(Map<String, dynamic> json,
+      {ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return HistoryViewData(
+      id: serializer.fromJson<int>(json['id']),
+      name: serializer.fromJson<String>(json['name']),
+      createdAt: serializer.fromJson<DateTime>(json['createdAt']),
+      updatedAt: serializer.fromJson<DateTime?>(json['updatedAt']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<int>(id),
+      'name': serializer.toJson<String>(name),
+      'createdAt': serializer.toJson<DateTime>(createdAt),
+      'updatedAt': serializer.toJson<DateTime?>(updatedAt),
+    };
+  }
+
+  HistoryViewData copyWith(
+          {int? id,
+          String? name,
+          DateTime? createdAt,
+          Value<DateTime?> updatedAt = const Value.absent()}) =>
+      HistoryViewData(
+        id: id ?? this.id,
+        name: name ?? this.name,
+        createdAt: createdAt ?? this.createdAt,
+        updatedAt: updatedAt.present ? updatedAt.value : this.updatedAt,
+      );
+  HistoryViewData copyWithCompanion(HistoryViewCompanion data) {
+    return HistoryViewData(
+      id: data.id.present ? data.id.value : this.id,
+      name: data.name.present ? data.name.value : this.name,
+      createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
+      updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('HistoryViewData(')
+          ..write('id: $id, ')
+          ..write('name: $name, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('updatedAt: $updatedAt')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(id, name, createdAt, updatedAt);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is HistoryViewData &&
+          other.id == this.id &&
+          other.name == this.name &&
+          other.createdAt == this.createdAt &&
+          other.updatedAt == this.updatedAt);
+}
+
+class HistoryViewCompanion extends UpdateCompanion<HistoryViewData> {
+  final Value<int> id;
+  final Value<String> name;
+  final Value<DateTime> createdAt;
+  final Value<DateTime?> updatedAt;
+  const HistoryViewCompanion({
+    this.id = const Value.absent(),
+    this.name = const Value.absent(),
+    this.createdAt = const Value.absent(),
+    this.updatedAt = const Value.absent(),
+  });
+  HistoryViewCompanion.insert({
+    this.id = const Value.absent(),
+    required String name,
+    this.createdAt = const Value.absent(),
+    this.updatedAt = const Value.absent(),
+  }) : name = Value(name);
+  static Insertable<HistoryViewData> custom({
+    Expression<int>? id,
+    Expression<String>? name,
+    Expression<DateTime>? createdAt,
+    Expression<DateTime>? updatedAt,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (name != null) 'name': name,
+      if (createdAt != null) 'created_at': createdAt,
+      if (updatedAt != null) 'updated_at': updatedAt,
+    });
+  }
+
+  HistoryViewCompanion copyWith(
+      {Value<int>? id,
+      Value<String>? name,
+      Value<DateTime>? createdAt,
+      Value<DateTime?>? updatedAt}) {
+    return HistoryViewCompanion(
+      id: id ?? this.id,
+      name: name ?? this.name,
+      createdAt: createdAt ?? this.createdAt,
+      updatedAt: updatedAt ?? this.updatedAt,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<int>(id.value);
+    }
+    if (name.present) {
+      map['name'] = Variable<String>(name.value);
+    }
+    if (createdAt.present) {
+      map['created_at'] = Variable<DateTime>(createdAt.value);
+    }
+    if (updatedAt.present) {
+      map['updated_at'] = Variable<DateTime>(updatedAt.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('HistoryViewCompanion(')
+          ..write('id: $id, ')
+          ..write('name: $name, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('updatedAt: $updatedAt')
+          ..write(')'))
+        .toString();
+  }
+}
+
+class $HistoryViewKeyTable extends HistoryViewKey
+    with TableInfo<$HistoryViewKeyTable, HistoryViewKeyData> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $HistoryViewKeyTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<int> id = GeneratedColumn<int>(
+      'id', aliasedName, false,
+      hasAutoIncrement: true,
+      type: DriftSqlType.int,
+      requiredDuringInsert: false,
+      defaultConstraints:
+          GeneratedColumn.constraintIsAlways('PRIMARY KEY AUTOINCREMENT'));
+  static const VerificationMeta _viewIdMeta = const VerificationMeta('viewId');
+  @override
+  late final GeneratedColumn<int> viewId = GeneratedColumn<int>(
+      'view_id', aliasedName, false,
+      type: DriftSqlType.int,
+      requiredDuringInsert: true,
+      defaultConstraints: GeneratedColumn.constraintIsAlways(
+          'REFERENCES history_view (id) ON DELETE CASCADE'));
+  static const VerificationMeta _keyMeta = const VerificationMeta('key');
+  @override
+  late final GeneratedColumn<String> key = GeneratedColumn<String>(
+      'key', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  @override
+  List<GeneratedColumn> get $columns => [id, viewId, key];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'history_view_key';
+  @override
+  VerificationContext validateIntegrity(Insertable<HistoryViewKeyData> instance,
+      {bool isInserting = false}) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    }
+    if (data.containsKey('view_id')) {
+      context.handle(_viewIdMeta,
+          viewId.isAcceptableOrUnknown(data['view_id']!, _viewIdMeta));
+    } else if (isInserting) {
+      context.missing(_viewIdMeta);
+    }
+    if (data.containsKey('key')) {
+      context.handle(
+          _keyMeta, key.isAcceptableOrUnknown(data['key']!, _keyMeta));
+    } else if (isInserting) {
+      context.missing(_keyMeta);
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  HistoryViewKeyData map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return HistoryViewKeyData(
+      id: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}id'])!,
+      viewId: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}view_id'])!,
+      key: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}key'])!,
+    );
+  }
+
+  @override
+  $HistoryViewKeyTable createAlias(String alias) {
+    return $HistoryViewKeyTable(attachedDatabase, alias);
+  }
+}
+
+class HistoryViewKeyData extends DataClass
+    implements Insertable<HistoryViewKeyData> {
+  final int id;
+  final int viewId;
+  final String key;
+  const HistoryViewKeyData(
+      {required this.id, required this.viewId, required this.key});
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<int>(id);
+    map['view_id'] = Variable<int>(viewId);
+    map['key'] = Variable<String>(key);
+    return map;
+  }
+
+  HistoryViewKeyCompanion toCompanion(bool nullToAbsent) {
+    return HistoryViewKeyCompanion(
+      id: Value(id),
+      viewId: Value(viewId),
+      key: Value(key),
+    );
+  }
+
+  factory HistoryViewKeyData.fromJson(Map<String, dynamic> json,
+      {ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return HistoryViewKeyData(
+      id: serializer.fromJson<int>(json['id']),
+      viewId: serializer.fromJson<int>(json['viewId']),
+      key: serializer.fromJson<String>(json['key']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<int>(id),
+      'viewId': serializer.toJson<int>(viewId),
+      'key': serializer.toJson<String>(key),
+    };
+  }
+
+  HistoryViewKeyData copyWith({int? id, int? viewId, String? key}) =>
+      HistoryViewKeyData(
+        id: id ?? this.id,
+        viewId: viewId ?? this.viewId,
+        key: key ?? this.key,
+      );
+  HistoryViewKeyData copyWithCompanion(HistoryViewKeyCompanion data) {
+    return HistoryViewKeyData(
+      id: data.id.present ? data.id.value : this.id,
+      viewId: data.viewId.present ? data.viewId.value : this.viewId,
+      key: data.key.present ? data.key.value : this.key,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('HistoryViewKeyData(')
+          ..write('id: $id, ')
+          ..write('viewId: $viewId, ')
+          ..write('key: $key')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(id, viewId, key);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is HistoryViewKeyData &&
+          other.id == this.id &&
+          other.viewId == this.viewId &&
+          other.key == this.key);
+}
+
+class HistoryViewKeyCompanion extends UpdateCompanion<HistoryViewKeyData> {
+  final Value<int> id;
+  final Value<int> viewId;
+  final Value<String> key;
+  const HistoryViewKeyCompanion({
+    this.id = const Value.absent(),
+    this.viewId = const Value.absent(),
+    this.key = const Value.absent(),
+  });
+  HistoryViewKeyCompanion.insert({
+    this.id = const Value.absent(),
+    required int viewId,
+    required String key,
+  })  : viewId = Value(viewId),
+        key = Value(key);
+  static Insertable<HistoryViewKeyData> custom({
+    Expression<int>? id,
+    Expression<int>? viewId,
+    Expression<String>? key,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (viewId != null) 'view_id': viewId,
+      if (key != null) 'key': key,
+    });
+  }
+
+  HistoryViewKeyCompanion copyWith(
+      {Value<int>? id, Value<int>? viewId, Value<String>? key}) {
+    return HistoryViewKeyCompanion(
+      id: id ?? this.id,
+      viewId: viewId ?? this.viewId,
+      key: key ?? this.key,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<int>(id.value);
+    }
+    if (viewId.present) {
+      map['view_id'] = Variable<int>(viewId.value);
+    }
+    if (key.present) {
+      map['key'] = Variable<String>(key.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('HistoryViewKeyCompanion(')
+          ..write('id: $id, ')
+          ..write('viewId: $viewId, ')
+          ..write('key: $key')
+          ..write(')'))
+        .toString();
+  }
+}
+
 abstract class _$AppDatabase extends GeneratedDatabase {
   _$AppDatabase(QueryExecutor e) : super(e);
   $AppDatabaseManager get managers => $AppDatabaseManager(this);
@@ -1026,12 +1505,26 @@ abstract class _$AppDatabase extends GeneratedDatabase {
   late final $AlarmHistoryTable alarmHistory = $AlarmHistoryTable(this);
   late final $FlutterPreferencesTable flutterPreferences =
       $FlutterPreferencesTable(this);
+  late final $HistoryViewTable historyView = $HistoryViewTable(this);
+  late final $HistoryViewKeyTable historyViewKey = $HistoryViewKeyTable(this);
   @override
   Iterable<TableInfo<Table, Object?>> get allTables =>
       allSchemaEntities.whereType<TableInfo<Table, Object?>>();
   @override
   List<DatabaseSchemaEntity> get allSchemaEntities =>
-      [alarm, alarmHistory, flutterPreferences];
+      [alarm, alarmHistory, flutterPreferences, historyView, historyViewKey];
+  @override
+  StreamQueryUpdateRules get streamUpdateRules => const StreamQueryUpdateRules(
+        [
+          WritePropagation(
+            on: TableUpdateQuery.onTableName('history_view',
+                limitUpdateKind: UpdateKind.delete),
+            result: [
+              TableUpdate('history_view_key', kind: UpdateKind.delete),
+            ],
+          ),
+        ],
+      );
   @override
   DriftDatabaseOptions get options =>
       const DriftDatabaseOptions(storeDateTimeAsText: true);
@@ -1795,6 +2288,483 @@ typedef $$FlutterPreferencesTableProcessedTableManager = ProcessedTableManager<
     ),
     FlutterPreference,
     PrefetchHooks Function()>;
+typedef $$HistoryViewTableCreateCompanionBuilder = HistoryViewCompanion
+    Function({
+  Value<int> id,
+  required String name,
+  Value<DateTime> createdAt,
+  Value<DateTime?> updatedAt,
+});
+typedef $$HistoryViewTableUpdateCompanionBuilder = HistoryViewCompanion
+    Function({
+  Value<int> id,
+  Value<String> name,
+  Value<DateTime> createdAt,
+  Value<DateTime?> updatedAt,
+});
+
+final class $$HistoryViewTableReferences
+    extends BaseReferences<_$AppDatabase, $HistoryViewTable, HistoryViewData> {
+  $$HistoryViewTableReferences(super.$_db, super.$_table, super.$_typedResult);
+
+  static MultiTypedResultKey<$HistoryViewKeyTable, List<HistoryViewKeyData>>
+      _historyViewKeyRefsTable(_$AppDatabase db) =>
+          MultiTypedResultKey.fromTable(db.historyViewKey,
+              aliasName: $_aliasNameGenerator(
+                  db.historyView.id, db.historyViewKey.viewId));
+
+  $$HistoryViewKeyTableProcessedTableManager get historyViewKeyRefs {
+    final manager = $$HistoryViewKeyTableTableManager($_db, $_db.historyViewKey)
+        .filter((f) => f.viewId.id.sqlEquals($_itemColumn<int>('id')!));
+
+    final cache = $_typedResult.readTableOrNull(_historyViewKeyRefsTable($_db));
+    return ProcessedTableManager(
+        manager.$state.copyWith(prefetchedData: cache));
+  }
+}
+
+class $$HistoryViewTableFilterComposer
+    extends Composer<_$AppDatabase, $HistoryViewTable> {
+  $$HistoryViewTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<int> get id => $composableBuilder(
+      column: $table.id, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get name => $composableBuilder(
+      column: $table.name, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<DateTime> get createdAt => $composableBuilder(
+      column: $table.createdAt, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<DateTime> get updatedAt => $composableBuilder(
+      column: $table.updatedAt, builder: (column) => ColumnFilters(column));
+
+  Expression<bool> historyViewKeyRefs(
+      Expression<bool> Function($$HistoryViewKeyTableFilterComposer f) f) {
+    final $$HistoryViewKeyTableFilterComposer composer = $composerBuilder(
+        composer: this,
+        getCurrentColumn: (t) => t.id,
+        referencedTable: $db.historyViewKey,
+        getReferencedColumn: (t) => t.viewId,
+        builder: (joinBuilder,
+                {$addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer}) =>
+            $$HistoryViewKeyTableFilterComposer(
+              $db: $db,
+              $table: $db.historyViewKey,
+              $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+              joinBuilder: joinBuilder,
+              $removeJoinBuilderFromRootComposer:
+                  $removeJoinBuilderFromRootComposer,
+            ));
+    return f(composer);
+  }
+}
+
+class $$HistoryViewTableOrderingComposer
+    extends Composer<_$AppDatabase, $HistoryViewTable> {
+  $$HistoryViewTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<int> get id => $composableBuilder(
+      column: $table.id, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get name => $composableBuilder(
+      column: $table.name, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<DateTime> get createdAt => $composableBuilder(
+      column: $table.createdAt, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<DateTime> get updatedAt => $composableBuilder(
+      column: $table.updatedAt, builder: (column) => ColumnOrderings(column));
+}
+
+class $$HistoryViewTableAnnotationComposer
+    extends Composer<_$AppDatabase, $HistoryViewTable> {
+  $$HistoryViewTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<int> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<String> get name =>
+      $composableBuilder(column: $table.name, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get createdAt =>
+      $composableBuilder(column: $table.createdAt, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get updatedAt =>
+      $composableBuilder(column: $table.updatedAt, builder: (column) => column);
+
+  Expression<T> historyViewKeyRefs<T extends Object>(
+      Expression<T> Function($$HistoryViewKeyTableAnnotationComposer a) f) {
+    final $$HistoryViewKeyTableAnnotationComposer composer = $composerBuilder(
+        composer: this,
+        getCurrentColumn: (t) => t.id,
+        referencedTable: $db.historyViewKey,
+        getReferencedColumn: (t) => t.viewId,
+        builder: (joinBuilder,
+                {$addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer}) =>
+            $$HistoryViewKeyTableAnnotationComposer(
+              $db: $db,
+              $table: $db.historyViewKey,
+              $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+              joinBuilder: joinBuilder,
+              $removeJoinBuilderFromRootComposer:
+                  $removeJoinBuilderFromRootComposer,
+            ));
+    return f(composer);
+  }
+}
+
+class $$HistoryViewTableTableManager extends RootTableManager<
+    _$AppDatabase,
+    $HistoryViewTable,
+    HistoryViewData,
+    $$HistoryViewTableFilterComposer,
+    $$HistoryViewTableOrderingComposer,
+    $$HistoryViewTableAnnotationComposer,
+    $$HistoryViewTableCreateCompanionBuilder,
+    $$HistoryViewTableUpdateCompanionBuilder,
+    (HistoryViewData, $$HistoryViewTableReferences),
+    HistoryViewData,
+    PrefetchHooks Function({bool historyViewKeyRefs})> {
+  $$HistoryViewTableTableManager(_$AppDatabase db, $HistoryViewTable table)
+      : super(TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$HistoryViewTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$HistoryViewTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$HistoryViewTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback: ({
+            Value<int> id = const Value.absent(),
+            Value<String> name = const Value.absent(),
+            Value<DateTime> createdAt = const Value.absent(),
+            Value<DateTime?> updatedAt = const Value.absent(),
+          }) =>
+              HistoryViewCompanion(
+            id: id,
+            name: name,
+            createdAt: createdAt,
+            updatedAt: updatedAt,
+          ),
+          createCompanionCallback: ({
+            Value<int> id = const Value.absent(),
+            required String name,
+            Value<DateTime> createdAt = const Value.absent(),
+            Value<DateTime?> updatedAt = const Value.absent(),
+          }) =>
+              HistoryViewCompanion.insert(
+            id: id,
+            name: name,
+            createdAt: createdAt,
+            updatedAt: updatedAt,
+          ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (
+                    e.readTable(table),
+                    $$HistoryViewTableReferences(db, table, e)
+                  ))
+              .toList(),
+          prefetchHooksCallback: ({historyViewKeyRefs = false}) {
+            return PrefetchHooks(
+              db: db,
+              explicitlyWatchedTables: [
+                if (historyViewKeyRefs) db.historyViewKey
+              ],
+              addJoins: null,
+              getPrefetchedDataCallback: (items) async {
+                return [
+                  if (historyViewKeyRefs)
+                    await $_getPrefetchedData<HistoryViewData,
+                            $HistoryViewTable, HistoryViewKeyData>(
+                        currentTable: table,
+                        referencedTable: $$HistoryViewTableReferences
+                            ._historyViewKeyRefsTable(db),
+                        managerFromTypedResult: (p0) =>
+                            $$HistoryViewTableReferences(db, table, p0)
+                                .historyViewKeyRefs,
+                        referencedItemsForCurrentItem: (item,
+                                referencedItems) =>
+                            referencedItems.where((e) => e.viewId == item.id),
+                        typedResults: items)
+                ];
+              },
+            );
+          },
+        ));
+}
+
+typedef $$HistoryViewTableProcessedTableManager = ProcessedTableManager<
+    _$AppDatabase,
+    $HistoryViewTable,
+    HistoryViewData,
+    $$HistoryViewTableFilterComposer,
+    $$HistoryViewTableOrderingComposer,
+    $$HistoryViewTableAnnotationComposer,
+    $$HistoryViewTableCreateCompanionBuilder,
+    $$HistoryViewTableUpdateCompanionBuilder,
+    (HistoryViewData, $$HistoryViewTableReferences),
+    HistoryViewData,
+    PrefetchHooks Function({bool historyViewKeyRefs})>;
+typedef $$HistoryViewKeyTableCreateCompanionBuilder = HistoryViewKeyCompanion
+    Function({
+  Value<int> id,
+  required int viewId,
+  required String key,
+});
+typedef $$HistoryViewKeyTableUpdateCompanionBuilder = HistoryViewKeyCompanion
+    Function({
+  Value<int> id,
+  Value<int> viewId,
+  Value<String> key,
+});
+
+final class $$HistoryViewKeyTableReferences extends BaseReferences<
+    _$AppDatabase, $HistoryViewKeyTable, HistoryViewKeyData> {
+  $$HistoryViewKeyTableReferences(
+      super.$_db, super.$_table, super.$_typedResult);
+
+  static $HistoryViewTable _viewIdTable(_$AppDatabase db) =>
+      db.historyView.createAlias(
+          $_aliasNameGenerator(db.historyViewKey.viewId, db.historyView.id));
+
+  $$HistoryViewTableProcessedTableManager get viewId {
+    final $_column = $_itemColumn<int>('view_id')!;
+
+    final manager = $$HistoryViewTableTableManager($_db, $_db.historyView)
+        .filter((f) => f.id.sqlEquals($_column));
+    final item = $_typedResult.readTableOrNull(_viewIdTable($_db));
+    if (item == null) return manager;
+    return ProcessedTableManager(
+        manager.$state.copyWith(prefetchedData: [item]));
+  }
+}
+
+class $$HistoryViewKeyTableFilterComposer
+    extends Composer<_$AppDatabase, $HistoryViewKeyTable> {
+  $$HistoryViewKeyTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<int> get id => $composableBuilder(
+      column: $table.id, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get key => $composableBuilder(
+      column: $table.key, builder: (column) => ColumnFilters(column));
+
+  $$HistoryViewTableFilterComposer get viewId {
+    final $$HistoryViewTableFilterComposer composer = $composerBuilder(
+        composer: this,
+        getCurrentColumn: (t) => t.viewId,
+        referencedTable: $db.historyView,
+        getReferencedColumn: (t) => t.id,
+        builder: (joinBuilder,
+                {$addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer}) =>
+            $$HistoryViewTableFilterComposer(
+              $db: $db,
+              $table: $db.historyView,
+              $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+              joinBuilder: joinBuilder,
+              $removeJoinBuilderFromRootComposer:
+                  $removeJoinBuilderFromRootComposer,
+            ));
+    return composer;
+  }
+}
+
+class $$HistoryViewKeyTableOrderingComposer
+    extends Composer<_$AppDatabase, $HistoryViewKeyTable> {
+  $$HistoryViewKeyTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<int> get id => $composableBuilder(
+      column: $table.id, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get key => $composableBuilder(
+      column: $table.key, builder: (column) => ColumnOrderings(column));
+
+  $$HistoryViewTableOrderingComposer get viewId {
+    final $$HistoryViewTableOrderingComposer composer = $composerBuilder(
+        composer: this,
+        getCurrentColumn: (t) => t.viewId,
+        referencedTable: $db.historyView,
+        getReferencedColumn: (t) => t.id,
+        builder: (joinBuilder,
+                {$addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer}) =>
+            $$HistoryViewTableOrderingComposer(
+              $db: $db,
+              $table: $db.historyView,
+              $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+              joinBuilder: joinBuilder,
+              $removeJoinBuilderFromRootComposer:
+                  $removeJoinBuilderFromRootComposer,
+            ));
+    return composer;
+  }
+}
+
+class $$HistoryViewKeyTableAnnotationComposer
+    extends Composer<_$AppDatabase, $HistoryViewKeyTable> {
+  $$HistoryViewKeyTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<int> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<String> get key =>
+      $composableBuilder(column: $table.key, builder: (column) => column);
+
+  $$HistoryViewTableAnnotationComposer get viewId {
+    final $$HistoryViewTableAnnotationComposer composer = $composerBuilder(
+        composer: this,
+        getCurrentColumn: (t) => t.viewId,
+        referencedTable: $db.historyView,
+        getReferencedColumn: (t) => t.id,
+        builder: (joinBuilder,
+                {$addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer}) =>
+            $$HistoryViewTableAnnotationComposer(
+              $db: $db,
+              $table: $db.historyView,
+              $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+              joinBuilder: joinBuilder,
+              $removeJoinBuilderFromRootComposer:
+                  $removeJoinBuilderFromRootComposer,
+            ));
+    return composer;
+  }
+}
+
+class $$HistoryViewKeyTableTableManager extends RootTableManager<
+    _$AppDatabase,
+    $HistoryViewKeyTable,
+    HistoryViewKeyData,
+    $$HistoryViewKeyTableFilterComposer,
+    $$HistoryViewKeyTableOrderingComposer,
+    $$HistoryViewKeyTableAnnotationComposer,
+    $$HistoryViewKeyTableCreateCompanionBuilder,
+    $$HistoryViewKeyTableUpdateCompanionBuilder,
+    (HistoryViewKeyData, $$HistoryViewKeyTableReferences),
+    HistoryViewKeyData,
+    PrefetchHooks Function({bool viewId})> {
+  $$HistoryViewKeyTableTableManager(
+      _$AppDatabase db, $HistoryViewKeyTable table)
+      : super(TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$HistoryViewKeyTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$HistoryViewKeyTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$HistoryViewKeyTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback: ({
+            Value<int> id = const Value.absent(),
+            Value<int> viewId = const Value.absent(),
+            Value<String> key = const Value.absent(),
+          }) =>
+              HistoryViewKeyCompanion(
+            id: id,
+            viewId: viewId,
+            key: key,
+          ),
+          createCompanionCallback: ({
+            Value<int> id = const Value.absent(),
+            required int viewId,
+            required String key,
+          }) =>
+              HistoryViewKeyCompanion.insert(
+            id: id,
+            viewId: viewId,
+            key: key,
+          ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (
+                    e.readTable(table),
+                    $$HistoryViewKeyTableReferences(db, table, e)
+                  ))
+              .toList(),
+          prefetchHooksCallback: ({viewId = false}) {
+            return PrefetchHooks(
+              db: db,
+              explicitlyWatchedTables: [],
+              addJoins: <
+                  T extends TableManagerState<
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic>>(state) {
+                if (viewId) {
+                  state = state.withJoin(
+                    currentTable: table,
+                    currentColumn: table.viewId,
+                    referencedTable:
+                        $$HistoryViewKeyTableReferences._viewIdTable(db),
+                    referencedColumn:
+                        $$HistoryViewKeyTableReferences._viewIdTable(db).id,
+                  ) as T;
+                }
+
+                return state;
+              },
+              getPrefetchedDataCallback: (items) async {
+                return [];
+              },
+            );
+          },
+        ));
+}
+
+typedef $$HistoryViewKeyTableProcessedTableManager = ProcessedTableManager<
+    _$AppDatabase,
+    $HistoryViewKeyTable,
+    HistoryViewKeyData,
+    $$HistoryViewKeyTableFilterComposer,
+    $$HistoryViewKeyTableOrderingComposer,
+    $$HistoryViewKeyTableAnnotationComposer,
+    $$HistoryViewKeyTableCreateCompanionBuilder,
+    $$HistoryViewKeyTableUpdateCompanionBuilder,
+    (HistoryViewKeyData, $$HistoryViewKeyTableReferences),
+    HistoryViewKeyData,
+    PrefetchHooks Function({bool viewId})>;
 
 class $AppDatabaseManager {
   final _$AppDatabase _db;
@@ -1805,4 +2775,8 @@ class $AppDatabaseManager {
       $$AlarmHistoryTableTableManager(_db, _db.alarmHistory);
   $$FlutterPreferencesTableTableManager get flutterPreferences =>
       $$FlutterPreferencesTableTableManager(_db, _db.flutterPreferences);
+  $$HistoryViewTableTableManager get historyView =>
+      $$HistoryViewTableTableManager(_db, _db.historyView);
+  $$HistoryViewKeyTableTableManager get historyViewKey =>
+      $$HistoryViewKeyTableTableManager(_db, _db.historyViewKey);
 }

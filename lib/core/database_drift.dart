@@ -50,13 +50,48 @@ class FlutterPreferences extends Table {
   TextColumn get type => text()();
 }
 
-@DriftDatabase(tables: [Alarm, AlarmHistory, FlutterPreferences])
+/// Saved History Views (name + keys)
+class HistoryView extends Table {
+  IntColumn get id => integer().autoIncrement()();
+  TextColumn get name => text()();
+  DateTimeColumn get createdAt => dateTime().withDefault(currentDateAndTime)();
+  DateTimeColumn get updatedAt => dateTime().nullable()();
+}
+
+class HistoryViewKey extends Table {
+  IntColumn get id => integer().autoIncrement()();
+  IntColumn get viewId =>
+      integer().references(HistoryView, #id, onDelete: KeyAction.cascade)();
+  TextColumn get key => text()();
+}
+
+// Register all tables here
+@DriftDatabase(tables: [
+  Alarm,
+  AlarmHistory,
+  FlutterPreferences,
+  HistoryView,
+  HistoryViewKey
+])
 class AppDatabase extends _$AppDatabase {
   final DatabaseConfig config;
   AppDatabase._(this.config, QueryExecutor executor) : super(executor);
 
   @override
-  int get schemaVersion => 1;
+  int get schemaVersion => 2;
+
+  @override
+  MigrationStrategy get migration => MigrationStrategy(
+        onCreate: (m) async {
+          await m.createAll();
+        },
+        onUpgrade: (m, from, to) async {
+          if (from < 2) {
+            await m.createTable(historyView);
+            await m.createTable(historyViewKey);
+          }
+        },
+      );
 
   bool get native => executor is NativeDatabase;
   bool get postgres => executor is PgDatabase;
@@ -122,8 +157,71 @@ class AppDatabase extends _$AppDatabase {
     }
   }
 
-  /// Create a runtime-defined table
-  /// The columns are a map of column name to column type
+  // ----------------------------
+  // Convenience API for History Views
+  // ----------------------------
+
+  Future<int> createHistoryView(String name, List<String> keys) async {
+    return transaction(() async {
+      final id = await into(historyView).insert(HistoryViewCompanion.insert(
+        name: name,
+        // createdAt default,
+        // updatedAt: const Value.absent(),
+      ));
+      if (keys.isNotEmpty) {
+        // Fallback to individual inserts for SQLite
+        for (final key in keys) {
+          await into(historyViewKey).insert(HistoryViewKeyCompanion.insert(
+            viewId: id,
+            key: key,
+          ));
+        }
+      }
+      return id;
+    });
+  }
+
+  Future<void> updateHistoryView(int id, String name, List<String> keys) async {
+    await transaction(() async {
+      await (update(historyView)..where((t) => t.id.equals(id))).write(
+        HistoryViewCompanion(
+          name: Value(name),
+          updatedAt: Value(DateTime.now()),
+        ),
+      );
+      await (delete(historyViewKey)..where((t) => t.viewId.equals(id))).go();
+      if (keys.isNotEmpty) {
+        // Use individual inserts instead of batch for PostgreSQL compatibility
+        for (final key in keys) {
+          await into(historyViewKey).insert(HistoryViewKeyCompanion.insert(
+            viewId: id,
+            key: key,
+          ));
+        }
+      }
+    });
+  }
+
+  Future<void> deleteHistoryView(int id) async {
+    await (delete(historyView)..where((t) => t.id.equals(id))).go();
+    // keys cascade due to FK
+  }
+
+  Future<List<HistoryViewData>> selectHistoryViews() {
+    return (select(historyView)).get();
+  }
+
+  Future<List<String>> getHistoryViewKeys(int viewId) async {
+    final rows = await (select(historyViewKey)
+          ..where((t) => t.viewId.equals(viewId)))
+        .get();
+    return rows.map((r) => r.key).toList();
+  }
+
+  // ----------------------------
+  // (Your existing dynamic table helpers below unchanged)
+  // ----------------------------
+
   Future<void> createTable(
       String tableName, Map<String, String> columns) async {
     final columnDefs =

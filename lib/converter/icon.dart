@@ -666,6 +666,16 @@ class IconDataConverter implements JsonConverter<IconData, String> {
         return FontAwesomeIcons.slash;
       case 'dumbbell':
         return FontAwesomeIcons.dumbbell;
+      case 'play':
+        return FontAwesomeIcons.play;
+      case 'pause_fa':
+        return FontAwesomeIcons.pause;
+      case 'stop_fa':
+        return FontAwesomeIcons.stop;
+      case 'car':
+        return FontAwesomeIcons.car;
+      case 'droplet':
+        return FontAwesomeIcons.droplet;
 
       // Additional commonly used FontAwesome icons
       case 'heart':
@@ -680,7 +690,7 @@ class IconDataConverter implements JsonConverter<IconData, String> {
         return FontAwesomeIcons.envelope;
       case 'envelope_solid':
         return FontAwesomeIcons.solidEnvelope;
-      case 'phone_alt':
+      case 'fa_phone':
         return FontAwesomeIcons.phone;
       case 'calendar':
         return FontAwesomeIcons.calendar;
@@ -1172,6 +1182,11 @@ class IconDataConverter implements JsonConverter<IconData, String> {
       return 'magnifying_glass_location';
     if (iconData == FontAwesomeIcons.slash) return 'slash';
     if (iconData == FontAwesomeIcons.dumbbell) return 'dumbbell';
+    if (iconData == FontAwesomeIcons.play) return 'play';
+    if (iconData == FontAwesomeIcons.pause) return 'pause_fa';
+    if (iconData == FontAwesomeIcons.stop) return 'stop_fa';
+    if (iconData == FontAwesomeIcons.car) return 'car';
+    if (iconData == FontAwesomeIcons.droplet) return 'droplet';
 
     // Additional commonly used FontAwesome icons
     if (iconData == FontAwesomeIcons.heart) return 'heart';
@@ -1180,7 +1195,7 @@ class IconDataConverter implements JsonConverter<IconData, String> {
     if (iconData == FontAwesomeIcons.solidUser) return 'user_solid';
     if (iconData == FontAwesomeIcons.envelope) return 'envelope';
     if (iconData == FontAwesomeIcons.solidEnvelope) return 'envelope_solid';
-    if (iconData == FontAwesomeIcons.phone) return 'phone_alt';
+    if (iconData == FontAwesomeIcons.phone) return 'fa_phone';
     if (iconData == FontAwesomeIcons.calendar) return 'calendar';
     if (iconData == FontAwesomeIcons.solidCalendar) return 'calendar_solid';
     if (iconData == FontAwesomeIcons.clock) return 'clock';
@@ -1620,6 +1635,11 @@ const List<IconData> iconList = [
   FontAwesomeIcons.magnifyingGlassLocation,
   FontAwesomeIcons.slash,
   FontAwesomeIcons.dumbbell,
+  FontAwesomeIcons.play,
+  FontAwesomeIcons.pause,
+  FontAwesomeIcons.stop,
+  FontAwesomeIcons.car,
+  FontAwesomeIcons.droplet,
 
   // Additional commonly used FontAwesome icons
   FontAwesomeIcons.heart,
