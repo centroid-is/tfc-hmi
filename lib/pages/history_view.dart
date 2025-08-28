@@ -707,6 +707,262 @@ class GraphDisplayConfig {
   int get hashCode => Object.hash(index, yAxisUnit, yAxis2Unit);
 }
 
+// Add these classes at the top level (before HistoryViewPage)
+class KeyTreeNode {
+  final String name;
+  final String? fullKey; // null for folder nodes, non-null for leaf nodes
+  final Map<String, KeyTreeNode> children;
+  final bool isExpanded;
+
+  KeyTreeNode({
+    required this.name,
+    this.fullKey,
+    required this.children,
+    this.isExpanded = false,
+  });
+
+  bool get isLeaf => fullKey != null;
+  bool get isFolder => !isLeaf;
+}
+
+class _KeyFolderTile extends StatefulWidget {
+  final KeyTreeNode node;
+  final Set<String> collected;
+  final String search;
+  final bool onlyCollected;
+  final Set<String> selected;
+  final Function(String) onKeyToggle;
+  final Widget Function(
+          KeyTreeNode, Set<String>, String, bool, Set<String>, Function(String))
+      buildKeyTreeView;
+
+  const _KeyFolderTile({
+    required this.node,
+    required this.collected,
+    required this.search,
+    required this.onlyCollected,
+    required this.selected,
+    required this.onKeyToggle,
+    required this.buildKeyTreeView,
+  });
+
+  @override
+  State<_KeyFolderTile> createState() => _KeyFolderTileState();
+}
+
+class _KeyFolderTileState extends State<_KeyFolderTile> {
+  late bool _isExpanded;
+
+  @override
+  void initState() {
+    super.initState();
+    _isExpanded = widget.node.isExpanded;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // Count how many keys are in this folder (recursively)
+    int _countKeys(KeyTreeNode node) {
+      int count = 0;
+      for (final child in node.children.values) {
+        if (child.isLeaf) {
+          count++;
+        } else {
+          count += _countKeys(child);
+        }
+      }
+      return count;
+    }
+
+    final keyCount = _countKeys(widget.node);
+
+    // Check if this folder has any visible children
+    final hasVisibleChildren = widget.node.children.values.any((child) {
+      if (widget.search.isNotEmpty) {
+        final fullKey = child.fullKey ?? child.name;
+        if (!fullKey.toLowerCase().contains(widget.search.toLowerCase())) {
+          return false;
+        }
+      }
+
+      if (widget.onlyCollected && child.isLeaf) {
+        return widget.collected.contains(child.fullKey);
+      }
+
+      return true;
+    });
+
+    if (!hasVisibleChildren) {
+      return const SizedBox.shrink();
+    }
+
+    return Column(
+      children: [
+        ListTile(
+          dense: true,
+          leading: Icon(
+            _isExpanded ? Icons.expand_more : Icons.chevron_right,
+            size: 20,
+          ),
+          title: Row(
+            children: [
+              Icon(
+                Icons.folder,
+                size: 18,
+                color: Theme.of(context).colorScheme.primary,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  widget.node.name,
+                  style: TextStyle(
+                    fontWeight: FontWeight.w600,
+                    color:
+                        Theme.of(context).colorScheme.onSurface, // Better color
+                  ),
+                ),
+              ),
+              Text(
+                '($keyCount)',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ],
+          ),
+          onTap: () {
+            setState(() {
+              _isExpanded = !_isExpanded;
+            });
+          },
+        ),
+        if (_isExpanded)
+          Padding(
+            padding: const EdgeInsets.only(left: 24),
+            child: Column(
+              children: widget.node.children.values.map((child) {
+                // For leaf nodes, render the key row directly
+                if (child.isLeaf) {
+                  final keyName = child.fullKey!;
+                  final isCollected = widget.collected.contains(keyName);
+
+                  if (widget.onlyCollected && !isCollected) {
+                    return const SizedBox.shrink();
+                  }
+
+                  // Extract just the key name part (skip the folder prefix)
+                  final displayName = keyName.split('.').last;
+
+                  return ListTile(
+                    dense: true,
+                    title: Text(
+                      displayName, // Use displayName instead of keyName
+                      style: const TextStyle(fontWeight: FontWeight.w500),
+                    ),
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        SizedBox(
+                          width: 90,
+                          child: _CollectorToggle(keyName: keyName),
+                        ),
+                        const SizedBox(width: 8),
+                        Checkbox(
+                          value: widget.selected.contains(keyName),
+                          onChanged: (v) => widget.onKeyToggle(keyName),
+                        ),
+                      ],
+                    ),
+                    onTap: () => widget.onKeyToggle(keyName),
+                  );
+                }
+
+                // For folder nodes, render them recursively
+                return _KeyFolderTile(
+                  node: child,
+                  collected: widget.collected,
+                  search: widget.search,
+                  onlyCollected: widget.onlyCollected,
+                  selected: widget.selected,
+                  onKeyToggle: widget.onKeyToggle,
+                  buildKeyTreeView: widget.buildKeyTreeView,
+                );
+              }).toList(),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+// Add this provider at the top level
+final keyTreeProvider = FutureProvider<KeyTreeNode>((ref) async {
+  final sm = await ref.watch(stateManProvider.future);
+  final keys = List<String>.from(sm.keys);
+  keys.sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+
+  // Debug: Print some sample keys
+  print('🔑 Sample keys: ${keys.take(10).toList()}');
+
+  // Debug: Check if keys actually contain dots
+  final keysWithDots = keys.where((k) => k.contains('.')).take(5).toList();
+  print('🔑 Keys with dots: $keysWithDots');
+
+  return _buildKeyTree(keys);
+});
+
+// Add this helper function at the top level
+KeyTreeNode _buildKeyTree(List<String> keys) {
+  print('🔗 Building tree from ${keys.length} keys');
+  final root = KeyTreeNode(name: 'root', children: {});
+
+  for (final key in keys) {
+    final parts = key.split('.');
+    print('  🔑 Processing key: $key -> parts: $parts');
+
+    // Start from root
+    KeyTreeNode current = root;
+
+    // Build the path step by step
+    for (int i = 0; i < parts.length; i++) {
+      final part = parts[i];
+      final isLast = i == parts.length - 1;
+
+      // Create the node if it doesn't exist
+      if (!current.children.containsKey(part)) {
+        current.children[part] = KeyTreeNode(
+          name: part,
+          fullKey: isLast ? key : null, // Only set fullKey for the final part
+          children: {},
+        );
+        print('    Created ${isLast ? 'leaf' : 'folder'}: $part');
+      }
+
+      // Move to the next level
+      current = current.children[part]!;
+    }
+  }
+
+  // Debug: Print the actual tree structure
+  print('🌳 Tree structure:');
+  _printTree(root, 0);
+
+  return root;
+}
+
+// Add this helper function to debug the tree structure
+void _printTree(KeyTreeNode node, int depth) {
+  final indent = '  ' * depth;
+  final type = node.isLeaf ? '📄' : '📁';
+  final key = node.isLeaf ? ' (${node.fullKey})' : '';
+  print('$indent$type ${node.name}$key - ${node.children.length} children');
+
+  for (final child in node.children.values) {
+    _printTree(child, depth + 1);
+  }
+}
+
 // -----------------------------------------------------------------------------
 // Main Page
 // -----------------------------------------------------------------------------
@@ -987,10 +1243,12 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage>
     );
   }
 
+  // Replace the existing _buildKeyPicker method with this tree-based version
   Widget _buildKeyPicker(BuildContext context) {
     final keysAsync = ref.watch(stateKeysProvider);
     final collectedAsync = ref.watch(collectedKeysProvider);
-    final dbAsync = ref.watch(databaseProvider); // AsyncValue<Database?>
+    final dbAsync = ref.watch(databaseProvider);
+    final keyTreeAsync = ref.watch(keyTreeProvider);
 
     final canSave = _selected.isNotEmpty && (dbAsync.valueOrNull != null);
 
@@ -1070,68 +1328,26 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage>
             ],
           ),
         ),
-        // Keys list
+        // Tree-based keys list
         Expanded(
-          child: keysAsync.when(
-            data: (allKeys) {
+          child: keyTreeAsync.when(
+            data: (keyTree) {
               final Set<String> collected =
                   collectedAsync.valueOrNull ?? const <String>{};
 
-              // Apply filters
-              final filtered = allKeys.where((k) {
-                final matches = _search.isEmpty ||
-                    k.toLowerCase().contains(_search.toLowerCase());
-                final passCollected = !_onlyCollected || collected.contains(k);
-                return matches && passCollected;
-              }).toList();
-
-              if (filtered.isEmpty) {
-                return const Center(child: Text('No matching keys'));
-              }
-
-              return ListView.separated(
-                itemCount: filtered.length,
-                separatorBuilder: (_, __) => const Divider(height: 1),
-                itemBuilder: (context, i) {
-                  final keyName = filtered[i];
-                  final selected = _selected.contains(keyName);
-                  return ListTile(
-                    dense: true,
-                    title: Text(
-                      keyName,
-                      style: const TextStyle(fontWeight: FontWeight.w500),
-                    ),
-                    trailing: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        // ⚡ collector toggle (now wider)
-                        SizedBox(
-                          width: 90,
-                          child: _CollectorToggle(keyName: keyName),
-                        ),
-                        const SizedBox(width: 8),
-                        // selection checkbox
-                        Checkbox(
-                          value: selected,
-                          onChanged: (v) => setState(() {
-                            if (v == true) {
-                              _selected.add(keyName);
-                            } else {
-                              _selected.remove(keyName);
-                            }
-                          }),
-                        ),
-                      ],
-                    ),
-                    onTap: () => setState(() {
-                      if (selected) {
-                        _selected.remove(keyName);
-                      } else {
-                        _selected.add(keyName);
-                      }
-                    }),
-                  );
-                },
+              return _buildKeyTreeView(
+                keyTree,
+                collected,
+                _search,
+                _onlyCollected,
+                _selected,
+                (key) => setState(() {
+                  if (_selected.contains(key)) {
+                    _selected.remove(key);
+                  } else {
+                    _selected.add(key);
+                  }
+                }),
               );
             },
             loading: () =>
@@ -1180,9 +1396,112 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage>
           ),
         ],
         if (dbAsync.isLoading) const SizedBox(height: 8),
-        if (dbAsync.isLoading)
-          const LinearProgressIndicator(minHeight: 2), // DB opening feedback
+        if (dbAsync.isLoading) const LinearProgressIndicator(minHeight: 2),
       ],
+    );
+  }
+
+  // Add this new method to build the tree view
+  Widget _buildKeyTreeView(
+    KeyTreeNode node,
+    Set<String> collected,
+    String search,
+    bool onlyCollected,
+    Set<String> selected,
+    Function(String) onKeyToggle,
+  ) {
+    // Add debug logging
+    print(
+        '🔗 Building tree view for: ${node.name} (isLeaf: ${node.isLeaf}, children: ${node.children.length})');
+
+    // Skip root node
+    if (node.name == 'root') {
+      print('  📁 Root node, building ${node.children.length} children');
+      return ListView.builder(
+        itemCount: node.children.length,
+        itemBuilder: (context, index) {
+          final child = node.children.values.elementAt(index);
+          print('    🔗 Building child: ${child.name}');
+          return _buildKeyTreeView(
+            child,
+            collected,
+            search,
+            onlyCollected,
+            selected,
+            onKeyToggle,
+          );
+        },
+      );
+    }
+
+    // Filter children based on search and collection status
+    final filteredChildren = node.children.values.where((child) {
+      if (search.isNotEmpty) {
+        final fullKey = child.fullKey ?? child.name;
+        if (!fullKey.toLowerCase().contains(search.toLowerCase())) {
+          return false;
+        }
+      }
+
+      if (onlyCollected && child.isLeaf) {
+        return collected.contains(child.fullKey);
+      }
+
+      return true;
+    }).toList();
+
+    print(
+        '  🔗 Filtered children: ${filteredChildren.length} out of ${node.children.length}');
+
+    if (filteredChildren.isEmpty) {
+      print('  📁 No visible children, returning empty');
+      return const SizedBox.shrink();
+    }
+
+    // If this is a leaf node (actual key), show the key row
+    if (node.isLeaf) {
+      print('  📄 Leaf node: ${node.fullKey}');
+      final keyName = node.fullKey!;
+      final isCollected = collected.contains(keyName);
+
+      if (onlyCollected && !isCollected) {
+        return const SizedBox.shrink();
+      }
+
+      return ListTile(
+        dense: true,
+        title: Text(
+          keyName,
+          style: const TextStyle(fontWeight: FontWeight.w500),
+        ),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SizedBox(
+              width: 90,
+              child: _CollectorToggle(keyName: keyName),
+            ),
+            const SizedBox(width: 8),
+            Checkbox(
+              value: selected.contains(keyName),
+              onChanged: (v) => onKeyToggle(keyName),
+            ),
+          ],
+        ),
+        onTap: () => onKeyToggle(keyName),
+      );
+    }
+
+    // If this is a folder node, show expandable folder
+    print('  📁 Folder node: ${node.name}, building folder tile');
+    return _KeyFolderTile(
+      node: node,
+      collected: collected,
+      search: search,
+      onlyCollected: onlyCollected,
+      selected: selected,
+      onKeyToggle: onKeyToggle,
+      buildKeyTreeView: _buildKeyTreeView,
     );
   }
 
