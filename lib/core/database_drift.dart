@@ -1,3 +1,7 @@
+// ============================================================================
+// ========================  DRIFT / DATABASE LAYER  ==========================
+// ============================================================================
+
 import 'dart:io';
 
 import 'package:drift/backends.dart';
@@ -80,6 +84,17 @@ class HistoryViewGraph extends Table {
   TextColumn get yAxis2Unit => text().nullable()();
 }
 
+/// NEW: Saved Periods per History View
+class HistoryViewPeriod extends Table {
+  IntColumn get id => integer().autoIncrement()();
+  IntColumn get viewId =>
+      integer().references(HistoryView, #id, onDelete: KeyAction.cascade)();
+  TextColumn get name => text()();
+  DateTimeColumn get startAt => dateTime()();
+  DateTimeColumn get endAt => dateTime()();
+  DateTimeColumn get createdAt => dateTime().withDefault(currentDateAndTime)();
+}
+
 // Register all tables here
 @DriftDatabase(tables: [
   Alarm,
@@ -87,14 +102,15 @@ class HistoryViewGraph extends Table {
   FlutterPreferences,
   HistoryView,
   HistoryViewKey,
-  HistoryViewGraph, // Add the new table
+  HistoryViewGraph,
+  HistoryViewPeriod, // NEW
 ])
 class AppDatabase extends _$AppDatabase {
   final DatabaseConfig config;
   AppDatabase._(this.config, QueryExecutor executor) : super(executor);
 
   @override
-  int get schemaVersion => 4; // Increment schema version
+  int get schemaVersion => 5; // Increment schema version
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -115,6 +131,10 @@ class AppDatabase extends _$AppDatabase {
           if (from < 4) {
             // Add new table for graph-level configuration
             await m.createTable(historyViewGraph);
+          }
+          if (from < 5) {
+            // NEW: periods table
+            await m.createTable(historyViewPeriod);
           }
         },
       );
@@ -278,6 +298,7 @@ class AppDatabase extends _$AppDatabase {
     // keys cascade due to FK
     await (delete(historyViewKey)..where((t) => t.viewId.equals(id))).go();
     await (delete(historyViewGraph)..where((t) => t.viewId.equals(id))).go();
+    await (delete(historyViewPeriod)..where((t) => t.viewId.equals(id))).go();
   }
 
   Future<List<HistoryViewData>> selectHistoryViews() {
@@ -326,6 +347,58 @@ class AppDatabase extends _$AppDatabase {
           ..where((t) => t.viewId.equals(viewId)))
         .get();
     return rows.map((r) => r.key).toList();
+  }
+
+  // ----------------------------
+  // NEW: Saved Periods helpers
+  // ----------------------------
+  Future<int> addHistoryViewPeriod(
+      int viewId, String name, DateTime start, DateTime end) async {
+    return into(historyViewPeriod).insert(HistoryViewPeriodCompanion.insert(
+      viewId: viewId,
+      name: name,
+      startAt: start,
+      endAt: end,
+    ));
+  }
+
+  Future<void> deleteHistoryViewPeriod(int id) async {
+    await (delete(historyViewPeriod)..where((t) => t.id.equals(id))).go();
+  }
+
+  Future<List<HistoryViewPeriodData>> listHistoryViewPeriods(int viewId) async {
+    return (select(historyViewPeriod)..where((t) => t.viewId.equals(viewId)))
+        .get();
+  }
+
+  /// A best-effort global retention horizon (now - max(drop_after) across jobs).
+  /// Returns null if unknown/unavailable.
+  Future<DateTime?> getGlobalRetentionHorizon() async {
+    try {
+      // TimescaleDB only: read from jobs
+      final rows = await customSelect(
+        r'''
+        SELECT config ->> 'drop_after' AS drop_after
+        FROM timescaledb_information.jobs
+        WHERE proc_name = 'policy_retention'
+        ''',
+      ).get();
+
+      if (rows.isEmpty) return null;
+      Duration? maxDur;
+      for (final r in rows) {
+        final s = r.data['drop_after'] as String?;
+        final d = AppDatabase.parsePostgresInterval(s);
+        if (d != null) {
+          if (maxDur == null || d > maxDur) maxDur = d;
+        }
+      }
+      if (maxDur == null) return null;
+      return DateTime.now().subtract(maxDur);
+    } catch (_) {
+      // Not postgres/timescale or no permissions
+      return null;
+    }
   }
 
   // ----------------------------
@@ -390,40 +463,13 @@ class AppDatabase extends _$AppDatabase {
     List<dynamic>? whereArgs,
     String? orderBy,
   }) async {
-    // await testRawPostgresConnection();
-    // final startnet = DateTime.now();
-    // await testConnectionLatency();
-    // final durationnet = DateTime.now().difference(startnet);
-    // print('⏱️  tableQuery: Network latency: ${durationnet.inMilliseconds}ms');
-
     final start = DateTime.now();
-    // print('🔍 tableQuery: Building query for table $tableName');
 
     final cols = columns?.join(', ') ?? '*';
     final whereClause = where != null ? ' WHERE $where' : '';
     final orderByClause = orderBy != null ? ' ORDER BY $orderBy' : '';
 
     final sql = 'SELECT $cols FROM "$tableName"$whereClause$orderByClause';
-    // print(' tableQuery: SQL: $sql');
-
-    // // Add EXPLAIN ANALYZE to see what PostgreSQL is doing
-    // final explainSql = 'EXPLAIN (ANALYZE, BUFFERS, FORMAT TEXT) $sql';
-    // print('🔬 tableQuery: Running EXPLAIN ANALYZE...');
-
-    // try {
-    //   final explainResult = await customSelect(
-    //     explainSql,
-    //     variables:
-    //         whereArgs != null ? [for (var arg in whereArgs) Variable(arg)] : [],
-    //   ).get();
-
-    //   print('📊 tableQuery: Query Plan:');
-    //   for (final row in explainResult) {
-    //     print('   ${row.data.values.first}');
-    //   }
-    // } catch (e) {
-    //   print('⚠️  tableQuery: Could not get query plan: $e');
-    // }
 
     final result = await customSelect(
       sql,
@@ -488,9 +534,7 @@ class AppDatabase extends _$AppDatabase {
     if (interval == null) return null;
 
     // TimescaleDB might return intervals in different formats
-    // Let's handle the most common cases:
 
-    // Format: "10 microseconds"
     final microsecondsMatch =
         RegExp(r'(\d+)\s*microseconds').firstMatch(interval);
     if (microsecondsMatch != null) {
@@ -498,7 +542,6 @@ class AppDatabase extends _$AppDatabase {
       return Duration(microseconds: microseconds);
     }
 
-    // Format: "10 milliseconds"
     final millisecondsMatch =
         RegExp(r'(\d+)\s*milliseconds').firstMatch(interval);
     if (millisecondsMatch != null) {
@@ -512,7 +555,6 @@ class AppDatabase extends _$AppDatabase {
       return Duration(seconds: seconds);
     }
 
-    // Format: "10 minutes", "1 hour", etc.
     final minutesMatch = RegExp(r'(\d+)\s*minute').firstMatch(interval);
     if (minutesMatch != null) {
       final minutes = int.parse(minutesMatch.group(1)!);
@@ -534,13 +576,13 @@ class AppDatabase extends _$AppDatabase {
     final monthsMatch = RegExp(r'(\d+)\s*month').firstMatch(interval);
     if (monthsMatch != null) {
       final months = int.parse(monthsMatch.group(1)!);
-      return Duration(days: months * 30); // TODO: This is not correct
+      return Duration(days: months * 30); // approx
     }
 
     final yearsMatch = RegExp(r'(\d+)\s*year').firstMatch(interval);
     if (yearsMatch != null) {
       final years = int.parse(yearsMatch.group(1)!);
-      return Duration(days: years * 365); // TODO: This is not correct
+      return Duration(days: years * 365); // approx
     }
 
     // Format: "00:10:00" (HH:MM:SS)
@@ -638,67 +680,35 @@ class AppDatabase extends _$AppDatabase {
 
     // Test 1: Simple connection test with timing
     final start1 = DateTime.now();
-    print('🔍 Step 1: About to call customSelect("SELECT 1")');
-
-    // Add timing around the actual database call
     final dbStart = DateTime.now();
-    print('🔍 Step 1a: About to call .getSingle()');
     await customSelect('SELECT 1').getSingle();
     final dbDuration = DateTime.now().difference(dbStart);
-
     final totalDuration = DateTime.now().difference(start1);
     print('⏱️  Step 1: Database call took ${dbDuration.inMilliseconds}ms');
     print(
         '⏱️  Step 1: Total time including overhead: ${totalDuration.inMilliseconds}ms');
-    print(
-        '⏱️  Step 1: Drift isolate overhead: ${(totalDuration - dbDuration).inMilliseconds}ms');
 
-    // Test 2: Test with a more complex query
+    // Test 2
     final start2 = DateTime.now();
-    print('🔍 Step 2: About to call customSelect("SELECT NOW()")');
-
     final dbStart2 = DateTime.now();
     await customSelect('SELECT NOW()').getSingle();
     final dbDuration2 = DateTime.now().difference(dbStart2);
-
     final totalDuration2 = DateTime.now().difference(start2);
     print('⏱️  Step 2: Database call took ${dbDuration2.inMilliseconds}ms');
     print(
         '⏱️  Step 2: Total time including overhead: ${totalDuration2.inMilliseconds}ms');
-    print(
-        '⏱️  Step 2: Drift isolate overhead: ${(totalDuration2 - dbDuration2).inMilliseconds}ms');
-
-    print(' Connection latency summary:');
-    print('   Database call 1: ${dbDuration.inMilliseconds}ms');
-    print('   Database call 2: ${dbDuration2.inMilliseconds}ms');
-    print(
-        '   Drift overhead 1: ${(totalDuration - dbDuration).inMilliseconds}ms');
-    print(
-        '   Drift overhead 2: ${(totalDuration2 - dbDuration2).inMilliseconds}ms');
-
-    if ((totalDuration - dbDuration).inMilliseconds > 100) {
-      print('⚠️  High Drift isolate overhead detected! The issue is likely:');
-      print('   1. Drift isolate communication is slow');
-      print('   2. Serialization/deserialization overhead');
-      print('   3. Isolate message passing bottleneck');
-      print('   4. Memory pressure causing isolate slowdown');
-    }
   }
 
   /// Test Drift isolate performance
   Future<void> testDriftIsolatePerformance() async {
     print('🔍 Testing Drift isolate performance...');
 
-    // Test 1: Simple operation
     final start1 = DateTime.now();
-    print('🔍 Test 1: Simple customSelect');
     await customSelect('SELECT 1').getSingle();
     final duration1 = DateTime.now().difference(start1);
     print('⏱️  Test 1 took: ${duration1.inMilliseconds}ms');
 
-    // Test 2: Multiple operations
     final start2 = DateTime.now();
-    print('🔍 Test 2: Multiple operations');
     for (int i = 0; i < 3; i++) {
       await customSelect('SELECT $i').getSingle();
     }
@@ -706,9 +716,7 @@ class AppDatabase extends _$AppDatabase {
     print(
         '⏱️  Test 2 took: ${duration2.inMilliseconds}ms (avg: ${duration2.inMilliseconds / 3}ms per operation)');
 
-    // Test 3: Check if it's a one-time overhead
     final start3 = DateTime.now();
-    print('🔍 Test 3: Repeated operation');
     await customSelect('SELECT 1').getSingle();
     final duration3 = DateTime.now().difference(start3);
     print('⏱️  Test 3 took: ${duration3.inMilliseconds}ms');
@@ -723,18 +731,14 @@ class AppDatabase extends _$AppDatabase {
     }
 
     final start = DateTime.now();
-    print('🔍 Creating raw PostgreSQL connection...');
-
     try {
-      // Create a direct connection without the pool
       final connection = await pg.Connection.open(config.postgres!);
       final connectDuration = DateTime.now().difference(start);
       print(
           '⏱️  Raw connection creation took ${connectDuration.inMilliseconds}ms');
 
-      // Test a simple query
       final queryStart = DateTime.now();
-      final result = await connection.execute('SELECT 1');
+      await connection.execute('SELECT 1');
       final queryDuration = DateTime.now().difference(queryStart);
       print('⏱️  Raw query execution took ${queryDuration.inMilliseconds}ms');
 

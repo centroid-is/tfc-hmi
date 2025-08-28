@@ -86,6 +86,80 @@ final savedViewsProvider = FutureProvider<List<SavedHistoryView>>((ref) async {
 });
 
 // -----------------------------------------------------------------------------
+// NEW: Saved Periods per View
+// -----------------------------------------------------------------------------
+class SavedPeriod {
+  final int id;
+  final int viewId;
+  final String name;
+  final DateTime start;
+  final DateTime end;
+  SavedPeriod({
+    required this.id,
+    required this.viewId,
+    required this.name,
+    required this.start,
+    required this.end,
+  });
+}
+
+final savedPeriodsProvider =
+    FutureProvider.family<List<SavedPeriod>, int>((ref, viewId) async {
+  final dbWrap = await ref.watch(databaseProvider.future);
+  if (dbWrap == null) return [];
+  final rows = await dbWrap.db.listHistoryViewPeriods(viewId);
+  return [
+    for (final r in rows)
+      SavedPeriod(
+        id: r.id,
+        viewId: r.viewId,
+        name: r.name,
+        start: r.startAt,
+        end: r.endAt,
+      )
+  ]..sort((a, b) => a.start.compareTo(b.start));
+});
+
+// A best-effort "global" retention horizon (oldest timestamp we likely still have)
+// If null, retention is unknown (no icon/warning).
+final retentionHorizonProvider = FutureProvider<DateTime?>((ref) async {
+  final dbWrap = await ref.watch(databaseProvider.future);
+  if (dbWrap == null) return null;
+  try {
+    return await dbWrap.db.getGlobalRetentionHorizon();
+  } catch (_) {
+    return null;
+  }
+});
+
+enum PeriodValidity { valid, partial, invalid, unknown }
+
+PeriodValidity validityForRange(DateTimeRange r, DateTime? horizon) {
+  if (horizon == null) return PeriodValidity.unknown;
+  if (r.end.isBefore(horizon)) return PeriodValidity.invalid;
+  if (r.start.isBefore(horizon)) return PeriodValidity.partial;
+  return PeriodValidity.valid;
+}
+
+Icon _validityIcon(BuildContext context, PeriodValidity v) {
+  switch (v) {
+    case PeriodValidity.valid:
+      return Icon(Icons.check_circle,
+          size: 18, color: Theme.of(context).colorScheme.tertiary);
+    case PeriodValidity.partial:
+      return Icon(Icons.warning_amber_rounded,
+          size: 18, color: Theme.of(context).colorScheme.secondary);
+    case PeriodValidity.invalid:
+      return Icon(Icons.error_outline,
+          size: 18, color: Theme.of(context).colorScheme.error);
+    case PeriodValidity.unknown:
+    default:
+      return Icon(Icons.help_outline,
+          size: 18, color: Theme.of(context).colorScheme.outline);
+  }
+}
+
+// -----------------------------------------------------------------------------
 // Collector toggle (enable/disable collection for a key)
 // -----------------------------------------------------------------------------
 class _CollectorToggle extends ConsumerWidget {
@@ -792,6 +866,9 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage>
   // Left pane collapse
   bool _leftPaneExpanded = true;
 
+  // Saved periods UI state
+  SavedPeriod? _activePeriod;
+
   // Rename to avoid conflict with the widget's GraphConfig
   final Map<String, GraphKeyConfig> _keyConfigs = <String, GraphKeyConfig>{};
   final Map<int, GraphDisplayConfig> _graphConfigs =
@@ -1230,7 +1307,7 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage>
 
     return Row(
       children: [
-        // Left side: existing controls
+        // Left side: existing controls (+ new saved periods controls)
         Expanded(
           child: Wrap(
             spacing: 12,
@@ -1267,6 +1344,7 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage>
                     onChanged: (v) {
                       setState(() {
                         _activeView = v;
+                        _activePeriod = null;
                         _selected
                           ..clear()
                           ..addAll(v?.keys ?? const []);
@@ -1296,6 +1374,7 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage>
                 ),
                 error: (e, _) => Text('Views err: $e'),
               ),
+
               // Configure button
               ElevatedButton.icon(
                 icon: const Icon(Icons.settings),
@@ -1319,7 +1398,108 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage>
                       Theme.of(context).colorScheme.onErrorContainer,
                 ),
               ),
+
+              // --- NEW: Saved Periods picker + delete + "save current period" ---
+              if (_activeView != null)
+                Consumer(builder: (context, ref, _) {
+                  final periodsAsync =
+                      ref.watch(savedPeriodsProvider(_activeView!.id));
+                  final horizonAsync = ref.watch(retentionHorizonProvider);
+
+                  return periodsAsync.when(
+                    data: (periods) {
+                      final horizon = horizonAsync.valueOrNull;
+                      SavedPeriod? dropdownValue = _activePeriod == null
+                          ? null
+                          : periods.firstWhere(
+                              (p) => p.id == _activePeriod!.id,
+                              orElse: () => _activePeriod!,
+                            );
+
+                      return Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          DropdownButton<SavedPeriod?>(
+                            value: dropdownValue,
+                            hint: const Text('Saved periods…'),
+                            onChanged: (p) {
+                              setState(() {
+                                _activePeriod = p;
+                                if (p != null) {
+                                  _realtime = false;
+                                  _range =
+                                      DateTimeRange(start: p.start, end: p.end);
+                                }
+                              });
+                            },
+                            items: [
+                              for (final p in periods)
+                                DropdownMenuItem(
+                                  value: p,
+                                  child: Row(
+                                    children: [
+                                      _validityIcon(
+                                        context,
+                                        validityForRange(
+                                          DateTimeRange(
+                                              start: p.start, end: p.end),
+                                          horizon,
+                                        ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Text(p.name),
+                                      const SizedBox(width: 8),
+                                      Text(
+                                        '(${_fmtDT(p.start)} → ${_fmtDT(p.end)})',
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          color: Theme.of(context)
+                                              .colorScheme
+                                              .onSurfaceVariant,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                            ],
+                          ),
+                          const SizedBox(width: 4),
+                          Tooltip(
+                            message: 'Save current range as period',
+                            child: IconButton(
+                              onPressed: (_activeView != null &&
+                                      !_realtime &&
+                                      _range != null)
+                                  ? _saveCurrentRangeAsPeriod
+                                  : null,
+                              icon: const Icon(Icons.bookmark_add_outlined),
+                            ),
+                          ),
+                          Tooltip(
+                            message: 'Delete selected period',
+                            child: IconButton(
+                              onPressed: (_activeView != null &&
+                                      _activePeriod != null)
+                                  ? () => _deletePeriod(
+                                      _activePeriod!, horizonAsync.valueOrNull)
+                                  : null,
+                              icon: const Icon(Icons.delete_outline),
+                            ),
+                          ),
+                        ],
+                      );
+                    },
+                    loading: () => const SizedBox(
+                      width: 120,
+                      height: 20,
+                      child: LinearProgressIndicator(minHeight: 2),
+                    ),
+                    error: (e, _) => Text('Periods err: $e'),
+                  );
+                }),
+
               const SizedBox(width: 12),
+
               // Realtime toggle
               Row(
                 mainAxisSize: MainAxisSize.min,
@@ -1328,34 +1508,31 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage>
                     value: _realtime,
                     onChanged: (v) => setState(() {
                       _realtime = v;
-                      if (v) _range = null;
+                      if (v) {
+                        _range = null;
+                        _activePeriod = null;
+                      }
                     }),
                   ),
                   const Text('Realtime'),
                 ],
               ),
-              // DateRange when NOT realtime
+
+              // DateRange when NOT realtime (with seconds)
               if (!_realtime)
                 OutlinedButton.icon(
                   icon: const Icon(Icons.calendar_today),
                   label: Text(_range == null
-                      ? 'Pick range'
-                      : '${_range!.start.toLocal()} → ${_range!.end.toLocal()}'),
+                      ? 'Pick date & time range'
+                      : '${_rangeLabel(_range!)}'),
                   onPressed: () async {
-                    final now = DateTime.now();
-                    final initial = _range ??
-                        DateTimeRange(
-                          start: now.subtract(const Duration(hours: 1)),
-                          end: now,
-                        );
-                    final picked = await showDateRangePicker(
-                      context: context,
-                      firstDate: DateTime(2000),
-                      lastDate: now.add(const Duration(days: 1)),
-                      initialDateRange: initial,
-                    );
+                    final picked =
+                        await _pickDateTimeRangeWithSeconds(context, _range);
                     if (picked != null) {
-                      setState(() => _range = picked);
+                      setState(() {
+                        _range = picked;
+                        _activePeriod = null; // manual pick overrides saved
+                      });
                     }
                   },
                 ),
@@ -1393,9 +1570,69 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage>
     }
     final adb = dbWrap.db;
     await adb.deleteHistoryView(v.id);
-    setState(() => _activeView = null);
+    setState(() {
+      _activeView = null;
+      _activePeriod = null;
+    });
     ref.invalidate(savedViewsProvider);
     _toast(context, 'Deleted');
+  }
+
+  Future<void> _saveCurrentRangeAsPeriod() async {
+    if (_activeView == null || _range == null) return;
+    final name = await _askName(context, title: 'Save period', initial: '');
+    if (name == null || name.trim().isEmpty) return;
+
+    final dbWrap = await ref.read(databaseProvider.future);
+    if (dbWrap == null) {
+      _toast(context, 'Database not ready yet.');
+      return;
+    }
+    final id = await dbWrap.db.addHistoryViewPeriod(
+      _activeView!.id,
+      name.trim(),
+      _range!.start,
+      _range!.end,
+    );
+    setState(() {
+      _activePeriod = SavedPeriod(
+          id: id,
+          viewId: _activeView!.id,
+          name: name.trim(),
+          start: _range!.start,
+          end: _range!.end);
+    });
+    ref.invalidate(savedPeriodsProvider(_activeView!.id));
+    _toast(context, 'Saved period "$name"');
+  }
+
+  Future<void> _deletePeriod(SavedPeriod p, DateTime? retentionHorizon) async {
+    final validity = validityForRange(
+        DateTimeRange(start: p.start, end: p.end), retentionHorizon);
+
+    final warn = switch (validity) {
+      PeriodValidity.invalid =>
+        '\n\nNote: This period is already invalid due to retention.',
+      PeriodValidity.partial =>
+        '\n\nWarning: Part of this period is older than retention.',
+      _ => '',
+    };
+
+    final ok = await _confirm(context, 'Delete saved period "${p.name}"?$warn');
+    if (!ok) return;
+
+    final dbWrap = await ref.read(databaseProvider.future);
+    if (dbWrap == null) {
+      _toast(context, 'Database not ready yet.');
+      return;
+    }
+    await dbWrap.db.deleteHistoryViewPeriod(p.id);
+    if (!mounted) return;
+    if (_activePeriod?.id == p.id) {
+      setState(() => _activePeriod = null);
+    }
+    ref.invalidate(savedPeriodsProvider(p.viewId));
+    _toast(context, 'Deleted period "${p.name}"');
   }
 
   Future<void> _editKey(BuildContext context, String oldKey) async {
@@ -1456,7 +1693,7 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage>
           controller: ctrl,
           decoration: const InputDecoration(
             border: OutlineInputBorder(),
-            labelText: 'View name',
+            labelText: 'Name',
           ),
         ),
         actions: [
@@ -1566,7 +1803,10 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage>
     final newView =
         SavedHistoryView(id: id, name: name.trim(), keys: _selected.toList());
 
-    setState(() => _activeView = newView);
+    setState(() {
+      _activeView = newView;
+      _activePeriod = null;
+    });
     ref.invalidate(savedViewsProvider);
     _toast(context, 'Saved "${name.trim()}" as new view');
   }
@@ -1689,7 +1929,9 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage>
               Text('• Save current selection as a new view'),
               Text('• Update existing views'),
               Text('• Toggle between real-time and historical data'),
-              Text('• Pick specific date ranges for historical data'),
+              Text(
+                  '• Pick specific date ranges for historical data (with seconds)'),
+              Text('• Save named periods and re-apply them later'),
               SizedBox(height: 16),
               Text(
                 'Graph & Table Views:',
@@ -1702,15 +1944,15 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage>
               Text('• Resume button appears when paused'),
               SizedBox(height: 16),
               Text(
-                'Configuration:',
+                'Retention & Periods:',
                 style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
               ),
               SizedBox(height: 8),
-              Text('• Set friendly aliases for keys'),
-              Text('• Organize keys into up to 5 separate graphs'),
-              Text('• Configure Y-axis units for each graph'),
-              Text('• Use secondary Y-axes for different value scales'),
-              Text('• All configurations are saved with your view'),
+              Text('• Saved periods show status vs. retention'),
+              Text(
+                  '• Green: fully valid; Yellow: partially valid; Red: invalid'),
+              Text(
+                  '• Invalid periods can still be kept for reference or deleted'),
             ],
           ),
         ),
@@ -1723,6 +1965,26 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage>
       ),
     );
   }
+
+  // ---- DateTime range picker with seconds -----------------------------------
+
+  Future<DateTimeRange?> _pickDateTimeRangeWithSeconds(
+      BuildContext context, DateTimeRange? initial) async {
+    final res = await showDialog<DateTimeRange>(
+      context: context,
+      builder: (context) => _DateTimeRangeDialog(initial: initial),
+    );
+    return res;
+  }
+
+  static String _fmtDT(DateTime dt) {
+    String two(int n) => n.toString().padLeft(2, '0');
+    return '${two(dt.year)}-${two(dt.month)}-${two(dt.day)} '
+        '${two(dt.hour)}:${two(dt.minute)}:${two(dt.second)}';
+  }
+
+  String _rangeLabel(DateTimeRange r) =>
+      '${_fmtDT(r.start)} → ${_fmtDT(r.end)}';
 }
 
 // -----------------------------------------------------------------------------
@@ -2257,5 +2519,190 @@ class _GraphConfigurationDialogState extends State<_GraphConfigurationDialog> {
     return usedGraphs.isEmpty
         ? 1
         : (usedGraphs.reduce((a, b) => a > b ? a : b) + 1);
+  }
+}
+
+// -----------------------------------------------------------------------------
+// DateTimeRange editor dialog with H:M:S
+// -----------------------------------------------------------------------------
+class _DateTimeRangeDialog extends StatefulWidget {
+  final DateTimeRange? initial;
+  const _DateTimeRangeDialog({this.initial});
+
+  @override
+  State<_DateTimeRangeDialog> createState() => _DateTimeRangeDialogState();
+}
+
+class _DateTimeRangeDialogState extends State<_DateTimeRangeDialog> {
+  late DateTime _startDate;
+  late TimeOfDay _startTime;
+  int _startSec = 0;
+
+  late DateTime _endDate;
+  late TimeOfDay _endTime;
+  int _endSec = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    final now = DateTime.now();
+    final init = widget.initial ??
+        DateTimeRange(
+          start: now.subtract(const Duration(hours: 1)),
+          end: now,
+        );
+    _startDate = DateTime(init.start.year, init.start.month, init.start.day);
+    _startTime = TimeOfDay(hour: init.start.hour, minute: init.start.minute);
+    _startSec = init.start.second;
+
+    _endDate = DateTime(init.end.year, init.end.month, init.end.day);
+    _endTime = TimeOfDay(hour: init.end.hour, minute: init.end.minute);
+    _endSec = init.end.second;
+  }
+
+  DateTime _compose(DateTime d, TimeOfDay t, int s) =>
+      DateTime(d.year, d.month, d.day, t.hour, t.minute, s.clamp(0, 59));
+
+  Future<void> _pickDate({required bool start}) async {
+    final base = start ? _startDate : _endDate;
+    final picked = await showDatePicker(
+      context: context,
+      firstDate: DateTime(2000),
+      lastDate: DateTime.now().add(const Duration(days: 365)),
+      initialDate: base,
+    );
+    if (picked != null) {
+      setState(() {
+        if (start) {
+          _startDate = picked;
+        } else {
+          _endDate = picked;
+        }
+      });
+    }
+  }
+
+  Future<void> _pickTime({required bool start}) async {
+    final base = start ? _startTime : _endTime;
+    final picked = await showTimePicker(context: context, initialTime: base);
+    if (picked != null) {
+      setState(() {
+        if (start) {
+          _startTime = picked;
+        } else {
+          _endTime = picked;
+        }
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final startDT = _compose(_startDate, _startTime, _startSec);
+    final endDT = _compose(_endDate, _endTime, _endSec);
+    final valid = !endDT.isBefore(startDT);
+
+    return AlertDialog(
+      title: const Text('Pick date & time range'),
+      content: SizedBox(
+        width: 520,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _row(context,
+                label: 'Start',
+                date: _startDate,
+                time: _startTime,
+                secs: _startSec,
+                onPickDate: () => _pickDate(start: true),
+                onPickTime: () => _pickTime(start: true),
+                onSecsChanged: (v) => setState(() => _startSec = v)),
+            const SizedBox(height: 12),
+            _row(context,
+                label: 'End',
+                date: _endDate,
+                time: _endTime,
+                secs: _endSec,
+                onPickDate: () => _pickDate(start: false),
+                onPickTime: () => _pickTime(start: false),
+                onSecsChanged: (v) => setState(() => _endSec = v)),
+            if (!valid)
+              Padding(
+                padding: const EdgeInsets.only(top: 12),
+                child: Text(
+                  'End must be after start',
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+                ),
+              ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel')),
+        ElevatedButton(
+            onPressed: valid
+                ? () => Navigator.pop(
+                      context,
+                      DateTimeRange(start: startDT, end: endDT),
+                    )
+                : null,
+            child: const Text('Apply')),
+      ],
+    );
+  }
+
+  Widget _row(
+    BuildContext context, {
+    required String label,
+    required DateTime date,
+    required TimeOfDay time,
+    required int secs,
+    required VoidCallback onPickDate,
+    required VoidCallback onPickTime,
+    required ValueChanged<int> onSecsChanged,
+  }) {
+    final two = (int n) => n.toString().padLeft(2, '0');
+    return Row(
+      children: [
+        SizedBox(
+          width: 56,
+          child: Text(
+            label,
+            style: const TextStyle(fontWeight: FontWeight.bold),
+          ),
+        ),
+        const SizedBox(width: 8),
+        OutlinedButton.icon(
+          onPressed: onPickDate,
+          icon: const Icon(Icons.event),
+          label: Text('${date.year}-${two(date.month)}-${two(date.day)}'),
+        ),
+        const SizedBox(width: 8),
+        OutlinedButton.icon(
+          onPressed: onPickTime,
+          icon: const Icon(Icons.schedule),
+          label: Text('${two(time.hour)}:${two(time.minute)}'),
+        ),
+        const SizedBox(width: 8),
+        SizedBox(
+          width: 88,
+          child: TextFormField(
+            initialValue: secs.toString(),
+            keyboardType: TextInputType.number,
+            decoration: const InputDecoration(
+              labelText: 'Seconds',
+              border: OutlineInputBorder(),
+              isDense: true,
+            ),
+            onChanged: (v) {
+              final n = int.tryParse(v) ?? 0;
+              onSecsChanged(n.clamp(0, 59));
+            },
+          ),
+        ),
+      ],
+    );
   }
 }
