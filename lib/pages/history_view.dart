@@ -1,9 +1,8 @@
-// TRIGGER
-
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
 
+import 'package:flutter/services.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:rxdart/rxdart.dart';
@@ -1635,53 +1634,6 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage>
     _toast(context, 'Deleted period "${p.name}"');
   }
 
-  Future<void> _editKey(BuildContext context, String oldKey) async {
-    final sm = await ref.read(stateManProvider.future);
-    final km = sm.keyMappings;
-    final current = km.nodes[oldKey];
-
-    final result = await showDialog<Map<String, dynamic>>(
-      context: context,
-      builder: (context) => KeyMappingEntryDialog(
-        initialKey: oldKey,
-        initialKeyMappingEntry: current,
-      ),
-    );
-
-    if (result == null) return;
-
-    final newKey = result['key'] as String;
-    final newEntry = result['entry'] as KeyMappingEntry;
-
-    final prefs = await ref.read(preferencesProvider.future);
-
-    if (oldKey != newKey) {
-      km.nodes.remove(oldKey);
-    }
-    km.nodes[newKey] = newEntry;
-
-    await prefs.setString('key_mappings', jsonEncode(km.toJson()));
-
-    setState(() {
-      if (oldKey != newKey && _selected.remove(oldKey)) {
-        _selected.add(newKey);
-      }
-    });
-
-    // Start foreground collection if collect is present
-    try {
-      final collector = await ref.read(collectorProvider.future);
-      if (collector != null && newEntry.collect != null) {
-        await collector.collectEntry(newEntry.collect!);
-      }
-    } catch (_) {}
-
-    ref.invalidate(stateManProvider);
-    ref.invalidate(collectedKeysProvider);
-
-    _toast(context, 'Saved "$newKey"');
-  }
-
   Future<String?> _askName(BuildContext context,
       {required String title, String initial = ''}) async {
     final ctrl = TextEditingController(text: initial);
@@ -2523,7 +2475,7 @@ class _GraphConfigurationDialogState extends State<_GraphConfigurationDialog> {
 }
 
 // -----------------------------------------------------------------------------
-// DateTimeRange editor dialog with H:M:S
+// DateTimeRange editor dialog with unified H:M:S picker
 // -----------------------------------------------------------------------------
 class _DateTimeRangeDialog extends StatefulWidget {
   final DateTimeRange? initial;
@@ -2582,15 +2534,29 @@ class _DateTimeRangeDialogState extends State<_DateTimeRangeDialog> {
     }
   }
 
-  Future<void> _pickTime({required bool start}) async {
-    final base = start ? _startTime : _endTime;
-    final picked = await showTimePicker(context: context, initialTime: base);
+  Future<void> _pickTimeHms({required bool start}) async {
+    final initial = Duration(
+      hours: start ? _startTime.hour : _endTime.hour,
+      minutes: start ? _startTime.minute : _endTime.minute,
+      seconds: start ? _startSec : _endSec,
+    );
+
+    final picked = await showDialog<Duration>(
+      context: context,
+      builder: (context) => _HmsTimePickerDialog(initial: initial),
+    );
+
     if (picked != null) {
       setState(() {
+        final h = picked.inHours % 24;
+        final m = picked.inMinutes % 60;
+        final s = picked.inSeconds % 60;
         if (start) {
-          _startTime = picked;
+          _startTime = TimeOfDay(hour: h, minute: m);
+          _startSec = s;
         } else {
-          _endTime = picked;
+          _endTime = TimeOfDay(hour: h, minute: m);
+          _endSec = s;
         }
       });
     }
@@ -2605,7 +2571,7 @@ class _DateTimeRangeDialogState extends State<_DateTimeRangeDialog> {
     return AlertDialog(
       title: const Text('Pick date & time range'),
       content: SizedBox(
-        width: 520,
+        width: 560,
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -2615,8 +2581,7 @@ class _DateTimeRangeDialogState extends State<_DateTimeRangeDialog> {
                 time: _startTime,
                 secs: _startSec,
                 onPickDate: () => _pickDate(start: true),
-                onPickTime: () => _pickTime(start: true),
-                onSecsChanged: (v) => setState(() => _startSec = v)),
+                onPickTimeHms: () => _pickTimeHms(start: true)),
             const SizedBox(height: 12),
             _row(context,
                 label: 'End',
@@ -2624,8 +2589,7 @@ class _DateTimeRangeDialogState extends State<_DateTimeRangeDialog> {
                 time: _endTime,
                 secs: _endSec,
                 onPickDate: () => _pickDate(start: false),
-                onPickTime: () => _pickTime(start: false),
-                onSecsChanged: (v) => setState(() => _endSec = v)),
+                onPickTimeHms: () => _pickTimeHms(start: false)),
             if (!valid)
               Padding(
                 padding: const EdgeInsets.only(top: 12),
@@ -2660,8 +2624,7 @@ class _DateTimeRangeDialogState extends State<_DateTimeRangeDialog> {
     required TimeOfDay time,
     required int secs,
     required VoidCallback onPickDate,
-    required VoidCallback onPickTime,
-    required ValueChanged<int> onSecsChanged,
+    required VoidCallback onPickTimeHms,
   }) {
     final two = (int n) => n.toString().padLeft(2, '0');
     return Row(
@@ -2681,28 +2644,488 @@ class _DateTimeRangeDialogState extends State<_DateTimeRangeDialog> {
         ),
         const SizedBox(width: 8),
         OutlinedButton.icon(
-          onPressed: onPickTime,
+          onPressed: onPickTimeHms,
           icon: const Icon(Icons.schedule),
-          label: Text('${two(time.hour)}:${two(time.minute)}'),
+          label: Text('${two(time.hour)}:${two(time.minute)}:${two(secs)}'),
         ),
-        const SizedBox(width: 8),
-        SizedBox(
-          width: 88,
-          child: TextFormField(
-            initialValue: secs.toString(),
-            keyboardType: TextInputType.number,
-            decoration: const InputDecoration(
-              labelText: 'Seconds',
-              border: OutlineInputBorder(),
-              isDense: true,
+      ],
+    );
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Fancy Material HMS time picker dialog
+// - Two modes: "Wheel" (ListWheelScrollView) and "Numeric" (steppers)
+// - Syncs both ways; switch modes anytime
+// - Touch-friendly sizes, optional haptic feedback
+// -----------------------------------------------------------------------------
+class _HmsTimePickerDialog extends StatefulWidget {
+  final Duration initial;
+  const _HmsTimePickerDialog({required this.initial});
+
+  @override
+  State<_HmsTimePickerDialog> createState() => _HmsTimePickerDialogState();
+}
+
+enum _PickerMode { wheel, numeric }
+
+class _HmsTimePickerDialogState extends State<_HmsTimePickerDialog> {
+  // canonical state
+  late int _h;
+  late int _m;
+  late int _s;
+
+  // wheel controllers
+  late FixedExtentScrollController _hCtrl;
+  late FixedExtentScrollController _mCtrl;
+  late FixedExtentScrollController _sCtrl;
+
+  // numeric controllers
+  late final TextEditingController _hText;
+  late final TextEditingController _mText;
+  late final TextEditingController _sText;
+
+  _PickerMode _mode = _PickerMode.wheel;
+
+  @override
+  void initState() {
+    super.initState();
+    _h = widget.initial.inHours % 24;
+    _m = widget.initial.inMinutes % 60;
+    _s = widget.initial.inSeconds % 60;
+
+    _hCtrl = FixedExtentScrollController(initialItem: _h);
+    _mCtrl = FixedExtentScrollController(initialItem: _m);
+    _sCtrl = FixedExtentScrollController(initialItem: _s);
+
+    _hText = TextEditingController(text: _two(_h));
+    _mText = TextEditingController(text: _two(_m));
+    _sText = TextEditingController(text: _two(_s));
+  }
+
+  @override
+  void dispose() {
+    _hCtrl.dispose();
+    _mCtrl.dispose();
+    _sCtrl.dispose();
+    _hText.dispose();
+    _mText.dispose();
+    _sText.dispose();
+    super.dispose();
+  }
+
+  String _two(int n) => n.toString().padLeft(2, '0');
+
+  Future<void> _animateWheel(FixedExtentScrollController c, int v) async {
+    // clamp to safe range; caller already ensures bounds
+    final target = v.clamp(0, 9999); // controller guards anyway
+    if (!mounted) return;
+    await c.animateToItem(
+      target,
+      duration: const Duration(milliseconds: 180),
+      curve: Curves.easeOutCubic,
+    );
+  }
+
+  void _setH(int v, {bool fromWheel = false, bool fromField = false}) {
+    v = v.clamp(0, 23);
+    if (_h == v) return;
+    setState(() => _h = v);
+    if (!fromWheel) _animateWheel(_hCtrl, v);
+    if (!fromField) _hText.text = _two(v);
+    _haptic();
+  }
+
+  void _setM(int v, {bool fromWheel = false, bool fromField = false}) {
+    v = v.clamp(0, 59);
+    if (_m == v) return;
+    setState(() => _m = v);
+    if (!fromWheel) _animateWheel(_mCtrl, v);
+    if (!fromField) _mText.text = _two(v);
+    _haptic();
+  }
+
+  void _setS(int v, {bool fromWheel = false, bool fromField = false}) {
+    v = v.clamp(0, 59);
+    if (_s == v) return;
+    setState(() => _s = v);
+    if (!fromWheel) _animateWheel(_sCtrl, v);
+    if (!fromField) _sText.text = _two(v);
+    _haptic();
+  }
+
+  void _haptic() {
+    // optional: requires import 'package:flutter/services.dart';
+    // HapticFeedback.selectionClick();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final itemExtent = 48.0; // bigger touch targets
+    final textStyle = Theme.of(context).textTheme.titleMedium;
+
+    return AlertDialog(
+      title: const Text('Select time (HH:MM:SS)'),
+      content: SizedBox(
+        width: 460,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _modeToggle(context),
+            const SizedBox(height: 12),
+            AnimatedSwitcher(
+              duration: const Duration(milliseconds: 200),
+              switchInCurve: Curves.easeOut,
+              switchOutCurve: Curves.easeIn,
+              child: _mode == _PickerMode.wheel
+                  ? _wheelContent(itemExtent, textStyle)
+                  : _numericContent(textStyle),
             ),
-            onChanged: (v) {
-              final n = int.tryParse(v) ?? 0;
-              onSecsChanged(n.clamp(0, 59));
+            const SizedBox(height: 12),
+            _previewChip(context),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        ElevatedButton(
+          onPressed: () {
+            Navigator.pop(
+              context,
+              Duration(hours: _h, minutes: _m, seconds: _s),
+            );
+          },
+          child: const Text('OK'),
+        ),
+      ],
+    );
+  }
+
+  Widget _modeToggle(BuildContext context) {
+    return ToggleButtons(
+      isSelected: [
+        _mode == _PickerMode.wheel,
+        _mode == _PickerMode.numeric,
+      ],
+      onPressed: (i) {
+        setState(() {
+          _mode = i == 0 ? _PickerMode.wheel : _PickerMode.numeric;
+        });
+      },
+      borderRadius: BorderRadius.circular(8),
+      children: const [
+        Padding(
+          padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Text('Wheel'),
+        ),
+        Padding(
+          padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Text('Numeric'),
+        ),
+      ],
+    );
+  }
+
+  Widget _previewChip(BuildContext context) {
+    final s = '${_two(_h)}:${_two(_m)}:${_two(_s)}';
+    return Align(
+      alignment: Alignment.centerRight,
+      child: Chip(
+        label: Text(
+          s,
+          style: const TextStyle(fontFeatures: [FontFeature.tabularFigures()]),
+        ),
+      ),
+    );
+  }
+
+  // ---------- Wheel mode ----------
+  Widget _wheelContent(double itemExtent, TextStyle? textStyle) {
+    return SizedBox(
+      height: 240,
+      child: Row(
+        key: const ValueKey('wheel'),
+        children: [
+          Expanded(
+            child: _wheel(
+              count: 24,
+              controller: _hCtrl,
+              onSelected: (v) => _setH(v, fromWheel: true),
+              itemExtent: itemExtent,
+              textStyle: textStyle,
+            ),
+          ),
+          _colon(context),
+          Expanded(
+            child: _wheel(
+              count: 60,
+              controller: _mCtrl,
+              onSelected: (v) => _setM(v, fromWheel: true),
+              itemExtent: itemExtent,
+              textStyle: textStyle,
+            ),
+          ),
+          _colon(context),
+          Expanded(
+            child: _wheel(
+              count: 60,
+              controller: _sCtrl,
+              onSelected: (v) => _setS(v, fromWheel: true),
+              itemExtent: itemExtent,
+              textStyle: textStyle,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _colon(BuildContext context) => Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 6),
+        child: Text(':', style: Theme.of(context).textTheme.headlineSmall),
+      );
+
+  Widget _wheel({
+    required int count,
+    required FixedExtentScrollController controller,
+    required ValueChanged<int> onSelected,
+    required double itemExtent,
+    required TextStyle? textStyle,
+  }) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+        border: Border.all(color: Theme.of(context).dividerColor),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(12),
+        child: ListWheelScrollView.useDelegate(
+          controller: controller,
+          itemExtent: itemExtent,
+          physics: const FixedExtentScrollPhysics(),
+          useMagnifier: true,
+          magnification: 1.12,
+          diameterRatio: 2.0, // flatter for readability
+          overAndUnderCenterOpacity: 0.45,
+          onSelectedItemChanged: onSelected,
+          childDelegate: ListWheelChildBuilderDelegate(
+            builder: (context, index) {
+              if (index < 0 || index >= count) return null;
+              return Center(
+                child: Text(
+                  _two(index),
+                  style: textStyle,
+                ),
+              );
             },
           ),
         ),
+      ),
+    );
+  }
+
+  // ---------- Numeric (stepper) mode ----------
+  Widget _numericContent(TextStyle? textStyle) {
+    return Row(
+      key: const ValueKey('numeric'),
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        Expanded(
+          child: _StepperField(
+            label: 'HH',
+            controller: _hText,
+            min: 0,
+            max: 23,
+            onChanged: (v) => _setH(v, fromField: true),
+          ),
+        ),
+        _colon(context),
+        Expanded(
+          child: _StepperField(
+            label: 'MM',
+            controller: _mText,
+            min: 0,
+            max: 59,
+            onChanged: (v) => _setM(v, fromField: true),
+          ),
+        ),
+        _colon(context),
+        Expanded(
+          child: _StepperField(
+            label: 'SS',
+            controller: _sText,
+            min: 0,
+            max: 59,
+            onChanged: (v) => _setS(v, fromField: true),
+          ),
+        ),
       ],
+    );
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Stepper text field (00-59 style) with up/down arrow buttons and press&hold
+// -----------------------------------------------------------------------------
+class _StepperField extends StatefulWidget {
+  final String label;
+  final TextEditingController controller;
+  final int min;
+  final int max;
+  final ValueChanged<int> onChanged;
+
+  const _StepperField({
+    required this.label,
+    required this.controller,
+    required this.min,
+    required this.max,
+    required this.onChanged,
+  });
+
+  @override
+  State<_StepperField> createState() => _StepperFieldState();
+}
+
+class _StepperFieldState extends State<_StepperField> {
+  Timer? _holdTimer;
+
+  int get _value => int.tryParse(widget.controller.text) ?? widget.min;
+
+  void _update(int v) {
+    final clamped = v.clamp(widget.min, widget.max);
+    if (mounted) {
+      widget.controller.text = clamped.toString().padLeft(2, '0');
+      widget.onChanged(clamped);
+      // HapticFeedback.selectionClick(); // optional haptic
+    }
+  }
+
+  void _startHold(bool up) {
+    _holdTimer?.cancel();
+    _holdTimer = Timer.periodic(const Duration(milliseconds: 90), (_) {
+      _update(_value + (up ? 1 : -1));
+    });
+  }
+
+  void _stopHold() {
+    _holdTimer?.cancel();
+    _holdTimer = null;
+  }
+
+  @override
+  void dispose() {
+    _stopHold();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: 85,
+      child: Column(
+        children: [
+          Text(widget.label,
+              style: Theme.of(context)
+                  .textTheme
+                  .labelSmall
+                  ?.copyWith(fontWeight: FontWeight.bold)),
+          const SizedBox(height: 6),
+          Container(
+            decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.surfaceContainerHighest,
+              border: Border.all(color: Theme.of(context).dividerColor),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Row(
+              children: [
+                _HoldableIconButton(
+                  icon: Icons.keyboard_arrow_up,
+                  tooltip: 'Increase',
+                  onTap: () => _update(_value + 1),
+                  onHoldStart: () => _startHold(true),
+                  onHoldEnd: _stopHold,
+                ),
+                Expanded(
+                  child: TextFormField(
+                    controller: widget.controller,
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.headlineSmall,
+                    keyboardType: TextInputType.number,
+                    inputFormatters: [
+                      FilteringTextInputFormatter.digitsOnly,
+                      LengthLimitingTextInputFormatter(2),
+                    ],
+                    decoration: const InputDecoration(
+                      isDense: true,
+                      border: InputBorder.none,
+                      enabledBorder: InputBorder.none,
+                      focusedBorder: InputBorder.none,
+                      contentPadding:
+                          EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+                    ),
+                    onChanged: (txt) {
+                      final v = int.tryParse(txt) ?? widget.min;
+                      if (txt.length <= 2) {
+                        // don’t clamp while typing unless out of range wildly
+                        final clamped = v.clamp(widget.min, widget.max);
+                        widget.onChanged(clamped);
+                      }
+                    },
+                    onEditingComplete: () {
+                      final v =
+                          int.tryParse(widget.controller.text) ?? widget.min;
+                      _update(v);
+                      FocusScope.of(context).unfocus();
+                    },
+                  ),
+                ),
+                _HoldableIconButton(
+                  icon: Icons.keyboard_arrow_down,
+                  tooltip: 'Decrease',
+                  onTap: () => _update(_value - 1),
+                  onHoldStart: () => _startHold(false),
+                  onHoldEnd: _stopHold,
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// Small helper for press & hold repetition on icon buttons
+class _HoldableIconButton extends StatelessWidget {
+  final IconData icon;
+  final String? tooltip;
+  final VoidCallback onTap;
+  final VoidCallback onHoldStart;
+  final VoidCallback onHoldEnd;
+
+  const _HoldableIconButton({
+    required this.icon,
+    required this.onTap,
+    required this.onHoldStart,
+    required this.onHoldEnd,
+    this.tooltip,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final btn = IconButton(
+      icon: Icon(icon),
+      onPressed: onTap,
+      tooltip: tooltip,
+    );
+    return GestureDetector(
+      onLongPressStart: (_) => onHoldStart(),
+      onLongPressEnd: (_) => onHoldEnd(),
+      child: btn,
     );
   }
 }
