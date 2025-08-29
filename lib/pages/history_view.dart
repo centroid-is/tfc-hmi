@@ -352,9 +352,15 @@ class _HistoryGraphPaneState extends ConsumerState<_HistoryGraphPane> {
           since = DateTime.now().difference(widget.range!.start);
         }
 
-        final streams = widget.keys
-            .map((k) => collector.collectStream(k, since: since))
-            .toList();
+        final streams = widget.keys.map((k) {
+          if (widget.realtime) {
+            return collector.collectStream(k, since: since);
+          } else {
+            return Stream.fromFuture(collector.database.queryTimeseriesData(
+                k, widget.range!.end,
+                from: widget.range!.start));
+          }
+        }).toList();
 
         return StreamBuilder<List<List<dynamic>>>(
           stream: _paused ? null : Rx.combineLatestList(streams),
@@ -444,8 +450,8 @@ class _HistoryGraphPaneState extends ConsumerState<_HistoryGraphPane> {
                   },
                   child: Graph(
                     config: GraphConfig(
-                      type: GraphType.line,
-                      xAxis: GraphAxisConfig(unit: 's'),
+                      type: GraphType.timeseries,
+                      xAxis: GraphAxisConfig(unit: ''),
                       yAxis: GraphAxisConfig(unit: ''),
                       yAxis2: null,
                       xSpan: xSpan,
@@ -572,8 +578,15 @@ class _HistoryTablePane extends ConsumerWidget {
           since = DateTime.now().difference(range!.start);
         }
 
-        final streams =
-            keys.map((k) => collector.collectStream(k, since: since)).toList();
+        final streams = keys.map((k) {
+          if (realtime) {
+            return collector.collectStream(k, since: since);
+          } else {
+            print('querying $k from ${range!.start} to ${range!.end}');
+            return Stream.fromFuture(collector.database
+                .queryTimeseriesData(k, range!.end, from: range!.start));
+          }
+        }).toList();
 
         return StreamBuilder<List<List<TimeseriesData<dynamic>>>>(
           stream: Rx.combineLatestList(streams),
@@ -588,7 +601,9 @@ class _HistoryTablePane extends ConsumerWidget {
               for (final s in l) {
                 if (!realtime && range != null) {
                   if (s.time.isBefore(range!.start) ||
-                      s.time.isAfter(range!.end)) continue;
+                      s.time.isAfter(range!.end)) {
+                    continue;
+                  }
                 }
                 allTs.add(s.time);
               }

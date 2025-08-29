@@ -12,6 +12,7 @@ import 'package:drift_postgres/drift_postgres.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
 import 'package:postgres/postgres.dart' as pg;
+import 'package:logger/logger.dart';
 
 import 'alarm.dart';
 import 'database.dart';
@@ -108,9 +109,10 @@ class HistoryViewPeriod extends Table {
 class AppDatabase extends _$AppDatabase {
   final DatabaseConfig config;
   AppDatabase._(this.config, QueryExecutor executor) : super(executor);
+  final logger = Logger();
 
   @override
-  int get schemaVersion => 5; // Increment schema version
+  int get schemaVersion => 2;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -118,22 +120,11 @@ class AppDatabase extends _$AppDatabase {
           await m.createAll();
         },
         onUpgrade: (m, from, to) async {
+          logger.i('Database onUpgrade: $from -> $to');
           if (from < 2) {
             await m.createTable(historyView);
             await m.createTable(historyViewKey);
-          }
-          if (from < 3) {
-            // Add new columns for graph configuration
-            await m.addColumn(historyViewKey, historyViewKey.alias);
-            await m.addColumn(historyViewKey, historyViewKey.useSecondYAxis);
-            await m.addColumn(historyViewKey, historyViewKey.graphIndex);
-          }
-          if (from < 4) {
-            // Add new table for graph-level configuration
             await m.createTable(historyViewGraph);
-          }
-          if (from < 5) {
-            // NEW: periods table
             await m.createTable(historyViewPeriod);
           }
         },
