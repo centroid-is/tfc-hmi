@@ -58,6 +58,10 @@ class ButtonConfig extends BaseAsset {
   @JsonKey(name: 'button_type')
   ButtonType buttonType;
 
+  /// Whether the button should toggle (stick) when pressed
+  @JsonKey(name: 'is_toggle')
+  bool isToggle = false;
+
   @override
   Widget build(BuildContext context) {
     return Button(this);
@@ -99,6 +103,7 @@ class ButtonConfig extends BaseAsset {
     required this.buttonType,
     this.icon,
     this.feedback,
+    this.isToggle = false,
   });
 
   static const previewStr = 'Button preview';
@@ -109,7 +114,8 @@ class ButtonConfig extends BaseAsset {
         inwardColor = Colors.green,
         buttonType = ButtonType.circle,
         icon = null,
-        feedback = null {
+        feedback = null,
+        isToggle = false {
     textPos = TextPos.right;
   }
 
@@ -142,6 +148,7 @@ class _ButtonState extends ConsumerState<Button> {
   final _pressedController = StreamController<bool>.broadcast();
   bool _isPressed = false;
   bool _feedbackActive = false;
+  bool _isToggled = false; // Add toggle state
 
   @override
   void dispose() {
@@ -154,6 +161,14 @@ class _ButtonState extends ConsumerState<Button> {
     if (_isPressed != value) {
       setState(() => _isPressed = value);
       _pressedController.add(value);
+    }
+  }
+
+  // Handle toggle logic
+  void _handleToggle() {
+    if (widget.config.isToggle) {
+      setState(() => _isToggled = !_isToggled);
+      _pressedController.add(_isToggled);
     }
   }
 
@@ -177,7 +192,10 @@ class _ButtonState extends ConsumerState<Button> {
         if (feedbackActive) {
           return widget.config.feedback!.color;
         }
-        return isPressed
+        // For toggle buttons, use toggled state; for regular buttons, use pressed state
+        final shouldShowPressed =
+            widget.config.isToggle ? _isToggled : isPressed;
+        return shouldShowPressed
             ? widget.config.inwardColor
             : widget.config.outwardColor;
       },
@@ -194,39 +212,60 @@ class _ButtonState extends ConsumerState<Button> {
             ? const CircleBorder()
             : const RoundedRectangleBorder(),
         onTapDown: (_) async {
-          _setPressed(true);
+          if (!widget.config.isToggle) {
+            _setPressed(true);
+          }
           if (isPreview) return;
-          final client = await ref.read(stateManProvider.future);
-          try {
-            await client.write(widget.config.key,
-                DynamicValue(value: true, typeId: NodeId.boolean));
-            _log.d('Button ${widget.config.key} pressed');
-          } catch (e) {
-            _log.e('Error writing button press', error: e);
+
+          if (widget.config.isToggle) {
+            // For toggle buttons, just handle the toggle
+            _handleToggle();
+          } else {
+            // For regular buttons, write true
+            final client = await ref.read(stateManProvider.future);
+            try {
+              await client.write(widget.config.key,
+                  DynamicValue(value: true, typeId: NodeId.boolean));
+              _log.d('Button ${widget.config.key} pressed');
+            } catch (e) {
+              _log.e('Error writing button press', error: e);
+            }
           }
         },
         onTapUp: (_) async {
-          _setPressed(false);
+          if (!widget.config.isToggle) {
+            _setPressed(false);
+          }
           if (isPreview) return;
-          final client = await ref.read(stateManProvider.future);
-          try {
-            await client.write(widget.config.key,
-                DynamicValue(value: false, typeId: NodeId.boolean));
-            _log.d('Button ${widget.config.key} released');
-          } catch (e) {
-            _log.e('Error writing button release', error: e);
+
+          if (!widget.config.isToggle) {
+            // For regular buttons, write false
+            final client = await ref.read(stateManProvider.future);
+            try {
+              await client.write(widget.config.key,
+                  DynamicValue(value: false, typeId: NodeId.boolean));
+              _log.d('Button ${widget.config.key} released');
+            } catch (e) {
+              _log.e('Error writing button release', error: e);
+            }
           }
         },
         onTapCancel: () async {
-          _setPressed(false);
+          if (!widget.config.isToggle) {
+            _setPressed(false);
+          }
           if (isPreview) return;
-          final client = await ref.read(stateManProvider.future);
-          try {
-            await client.write(widget.config.key,
-                DynamicValue(value: false, typeId: NodeId.boolean));
-            _log.d('Button ${widget.config.key} tap cancelled');
-          } catch (e) {
-            _log.e('Error writing button cancel', error: e);
+
+          if (!widget.config.isToggle) {
+            // For regular buttons, write false
+            final client = await ref.read(stateManProvider.future);
+            try {
+              await client.write(widget.config.key,
+                  DynamicValue(value: false, typeId: NodeId.boolean));
+              _log.d('Button ${widget.config.key} tap cancelled');
+            } catch (e) {
+              _log.e('Error writing button cancel', error: e);
+            }
           }
         },
         child: Stack(
@@ -237,7 +276,7 @@ class _ButtonState extends ConsumerState<Button> {
             CustomPaint(
               painter: ButtonPainter(
                 color: color,
-                isPressed: _isPressed,
+                isPressed: widget.config.isToggle ? _isToggled : _isPressed,
                 buttonType: widget.config.buttonType,
               ),
             ),
@@ -247,7 +286,10 @@ class _ButtonState extends ConsumerState<Button> {
               LayoutBuilder(
                 builder: (context, constraints) {
                   final minSide = constraints.biggest.shortestSide;
-                  final faceScale = _isPressed ? 0.95 : 1.0;
+                  final faceScale =
+                      (widget.config.isToggle ? _isToggled : _isPressed)
+                          ? 0.95
+                          : 1.0;
                   final iconSide =
                       (minSide * 0.60 * faceScale).clamp(0.0, minSide);
 
@@ -660,6 +702,31 @@ class _ConfigContentState extends State<_ConfigContent> {
             ),
           ),
         ],
+
+        // Toggle behavior switch
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          title: const Text('Toggle Button'),
+          subtitle: const Text('Button stays pressed until tapped again'),
+          value: widget.config.isToggle,
+          onChanged: (value) {
+            setState(() {
+              widget.config.isToggle = value;
+              // Reset toggle state when switching modes
+              if (!value) {
+                // Reset to untoggled state when switching from toggle to normal
+                final buttonState =
+                    context.findAncestorStateOfType<_ButtonState>();
+                if (buttonState != null) {
+                  buttonState.setState(() {
+                    buttonState._isToggled = false;
+                  });
+                }
+              }
+            });
+          },
+        ),
+        const SizedBox(height: 16),
       ],
     );
   }

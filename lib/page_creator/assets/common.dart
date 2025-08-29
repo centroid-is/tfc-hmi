@@ -209,7 +209,7 @@ class _KeyFieldState extends ConsumerState<KeyField> {
     final result = await showDialog<Map<String, dynamic>>(
       context: context,
       builder: (context) => KeyMappingEntryDialog(
-        initialKey: _controller.text,
+        initialKeyMappingEntry: KeyMappingEntry(),
       ),
     );
 
@@ -648,15 +648,13 @@ class _CoordinatesFieldState extends State<CoordinatesField> {
 }
 
 class KeyMappingEntryDialog extends ConsumerStatefulWidget {
-  final String? serverAlias;
   final String? initialKey;
-  final CollectEntry? initialCollectEntry;
+  final KeyMappingEntry? initialKeyMappingEntry;
 
   const KeyMappingEntryDialog({
     super.key,
-    this.serverAlias,
     this.initialKey,
-    this.initialCollectEntry,
+    this.initialKeyMappingEntry,
   });
 
   @override
@@ -680,19 +678,56 @@ class _KeyMappingEntryDialogState extends ConsumerState<KeyMappingEntryDialog> {
   @override
   void initState() {
     super.initState();
-    _keyController = TextEditingController(text: widget.initialKey ?? '');
-    _namespaceController = TextEditingController(text: '0');
-    _identifierController = TextEditingController();
-    _collectNameController = TextEditingController();
-    _collectIntervalController = TextEditingController();
-    _retentionDaysController = TextEditingController(text: '365');
-    _scheduleIntervalController = TextEditingController();
-    _selectedServerAlias = widget.serverAlias;
 
-    // Initialize expression if editing an existing entry
-    if (widget.initialCollectEntry?.sampleExpression != null) {
-      _useSampleExpression = true;
-      _sampleExpression = widget.initialCollectEntry!.sampleExpression;
+    // Initialize from existing KeyMappingEntry if available
+    if (widget.initialKeyMappingEntry != null) {
+      final entry = widget.initialKeyMappingEntry!;
+
+      _keyController = TextEditingController(text: widget.initialKey ?? '');
+      _namespaceController = TextEditingController(
+          text: entry.opcuaNode?.namespace.toString() ?? '0');
+      _identifierController =
+          TextEditingController(text: entry.opcuaNode?.identifier ?? '');
+      _selectedServerAlias = entry.opcuaNode?.serverAlias;
+
+      // Initialize collect settings if they exist
+      if (entry.collect != null) {
+        _isCollecting = true; // Add this line to enable the toggle
+        _collectNameController =
+            TextEditingController(text: entry.collect!.name ?? '');
+        _collectIntervalController = TextEditingController(
+            text:
+                entry.collect!.sampleInterval?.inMicroseconds.toString() ?? '');
+        _retentionDaysController = TextEditingController(
+            text: entry.collect!.retention.dropAfter.inDays.toString());
+        _scheduleIntervalController = TextEditingController(
+            text: entry.collect!.retention.scheduleInterval?.inMinutes
+                    .toString() ??
+                '');
+
+        if (entry.collect!.sampleExpression != null) {
+          _useSampleExpression = true;
+          _sampleExpression = entry.collect!.sampleExpression;
+        }
+      } else {
+        // Default values for new entries
+        _isCollecting = false; // Add this line to ensure it's off
+        _collectNameController = TextEditingController();
+        _collectIntervalController = TextEditingController();
+        _retentionDaysController = TextEditingController(text: '365');
+        _scheduleIntervalController = TextEditingController();
+      }
+    } else {
+      // Default values for completely new entries
+      _keyController = TextEditingController(text: widget.initialKey ?? '');
+      _namespaceController = TextEditingController(text: '0');
+      _identifierController = TextEditingController();
+      _collectNameController = TextEditingController();
+      _collectIntervalController = TextEditingController();
+      _retentionDaysController = TextEditingController(text: '365');
+      _scheduleIntervalController = TextEditingController();
+      _selectedServerAlias = null;
+      _isCollecting = false; // Add this line to ensure it's off
     }
   }
 

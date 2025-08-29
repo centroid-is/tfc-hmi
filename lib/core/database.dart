@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:async';
 import 'dart:convert';
+import 'package:drift/drift.dart' show QueryRow;
 import 'package:postgres/postgres.dart' as pg;
 import 'package:postgres/postgres.dart' show Endpoint, SslMode;
 import 'package:json_annotation/json_annotation.dart' as json;
@@ -202,8 +203,8 @@ class Database {
 
   /// Query time-series data with performance analysis
   Future<List<TimeseriesData<dynamic>>> queryTimeseriesData(
-      String tableName, DateTime since,
-      {String? orderBy = 'time ASC'}) async {
+      String tableName, DateTime to,
+      {String? orderBy = 'time ASC', DateTime? from}) async {
     // final totalStart = DateTime.now();
     // print('🔍 queryTimeseriesData: Starting query for table $tableName');
     // print('📅 queryTimeseriesData: Querying since $since');
@@ -211,11 +212,23 @@ class Database {
     // // Analyze table performance first
     // await db.analyzeTablePerformance(tableName);
 
+    late final List<QueryRow> result;
+
     // final queryStart = DateTime.now();
-    final result = await db.tableQuery(tableName,
-        where: r'time >= $1::timestamptz',
-        whereArgs: [since],
-        orderBy: orderBy);
+    if (from != null) {
+      final startTime = from.isBefore(to) ? from : to;
+      final endTime = from.isBefore(to) ? to : from;
+      // If from is provided, we need to query from that time
+      // We need to query from the time of the first data point in the table
+      result = await db.tableQuery(tableName,
+          where: r'time >= $1::timestamptz AND time <= $2::timestamptz',
+          whereArgs: [startTime, endTime],
+          orderBy: orderBy);
+    } else {
+      result = await db.tableQuery(tableName,
+          where: r'time >= $1::timestamptz', whereArgs: [to], orderBy: orderBy);
+    }
+
     // final queryDuration = DateTime.now().difference(queryStart);
     // print(
     //     '⏱️  queryTimeseriesData: Database query took ${queryDuration.inMilliseconds}ms, returned ${result.length} rows');

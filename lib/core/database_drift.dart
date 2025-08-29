@@ -1,3 +1,7 @@
+// ============================================================================
+// ========================  DRIFT / DATABASE LAYER  ==========================
+// ============================================================================
+
 import 'dart:io';
 
 import 'package:drift/backends.dart';
@@ -8,6 +12,7 @@ import 'package:drift_postgres/drift_postgres.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
 import 'package:postgres/postgres.dart' as pg;
+import 'package:logger/logger.dart';
 
 import 'alarm.dart';
 import 'database.dart';
@@ -50,13 +55,80 @@ class FlutterPreferences extends Table {
   TextColumn get type => text()();
 }
 
-@DriftDatabase(tables: [Alarm, AlarmHistory, FlutterPreferences])
+/// Saved History Views (name + keys)
+class HistoryView extends Table {
+  IntColumn get id => integer().autoIncrement()();
+  TextColumn get name => text()();
+  DateTimeColumn get createdAt => dateTime().withDefault(currentDateAndTime)();
+  DateTimeColumn get updatedAt => dateTime().nullable()();
+}
+
+class HistoryViewKey extends Table {
+  IntColumn get id => integer().autoIncrement()();
+  IntColumn get viewId =>
+      integer().references(HistoryView, #id, onDelete: KeyAction.cascade)();
+  TextColumn get key => text()();
+  TextColumn get alias => text().nullable()(); // Add alias column
+  BoolColumn get useSecondYAxis =>
+      boolean().withDefault(const Constant(false))(); // Add Y-axis choice
+  IntColumn get graphIndex =>
+      integer().withDefault(const Constant(0))(); // Add graph index
+}
+
+/// Graph-level configuration (Y-axis units)
+class HistoryViewGraph extends Table {
+  IntColumn get id => integer().autoIncrement()();
+  IntColumn get viewId =>
+      integer().references(HistoryView, #id, onDelete: KeyAction.cascade)();
+  IntColumn get graphIndex => integer()();
+  TextColumn get yAxisUnit => text().nullable()();
+  TextColumn get yAxis2Unit => text().nullable()();
+}
+
+/// NEW: Saved Periods per History View
+class HistoryViewPeriod extends Table {
+  IntColumn get id => integer().autoIncrement()();
+  IntColumn get viewId =>
+      integer().references(HistoryView, #id, onDelete: KeyAction.cascade)();
+  TextColumn get name => text()();
+  DateTimeColumn get startAt => dateTime()();
+  DateTimeColumn get endAt => dateTime()();
+  DateTimeColumn get createdAt => dateTime().withDefault(currentDateAndTime)();
+}
+
+// Register all tables here
+@DriftDatabase(tables: [
+  Alarm,
+  AlarmHistory,
+  FlutterPreferences,
+  HistoryView,
+  HistoryViewKey,
+  HistoryViewGraph,
+  HistoryViewPeriod, // NEW
+])
 class AppDatabase extends _$AppDatabase {
   final DatabaseConfig config;
   AppDatabase._(this.config, QueryExecutor executor) : super(executor);
+  final logger = Logger();
 
   @override
-  int get schemaVersion => 1;
+  int get schemaVersion => 2;
+
+  @override
+  MigrationStrategy get migration => MigrationStrategy(
+        onCreate: (m) async {
+          await m.createAll();
+        },
+        onUpgrade: (m, from, to) async {
+          logger.i('Database onUpgrade: $from -> $to');
+          if (from < 2) {
+            await m.createTable(historyView);
+            await m.createTable(historyViewKey);
+            await m.createTable(historyViewGraph);
+            await m.createTable(historyViewPeriod);
+          }
+        },
+      );
 
   bool get native => executor is NativeDatabase;
   bool get postgres => executor is PgDatabase;
@@ -122,8 +194,208 @@ class AppDatabase extends _$AppDatabase {
     }
   }
 
-  /// Create a runtime-defined table
-  /// The columns are a map of column name to column type
+  // ----------------------------
+  // Convenience API for History Views
+  // ----------------------------
+
+  // Update the convenience methods to handle both configs
+  Future<int> createHistoryView(String name, List<String> keys,
+      [Map<String, Map<String, dynamic>>? keyConfigs,
+      Map<String, Map<String, dynamic>>? graphConfigs]) async {
+    return transaction(() async {
+      final id = await into(historyView).insert(HistoryViewCompanion.insert(
+        name: name,
+      ));
+
+      // Save key configurations
+      if (keys.isNotEmpty) {
+        for (final key in keys) {
+          final config = keyConfigs?[key];
+          await into(historyViewKey).insert(HistoryViewKeyCompanion.insert(
+            viewId: id,
+            key: key,
+            alias: Value(config?['alias'] ?? key),
+            useSecondYAxis: Value(config?['useSecondYAxis'] ?? false),
+            graphIndex: Value(config?['graphIndex'] ?? 0),
+          ));
+        }
+      }
+
+      // Save graph configurations
+      if (graphConfigs != null) {
+        for (final entry in graphConfigs.entries) {
+          final graphIndex = int.tryParse(entry.key);
+          if (graphIndex != null) {
+            final config = entry.value;
+            await into(historyViewGraph)
+                .insert(HistoryViewGraphCompanion.insert(
+              viewId: id,
+              graphIndex: graphIndex,
+              yAxisUnit: Value(config['yAxisUnit'] ?? ''),
+              yAxis2Unit: Value(config['yAxis2Unit'] ?? ''),
+            ));
+          }
+        }
+      }
+
+      return id;
+    });
+  }
+
+  Future<void> updateHistoryView(int id, String name, List<String> keys,
+      [Map<String, Map<String, dynamic>>? keyConfigs,
+      Map<String, Map<String, dynamic>>? graphConfigs]) async {
+    await transaction(() async {
+      await (update(historyView)..where((t) => t.id.equals(id))).write(
+        HistoryViewCompanion(
+          name: Value(name),
+          updatedAt: Value(DateTime.now()),
+        ),
+      );
+      await (delete(historyViewKey)..where((t) => t.viewId.equals(id))).go();
+      if (keys.isNotEmpty) {
+        for (final key in keys) {
+          final config = keyConfigs?[key];
+          await into(historyViewKey).insert(HistoryViewKeyCompanion.insert(
+            viewId: id,
+            key: key,
+            alias: Value(config?['alias'] ?? key),
+            useSecondYAxis: Value(config?['useSecondYAxis'] ?? false),
+            graphIndex: Value(config?['graphIndex'] ?? 0),
+          ));
+        }
+      }
+      await (delete(historyViewGraph)..where((t) => t.viewId.equals(id))).go();
+      if (graphConfigs != null) {
+        for (final entry in graphConfigs.entries) {
+          final graphIndex = int.tryParse(entry.key);
+          if (graphIndex != null) {
+            final config = entry.value;
+            await into(historyViewGraph)
+                .insert(HistoryViewGraphCompanion.insert(
+              viewId: id,
+              graphIndex: graphIndex,
+              yAxisUnit: Value(config['yAxisUnit'] ?? ''),
+              yAxis2Unit: Value(config['yAxis2Unit'] ?? ''),
+            ));
+          }
+        }
+      }
+    });
+  }
+
+  Future<void> deleteHistoryView(int id) async {
+    await (delete(historyView)..where((t) => t.id.equals(id))).go();
+    // keys cascade due to FK
+    await (delete(historyViewKey)..where((t) => t.viewId.equals(id))).go();
+    await (delete(historyViewGraph)..where((t) => t.viewId.equals(id))).go();
+    await (delete(historyViewPeriod)..where((t) => t.viewId.equals(id))).go();
+  }
+
+  Future<List<HistoryViewData>> selectHistoryViews() {
+    return (select(historyView)).get();
+  }
+
+  // Return primitive data, let the UI layer convert to objects
+  Future<Map<String, Map<String, dynamic>>> getHistoryViewKeys(
+      int viewId) async {
+    final rows = await (select(historyViewKey)
+          ..where((t) => t.viewId.equals(viewId)))
+        .get();
+
+    final configs = <String, Map<String, dynamic>>{};
+    for (final row in rows) {
+      configs[row.key] = {
+        'key': row.key,
+        'alias': row.alias ?? row.key,
+        'useSecondYAxis': row.useSecondYAxis,
+        'graphIndex': row.graphIndex,
+      };
+    }
+    return configs;
+  }
+
+  // Add method to get graph configurations
+  Future<Map<int, Map<String, dynamic>>> getHistoryViewGraphs(
+      int viewId) async {
+    final rows = await (select(historyViewGraph)
+          ..where((t) => t.viewId.equals(viewId)))
+        .get();
+
+    final configs = <int, Map<String, dynamic>>{};
+    for (final row in rows) {
+      configs[row.graphIndex] = {
+        'yAxisUnit': row.yAxisUnit ?? '',
+        'yAxis2Unit': row.yAxis2Unit ?? '',
+      };
+    }
+    return configs;
+  }
+
+  // Add method to get just the keys (for backward compatibility)
+  Future<List<String>> getHistoryViewKeyNames(int viewId) async {
+    final rows = await (select(historyViewKey)
+          ..where((t) => t.viewId.equals(viewId)))
+        .get();
+    return rows.map((r) => r.key).toList();
+  }
+
+  // ----------------------------
+  // NEW: Saved Periods helpers
+  // ----------------------------
+  Future<int> addHistoryViewPeriod(
+      int viewId, String name, DateTime start, DateTime end) async {
+    return into(historyViewPeriod).insert(HistoryViewPeriodCompanion.insert(
+      viewId: viewId,
+      name: name,
+      startAt: start,
+      endAt: end,
+    ));
+  }
+
+  Future<void> deleteHistoryViewPeriod(int id) async {
+    await (delete(historyViewPeriod)..where((t) => t.id.equals(id))).go();
+  }
+
+  Future<List<HistoryViewPeriodData>> listHistoryViewPeriods(int viewId) async {
+    return (select(historyViewPeriod)..where((t) => t.viewId.equals(viewId)))
+        .get();
+  }
+
+  /// A best-effort global retention horizon (now - max(drop_after) across jobs).
+  /// Returns null if unknown/unavailable.
+  Future<DateTime?> getGlobalRetentionHorizon() async {
+    try {
+      // TimescaleDB only: read from jobs
+      final rows = await customSelect(
+        r'''
+        SELECT config ->> 'drop_after' AS drop_after
+        FROM timescaledb_information.jobs
+        WHERE proc_name = 'policy_retention'
+        ''',
+      ).get();
+
+      if (rows.isEmpty) return null;
+      Duration? maxDur;
+      for (final r in rows) {
+        final s = r.data['drop_after'] as String?;
+        final d = AppDatabase.parsePostgresInterval(s);
+        if (d != null) {
+          if (maxDur == null || d > maxDur) maxDur = d;
+        }
+      }
+      if (maxDur == null) return null;
+      return DateTime.now().subtract(maxDur);
+    } catch (_) {
+      // Not postgres/timescale or no permissions
+      return null;
+    }
+  }
+
+  // ----------------------------
+  // (Your existing dynamic table helpers below unchanged)
+  // ----------------------------
+
   Future<void> createTable(
       String tableName, Map<String, String> columns) async {
     final columnDefs =
@@ -182,40 +454,13 @@ class AppDatabase extends _$AppDatabase {
     List<dynamic>? whereArgs,
     String? orderBy,
   }) async {
-    // await testRawPostgresConnection();
-    // final startnet = DateTime.now();
-    // await testConnectionLatency();
-    // final durationnet = DateTime.now().difference(startnet);
-    // print('⏱️  tableQuery: Network latency: ${durationnet.inMilliseconds}ms');
-
     final start = DateTime.now();
-    // print('🔍 tableQuery: Building query for table $tableName');
 
     final cols = columns?.join(', ') ?? '*';
     final whereClause = where != null ? ' WHERE $where' : '';
     final orderByClause = orderBy != null ? ' ORDER BY $orderBy' : '';
 
     final sql = 'SELECT $cols FROM "$tableName"$whereClause$orderByClause';
-    // print(' tableQuery: SQL: $sql');
-
-    // // Add EXPLAIN ANALYZE to see what PostgreSQL is doing
-    // final explainSql = 'EXPLAIN (ANALYZE, BUFFERS, FORMAT TEXT) $sql';
-    // print('🔬 tableQuery: Running EXPLAIN ANALYZE...');
-
-    // try {
-    //   final explainResult = await customSelect(
-    //     explainSql,
-    //     variables:
-    //         whereArgs != null ? [for (var arg in whereArgs) Variable(arg)] : [],
-    //   ).get();
-
-    //   print('📊 tableQuery: Query Plan:');
-    //   for (final row in explainResult) {
-    //     print('   ${row.data.values.first}');
-    //   }
-    // } catch (e) {
-    //   print('⚠️  tableQuery: Could not get query plan: $e');
-    // }
 
     final result = await customSelect(
       sql,
@@ -280,9 +525,7 @@ class AppDatabase extends _$AppDatabase {
     if (interval == null) return null;
 
     // TimescaleDB might return intervals in different formats
-    // Let's handle the most common cases:
 
-    // Format: "10 microseconds"
     final microsecondsMatch =
         RegExp(r'(\d+)\s*microseconds').firstMatch(interval);
     if (microsecondsMatch != null) {
@@ -290,7 +533,6 @@ class AppDatabase extends _$AppDatabase {
       return Duration(microseconds: microseconds);
     }
 
-    // Format: "10 milliseconds"
     final millisecondsMatch =
         RegExp(r'(\d+)\s*milliseconds').firstMatch(interval);
     if (millisecondsMatch != null) {
@@ -304,7 +546,6 @@ class AppDatabase extends _$AppDatabase {
       return Duration(seconds: seconds);
     }
 
-    // Format: "10 minutes", "1 hour", etc.
     final minutesMatch = RegExp(r'(\d+)\s*minute').firstMatch(interval);
     if (minutesMatch != null) {
       final minutes = int.parse(minutesMatch.group(1)!);
@@ -326,13 +567,13 @@ class AppDatabase extends _$AppDatabase {
     final monthsMatch = RegExp(r'(\d+)\s*month').firstMatch(interval);
     if (monthsMatch != null) {
       final months = int.parse(monthsMatch.group(1)!);
-      return Duration(days: months * 30); // TODO: This is not correct
+      return Duration(days: months * 30); // approx
     }
 
     final yearsMatch = RegExp(r'(\d+)\s*year').firstMatch(interval);
     if (yearsMatch != null) {
       final years = int.parse(yearsMatch.group(1)!);
-      return Duration(days: years * 365); // TODO: This is not correct
+      return Duration(days: years * 365); // approx
     }
 
     // Format: "00:10:00" (HH:MM:SS)
@@ -430,67 +671,35 @@ class AppDatabase extends _$AppDatabase {
 
     // Test 1: Simple connection test with timing
     final start1 = DateTime.now();
-    print('🔍 Step 1: About to call customSelect("SELECT 1")');
-
-    // Add timing around the actual database call
     final dbStart = DateTime.now();
-    print('🔍 Step 1a: About to call .getSingle()');
     await customSelect('SELECT 1').getSingle();
     final dbDuration = DateTime.now().difference(dbStart);
-
     final totalDuration = DateTime.now().difference(start1);
     print('⏱️  Step 1: Database call took ${dbDuration.inMilliseconds}ms');
     print(
         '⏱️  Step 1: Total time including overhead: ${totalDuration.inMilliseconds}ms');
-    print(
-        '⏱️  Step 1: Drift isolate overhead: ${(totalDuration - dbDuration).inMilliseconds}ms');
 
-    // Test 2: Test with a more complex query
+    // Test 2
     final start2 = DateTime.now();
-    print('🔍 Step 2: About to call customSelect("SELECT NOW()")');
-
     final dbStart2 = DateTime.now();
     await customSelect('SELECT NOW()').getSingle();
     final dbDuration2 = DateTime.now().difference(dbStart2);
-
     final totalDuration2 = DateTime.now().difference(start2);
     print('⏱️  Step 2: Database call took ${dbDuration2.inMilliseconds}ms');
     print(
         '⏱️  Step 2: Total time including overhead: ${totalDuration2.inMilliseconds}ms');
-    print(
-        '⏱️  Step 2: Drift isolate overhead: ${(totalDuration2 - dbDuration2).inMilliseconds}ms');
-
-    print(' Connection latency summary:');
-    print('   Database call 1: ${dbDuration.inMilliseconds}ms');
-    print('   Database call 2: ${dbDuration2.inMilliseconds}ms');
-    print(
-        '   Drift overhead 1: ${(totalDuration - dbDuration).inMilliseconds}ms');
-    print(
-        '   Drift overhead 2: ${(totalDuration2 - dbDuration2).inMilliseconds}ms');
-
-    if ((totalDuration - dbDuration).inMilliseconds > 100) {
-      print('⚠️  High Drift isolate overhead detected! The issue is likely:');
-      print('   1. Drift isolate communication is slow');
-      print('   2. Serialization/deserialization overhead');
-      print('   3. Isolate message passing bottleneck');
-      print('   4. Memory pressure causing isolate slowdown');
-    }
   }
 
   /// Test Drift isolate performance
   Future<void> testDriftIsolatePerformance() async {
     print('🔍 Testing Drift isolate performance...');
 
-    // Test 1: Simple operation
     final start1 = DateTime.now();
-    print('🔍 Test 1: Simple customSelect');
     await customSelect('SELECT 1').getSingle();
     final duration1 = DateTime.now().difference(start1);
     print('⏱️  Test 1 took: ${duration1.inMilliseconds}ms');
 
-    // Test 2: Multiple operations
     final start2 = DateTime.now();
-    print('🔍 Test 2: Multiple operations');
     for (int i = 0; i < 3; i++) {
       await customSelect('SELECT $i').getSingle();
     }
@@ -498,9 +707,7 @@ class AppDatabase extends _$AppDatabase {
     print(
         '⏱️  Test 2 took: ${duration2.inMilliseconds}ms (avg: ${duration2.inMilliseconds / 3}ms per operation)');
 
-    // Test 3: Check if it's a one-time overhead
     final start3 = DateTime.now();
-    print('🔍 Test 3: Repeated operation');
     await customSelect('SELECT 1').getSingle();
     final duration3 = DateTime.now().difference(start3);
     print('⏱️  Test 3 took: ${duration3.inMilliseconds}ms');
@@ -515,18 +722,14 @@ class AppDatabase extends _$AppDatabase {
     }
 
     final start = DateTime.now();
-    print('🔍 Creating raw PostgreSQL connection...');
-
     try {
-      // Create a direct connection without the pool
       final connection = await pg.Connection.open(config.postgres!);
       final connectDuration = DateTime.now().difference(start);
       print(
           '⏱️  Raw connection creation took ${connectDuration.inMilliseconds}ms');
 
-      // Test a simple query
       final queryStart = DateTime.now();
-      final result = await connection.execute('SELECT 1');
+      await connection.execute('SELECT 1');
       final queryDuration = DateTime.now().difference(queryStart);
       print('⏱️  Raw query execution took ${queryDuration.inMilliseconds}ms');
 

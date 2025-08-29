@@ -41,7 +41,7 @@ class _ExpressionBuilderState extends ConsumerState<ExpressionBuilder> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const Text(
-          'Alarm Condition Expression',
+          'Boolean Expression',
           style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
         ),
         const SizedBox(height: 8),
@@ -55,7 +55,7 @@ class _ExpressionBuilderState extends ConsumerState<ExpressionBuilder> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const Text(
-                'Enter a boolean expression that determines when the alarm should trigger.',
+                'Enter a boolean expression that determines when it should trigger.',
                 style: TextStyle(fontSize: 14),
               ),
               const SizedBox(height: 4),
