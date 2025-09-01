@@ -46,6 +46,8 @@ class AnalogBoxConfig extends BaseAsset {
 
   /// Visual / UX
   String? units;
+  @JsonKey(name: 'range_units')
+  String? rangeUnits; // Units for range min/max, falls back to units
   @JsonKey(name: 'border_radius_pct')
   double borderRadiusPct; // relative to shortest side (0..0.5)
   bool vertical; // vertical tank-style; if false, horizontal bar
@@ -84,6 +86,7 @@ class AnalogBoxConfig extends BaseAsset {
     this.minValue = 0,
     this.maxValue = 100,
     this.units,
+    this.rangeUnits,
     this.borderRadiusPct = .15,
     this.vertical = true,
     this.reverseFill = false,
@@ -100,6 +103,7 @@ class AnalogBoxConfig extends BaseAsset {
         minValue = 0,
         maxValue = 100,
         units = 'bar',
+        rangeUnits = null,
         borderRadiusPct = .18,
         vertical = true,
         reverseFill = false,
@@ -206,9 +210,6 @@ class _AnalogBoxConfigEditorState extends State<_AnalogBoxConfigEditor> {
                               ? 'Using dynamic value from ${widget.config.analogSensorRangeMinKey}'
                               : null,
                         ),
-                        enabled:
-                            widget.config.analogSensorRangeMinKey?.isEmpty ??
-                                true,
                         keyboardType: const TextInputType.numberWithOptions(
                             decimal: true),
                         onChanged: (v) {
@@ -231,9 +232,6 @@ class _AnalogBoxConfigEditorState extends State<_AnalogBoxConfigEditor> {
                               ? 'Using dynamic value from ${widget.config.analogSensorRangeMaxKey}'
                               : null,
                         ),
-                        enabled:
-                            widget.config.analogSensorRangeMaxKey?.isEmpty ??
-                                true,
                         keyboardType: const TextInputType.numberWithOptions(
                             decimal: true),
                         onChanged: (v) {
@@ -251,6 +249,17 @@ class _AnalogBoxConfigEditorState extends State<_AnalogBoxConfigEditor> {
                   initialValue: widget.config.units,
                   decoration: const InputDecoration(labelText: 'Units'),
                   onChanged: (v) => setState(() => widget.config.units = v),
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  initialValue: widget.config.rangeUnits,
+                  decoration: InputDecoration(
+                    labelText: 'Range units',
+                    helperText:
+                        'Optional: units for range min/max values (falls back to main units)',
+                  ),
+                  onChanged: (v) =>
+                      setState(() => widget.config.rangeUnits = v),
                 ),
                 const SizedBox(height: 12),
                 Row(
@@ -432,8 +441,8 @@ class AnalogBox extends ConsumerWidget {
         double? sp1;
         double? hyst;
         double? sp2;
-        double? dynamicMin;
-        double? dynamicMax;
+        // double? dynamicMin;
+        // double? dynamicMax;
 
         if (snapshot.hasData) {
           final m = snapshot.data!;
@@ -449,17 +458,17 @@ class AnalogBox extends ConsumerWidget {
           if (m['sp2'] case final v?) {
             if (v.isDouble || v.isInteger) sp2 = v.asDouble;
           }
-          if (m['min'] case final v?) {
-            if (v.isDouble || v.isInteger) dynamicMin = v.asDouble;
-          }
-          if (m['max'] case final v?) {
-            if (v.isDouble || v.isInteger) dynamicMax = v.asDouble;
-          }
+          // if (m['min'] case final v?) {
+          //   if (v.isDouble || v.isInteger) dynamicMin = v.asDouble;
+          // }
+          // if (m['max'] case final v?) {
+          //   if (v.isDouble || v.isInteger) dynamicMax = v.asDouble;
+          // }
         }
 
         // Use dynamic min/max if available, otherwise fall back to config values
-        final effectiveMin = dynamicMin ?? config.minValue;
-        final effectiveMax = dynamicMax ?? config.maxValue;
+        final effectiveMin = config.minValue;
+        final effectiveMax = config.maxValue;
 
         final pct = _toPercent(
           analog,
@@ -553,6 +562,7 @@ class _AnalogBoxDialogState extends ConsumerState<_AnalogBoxDialog> {
       required String label,
       required double? current,
       required void Function(double) onSubmitted,
+      String? units,
     }) {
       final controller = TextEditingController(
         text: current?.toStringAsFixed(3) ?? '',
@@ -563,7 +573,7 @@ class _AnalogBoxDialogState extends ConsumerState<_AnalogBoxDialog> {
           controller: controller,
           decoration: InputDecoration(
             labelText: label,
-            suffixText: widget.config.units,
+            suffixText: units ?? widget.config.units,
           ),
           keyboardType: const TextInputType.numberWithOptions(
               decimal: true, signed: false),
@@ -766,6 +776,7 @@ class _AnalogBoxDialogState extends ConsumerState<_AnalogBoxDialog> {
                                   onSubmitted: (d) => writeValue(
                                       widget.config.analogSensorRangeMinKey!,
                                       d),
+                                  units: widget.config.rangeUnits,
                                 );
                               },
                             ),
@@ -784,6 +795,7 @@ class _AnalogBoxDialogState extends ConsumerState<_AnalogBoxDialog> {
                                   onSubmitted: (d) => writeValue(
                                       widget.config.analogSensorRangeMaxKey!,
                                       d),
+                                  units: widget.config.rangeUnits,
                                 );
                               },
                             ),
