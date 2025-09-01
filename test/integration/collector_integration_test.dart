@@ -543,6 +543,64 @@ void main() {
       collector.stopCollect(entry);
     });
 
+    test('collectStream should handle simple arrays of doubles', () async {
+      // Arrange
+      const testKey = 'array_doubles_test';
+      const testName = 'array_doubles_test';
+      final entry = CollectEntry(key: testKey, name: testName);
+      final streamController = StreamController<DynamicValue>();
+
+      database.registerRetentionPolicy(
+          testName,
+          const RetentionPolicy(
+            dropAfter: Duration(days: 1),
+          ));
+
+      // Insert historical array data
+      final historicalArrayData = [1.5, 2.7, 3.9, 4.2];
+      await database.insertTimeseriesData(
+          testName,
+          DateTime.now().toUtc().subtract(const Duration(hours: 1)),
+          historicalArrayData);
+
+      // Act
+      await collector.collectEntryImpl(entry, streamController.stream);
+      final stream =
+          collector.collectStream(testKey, since: const Duration(hours: 2));
+
+      int count = 0;
+      stream.listen((data) {
+        count++;
+        if (count == 1) {
+          expect(data.length, 1);
+          expect(data[0].value, historicalArrayData);
+        } else if (count == 2) {
+          expect(data.length, 2);
+          expect(data[0].value, historicalArrayData);
+          expect(data[1].value, isA<List<dynamic>>());
+          expect(data[1].value, [5.1, 6.3, 7.8, 8.4]);
+        }
+      });
+
+      // wait for database query
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      // Add real-time array data
+      final realtimeArrayData = DynamicValue.fromList([
+        DynamicValue(value: 5.1),
+        DynamicValue(value: 6.3),
+        DynamicValue(value: 7.8),
+        DynamicValue(value: 8.4),
+      ]);
+      streamController.add(realtimeArrayData);
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      expect(count, 2);
+      // Clean up
+      streamController.close();
+      collector.stopCollect(entry);
+    });
+
     test('collectStream should handle real-time stream errors', () async {
       // Arrange
       const testKey = 'stream_error_test';

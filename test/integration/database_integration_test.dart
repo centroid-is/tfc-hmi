@@ -206,6 +206,18 @@ void main() {
         expect(result[0].value, testData);
       });
 
+      test('should insert array of doubles data', () async {
+        final now = DateTime.now();
+        const testData = [24.5, 10.2, 99.9, 3.14159];
+
+        await database.insertTimeseriesData(testTableName, now, testData);
+
+        final result = await database.queryTimeseriesData(
+            testTableName, now.subtract(const Duration(days: 1)));
+        expect(result.length, 1);
+        expect(result[0].value, testData);
+      });
+
       test('should insert boolean data', () async {
         final now = DateTime.now();
         const testData = true;

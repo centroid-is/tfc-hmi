@@ -3,6 +3,7 @@
 // ============================================================================
 
 import 'dart:io';
+import 'dart:convert';
 
 import 'package:drift/backends.dart';
 import 'package:drift/drift.dart';
@@ -429,14 +430,58 @@ class AppDatabase extends _$AppDatabase {
   Future<int> tableInsert(String tableName, Map<String, dynamic> data) async {
     final keys = data.keys.map((key) => '"$key"').join(', ');
     final placeholders = data.keys.map((key) {
+      final value = data[key];
+      final index = data.keys.toList().indexOf(key) + 1;
+
       if (key == 'time') {
-        return '\$${data.keys.toList().indexOf(key) + 1}::timestamptz';
+        return '\$$index::timestamptz';
+      } else if (value is List) {
+        // Handle array types with proper casting
+        if (value.isEmpty) {
+          return '\$$index::text[]'; // Default to text array for empty lists
+        }
+
+        final first = value.first;
+        if (first is int) {
+          return '\$$index::integer[]';
+        } else if (first is double) {
+          return '\$$index::double precision[]';
+        } else if (first is String) {
+          return '\$$index::text[]';
+        } else if (first is bool) {
+          return '\$$index::boolean[]';
+        } else {
+          return '\$$index::jsonb[]';
+        }
       }
-      return '\$${data.keys.toList().indexOf(key) + 1}';
+      return '\$$index';
     }).join(', ');
 
-    // Create variables with custom types for arrays
+    // Create variables with proper array formatting
     final variables = data.values.map((value) {
+      if (value is List) {
+        if (value.isEmpty) {
+          return const Variable('{}');
+        }
+
+        final first = value.first;
+        if (first is num) {
+          // For numeric arrays, convert to PostgreSQL array format
+          final arrayString = '{${value.join(',')}}';
+          return Variable(arrayString);
+        } else if (first is String) {
+          // For string arrays, quote each element
+          final arrayString = '{${value.map((e) => '"$e"').join(',')}}';
+          return Variable(arrayString);
+        } else if (first is bool) {
+          // For boolean arrays
+          final arrayString = '{${value.join(',')}}';
+          return Variable(arrayString);
+        } else {
+          // For other types, convert to JSON array
+          return Variable(jsonEncode(value));
+        }
+      }
       return Variable(value);
     }).toList();
 
