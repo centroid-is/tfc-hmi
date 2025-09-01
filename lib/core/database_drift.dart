@@ -511,7 +511,13 @@ class AppDatabase extends _$AppDatabase {
       SELECT config ->> 'drop_after' AS drop_after, schedule_interval FROM timescaledb_information.jobs
       WHERE proc_name = 'policy_retention' AND hypertable_name = $1
     ''', variables: [Variable.withString(tableName)]);
-    final result = await select.getSingle();
+    final QueryRow result;
+    try {
+      result = await select.getSingle();
+    } catch (e) {
+      logger.e('Error getting retention policy for $tableName: $e');
+      return null;
+    }
     final dropAfter = result.read<String>('drop_after');
     final scheduleInterval = result.read<String>('schedule_interval');
 
