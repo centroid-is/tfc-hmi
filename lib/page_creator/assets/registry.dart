@@ -98,10 +98,10 @@ class AssetRegistry {
     final List<Asset> foundWidgets = [];
     void crawlJson(dynamic jsonPart) {
       if (jsonPart is Map<String, dynamic>) {
-        _log.t('Crawling object: $jsonPart');
+        // _log.t('Crawling object: $jsonPart');
         if (jsonPart.containsKey(constAssetName)) {
           final assetName = jsonPart[constAssetName] as String;
-          _log.d('Found potential asset: $assetName');
+          // _log.d('Found potential asset: $assetName');
 
           for (final factory in _fromJsonFactories.entries) {
             if (factory.key.toString() == assetName) {

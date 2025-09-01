@@ -590,7 +590,8 @@ class StateMan {
 
         return _subscriptions[key]!.stream;
       } catch (e) {
-        logger.w('Failed to get initial value for $key: $e');
+        // todo log if this occurs more than 10 times
+        // logger.w('Failed to get initial value for $key: $e');
         await Future.delayed(const Duration(seconds: 1));
         continue;
       }
