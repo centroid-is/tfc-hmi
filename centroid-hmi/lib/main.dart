@@ -17,6 +17,7 @@ import 'package:tfc/pages/alarm_editor.dart';
 import 'package:tfc/pages/alarm_view.dart';
 import 'package:tfc/pages/ip_settings.dart';
 import 'package:tfc/pages/dbus_login.dart';
+import 'package:tfc/pages/history_view.dart';
 import 'package:tfc/transition_delegate.dart';
 import 'package:tfc/providers/theme.dart';
 import 'package:tfc/core/preferences.dart';
@@ -60,9 +61,8 @@ void main() async {
   await pageManager.load();
 
   // Sort pages by navigationPriority first, then map to menu items
-  final sortedPages =
-      pageManager.pages.values.toList()
-        ..sort((a, b) => (a.navigationPriority ?? 0).compareTo(b.navigationPriority ?? 0));
+  final sortedPages = pageManager.pages.values.toList()
+    ..sort((a, b) => (a.navigationPriority ?? 0).compareTo(b.navigationPriority ?? 0));
   final extraMenuItems = sortedPages.map((page) => page.menuItem).toList();
 
   for (final menuItem in extraMenuItems) {
@@ -81,6 +81,7 @@ void main() async {
           MenuItem(label: 'Preferences', path: '/advanced/preferences', icon: Icons.settings),
         if (environmentVariableIsGod)
           MenuItem(label: 'Alarm Editor', path: '/advanced/alarm-editor', icon: Icons.alarm),
+        MenuItem(label: 'History View', path: '/advanced/history-view', icon: Icons.history),
       ],
     ),
   );
@@ -108,8 +109,7 @@ RoutesLocationBuilder createLocationBuilder(List<MenuItem> extraMenuItems) {
     //         },
     //       ),
     //     ),
-    '/advanced/ip-settings':
-        (context, state, args) => BeamPage(
+    '/advanced/ip-settings': (context, state, args) => BeamPage(
           key: const ValueKey('/advanced/ip-settings'),
           title: 'IP Settings',
           child: Consumer(
@@ -138,18 +138,16 @@ RoutesLocationBuilder createLocationBuilder(List<MenuItem> extraMenuItems) {
             },
           ),
         ),
-    '/advanced/page-editor':
-        (context, state, args) =>
-            BeamPage(key: const ValueKey('/advanced/page-editor'), title: 'Page Editor', child: PageEditor()),
-    '/advanced/preferences':
-        (context, state, args) =>
-            BeamPage(key: const ValueKey('/advanced/preferences'), title: 'Preferences', child: PreferencesPage()),
-    '/advanced/alarm-editor':
-        (context, state, args) =>
-            BeamPage(key: const ValueKey('/advanced/alarm-editor'), title: 'Alarm Editor', child: AlarmEditorPage()),
-    '/alarm-view':
-        (context, state, args) =>
-            BeamPage(key: const ValueKey('/alarm-view'), title: 'Alarm View', child: AlarmViewPage()),
+    '/advanced/page-editor': (context, state, args) =>
+        BeamPage(key: const ValueKey('/advanced/page-editor'), title: 'Page Editor', child: PageEditor()),
+    '/advanced/preferences': (context, state, args) =>
+        BeamPage(key: const ValueKey('/advanced/preferences'), title: 'Preferences', child: PreferencesPage()),
+    '/advanced/alarm-editor': (context, state, args) =>
+        BeamPage(key: const ValueKey('/advanced/alarm-editor'), title: 'Alarm Editor', child: AlarmEditorPage()),
+    '/advanced/history-view': (context, state, args) =>
+        BeamPage(key: const ValueKey('/advanced/history-view'), title: 'History View', child: HistoryViewPage()),
+    '/alarm-view': (context, state, args) =>
+        BeamPage(key: const ValueKey('/alarm-view'), title: 'Alarm View', child: AlarmViewPage()),
   };
 
   addRoute(MenuItem menuItem) {
@@ -157,8 +155,7 @@ RoutesLocationBuilder createLocationBuilder(List<MenuItem> extraMenuItems) {
       return;
     }
     if (menuItem.children.isEmpty) {
-      routes[menuItem.path!] =
-          (context, state, args) => BeamPage(
+      routes[menuItem.path!] = (context, state, args) => BeamPage(
             key: ValueKey(menuItem.path!),
             title: menuItem.label,
             child: Consumer(
@@ -182,11 +179,11 @@ RoutesLocationBuilder createLocationBuilder(List<MenuItem> extraMenuItems) {
 
 class MyApp extends ConsumerWidget {
   MyApp({super.key, required RoutesLocationBuilder locationBuilder})
-    : routerDelegate = BeamerDelegate(
-        notFoundPage: const BeamPage(child: PageNotFound()),
-        transitionDelegate: MyNoAnimationTransitionDelegate(),
-        locationBuilder: (routeInformation, context) => locationBuilder(routeInformation, context),
-      );
+      : routerDelegate = BeamerDelegate(
+          notFoundPage: const BeamPage(child: PageNotFound()),
+          transitionDelegate: MyNoAnimationTransitionDelegate(),
+          locationBuilder: (routeInformation, context) => locationBuilder(routeInformation, context),
+        );
 
   final BeamerDelegate routerDelegate;
 
