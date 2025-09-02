@@ -55,7 +55,7 @@ class PageManager {
   PageManager({required this.pages, required this.prefs});
 
   Future<void> load() async {
-    final String? jsonString = await prefs.getString(storageKey);
+    String? jsonString = await prefs.getString(storageKey);
     final defaultPages = {
       'Home': AssetPage(
         menuItem: const MenuItem(label: 'Home', path: '/', icon: Icons.home),
@@ -72,6 +72,140 @@ class PageManager {
       } catch (e) {
         pages = defaultPages;
       }
+    } else {
+      // some sane default
+      jsonString = r'''
+        {
+          "Home": {
+            "menu_item": {
+              "label": "Home",
+              "path": "/",
+              "icon": "home",
+              "children": []
+            },
+            "assets": [
+              {
+                "asset_name": "ButtonConfig",
+                "coordinates": {
+                  "x": 0.3062472475044039,
+                  "y": 0.13612415997912186,
+                  "angle": null
+                },
+                "size": {
+                  "width": 0.03,
+                  "height": 0.03
+                },
+                "text": "A button",
+                "textPos": "right",
+                "key": "Button preview",
+                "feedback": null,
+                "icon": null,
+                "outward_color": {
+                  "red": 0.2980392156862745,
+                  "green": 0.6862745098039216,
+                  "blue": 0.3137254901960784,
+                  "alpha": 1.0
+                },
+                "inward_color": {
+                  "red": 0.2980392156862745,
+                  "green": 0.6862745098039216,
+                  "blue": 0.3137254901960784,
+                  "alpha": 1.0
+                },
+                "button_type": "circle",
+                "is_toggle": false
+              },
+              {
+                "asset_name": "LEDConfig",
+                "coordinates": {
+                  "x": 0.3060637477980035,
+                  "y": 0.23322812683499702,
+                  "angle": null
+                },
+                "size": {
+                  "width": 0.03,
+                  "height": 0.03
+                },
+                "text": "A light",
+                "textPos": "right",
+                "key": "Led preview",
+                "on_color": {
+                  "red": 0.2980392156862745,
+                  "green": 0.6862745098039216,
+                  "blue": 0.3137254901960784,
+                  "alpha": 1.0
+                },
+                "off_color": {
+                  "red": 0.2980392156862745,
+                  "green": 0.6862745098039216,
+                  "blue": 0.3137254901960784,
+                  "alpha": 1.0
+                },
+                "led_type": "circle"
+              },
+              {
+                "asset_name": "BeckhoffCX5010Config",
+                "coordinates": {
+                  "x": 0.5455216896652962,
+                  "y": 0.602119625497488,
+                  "angle": null
+                },
+                "size": {
+                  "width": 0.5,
+                  "height": 0.5
+                },
+                "text": null,
+                "textPos": null,
+                "subdevices": [
+                  {
+                    "asset_name": "BeckhoffEL1008Config",
+                    "coordinates": {
+                      "x": 0.0,
+                      "y": 0.0,
+                      "angle": null
+                    },
+                    "size": {
+                      "width": 0.03,
+                      "height": 0.03
+                    },
+                    "text": null,
+                    "textPos": null,
+                    "nameOrId": "1",
+                    "descriptionsKey": null,
+                    "rawStateKey": null,
+                    "processedStateKey": null,
+                    "forceValuesKey": null,
+                    "onFiltersKey": null,
+                    "offFiltersKey": null
+                  },
+                  {
+                    "asset_name": "BeckhoffEL2008Config",
+                    "coordinates": {
+                      "x": 0.0,
+                      "y": 0.0,
+                      "angle": null
+                    },
+                    "size": {
+                      "width": 0.03,
+                      "height": 0.03
+                    },
+                    "text": null,
+                    "textPos": null,
+                    "nameOrId": "1",
+                    "descriptionsKey": null,
+                    "rawStateKey": null,
+                    "forceValuesKey": null
+                  }
+                ]
+              }
+            ],
+            "mirroring_disabled": false,
+            "navigation_priority": 0
+          }
+        }
+      ''';
+      fromJson(jsonString);
+      prefs.setString(storageKey, jsonString);
     }
   }
 

@@ -396,6 +396,8 @@ class _HistoryGraphPaneState extends ConsumerState<_HistoryGraphPane> {
                   y = value.toDouble();
                 } else if (value is Map && value['value'] is num) {
                   y = (value['value'] as num).toDouble();
+                } else if (value is bool) {
+                  y = value ? 1.0 : 0.0;
                 }
                 if (y != null) {
                   if (!widget.realtime && widget.range != null) {
@@ -405,6 +407,10 @@ class _HistoryGraphPaneState extends ConsumerState<_HistoryGraphPane> {
                         dt.isAfter(widget.range!.end)) {
                       continue;
                     }
+                  }
+                  if (value is bool) {
+                    // To create a square wave
+                    points.add([time, !value ? 1.0 : 0.0]);
                   }
                   points.add([time, y]);
                 }

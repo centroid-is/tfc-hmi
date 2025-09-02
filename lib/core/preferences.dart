@@ -239,6 +239,9 @@ class Preferences implements PreferencesApi {
   }
 
   Future<void> _updateCache() async {
+    if (database == null) {
+      return;
+    }
     final db = database!.db;
     final select = db.selectOnly(db.flutterPreferences)
       ..addColumns([db.flutterPreferences.key]);
