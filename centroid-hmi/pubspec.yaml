@@ -17,7 +17,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
 # Format: YYYY.MM.DD+1, +1 is the build number that day
-version: 2025.8.19+1
+version: 2025.09.02+1
 
 environment:
   sdk: ^3.6.0
@@ -62,6 +62,8 @@ dev_dependencies:
   flutter_lints: ^5.0.0
   build_runner: ^2.4.15
   json_serializable: ^6.9.5
+  msix: ^3.16.12
+
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
@@ -111,3 +113,16 @@ dependency_overrides:
   # drift_flutter:
   #   path: ../../drift/drift_flutter
 
+
+msix_config:
+  msix_version: 2025.09.02.0
+  display_name: Centroid
+  description: Centroid HMI - Windows client by Centroid ehf
+  publisher: CN=2F2634E3-C7B6-45A4-A112-0D039FC2ECDB
+  publisher_display_name: Centroid
+  logo_path: assets/icon.png
+  identity_name: Centroid.HMI
+  architecture: x64
+  capabilities: "internetClient,privateNetworkClientServer"
+  languages: en-US
+  store: true

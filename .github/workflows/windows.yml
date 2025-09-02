@@ -1,0 +1,53 @@
+name: Windows Build
+
+on:
+  workflow_dispatch: 
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  publish:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with: { channel: stable }
+
+      - name: Build Windows
+        working-directory: centroid-hmi
+        run: flutter build windows --release
+
+      - name: Create MSIX for Store
+        working-directory: centroid-hmi
+        run: |
+          dart run msix:create --store
+        shell: powershell
+
+      - name: Locate MSIX
+        working-directory: centroid-hmi
+        id: locate
+        shell: powershell
+        run: |
+            $msix = Get-ChildItem -Recurse -Filter *.msix | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+            if (-not $msix) { throw "No .msix file found" }
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: centroid-hmi.msix
+          path: ${{ steps.locate.outputs.msix }}
+
+      - name: Run Windows App Certification Kit
+        uses: ChristopheLav/wack-certification@v1
+        with:
+          name: 'WACK (x64)'
+          package-path: '${{ steps.locate.outputs.msix }}'   # or .appxbundle
+          report-name: 'centroid-hmi.Certification.xml'
+          # ignore-rules: '38,81'                      # optional
+          # threat-as-warning-rules: '83'              # optional
