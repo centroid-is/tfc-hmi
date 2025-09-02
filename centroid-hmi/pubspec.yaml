@@ -1,4 +1,4 @@
-name: centroid_hmi
+name: centroid-scada
 description: "A new Flutter project."
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
@@ -116,12 +116,12 @@ dependency_overrides:
 
 msix_config:
   msix_version: 2025.9.2.0
-  display_name: Centroid
-  description: Centroid HMI - Windows client by Centroid ehf
+  display_name: Centroid SCADA
+  description: Centroid SCADA - Windows client by Centroid ehf
   publisher: CN=2F2634E3-C7B6-45A4-A112-0D039FC2ECDB
   publisher_display_name: Centroid
   logo_path: assets/icon.png
-  identity_name: Centroid.HMI
+  identity_name: Centroid.centroid-scada
   architecture: x64
   capabilities: "internetClient,privateNetworkClientServer"
   store: true
