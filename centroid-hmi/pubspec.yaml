@@ -17,7 +17,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
 # Format: YYYY.MM.DD+1, +1 is the build number that day
-version: 2025.09.02+1
+version: 2025.9.2+1
 
 environment:
   sdk: ^3.6.0
@@ -115,7 +115,7 @@ dependency_overrides:
 
 
 msix_config:
-  msix_version: 2025.09.02.0
+  msix_version: 2025.9.2.0
   display_name: Centroid
   description: Centroid HMI - Windows client by Centroid ehf
   publisher: CN=2F2634E3-C7B6-45A4-A112-0D039FC2ECDB
