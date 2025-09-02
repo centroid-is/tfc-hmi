@@ -124,5 +124,4 @@ msix_config:
   identity_name: Centroid.HMI
   architecture: x64
   capabilities: "internetClient,privateNetworkClientServer"
-  languages: en-US
   store: true
