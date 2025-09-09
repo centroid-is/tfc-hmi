@@ -60,6 +60,7 @@ class GraphConfig {
   final GraphAxisConfig yAxis;
   final GraphAxisConfig? yAxis2;
   final Duration? xSpan; // New field for timeseries span
+  final DateTimeRange? xRange; // New field for timeseries range
 
   static const List<Color> colors = [
     Colors.blue,
@@ -87,7 +88,8 @@ class GraphConfig {
     required this.xAxis,
     required this.yAxis,
     this.yAxis2,
-    this.xSpan, // Add to constructor
+    this.xSpan,
+    this.xRange,
   });
 
   factory GraphConfig.fromJson(Map<String, dynamic> json) =>
@@ -169,8 +171,8 @@ class _GraphState extends State<Graph> {
           series,
           animate: false,
           defaultRenderer: charts.LineRendererConfig<DateTime>(),
-          domainAxis:
-              _buildDateTimeAxisSpec(widget.config.xAxis, widget.config.xSpan),
+          domainAxis: _buildDateTimeAxisSpec(
+              widget.config.xAxis, widget.config.xSpan, widget.config.xRange),
           primaryMeasureAxis: _buildAxisSpec(widget.config.yAxis),
           secondaryMeasureAxis: widget.config.yAxis2 != null
               ? _buildAxisSpec(widget.config.yAxis2!)
@@ -213,8 +215,8 @@ class _GraphState extends State<Graph> {
           series,
           defaultRenderer: charts.BarRendererConfig<DateTime>(),
           animate: false,
-          domainAxis:
-              _buildDateTimeAxisSpec(widget.config.xAxis, widget.config.xSpan),
+          domainAxis: _buildDateTimeAxisSpec(
+              widget.config.xAxis, widget.config.xSpan, widget.config.xRange),
           primaryMeasureAxis: _buildAxisSpec(widget.config.yAxis),
           secondaryMeasureAxis: widget.config.yAxis2 != null
               ? _buildAxisSpec(widget.config.yAxis2!)
@@ -583,11 +585,17 @@ class _GraphState extends State<Graph> {
   }
 
   charts.DateTimeAxisSpec _buildDateTimeAxisSpec(GraphAxisConfig axisConfig,
-      [Duration? xSpan]) {
+      [Duration? xSpan, DateTimeRange? xRange]) {
     // If you gave min/max in ms since epoch, you can use them to zoom the viewport:
     charts.DateTimeExtents? extents;
 
-    if (axisConfig.min != null && axisConfig.max != null) {
+    if (xRange != null) {
+      // Use xRange to set the viewport
+      extents = charts.DateTimeExtents(
+        start: xRange.start,
+        end: xRange.end,
+      );
+    } else if (axisConfig.min != null && axisConfig.max != null) {
       // Use explicit min/max from axis config
       extents = charts.DateTimeExtents(
         start: DateTime.fromMillisecondsSinceEpoch(axisConfig.min!.toInt()),

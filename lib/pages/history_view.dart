@@ -354,6 +354,8 @@ class _HistoryGraphPaneState extends ConsumerState<_HistoryGraphPane> {
         }
 
         Duration since;
+        DateTimeRange? fetchRange; // Extended range for fetching
+
         if (widget.realtime) {
           since = const Duration(minutes: 10);
         } else {
@@ -361,15 +363,28 @@ class _HistoryGraphPaneState extends ConsumerState<_HistoryGraphPane> {
             return const Center(child: Text('Pick a start & end date'));
           }
           since = DateTime.now().difference(widget.range!.start);
+
+          // Calculate extended range: 50% more on each side
+          final rangeDuration =
+              widget.range!.end.difference(widget.range!.start);
+          final extension = Duration(
+            milliseconds: (rangeDuration.inMilliseconds * 0.5).round(),
+          );
+
+          fetchRange = DateTimeRange(
+            start: widget.range!.start.subtract(extension),
+            end: widget.range!.end.add(extension),
+          );
         }
 
         final streams = widget.keys.map((k) {
           if (widget.realtime) {
             return collector.collectStream(k, since: since);
           } else {
+            // Use extended range for fetching
             return Stream.fromFuture(collector.database.queryTimeseriesData(
-                k, widget.range!.end,
-                from: widget.range!.start));
+                k, fetchRange!.end,
+                from: fetchRange!.start));
           }
         }).toList();
 
@@ -411,14 +426,7 @@ class _HistoryGraphPaneState extends ConsumerState<_HistoryGraphPane> {
                   y = value ? 1.0 : 0.0;
                 }
                 if (y != null) {
-                  if (!widget.realtime && widget.range != null) {
-                    final dt =
-                        DateTime.fromMillisecondsSinceEpoch(time.toInt());
-                    if (dt.isBefore(widget.range!.start) ||
-                        dt.isAfter(widget.range!.end)) {
-                      continue;
-                    }
-                  }
+                  // Include all fetched data - the graph will handle the display range
                   if (value is bool) {
                     // To create a square wave
                     points.add([time, !value ? 1.0 : 0.0]);
@@ -440,6 +448,7 @@ class _HistoryGraphPaneState extends ConsumerState<_HistoryGraphPane> {
                   .add(graphData);
             }
 
+            // Use original range for xSpan (what's visible initially)
             final Duration xSpan = widget.realtime
                 ? const Duration(minutes: 10)
                 : (widget.range != null
@@ -479,9 +488,11 @@ class _HistoryGraphPaneState extends ConsumerState<_HistoryGraphPane> {
                                     ? GraphAxisConfig(
                                         unit: graphDisplayConfig!.yAxis2Unit!)
                                     : null,
-                            xSpan: xSpan,
+                            xSpan: widget.realtime ? xSpan : null,
+                            xRange: widget.realtime ? null : widget.range,
                           ),
-                          data: graphData,
+                          data:
+                              graphData, // All fetched data is available for panning
                           showDate: _paused,
                         ),
                       ),
@@ -621,6 +632,8 @@ class _HistoryTablePaneState extends ConsumerState<_HistoryTablePane> {
         }
 
         Duration since;
+        DateTimeRange? fetchRange; // Extended range for fetching
+
         if (widget.realtime) {
           since = const Duration(minutes: 10);
         } else {
@@ -628,15 +641,28 @@ class _HistoryTablePaneState extends ConsumerState<_HistoryTablePane> {
             return const Center(child: Text('Pick a start & end date'));
           }
           since = DateTime.now().difference(widget.range!.start);
+
+          // Calculate extended range: 50% more on each side
+          final rangeDuration =
+              widget.range!.end.difference(widget.range!.start);
+          final extension = Duration(
+            milliseconds: (rangeDuration.inMilliseconds * 0.5).round(),
+          );
+
+          fetchRange = DateTimeRange(
+            start: widget.range!.start.subtract(extension),
+            end: widget.range!.end.add(extension),
+          );
         }
 
         final streams = widget.keys.map((k) {
           if (widget.realtime) {
             return collector.collectStream(k, since: since);
           } else {
+            // Use extended range for fetching
             return Stream.fromFuture(collector.database.queryTimeseriesData(
-                k, widget.range!.end,
-                from: widget.range!.start));
+                k, fetchRange!.end,
+                from: fetchRange!.start));
           }
         }).toList();
 
@@ -705,6 +731,7 @@ class _HistoryTablePaneState extends ConsumerState<_HistoryTablePane> {
       keyData[key] = list;
 
       for (final s in list) {
+        // For historical data, only include data within the selected range
         if (!widget.realtime && widget.range != null) {
           if (s.time.isBefore(widget.range!.start) ||
               s.time.isAfter(widget.range!.end)) {
