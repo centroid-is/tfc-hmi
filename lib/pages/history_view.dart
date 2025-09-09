@@ -446,43 +446,47 @@ class _HistoryGraphPaneState extends ConsumerState<_HistoryGraphPane> {
                     ? widget.range!.end.difference(widget.range!.start)
                     : const Duration(minutes: 10));
 
+            // Get all used graph indices and sort them
+            final usedGraphIndices = graphDataByIndex.keys.toList()..sort();
+
+            // If no graphs have data, show empty state
+            if (usedGraphIndices.isEmpty) {
+              return const Center(child: Text('No data to display'));
+            }
+
             return Stack(
               children: [
-                GestureDetector(
-                  onTapDown: (_) {
-                    if (widget.realtime) {
-                      setState(() {
-                        _paused = true;
-                        _pausedAt = DateTime.now();
-                      });
-                    }
-                  },
-                  onPanStart: (_) {
-                    if (widget.realtime) {
-                      setState(() {
-                        _paused = true;
-                        _pausedAt = DateTime.now();
-                      });
-                    }
-                  },
-                  child: Graph(
-                    config: GraphConfig(
-                      type: GraphType.timeseries,
-                      xAxis: GraphAxisConfig(unit: ''),
-                      yAxis: GraphAxisConfig(
-                        unit: widget.graphDisplayConfigs[0]?.yAxisUnit ?? '',
+                // Display all graphs stacked vertically, taking full available space
+                Column(
+                  children: usedGraphIndices.map((graphIndex) {
+                    final graphData = graphDataByIndex[graphIndex] ?? [];
+                    final graphDisplayConfig =
+                        widget.graphDisplayConfigs[graphIndex];
+
+                    return Expanded(
+                      child: Container(
+                        margin: const EdgeInsets.only(bottom: 8),
+                        child: Graph(
+                          config: GraphConfig(
+                            type: GraphType.timeseries,
+                            xAxis: GraphAxisConfig(unit: ''),
+                            yAxis: GraphAxisConfig(
+                              unit: graphDisplayConfig?.yAxisUnit ?? '',
+                            ),
+                            yAxis2:
+                                graphDisplayConfig?.yAxis2Unit?.isNotEmpty ==
+                                        true
+                                    ? GraphAxisConfig(
+                                        unit: graphDisplayConfig!.yAxis2Unit!)
+                                    : null,
+                            xSpan: xSpan,
+                          ),
+                          data: graphData,
+                          showDate: _paused,
+                        ),
                       ),
-                      yAxis2: widget.graphDisplayConfigs[0]?.yAxis2Unit
-                                  ?.isNotEmpty ==
-                              true
-                          ? GraphAxisConfig(
-                              unit: widget.graphDisplayConfigs[0]!.yAxis2Unit!)
-                          : null,
-                      xSpan: xSpan,
-                    ),
-                    data: graphDataByIndex[0] ?? [],
-                    showDate: _paused,
-                  ),
+                    );
+                  }).toList(),
                 ),
                 if (widget.realtime && _paused)
                   Positioned(
