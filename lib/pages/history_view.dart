@@ -568,7 +568,7 @@ class _HistoryGraphPaneState extends ConsumerState<_HistoryGraphPane> {
 // -----------------------------------------------------------------------------
 // Table pane – merges selected keys by nearest timestamp
 // -----------------------------------------------------------------------------
-class _HistoryTablePane extends ConsumerWidget {
+class _HistoryTablePane extends ConsumerStatefulWidget {
   final List<String> keys;
   final bool realtime;
   final DateTimeRange? range;
@@ -583,7 +583,30 @@ class _HistoryTablePane extends ConsumerWidget {
   });
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_HistoryTablePane> createState() => _HistoryTablePaneState();
+}
+
+enum _TableSortOrder { newestFirst, oldestFirst }
+
+class _HistoryTablePaneState extends ConsumerState<_HistoryTablePane> {
+  _TableSortOrder _sortOrder = _TableSortOrder.newestFirst;
+
+  // Cache processed data to avoid recalculation
+  List<Map<String, dynamic>>? _cachedTableRows;
+  List<List<TimeseriesData<dynamic>>>? _lastProcessedData;
+  int _lastDataHash = 0;
+
+  // Debounce updates to reduce frequency
+  Timer? _updateTimer;
+
+  @override
+  void dispose() {
+    _updateTimer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final collectorAsync = ref.watch(collectorProvider);
 
     return collectorAsync.when(
@@ -591,27 +614,27 @@ class _HistoryTablePane extends ConsumerWidget {
         if (collector == null) {
           return const Center(child: Text('No collector available'));
         }
-        if (keys.isEmpty) {
+        if (widget.keys.isEmpty) {
           return const Center(child: Text('Select keys to view history'));
         }
 
         Duration since;
-        if (realtime) {
+        if (widget.realtime) {
           since = const Duration(minutes: 10);
         } else {
-          if (range == null) {
+          if (widget.range == null) {
             return const Center(child: Text('Pick a start & end date'));
           }
-          since = DateTime.now().difference(range!.start);
+          since = DateTime.now().difference(widget.range!.start);
         }
 
-        final streams = keys.map((k) {
-          if (realtime) {
+        final streams = widget.keys.map((k) {
+          if (widget.realtime) {
             return collector.collectStream(k, since: since);
           } else {
-            print('querying $k from ${range!.start} to ${range!.end}');
-            return Stream.fromFuture(collector.database
-                .queryTimeseriesData(k, range!.end, from: range!.start));
+            return Stream.fromFuture(collector.database.queryTimeseriesData(
+                k, widget.range!.end,
+                from: widget.range!.start));
           }
         }).toList();
 
@@ -621,120 +644,272 @@ class _HistoryTablePane extends ConsumerWidget {
             if (!snap.hasData) {
               return const Center(child: CircularProgressIndicator());
             }
+
             final lists = snap.data!;
 
-            final allTs = <DateTime>{};
-            for (final l in lists) {
-              for (final s in l) {
-                if (!realtime && range != null) {
-                  if (s.time.isBefore(range!.start) ||
-                      s.time.isAfter(range!.end)) {
-                    continue;
-                  }
+            // Quick hash check to see if data actually changed
+            final currentHash = _calculateDataHash(lists);
+            if (currentHash != _lastDataHash) {
+              _lastDataHash = currentHash;
+              _updateTimer?.cancel();
+              _updateTimer = Timer(const Duration(milliseconds: 50), () {
+                if (mounted) {
+                  _processDataEfficiently(lists);
                 }
-                allTs.add(s.time);
-              }
+              });
             }
 
-            final ordered = allTs.toList()..sort((a, b) => b.compareTo(a));
-            final kept = rows == -1
-                ? ordered.reversed.toList() // No limit for historical data
-                : ordered
-                    .take(rows)
-                    .toList()
-                    .reversed
-                    .toList(); // Apply limit for real-time
-
-            const epsilon = Duration(seconds: 5);
-            final tableRows = <Map<String, dynamic>>[];
-
-            for (final t in kept) {
-              final row = <String, dynamic>{'Timestamp': t};
-              for (int i = 0; i < keys.length; i++) {
-                final key = keys[i];
-                final list = lists[i];
-                TimeseriesData<dynamic>? best;
-                var bestDt = epsilon + const Duration(days: 999);
-                for (final s in list) {
-                  final d = s.time.difference(t).abs();
-                  if (d <= epsilon && d < bestDt) {
-                    best = s;
-                    bestDt = d;
-                  }
-                }
-                row[key] = best?.value;
-              }
-              tableRows.add(row);
-            }
-
-            final columns = ['Timestamp', ...keys];
-
-            return LayoutBuilder(
-              builder: (context, constraints) {
-                final hasFiniteH = constraints.hasBoundedHeight &&
-                    constraints.maxHeight.isFinite;
-                final rowH = hasFiniteH
-                    ? (constraints.maxHeight /
-                            math.max(2, tableRows.length + 1))
-                        .clamp(28.0, 60.0)
-                    : 36.0;
-                final fontSize = (rowH * 0.6).clamp(10.0, 18.0).toDouble();
-
-                final table = DataTable(
-                  columns: columns
-                      .map((c) => DataColumn(
-                            label: Text(
-                              c,
-                              style: TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: fontSize),
-                            ),
-                          ))
-                      .toList(),
-                  rows: tableRows
-                      .map(
-                        (r) => DataRow(
-                          cells: columns.map((c) {
-                            if (c == 'Timestamp') {
-                              final ts = r['Timestamp'] as DateTime;
-                              final txt =
-                                  '${ts.hour.toString().padLeft(2, '0')}:${ts.minute.toString().padLeft(2, '0')}:${ts.second.toString().padLeft(2, '0')}';
-                              return DataCell(Text(txt,
-                                  style: TextStyle(fontSize: fontSize)));
-                            }
-                            return DataCell(Text(_fmt(r[c]),
-                                style: TextStyle(fontSize: fontSize)));
-                          }).toList(),
-                        ),
-                      )
-                      .toList(),
-                  dataRowMinHeight: rowH,
-                  dataRowMaxHeight: rowH,
-                  headingRowHeight: rowH,
-                );
-
-                if (hasFiniteH) {
-                  return SingleChildScrollView(
-                    scrollDirection: Axis.vertical,
-                    child: SingleChildScrollView(
-                      scrollDirection: Axis.horizontal,
-                      child: table,
-                    ),
-                  );
-                } else {
-                  return SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    child: table,
-                  );
-                }
-              },
-            );
+            return _buildOptimizedTable();
           },
         );
       },
       loading: () => const Center(child: CircularProgressIndicator()),
       error: (e, _) => Center(child: Text('Error: $e')),
     );
+  }
+
+  // Fast hash calculation to detect data changes
+  int _calculateDataHash(List<List<TimeseriesData<dynamic>>> lists) {
+    int hash = 0;
+    for (final list in lists) {
+      if (list.isNotEmpty) {
+        hash ^= list.length.hashCode;
+        hash ^= list.first.time.millisecondsSinceEpoch.hashCode;
+        hash ^= list.last.time.millisecondsSinceEpoch.hashCode;
+      }
+    }
+    return hash;
+  }
+
+  void _processDataEfficiently(List<List<TimeseriesData<dynamic>>> lists) {
+    // Remove the early return check when called directly from timestamp click
+    // Only skip if called from the timer and data hasn't changed
+    if (_lastProcessedData != null &&
+        _listsEqual(_lastProcessedData!, lists) &&
+        _lastDataHash != 0) {
+      return;
+    }
+
+    final stopwatch = Stopwatch()..start();
+
+    // Pre-allocate collections with known sizes
+    final allTs = <DateTime>{};
+    final keyData = <String, List<TimeseriesData<dynamic>>>{};
+
+    // Single pass to collect timestamps and organize data by key
+    for (int i = 0; i < widget.keys.length; i++) {
+      final key = widget.keys[i];
+      final list = lists[i];
+      keyData[key] = list;
+
+      for (final s in list) {
+        if (!widget.realtime && widget.range != null) {
+          if (s.time.isBefore(widget.range!.start) ||
+              s.time.isAfter(widget.range!.end)) {
+            continue;
+          }
+        }
+        allTs.add(s.time);
+      }
+    }
+
+    // Sort timestamps once
+    final ordered = allTs.toList();
+    if (_sortOrder == _TableSortOrder.newestFirst) {
+      ordered.sort((a, b) => b.compareTo(a));
+    } else {
+      ordered.sort((a, b) => a.compareTo(b));
+    }
+
+    final kept =
+        widget.rows == -1 ? ordered : ordered.take(widget.rows).toList();
+
+    // Pre-allocate table rows
+    final tableRows =
+        List<Map<String, dynamic>>.filled(kept.length, <String, dynamic>{});
+
+    // Optimized row processing with early termination
+    const epsilon = Duration(seconds: 5);
+    for (int i = 0; i < kept.length; i++) {
+      final t = kept[i];
+      final row = <String, dynamic>{'Timestamp': t};
+
+      for (final key in widget.keys) {
+        final list = keyData[key]!;
+        TimeseriesData<dynamic>? best;
+        var bestDt = epsilon + const Duration(days: 999);
+
+        // Early termination: if we find a perfect match, stop looking
+        for (final s in list) {
+          final d = s.time.difference(t).abs();
+          if (d <= epsilon && d < bestDt) {
+            best = s;
+            bestDt = d;
+            if (d.inMilliseconds == 0) break; // Perfect match, stop
+          }
+        }
+        row[key] = best?.value;
+      }
+      tableRows[i] = row;
+    }
+
+    if (mounted) {
+      setState(() {
+        _cachedTableRows = tableRows;
+        _lastProcessedData = lists;
+      });
+    }
+
+    stopwatch.stop();
+    print('Table processing took: ${stopwatch.elapsedMilliseconds}ms');
+  }
+
+  bool _listsEqual(List<List<TimeseriesData<dynamic>>> a,
+      List<List<TimeseriesData<dynamic>>> b) {
+    if (a.length != b.length) return false;
+    for (int i = 0; i < a.length; i++) {
+      if (a[i].length != b[i].length) return false;
+      if (a[i].isNotEmpty && b[i].isNotEmpty) {
+        if (a[i].first.time != b[i].first.time ||
+            a[i].last.time != b[i].last.time) {
+          return false;
+        }
+      }
+    }
+    return true;
+  }
+
+  Widget _buildOptimizedTable() {
+    if (_cachedTableRows == null) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    final columns = ['Timestamp', ...widget.keys];
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // Use ListView.builder for virtualization - only renders visible rows
+        return ListView.builder(
+          itemCount: _cachedTableRows!.length + 1, // +1 for header
+          itemExtent: 32.0, // Fixed row height for better performance
+          itemBuilder: (context, index) {
+            if (index == 0) {
+              return _buildTableHeader(columns);
+            }
+
+            final rowIndex = index - 1;
+            final row = _cachedTableRows![rowIndex];
+
+            return _buildTableRow(row, columns, rowIndex);
+          },
+        );
+      },
+    );
+  }
+
+  Widget _buildTableHeader(List<String> columns) {
+    return Container(
+      height: 32,
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+        border: Border(
+          bottom: BorderSide(color: Theme.of(context).dividerColor),
+        ),
+      ),
+      child: Row(
+        children: columns
+            .map((c) => Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 8.0, vertical: 4.0),
+                    child: c == 'Timestamp'
+                        ? InkWell(
+                            onTap: () {
+                              setState(() {
+                                _sortOrder =
+                                    _sortOrder == _TableSortOrder.newestFirst
+                                        ? _TableSortOrder.oldestFirst
+                                        : _TableSortOrder.newestFirst;
+                                // Force reprocessing by clearing the data hash
+                                _lastDataHash = 0;
+                                if (_lastProcessedData != null) {
+                                  _processDataEfficiently(_lastProcessedData!);
+                                }
+                              });
+                            },
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(
+                                  c,
+                                  style: const TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 14),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                const SizedBox(width: 4),
+                                Icon(
+                                  _sortOrder == _TableSortOrder.newestFirst
+                                      ? Icons.arrow_downward
+                                      : Icons.arrow_upward,
+                                  size: 16,
+                                ),
+                              ],
+                            ),
+                          )
+                        : Text(
+                            c,
+                            style: const TextStyle(
+                                fontWeight: FontWeight.bold, fontSize: 14),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                  ),
+                ))
+            .toList(),
+      ),
+    );
+  }
+
+  Widget _buildTableRow(
+      Map<String, dynamic> row, List<String> columns, int index) {
+    return Container(
+      height: 32,
+      decoration: BoxDecoration(
+        color: index.isEven
+            ? Theme.of(context).colorScheme.surface
+            : Theme.of(context).colorScheme.surfaceContainerLowest,
+        border: Border(
+          bottom: BorderSide(
+            color: Theme.of(context).dividerColor.withOpacity(0.2),
+            width: 0.5,
+          ),
+        ),
+      ),
+      child: Row(
+        children: columns
+            .map((c) => Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 8.0, vertical: 2.0),
+                    child: Text(
+                      c == 'Timestamp'
+                          ? _formatTimestamp(row[c] as DateTime)
+                          : _fmt(row[c]),
+                      style: const TextStyle(fontSize: 13),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ))
+            .toList(),
+      ),
+    );
+  }
+
+  String _formatTimestamp(DateTime ts) {
+    // Cache formatted strings to avoid repeated formatting
+    return '${ts.hour.toString().padLeft(2, '0')}:'
+        '${ts.minute.toString().padLeft(2, '0')}:'
+        '${ts.second.toString().padLeft(2, '0')}';
   }
 
   static String _fmt(dynamic v) {
@@ -746,84 +921,6 @@ class _HistoryTablePane extends ConsumerWidget {
     if (v is bool) return v ? 'true' : 'false';
     return v.toString();
   }
-}
-
-class GraphKeyConfig {
-  final String key;
-  final String alias;
-  final bool useSecondYAxis;
-  final int graphIndex; // 0-4 for up to 5 graphs
-
-  GraphKeyConfig({
-    required this.key,
-    required this.alias,
-    this.useSecondYAxis = false,
-    this.graphIndex = 0,
-  });
-
-  GraphKeyConfig copyWith({
-    String? key,
-    String? alias,
-    bool? useSecondYAxis,
-    int? graphIndex,
-  }) {
-    return GraphKeyConfig(
-      key: key ?? this.key,
-      alias: alias ?? this.alias,
-      useSecondYAxis: useSecondYAxis ?? this.useSecondYAxis,
-      graphIndex: graphIndex ?? this.graphIndex,
-    );
-  }
-
-  @override
-  bool operator ==(Object other) {
-    if (identical(this, other)) return true;
-    return other is GraphKeyConfig &&
-        other.key == key &&
-        other.alias == alias &&
-        other.useSecondYAxis == useSecondYAxis &&
-        other.graphIndex == graphIndex;
-  }
-
-  @override
-  int get hashCode => Object.hash(key, alias, useSecondYAxis, graphIndex);
-}
-
-// Rename to avoid conflict with imported GraphConfig
-class GraphDisplayConfig {
-  final int index;
-  final String yAxisUnit;
-  final String yAxis2Unit;
-
-  GraphDisplayConfig({
-    required this.index,
-    this.yAxisUnit = '',
-    this.yAxis2Unit = '',
-  });
-
-  GraphDisplayConfig copyWith({
-    int? index,
-    String? yAxisUnit,
-    String? yAxis2Unit,
-  }) {
-    return GraphDisplayConfig(
-      index: index ?? this.index,
-      yAxisUnit: yAxisUnit ?? this.yAxisUnit,
-      yAxis2Unit: yAxis2Unit ?? this.yAxis2Unit,
-    );
-  }
-
-  @override
-  bool operator ==(Object other) {
-    if (identical(this, other)) return true;
-    return other is GraphDisplayConfig &&
-        other.index == index &&
-        other.yAxisUnit == yAxisUnit &&
-        other.yAxis2Unit == yAxis2Unit;
-  }
-
-  @override
-  int get hashCode => Object.hash(index, yAxisUnit, yAxis2Unit);
 }
 
 // -----------------------------------------------------------------------------
@@ -3177,4 +3274,83 @@ class _HoldableIconButton extends StatelessWidget {
       child: btn,
     );
   }
+}
+
+// Add these classes after the imports and before the first provider (around line 24)
+
+class GraphKeyConfig {
+  final String key;
+  final String alias;
+  final bool useSecondYAxis;
+  final int graphIndex; // 0-4 for up to 5 graphs
+
+  GraphKeyConfig({
+    required this.key,
+    required this.alias,
+    this.useSecondYAxis = false,
+    this.graphIndex = 0,
+  });
+
+  GraphKeyConfig copyWith({
+    String? key,
+    String? alias,
+    bool? useSecondYAxis,
+    int? graphIndex,
+  }) {
+    return GraphKeyConfig(
+      key: key ?? this.key,
+      alias: alias ?? this.alias,
+      useSecondYAxis: useSecondYAxis ?? this.useSecondYAxis,
+      graphIndex: graphIndex ?? this.graphIndex,
+    );
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    return other is GraphKeyConfig &&
+        other.key == key &&
+        other.alias == alias &&
+        other.useSecondYAxis == useSecondYAxis &&
+        other.graphIndex == graphIndex;
+  }
+
+  @override
+  int get hashCode => Object.hash(key, alias, useSecondYAxis, graphIndex);
+}
+
+class GraphDisplayConfig {
+  final int index;
+  final String yAxisUnit;
+  final String yAxis2Unit;
+
+  GraphDisplayConfig({
+    required this.index,
+    this.yAxisUnit = '',
+    this.yAxis2Unit = '',
+  });
+
+  GraphDisplayConfig copyWith({
+    int? index,
+    String? yAxisUnit,
+    String? yAxis2Unit,
+  }) {
+    return GraphDisplayConfig(
+      index: index ?? this.index,
+      yAxisUnit: yAxisUnit ?? this.yAxisUnit,
+      yAxis2Unit: yAxis2Unit ?? this.yAxis2Unit,
+    );
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    return other is GraphDisplayConfig &&
+        other.index == index &&
+        other.yAxisUnit == yAxisUnit &&
+        other.yAxis2Unit == yAxis2Unit;
+  }
+
+  @override
+  int get hashCode => Object.hash(index, yAxisUnit, yAxis2Unit);
 }
