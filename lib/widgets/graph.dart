@@ -625,10 +625,83 @@ class _GraphState extends State<Graph> {
       }
     }
 
-    return charts.DateTimeAxisSpec(
-      viewport: extents,
-      tickProviderSpec: const charts.AutoDateTimeTickProviderSpec(),
-      tickFormatterSpec: charts.AutoDateTimeTickFormatterSpec(
+    // Determine appropriate tick provider based on time span
+    charts.DateTimeTickProviderSpec tickProviderSpec;
+    charts.DateTimeTickFormatterSpec tickFormatterSpec;
+
+    if (extents != null) {
+      final duration = extents.end.difference(extents.start);
+
+      if (duration.inMinutes <= 1) {
+        // For very short spans (≤1 minute), use 10-second intervals
+        tickProviderSpec = charts.StaticDateTimeTickProviderSpec(
+          _generateTimeTicks(
+              extents.start, extents.end, const Duration(seconds: 10)),
+        );
+        tickFormatterSpec = const charts.AutoDateTimeTickFormatterSpec(
+          minute: charts.TimeFormatterSpec(
+            format: 'HH:mm:ss',
+            transitionFormat: 'HH:mm:ss',
+          ),
+        );
+      } else if (duration.inMinutes <= 5) {
+        // For short spans (≤5 minutes), use 30-second intervals
+        tickProviderSpec = charts.StaticDateTimeTickProviderSpec(
+          _generateTimeTicks(
+              extents.start, extents.end, const Duration(seconds: 30)),
+        );
+        tickFormatterSpec = const charts.AutoDateTimeTickFormatterSpec(
+          minute: charts.TimeFormatterSpec(
+            format: 'HH:mm:ss',
+            transitionFormat: 'HH:mm:ss',
+          ),
+        );
+      } else if (duration.inMinutes <= 30) {
+        // For medium spans (≤30 minutes), use 1-minute intervals
+        tickProviderSpec = charts.StaticDateTimeTickProviderSpec(
+          _generateTimeTicks(
+              extents.start, extents.end, const Duration(minutes: 1)),
+        );
+        tickFormatterSpec = charts.AutoDateTimeTickFormatterSpec(
+          minute: charts.TimeFormatterSpec(
+            format: widget.showDate ? 'MM/dd HH:mm' : 'HH:mm',
+            transitionFormat: widget.showDate ? 'MM/dd HH:mm' : 'HH:mm',
+          ),
+        );
+      } else if (duration.inHours <= 2) {
+        // For spans ≤2 hours, use 5-minute intervals
+        tickProviderSpec = charts.StaticDateTimeTickProviderSpec(
+          _generateTimeTicks(
+              extents.start, extents.end, const Duration(minutes: 5)),
+        );
+        tickFormatterSpec = charts.AutoDateTimeTickFormatterSpec(
+          minute: charts.TimeFormatterSpec(
+            format: widget.showDate ? 'MM/dd HH:mm' : 'HH:mm',
+            transitionFormat: widget.showDate ? 'MM/dd HH:mm' : 'HH:mm',
+          ),
+        );
+      } else {
+        // For longer spans, use auto tick provider
+        tickProviderSpec = const charts.AutoDateTimeTickProviderSpec();
+        tickFormatterSpec = charts.AutoDateTimeTickFormatterSpec(
+          minute: charts.TimeFormatterSpec(
+            format: widget.showDate ? 'MM/dd HH:mm' : 'HH:mm',
+            transitionFormat: widget.showDate ? 'MM/dd HH:mm' : 'HH:mm',
+          ),
+          hour: charts.TimeFormatterSpec(
+            format: widget.showDate ? 'MM/dd HH:mm' : 'HH:mm',
+            transitionFormat: widget.showDate ? 'MM/dd HH:mm' : 'HH:mm',
+          ),
+          day: charts.TimeFormatterSpec(
+            format: 'MM/dd',
+            transitionFormat: 'yyyy-MM-dd',
+          ),
+        );
+      }
+    } else {
+      // Fallback to auto tick provider
+      tickProviderSpec = const charts.AutoDateTimeTickProviderSpec();
+      tickFormatterSpec = charts.AutoDateTimeTickFormatterSpec(
         minute: charts.TimeFormatterSpec(
           format: widget.showDate ? 'MM/dd HH:mm' : 'HH:mm',
           transitionFormat: widget.showDate ? 'MM/dd HH:mm' : 'HH:mm',
@@ -641,9 +714,48 @@ class _GraphState extends State<Graph> {
           format: 'MM/dd',
           transitionFormat: 'yyyy-MM-dd',
         ),
-      ),
+      );
+    }
+
+    return charts.DateTimeAxisSpec(
+      viewport: extents,
+      tickProviderSpec: tickProviderSpec,
+      tickFormatterSpec: tickFormatterSpec,
       showAxisLine: true,
     );
+  }
+
+  // Helper method to generate time ticks
+  List<charts.TickSpec<DateTime>> _generateTimeTicks(
+      DateTime start, DateTime end, Duration interval) {
+    final ticks = <charts.TickSpec<DateTime>>[];
+
+    // Round start time down to the nearest interval
+    DateTime current = _roundDownToInterval(start, interval);
+
+    while (current.isBefore(end) || current.isAtSameMomentAs(end)) {
+      ticks.add(charts.TickSpec(current));
+      current = current.add(interval);
+    }
+
+    return ticks;
+  }
+
+  // Helper method to round down to the nearest interval
+  DateTime _roundDownToInterval(DateTime dateTime, Duration interval) {
+    if (interval.inSeconds >= 60) {
+      // For minute intervals and above
+      final minutes =
+          (dateTime.minute ~/ (interval.inMinutes)) * interval.inMinutes;
+      return DateTime(dateTime.year, dateTime.month, dateTime.day,
+          dateTime.hour, minutes, 0, 0);
+    } else {
+      // For second intervals
+      final seconds =
+          (dateTime.second ~/ interval.inSeconds) * interval.inSeconds;
+      return DateTime(dateTime.year, dateTime.month, dateTime.day,
+          dateTime.hour, dateTime.minute, seconds, 0);
+    }
   }
 
   // Generate ticks for static axis configuration

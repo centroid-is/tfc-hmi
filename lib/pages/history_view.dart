@@ -320,6 +320,7 @@ class _HistoryGraphPane extends ConsumerStatefulWidget {
   final List<String> keys;
   final bool realtime;
   final DateTimeRange? range;
+  final Duration realtimeDuration;
   final Map<String, GraphKeyConfig> graphConfigs;
   final Map<int, GraphDisplayConfig> graphDisplayConfigs;
 
@@ -327,6 +328,7 @@ class _HistoryGraphPane extends ConsumerStatefulWidget {
     required this.keys,
     required this.realtime,
     required this.range,
+    required this.realtimeDuration,
     required this.graphConfigs,
     required this.graphDisplayConfigs,
   });
@@ -357,7 +359,7 @@ class _HistoryGraphPaneState extends ConsumerState<_HistoryGraphPane> {
         DateTimeRange? fetchRange; // Extended range for fetching
 
         if (widget.realtime) {
-          since = const Duration(minutes: 10);
+          since = widget.realtimeDuration;
         } else {
           if (widget.range == null) {
             return const Center(child: Text('Pick a start & end date'));
@@ -450,7 +452,7 @@ class _HistoryGraphPaneState extends ConsumerState<_HistoryGraphPane> {
 
             // Use original range for xSpan (what's visible initially)
             final Duration xSpan = widget.realtime
-                ? const Duration(minutes: 10)
+                ? widget.realtimeDuration
                 : (widget.range != null
                     ? widget.range!.end.difference(widget.range!.start)
                     : const Duration(minutes: 10));
@@ -583,6 +585,7 @@ class _HistoryTablePane extends ConsumerStatefulWidget {
   final List<String> keys;
   final bool realtime;
   final DateTimeRange? range;
+  final Duration realtimeDuration;
   final int rows;
   final Map<String, GraphKeyConfig> graphConfigs;
 
@@ -590,6 +593,7 @@ class _HistoryTablePane extends ConsumerStatefulWidget {
     required this.keys,
     required this.realtime,
     required this.range,
+    required this.realtimeDuration,
     required this.graphConfigs,
     this.rows = 50,
     super.key,
@@ -635,7 +639,7 @@ class _HistoryTablePaneState extends ConsumerState<_HistoryTablePane> {
         DateTimeRange? fetchRange; // Extended range for fetching
 
         if (widget.realtime) {
-          since = const Duration(minutes: 10);
+          since = widget.realtimeDuration;
         } else {
           if (widget.range == null) {
             return const Center(child: Text('Pick a start & end date'));
@@ -1051,6 +1055,12 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage>
   // Saved periods UI state
   SavedPeriod? _activePeriod;
 
+  // Real-time duration controls
+  int _realtimeMinutes = 10;
+  int _realtimeSeconds = 0;
+  final TextEditingController _minutesController = TextEditingController();
+  final TextEditingController _secondsController = TextEditingController();
+
   // Rename to avoid conflict with the widget's GraphConfig
   final Map<String, GraphKeyConfig> _keyConfigs = <String, GraphKeyConfig>{};
   final Map<int, GraphDisplayConfig> _graphConfigs =
@@ -1063,6 +1073,16 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage>
     super.initState();
     _updateGraphConfigs();
     _updateKeyConfigs();
+    _minutesController.text = '10'; // Preload with 10 minutes
+    _secondsController.text = '00';
+  }
+
+  @override
+  void dispose() {
+    _minutesController.dispose();
+    _secondsController.dispose();
+    _tab.dispose();
+    super.dispose();
   }
 
   void _updateKeyConfigs() {
@@ -1090,12 +1110,6 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage>
         () => GraphDisplayConfig(index: i, yAxisUnit: '', yAxis2Unit: ''),
       );
     }
-  }
-
-  @override
-  void dispose() {
-    _tab.dispose();
-    super.dispose();
   }
 
   @override
@@ -1169,6 +1183,8 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage>
                           keys: _selected.toList(),
                           realtime: _realtime,
                           range: _range,
+                          realtimeDuration:
+                              _realtimeDuration, // Pass the configurable duration
                           graphConfigs: _keyConfigs,
                           graphDisplayConfigs: _graphConfigs,
                         ),
@@ -1176,6 +1192,8 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage>
                           keys: _selected.toList(),
                           realtime: _realtime,
                           range: _range,
+                          realtimeDuration:
+                              _realtimeDuration, // Pass the configurable duration
                           graphConfigs: _keyConfigs,
                           rows: _realtime
                               ? 100
@@ -1686,9 +1704,11 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage>
 
               const SizedBox(width: 12),
 
-              // Realtime toggle
+              // Realtime toggle with duration controls
               Row(
                 mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment:
+                    CrossAxisAlignment.center, // Explicit alignment
                 children: [
                   Switch(
                     value: _realtime,
@@ -1701,6 +1721,58 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage>
                     }),
                   ),
                   const Text('Realtime'),
+                  // Duration controls (only show when in real-time mode)
+                  if (_realtime) ...[
+                    const SizedBox(width: 16),
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment:
+                          CrossAxisAlignment.center, // Explicit alignment
+                      children: [
+                        const Text('Min:'),
+                        const SizedBox(width: 4),
+                        Transform.scale(
+                          scale: 0.8,
+                          child: SizedBox(
+                            width: 120,
+                            child: _StepperField(
+                              height: 45,
+                              label: '',
+                              controller: _minutesController,
+                              min: 0,
+                              max: 59,
+                              onChanged: (value) {
+                                setState(() {
+                                  _realtimeMinutes = value;
+                                });
+                              },
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        const Text('Sec:'),
+                        const SizedBox(width: 4),
+                        Transform.scale(
+                          scale: 0.8,
+                          child: SizedBox(
+                            width: 120,
+                            child: _StepperField(
+                              height: 45,
+                              label: '',
+                              controller: _secondsController,
+                              min: 0,
+                              max: 59,
+                              onChanged: (value) {
+                                setState(() {
+                                  _realtimeSeconds = value;
+                                });
+                              },
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
                 ],
               ),
 
@@ -2124,6 +2196,16 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage>
 
   String _rangeLabel(DateTimeRange r) =>
       '${_fmtDT(r.start)} → ${_fmtDT(r.end)}';
+
+  // Get the current real-time duration
+  Duration get _realtimeDuration {
+    final value = Duration(
+      minutes: _realtimeMinutes,
+      seconds: _realtimeSeconds,
+    );
+    if (value.inSeconds <= 0) return const Duration(minutes: 1);
+    return value;
+  }
 }
 
 // -----------------------------------------------------------------------------
@@ -3164,6 +3246,7 @@ class _StepperField extends StatefulWidget {
   final int min;
   final int max;
   final ValueChanged<int> onChanged;
+  final int height;
 
   const _StepperField({
     required this.label,
@@ -3171,6 +3254,7 @@ class _StepperField extends StatefulWidget {
     required this.min,
     required this.max,
     required this.onChanged,
+    this.height = 85,
   });
 
   @override
@@ -3187,7 +3271,6 @@ class _StepperFieldState extends State<_StepperField> {
     if (mounted) {
       widget.controller.text = clamped.toString().padLeft(2, '0');
       widget.onChanged(clamped);
-      // HapticFeedback.selectionClick(); // optional haptic
     }
   }
 
@@ -3212,15 +3295,16 @@ class _StepperFieldState extends State<_StepperField> {
   @override
   Widget build(BuildContext context) {
     return SizedBox(
-      height: 85,
+      height: widget.height.toDouble(),
       child: Column(
         children: [
-          Text(widget.label,
-              style: Theme.of(context)
-                  .textTheme
-                  .labelSmall
-                  ?.copyWith(fontWeight: FontWeight.bold)),
-          const SizedBox(height: 6),
+          if (widget.label.isNotEmpty)
+            Text(widget.label,
+                style: Theme.of(context)
+                    .textTheme
+                    .labelSmall
+                    ?.copyWith(fontWeight: FontWeight.bold)),
+          if (widget.label.isNotEmpty) const SizedBox(height: 6),
           Container(
             decoration: BoxDecoration(
               color: Theme.of(context).colorScheme.surfaceContainerHighest,
@@ -3255,9 +3339,11 @@ class _StepperFieldState extends State<_StepperField> {
                           EdgeInsets.symmetric(vertical: 8, horizontal: 4),
                     ),
                     onChanged: (txt) {
+                      if (txt.isEmpty) {
+                        return;
+                      }
                       final v = int.tryParse(txt) ?? widget.min;
                       if (txt.length <= 2) {
-                        // don't clamp while typing unless out of range wildly
                         final clamped = v.clamp(widget.min, widget.max);
                         widget.onChanged(clamped);
                       }
