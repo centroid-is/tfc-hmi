@@ -85,7 +85,7 @@ final savedViewsProvider = FutureProvider<List<SavedHistoryView>>((ref) async {
 });
 
 // -----------------------------------------------------------------------------
-// NEW: Saved Periods per View
+// Saved Periods per View
 // -----------------------------------------------------------------------------
 class SavedPeriod {
   final int id;
@@ -100,6 +100,15 @@ class SavedPeriod {
     required this.start,
     required this.end,
   });
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    return other is SavedPeriod && other.id == id;
+  }
+
+  @override
+  int get hashCode => id.hashCode;
 }
 
 final savedPeriodsProvider =
@@ -311,13 +320,15 @@ class _HistoryGraphPane extends ConsumerStatefulWidget {
   final List<String> keys;
   final bool realtime;
   final DateTimeRange? range;
-  final Map<String, GraphKeyConfig> graphConfigs; // Add this parameter
+  final Map<String, GraphKeyConfig> graphConfigs;
+  final Map<int, GraphDisplayConfig> graphDisplayConfigs;
 
   const _HistoryGraphPane({
     required this.keys,
     required this.realtime,
     required this.range,
-    required this.graphConfigs, // Add this parameter
+    required this.graphConfigs,
+    required this.graphDisplayConfigs,
   });
 
   @override
@@ -458,12 +469,18 @@ class _HistoryGraphPaneState extends ConsumerState<_HistoryGraphPane> {
                     config: GraphConfig(
                       type: GraphType.timeseries,
                       xAxis: GraphAxisConfig(unit: ''),
-                      yAxis: GraphAxisConfig(unit: ''),
-                      yAxis2: null,
+                      yAxis: GraphAxisConfig(
+                        unit: widget.graphDisplayConfigs[0]?.yAxisUnit ?? '',
+                      ),
+                      yAxis2: widget.graphDisplayConfigs[0]?.yAxis2Unit
+                                  ?.isNotEmpty ==
+                              true
+                          ? GraphAxisConfig(
+                              unit: widget.graphDisplayConfigs[0]!.yAxis2Unit!)
+                          : null,
                       xSpan: xSpan,
                     ),
-                    data: graphDataByIndex[0] ??
-                        [], // Only show one graph for now
+                    data: graphDataByIndex[0] ?? [],
                     showDate: _paused,
                   ),
                 ),
@@ -1008,6 +1025,7 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage>
                           realtime: _realtime,
                           range: _range,
                           graphConfigs: _keyConfigs,
+                          graphDisplayConfigs: _graphConfigs,
                         ),
                         _HistoryTablePane(
                           keys: _selected.toList(),
@@ -3091,7 +3109,7 @@ class _StepperFieldState extends State<_StepperField> {
                     onChanged: (txt) {
                       final v = int.tryParse(txt) ?? widget.min;
                       if (txt.length <= 2) {
-                        // don’t clamp while typing unless out of range wildly
+                        // don't clamp while typing unless out of range wildly
                         final clamped = v.clamp(widget.min, widget.max);
                         widget.onChanged(clamped);
                       }
