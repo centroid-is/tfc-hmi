@@ -573,11 +573,13 @@ class _HistoryTablePane extends ConsumerStatefulWidget {
   final bool realtime;
   final DateTimeRange? range;
   final int rows;
+  final Map<String, GraphKeyConfig> graphConfigs;
 
   const _HistoryTablePane({
     required this.keys,
     required this.realtime,
     required this.range,
+    required this.graphConfigs,
     this.rows = 50,
     super.key,
   });
@@ -784,7 +786,17 @@ class _HistoryTablePaneState extends ConsumerState<_HistoryTablePane> {
       return const Center(child: CircularProgressIndicator());
     }
 
-    final columns = ['Timestamp', ...widget.keys];
+    // Create columns with aliases
+    final columns = ['Timestamp'];
+    final keyColumns = <String>[];
+
+    for (final key in widget.keys) {
+      final config = widget.graphConfigs[key];
+      final displayName = config?.alias ?? key;
+      keyColumns.add(displayName);
+    }
+
+    columns.addAll(keyColumns);
 
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -800,7 +812,7 @@ class _HistoryTablePaneState extends ConsumerState<_HistoryTablePane> {
             final rowIndex = index - 1;
             final row = _cachedTableRows![rowIndex];
 
-            return _buildTableRow(row, columns, rowIndex);
+            return _buildTableRow(row, columns, keyColumns, rowIndex);
           },
         );
       },
@@ -870,8 +882,8 @@ class _HistoryTablePaneState extends ConsumerState<_HistoryTablePane> {
     );
   }
 
-  Widget _buildTableRow(
-      Map<String, dynamic> row, List<String> columns, int index) {
+  Widget _buildTableRow(Map<String, dynamic> row, List<String> columns,
+      List<String> keyColumns, int index) {
     return Container(
       height: 32,
       decoration: BoxDecoration(
@@ -894,7 +906,8 @@ class _HistoryTablePaneState extends ConsumerState<_HistoryTablePane> {
                     child: Text(
                       c == 'Timestamp'
                           ? _formatTimestamp(row[c] as DateTime)
-                          : _fmt(row[c]),
+                          : _fmt(row[widget.keys[columns.indexOf(c) -
+                              1]]), // Use original key for data lookup
                       style: const TextStyle(fontSize: 13),
                       overflow: TextOverflow.ellipsis,
                     ),
@@ -1136,6 +1149,7 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage>
                           keys: _selected.toList(),
                           realtime: _realtime,
                           range: _range,
+                          graphConfigs: _keyConfigs,
                           rows: _realtime
                               ? 100
                               : -1, // 100 for real-time, unlimited for historical
