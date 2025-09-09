@@ -810,7 +810,7 @@ class IconDataConverter implements JsonConverter<IconData, String> {
         return FontAwesomeIcons.toolbox;
       case 'industry':
         return FontAwesomeIcons.industry;
-      case 'warehouse':
+      case 'warehouse_fa':
         return FontAwesomeIcons.warehouse;
       case 'truck':
         return FontAwesomeIcons.truck;
@@ -1255,7 +1255,7 @@ class IconDataConverter implements JsonConverter<IconData, String> {
     if (iconData == FontAwesomeIcons.screwdriver) return 'screwdriver';
     if (iconData == FontAwesomeIcons.toolbox) return 'toolbox';
     if (iconData == FontAwesomeIcons.industry) return 'industry';
-    if (iconData == FontAwesomeIcons.warehouse) return 'warehouse';
+    if (iconData == FontAwesomeIcons.warehouse) return 'warehouse_fa';
     if (iconData == FontAwesomeIcons.truck) return 'truck';
     if (iconData == FontAwesomeIcons.truckFast) return 'shipping_fast';
     if (iconData == FontAwesomeIcons.box) return 'box';
