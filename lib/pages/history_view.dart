@@ -637,7 +637,13 @@ class _HistoryTablePane extends ConsumerWidget {
             }
 
             final ordered = allTs.toList()..sort((a, b) => b.compareTo(a));
-            final kept = ordered.take(rows).toList().reversed.toList();
+            final kept = rows == -1
+                ? ordered.reversed.toList() // No limit for historical data
+                : ordered
+                    .take(rows)
+                    .toList()
+                    .reversed
+                    .toList(); // Apply limit for real-time
 
             const epsilon = Duration(seconds: 5);
             final tableRows = <Map<String, dynamic>>[];
@@ -708,12 +714,10 @@ class _HistoryTablePane extends ConsumerWidget {
                 );
 
                 if (hasFiniteH) {
-                  return FittedBox(
-                    fit: BoxFit.contain,
-                    alignment: Alignment.topLeft,
-                    child: SizedBox(
-                      width: constraints.maxWidth,
-                      height: constraints.maxHeight,
+                  return SingleChildScrollView(
+                    scrollDirection: Axis.vertical,
+                    child: SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
                       child: table,
                     ),
                   );
@@ -1035,7 +1039,9 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage>
                           keys: _selected.toList(),
                           realtime: _realtime,
                           range: _range,
-                          rows: 80,
+                          rows: _realtime
+                              ? 100
+                              : -1, // 100 for real-time, unlimited for historical
                         ),
                       ],
                     ),
