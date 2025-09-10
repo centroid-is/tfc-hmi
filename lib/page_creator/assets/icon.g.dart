@@ -6,6 +6,38 @@ part of 'icon.dart';
 // JsonSerializableGenerator
 // **************************************************************************
 
+ConditionalIconState _$ConditionalIconStateFromJson(
+        Map<String, dynamic> json) =>
+    ConditionalIconState(
+      expression:
+          ExpressionConfig.fromJson(json['expression'] as Map<String, dynamic>),
+      iconData: _$JsonConverterFromJson<String, IconData>(
+          json['iconData'], const IconDataConverter().fromJson),
+      color: const OptionalColorConverter()
+          .fromJson(json['color'] as Map<String, dynamic>?),
+    );
+
+Map<String, dynamic> _$ConditionalIconStateToJson(
+        ConditionalIconState instance) =>
+    <String, dynamic>{
+      'expression': instance.expression.toJson(),
+      'iconData': _$JsonConverterToJson<String, IconData>(
+          instance.iconData, const IconDataConverter().toJson),
+      'color': const OptionalColorConverter().toJson(instance.color),
+    };
+
+Value? _$JsonConverterFromJson<Json, Value>(
+  Object? json,
+  Value? Function(Json json) fromJson,
+) =>
+    json == null ? null : fromJson(json as Json);
+
+Json? _$JsonConverterToJson<Json, Value>(
+  Value? value,
+  Json? Function(Value value) toJson,
+) =>
+    value == null ? null : toJson(value);
+
 IconConfig _$IconConfigFromJson(Map<String, dynamic> json) => IconConfig(
       iconData: const IconDataConverter().fromJson(json['iconData'] as String),
     )
@@ -16,7 +48,10 @@ IconConfig _$IconConfigFromJson(Map<String, dynamic> json) => IconConfig(
       ..text = json['text'] as String?
       ..textPos = $enumDecodeNullable(_$TextPosEnumMap, json['textPos'])
       ..color = const OptionalColorConverter()
-          .fromJson(json['color'] as Map<String, dynamic>?);
+          .fromJson(json['color'] as Map<String, dynamic>?)
+      ..conditionalStates = (json['conditional_states'] as List<dynamic>?)
+          ?.map((e) => ConditionalIconState.fromJson(e as Map<String, dynamic>))
+          .toList();
 
 Map<String, dynamic> _$IconConfigToJson(IconConfig instance) =>
     <String, dynamic>{
@@ -27,6 +62,8 @@ Map<String, dynamic> _$IconConfigToJson(IconConfig instance) =>
       'textPos': _$TextPosEnumMap[instance.textPos],
       'iconData': const IconDataConverter().toJson(instance.iconData),
       'color': const OptionalColorConverter().toJson(instance.color),
+      'conditional_states':
+          instance.conditionalStates?.map((e) => e.toJson()).toList(),
     };
 
 const _$TextPosEnumMap = {

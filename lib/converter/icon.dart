@@ -2,10 +2,18 @@ import 'package:flutter/material.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 
-class IconDataConverter implements JsonConverter<IconData, String> {
-  static const IconData baadericon =
-      IconData(0xe800, fontFamily: "Baader", fontPackage: "tfc");
+const IconData baadericon =
+    IconData(0xe800, fontFamily: "TfcIcons", fontPackage: "tfc");
+const IconData warehouse_open =
+    IconData(0xe801, fontFamily: "TfcIcons", fontPackage: "tfc");
+const IconData warehouse_open1 =
+    IconData(0xe803, fontFamily: "TfcIcons", fontPackage: "tfc");
+const IconData warehouse_open2 =
+    IconData(0xe804, fontFamily: "TfcIcons", fontPackage: "tfc");
+const IconData warehouse_closed =
+    IconData(0xe805, fontFamily: "TfcIcons", fontPackage: "tfc");
 
+class IconDataConverter implements JsonConverter<IconData, String> {
   const IconDataConverter();
 
   @override
@@ -812,6 +820,14 @@ class IconDataConverter implements JsonConverter<IconData, String> {
         return FontAwesomeIcons.industry;
       case 'warehouse_fa':
         return FontAwesomeIcons.warehouse;
+      case 'warehouse_open':
+        return warehouse_open;
+      case 'warehouse_open1':
+        return warehouse_open1;
+      case 'warehouse_open2':
+        return warehouse_open2;
+      case 'warehouse_closed':
+        return warehouse_closed;
       case 'truck':
         return FontAwesomeIcons.truck;
       case 'shipping_fast':
@@ -915,6 +931,10 @@ class IconDataConverter implements JsonConverter<IconData, String> {
       return 'precision_manufacturing';
     if (iconData == Icons.factory) return 'factory';
     if (iconData == Icons.warehouse) return 'warehouse';
+    if (iconData == warehouse_open) return 'warehouse_open';
+    if (iconData == warehouse_open1) return 'warehouse_open1';
+    if (iconData == warehouse_open2) return 'warehouse_open2';
+    if (iconData == warehouse_closed) return 'warehouse_closed';
     if (iconData == Icons.inventory) return 'inventory';
     if (iconData == Icons.inventory_2) return 'inventory_2';
     if (iconData == Icons.local_shipping) return 'local_shipping';
@@ -1256,6 +1276,10 @@ class IconDataConverter implements JsonConverter<IconData, String> {
     if (iconData == FontAwesomeIcons.toolbox) return 'toolbox';
     if (iconData == FontAwesomeIcons.industry) return 'industry';
     if (iconData == FontAwesomeIcons.warehouse) return 'warehouse_fa';
+    if (iconData == warehouse_open) return 'warehouse_open';
+    if (iconData == warehouse_open1) return 'warehouse_open1';
+    if (iconData == warehouse_open2) return 'warehouse_open2';
+    if (iconData == warehouse_closed) return 'warehouse_closed';
     if (iconData == FontAwesomeIcons.truck) return 'truck';
     if (iconData == FontAwesomeIcons.truckFast) return 'shipping_fast';
     if (iconData == FontAwesomeIcons.box) return 'box';
@@ -1280,9 +1304,6 @@ class IconDataConverter implements JsonConverter<IconData, String> {
     return 'help'; // fallback
   }
 }
-
-const IconData baadericon =
-    IconData(0xe800, fontFamily: "Baader", fontPackage: "tfc");
 
 const List<IconData> iconList = [
   // Navigation & Basic UI
@@ -1730,4 +1751,8 @@ const List<IconData> iconList = [
 
   // Custom Icon
   baadericon,
+  warehouse_open,
+  warehouse_open1,
+  warehouse_open2,
+  warehouse_closed,
 ];

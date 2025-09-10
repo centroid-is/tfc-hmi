@@ -60,6 +60,7 @@ class GraphConfig {
   final GraphAxisConfig yAxis;
   final GraphAxisConfig? yAxis2;
   final Duration? xSpan; // New field for timeseries span
+  @JsonKey(includeFromJson: false, includeToJson: false)
   final DateTimeRange? xRange; // New field for timeseries range
 
   static const List<Color> colors = [

@@ -46,6 +46,10 @@ class Evaluator {
 
   Evaluator({required this.stateMan, required this.expression});
 
+  Stream<bool> eval() {
+    return state().map((state) => state != null).distinct().startWith(false);
+  }
+
   Stream<String?> state() {
     streamController.onListen = () async {
       final variables = expression.value.extractVariables();
@@ -75,7 +79,7 @@ class Evaluator {
 
     streamController.onCancel = () async {
       await subscription?.cancel();
-      streamController.close();
+      // streamController.close();
     };
 
     return streamController.stream;
