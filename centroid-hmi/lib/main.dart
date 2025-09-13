@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:beamer/beamer.dart';
 import 'package:dbus/dbus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 
 import 'package:tfc/route_registry.dart';
 import 'package:tfc/models/menu_item.dart';
@@ -18,6 +19,7 @@ import 'package:tfc/pages/alarm_view.dart';
 import 'package:tfc/pages/ip_settings.dart';
 import 'package:tfc/pages/dbus_login.dart';
 import 'package:tfc/pages/history_view.dart';
+import 'package:tfc/pages/server_config.dart';
 import 'package:tfc/transition_delegate.dart';
 import 'package:tfc/providers/theme.dart';
 import 'package:tfc/core/preferences.dart';
@@ -75,13 +77,14 @@ void main() async {
       path: '/advanced',
       icon: Icons.settings,
       children: [
-        MenuItem(label: 'IP Settings', path: '/advanced/ip-settings', icon: Icons.network_cell_outlined),
+        MenuItem(label: 'IP Settings', path: '/advanced/ip-settings', icon: Icons.settings_ethernet),
         if (environmentVariableIsGod) MenuItem(label: 'Page Editor', path: '/advanced/page-editor', icon: Icons.edit),
         if (environmentVariableIsGod)
           MenuItem(label: 'Preferences', path: '/advanced/preferences', icon: Icons.settings),
         if (environmentVariableIsGod)
           MenuItem(label: 'Alarm Editor', path: '/advanced/alarm-editor', icon: Icons.alarm),
         MenuItem(label: 'History View', path: '/advanced/history-view', icon: Icons.history),
+        MenuItem(label: 'Server Config', path: '/advanced/server-config', icon: FontAwesomeIcons.server),
       ],
     ),
   );
@@ -146,6 +149,8 @@ RoutesLocationBuilder createLocationBuilder(List<MenuItem> extraMenuItems) {
         BeamPage(key: const ValueKey('/advanced/alarm-editor'), title: 'Alarm Editor', child: AlarmEditorPage()),
     '/advanced/history-view': (context, state, args) =>
         BeamPage(key: const ValueKey('/advanced/history-view'), title: 'History View', child: HistoryViewPage()),
+    '/advanced/server-config': (context, state, args) =>
+        BeamPage(key: const ValueKey('/advanced/server-config'), title: 'Server Config', child: ServerConfigPage()),
     '/alarm-view': (context, state, args) =>
         BeamPage(key: const ValueKey('/alarm-view'), title: 'Alarm View', child: AlarmViewPage()),
   };
