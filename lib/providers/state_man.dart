@@ -30,11 +30,12 @@ Future<KeyMappings> fetchKeyMappings(PreferencesApi prefs) async {
 Future<StateMan> stateMan(Ref ref) async {
   final SharedPreferencesAsync sharedPreferences = SharedPreferencesAsync();
 
-  var stateManJson = await sharedPreferences.getString('state_man_config');
+  var stateManJson =
+      await sharedPreferences.getString(StateManConfig.configKey);
   if (stateManJson == null) {
     final defaultConfig = StateManConfig(opcua: [OpcUAConfig()]);
     stateManJson = jsonEncode(defaultConfig.toJson());
-    await sharedPreferences.setString('state_man_config', stateManJson);
+    await sharedPreferences.setString(StateManConfig.configKey, stateManJson);
   }
   final config = StateManConfig.fromJson(jsonDecode(stateManJson));
 

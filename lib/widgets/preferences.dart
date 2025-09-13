@@ -433,7 +433,8 @@ class _PreferenceKeyTile extends StatefulWidget {
 
 class _PreferenceKeyTileState extends State<_PreferenceKeyTile> {
   late TextEditingController _controller;
-  final _expansionController = ExpansibleController();
+  final _expansionController =
+      ExpansionTileController(); // todo deprecated since 3.31
 
   @override
   void initState() {
