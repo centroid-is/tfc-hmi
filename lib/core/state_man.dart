@@ -69,6 +69,8 @@ class StateManConfig {
   factory StateManConfig.fromJson(Map<String, dynamic> json) =>
       _$StateManConfigFromJson(json);
   Map<String, dynamic> toJson() => _$StateManConfigToJson(this);
+
+  static const String configKey = 'state_man_config';
 }
 
 @JsonSerializable()

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:postgres/postgres.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:tfc/providers/database.dart';
 
 import '../providers/preferences.dart';
@@ -9,181 +10,50 @@ import '../core/preferences.dart';
 import '../core/database.dart';
 import 'dart:convert';
 
-class PreferencesWidget extends ConsumerWidget {
-  const PreferencesWidget({Key? key}) : super(key: key);
+class DatabaseConfigWidget extends ConsumerWidget {
+  const DatabaseConfigWidget({Key? key}) : super(key: key);
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    return FutureBuilder<Preferences>(
-      future: ref.watch(preferencesProvider.future),
+    return FutureBuilder<DatabaseConfig>(
+      future: DatabaseConfig.fromPreferences(),
       builder: (context, snapshot) {
         if (!snapshot.hasData) {
           return const Center(child: CircularProgressIndicator());
         }
-        final preferences = snapshot.data!;
-        final localPrefs =
-            SharedPreferencesWrapper(preferences.sharedPreferences);
-
-        return ListView(
-          children: [
-            FutureBuilder<DatabaseConfig>(
-                future: DatabaseConfig.fromPreferences(),
-                builder: (context, snapshot) {
-                  if (!snapshot.hasData) {
-                    return const Center(child: CircularProgressIndicator());
-                  }
-                  return ExpansionTile(
-                    title: const Text('(Local) Preferences Config'),
-                    children: [
-                      _ConfigEditor(
-                        config: snapshot.data!,
-                        onSave: (newConfig) async {
-                          await localPrefs.setString(
-                              DatabaseConfig.configLocation,
-                              jsonEncode(newConfig.toJson()));
-                          ref.invalidate(databaseProvider);
-                        },
-                      ),
-                    ],
-                  );
-                }),
-            ExpansionTile(
-              title: const Text('Preferences Keys'),
-              children: [
-                FutureBuilder<Map<String, Object?>>(
-                  future: preferences.getAll(),
-                  builder: (context, keysSnap) {
-                    if (!keysSnap.hasData) {
-                      return const Padding(
-                        padding: EdgeInsets.all(16.0),
-                        child: Center(child: CircularProgressIndicator()),
-                      );
-                    }
-                    final allPrefs = keysSnap.data!;
-                    if (allPrefs.isEmpty) {
-                      return const ListTile(
-                        title: Text('No preferences found.'),
-                      );
-                    }
-                    return Column(
-                      children: (() {
-                        final list = allPrefs.entries.toList();
-                        list.sort((a, b) => a.key.compareTo(b.key));
-                        return list
-                            .map((e) => FutureBuilder<bool>(
-                                future: preferences
-                                    .isKeyInDatabase(e.key)
-                                    .timeout(const Duration(seconds: 2)),
-                                builder: (context, snapshot) {
-                                  if (!snapshot.hasData) {
-                                    return const Padding(
-                                      padding: EdgeInsets.all(16.0),
-                                      child: Center(
-                                          child: CircularProgressIndicator()),
-                                    );
-                                  }
-                                  return ExpansionTile(
-                                    title: Row(
-                                      children: [
-                                        Expanded(
-                                            child: Text(
-                                                "(${snapshot.data! ? 'DB' : 'Local'}) ${e.key}")),
-                                        IconButton(
-                                          icon:
-                                              const Icon(Icons.delete_outline),
-                                          onPressed: () async {
-                                            final confirmed =
-                                                await showDialog<bool>(
-                                              context: context,
-                                              builder: (context) => AlertDialog(
-                                                title: const Text(
-                                                    'Delete Preference'),
-                                                content:
-                                                    Text('Delete "${e.key}"?'),
-                                                actions: [
-                                                  TextButton(
-                                                    onPressed: () =>
-                                                        Navigator.pop(
-                                                            context, false),
-                                                    child: const Text('Cancel'),
-                                                  ),
-                                                  TextButton(
-                                                    onPressed: () =>
-                                                        Navigator.pop(
-                                                            context, true),
-                                                    child: const Text('Delete'),
-                                                  ),
-                                                ],
-                                              ),
-                                            );
-                                            if (confirmed == true) {
-                                              await preferences.remove(e.key);
-                                              ref.invalidate(
-                                                  preferencesProvider);
-                                            }
-                                          },
-                                        ),
-                                      ],
-                                    ),
-                                    children: [
-                                      _ValueEditor(
-                                        keyName: e.key,
-                                        value: e.value,
-                                        onChanged: (newValue) async {
-                                          // Check if key is in database
-                                          final isInDb = snapshot.data!;
-
-                                          // Use appropriate preferences implementation
-                                          final prefs =
-                                              isInDb ? preferences : localPrefs;
-
-                                          if (newValue is bool) {
-                                            await prefs.setBool(
-                                                e.key, newValue);
-                                          } else if (newValue is int) {
-                                            await prefs.setInt(e.key, newValue);
-                                          } else if (newValue is double) {
-                                            await prefs.setDouble(
-                                                e.key, newValue);
-                                          } else if (newValue is List<String>) {
-                                            await prefs.setStringList(
-                                                e.key, newValue);
-                                          } else if (newValue is String) {
-                                            await prefs.setString(
-                                                e.key, newValue);
-                                          }
-                                          // Force refresh
-                                          (context as Element).markNeedsBuild();
-                                        },
-                                      ),
-                                    ],
-                                  );
-                                }))
-                            .toList();
-                      })(),
-                    );
-                  },
-                ),
-              ],
-            ),
-          ],
+        return _DatabaseConfigEditor(
+          config: snapshot.data!,
+          onSave: (newConfig) async {
+            final prefs = await ref.watch(preferencesProvider.future);
+            final localPrefs =
+                SharedPreferencesWrapper(prefs.sharedPreferences);
+            await localPrefs.setString(
+              DatabaseConfig.configLocation,
+              jsonEncode(newConfig.toJson()),
+            );
+            ref.invalidate(databaseProvider);
+          },
         );
       },
     );
   }
 }
 
-class _ConfigEditor extends ConsumerStatefulWidget {
+class _DatabaseConfigEditor extends ConsumerStatefulWidget {
   final DatabaseConfig config;
   final ValueChanged<DatabaseConfig> onSave;
 
-  const _ConfigEditor({required this.config, required this.onSave});
+  const _DatabaseConfigEditor({
+    required this.config,
+    required this.onSave,
+  });
 
   @override
-  ConsumerState<_ConfigEditor> createState() => _ConfigEditorState();
+  ConsumerState<_DatabaseConfigEditor> createState() =>
+      _DatabaseConfigEditorState();
 }
 
-class _ConfigEditorState extends ConsumerState<_ConfigEditor> {
+class _DatabaseConfigEditorState extends ConsumerState<_DatabaseConfigEditor> {
   late TextEditingController hostController;
   late TextEditingController portController;
   late TextEditingController dbController;
@@ -210,131 +80,360 @@ class _ConfigEditorState extends ConsumerState<_ConfigEditor> {
   @override
   Widget build(BuildContext context) {
     return FutureBuilder<Preferences>(
-        future: ref.watch(preferencesProvider.future),
-        builder: (context, snapshot) {
-          if (!snapshot.hasData) {
-            return const Padding(
-              padding: EdgeInsets.all(16.0),
-              child: Center(child: CircularProgressIndicator()),
-            );
-          }
-          if (snapshot.hasError) {
-            return Padding(
-              padding: const EdgeInsets.all(16.0),
-              child: Center(child: Text('Error: ${snapshot.error}')),
-            );
-          }
-          final prefs = snapshot.data!;
+      future: ref.watch(preferencesProvider.future),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData) {
+          return const Padding(
+            padding: EdgeInsets.all(16.0),
+            child: Center(child: CircularProgressIndicator()),
+          );
+        }
+        if (snapshot.hasError) {
           return Padding(
-            padding: const EdgeInsets.all(8.0),
-            child: Column(
-              children: [
-                FutureBuilder<bool>(
-                  future: prefs.database?.db.isOpen,
-                  builder: (context, snapshot) {
-                    return Text(
-                      'Connection Status: ${snapshot.data ?? false}',
-                      style: const TextStyle(fontSize: 12),
-                    );
-                  },
-                ),
-                TextField(
-                    controller: hostController,
-                    decoration: const InputDecoration(labelText: 'Host')),
-                TextField(
-                    controller: portController,
-                    decoration: const InputDecoration(labelText: 'Port'),
-                    keyboardType: TextInputType.number),
-                TextField(
-                    controller: dbController,
-                    decoration: const InputDecoration(labelText: 'Database')),
-                TextField(
-                    controller: userController,
-                    decoration: const InputDecoration(labelText: 'Username')),
-                TextField(
-                    controller: passController,
-                    decoration: const InputDecoration(labelText: 'Password')),
-                CheckboxListTile(
-                  title: const Text('Is Unix Socket'),
-                  value: isUnixSocket,
-                  onChanged: (v) => setState(() => isUnixSocket = v ?? false),
-                ),
-                Row(
+            padding: const EdgeInsets.all(16.0),
+            child: Center(child: Text('Error: ${snapshot.error}')),
+          );
+        }
+        final prefs = snapshot.data!;
+        return Card(
+          child: ExpansionTile(
+            leading: const FaIcon(FontAwesomeIcons.database, size: 20),
+            title: const Text('Database Configuration'),
+            subtitle: FutureBuilder<bool>(
+              future: prefs.database?.db.isOpen,
+              builder: (context, connectionSnapshot) {
+                final isConnected = connectionSnapshot.data ?? false;
+                return Text(
+                  'Status: ${isConnected ? "Connected" : "Disconnected"}',
+                  style: TextStyle(
+                    color: isConnected ? Colors.green : Colors.red,
+                    fontWeight: FontWeight.w500,
+                  ),
+                );
+              },
+            ),
+            initiallyExpanded: false, // Default to folded
+            children: [
+              Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text('SSL Mode: '),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Container(
-                        decoration: BoxDecoration(
-                          border: Border.all(
-                            color: sslMode == null ? Colors.red : Colors.grey,
-                            width: 1.0,
+                    FutureBuilder<bool>(
+                      future: prefs.database?.db.isOpen,
+                      builder: (context, snapshot) {
+                        return Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: (snapshot.data ?? false)
+                                ? Colors.green.withOpacity(0.1)
+                                : Colors.red.withOpacity(0.1),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                              color: (snapshot.data ?? false)
+                                  ? Colors.green
+                                  : Colors.red,
+                            ),
                           ),
-                          borderRadius: BorderRadius.circular(4),
-                          color: sslMode == null
-                              ? Colors.red.withAlpha((0.05 * 255).toInt())
-                              : null,
+                          child: Row(
+                            children: [
+                              FaIcon(
+                                (snapshot.data ?? false)
+                                    ? FontAwesomeIcons.checkCircle
+                                    : FontAwesomeIcons.exclamationCircle,
+                                color: (snapshot.data ?? false)
+                                    ? Colors.green
+                                    : Colors.red,
+                                size: 16,
+                              ),
+                              const SizedBox(width: 8),
+                              Text(
+                                'Connection Status: ${snapshot.data ?? false ? "Connected" : "Disconnected"}',
+                                style: const TextStyle(fontSize: 12),
+                              ),
+                            ],
+                          ),
+                        );
+                      },
+                    ),
+                    const SizedBox(height: 16),
+                    TextField(
+                      controller: hostController,
+                      decoration: const InputDecoration(
+                        labelText: 'Host',
+                        prefixIcon: FaIcon(FontAwesomeIcons.server, size: 16),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: portController,
+                      decoration: const InputDecoration(
+                        labelText: 'Port',
+                        prefixIcon: FaIcon(FontAwesomeIcons.hashtag, size: 16),
+                      ),
+                      keyboardType: TextInputType.number,
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: dbController,
+                      decoration: const InputDecoration(
+                        labelText: 'Database',
+                        prefixIcon: FaIcon(FontAwesomeIcons.database, size: 16),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: userController,
+                      decoration: const InputDecoration(
+                        labelText: 'Username',
+                        prefixIcon: FaIcon(FontAwesomeIcons.user, size: 16),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: passController,
+                      decoration: const InputDecoration(
+                        labelText: 'Password',
+                        prefixIcon: FaIcon(FontAwesomeIcons.lock, size: 16),
+                      ),
+                      obscureText: true,
+                    ),
+                    const SizedBox(height: 12),
+                    CheckboxListTile(
+                      title: const Text('Is Unix Socket'),
+                      value: isUnixSocket,
+                      onChanged: (v) =>
+                          setState(() => isUnixSocket = v ?? false),
+                    ),
+                    Row(
+                      children: [
+                        const Text('SSL Mode: '),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Container(
+                            decoration: BoxDecoration(
+                              border: Border.all(
+                                color:
+                                    sslMode == null ? Colors.red : Colors.grey,
+                                width: 1.0,
+                              ),
+                              borderRadius: BorderRadius.circular(4),
+                              color: sslMode == null
+                                  ? Colors.red.withAlpha((0.05 * 255).toInt())
+                                  : null,
+                            ),
+                            child: DropdownButton<SslMode>(
+                              value: sslMode,
+                              isExpanded: true,
+                              hint: const Text("Select SSL Mode"),
+                              icon: const Icon(Icons.arrow_drop_down),
+                              onChanged: (v) => setState(() => sslMode = v),
+                              items: SslMode.values
+                                  .map((e) => DropdownMenuItem(
+                                        value: e,
+                                        child: Text(e.name),
+                                      ))
+                                  .toList(),
+                              underline: const SizedBox(),
+                            ),
+                          ),
                         ),
-                        child: DropdownButton<SslMode>(
-                          value: sslMode,
-                          isExpanded: true,
-                          hint: const Text("Select SSL Mode"),
-                          icon: const Icon(Icons.arrow_drop_down),
-                          onChanged: (v) => setState(() => sslMode = v),
-                          items: SslMode.values
-                              .map((e) => DropdownMenuItem(
-                                    value: e,
-                                    child: Text(e.name),
-                                  ))
-                              .toList(),
-                          underline: SizedBox(),
-                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton.icon(
+                        onPressed: () {
+                          final newConfig = DatabaseConfig(
+                            postgres: Endpoint(
+                              host: hostController.text,
+                              port: int.tryParse(portController.text) ?? 5432,
+                              database: dbController.text,
+                              username: userController.text,
+                              password: passController.text,
+                              isUnixSocket: isUnixSocket,
+                            ),
+                            sslMode: sslMode,
+                          );
+                          widget.onSave(newConfig);
+                          ref.invalidate(preferencesProvider);
+                        },
+                        icon: const FaIcon(FontAwesomeIcons.save, size: 16),
+                        label: const Text('Save Database Config'),
                       ),
                     ),
                   ],
                 ),
-                ElevatedButton(
-                  onPressed: () {
-                    final newConfig = DatabaseConfig(
-                      postgres: Endpoint(
-                        host: hostController.text,
-                        port: int.tryParse(portController.text) ?? 5432,
-                        database: dbController.text,
-                        username: userController.text,
-                        password: passController.text,
-                        isUnixSocket: isUnixSocket,
-                      ),
-                      sslMode: sslMode,
-                    );
-                    widget.onSave(newConfig);
-                    ref.invalidate(preferencesProvider);
-                  },
-                  child: const Text('Save Config'),
-                ),
-              ],
-            ),
-          );
-        });
+              ),
+            ],
+          ),
+        );
+      },
+    );
   }
 }
 
-class _ValueEditor extends StatefulWidget {
+class PreferencesKeysWidget extends ConsumerWidget {
+  const PreferencesKeysWidget({Key? key}) : super(key: key);
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return FutureBuilder<Preferences>(
+      future: ref.watch(preferencesProvider.future),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData) {
+          return const Center(child: CircularProgressIndicator());
+        }
+        final preferences = snapshot.data!;
+        final localPrefs =
+            SharedPreferencesWrapper(preferences.sharedPreferences);
+
+        return FutureBuilder<Map<String, Object?>>(
+          future: preferences.getAll(),
+          builder: (context, keysSnap) {
+            if (!keysSnap.hasData) {
+              return const Padding(
+                padding: EdgeInsets.all(16.0),
+                child: Center(child: CircularProgressIndicator()),
+              );
+            }
+            final allPrefs = keysSnap.data!;
+            if (allPrefs.isEmpty) {
+              return const ListTile(
+                title: Text('No preferences found.'),
+              );
+            }
+            return Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        const FaIcon(FontAwesomeIcons.key, size: 20),
+                        const SizedBox(width: 8),
+                        Text(
+                          'Preferences Keys',
+                          style: Theme.of(context).textTheme.titleMedium,
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    Expanded(
+                      child: ListView(
+                        children: (() {
+                          final list = allPrefs.entries.toList();
+                          list.sort((a, b) => a.key.compareTo(b.key));
+                          return list
+                              .map((e) => FutureBuilder<bool>(
+                                  future: preferences
+                                      .isKeyInDatabase(e.key)
+                                      .timeout(const Duration(seconds: 2)),
+                                  builder: (context, snapshot) {
+                                    if (!snapshot.hasData) {
+                                      return const Padding(
+                                        padding: EdgeInsets.all(16.0),
+                                        child: Center(
+                                            child: CircularProgressIndicator()),
+                                      );
+                                    }
+                                    return _PreferenceKeyTile(
+                                      keyName: e.key,
+                                      value: e.value,
+                                      isInDatabase: snapshot.data!,
+                                      onChanged: (newValue) async {
+                                        // Check if key is in database
+                                        final isInDb = snapshot.data!;
+
+                                        // Use appropriate preferences implementation
+                                        final prefs =
+                                            isInDb ? preferences : localPrefs;
+
+                                        if (newValue is bool) {
+                                          await prefs.setBool(e.key, newValue);
+                                        } else if (newValue is int) {
+                                          await prefs.setInt(e.key, newValue);
+                                        } else if (newValue is double) {
+                                          await prefs.setDouble(
+                                              e.key, newValue);
+                                        } else if (newValue is List<String>) {
+                                          await prefs.setStringList(
+                                              e.key, newValue);
+                                        } else if (newValue is String) {
+                                          await prefs.setString(
+                                              e.key, newValue);
+                                        }
+                                        // Force refresh
+                                        (context as Element).markNeedsBuild();
+                                      },
+                                      onDelete: () async {
+                                        final confirmed =
+                                            await showDialog<bool>(
+                                          context: context,
+                                          builder: (context) => AlertDialog(
+                                            title:
+                                                const Text('Delete Preference'),
+                                            content: Text('Delete "${e.key}"?'),
+                                            actions: [
+                                              TextButton(
+                                                onPressed: () => Navigator.pop(
+                                                    context, false),
+                                                child: const Text('Cancel'),
+                                              ),
+                                              TextButton(
+                                                onPressed: () => Navigator.pop(
+                                                    context, true),
+                                                child: const Text('Delete'),
+                                              ),
+                                            ],
+                                          ),
+                                        );
+                                        if (confirmed == true) {
+                                          await preferences.remove(e.key);
+                                          ref.invalidate(preferencesProvider);
+                                        }
+                                      },
+                                    );
+                                  }))
+                              .toList();
+                        })(),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+}
+
+class _PreferenceKeyTile extends StatefulWidget {
   final String keyName;
   final Object? value;
+  final bool isInDatabase;
   final ValueChanged<Object?> onChanged;
+  final VoidCallback onDelete;
 
-  const _ValueEditor({
+  const _PreferenceKeyTile({
     required this.keyName,
     required this.value,
+    required this.isInDatabase,
     required this.onChanged,
+    required this.onDelete,
   });
 
   @override
-  State<_ValueEditor> createState() => _ValueEditorState();
+  State<_PreferenceKeyTile> createState() => _PreferenceKeyTileState();
 }
 
-class _ValueEditorState extends State<_ValueEditor> {
+class _PreferenceKeyTileState extends State<_PreferenceKeyTile> {
   late TextEditingController _controller;
+  final _expansionController = ExpansibleController();
 
   @override
   void initState() {
@@ -347,7 +446,7 @@ class _ValueEditorState extends State<_ValueEditor> {
   }
 
   @override
-  void didUpdateWidget(covariant _ValueEditor oldWidget) {
+  void didUpdateWidget(covariant _PreferenceKeyTile oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.value != oldWidget.value) {
       _controller.text = widget.value is String
@@ -359,76 +458,126 @@ class _ValueEditorState extends State<_ValueEditor> {
   @override
   Widget build(BuildContext context) {
     final value = widget.value;
-    if (value is bool) {
-      return SwitchListTile(
-        title: Text(widget.keyName),
-        value: value,
-        onChanged: (v) => widget.onChanged(v),
-      );
-    } else if (value is int) {
-      return ListTile(
-        title: Text(widget.keyName),
-        subtitle: TextField(
-          controller: _controller,
-          keyboardType: TextInputType.number,
-          onSubmitted: (v) {
-            final intVal = int.tryParse(v) ?? value;
-            widget.onChanged(intVal);
-          },
-        ),
-      );
-    } else if (value is double) {
-      return ListTile(
-        title: Text(widget.keyName),
-        subtitle: TextField(
-          controller: _controller,
-          keyboardType: const TextInputType.numberWithOptions(decimal: true),
-          onSubmitted: (v) {
-            final doubleVal = double.tryParse(v) ?? value;
-            widget.onChanged(doubleVal);
-          },
-        ),
-      );
-    } else if (value is List<String>) {
-      return ListTile(
-        title: Text(widget.keyName),
-        subtitle: TextField(
-          controller: _controller,
-          decoration: const InputDecoration(hintText: 'Comma separated'),
-          onSubmitted: (v) {
-            final listVal = v.split(',').map((e) => e.trim()).toList();
-            widget.onChanged(listVal);
-          },
-        ),
-      );
-    } else if (value is String) {
-      // Try to decode as JSON
-      dynamic decoded;
-      bool isJson = false;
-      try {
-        decoded = jsonDecode(value);
-        isJson = true;
-      } catch (_) {}
-
-      if (isJson) {
-        return _JsonEditor(
-          keyName: widget.keyName,
-          initialText: const JsonEncoder.withIndent('  ').convert(decoded),
-          onSave: (formatted) => widget.onChanged(formatted),
-        );
-      } else {
-        return ListTile(
-          title: Text(widget.keyName),
-          subtitle: TextField(
-            controller: _controller,
-            onSubmitted: (v) => widget.onChanged(v),
+    return ExpansionTile(
+      controller: _expansionController,
+      leading: FaIcon(
+        widget.isInDatabase
+            ? FontAwesomeIcons.database
+            : FontAwesomeIcons.hardDrive,
+        size: 16,
+        color: widget.isInDatabase ? Colors.blue : Colors.grey,
+      ),
+      title: Text(
+        '(${widget.isInDatabase ? 'DB' : 'Local'}) ${widget.keyName}',
+        style: const TextStyle(fontWeight: FontWeight.bold),
+      ),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          IconButton(
+            icon: const FaIcon(FontAwesomeIcons.trash, size: 16),
+            onPressed: widget.onDelete,
           ),
-        );
-      }
+          IconButton(
+            icon: FaIcon(
+              _expansionController.isExpanded
+                  ? FontAwesomeIcons.chevronUp
+                  : FontAwesomeIcons.chevronDown,
+              size: 16,
+            ),
+            onPressed: () {
+              if (_expansionController.isExpanded) {
+                _expansionController.collapse();
+              } else {
+                _expansionController.expand();
+              }
+            },
+          ),
+        ],
+      ),
+      onExpansionChanged: (expanded) {
+        // This will be called when the expansion state changes
+        setState(() {
+          // Trigger rebuild to update the chevron icon
+        });
+      },
+      children: [
+        if (value is bool)
+          SwitchListTile(
+            title: Text(widget.keyName),
+            value: value,
+            onChanged: (v) => widget.onChanged(v),
+          )
+        else if (value is int)
+          ListTile(
+            title: Text(widget.keyName),
+            subtitle: TextField(
+              controller: _controller,
+              keyboardType: TextInputType.number,
+              onSubmitted: (v) {
+                final intVal = int.tryParse(v) ?? value;
+                widget.onChanged(intVal);
+              },
+            ),
+          )
+        else if (value is double)
+          ListTile(
+            title: Text(widget.keyName),
+            subtitle: TextField(
+              controller: _controller,
+              keyboardType:
+                  const TextInputType.numberWithOptions(decimal: true),
+              onSubmitted: (v) {
+                final doubleVal = double.tryParse(v) ?? value;
+                widget.onChanged(doubleVal);
+              },
+            ),
+          )
+        else if (value is List<String>)
+          ListTile(
+            title: Text(widget.keyName),
+            subtitle: TextField(
+              controller: _controller,
+              decoration: const InputDecoration(hintText: 'Comma separated'),
+              onSubmitted: (v) {
+                final listVal = v.split(',').map((e) => e.trim()).toList();
+                widget.onChanged(listVal);
+              },
+            ),
+          )
+        else if (value is String)
+          _buildStringEditor()
+        else
+          ListTile(
+            title: Text(widget.keyName),
+            subtitle: Text('Unsupported type: ${value.runtimeType}'),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildStringEditor() {
+    // Try to decode as JSON
+    dynamic decoded;
+    bool isJson = false;
+    try {
+      decoded = jsonDecode(widget.value as String);
+      isJson = true;
+    } catch (_) {}
+
+    if (isJson) {
+      return _JsonEditor(
+        keyName: widget.keyName,
+        initialText: const JsonEncoder.withIndent('  ').convert(decoded),
+        onSave: (formatted) => widget.onChanged(formatted),
+      );
     } else {
       return ListTile(
         title: Text(widget.keyName),
-        subtitle: Text('Unsupported type: ${value.runtimeType}'),
+        subtitle: TextField(
+          controller: _controller,
+          onSubmitted: (v) => widget.onChanged(v),
+        ),
       );
     }
   }

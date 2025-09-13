@@ -7,12 +7,14 @@ class PreferencesPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const BaseScaffold(
-      title: 'Preferences',
-      body: Padding(
-        padding: EdgeInsets.all(16.0),
-        child: PreferencesWidget(),
-      ),
-    );
+    return BaseScaffold(
+        title: 'Preferences',
+        body: Column(
+          children: [
+            const DatabaseConfigWidget(),
+            const SizedBox(height: 16),
+            Expanded(child: const PreferencesKeysWidget()),
+          ],
+        ));
   }
 }
