@@ -58,7 +58,7 @@ class CollectorConfig {
   bool collect; // if false, no collection will be done
   // List<CollectTable> tables;
 
-  CollectorConfig({this.collect = true});
+  CollectorConfig({this.collect = false});
 
   Map<String, dynamic> toJson() => _$CollectorConfigToJson(this);
   static CollectorConfig fromJson(Map<String, dynamic> json) =>
