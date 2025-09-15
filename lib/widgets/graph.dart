@@ -633,6 +633,11 @@ class _GraphState extends State<Graph> {
     if (extents != null) {
       final duration = extents.end.difference(extents.start);
 
+      // Use AutoDateTimeTickProviderSpec for dynamic tick generation when panning
+      // This allows ticks to be generated for the current viewport as you pan
+      tickProviderSpec = const charts.AutoDateTimeTickProviderSpec();
+
+      // Set appropriate formatter based on duration
       if (duration.inMinutes <= 1) {
         // For very short spans (≤1 minute), use 10-second intervals
         tickProviderSpec = charts.StaticDateTimeTickProviderSpec(
@@ -646,11 +651,6 @@ class _GraphState extends State<Graph> {
           ),
         );
       } else if (duration.inMinutes <= 5) {
-        // For short spans (≤5 minutes), use 30-second intervals
-        tickProviderSpec = charts.StaticDateTimeTickProviderSpec(
-          _generateTimeTicks(
-              extents.start, extents.end, const Duration(seconds: 30)),
-        );
         tickFormatterSpec = const charts.AutoDateTimeTickFormatterSpec(
           minute: charts.TimeFormatterSpec(
             format: 'HH:mm:ss',
@@ -658,11 +658,6 @@ class _GraphState extends State<Graph> {
           ),
         );
       } else if (duration.inMinutes <= 30) {
-        // For medium spans (≤30 minutes), use 1-minute intervals
-        tickProviderSpec = charts.StaticDateTimeTickProviderSpec(
-          _generateTimeTicks(
-              extents.start, extents.end, const Duration(minutes: 1)),
-        );
         tickFormatterSpec = charts.AutoDateTimeTickFormatterSpec(
           minute: charts.TimeFormatterSpec(
             format: widget.showDate ? 'MM/dd HH:mm' : 'HH:mm',
@@ -670,11 +665,6 @@ class _GraphState extends State<Graph> {
           ),
         );
       } else if (duration.inHours <= 2) {
-        // For spans ≤2 hours, use 5-minute intervals
-        tickProviderSpec = charts.StaticDateTimeTickProviderSpec(
-          _generateTimeTicks(
-              extents.start, extents.end, const Duration(minutes: 5)),
-        );
         tickFormatterSpec = charts.AutoDateTimeTickFormatterSpec(
           minute: charts.TimeFormatterSpec(
             format: widget.showDate ? 'MM/dd HH:mm' : 'HH:mm',
@@ -682,8 +672,6 @@ class _GraphState extends State<Graph> {
           ),
         );
       } else {
-        // For longer spans, use auto tick provider
-        tickProviderSpec = const charts.AutoDateTimeTickProviderSpec();
         tickFormatterSpec = charts.AutoDateTimeTickFormatterSpec(
           minute: charts.TimeFormatterSpec(
             format: widget.showDate ? 'MM/dd HH:mm' : 'HH:mm',
