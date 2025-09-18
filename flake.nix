@@ -22,6 +22,7 @@ outputs = { self, nixpkgs, flake-utils }:
             pkg-config
             libsecret
             gtk3
+            jsoncpp
           ];
         };
     });

@@ -1917,6 +1917,14 @@ class _BeckhoffEL3054 extends ConsumerWidget {
   }
 
   Widget _el3054StatusDialog(BuildContext context, StateMan stateMan) {
+    // todo - parse errors
+// hmi.errors[1].0 := raw_input.MDP5001_300_AI_Standard_Channel_1_Status.Error;
+// hmi.errors[1].1 := raw_input.MDP5001_300_AI_Standard_Channel_1_Status.Limit_1_Bit0;
+// hmi.errors[1].2 := raw_input.MDP5001_300_AI_Standard_Channel_1_Status.Limit_1_Bit1;
+// hmi.errors[1].3 := raw_input.MDP5001_300_AI_Standard_Channel_1_Status.Limit_2_Bit0;
+// hmi.errors[1].4 := raw_input.MDP5001_300_AI_Standard_Channel_1_Status.Limit_2_Bit1;
+// hmi.errors[1].5 := raw_input.MDP5001_300_AI_Standard_Channel_1_Status.Overrange;
+// hmi.errors[1].6 := raw_input.MDP5001_300_AI_Standard_Channel_1_Status.Underrange;
     return AlertDialog(
       title: Text(config.nameOrId),
       content: StreamBuilder<Map<String, DynamicValue>>(

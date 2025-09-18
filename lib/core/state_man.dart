@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
+import 'dart:convert';
 
 import 'package:meta/meta.dart'; // Add this import at the top
 import 'package:logger/logger.dart';
@@ -10,6 +11,7 @@ import 'package:rxdart/rxdart.dart';
 import 'package:collection/collection.dart';
 
 import 'collector.dart';
+import 'preferences.dart';
 
 part 'state_man.g.dart';
 
@@ -61,16 +63,32 @@ class StateManConfig {
 
   StateManConfig({required this.opcua});
 
+  StateManConfig copy() => StateManConfig.fromJson(toJson());
+
   @override
   String toString() {
     return 'StateManConfig(opcua: ${opcua.toString()})';
+  }
+
+  static Future<StateManConfig> fromPrefs(Preferences prefs) async {
+    var configJson = await prefs.getString(_configKey, secret: true);
+    if (configJson == null) {
+      configJson = jsonEncode(StateManConfig(opcua: [OpcUAConfig()]).toJson());
+      await prefs.setString(_configKey, configJson, secret: true);
+    }
+    return StateManConfig.fromJson(jsonDecode(configJson));
+  }
+
+  Future<void> toPrefs(Preferences prefs) async {
+    final configJson = jsonEncode(toJson());
+    await prefs.setString(_configKey, configJson, secret: true);
   }
 
   factory StateManConfig.fromJson(Map<String, dynamic> json) =>
       _$StateManConfigFromJson(json);
   Map<String, dynamic> toJson() => _$StateManConfigToJson(this);
 
-  static const String configKey = 'state_man_config';
+  static const String _configKey = 'state_man_config';
 }
 
 @JsonSerializable()
@@ -315,7 +333,7 @@ class StateMan {
                   certificate: cert,
                   privateKey: key,
                   securityMode: securityMode,
-                  logLevel: LogLevel.UA_LOGLEVEL_ERROR,
+                  logLevel: LogLevel.UA_LOGLEVEL_TRACE,
                 )
               : Client(
                   loadOpen62541Library(staticLinking: true),
@@ -555,6 +573,7 @@ class StateMan {
       });
     }
 
+    int retries = 0;
     while (true) {
       try {
         await client.awaitConnect();
@@ -592,8 +611,11 @@ class StateMan {
 
         return _subscriptions[key]!.stream;
       } catch (e) {
-        // todo log if this occurs more than 10 times
-        // logger.w('Failed to get initial value for $key: $e');
+        retries++;
+        if (retries > 10) {
+          logger.w('Failed to get initial value for $key: $e');
+          retries = 0;
+        }
         await Future.delayed(const Duration(seconds: 1));
         continue;
       }

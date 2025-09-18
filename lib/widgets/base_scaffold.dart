@@ -211,10 +211,9 @@ class BaseScaffold extends ConsumerWidget {
                     ),
                     Consumer(
                       builder: (context, ref, child) {
-                        final notifier =
-                            ref.read(themeNotifierProvider.notifier);
+                        final notifier = ref.read(themeProvider.notifier);
                         return FutureBuilder(
-                          future: ref.watch(themeNotifierProvider.future),
+                          future: ref.watch(themeProvider.future),
                           builder: (context, snapshot) {
                             if (snapshot.hasData) {
                               final currentTheme = snapshot.data!;

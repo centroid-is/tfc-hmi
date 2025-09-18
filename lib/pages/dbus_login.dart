@@ -356,7 +356,7 @@ class LoginApp extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final themeAsync = ref.watch(themeNotifierProvider);
+    final themeAsync = ref.watch(themeProvider);
     final (light, dark) = solarized();
     final themeMode = themeAsync.when(
       data: (themeMode) => themeMode,

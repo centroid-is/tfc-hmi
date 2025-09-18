@@ -2,10 +2,11 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:json_annotation/json_annotation.dart';
-import 'package:tfc/core/database_drift.dart';
-import 'package:drift/drift.dart' show Value;
 import 'package:drift/drift.dart' show Variable;
+// todo use https://pub.dev/packages/dbus_secrets instead of flutter_secure_storage on linux
+// the reason is that I would like this part to be dart compatible
+// and flutter_secure_storage is not dart compatible
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import 'database.dart';
 
@@ -97,6 +98,7 @@ class Preferences implements PreferencesApi {
   final Database? database;
   final KeyCache keyCache = KeyCache();
   final SharedPreferencesAsync sharedPreferences = SharedPreferencesAsync();
+  final FlutterSecureStorage secureStorage = FlutterSecureStorage();
   final StreamController<String> _onPreferencesChanged =
       StreamController<String>.broadcast();
 
@@ -144,67 +146,130 @@ class Preferences implements PreferencesApi {
   }
 
   @override
-  Future<bool?> getBool(String key) async {
-    return await sharedPreferences.getBool(key);
+  Future<bool?> getBool(String key, {bool secret = false}) async {
+    if (secret) {
+      final value = await secureStorage.read(key: key);
+      return value == null ? null : value == 'true';
+    } else {
+      return await sharedPreferences.getBool(key);
+    }
   }
 
   @override
-  Future<int?> getInt(String key) async {
-    return await sharedPreferences.getInt(key);
+  Future<int?> getInt(String key, {bool secret = false}) async {
+    if (secret) {
+      final value = await secureStorage.read(key: key);
+      return value == null ? null : int.parse(value);
+    } else {
+      return await sharedPreferences.getInt(key);
+    }
   }
 
   @override
-  Future<double?> getDouble(String key) async {
-    return await sharedPreferences.getDouble(key);
+  Future<double?> getDouble(String key, {bool secret = false}) async {
+    if (secret) {
+      final value = await secureStorage.read(key: key);
+      return value == null ? null : double.parse(value);
+    } else {
+      return await sharedPreferences.getDouble(key);
+    }
   }
 
   @override
-  Future<String?> getString(String key) async {
-    return await sharedPreferences.getString(key);
+  Future<String?> getString(String key, {bool secret = false}) async {
+    if (secret) {
+      return await secureStorage.read(key: key);
+    } else {
+      return await sharedPreferences.getString(key);
+    }
   }
 
   @override
-  Future<List<String>?> getStringList(String key) async {
-    return await sharedPreferences.getStringList(key);
+  Future<List<String>?> getStringList(String key, {bool secret = false}) async {
+    if (secret) {
+      final value = await secureStorage.read(key: key);
+      return value?.split(',');
+    } else {
+      return await sharedPreferences.getStringList(key);
+    }
   }
 
   @override
-  Future<bool> containsKey(String key) async {
-    return await sharedPreferences.containsKey(key);
+  Future<bool> containsKey(String key, {bool secret = false}) async {
+    if (secret) {
+      return await secureStorage.containsKey(key: key);
+    } else {
+      return await sharedPreferences.containsKey(key);
+    }
   }
 
   @override
-  Future<void> setBool(String key, bool value) async {
-    await sharedPreferences.setBool(key, value);
-    await _upsertToPostgres(key, value, 'bool');
+  Future<void> setBool(String key, bool value,
+      {bool saveToDb = true, bool secret = false}) async {
+    if (secret) {
+      await secureStorage.write(key: key, value: value.toString());
+    } else {
+      await sharedPreferences.setBool(key, value);
+    }
+    if (saveToDb) {
+      await _upsertToPostgres(key, value, 'bool');
+    }
     _onPreferencesChanged.add(key);
   }
 
   @override
-  Future<void> setInt(String key, int value) async {
-    await sharedPreferences.setInt(key, value);
-    await _upsertToPostgres(key, value, 'int');
+  Future<void> setInt(String key, int value,
+      {bool saveToDb = true, bool secret = false}) async {
+    if (secret) {
+      await secureStorage.write(key: key, value: value.toString());
+    } else {
+      await sharedPreferences.setInt(key, value);
+    }
+    if (saveToDb) {
+      await _upsertToPostgres(key, value, 'int');
+    }
     _onPreferencesChanged.add(key);
   }
 
   @override
-  Future<void> setDouble(String key, double value) async {
-    await sharedPreferences.setDouble(key, value);
-    await _upsertToPostgres(key, value, 'double');
+  Future<void> setDouble(String key, double value,
+      {bool saveToDb = true, bool secret = false}) async {
+    if (secret) {
+      await secureStorage.write(key: key, value: value.toString());
+    } else {
+      await sharedPreferences.setDouble(key, value);
+    }
+    if (saveToDb) {
+      await _upsertToPostgres(key, value, 'double');
+    }
     _onPreferencesChanged.add(key);
   }
 
   @override
-  Future<void> setString(String key, String value) async {
-    await sharedPreferences.setString(key, value);
-    await _upsertToPostgres(key, value, 'String');
+  Future<void> setString(String key, String value,
+      {bool saveToDb = true, bool secret = false}) async {
+    if (secret) {
+      await secureStorage.write(key: key, value: value);
+    } else {
+      await sharedPreferences.setString(key, value);
+    }
+    if (saveToDb) {
+      await _upsertToPostgres(key, value, 'String');
+    }
     _onPreferencesChanged.add(key);
   }
 
   @override
-  Future<void> setStringList(String key, List<String> value) async {
-    await sharedPreferences.setStringList(key, value);
-    await _upsertToPostgres(key, value, 'List<String>');
+  Future<void> setStringList(String key, List<String> value,
+      {bool saveToDb = true, bool secret = false}) async {
+    if (secret) {
+      await secureStorage.write(key: key, value: value.join(','));
+    } else {
+      await sharedPreferences.setStringList(key, value);
+    }
+    if (saveToDb) {
+      await _upsertToPostgres(key, value, 'List<String>');
+    }
     _onPreferencesChanged.add(key);
   }
 

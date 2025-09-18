@@ -6,21 +6,38 @@ part of 'collector.dart';
 // RiverpodGenerator
 // **************************************************************************
 
-String _$collectorHash() => r'51cb957194d03fdb11500d8e409e66df0cad4dad';
+// GENERATED CODE - DO NOT MODIFY BY HAND
+// ignore_for_file: type=lint, type=warning
 
-/// See also [collector].
 @ProviderFor(collector)
-final collectorProvider = FutureProvider<Collector?>.internal(
-  collector,
-  name: r'collectorProvider',
-  debugGetCreateSourceHash:
-      const bool.fromEnvironment('dart.vm.product') ? null : _$collectorHash,
-  dependencies: null,
-  allTransitiveDependencies: null,
-);
+const collectorProvider = CollectorProvider._();
 
-@Deprecated('Will be removed in 3.0. Use Ref instead')
-// ignore: unused_element
-typedef CollectorRef = FutureProviderRef<Collector?>;
-// ignore_for_file: type=lint
-// ignore_for_file: subtype_of_sealed_class, invalid_use_of_internal_member, invalid_use_of_visible_for_testing_member, deprecated_member_use_from_same_package
+final class CollectorProvider extends $FunctionalProvider<
+        AsyncValue<Collector?>, Collector?, FutureOr<Collector?>>
+    with $FutureModifier<Collector?>, $FutureProvider<Collector?> {
+  const CollectorProvider._()
+      : super(
+          from: null,
+          argument: null,
+          retry: null,
+          name: r'collectorProvider',
+          isAutoDispose: false,
+          dependencies: null,
+          $allTransitiveDependencies: null,
+        );
+
+  @override
+  String debugGetCreateSourceHash() => _$collectorHash();
+
+  @$internal
+  @override
+  $FutureProviderElement<Collector?> $createElement($ProviderPointer pointer) =>
+      $FutureProviderElement(pointer);
+
+  @override
+  FutureOr<Collector?> create(Ref ref) {
+    return collector(ref);
+  }
+}
+
+String _$collectorHash() => r'51cb957194d03fdb11500d8e409e66df0cad4dad';

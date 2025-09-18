@@ -1337,7 +1337,12 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage>
     final dbAsync = ref.watch(databaseProvider);
     final keyTreeAsync = ref.watch(keyTreeProvider);
 
-    final canSave = _selected.isNotEmpty && (dbAsync.valueOrNull != null);
+    final canSave = _selected.isNotEmpty &&
+        dbAsync.when(
+          data: (db) => db != null,
+          loading: () => false,
+          error: (_, __) => false,
+        );
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1424,7 +1429,11 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage>
         Expanded(
           child: keyTreeAsync.when(
             data: (root) {
-              final collected = collectedAsync.valueOrNull ?? const <String>{};
+              final collected = collectedAsync.when(
+                data: (data) => data,
+                loading: () => const <String>{},
+                error: (_, __) => const <String>{},
+              );
               return _KeyTreeList(
                 root: root,
                 collected: collected,
@@ -1612,7 +1621,11 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage>
 
                   return periodsAsync.when(
                     data: (periods) {
-                      final horizon = horizonAsync.valueOrNull;
+                      final horizon = horizonAsync.when(
+                        data: (data) => data,
+                        loading: () => null,
+                        error: (_, __) => null,
+                      );
                       SavedPeriod? dropdownValue = _activePeriod == null
                           ? null
                           : periods.firstWhere(
@@ -1682,11 +1695,16 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage>
                           Tooltip(
                             message: 'Delete selected period',
                             child: IconButton(
-                              onPressed: (_activeView != null &&
-                                      _activePeriod != null)
-                                  ? () => _deletePeriod(
-                                      _activePeriod!, horizonAsync.valueOrNull)
-                                  : null,
+                              onPressed:
+                                  (_activeView != null && _activePeriod != null)
+                                      ? () => _deletePeriod(
+                                          _activePeriod!,
+                                          horizonAsync.when(
+                                            data: (data) => data,
+                                            loading: () => null,
+                                            error: (_, __) => null,
+                                          ))
+                                      : null,
                               icon: const Icon(Icons.delete_outline),
                             ),
                           ),

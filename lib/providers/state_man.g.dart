@@ -6,21 +6,38 @@ part of 'state_man.dart';
 // RiverpodGenerator
 // **************************************************************************
 
-String _$stateManHash() => r'08e41f23d7bd381fb11408cad0b55cff7e70c16a';
+// GENERATED CODE - DO NOT MODIFY BY HAND
+// ignore_for_file: type=lint, type=warning
 
-/// See also [stateMan].
 @ProviderFor(stateMan)
-final stateManProvider = FutureProvider<StateMan>.internal(
-  stateMan,
-  name: r'stateManProvider',
-  debugGetCreateSourceHash:
-      const bool.fromEnvironment('dart.vm.product') ? null : _$stateManHash,
-  dependencies: null,
-  allTransitiveDependencies: null,
-);
+const stateManProvider = StateManProvider._();
 
-@Deprecated('Will be removed in 3.0. Use Ref instead')
-// ignore: unused_element
-typedef StateManRef = FutureProviderRef<StateMan>;
-// ignore_for_file: type=lint
-// ignore_for_file: subtype_of_sealed_class, invalid_use_of_internal_member, invalid_use_of_visible_for_testing_member, deprecated_member_use_from_same_package
+final class StateManProvider extends $FunctionalProvider<AsyncValue<StateMan>,
+        StateMan, FutureOr<StateMan>>
+    with $FutureModifier<StateMan>, $FutureProvider<StateMan> {
+  const StateManProvider._()
+      : super(
+          from: null,
+          argument: null,
+          retry: null,
+          name: r'stateManProvider',
+          isAutoDispose: false,
+          dependencies: null,
+          $allTransitiveDependencies: null,
+        );
+
+  @override
+  String debugGetCreateSourceHash() => _$stateManHash();
+
+  @$internal
+  @override
+  $FutureProviderElement<StateMan> $createElement($ProviderPointer pointer) =>
+      $FutureProviderElement(pointer);
+
+  @override
+  FutureOr<StateMan> create(Ref ref) {
+    return stateMan(ref);
+  }
+}
+
+String _$stateManHash() => r'dcf2ef006afa9f8bc3e4db4869d2abd5cb738352';

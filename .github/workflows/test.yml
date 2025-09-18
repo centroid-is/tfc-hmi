@@ -8,18 +8,14 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted]
+    container:
+      image: ghcr.io/cirruslabs/flutter:3.28.0
     
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-      
-    - name: Setup Flutter
-      uses: subosito/flutter-action@v2
-      with:
-        flutter-version: '3.27.0'
-        channel: 'stable'
-        
+
     - name: Get dependencies
       run: flutter pub get
       

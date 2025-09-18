@@ -6,21 +6,38 @@ part of 'alarm.dart';
 // RiverpodGenerator
 // **************************************************************************
 
-String _$alarmManHash() => r'070a52de2aada5e37f7d2051c4ad9f39872116f4';
+// GENERATED CODE - DO NOT MODIFY BY HAND
+// ignore_for_file: type=lint, type=warning
 
-/// See also [alarmMan].
 @ProviderFor(alarmMan)
-final alarmManProvider = FutureProvider<AlarmMan>.internal(
-  alarmMan,
-  name: r'alarmManProvider',
-  debugGetCreateSourceHash:
-      const bool.fromEnvironment('dart.vm.product') ? null : _$alarmManHash,
-  dependencies: null,
-  allTransitiveDependencies: null,
-);
+const alarmManProvider = AlarmManProvider._();
 
-@Deprecated('Will be removed in 3.0. Use Ref instead')
-// ignore: unused_element
-typedef AlarmManRef = FutureProviderRef<AlarmMan>;
-// ignore_for_file: type=lint
-// ignore_for_file: subtype_of_sealed_class, invalid_use_of_internal_member, invalid_use_of_visible_for_testing_member, deprecated_member_use_from_same_package
+final class AlarmManProvider extends $FunctionalProvider<AsyncValue<AlarmMan>,
+        AlarmMan, FutureOr<AlarmMan>>
+    with $FutureModifier<AlarmMan>, $FutureProvider<AlarmMan> {
+  const AlarmManProvider._()
+      : super(
+          from: null,
+          argument: null,
+          retry: null,
+          name: r'alarmManProvider',
+          isAutoDispose: false,
+          dependencies: null,
+          $allTransitiveDependencies: null,
+        );
+
+  @override
+  String debugGetCreateSourceHash() => _$alarmManHash();
+
+  @$internal
+  @override
+  $FutureProviderElement<AlarmMan> $createElement($ProviderPointer pointer) =>
+      $FutureProviderElement(pointer);
+
+  @override
+  FutureOr<AlarmMan> create(Ref ref) {
+    return alarmMan(ref);
+  }
+}
+
+String _$alarmManHash() => r'070a52de2aada5e37f7d2051c4ad9f39872116f4';

@@ -28,18 +28,8 @@ Future<KeyMappings> fetchKeyMappings(PreferencesApi prefs) async {
 
 @Riverpod(keepAlive: true)
 Future<StateMan> stateMan(Ref ref) async {
-  final SharedPreferencesAsync sharedPreferences = SharedPreferencesAsync();
-
-  var stateManJson =
-      await sharedPreferences.getString(StateManConfig.configKey);
-  if (stateManJson == null) {
-    final defaultConfig = StateManConfig(opcua: [OpcUAConfig()]);
-    stateManJson = jsonEncode(defaultConfig.toJson());
-    await sharedPreferences.setString(StateManConfig.configKey, stateManJson);
-  }
-  final config = StateManConfig.fromJson(jsonDecode(stateManJson));
-
   final prefs = await ref.watch(preferencesProvider.future);
+  final config = await StateManConfig.fromPrefs(prefs);
 
   final keyMappings = await fetchKeyMappings(prefs);
 

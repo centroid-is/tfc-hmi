@@ -16,6 +16,7 @@ import '../widgets/base_scaffold.dart';
 import '../widgets/preferences.dart';
 import '../core/state_man.dart';
 import '../providers/state_man.dart';
+import '../providers/preferences.dart';
 
 class CertificateGenerator extends StatefulWidget {
   final Function(File?, File?) onCertificatesGenerated;
@@ -552,18 +553,10 @@ class _OpcUAServersSectionState extends ConsumerState<_OpcUAServersSection> {
     });
 
     try {
-      final sharedPreferences = SharedPreferencesAsync();
-      final configJson =
-          await sharedPreferences.getString(StateManConfig.configKey);
-
-      if (configJson != null) {
-        _config = StateManConfig.fromJson(jsonDecode(configJson));
-        _savedConfig = StateManConfig.fromJson(
-            jsonDecode(configJson)); // Keep a copy of saved state
-      } else {
-        _config = StateManConfig(opcua: []);
-        _savedConfig = StateManConfig(opcua: []);
-      }
+      final prefs = await ref.watch(preferencesProvider.future);
+      final stateManConfig = await StateManConfig.fromPrefs(prefs);
+      _config = stateManConfig;
+      _savedConfig = stateManConfig.copy();
     } catch (e) {
       _error = e.toString();
     } finally {
@@ -587,12 +580,10 @@ class _OpcUAServersSectionState extends ConsumerState<_OpcUAServersSection> {
     if (_config == null) return;
 
     try {
-      final sharedPreferences = SharedPreferencesAsync();
-      final configJson = jsonEncode(_config!.toJson());
-      await sharedPreferences.setString(StateManConfig.configKey, configJson);
-
+      final prefs = await ref.watch(preferencesProvider.future);
+      await _config!.toPrefs(prefs);
       // Update the saved config to match current config
-      _savedConfig = StateManConfig.fromJson(jsonDecode(configJson));
+      _savedConfig = _config!.copy();
 
       // Invalidate the state man provider to reload with new config
       ref.invalidate(stateManProvider);

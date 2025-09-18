@@ -33,7 +33,7 @@ Map<String, dynamic> _$CollectEntryToJson(CollectEntry instance) =>
 
 CollectorConfig _$CollectorConfigFromJson(Map<String, dynamic> json) =>
     CollectorConfig(
-      collect: json['collect'] as bool? ?? true,
+      collect: json['collect'] as bool? ?? false,
     );
 
 Map<String, dynamic> _$CollectorConfigToJson(CollectorConfig instance) =>
