@@ -60,12 +60,14 @@ jobs:
   docker-build:
     needs: elinux-build
     runs-on: [self-hosted]
+    container:
+      image: ghcr.io/centroid-is/tfc-toolchain:latest
     steps:
       - name: Checkout Docker repo
         uses: actions/checkout@v4
         with:
-            repository: centroid-is/dockers
-            ref: main
+          repository: centroid-is/dockers
+          ref: main
 
       - name: Download build artifacts
         uses: actions/download-artifact@v4
