@@ -537,33 +537,25 @@ class _OpcUAServersSection extends ConsumerStatefulWidget {
 class _OpcUAServersSectionState extends ConsumerState<_OpcUAServersSection> {
   StateManConfig? _config;
   StateManConfig? _savedConfig;
-  bool _isLoading = false;
   String? _error;
 
   @override
   void initState() {
     super.initState();
-    _loadConfig();
   }
 
-  Future<void> _loadConfig() async {
-    setState(() {
-      _isLoading = true;
-      _error = null;
-    });
-
+  Future<bool> _loadConfig() async {
+    _error = null;
     try {
-      final prefs = await ref.watch(preferencesProvider.future);
+      if (_config != null && _savedConfig != null) return true;
+      final prefs = await ref.read(preferencesProvider.future);
       final stateManConfig = await StateManConfig.fromPrefs(prefs);
       _config = stateManConfig;
       _savedConfig = stateManConfig.copy();
     } catch (e) {
       _error = e.toString();
-    } finally {
-      setState(() {
-        _isLoading = false;
-      });
     }
+    return _config != null;
   }
 
   bool get _hasUnsavedChanges {
@@ -580,10 +572,12 @@ class _OpcUAServersSectionState extends ConsumerState<_OpcUAServersSection> {
     if (_config == null) return;
 
     try {
-      final prefs = await ref.watch(preferencesProvider.future);
+      final prefs = await ref.read(preferencesProvider.future);
       await _config!.toPrefs(prefs);
       // Update the saved config to match current config
-      _savedConfig = _config!.copy();
+      setState(() {
+        _savedConfig = _config!.copy();
+      });
 
       // Invalidate the state man provider to reload with new config
       ref.invalidate(stateManProvider);
@@ -634,10 +628,18 @@ class _OpcUAServersSectionState extends ConsumerState<_OpcUAServersSection> {
 
   @override
   Widget build(BuildContext context) {
-    if (_isLoading) {
-      return const Center(child: CircularProgressIndicator());
-    }
+    return FutureBuilder<bool>(
+      future: _loadConfig(),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData || snapshot.data == false) {
+          return const Center(child: CircularProgressIndicator());
+        }
+        return _build(context);
+      },
+    );
+  }
 
+  Widget _build(BuildContext context) {
     if (_error != null) {
       return Card(
         child: Padding(

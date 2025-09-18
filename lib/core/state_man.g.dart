@@ -33,7 +33,7 @@ StateManConfig _$StateManConfigFromJson(Map<String, dynamic> json) =>
 
 Map<String, dynamic> _$StateManConfigToJson(StateManConfig instance) =>
     <String, dynamic>{
-      'opcua': instance.opcua,
+      'opcua': instance.opcua.map((e) => e.toJson()).toList(),
     };
 
 OpcUANodeConfig _$OpcUANodeConfigFromJson(Map<String, dynamic> json) =>

@@ -57,7 +57,7 @@ class OpcUAConfig {
   Map<String, dynamic> toJson() => _$OpcUAConfigToJson(this);
 }
 
-@JsonSerializable()
+@JsonSerializable(explicitToJson: true)
 class StateManConfig {
   List<OpcUAConfig> opcua;
 
