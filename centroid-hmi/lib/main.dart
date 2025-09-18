@@ -194,7 +194,7 @@ class MyApp extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final themeAsync = ref.watch(themeProvider);
+    final themeAsync = ref.watch(themeNotifierProvider);
     final (light, dark) = solarized();
 
     final app = MaterialApp.router(

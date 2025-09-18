@@ -6,39 +6,21 @@ part of 'preferences.dart';
 // RiverpodGenerator
 // **************************************************************************
 
-// GENERATED CODE - DO NOT MODIFY BY HAND
-// ignore_for_file: type=lint, type=warning
-
-@ProviderFor(preferences)
-const preferencesProvider = PreferencesProvider._();
-
-final class PreferencesProvider extends $FunctionalProvider<
-        AsyncValue<Preferences>, Preferences, FutureOr<Preferences>>
-    with $FutureModifier<Preferences>, $FutureProvider<Preferences> {
-  const PreferencesProvider._()
-      : super(
-          from: null,
-          argument: null,
-          retry: null,
-          name: r'preferencesProvider',
-          isAutoDispose: false,
-          dependencies: null,
-          $allTransitiveDependencies: null,
-        );
-
-  @override
-  String debugGetCreateSourceHash() => _$preferencesHash();
-
-  @$internal
-  @override
-  $FutureProviderElement<Preferences> $createElement(
-          $ProviderPointer pointer) =>
-      $FutureProviderElement(pointer);
-
-  @override
-  FutureOr<Preferences> create(Ref ref) {
-    return preferences(ref);
-  }
-}
-
 String _$preferencesHash() => r'e1e51e4a0237621265a9a23b4b3441b6a8b63d13';
+
+/// See also [preferences].
+@ProviderFor(preferences)
+final preferencesProvider = FutureProvider<Preferences>.internal(
+  preferences,
+  name: r'preferencesProvider',
+  debugGetCreateSourceHash:
+      const bool.fromEnvironment('dart.vm.product') ? null : _$preferencesHash,
+  dependencies: null,
+  allTransitiveDependencies: null,
+);
+
+@Deprecated('Will be removed in 3.0. Use Ref instead')
+// ignore: unused_element
+typedef PreferencesRef = FutureProviderRef<Preferences>;
+// ignore_for_file: type=lint
+// ignore_for_file: subtype_of_sealed_class, invalid_use_of_internal_member, invalid_use_of_visible_for_testing_member, deprecated_member_use_from_same_package
