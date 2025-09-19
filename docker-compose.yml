@@ -1,0 +1,86 @@
+services:
+  seatd:
+    image: ghcr.io/centroid-is/weston:latest
+    container_name: seatd
+    privileged: true
+    user: root
+    restart: unless-stopped
+    volumes:
+      - /dev:/dev:rw
+      - /run/udev:/run/udev:ro
+      - ./seatd-socket:/run # I know, this is not good
+    command: seatd -g seat
+
+  weston:
+    image: ghcr.io/centroid-is/weston:latest
+    container_name: weston
+    user: root
+    privileged: true
+    volumes:
+      - ./wayland-socket/user:/run/user
+      - ./seatd-socket:/run
+      - /dev:/dev:rw
+      - /run/udev:/run/udev:ro
+    environment:
+      XDG_RUNTIME_DIR: /run/user/1000
+    ports:
+      - 5900:5900
+    restart: unless-stopped
+    entrypoint: >
+      bash -lc "
+        echo 'centroid:foo' | chpasswd &&
+        mkdir -p /run/user/1000 &&
+        chown 1000:1000 /run/user/1000 &&
+        chmod 0700 /run/user/1000 &&
+        exec su -s /bin/bash -c '
+         export XDG_RUNTIME_DIR=/run/user/1000
+         exec weston -c /home/centroid/.config/weston.ini
+        ' centroid
+      "
+
+  flutter:
+    image: ghcr.io/centroid-is/centroid-hmi:latest
+    container_name: flutter
+    volumes:
+      - /run/user/1000/bus:/run/user/1000/bus # need for dbus session socket
+      - ./wayland-socket/user:/run/user
+      - ./local-share:/root/.local/share/ # shared preferences
+      - ./opcua_certs:/certs:ro
+      - /var/run/dbus/system_bus_socket:/var/run/dbus/system_bus_socket
+    environment:
+      TFC_GOD: true
+      XDG_RUNTIME_DIR: /run/user/1000
+      WAYLAND_DISPLAY: wayland-1
+      DBUS_SESSION_BUS_ADDRESS: unix:path=/run/user/1000/bus
+    devices:
+      - /dev/dri/renderD128
+    depends_on:
+      - weston
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+    restart: unless-stopped
+
+  watchtower:
+    image: containrrr/watchtower
+    container_name: watchtower
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: --interval 60
+    restart: unless-stopped
+
+  timescaledb:
+    image: timescale/timescaledb:latest-pg17
+    container_name: timescaledb
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=hmi
+      - POSTGRES_USER=centroid
+      - POSTGRES_PASSWORD=FooBarHelloWorld
+      # (Optional) You can also set PGDATA or other environment variables.
+    ports:
+      - 5432:5432
+    volumes:
+      - ./timescale_data:/var/lib/postgresql/data
+      - ./timescale_certs:/certs:ro
