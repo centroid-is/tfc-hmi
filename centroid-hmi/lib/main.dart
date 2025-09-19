@@ -30,6 +30,8 @@ import 'package:tfc/page_creator/assets/registry.dart';
 import 'package:tfc/widgets/base_scaffold.dart';
 
 void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+
   // Register your custom asset type
   // AssetRegistry.registerFromJsonFactory<ChecklistsConfig>(ChecklistsConfig.fromJson);
   // AssetRegistry.registerDefaultFactory<ChecklistsConfig>(ChecklistsConfig.preview);
@@ -90,8 +92,6 @@ void main() async {
   );
 
   final locationBuilder = createLocationBuilder(extraMenuItems);
-
-  WidgetsFlutterBinding.ensureInitialized();
 
   runApp(ProviderScope(child: MyApp(locationBuilder: locationBuilder)));
 }
