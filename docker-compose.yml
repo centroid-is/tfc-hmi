@@ -41,6 +41,8 @@ services:
   flutter:
     image: ghcr.io/centroid-is/centroid-hmi:latest
     container_name: flutter
+    group_add:
+      - 992 # use $ getent group render
     volumes:
       - /run/user/1000/bus:/run/user/1000/bus # need for dbus session socket
       - ./wayland-socket/user:/run/user
