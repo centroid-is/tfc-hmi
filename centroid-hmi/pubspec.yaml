@@ -49,7 +49,7 @@ dependencies:
   shared_preferences: ^2.5.3
   json_annotation: ^4.9.0
   rxdart: ^0.28.0
-  amplify_secure_storage_dart: ^0.5.7
+  amplify_secure_storage_dart: ^0.5.6
 
 dev_dependencies:
   flutter_test:
