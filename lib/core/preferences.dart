@@ -3,10 +3,7 @@ import 'dart:io';
 
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:drift/drift.dart' show Variable;
-// todo use https://pub.dev/packages/dbus_secrets instead of flutter_secure_storage on linux
-// the reason is that I would like this part to be dart compatible
-// and flutter_secure_storage is not dart compatible
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:amplify_secure_storage_dart/amplify_secure_storage_dart.dart';
 
 import 'database.dart';
 
@@ -98,7 +95,11 @@ class Preferences implements PreferencesApi {
   final Database? database;
   final KeyCache keyCache = KeyCache();
   final SharedPreferencesAsync sharedPreferences = SharedPreferencesAsync();
-  final FlutterSecureStorage secureStorage = FlutterSecureStorage();
+  final AmplifySecureStorageDart secureStorage =
+      AmplifySecureStorageDart.factoryFrom()(
+    AmplifySecureStorageScope
+        .awsCognitoAuthPlugin, // dont know if this makes sense
+  );
   final StreamController<String> _onPreferencesChanged =
       StreamController<String>.broadcast();
 
@@ -197,7 +198,8 @@ class Preferences implements PreferencesApi {
   @override
   Future<bool> containsKey(String key, {bool secret = false}) async {
     if (secret) {
-      return await secureStorage.containsKey(key: key);
+      throw UnimplementedError(
+          'containsKey is not implemented for secret storage');
     } else {
       return await sharedPreferences.containsKey(key);
     }

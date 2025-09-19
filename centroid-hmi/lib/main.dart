@@ -7,6 +7,7 @@ import 'package:beamer/beamer.dart';
 import 'package:dbus/dbus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
+import 'package:amplify_secure_storage_dart/amplify_secure_storage_dart.dart';
 
 import 'package:tfc/route_registry.dart';
 import 'package:tfc/models/menu_item.dart';
@@ -31,6 +32,7 @@ import 'package:tfc/widgets/base_scaffold.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  AmplifySecureStorageDart.registerWith();
 
   // Register your custom asset type
   // AssetRegistry.registerFromJsonFactory<ChecklistsConfig>(ChecklistsConfig.fromJson);

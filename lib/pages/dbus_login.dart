@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:dbus/dbus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:amplify_secure_storage_dart/amplify_secure_storage_dart.dart';
 import 'package:logger/logger.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:file_picker/file_picker.dart';
@@ -122,7 +122,10 @@ class _LoginFormState extends ConsumerState<LoginForm> {
   Future<void> _saveCredentials(LoginCredentials creds) async {
     logger.d('Saving credentials: $creds');
     final prefs = await SharedPreferences.getInstance();
-    const secureStorage = FlutterSecureStorage();
+    final secureStorage = AmplifySecureStorageDart.factoryFrom()(
+      AmplifySecureStorageScope
+          .awsCognitoAuthPlugin, // dont know if this makes sense
+    );
 
     await prefs.setString('connectionType', creds.type.name);
     await prefs.setString('host', creds.host ?? '');
@@ -130,7 +133,9 @@ class _LoginFormState extends ConsumerState<LoginForm> {
     await prefs.setBool('autoLogin', creds.autoLogin);
     await prefs.setString('sshPrivateKeyPath', creds.sshPrivateKeyPath ?? '');
 
-    await secureStorage.write(key: 'password', value: creds.password);
+    if (creds.password != null) {
+      await secureStorage.write(key: 'dbus_password', value: creds.password!);
+    }
     logger.d('Saved credentials: $creds');
   }
 
@@ -151,9 +156,12 @@ class _LoginFormState extends ConsumerState<LoginForm> {
     String? password;
     if (username != null && username.isNotEmpty) {
       logger.d('Loading saved credentials from secure storage');
-      const secureStorage = FlutterSecureStorage();
+      final secureStorage = AmplifySecureStorageDart.factoryFrom()(
+        AmplifySecureStorageScope
+            .awsCognitoAuthPlugin, // dont know if this makes sense
+      );
       logger.d('Reading password from secure storage');
-      password = await secureStorage.read(key: 'password');
+      password = await secureStorage.read(key: 'dbus_password');
     }
 
     final credentials = LoginCredentials(
