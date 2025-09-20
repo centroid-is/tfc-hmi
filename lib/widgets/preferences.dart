@@ -11,12 +11,12 @@ import '../core/database.dart';
 import 'dart:convert';
 
 class DatabaseConfigWidget extends ConsumerWidget {
-  const DatabaseConfigWidget({Key? key}) : super(key: key);
+  const DatabaseConfigWidget({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     return FutureBuilder<DatabaseConfig>(
-      future: DatabaseConfig.fromPreferences(),
+      future: DatabaseConfig.fromPrefs(),
       builder: (context, snapshot) {
         if (!snapshot.hasData) {
           return const Center(child: CircularProgressIndicator());
@@ -24,13 +24,7 @@ class DatabaseConfigWidget extends ConsumerWidget {
         return _DatabaseConfigEditor(
           config: snapshot.data!,
           onSave: (newConfig) async {
-            final prefs = await ref.watch(preferencesProvider.future);
-            final localPrefs =
-                SharedPreferencesWrapper(prefs.sharedPreferences);
-            await localPrefs.setString(
-              DatabaseConfig.configLocation,
-              jsonEncode(newConfig.toJson()),
-            );
+            await newConfig.toPrefs();
             ref.invalidate(databaseProvider);
           },
         );

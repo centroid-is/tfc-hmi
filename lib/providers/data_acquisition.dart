@@ -251,7 +251,7 @@ Future<DataAcquisition> dataAcquisition(Ref ref) async {
       serverName: server,
       keyMappings: collectEntries[server]!,
       stateManConfig: serverConfigs[server]!,
-      databaseConfig: await DatabaseConfig.fromPreferences(),
+      databaseConfig: await DatabaseConfig.fromPrefs(),
     );
 
     // Spawn replacement and track it
@@ -277,7 +277,7 @@ Future<DataAcquisition> dataAcquisition(Ref ref) async {
       serverName: name,
       keyMappings: collectEntries[server]!,
       stateManConfig: serverConfigs[server]!,
-      databaseConfig: await DatabaseConfig.fromPreferences(),
+      databaseConfig: await DatabaseConfig.fromPrefs(),
     );
 
     final handle = await _spawnWorker(

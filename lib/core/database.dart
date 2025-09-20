@@ -7,7 +7,8 @@ import 'package:postgres/postgres.dart' show Endpoint, SslMode;
 import 'package:json_annotation/json_annotation.dart' as json;
 export 'package:postgres/postgres.dart' show Sql;
 import 'package:logger/logger.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:amplify_secure_storage_dart/amplify_secure_storage_dart.dart';
+
 import 'database_drift.dart';
 import '../converter/duration_converter.dart';
 
@@ -87,22 +88,34 @@ class DatabaseConfig {
 
   Map<String, dynamic> toJson() => _$DatabaseConfigToJson(this);
 
-  static const configLocation = 'database_config';
+  static const _configLocation = 'database_config';
 
-  static Future<DatabaseConfig> fromPreferences() async {
-    final prefs = SharedPreferencesAsync();
-    var configJson = await prefs.getString(configLocation);
+  static Future<DatabaseConfig> fromPrefs() async {
+    final prefs = AmplifySecureStorageDart.factoryFrom()(
+      AmplifySecureStorageScope
+          .awsCognitoAuthPlugin, // dont know if this makes sense
+    );
+    var configJson = await prefs.read(key: _configLocation);
     DatabaseConfig config;
     if (configJson == null) {
       // If not found, create default config
       config = DatabaseConfig(
           postgres: null); // Or provide a default Endpoint if needed
       configJson = jsonEncode(config.toJson());
-      await prefs.setString(configLocation, configJson);
+      await prefs.write(key: _configLocation, value: configJson);
     } else {
       config = DatabaseConfig.fromJson(jsonDecode(configJson));
     }
     return config;
+  }
+
+  Future<void> toPrefs() async {
+    final prefs = AmplifySecureStorageDart.factoryFrom()(
+      AmplifySecureStorageScope
+          .awsCognitoAuthPlugin, // dont know if this makes sense
+    );
+    final configJson = jsonEncode(toJson());
+    await prefs.write(key: _configLocation, value: configJson);
   }
 }
 

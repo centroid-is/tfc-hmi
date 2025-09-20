@@ -631,6 +631,27 @@ class _OpcUAServersSectionState extends ConsumerState<_OpcUAServersSection> {
     return FutureBuilder<bool>(
       future: _loadConfig(),
       builder: (context, snapshot) {
+        if (_error != null) {
+          return Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const FaIcon(FontAwesomeIcons.triangleExclamation,
+                      size: 64, color: Colors.red),
+                  const SizedBox(height: 16),
+                  Text('Error loading configuration: $_error'),
+                  const SizedBox(height: 16),
+                  ElevatedButton(
+                    onPressed: _loadConfig,
+                    child: const Text('Retry'),
+                  ),
+                ],
+              ),
+            ),
+          );
+        }
         if (!snapshot.hasData || snapshot.data == false) {
           return const Center(child: CircularProgressIndicator());
         }
@@ -640,28 +661,6 @@ class _OpcUAServersSectionState extends ConsumerState<_OpcUAServersSection> {
   }
 
   Widget _build(BuildContext context) {
-    if (_error != null) {
-      return Card(
-        child: Padding(
-          padding: const EdgeInsets.all(16.0),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const FaIcon(FontAwesomeIcons.triangleExclamation,
-                  size: 64, color: Colors.red),
-              const SizedBox(height: 16),
-              Text('Error loading configuration: $_error'),
-              const SizedBox(height: 16),
-              ElevatedButton(
-                onPressed: _loadConfig,
-                child: const Text('Retry'),
-              ),
-            ],
-          ),
-        ),
-      );
-    }
-
     final config = _config ?? StateManConfig(opcua: []);
 
     return Card(
