@@ -24,6 +24,15 @@ outputs = { self, nixpkgs, flake-utils }:
             gtk3
             jsoncpp
           ];
+                    
+          # Set library paths for runtime
+          LD_LIBRARY_PATH = lib.makeLibraryPath buildInputs;
+          
+          shellHook = ''
+            export LD_LIBRARY_PATH="${lib.makeLibraryPath buildInputs}:$LD_LIBRARY_PATH"
+            echo "libsecret library path: ${libsecret}/lib"
+            echo "LD_LIBRARY_PATH set to: $LD_LIBRARY_PATH"
+          '';
         };
     });
 }
