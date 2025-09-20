@@ -4,6 +4,7 @@ import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:riverpod_annotation/riverpod_annotation.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:basic_utils/basic_utils.dart';
 import 'package:path_provider/path_provider.dart';
@@ -20,6 +21,10 @@ import '../core/database.dart';
 import '../providers/state_man.dart';
 import '../providers/preferences.dart';
 import '../providers/database.dart';
+
+part 'server_config.g.dart';
+
+const _certPlaceholder = "todo";
 
 // ===================== Secure Envelope (Encryption Helper) =====================
 class SecureEnvelope {
@@ -127,9 +132,9 @@ class CertificateGenerator extends StatefulWidget {
   final Function(File?, File?) onCertificatesGenerated;
 
   const CertificateGenerator({
-    Key? key,
+    super.key,
     required this.onCertificatesGenerated,
-  }) : super(key: key);
+  });
 
   @override
   State<CertificateGenerator> createState() => _CertificateGeneratorState();
@@ -615,26 +620,38 @@ class ServerConfigPage extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    // Watch a simple counter that gets incremented on import
+    final refreshKey = ref.watch(refreshKeyProvider);
+
     return BaseScaffold(
       title: 'Server Configuration',
       body: Column(
         children: [
           // Database Configuration Section
-          const DatabaseConfigWidget(),
+          DatabaseConfigWidget(key: ValueKey('db_$refreshKey')),
           const SizedBox(height: 16),
 
           // OPC-UA Servers Section
           Expanded(
-            child: _OpcUAServersSection(),
+            child: _OpcUAServersSection(key: ValueKey('opcua_$refreshKey')),
           ),
+          const ImportExportCard(),
         ],
       ),
     );
   }
 }
 
+@riverpod
+class RefreshKey extends _$RefreshKey {
+  @override
+  int build() => 0;
+
+  void increment() => state++;
+}
+
 class _OpcUAServersSection extends ConsumerStatefulWidget {
-  const _OpcUAServersSection();
+  const _OpcUAServersSection({super.key});
   @override
   ConsumerState<_OpcUAServersSection> createState() =>
       _OpcUAServersSectionState();
@@ -645,9 +662,6 @@ class _OpcUAServersSectionState extends ConsumerState<_OpcUAServersSection> {
   StateManConfig? _savedConfig;
   bool _isLoading = false;
   String? _error;
-
-  // === Passphrase handling: prefix compiled-in; postfix generated per export ===
-  static const String _compiledPrefix = 'Flottur köttur:';
 
   @override
   void initState() {
@@ -717,212 +731,6 @@ class _OpcUAServersSectionState extends ConsumerState<_OpcUAServersSection> {
 
   Future<void> _removeServer(int index) async {
     setState(() => _config!.opcua.removeAt(index));
-  }
-
-  // ===================== Export / Import =====================
-  Future<void> _exportEncrypted() async {
-    if (_savedConfig == null) return;
-
-    try {
-      // Build a plain JSON from current config
-      final jsonMap = _savedConfig!.toJson();
-
-      // TODO this breaks single responsibility principle because this widget is opc ua config
-      final databaseConfig = await DatabaseConfig.fromPrefs();
-      jsonMap['database'] = databaseConfig.toJson();
-
-      // Generate random postfix for this export
-      final postfix = _generatePostfix(12); // base64url-ish string
-
-      // Encrypt
-      final envelope = await SecureEnvelope.encrypt(
-        jsonConfig: jsonMap,
-        compiledPrefix: _compiledPrefix,
-        exportPostfix: postfix,
-      );
-
-      // Choose save path
-      String? savePath;
-      if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
-        savePath = await FilePicker.platform.saveFile(
-          dialogTitle: 'Save Encrypted Config',
-          fileName: 'server_config.enc',
-          type: FileType.custom,
-          allowedExtensions: ['enc'],
-        );
-      } else {
-        // Mobile fallback: save to app docs dir
-        final dir = await getApplicationDocumentsDirectory();
-        final ts = DateTime.now().toIso8601String().replaceAll(':', '-');
-        savePath = path.join(dir.path, 'server_config_$ts.enc');
-      }
-
-      if (savePath == null) return; // user cancelled
-
-      final file = File(savePath);
-      await file
-          .writeAsString(const JsonEncoder.withIndent('  ').convert(envelope));
-
-      if (!mounted) return;
-
-      // Show postfix to user (copyable)
-      await showDialog(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('Export Complete'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text('Encrypted file saved.'),
-              const SizedBox(height: 12),
-              const Text('Use this code to decrypt:'),
-              const SizedBox(height: 8),
-              SelectableText(postfix,
-                  style: const TextStyle(fontFamily: 'monospace')),
-              const SizedBox(height: 8),
-              Text('Location:\n${file.path}',
-                  style: const TextStyle(fontSize: 12, color: Colors.grey)),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () {
-                Clipboard.setData(ClipboardData(text: postfix));
-                Navigator.pop(ctx);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Code copied to clipboard')),
-                );
-              },
-              child: const Text('Copy Code'),
-            ),
-            TextButton(
-                onPressed: () => Navigator.pop(ctx),
-                child: const Text('Close')),
-          ],
-        ),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-            content: Text('Export failed: $e'), backgroundColor: Colors.red),
-      );
-    }
-  }
-
-  Future<void> _importEncrypted() async {
-    try {
-      // Pick file
-      final result = await FilePicker.platform.pickFiles(
-        type: FileType.custom,
-        allowedExtensions: ['enc'],
-        dialogTitle: 'Select Encrypted Config',
-      );
-      if (result == null || result.files.single.path == null) return;
-      final file = File(result.files.single.path!);
-
-      final text = await file.readAsString();
-      final envelope = jsonDecode(text) as Map<String, dynamic>;
-
-      if (!mounted) return;
-
-      // Ask for postfix
-      final postfixController = TextEditingController();
-      final postfix = await showDialog<String?>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('Enter Decryption Code'),
-          content: TextField(
-            controller: postfixController,
-            decoration: const InputDecoration(
-              labelText: 'Code',
-              hintText: 'Enter the code shared with you',
-              prefixIcon: FaIcon(FontAwesomeIcons.key, size: 16),
-            ),
-            obscureText: true,
-          ),
-          actions: [
-            TextButton(
-                onPressed: () => Navigator.pop(ctx, null),
-                child: const Text('Cancel')),
-            TextButton(
-                onPressed: () =>
-                    Navigator.pop(ctx, postfixController.text.trim()),
-                child: const Text('Decrypt')),
-          ],
-        ),
-      );
-
-      if (postfix == null || postfix.isEmpty) return;
-
-      // Decrypt
-      final jsonMap = await SecureEnvelope.decrypt(
-        envelope: envelope,
-        compiledPrefix: _compiledPrefix,
-        postfix: postfix,
-      );
-
-      // Scrub certificate paths before loading into model
-      final scrubbed = _scrubCertPaths(jsonMap);
-
-      // TODO this breaks single responsibility principle because this widget is opc ua config
-      final databaseConfig = DatabaseConfig.fromJson(scrubbed['database']);
-      await databaseConfig.toPrefs();
-      scrubbed.remove('database');
-      ref.invalidate(databaseProvider);
-
-      final imported = StateManConfig.fromJson(scrubbed);
-      setState(() {
-        _config = imported;
-      });
-
-      // Mark as unsaved until user saves
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-                'Config imported. ${_countServersNeedingCerts(scrubbed)} server(s) require certificate generation.'),
-          ),
-        );
-      }
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-            content: Text('Import failed: $e'), backgroundColor: Colors.red),
-      );
-    }
-  }
-
-  // Remove sslCert/sslKey file paths from incoming JSON and count affected servers
-  Map<String, dynamic> _scrubCertPaths(Map<String, dynamic> jsonMap) {
-    int affected = 0;
-    final copy =
-        jsonDecode(jsonEncode(jsonMap)) as Map<String, dynamic>; // deep copy
-    if (copy['opcua'] is List) {
-      for (final s in (copy['opcua'] as List)) {
-        if (s is Map<String, dynamic>) {
-          if ((s['sslCert'] != null) || (s['sslKey'] != null)) {
-            affected++;
-          }
-          s['sslCert'] = null;
-          s['sslKey'] = null;
-        }
-      }
-    }
-    _serversNeedingCerts = affected;
-    return copy;
-  }
-
-  int _serversNeedingCerts = 0;
-  int _countServersNeedingCerts(Map<String, dynamic> jsonMap) =>
-      _serversNeedingCerts;
-
-  String _generatePostfix(int length) {
-    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
-    final r = Random.secure();
-    return List.generate(length, (_) => chars[r.nextInt(chars.length)]).join();
   }
 
   @override
@@ -1010,10 +818,8 @@ class _OpcUAServersSectionState extends ConsumerState<_OpcUAServersSection> {
             // place save config button in bottom left corner, it should take 60% of the width
             Row(
               children: [
-                // Save config button takes 60% of width (left side)
                 if (config.opcua.isNotEmpty || _hasUnsavedChanges)
                   Expanded(
-                    flex: 60,
                     child: ElevatedButton.icon(
                       onPressed: _hasUnsavedChanges ? _saveConfig : null,
                       icon: FaIcon(FontAwesomeIcons.floppyDisk,
@@ -1028,50 +834,8 @@ class _OpcUAServersSectionState extends ConsumerState<_OpcUAServersSection> {
                               _hasUnsavedChanges ? null : Colors.grey),
                     ),
                   ),
-                if (config.opcua.isNotEmpty || _hasUnsavedChanges)
-                  const SizedBox(width: 16),
-                // Import/Export buttons in bottom right corner
-                Expanded(
-                  flex: 40,
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.end,
-                    children: [
-                      Expanded(
-                        child: ElevatedButton.icon(
-                          onPressed: _importEncrypted,
-                          icon: const FaIcon(FontAwesomeIcons.fileArrowUp,
-                              size: 14),
-                          label: const Text('Import'),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: ElevatedButton.icon(
-                          onPressed: _exportEncrypted,
-                          icon: const FaIcon(FontAwesomeIcons.fileArrowDown,
-                              size: 14),
-                          label: const Text('Export'),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
               ],
             ),
-            if (config.opcua.isNotEmpty || _hasUnsavedChanges) ...[
-              if (_serversNeedingCerts > 0) ...[
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    const FaIcon(FontAwesomeIcons.certificate, size: 14),
-                    const SizedBox(width: 8),
-                    Expanded(
-                        child: Text(
-                            '$_serversNeedingCerts server(s) imported referenced certificate paths. Those were intentionally not applied. Generate new certificates per server as needed.')),
-                  ],
-                ),
-              ],
-            ],
           ],
         ),
       ),
@@ -1246,7 +1010,12 @@ class _ServerConfigCardState extends State<_ServerConfigCard> {
     return Card(
       margin: const EdgeInsets.only(bottom: 16),
       child: ExpansionTile(
-        leading: const FaIcon(FontAwesomeIcons.server, size: 20),
+        leading: FaIcon(FontAwesomeIcons.server,
+            size: 20,
+            color: widget.server.sslCert?.path == _certPlaceholder ||
+                    widget.server.sslKey?.path == _certPlaceholder
+                ? Theme.of(context).colorScheme.error
+                : null),
         title: Text(
           widget.server.serverAlias ?? widget.server.endpoint,
           style: const TextStyle(fontWeight: FontWeight.bold),
@@ -1361,11 +1130,33 @@ class _ServerConfigCardState extends State<_ServerConfigCard> {
                                   text: widget.server.sslCert?.path ??
                                       'No certificate selected',
                                 ),
-                                decoration: const InputDecoration(
+                                decoration: InputDecoration(
                                   labelText: 'Certificate File',
-                                  prefixIcon: FaIcon(
+                                  prefixIcon: const FaIcon(
                                       FontAwesomeIcons.certificate,
                                       size: 16),
+                                  // Add red border if certificate path is the placeholder
+                                  border: widget.server.sslCert?.path ==
+                                          _certPlaceholder
+                                      ? const OutlineInputBorder(
+                                          borderSide: BorderSide(
+                                              color: Colors.red, width: 2),
+                                        )
+                                      : null,
+                                  enabledBorder: widget.server.sslCert?.path ==
+                                          _certPlaceholder
+                                      ? const OutlineInputBorder(
+                                          borderSide: BorderSide(
+                                              color: Colors.red, width: 2),
+                                        )
+                                      : null,
+                                  focusedBorder: widget.server.sslCert?.path ==
+                                          _certPlaceholder
+                                      ? const OutlineInputBorder(
+                                          borderSide: BorderSide(
+                                              color: Colors.red, width: 2),
+                                        )
+                                      : null,
                                 ),
                               ),
                             ),
@@ -1388,10 +1179,32 @@ class _ServerConfigCardState extends State<_ServerConfigCard> {
                                   text: widget.server.sslKey?.path ??
                                       'No private key selected',
                                 ),
-                                decoration: const InputDecoration(
+                                decoration: InputDecoration(
                                   labelText: 'Private Key File',
-                                  prefixIcon:
-                                      FaIcon(FontAwesomeIcons.key, size: 16),
+                                  prefixIcon: const FaIcon(FontAwesomeIcons.key,
+                                      size: 16),
+                                  // Add red border if key path is the placeholder
+                                  border: widget.server.sslKey?.path ==
+                                          _certPlaceholder
+                                      ? const OutlineInputBorder(
+                                          borderSide: BorderSide(
+                                              color: Colors.red, width: 2),
+                                        )
+                                      : null,
+                                  enabledBorder: widget.server.sslKey?.path ==
+                                          _certPlaceholder
+                                      ? const OutlineInputBorder(
+                                          borderSide: BorderSide(
+                                              color: Colors.red, width: 2),
+                                        )
+                                      : null,
+                                  focusedBorder: widget.server.sslKey?.path ==
+                                          _certPlaceholder
+                                      ? const OutlineInputBorder(
+                                          borderSide: BorderSide(
+                                              color: Colors.red, width: 2),
+                                        )
+                                      : null,
                                 ),
                               ),
                             ),
@@ -1423,6 +1236,236 @@ class _ServerConfigCardState extends State<_ServerConfigCard> {
         ],
       ),
     );
+  }
+}
+
+class ImportExportCard extends ConsumerWidget {
+  const ImportExportCard({super.key});
+
+  static const String _compiledPrefix = 'Flottur köttur:'; // same secret prefix
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: LayoutBuilder(
+          builder: (context, c) => Row(
+            children: [
+              const Icon(Icons.sync_alt, size: 20),
+              const SizedBox(width: 8),
+              Text('Import / Export',
+                  style: Theme.of(context).textTheme.titleMedium),
+              const Spacer(),
+              FilledButton.icon(
+                onPressed: () => _onImport(context, ref),
+                icon: const Icon(Icons.file_upload),
+                label: const Text('Import'),
+              ),
+              const SizedBox(width: 8),
+              OutlinedButton.icon(
+                onPressed: () => _onExport(context, ref),
+                icon: const Icon(Icons.file_download),
+                label: const Text('Export'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // -------------------- EXPORT --------------------
+  Future<void> _onExport(BuildContext context, WidgetRef ref) async {
+    try {
+      // Load current/saved config from prefs
+      final prefs = await ref.read(preferencesProvider.future);
+      final stateMan = await StateManConfig.fromPrefs(prefs);
+      final db = await DatabaseConfig.fromPrefs();
+
+      final rawJsonMap = stateMan.toJson();
+      final jsonMap = _scrubCertPaths(rawJsonMap);
+      jsonMap['database'] = db.toJson();
+
+      final postfix = _generatePostfix(12);
+      final envelope = await SecureEnvelope.encrypt(
+        jsonConfig: jsonMap,
+        compiledPrefix: _compiledPrefix,
+        exportPostfix: postfix,
+      );
+
+      String? savePath;
+      if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+        savePath = await FilePicker.platform.saveFile(
+          dialogTitle: 'Save Encrypted Config',
+          fileName: 'server_config.enc',
+          type: FileType.custom,
+          allowedExtensions: ['enc'],
+        );
+      } else {
+        final dir = await getApplicationDocumentsDirectory();
+        final ts = DateTime.now().toIso8601String().replaceAll(':', '-');
+        savePath = path.join(dir.path, 'server_config_$ts.enc');
+      }
+      if (savePath == null) return;
+
+      final file = File(savePath);
+      await file
+          .writeAsString(const JsonEncoder.withIndent('  ').convert(envelope));
+
+      if (!context.mounted) return;
+
+      // Show postfix/code
+      // ignore: use_build_context_synchronously
+      await showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Export Complete'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('Encrypted file saved.'),
+              const SizedBox(height: 12),
+              const Text('Use this code to decrypt:'),
+              const SizedBox(height: 8),
+              SelectableText(postfix,
+                  style: const TextStyle(fontFamily: 'monospace')),
+              const SizedBox(height: 8),
+              Text('Location:\n${file.path}',
+                  style: const TextStyle(fontSize: 12, color: Colors.grey)),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Clipboard.setData(ClipboardData(text: postfix));
+                Navigator.pop(ctx);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Code copied to clipboard')),
+                );
+              },
+              child: const Text('Copy Code'),
+            ),
+            TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Close')),
+          ],
+        ),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+            content: Text('Export failed: $e'), backgroundColor: Colors.red),
+      );
+    }
+  }
+
+  // -------------------- IMPORT --------------------
+  Future<void> _onImport(BuildContext context, WidgetRef ref) async {
+    try {
+      final pick = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['enc'],
+        dialogTitle: 'Select Encrypted Config',
+      );
+      if (pick == null || pick.files.single.path == null) return;
+
+      final file = File(pick.files.single.path!);
+      final envelope =
+          jsonDecode(await file.readAsString()) as Map<String, dynamic>;
+
+      if (!context.mounted) return;
+
+      // Ask for code
+      final ctrl = TextEditingController();
+      final postfix = await showDialog<String?>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text(
+              'Enter Code to Decrypt. \nCurrent server config will be overwritten!'),
+          content: TextField(
+            controller: ctrl,
+            decoration: const InputDecoration(
+              labelText: 'Code',
+              hintText: 'Enter the code shared with you',
+            ),
+            obscureText: true,
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx, null),
+                child: const Text('Cancel')),
+            TextButton(
+                onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
+                child: const Text('Decrypt')),
+          ],
+        ),
+      );
+      if (postfix == null || postfix.isEmpty) return;
+
+      // Decrypt & scrub
+      final decrypted = await SecureEnvelope.decrypt(
+        envelope: envelope,
+        compiledPrefix: _compiledPrefix,
+        postfix: postfix,
+      );
+
+      // Persist Database first (so DB widget re-reads correct values)
+      if (decrypted['database'] != null) {
+        final db = DatabaseConfig.fromJson(decrypted['database']);
+        await db.toPrefs();
+        decrypted.remove('database');
+      }
+
+      // Persist StateManConfig to prefs as current config
+      final stateMan = StateManConfig.fromJson(decrypted);
+      final prefs = await ref.read(preferencesProvider.future);
+      await stateMan.toPrefs(prefs);
+
+      // Trigger rebuilds:
+      ref.invalidate(databaseProvider);
+      ref.invalidate(stateManProvider);
+      ref.read(refreshKeyProvider.notifier).increment();
+
+      if (!context.mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Config imported. Please generate new certificates for the servers that need them.',
+          ),
+        ),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+            content: Text('Import failed: $e'), backgroundColor: Colors.red),
+      );
+    }
+  }
+
+  String _generatePostfix(int length) {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
+    final r = Random.secure();
+    return List.generate(length, (_) => chars[r.nextInt(chars.length)]).join();
+  }
+
+  // Remove sslCert/sslKey file paths from incoming JSON and count affected servers
+  Map<String, dynamic> _scrubCertPaths(Map<String, dynamic> jsonMap) {
+    final copy =
+        jsonDecode(jsonEncode(jsonMap)) as Map<String, dynamic>; // deep copy
+    if (copy['opcua'] is List) {
+      for (final s in (copy['opcua'] as List)) {
+        if (s is Map<String, dynamic>) {
+          if ((s['ssl_cert'] != null) && (s['ssl_key'] != null)) {
+            s['ssl_cert'] = _certPlaceholder;
+            s['ssl_key'] = _certPlaceholder;
+          }
+        }
+      }
+    }
+    return copy;
   }
 }
 

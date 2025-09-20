@@ -121,6 +121,9 @@ class Preferences implements PreferencesApi {
 
   Future<void> _upsertToPostgres(String key, Object? value, String type) async {
     final valStr = value is List<String> ? value.join(',') : value?.toString();
+    if (database == null) {
+      throw Exception('Database is not configured or connected');
+    }
     final db = database!.db;
     // TODO: track changes, like have a timestamp and then we can revert to the previous value if we want
     // then we can do a insert with primary key as timestamp

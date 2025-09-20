@@ -1,26 +1,25 @@
 // GENERATED CODE - DO NOT MODIFY BY HAND
 
-part of 'database.dart';
+part of 'server_config.dart';
 
 // **************************************************************************
 // RiverpodGenerator
 // **************************************************************************
 
-String _$databaseHash() => r'fd3d576a2c66025f278e12b7ec780f599b334295';
+String _$refreshKeyHash() => r'29cb560c9ace8d9474b444ce6f782946c98d64d2';
 
-/// See also [database].
-@ProviderFor(database)
-final databaseProvider = FutureProvider<Database?>.internal(
-  database,
-  name: r'databaseProvider',
+/// See also [RefreshKey].
+@ProviderFor(RefreshKey)
+final refreshKeyProvider =
+    AutoDisposeNotifierProvider<RefreshKey, int>.internal(
+  RefreshKey.new,
+  name: r'refreshKeyProvider',
   debugGetCreateSourceHash:
-      const bool.fromEnvironment('dart.vm.product') ? null : _$databaseHash,
+      const bool.fromEnvironment('dart.vm.product') ? null : _$refreshKeyHash,
   dependencies: null,
   allTransitiveDependencies: null,
 );
 
-@Deprecated('Will be removed in 3.0. Use Ref instead')
-// ignore: unused_element
-typedef DatabaseRef = FutureProviderRef<Database?>;
+typedef _$RefreshKey = AutoDisposeNotifier<int>;
 // ignore_for_file: type=lint
 // ignore_for_file: subtype_of_sealed_class, invalid_use_of_internal_member, invalid_use_of_visible_for_testing_member, deprecated_member_use_from_same_package

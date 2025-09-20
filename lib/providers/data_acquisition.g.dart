@@ -6,7 +6,7 @@ part of 'data_acquisition.dart';
 // RiverpodGenerator
 // **************************************************************************
 
-String _$dataAcquisitionHash() => r'4b5a493d5e73fcf01ff74b7f9b2a4b50f19bdee7';
+String _$dataAcquisitionHash() => r'd59e74d9b8bac36f957ad90f6db38db57bea3712';
 
 /// Supervisor: spawns N workers (one per server with collect-entries), and restarts whichever dies.
 ///

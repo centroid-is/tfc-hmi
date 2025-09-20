@@ -74,14 +74,16 @@ class StateManConfig {
     var configJson = await prefs.getString(_configKey, secret: true);
     if (configJson == null) {
       configJson = jsonEncode(StateManConfig(opcua: [OpcUAConfig()]).toJson());
-      await prefs.setString(_configKey, configJson, secret: true);
+      await prefs.setString(_configKey, configJson,
+          secret: true, saveToDb: false);
     }
     return StateManConfig.fromJson(jsonDecode(configJson));
   }
 
   Future<void> toPrefs(Preferences prefs) async {
     final configJson = jsonEncode(toJson());
-    await prefs.setString(_configKey, configJson, secret: true);
+    await prefs.setString(_configKey, configJson,
+        secret: true, saveToDb: false);
   }
 
   factory StateManConfig.fromJson(Map<String, dynamic> json) =>
