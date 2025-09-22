@@ -9,6 +9,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'dart:async';
 import 'dart:io' show Platform;
 import 'package:path/path.dart' as path;
+import 'package:path_provider/path_provider.dart';
 import '../dbus/remote.dart';
 import '../theme.dart';
 import '../providers/theme.dart';
@@ -122,7 +123,9 @@ class _LoginFormState extends ConsumerState<LoginForm> {
   Future<void> _saveCredentials(LoginCredentials creds) async {
     logger.d('Saving credentials: $creds');
     final prefs = await SharedPreferences.getInstance();
-    final secureStorage = AmplifySecureStorageDart.factoryFrom()(
+    final secureStorage = AmplifySecureStorageDart.factoryFrom(
+        windowsOptions: WindowsSecureStorageOptions(
+            storagePath: (await getApplicationSupportDirectory()).path))(
       AmplifySecureStorageScope
           .awsCognitoAuthPlugin, // dont know if this makes sense
     );
@@ -156,7 +159,9 @@ class _LoginFormState extends ConsumerState<LoginForm> {
     String? password;
     if (username != null && username.isNotEmpty) {
       logger.d('Loading saved credentials from secure storage');
-      final secureStorage = AmplifySecureStorageDart.factoryFrom()(
+      final secureStorage = AmplifySecureStorageDart.factoryFrom(
+          windowsOptions: WindowsSecureStorageOptions(
+              storagePath: (await getApplicationSupportDirectory()).path))(
         AmplifySecureStorageScope
             .awsCognitoAuthPlugin, // dont know if this makes sense
       );

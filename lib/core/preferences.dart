@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:drift/drift.dart' show Variable;
 import 'package:amplify_secure_storage_dart/amplify_secure_storage_dart.dart';
+import 'package:path_provider/path_provider.dart';
 
 import 'database.dart';
 
@@ -95,27 +96,29 @@ class Preferences implements PreferencesApi {
   final Database? database;
   final KeyCache keyCache = KeyCache();
   final SharedPreferencesAsync sharedPreferences = SharedPreferencesAsync();
-  final AmplifySecureStorageDart secureStorage =
-      AmplifySecureStorageDart.factoryFrom()(
-    AmplifySecureStorageScope
-        .awsCognitoAuthPlugin, // dont know if this makes sense
-  );
+  final AmplifySecureStorageDart secureStorage;
   final StreamController<String> _onPreferencesChanged =
       StreamController<String>.broadcast();
 
-  Preferences({required this.database});
+  Preferences({required this.database, required this.secureStorage});
 
   static Future<Preferences> create({required Database? db}) async {
+    final secureStorage = AmplifySecureStorageDart.factoryFrom(
+        windowsOptions: WindowsSecureStorageOptions(
+            storagePath: (await getApplicationSupportDirectory()).path))(
+      AmplifySecureStorageScope
+          .awsCognitoAuthPlugin, // dont know if this makes sense
+    );
     try {
       if (db == null) {
-        return Preferences(database: null);
+        return Preferences(database: null, secureStorage: secureStorage);
       }
-      final prefs = Preferences(database: db);
+      final prefs = Preferences(database: db, secureStorage: secureStorage);
       await prefs.loadFromPostgres();
       return prefs;
     } on PreferencesException catch (e) {
       stderr.writeln(e.message);
-      return Preferences(database: db);
+      return Preferences(database: db, secureStorage: secureStorage);
     }
   }
 

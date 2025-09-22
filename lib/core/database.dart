@@ -8,6 +8,7 @@ import 'package:json_annotation/json_annotation.dart' as json;
 export 'package:postgres/postgres.dart' show Sql;
 import 'package:logger/logger.dart';
 import 'package:amplify_secure_storage_dart/amplify_secure_storage_dart.dart';
+import 'package:path_provider/path_provider.dart';
 
 import 'database_drift.dart';
 import '../converter/duration_converter.dart';
@@ -91,7 +92,9 @@ class DatabaseConfig {
   static const _configLocation = 'database_config';
 
   static Future<DatabaseConfig> fromPrefs() async {
-    final prefs = AmplifySecureStorageDart.factoryFrom()(
+    final prefs = AmplifySecureStorageDart.factoryFrom(
+        windowsOptions: WindowsSecureStorageOptions(
+            storagePath: (await getApplicationSupportDirectory()).path))(
       AmplifySecureStorageScope
           .awsCognitoAuthPlugin, // dont know if this makes sense
     );
