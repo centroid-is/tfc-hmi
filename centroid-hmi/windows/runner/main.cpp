@@ -5,7 +5,7 @@
 #include "flutter_window.h"
 #include "utils.h"
 
-static void RedirectIOToConsole()
+/*static void RedirectIOToConsole()
 {
   FILE *fp;
   freopen_s(&fp, "CONOUT$", "w", stdout);
@@ -13,7 +13,7 @@ static void RedirectIOToConsole()
   freopen_s(&fp, "CONIN$", "r", stdin);
   setvbuf(stdout, nullptr, _IONBF, 0);
   setvbuf(stderr, nullptr, _IONBF, 0);
-}
+}*/
 
 int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
                       _In_ wchar_t *command_line, _In_ int show_command) {
@@ -21,10 +21,10 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   // new console when running with a debugger.
   if (!::AttachConsole(ATTACH_PARENT_PROCESS) && ::IsDebuggerPresent()) {
     CreateAndAttachConsole();
-  }
+  /*}
   else if (!::AttachConsole(ATTACH_PARENT_PROCESS))
   {
-    RedirectIOToConsole();
+    RedirectIOToConsole();*/
   }
 
   // Initialize COM, so that it is available for use in the library and/or
