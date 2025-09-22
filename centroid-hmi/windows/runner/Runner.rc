@@ -89,13 +89,13 @@ BEGIN
     BEGIN
         BLOCK "040904e4"
         BEGIN
-            VALUE "CompanyName", "com.example" "\0"
-            VALUE "FileDescription", "hmi" "\0"
+            VALUE "Centroid", "is.centroid" "\0"
+            VALUE "FileDescription", "centroid_scada" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
-            VALUE "InternalName", "hmi" "\0"
-            VALUE "LegalCopyright", "Copyright (C) 2025 com.example. All rights reserved." "\0"
-            VALUE "OriginalFilename", "hmi.exe" "\0"
-            VALUE "ProductName", "hmi" "\0"
+            VALUE "InternalName", "centroid_scada" "\0"
+            VALUE "LegalCopyright", "Copyright (C) 2025 Centroid ehf. All rights reserved." "\0"
+            VALUE "OriginalFilename", "centroid_scada.exe" "\0"
+            VALUE "ProductName", "centroid_scada" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END
