@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:dbus/dbus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:amplify_secure_storage_dart/amplify_secure_storage_dart.dart';
 import 'package:logger/logger.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:file_picker/file_picker.dart';
@@ -9,10 +8,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'dart:async';
 import 'dart:io' show Platform;
 import 'package:path/path.dart' as path;
-import 'package:path_provider/path_provider.dart';
 import '../dbus/remote.dart';
 import '../theme.dart';
 import '../providers/theme.dart';
+import '../core/secure_storage/secure_storage.dart';
 
 final logger = Logger();
 
@@ -123,12 +122,7 @@ class _LoginFormState extends ConsumerState<LoginForm> {
   Future<void> _saveCredentials(LoginCredentials creds) async {
     logger.d('Saving credentials: $creds');
     final prefs = await SharedPreferences.getInstance();
-    final secureStorage = AmplifySecureStorageDart.factoryFrom(
-        windowsOptions: WindowsSecureStorageOptions(
-            storagePath: (await getApplicationSupportDirectory()).path))(
-      AmplifySecureStorageScope
-          .awsCognitoAuthPlugin, // dont know if this makes sense
-    );
+    final secureStorage = SecureStorage.getInstance();
 
     await prefs.setString('connectionType', creds.type.name);
     await prefs.setString('host', creds.host ?? '');
@@ -159,12 +153,7 @@ class _LoginFormState extends ConsumerState<LoginForm> {
     String? password;
     if (username != null && username.isNotEmpty) {
       logger.d('Loading saved credentials from secure storage');
-      final secureStorage = AmplifySecureStorageDart.factoryFrom(
-          windowsOptions: WindowsSecureStorageOptions(
-              storagePath: (await getApplicationSupportDirectory()).path))(
-        AmplifySecureStorageScope
-            .awsCognitoAuthPlugin, // dont know if this makes sense
-      );
+      final secureStorage = SecureStorage.getInstance();
       logger.d('Reading password from secure storage');
       password = await secureStorage.read(key: 'dbus_password');
     }

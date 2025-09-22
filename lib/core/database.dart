@@ -7,9 +7,8 @@ import 'package:postgres/postgres.dart' show Endpoint, SslMode;
 import 'package:json_annotation/json_annotation.dart' as json;
 export 'package:postgres/postgres.dart' show Sql;
 import 'package:logger/logger.dart';
-import 'package:amplify_secure_storage_dart/amplify_secure_storage_dart.dart';
-import 'package:path_provider/path_provider.dart';
 
+import 'secure_storage/secure_storage.dart';
 import 'database_drift.dart';
 import '../converter/duration_converter.dart';
 
@@ -92,12 +91,7 @@ class DatabaseConfig {
   static const _configLocation = 'database_config';
 
   static Future<DatabaseConfig> fromPrefs() async {
-    final prefs = AmplifySecureStorageDart.factoryFrom(
-        windowsOptions: WindowsSecureStorageOptions(
-            storagePath: (await getApplicationSupportDirectory()).path))(
-      AmplifySecureStorageScope
-          .awsCognitoAuthPlugin, // dont know if this makes sense
-    );
+    final prefs = SecureStorage.getInstance();
     var configJson = await prefs.read(key: _configLocation);
     DatabaseConfig config;
     if (configJson == null) {
@@ -113,10 +107,7 @@ class DatabaseConfig {
   }
 
   Future<void> toPrefs() async {
-    final prefs = AmplifySecureStorageDart.factoryFrom()(
-      AmplifySecureStorageScope
-          .awsCognitoAuthPlugin, // dont know if this makes sense
-    );
+    final prefs = SecureStorage.getInstance();
     final configJson = jsonEncode(toJson());
     await prefs.write(key: _configLocation, value: configJson);
   }

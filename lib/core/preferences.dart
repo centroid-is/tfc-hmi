@@ -3,10 +3,9 @@ import 'dart:io';
 
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:drift/drift.dart' show Variable;
-import 'package:amplify_secure_storage_dart/amplify_secure_storage_dart.dart';
-import 'package:path_provider/path_provider.dart';
 
 import 'database.dart';
+import 'secure_storage/secure_storage.dart';
 
 class PreferencesException implements Exception {
   final String message;
@@ -96,19 +95,14 @@ class Preferences implements PreferencesApi {
   final Database? database;
   final KeyCache keyCache = KeyCache();
   final SharedPreferencesAsync sharedPreferences = SharedPreferencesAsync();
-  final AmplifySecureStorageDart secureStorage;
+  final MySecureStorage secureStorage;
   final StreamController<String> _onPreferencesChanged =
       StreamController<String>.broadcast();
 
   Preferences({required this.database, required this.secureStorage});
 
   static Future<Preferences> create({required Database? db}) async {
-    final secureStorage = AmplifySecureStorageDart.factoryFrom(
-        windowsOptions: WindowsSecureStorageOptions(
-            storagePath: (await getApplicationSupportDirectory()).path))(
-      AmplifySecureStorageScope
-          .awsCognitoAuthPlugin, // dont know if this makes sense
-    );
+    final secureStorage = SecureStorage.getInstance();
     try {
       if (db == null) {
         return Preferences(database: null, secureStorage: secureStorage);
