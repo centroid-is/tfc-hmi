@@ -1,20 +1,24 @@
+// graph.dart
 import 'package:flutter/material.dart';
 import 'package:json_annotation/json_annotation.dart';
-import 'package:community_charts_flutter/community_charts_flutter.dart'
-    as charts;
+import 'package:cristalyse/cristalyse.dart' as cs;
 
 import '../converter/color_converter.dart';
 
 part 'graph.g.dart';
 
+/// -------------------- Data models (kept compatible) --------------------
+
 @JsonSerializable(explicitToJson: true)
 class GraphDataConfig {
   final String label;
-  final bool mainAxis; // Whether this is the main axis or a secondary axis
+
+  /// true => primary Y axis (left); false => secondary Y axis (right)
+  final bool mainAxis;
   @OptionalColorConverter()
   final Color? color;
 
-  GraphDataConfig({
+  const GraphDataConfig({
     required this.label,
     this.mainAxis = true,
     this.color,
@@ -28,9 +32,7 @@ class GraphDataConfig {
 @JsonEnum()
 enum GraphType {
   line,
-  bar,
-  scatter,
-  timeseries,
+  timeseries, // real-time / time on X
   barTimeseries,
 }
 
@@ -39,9 +41,9 @@ class GraphAxisConfig {
   final String unit;
   final double? min;
   final double? max;
-  final double? step;
+  final double? step; // not used by Cristalyse, kept for compat
 
-  GraphAxisConfig({
+  const GraphAxisConfig({
     required this.unit,
     this.min,
     this.max,
@@ -59,10 +61,15 @@ class GraphConfig {
   final GraphAxisConfig xAxis;
   final GraphAxisConfig yAxis;
   final GraphAxisConfig? yAxis2;
-  final Duration? xSpan; // New field for timeseries span
-  @JsonKey(includeFromJson: false, includeToJson: false)
-  final DateTimeRange? xRange; // New field for timeseries range
 
+  /// For timeseries: window width to show (e.g. last 10s/5m/1h)
+  final Duration? xSpan;
+
+  /// For timeseries: explicit viewport
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  final DateTimeRange? xRange;
+
+  /// Fallback palette for series without explicit color
   static const List<Color> colors = [
     Colors.blue,
     Colors.red,
@@ -79,12 +86,10 @@ class GraphConfig {
     Colors.amber,
     Colors.deepPurple,
     Colors.deepOrange,
-    Colors.deepOrange,
-    Colors.deepOrange,
     Colors.yellow,
   ];
 
-  GraphConfig({
+  const GraphConfig({
     required this.type,
     required this.xAxis,
     required this.yAxis,
@@ -98,16 +103,55 @@ class GraphConfig {
   Map<String, dynamic> toJson() => _$GraphConfigToJson(this);
 }
 
+/// -------------------- Pan event surface --------------------
+
+class GraphPanEvent {
+  /// Raw double X-range (same units as X domain)
+  final double? minX;
+  final double? maxX;
+
+  /// If timeseries: mapped to DateTime from ms since epoch
+  final DateTime? minTime;
+  final DateTime? maxTime;
+
+  /// Original Cristalyse pan payload
+  final cs.PanInfo info;
+
+  GraphPanEvent({
+    required this.info,
+    this.minX,
+    this.maxX,
+    this.minTime,
+    this.maxTime,
+  });
+}
+
+/// -------------------- Graph (Cristalyse-only) --------------------
+
 class Graph extends StatefulWidget {
   final GraphConfig config;
+
+  /// Each map = one series.
+  /// Key = GraphDataConfig (label/color/axis); Value = list of [x, y] points.
+  /// For timeseries: x is milliseconds since epoch.
   final List<Map<GraphDataConfig, List<List<double>>>> data;
+
+  /// Panning callbacks (propagate visible X range)
+  final void Function(GraphPanEvent event)? onPanUpdate;
+  final void Function(GraphPanEvent event)? onPanEnd;
+
+  /// Legacy: called when pan ends (kept to avoid breaking downstream)
   final Function()? onPanCompleted;
-  final bool showDate; // Simple boolean flag
+
+  /// Show date on time-axis ticks (vs time only)
+  final bool showDate;
 
   const Graph({
     super.key,
     required this.config,
     required this.data,
+    this.onPanUpdate,
+    this.onPanEnd,
     this.onPanCompleted,
     this.showDate = false,
   });
@@ -117,675 +161,407 @@ class Graph extends StatefulWidget {
 }
 
 class _GraphState extends State<Graph> {
-  final Set<String> _hiddenSeries = {};
-  Offset _legendOffset = const Offset(16, 16); // left, top
+  // Build-once theme; no rebuild churn
+  late final cs.ChartTheme _theme = cs.ChartTheme.defaultTheme();
 
   @override
   Widget build(BuildContext context) {
-    // Filter out hidden series
-    final filteredData = widget.data.map((seriesMap) {
-      return Map.fromEntries(
-        seriesMap.entries.where((e) => !_hiddenSeries.contains(e.key.label)),
-      );
-    }).toList();
-
-    Widget chart = _buildChart(filteredData);
-
-    return Stack(
-      children: [
-        chart,
-        Positioned(
-          left: _legendOffset.dx,
-          top: _legendOffset.dy,
-          child: GestureDetector(
-            onPanUpdate: (details) {
-              setState(() {
-                _legendOffset += details.delta;
-                if (_legendOffset.dx < 0) {
-                  _legendOffset = Offset(0, _legendOffset.dy);
-                }
-                if (_legendOffset.dy < 0) {
-                  _legendOffset = Offset(_legendOffset.dx, 0);
-                }
-              });
-            },
-            child: _buildLegend(context),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildChart(
-      List<Map<GraphDataConfig, List<List<double>>>> filteredData) {
-    // If no data is provided, show an empty container with the same dimensions
-    if (filteredData.isEmpty || filteredData.every((m) => m.isEmpty)) {
+    // Early out keeps rebuilds cheap for RT charts
+    if (widget.data.isEmpty || widget.data.every((m) => m.isEmpty)) {
       return const SizedBox.shrink();
     }
 
-    // Configure behaviors
+    final flattened = _flatten(widget.data);
+    final palette = _buildCategoryPalette(flattened.order, widget.data);
+
+    // If timeseries, prepare viewport & label formatter
+    _Viewport? tsViewport;
+    String Function(num)? timeLabeler;
+    if (widget.config.type == GraphType.timeseries) {
+      final vpAndFmt = _computeTimeViewportAndFormatter(flattened.rows);
+      tsViewport = vpAndFmt.viewport;
+      timeLabeler = vpAndFmt.formatter;
+    }
+
     switch (widget.config.type) {
-      case GraphType.timeseries:
-        // Use DateTime as x-axis
-        final series = _convertDataToTimeSeries(filteredData);
-        return charts.TimeSeriesChart(
-          series,
-          animate: false,
-          defaultRenderer: charts.LineRendererConfig<DateTime>(),
-          domainAxis: _buildDateTimeAxisSpec(
-              widget.config.xAxis, widget.config.xSpan, widget.config.xRange),
-          primaryMeasureAxis: _buildAxisSpec(widget.config.yAxis),
-          secondaryMeasureAxis: widget.config.yAxis2 != null
-              ? _buildAxisSpec(widget.config.yAxis2!)
-              : null,
-          behaviors: [
-            charts.PanAndZoomBehavior<DateTime>(
-              panningCompletedCallback: () {
-                if (widget.onPanCompleted != null) {
-                  widget.onPanCompleted!();
-                }
-              },
-            ),
-          ],
-        );
       case GraphType.line:
-        // Use numeric x-axis
-        final series = _convertDataToNumericSeries(filteredData);
-        return charts.LineChart(
-          series,
-          animate: false,
-          domainAxis: _buildAxisSpec(widget.config.xAxis, 15),
-          primaryMeasureAxis: _buildAxisSpec(widget.config.yAxis),
-          secondaryMeasureAxis: widget.config.yAxis2 != null
-              ? _buildAxisSpec(widget.config.yAxis2!)
-              : null,
-          behaviors: [
-            charts.PanAndZoomBehavior<num>(
-              panningCompletedCallback: () {
-                if (widget.onPanCompleted != null) {
-                  widget.onPanCompleted!();
-                }
-              },
-            ),
-          ],
-        );
+        return _buildLine(flattened, palette);
+      case GraphType.timeseries:
+        return _buildTimeseries(flattened, palette, tsViewport, timeLabeler!);
       case GraphType.barTimeseries:
-        // Use DateTime as x-axis for bar chart
-        final series = _convertDataToTimeBarSeries(filteredData);
-        return charts.TimeSeriesChart(
-          series,
-          defaultRenderer: charts.BarRendererConfig<DateTime>(),
-          animate: false,
-          domainAxis: _buildDateTimeAxisSpec(
-              widget.config.xAxis, widget.config.xSpan, widget.config.xRange),
-          primaryMeasureAxis: _buildAxisSpec(widget.config.yAxis),
-          secondaryMeasureAxis: widget.config.yAxis2 != null
-              ? _buildAxisSpec(widget.config.yAxis2!)
-              : null,
-          behaviors: [
-            charts.PanAndZoomBehavior<DateTime>(
-              panningCompletedCallback: () {
-                if (widget.onPanCompleted != null) {
-                  widget.onPanCompleted!();
-                }
-              },
-            ),
-          ],
-        );
-      case GraphType.bar:
-        // Use string x-axis
-        final series = _convertDataToBarSeries(filteredData);
-        return charts.BarChart(
-          series,
-          animate: false,
-          domainAxis: _buildAxisSpec(widget.config.xAxis),
-          primaryMeasureAxis: _buildAxisSpec(widget.config.yAxis),
-          secondaryMeasureAxis: widget.config.yAxis2 != null
-              ? _buildAxisSpec(widget.config.yAxis2!)
-              : null,
-          behaviors: [
-            charts.PanAndZoomBehavior<String>(
-              panningCompletedCallback: () {
-                if (widget.onPanCompleted != null) {
-                  widget.onPanCompleted!();
-                }
-              },
-            ),
-          ],
-        );
-      case GraphType.scatter:
-        final behaviors = [
-          charts.PanAndZoomBehavior<num>(
-            panningCompletedCallback: () {
-              if (widget.onPanCompleted != null) {
-                widget.onPanCompleted!();
-              }
+        return const Text("Bar Timeseries");
+    }
+  }
+
+  /// ---------- Data → Cristalyse rows ----------
+  /// Each row:
+  /// {'x': double, 'y': double?, 'y2': double?, 'series': String}
+  _Flattened _flatten(
+    List<Map<GraphDataConfig, List<List<double>>>> data,
+  ) {
+    final rows = <Map<String, dynamic>>[];
+    final order = <String>[];
+
+    for (final seriesMap in data) {
+      seriesMap.forEach((cfg, points) {
+        if (!order.contains(cfg.label)) order.add(cfg.label);
+        final isPrimary = cfg.mainAxis;
+        for (final p in points) {
+          if (p.length != 2) continue;
+          final x = p[0];
+          final y = p[1];
+          if (!_isFinite(x) || !_isFinite(y)) continue;
+          rows.add({
+            'x': x,
+            'y': isPrimary ? y : null,
+            'y2': isPrimary ? null : y,
+            'series': cfg.label,
+          });
+        }
+      });
+    }
+    return _Flattened(rows: rows, order: order);
+  }
+
+  Map<String, Color> _buildCategoryPalette(
+    List<String> order,
+    List<Map<GraphDataConfig, List<List<double>>>> source,
+  ) {
+    final map = <String, Color>{};
+    var idx = 0;
+
+    // Respect explicit colors first
+    for (final seriesMap in source) {
+      for (final entry in seriesMap.entries) {
+        final label = entry.key.label;
+        if (map.containsKey(label)) continue;
+        map[label] = entry.key.color ??
+            GraphConfig.colors[idx % GraphConfig.colors.length];
+        idx++;
+      }
+    }
+    // Ensure all labels have a color
+    for (final label in order) {
+      map.putIfAbsent(
+          label, () => GraphConfig.colors[idx++ % GraphConfig.colors.length]);
+    }
+    return map;
+  }
+
+  /// ---------- Timeseries viewport + formatter (ms → labels) ----------
+  _ViewportAndFormatter _computeTimeViewportAndFormatter(
+      List<Map<String, dynamic>> rows) {
+    DateTime? start;
+    DateTime? end;
+
+    if (widget.config.xRange != null) {
+      // Hard range wins
+      start = widget.config.xRange!.start;
+      end = widget.config.xRange!.end;
+    } else if (widget.config.xSpan != null) {
+      // Anchor to NOW (fix: guarantees exact span even if last point < now)
+      end = DateTime.now();
+      start = end.subtract(widget.config.xSpan!);
+    } else {
+      // Fallback: auto-fit to data (rare for RT boards; keeps old behavior)
+      if (rows.isNotEmpty) {
+        int minMs = 1 << 62;
+        int maxMs = 0;
+        for (final r in rows) {
+          final x = (r['x'] as num).toInt();
+          if (x < minMs) minMs = x;
+          if (x > maxMs) maxMs = x;
+        }
+        if (maxMs > 0 && minMs < maxMs) {
+          start = DateTime.fromMillisecondsSinceEpoch(minMs);
+          end = DateTime.fromMillisecondsSinceEpoch(maxMs);
+        }
+      }
+    }
+
+    final formatter = _timeFormatter(
+      start: start,
+      end: end,
+      showDate: widget.showDate,
+    );
+    print("rows: $rows");
+    print("start: $start, end: $end");
+
+    return _ViewportAndFormatter(
+      viewport: (start != null && end != null)
+          ? _Viewport(start: start, end: end)
+          : null,
+      formatter: formatter,
+    );
+  }
+
+  /// ---------- Chart builders ----------
+
+  Widget _buildLine(_Flattened f, Map<String, Color> palette) {
+    final tooltipBuilder = _tooltipBuilder(isTimeseries: false);
+
+    return cs.CristalyseChart()
+        .data(f.rows)
+        .mapping(x: 'x', y: 'y', color: 'series')
+        .mappingY2('y2')
+        .geomLine(strokeWidth: 2.0, yAxis: cs.YAxis.primary, alpha: 1.0)
+        .geomLine(strokeWidth: 2.0, yAxis: cs.YAxis.secondary, alpha: 1.0)
+        .geomPoint(size: 2.5, alpha: 0.85, yAxis: cs.YAxis.primary)
+        .geomPoint(size: 2.5, alpha: 0.85, yAxis: cs.YAxis.secondary)
+        .scaleXContinuous(
+          min: widget.config.xAxis.min,
+          max: widget.config.xAxis.max,
+          labels: (v) => _numLabel(v, widget.config.xAxis.unit),
+        )
+        .scaleYContinuous(
+          min: widget.config.yAxis.min,
+          max: widget.config.yAxis.max,
+          labels: (v) => _numLabel(v, widget.config.yAxis.unit),
+        )
+        .scaleY2Continuous(
+          min: widget.config.yAxis2?.min,
+          max: widget.config.yAxis2?.max,
+          labels: (v) => _numLabel(v, widget.config.yAxis2?.unit ?? ''),
+        )
+        .customPalette(categoryColors: palette)
+        .interaction(
+          pan: cs.PanConfig(
+            enabled: true,
+            updateXDomain: true,
+            updateYDomain: false,
+            throttle: const Duration(milliseconds: 32), // ~30 FPS
+            onPanUpdate: _relayPan(isTimeseries: false, end: false),
+            onPanEnd: _relayPan(isTimeseries: false, end: true),
+          ),
+          tooltip: cs.TooltipConfig(
+            builder: tooltipBuilder,
+            showDelay: Duration.zero,
+            hideDelay: const Duration(milliseconds: 200),
+            followPointer: true,
+          ),
+        )
+        .theme(_theme)
+        .animate(duration: Duration.zero) // real-time friendly
+        .build();
+  }
+
+  // 2) Ensure your timeseries builder uses that viewport strictly
+  Widget _buildTimeseries(
+    _Flattened f,
+    Map<String, Color> palette,
+    _Viewport? viewport,
+    String Function(num) timeLabeler,
+  ) {
+    return cs.CristalyseChart()
+        .data(f.rows)
+        .mapping(x: 'x', y: 'y', color: 'series')
+        .mappingY2('y2')
+        .geomLine(strokeWidth: 2.0, yAxis: cs.YAxis.primary, alpha: 1.0)
+        .geomLine(strokeWidth: 2.0, yAxis: cs.YAxis.secondary, alpha: 1.0)
+        .geomPoint(size: 2.0, alpha: 0.85, yAxis: cs.YAxis.primary)
+        .geomPoint(size: 2.0, alpha: 0.85, yAxis: cs.YAxis.secondary)
+        .scaleXContinuous(
+          // X = ms since epoch; force exact window:
+          min: viewport != null
+              ? viewport.start.millisecondsSinceEpoch.toDouble()
+              : widget.config.xAxis.min,
+          max: viewport != null
+              ? viewport.end.millisecondsSinceEpoch.toDouble()
+              : widget.config.xAxis.max,
+          labels: timeLabeler, // drives tick text for the span
+        )
+        .scaleYContinuous(
+          min: widget.config.yAxis.min,
+          max: widget.config.yAxis.max,
+          labels: (v) => _numLabel(v, widget.config.yAxis.unit),
+        )
+        .scaleY2Continuous(
+          min: widget.config.yAxis2?.min,
+          max: widget.config.yAxis2?.max,
+          labels: (v) => _numLabel(v, widget.config.yAxis2?.unit ?? ''),
+        )
+        .customPalette(categoryColors: palette)
+        .interaction(
+          pan: cs.PanConfig(
+            enabled: true,
+            updateXDomain: true,
+            updateYDomain: false,
+            throttle: const Duration(milliseconds: 32),
+            onPanUpdate: _relayPan(isTimeseries: true, end: false),
+            onPanEnd: (info) {
+              _relayPan(isTimeseries: true, end: true)(info);
+              widget.onPanCompleted?.call();
             },
           ),
-        ];
-        final series = _convertDataToNumericSeries(filteredData);
-        // Return empty container if no valid series data
-        if (series.isEmpty) {
-          return const SizedBox.shrink();
-        }
-        return charts.ScatterPlotChart(
-          series,
-          animate: false,
-          domainAxis: _buildAxisSpec(widget.config.xAxis),
-          primaryMeasureAxis: _buildAxisSpec(widget.config.yAxis),
-          secondaryMeasureAxis: widget.config.yAxis2 != null
-              ? _buildAxisSpec(widget.config.yAxis2!)
-              : null,
-          behaviors: behaviors,
-        );
-    }
-  }
-
-  Widget _buildLegend(BuildContext context) {
-    // Collect all series configs
-    final configs = <GraphDataConfig>{};
-    for (final map in widget.data) {
-      configs.addAll(map.keys);
-    }
-    if (configs.isEmpty) return const SizedBox.shrink();
-
-    // Use the same color palette as charts
-    final palette = charts.MaterialPalette.getOrderedPalettes(configs.length);
-
-    return Card(
-      color: Theme.of(context).colorScheme.surfaceBright.withAlpha(200),
-      elevation: 2,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: configs.toList().asMap().entries.map((entry) {
-            final i = entry.key;
-            final config = entry.value;
-            final isHidden = _hiddenSeries.contains(config.label);
-            final chartColor = palette[i].shadeDefault.darker;
-            final color = config.color ??
-                Color.fromARGB(
-                    chartColor.a, chartColor.r, chartColor.g, chartColor.b);
-
-            return InkWell(
-              onTap: () {
-                setState(() {
-                  if (isHidden) {
-                    _hiddenSeries.remove(config.label);
-                  } else {
-                    _hiddenSeries.add(config.label);
-                  }
-                });
-              },
-              child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 4),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    // Color dot
-                    Container(
-                      width: 14,
-                      height: 14,
-                      margin: const EdgeInsets.only(right: 8),
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: isHidden ? color.withAlpha(128) : color,
-                        border: Border.all(
-                          color: color,
-                          width: 2,
-                        ),
-                      ),
-                    ),
-                    Text(
-                      config.label,
-                      style: TextStyle(
-                        decoration:
-                            isHidden ? TextDecoration.lineThrough : null,
-                        color: isHidden ? Colors.grey : color,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 15,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            );
-          }).toList(),
-        ),
-      ),
-    );
-  }
-
-  // Helper to calculate delta between viewports
-  double _calculateDelta(
-    charts.NumericExtents previous,
-    charts.NumericExtents current,
-  ) {
-    final previousCenter = (previous.min! + previous.max!) / 2;
-    final currentCenter = (current.min! + current.max!) / 2;
-    return previousCenter - currentCenter;
-  }
-
-  // Add these validation methods
-
-  bool _isValidNumber(double value) {
-    return !value.isNaN && !value.isInfinite;
-  }
-
-  bool _isValidDataPoint(List<double> point) {
-    return point.length == 2 &&
-        _isValidNumber(point[0]) &&
-        _isValidNumber(point[1]);
-  }
-
-  static int _floatToInt8(double x) {
-    return (x * 255.0).round() & 0xff;
-  }
-
-  // Convert input data to numeric series (for line and scatter charts)
-  List<charts.Series<_Point, num>> _convertDataToNumericSeries(
-      List<Map<GraphDataConfig, List<List<double>>>> data) {
-    final seriesList = <charts.Series<_Point, num>>[];
-    final usedLabels = <String>{};
-
-    for (var seriesMap in data) {
-      seriesMap.forEach((config, points) {
-        // Validate label uniqueness
-        if (usedLabels.contains(config.label)) {
-          throw ArgumentError('Duplicate series label: ${config.label}');
-        }
-        usedLabels.add(config.label);
-
-        // Filter out invalid points
-        final validPoints = points.where(_isValidDataPoint).toList();
-        if (validPoints.isEmpty) return;
-
-        final data = validPoints.map((p) => _Point(p[0], p[1])).toList();
-
-        final series = charts.Series<_Point, num>(
-          id: config.label,
-          data: data,
-          domainFn: (_Point point, _) => point.x,
-          measureFn: (_Point point, _) => point.y,
-          seriesColor: config.color != null
-              ? charts.Color(
-                  a: _floatToInt8(config.color!.a),
-                  r: _floatToInt8(config.color!.r),
-                  g: _floatToInt8(config.color!.g),
-                  b: _floatToInt8(config.color!.b),
-                )
-              : null,
-        );
-        if (!config.mainAxis) {
-          series.setAttribute(
-              charts.measureAxisIdKey, charts.Axis.secondaryMeasureAxisId);
-        }
-        seriesList.add(series);
-      });
-    }
-    return seriesList;
-  }
-
-  List<charts.Series<_TimePoint, DateTime>> _convertDataToTimeBarSeries(
-      List<Map<GraphDataConfig, List<List<double>>>> data) {
-    final seriesList = <charts.Series<_TimePoint, DateTime>>[];
-    for (var seriesMap in data) {
-      seriesMap.forEach((config, points) {
-        final data = points
-            .where((p) => p.length == 2)
-            .map((p) => _TimePoint(
-                DateTime.fromMillisecondsSinceEpoch(p[0].toInt()), p[1]))
-            .toList();
-        if (data.isNotEmpty) {
-          final series = charts.Series<_TimePoint, DateTime>(
-            id: config.label,
-            data: data,
-            domainFn: (_TimePoint point, _) => point.time,
-            measureFn: (_TimePoint point, _) => point.value,
-            seriesColor: config.color != null
-                ? charts.Color(
-                    a: _floatToInt8(config.color!.a),
-                    r: _floatToInt8(config.color!.r),
-                    g: _floatToInt8(config.color!.g),
-                    b: _floatToInt8(config.color!.b),
-                  )
-                : null,
-          );
-          if (!config.mainAxis) {
-            series.setAttribute(
-                charts.measureAxisIdKey, charts.Axis.secondaryMeasureAxisId);
-          }
-          seriesList.add(series);
-        }
-      });
-    }
-    return seriesList;
-  }
-
-  // Convert input data to bar series (for bar charts)
-  List<charts.Series<_BarPoint, String>> _convertDataToBarSeries(
-      List<Map<GraphDataConfig, List<List<double>>>> data) {
-    final seriesList = <charts.Series<_BarPoint, String>>[];
-    for (var seriesMap in data) {
-      seriesMap.forEach((config, points) {
-        final data =
-            points.map((p) => _BarPoint(p[0].toString(), p[1])).toList();
-        final series = charts.Series<_BarPoint, String>(
-          id: config.label,
-          data: data,
-          domainFn: (_BarPoint point, _) => point.x,
-          measureFn: (_BarPoint point, _) => point.y,
-          seriesColor: config.color != null
-              ? charts.Color(
-                  a: _floatToInt8(config.color!.a),
-                  r: _floatToInt8(config.color!.r),
-                  g: _floatToInt8(config.color!.g),
-                  b: _floatToInt8(config.color!.b),
-                )
-              : null,
-        );
-        if (!config.mainAxis) {
-          series.setAttribute(
-              charts.measureAxisIdKey, charts.Axis.secondaryMeasureAxisId);
-        }
-        seriesList.add(series);
-      });
-    }
-    return seriesList;
-  }
-
-  // Convert input data to time series (for timeseries charts)
-  List<charts.Series<_TimePoint, DateTime>> _convertDataToTimeSeries(
-      List<Map<GraphDataConfig, List<List<double>>>> data) {
-    final seriesList = <charts.Series<_TimePoint, DateTime>>[];
-    for (var seriesMap in data) {
-      seriesMap.forEach((config, points) {
-        final data = points
-            .where((p) => p.length == 2)
-            .map((p) => _TimePoint(
-                DateTime.fromMillisecondsSinceEpoch(p[0].toInt()), p[1]))
-            .toList();
-        if (data.isNotEmpty) {
-          final series = charts.Series<_TimePoint, DateTime>(
-            id: config.label,
-            data: data,
-            domainFn: (_TimePoint point, _) => point.time,
-            measureFn: (_TimePoint point, _) => point.value,
-            seriesColor: config.color != null
-                ? charts.Color(
-                    a: _floatToInt8(config.color!.a),
-                    r: _floatToInt8(config.color!.r),
-                    g: _floatToInt8(config.color!.g),
-                    b: _floatToInt8(config.color!.b),
-                  )
-                : null,
-          );
-          if (!config.mainAxis) {
-            series.setAttribute(
-                charts.measureAxisIdKey, charts.Axis.secondaryMeasureAxisId);
-          }
-          seriesList.add(series);
-        }
-      });
-    }
-    return seriesList;
-  }
-
-  // Build axis specification from configuration
-  charts.NumericAxisSpec _buildAxisSpec(GraphAxisConfig axisConfig,
-      [int? offset]) {
-    // Validate axis configuration
-    if (axisConfig.min != null && axisConfig.max != null) {
-      if (axisConfig.min! >= axisConfig.max!) {
-        throw ArgumentError('Axis min must be less than max');
-      }
-    }
-    if (axisConfig.step != null && axisConfig.step! <= 0) {
-      throw ArgumentError('Axis step must be positive');
-    }
-
-    return charts.NumericAxisSpec(
-      viewport: axisConfig.min != null && axisConfig.max != null
-          ? charts.NumericExtents(axisConfig.min!, axisConfig.max!)
-          : null,
-      tickProviderSpec: axisConfig.step != null
-          ? charts.StaticNumericTickProviderSpec(
-              _generateTicks(axisConfig.min, axisConfig.max, axisConfig.step!),
-            )
-          : null,
-      renderSpec: charts.GridlineRendererSpec(
-        labelStyle: charts.TextStyleSpec(fontSize: 12),
-        lineStyle: charts.LineStyleSpec(
-          thickness: 1,
-          color: charts.MaterialPalette.gray.shade300,
-        ),
-        labelOffsetFromAxisPx: offset,
-      ),
-      showAxisLine: true,
-      tickFormatterSpec: charts.BasicNumericTickFormatterSpec(
-        (num? value) => value != null
-            ? '${value.toStringAsFixed(1)} ${axisConfig.unit}'
-            : '',
-      ),
-    );
-  }
-
-  // Build string axis specification for bar charts
-  charts.AxisSpec<String> _buildStringAxisSpec(GraphAxisConfig axisConfig) {
-    return charts.AxisSpec<String>(
-      renderSpec: charts.GridlineRendererSpec(
-        labelStyle: charts.TextStyleSpec(fontSize: 12),
-        lineStyle: charts.LineStyleSpec(
-          thickness: 1,
-          color: charts.MaterialPalette.gray.shade300,
-        ),
-      ),
-      showAxisLine: true,
-    );
-  }
-
-  charts.DateTimeAxisSpec _buildDateTimeAxisSpec(GraphAxisConfig axisConfig,
-      [Duration? xSpan, DateTimeRange? xRange]) {
-    // If you gave min/max in ms since epoch, you can use them to zoom the viewport:
-    charts.DateTimeExtents? extents;
-
-    if (xRange != null) {
-      // Use xRange to set the viewport
-      extents = charts.DateTimeExtents(
-        start: xRange.start,
-        end: xRange.end,
-      );
-    } else if (axisConfig.min != null && axisConfig.max != null) {
-      // Use explicit min/max from axis config
-      extents = charts.DateTimeExtents(
-        start: DateTime.fromMillisecondsSinceEpoch(axisConfig.min!.toInt()),
-        end: DateTime.fromMillisecondsSinceEpoch(axisConfig.max!.toInt()),
-      );
-    } else if (xSpan != null) {
-      // Use xSpan to calculate viewport from the latest data point
-      final allTimePoints = <DateTime>[];
-      for (var seriesMap in widget.data) {
-        seriesMap.forEach((config, points) {
-          for (var point in points) {
-            if (point.length == 2) {
-              allTimePoints
-                  .add(DateTime.fromMillisecondsSinceEpoch(point[0].toInt()));
-            }
-          }
-        });
-      }
-
-      if (allTimePoints.isNotEmpty) {
-        final latestTime = allTimePoints.reduce((a, b) => a.isAfter(b) ? a : b);
-        final startTime = latestTime.subtract(xSpan);
-        extents = charts.DateTimeExtents(
-          start: startTime,
-          end: latestTime,
-        );
-      }
-    }
-
-    // Determine appropriate tick provider based on time span
-    charts.DateTimeTickProviderSpec tickProviderSpec;
-    charts.DateTimeTickFormatterSpec tickFormatterSpec;
-
-    if (extents != null) {
-      final duration = extents.end.difference(extents.start);
-
-      // Use AutoDateTimeTickProviderSpec for dynamic tick generation when panning
-      // This allows ticks to be generated for the current viewport as you pan
-      tickProviderSpec = const charts.AutoDateTimeTickProviderSpec();
-
-      // Set appropriate formatter based on duration
-      if (duration.inMinutes <= 1) {
-        // For very short spans (≤1 minute), use 10-second intervals
-        tickProviderSpec = charts.StaticDateTimeTickProviderSpec(
-          _generateTimeTicks(
-              extents.start, extents.end, const Duration(seconds: 10)),
-        );
-        tickFormatterSpec = const charts.AutoDateTimeTickFormatterSpec(
-          minute: charts.TimeFormatterSpec(
-            format: 'HH:mm:ss',
-            transitionFormat: 'HH:mm:ss',
+          tooltip: cs.TooltipConfig(
+            builder: _tooltipBuilder(isTimeseries: true),
+            showDelay: Duration.zero,
+            hideDelay: const Duration(milliseconds: 200),
+            followPointer: true,
           ),
-        );
-      } else if (duration.inMinutes <= 5) {
-        tickFormatterSpec = const charts.AutoDateTimeTickFormatterSpec(
-          minute: charts.TimeFormatterSpec(
-            format: 'HH:mm:ss',
-            transitionFormat: 'HH:mm:ss',
-          ),
-        );
-      } else if (duration.inMinutes <= 30) {
-        tickFormatterSpec = charts.AutoDateTimeTickFormatterSpec(
-          minute: charts.TimeFormatterSpec(
-            format: widget.showDate ? 'MM/dd HH:mm' : 'HH:mm',
-            transitionFormat: widget.showDate ? 'MM/dd HH:mm' : 'HH:mm',
-          ),
-        );
-      } else if (duration.inHours <= 2) {
-        tickFormatterSpec = charts.AutoDateTimeTickFormatterSpec(
-          minute: charts.TimeFormatterSpec(
-            format: widget.showDate ? 'MM/dd HH:mm' : 'HH:mm',
-            transitionFormat: widget.showDate ? 'MM/dd HH:mm' : 'HH:mm',
-          ),
-        );
+        )
+        .theme(_theme)
+        .animate(duration: Duration.zero)
+        .build();
+  }
+
+  /// ---------- Tooltip builders ----------
+  cs.TooltipBuilder _tooltipBuilder({required bool isTimeseries}) {
+    return (pt) {
+      final series = pt.getDisplayValue('series');
+      final xRaw = pt.getDisplayValue('x') as num?;
+      final y1 = pt.getDisplayValue('y');
+      final y2 = pt.getDisplayValue('y2');
+
+      String xLine;
+      if (isTimeseries && xRaw != null) {
+        final dt = DateTime.fromMillisecondsSinceEpoch(xRaw.toInt());
+        xLine = _formatTime(dt, showDate: widget.showDate);
       } else {
-        tickFormatterSpec = charts.AutoDateTimeTickFormatterSpec(
-          minute: charts.TimeFormatterSpec(
-            format: widget.showDate ? 'MM/dd HH:mm' : 'HH:mm',
-            transitionFormat: widget.showDate ? 'MM/dd HH:mm' : 'HH:mm',
-          ),
-          hour: charts.TimeFormatterSpec(
-            format: widget.showDate ? 'MM/dd HH:mm' : 'HH:mm',
-            transitionFormat: widget.showDate ? 'MM/dd HH:mm' : 'HH:mm',
-          ),
-          day: charts.TimeFormatterSpec(
-            format: 'MM/dd',
-            transitionFormat: 'yyyy-MM-dd',
-          ),
-        );
+        xLine = xRaw?.toString() ?? '';
       }
-    } else {
-      // Fallback to auto tick provider
-      tickProviderSpec = const charts.AutoDateTimeTickProviderSpec();
-      tickFormatterSpec = charts.AutoDateTimeTickFormatterSpec(
-        minute: charts.TimeFormatterSpec(
-          format: widget.showDate ? 'MM/dd HH:mm' : 'HH:mm',
-          transitionFormat: widget.showDate ? 'MM/dd HH:mm' : 'HH:mm',
+
+      final valueLine = y1 ?? y2 ?? '';
+
+      return Container(
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: Colors.black.withOpacity(0.85),
+          borderRadius: BorderRadius.circular(8),
         ),
-        hour: charts.TimeFormatterSpec(
-          format: widget.showDate ? 'MM/dd HH:mm' : 'HH:mm',
-          transitionFormat: widget.showDate ? 'MM/dd HH:mm' : 'HH:mm',
-        ),
-        day: charts.TimeFormatterSpec(
-          format: 'MM/dd',
-          transitionFormat: 'yyyy-MM-dd',
+        child: DefaultTextStyle(
+          style: const TextStyle(color: Colors.white, fontSize: 12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text('$series',
+                  style: const TextStyle(fontWeight: FontWeight.bold)),
+              const SizedBox(height: 4),
+              if (xLine.isNotEmpty)
+                Text(isTimeseries ? 'Time: $xLine' : 'X: $xLine'),
+              Text('Value: $valueLine'),
+            ],
+          ),
         ),
       );
-    }
-
-    return charts.DateTimeAxisSpec(
-      viewport: extents,
-      tickProviderSpec: tickProviderSpec,
-      tickFormatterSpec: tickFormatterSpec,
-      showAxisLine: true,
-    );
+    };
   }
 
-  // Helper method to generate time ticks
-  List<charts.TickSpec<DateTime>> _generateTimeTicks(
-      DateTime start, DateTime end, Duration interval) {
-    final ticks = <charts.TickSpec<DateTime>>[];
+  /// ---------- Pan relay ----------
+  cs.PanCallback _relayPan({required bool isTimeseries, required bool end}) {
+    return (info) {
+      if (widget.onPanUpdate == null &&
+          widget.onPanEnd == null &&
+          widget.onPanCompleted == null) {
+        return;
+      }
 
-    // Round start time down to the nearest interval
-    DateTime current = _roundDownToInterval(start, interval);
+      DateTime? minTime, maxTime;
+      if (isTimeseries) {
+        if (info.visibleMinX != null) {
+          minTime =
+              DateTime.fromMillisecondsSinceEpoch(info.visibleMinX!.toInt());
+        }
+        if (info.visibleMaxX != null) {
+          maxTime =
+              DateTime.fromMillisecondsSinceEpoch(info.visibleMaxX!.toInt());
+        }
+      }
 
-    while (current.isBefore(end) || current.isAtSameMomentAs(end)) {
-      ticks.add(charts.TickSpec(current));
-      current = current.add(interval);
-    }
+      final ev = GraphPanEvent(
+        info: info,
+        minX: info.visibleMinX,
+        maxX: info.visibleMaxX,
+        minTime: minTime,
+        maxTime: maxTime,
+      );
 
-    return ticks;
+      if (end) {
+        widget.onPanEnd?.call(ev);
+      } else {
+        widget.onPanUpdate?.call(ev);
+      }
+    };
   }
 
-  // Helper method to round down to the nearest interval
-  DateTime _roundDownToInterval(DateTime dateTime, Duration interval) {
-    if (interval.inSeconds >= 60) {
-      // For minute intervals and above
-      final minutes =
-          (dateTime.minute ~/ (interval.inMinutes)) * interval.inMinutes;
-      return DateTime(dateTime.year, dateTime.month, dateTime.day,
-          dateTime.hour, minutes, 0, 0);
-    } else {
-      // For second intervals
-      final seconds =
-          (dateTime.second ~/ interval.inSeconds) * interval.inSeconds;
-      return DateTime(dateTime.year, dateTime.month, dateTime.day,
-          dateTime.hour, dateTime.minute, seconds, 0);
-    }
+  /// ---------- Formatting helpers ----------
+  static bool _isFinite(num v) => v.isFinite;
+
+  static String _numLabel(num v, String unit) {
+    final text =
+        (v == v.roundToDouble()) ? v.toInt().toString() : v.toStringAsFixed(1);
+    return unit.isEmpty ? text : '$text $unit';
   }
 
-  // Generate ticks for static axis configuration
-  List<charts.TickSpec<num>> _generateTicks(
-      double? min, double? max, double step) {
-    if (min == null || max == null) return [];
-    final ticks = <charts.TickSpec<num>>[];
-    double current = min;
-    while (current <= max) {
-      ticks.add(charts.TickSpec(current));
-      current += step;
+  static String Function(num) _timeFormatter({
+    DateTime? start,
+    DateTime? end,
+    required bool showDate,
+  }) {
+    String fmt(DateTime dt, Duration span) {
+      if (span <= const Duration(minutes: 1)) {
+        return showDate ? _fmt(dt, 'MM/dd HH:mm:ss') : _fmt(dt, 'HH:mm:ss');
+      } else if (span <= const Duration(hours: 2)) {
+        return showDate ? _fmt(dt, 'MM/dd HH:mm') : _fmt(dt, 'HH:mm');
+      } else if (span <= const Duration(days: 2)) {
+        return showDate ? _fmt(dt, 'MM/dd HH:mm') : _fmt(dt, 'HH:mm');
+      } else if (span <= const Duration(days: 60)) {
+        return _fmt(dt, 'MM/dd');
+      } else {
+        return _fmt(dt, 'yyyy-MM-dd');
+      }
     }
-    return ticks;
+
+    final span = (start != null && end != null)
+        ? end.difference(start)
+        : const Duration(hours: 1);
+
+    return (num value) {
+      final dt = DateTime.fromMillisecondsSinceEpoch(value.toInt());
+      return fmt(dt, span);
+    };
+  }
+
+  static String _formatTime(DateTime dt, {required bool showDate}) {
+    return showDate ? _fmt(dt, 'MM/dd HH:mm:ss') : _fmt(dt, 'HH:mm:ss');
+  }
+
+  // Minimal formatter (no intl) for the patterns we need
+  static String _fmt(DateTime dt, String pattern) {
+    String two(int n) => n < 10 ? '0$n' : '$n';
+    final yyyy = dt.year.toString();
+    final MM = two(dt.month);
+    final dd = two(dt.day);
+    final HH = two(dt.hour);
+    final mm = two(dt.minute);
+    final ss = two(dt.second);
+    return pattern
+        .replaceAll('yyyy', yyyy)
+        .replaceAll('MM', MM)
+        .replaceAll('dd', dd)
+        .replaceAll('HH', HH)
+        .replaceAll('mm', mm)
+        .replaceAll('ss', ss);
   }
 }
 
-// Internal class to represent a data point
-class _Point {
-  final double x;
-  final double y;
+/// -------------------- small privates --------------------
 
-  _Point(this.x, this.y);
+class _Flattened {
+  final List<Map<String, dynamic>> rows;
+  final List<String> order;
+  _Flattened({required this.rows, required this.order});
 }
 
-// Internal class to represent a bar point
-class _BarPoint {
-  final String x;
-  final double y;
-
-  _BarPoint(this.x, this.y);
+class _Viewport {
+  final DateTime start;
+  final DateTime end;
+  const _Viewport({required this.start, required this.end});
 }
 
-// Internal class to represent a time series data point
-class _TimePoint {
-  final DateTime time;
-  final double value;
-
-  _TimePoint(this.time, this.value);
-
-  @override
-  String toString() {
-    return 'TimePoint(time: $time, value: $value)';
-  }
+class _ViewportAndFormatter {
+  final _Viewport? viewport;
+  final String Function(num) formatter;
+  _ViewportAndFormatter({required this.viewport, required this.formatter});
 }

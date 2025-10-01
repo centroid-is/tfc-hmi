@@ -69,10 +69,10 @@ Map<String, dynamic> _$GraphAssetConfigToJson(GraphAssetConfig instance) =>
 
 const _$GraphTypeEnumMap = {
   GraphType.line: 'line',
-  GraphType.bar: 'bar',
-  GraphType.scatter: 'scatter',
+  // GraphType.bar: 'bar',
+  // GraphType.scatter: 'scatter',
   GraphType.timeseries: 'timeseries',
-  GraphType.barTimeseries: 'barTimeseries',
+  // GraphType.barTimeseries: 'barTimeseries',
 };
 
 const _$TextPosEnumMap = {
