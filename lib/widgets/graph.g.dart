@@ -60,8 +60,32 @@ Map<String, dynamic> _$GraphConfigToJson(GraphConfig instance) =>
 
 const _$GraphTypeEnumMap = {
   GraphType.line: 'line',
-  // GraphType.bar: 'bar',
-  // GraphType.scatter: 'scatter',
   GraphType.timeseries: 'timeseries',
-  // GraphType.barTimeseries: 'barTimeseries',
+  GraphType.barTimeseries: 'barTimeseries',
 };
+
+// **************************************************************************
+// RiverpodGenerator
+// **************************************************************************
+
+String _$chartThemeNotifierHash() =>
+    r'84be81c1b75854160d298b8b54d2e3a2d807bf23';
+
+/// Chart theme provider that integrates with the app's theme system
+///
+/// Copied from [ChartThemeNotifier].
+@ProviderFor(ChartThemeNotifier)
+final chartThemeNotifierProvider =
+    AutoDisposeNotifierProvider<ChartThemeNotifier, cs.ChartTheme>.internal(
+  ChartThemeNotifier.new,
+  name: r'chartThemeNotifierProvider',
+  debugGetCreateSourceHash: const bool.fromEnvironment('dart.vm.product')
+      ? null
+      : _$chartThemeNotifierHash,
+  dependencies: null,
+  allTransitiveDependencies: null,
+);
+
+typedef _$ChartThemeNotifier = AutoDisposeNotifier<cs.ChartTheme>;
+// ignore_for_file: type=lint
+// ignore_for_file: subtype_of_sealed_class, invalid_use_of_internal_member, invalid_use_of_visible_for_testing_member, deprecated_member_use_from_same_package

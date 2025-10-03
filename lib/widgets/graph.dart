@@ -1,8 +1,12 @@
 // graph.dart
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:cristalyse/cristalyse.dart' as cs;
+import 'package:riverpod_annotation/riverpod_annotation.dart';
 
+import '../theme.dart';
+import '../providers/theme.dart';
 import '../converter/color_converter.dart';
 
 part 'graph.g.dart';
@@ -106,11 +110,12 @@ class GraphConfig {
 /// -------------------- Pan event surface --------------------
 
 class GraphPanEvent {
-  /// Raw double X-range (same units as X domain)
+  /// Raw double X-range (same units as the chart domain for this widget).
+  /// For timeseries this will be **relative ms from viewport start**.
   final double? minX;
   final double? maxX;
 
-  /// If timeseries: mapped to DateTime from ms since epoch
+  /// Absolute time (only for timeseries)
   final DateTime? minTime;
   final DateTime? maxTime;
 
@@ -128,12 +133,12 @@ class GraphPanEvent {
 
 /// -------------------- Graph (Cristalyse-only) --------------------
 
-class Graph extends StatefulWidget {
+class Graph extends ConsumerStatefulWidget {
   final GraphConfig config;
 
   /// Each map = one series.
   /// Key = GraphDataConfig (label/color/axis); Value = list of [x, y] points.
-  /// For timeseries: x is milliseconds since epoch.
+  /// For timeseries: x is milliseconds (or seconds) since epoch.
   final List<Map<GraphDataConfig, List<List<double>>>> data;
 
   /// Panning callbacks (propagate visible X range)
@@ -157,13 +162,10 @@ class Graph extends StatefulWidget {
   });
 
   @override
-  State<Graph> createState() => _GraphState();
+  ConsumerState<Graph> createState() => _GraphState();
 }
 
-class _GraphState extends State<Graph> {
-  // Build-once theme; no rebuild churn
-  late final cs.ChartTheme _theme = cs.ChartTheme.defaultTheme();
-
+class _GraphState extends ConsumerState<Graph> {
   @override
   Widget build(BuildContext context) {
     // Early out keeps rebuilds cheap for RT charts
@@ -174,20 +176,37 @@ class _GraphState extends State<Graph> {
     final flattened = _flatten(widget.data);
     final palette = _buildCategoryPalette(flattened.order, widget.data);
 
-    // If timeseries, prepare viewport & label formatter
+    // If timeseries, prepare viewport, transform & label formatter
     _Viewport? tsViewport;
+    _TimeDomainTransform? tsTransform;
     String Function(num)? timeLabeler;
+
     if (widget.config.type == GraphType.timeseries) {
-      final vpAndFmt = _computeTimeViewportAndFormatter(flattened.rows);
-      tsViewport = vpAndFmt.viewport;
-      timeLabeler = vpAndFmt.formatter;
+      final vp = _computeTimeViewport(flattened.rows);
+      tsViewport = vp;
+
+      if (tsViewport != null) {
+        tsTransform = _TimeDomainTransform(
+          originMs: tsViewport.start.millisecondsSinceEpoch,
+          spanMs: tsViewport.end.difference(tsViewport.start).inMilliseconds,
+        );
+        timeLabeler = (num relMs) {
+          final dt = tsTransform!.toAbsoluteTime(relMs);
+          return _formatTimeBySpan(
+            dt,
+            tsViewport!.end.difference(tsViewport.start),
+            showDate: widget.showDate,
+          );
+        };
+      }
     }
 
     switch (widget.config.type) {
       case GraphType.line:
         return _buildLine(flattened, palette);
       case GraphType.timeseries:
-        return _buildTimeseries(flattened, palette, tsViewport, timeLabeler!);
+        return _buildTimeseries(
+            flattened, palette, tsViewport, tsTransform!, timeLabeler!);
       case GraphType.barTimeseries:
         return const Text("Bar Timeseries");
     }
@@ -248,57 +267,50 @@ class _GraphState extends State<Graph> {
     return map;
   }
 
-  /// ---------- Timeseries viewport + formatter (ms → labels) ----------
-  _ViewportAndFormatter _computeTimeViewportAndFormatter(
-      List<Map<String, dynamic>> rows) {
+  /// ---------- Timeseries viewport (absolute) ----------
+  _Viewport? _computeTimeViewport(List<Map<String, dynamic>> rows) {
     DateTime? start;
     DateTime? end;
 
     if (widget.config.xRange != null) {
-      // Hard range wins
       start = widget.config.xRange!.start;
       end = widget.config.xRange!.end;
     } else if (widget.config.xSpan != null) {
-      // Anchor to NOW (fix: guarantees exact span even if last point < now)
+      // Anchor to NOW: guarantees exact span
       end = DateTime.now();
       start = end.subtract(widget.config.xSpan!);
     } else {
-      // Fallback: auto-fit to data (rare for RT boards; keeps old behavior)
+      // Auto-fit data
       if (rows.isNotEmpty) {
-        int minMs = 1 << 62;
-        int maxMs = 0;
+        num minRaw = double.infinity;
+        num maxRaw = -double.infinity;
         for (final r in rows) {
-          final x = (r['x'] as num).toInt();
-          if (x < minMs) minMs = x;
-          if (x > maxMs) maxMs = x;
+          final x = r['x'] as num;
+          if (x < minRaw) minRaw = x;
+          if (x > maxRaw) maxRaw = x;
         }
-        if (maxMs > 0 && minMs < maxMs) {
+        if (maxRaw.isFinite && minRaw.isFinite && maxRaw > minRaw) {
+          // Detect seconds vs milliseconds
+          final bool isSeconds = maxRaw < 3e10; // ~year 2968 in ms; safe cut
+          final minMs = isSeconds ? (minRaw * 1000).toInt() : minRaw.toInt();
+          final maxMs = isSeconds ? (maxRaw * 1000).toInt() : maxRaw.toInt();
           start = DateTime.fromMillisecondsSinceEpoch(minMs);
           end = DateTime.fromMillisecondsSinceEpoch(maxMs);
         }
       }
     }
 
-    final formatter = _timeFormatter(
-      start: start,
-      end: end,
-      showDate: widget.showDate,
-    );
-    print("rows: $rows");
-    print("start: $start, end: $end");
-
-    return _ViewportAndFormatter(
-      viewport: (start != null && end != null)
-          ? _Viewport(start: start, end: end)
-          : null,
-      formatter: formatter,
-    );
+    if (start != null && end != null) {
+      return _Viewport(start: start, end: end);
+    }
+    return null;
   }
 
   /// ---------- Chart builders ----------
 
   Widget _buildLine(_Flattened f, Map<String, Color> palette) {
     final tooltipBuilder = _tooltipBuilder(isTimeseries: false);
+    final chartTheme = ref.watch(chartThemeNotifierProvider);
 
     return cs.CristalyseChart()
         .data(f.rows)
@@ -340,20 +352,46 @@ class _GraphState extends State<Graph> {
             followPointer: true,
           ),
         )
-        .theme(_theme)
+        .theme(chartTheme)
         .animate(duration: Duration.zero) // real-time friendly
         .build();
   }
 
-  // 2) Ensure your timeseries builder uses that viewport strictly
   Widget _buildTimeseries(
     _Flattened f,
     Map<String, Color> palette,
     _Viewport? viewport,
+    _TimeDomainTransform transform,
     String Function(num) timeLabeler,
   ) {
+    final chartTheme = ref.watch(chartThemeNotifierProvider);
+    // Normalize X to "relative ms from start" to keep the domain small & consistent
+    // Also auto-detect seconds input and upscale to ms.
+    final bool sourceIsSeconds =
+        f.rows.isNotEmpty && ((f.rows.first['x'] as num) < 3e10);
+    final rowsRel = List<Map<String, dynamic>>.generate(
+      f.rows.length,
+      (i) {
+        final r = f.rows[i];
+        final raw = r['x'] as num;
+        final absMs = sourceIsSeconds ? (raw * 1000.0) : raw.toDouble();
+        return {
+          'x': transform.toRelative(absMs),
+          'y': r['y'],
+          'y2': r['y2'],
+          'series': r['series'],
+        };
+      },
+      growable: false,
+    );
+
+    final tooltipBuilder = _tooltipBuilder(
+      isTimeseries: true,
+      timeTransform: transform,
+    );
+
     return cs.CristalyseChart()
-        .data(f.rows)
+        .data(rowsRel)
         .mapping(x: 'x', y: 'y', color: 'series')
         .mappingY2('y2')
         .geomLine(strokeWidth: 2.0, yAxis: cs.YAxis.primary, alpha: 1.0)
@@ -361,14 +399,10 @@ class _GraphState extends State<Graph> {
         .geomPoint(size: 2.0, alpha: 0.85, yAxis: cs.YAxis.primary)
         .geomPoint(size: 2.0, alpha: 0.85, yAxis: cs.YAxis.secondary)
         .scaleXContinuous(
-          // X = ms since epoch; force exact window:
-          min: viewport != null
-              ? viewport.start.millisecondsSinceEpoch.toDouble()
-              : widget.config.xAxis.min,
-          max: viewport != null
-              ? viewport.end.millisecondsSinceEpoch.toDouble()
-              : widget.config.xAxis.max,
-          labels: timeLabeler, // drives tick text for the span
+          // Force exact window: [0 .. spanMs]
+          min: 0,
+          max: transform.spanMs.toDouble(),
+          labels: timeLabeler, // relMs -> absolute time label
         )
         .scaleYContinuous(
           min: widget.config.yAxis.min,
@@ -387,38 +421,47 @@ class _GraphState extends State<Graph> {
             updateXDomain: true,
             updateYDomain: false,
             throttle: const Duration(milliseconds: 32),
-            onPanUpdate: _relayPan(isTimeseries: true, end: false),
+            onPanUpdate: _relayPan(
+                isTimeseries: true, end: false, timeTransform: transform),
             onPanEnd: (info) {
-              _relayPan(isTimeseries: true, end: true)(info);
+              _relayPan(
+                  isTimeseries: true,
+                  end: true,
+                  timeTransform: transform)(info);
               widget.onPanCompleted?.call();
             },
           ),
           tooltip: cs.TooltipConfig(
-            builder: _tooltipBuilder(isTimeseries: true),
+            builder: tooltipBuilder,
             showDelay: Duration.zero,
             hideDelay: const Duration(milliseconds: 200),
-            followPointer: true,
+            followPointer: false,
           ),
         )
-        .theme(_theme)
+        .theme(chartTheme)
         .animate(duration: Duration.zero)
         .build();
   }
 
   /// ---------- Tooltip builders ----------
-  cs.TooltipBuilder _tooltipBuilder({required bool isTimeseries}) {
+  cs.TooltipBuilder _tooltipBuilder({
+    required bool isTimeseries,
+    _TimeDomainTransform? timeTransform,
+  }) {
     return (pt) {
       final series = pt.getDisplayValue('series');
-      final xRaw = pt.getDisplayValue('x') as num?;
+      final xRaw = double.tryParse(pt.getDisplayValue('x'));
       final y1 = pt.getDisplayValue('y');
       final y2 = pt.getDisplayValue('y2');
 
-      String xLine;
-      if (isTimeseries && xRaw != null) {
-        final dt = DateTime.fromMillisecondsSinceEpoch(xRaw.toInt());
-        xLine = _formatTime(dt, showDate: widget.showDate);
-      } else {
-        xLine = xRaw?.toString() ?? '';
+      String xLine = '';
+      if (xRaw != null) {
+        if (isTimeseries && timeTransform != null) {
+          final dt = timeTransform.toAbsoluteTime(xRaw);
+          xLine = _formatTime(dt, showDate: widget.showDate);
+        } else {
+          xLine = xRaw.toString();
+        }
       }
 
       final valueLine = y1 ?? y2 ?? '';
@@ -449,7 +492,11 @@ class _GraphState extends State<Graph> {
   }
 
   /// ---------- Pan relay ----------
-  cs.PanCallback _relayPan({required bool isTimeseries, required bool end}) {
+  cs.PanCallback _relayPan({
+    required bool isTimeseries,
+    required bool end,
+    _TimeDomainTransform? timeTransform,
+  }) {
     return (info) {
       if (widget.onPanUpdate == null &&
           widget.onPanEnd == null &&
@@ -458,14 +505,12 @@ class _GraphState extends State<Graph> {
       }
 
       DateTime? minTime, maxTime;
-      if (isTimeseries) {
+      if (isTimeseries && timeTransform != null) {
         if (info.visibleMinX != null) {
-          minTime =
-              DateTime.fromMillisecondsSinceEpoch(info.visibleMinX!.toInt());
+          minTime = timeTransform.toAbsoluteTime(info.visibleMinX!);
         }
         if (info.visibleMaxX != null) {
-          maxTime =
-              DateTime.fromMillisecondsSinceEpoch(info.visibleMaxX!.toInt());
+          maxTime = timeTransform.toAbsoluteTime(info.visibleMaxX!);
         }
       }
 
@@ -494,37 +539,23 @@ class _GraphState extends State<Graph> {
     return unit.isEmpty ? text : '$text $unit';
   }
 
-  static String Function(num) _timeFormatter({
-    DateTime? start,
-    DateTime? end,
-    required bool showDate,
-  }) {
-    String fmt(DateTime dt, Duration span) {
-      if (span <= const Duration(minutes: 1)) {
-        return showDate ? _fmt(dt, 'MM/dd HH:mm:ss') : _fmt(dt, 'HH:mm:ss');
-      } else if (span <= const Duration(hours: 2)) {
-        return showDate ? _fmt(dt, 'MM/dd HH:mm') : _fmt(dt, 'HH:mm');
-      } else if (span <= const Duration(days: 2)) {
-        return showDate ? _fmt(dt, 'MM/dd HH:mm') : _fmt(dt, 'HH:mm');
-      } else if (span <= const Duration(days: 60)) {
-        return _fmt(dt, 'MM/dd');
-      } else {
-        return _fmt(dt, 'yyyy-MM-dd');
-      }
+  static String _formatTimeBySpan(DateTime dt, Duration span,
+      {required bool showDate}) {
+    if (span <= const Duration(minutes: 1)) {
+      return showDate ? _fmt(dt, 'MM/dd HH:mm:ss') : _fmt(dt, 'HH:mm:ss');
+    } else if (span <= const Duration(hours: 2)) {
+      return showDate ? _fmt(dt, 'MM/dd HH:mm') : _fmt(dt, 'HH:mm');
+    } else if (span <= const Duration(days: 2)) {
+      return showDate ? _fmt(dt, 'MM/dd HH:mm') : _fmt(dt, 'HH:mm');
+    } else if (span <= const Duration(days: 60)) {
+      return _fmt(dt, 'MM/dd');
+    } else {
+      return _fmt(dt, 'yyyy-MM-dd');
     }
-
-    final span = (start != null && end != null)
-        ? end.difference(start)
-        : const Duration(hours: 1);
-
-    return (num value) {
-      final dt = DateTime.fromMillisecondsSinceEpoch(value.toInt());
-      return fmt(dt, span);
-    };
   }
 
   static String _formatTime(DateTime dt, {required bool showDate}) {
-    return showDate ? _fmt(dt, 'MM/dd HH:mm:ss') : _fmt(dt, 'HH:mm:ss');
+    return _fmt(dt, showDate ? 'MM/dd HH:mm:ss' : 'HH:mm:ss');
   }
 
   // Minimal formatter (no intl) for the patterns we need
@@ -560,8 +591,115 @@ class _Viewport {
   const _Viewport({required this.start, required this.end});
 }
 
-class _ViewportAndFormatter {
-  final _Viewport? viewport;
-  final String Function(num) formatter;
-  _ViewportAndFormatter({required this.viewport, required this.formatter});
+class _TimeDomainTransform {
+  final int originMs; // absolute start in ms since epoch
+  final int spanMs; // width of the window in ms
+  const _TimeDomainTransform({required this.originMs, required this.spanMs});
+
+  double toRelative(num absMs) => absMs.toDouble() - originMs.toDouble();
+  int toAbsoluteMs(num relMs) => originMs + relMs.toInt();
+  DateTime toAbsoluteTime(num relMs) =>
+      DateTime.fromMillisecondsSinceEpoch(toAbsoluteMs(relMs));
+}
+
+/// Chart theme provider that integrates with the app's theme system
+@riverpod
+class ChartThemeNotifier extends _$ChartThemeNotifier {
+  @override
+  cs.ChartTheme build() {
+    // Watch the theme mode
+    final themeMode = ref.watch(themeNotifierProvider);
+
+    return themeMode.when(
+      data: (mode) => _createChartTheme(mode),
+      loading: () => _createChartTheme(ThemeMode.system),
+      error: (_, __) => _createChartTheme(ThemeMode.system),
+    );
+  }
+
+  cs.ChartTheme _createChartTheme(ThemeMode mode) {
+    // For system mode, we'll default to light theme
+    // The actual brightness will be handled by the MaterialApp
+    final isDark = mode == ThemeMode.dark;
+
+    if (isDark) {
+      return _createDarkChartTheme();
+    } else {
+      return _createLightChartTheme();
+    }
+  }
+
+  cs.ChartTheme _createDarkChartTheme() {
+    return cs.ChartTheme(
+      backgroundColor: SolarizedColors.base03,
+      plotBackgroundColor: SolarizedColors.base02,
+      primaryColor: SolarizedColors.blue,
+      borderColor: SolarizedColors.base01,
+      gridColor: SolarizedColors.base01.withAlpha(75),
+      axisColor: SolarizedColors.base01,
+      gridWidth: 0.5,
+      axisWidth: 1.0,
+      pointSizeDefault: 0,
+      pointSizeMin: 0,
+      pointSizeMax: 0,
+      colorPalette: [
+        SolarizedColors.blue,
+        SolarizedColors.red,
+        SolarizedColors.green,
+        SolarizedColors.yellow,
+        SolarizedColors.orange,
+        SolarizedColors.magenta,
+        SolarizedColors.violet,
+        SolarizedColors.cyan,
+      ],
+      padding: const EdgeInsets.all(16.0),
+      axisTextStyle: const TextStyle(
+        color: SolarizedColors.base01,
+        fontSize: 12,
+        fontFamily: 'roboto-mono',
+      ),
+      axisLabelStyle: const TextStyle(
+        color: SolarizedColors.base0,
+        fontSize: 10,
+        fontFamily: 'roboto-mono',
+      ),
+    );
+  }
+
+  cs.ChartTheme _createLightChartTheme() {
+    return cs.ChartTheme(
+      backgroundColor: SolarizedColors.base3,
+      plotBackgroundColor: SolarizedColors.base2,
+      primaryColor: SolarizedColors.green,
+      borderColor: SolarizedColors.base00,
+      gridColor: SolarizedColors.base00.withAlpha(75),
+      axisColor: SolarizedColors.base00,
+      gridWidth: 0.5,
+      axisWidth: 1.0,
+      pointSizeDefault: 0,
+      pointSizeMin: 0,
+      pointSizeMax: 0,
+      colorPalette: [
+        SolarizedColors.green,
+        SolarizedColors.red,
+        SolarizedColors.blue,
+        SolarizedColors.orange,
+        SolarizedColors.magenta,
+        SolarizedColors.violet,
+        SolarizedColors.cyan,
+        SolarizedColors.yellow,
+      ],
+      padding: const EdgeInsets.all(16.0),
+      axisTextStyle: const TextStyle(
+        color: SolarizedColors.base00,
+        fontSize: 12,
+        fontFamily: 'roboto-mono',
+      ),
+      axisLabelStyle: const TextStyle(
+        color: SolarizedColors.base01,
+        fontSize: 10,
+        fontFamily: 'roboto-mono',
+      ),
+    );
+  }
 }
