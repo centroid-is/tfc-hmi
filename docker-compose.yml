@@ -86,3 +86,31 @@ services:
     volumes:
       - ./timescale_data:/var/lib/postgresql/data
       - ./timescale_certs:/certs:ro
+    depends_on:
+      pg-certs:
+        condition: service_completed_successfully
+    command: >
+      postgres -c ssl=on
+               -c ssl_cert_file=/certs/server.crt
+               -c ssl_key_file=/certs/server.key
+               -c ssl_min_protocol_version=TLSv1.2
+
+  pg-certs:
+    image: alpine:latest
+    container_name: pg-certs
+    restart: "no"
+    volumes:
+      - ./timescale_certs:/out
+    command: |
+      sh -euxc '
+        apk add --no-cache openssl
+        [ -f /out/server.key ] && [ -f /out/server.crt ] && { echo "TLS certs exist, skipping"; exit 0; }
+        openssl req -x509 -newkey rsa:2048 -nodes -days 365000 \
+          -subj "/C=IS/ST=Hofudborgarsvaedid/L=Hafnarfjordur/O=Centroid/CN=timescaledb" \
+          -keyout /out/server.key \
+          -out /out/server.crt
+        chown 70:70 /out/server.key /out/server.crt
+        chmod 600 /out/server.key
+        chmod 644 /out/server.crt
+        echo "Certs written to /out as uid:gid 70:70"
+      '

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 import 'package:rxdart/rxdart.dart';
 import 'package:logger/logger.dart';
 import 'package:json_annotation/json_annotation.dart';
@@ -225,9 +226,16 @@ class Collector {
 
     streamController.onListen = () async {
       try {
-        List<TimeseriesData<dynamic>>? historicalData = [];
-        final List<TimeseriesData<dynamic>> buffer = [];
-        final rtStream = _realTimeStreams[entry] ?? await _toBeCollected(entry);
+        Queue<TimeseriesData<dynamic>>? historicalData =
+            Queue<TimeseriesData<dynamic>>();
+        final Queue<TimeseriesData<dynamic>> buffer =
+            Queue<TimeseriesData<dynamic>>();
+        var rtStream = _realTimeStreams[entry] ?? await _toBeCollected(entry);
+        if (entry.sampleInterval != null) {
+          rtStream =
+              rtStream.throttleTime(entry.sampleInterval!, trailing: true);
+          print("throttling rtStream for ${entry.sampleInterval}");
+        }
         realTimeSubscription = rtStream.listen(
           (value) {
             final newSample = TimeseriesData<dynamic>(
@@ -242,22 +250,24 @@ class Collector {
 
             // Remove old data outside the retention window
             final cutoffTime = DateTime.now().toUtc().subtract(since);
-            historicalData
-                .removeWhere((sample) => sample.time.isBefore(cutoffTime));
+            while (historicalData.isNotEmpty &&
+                historicalData.first.time.isBefore(cutoffTime)) {
+              historicalData.removeFirst();
+            }
 
-            streamController.add(historicalData);
+            streamController.add(historicalData.toList());
           },
           onError: (error, stackTrace) {
             logger.e('Error collecting data for key $key',
                 error: error, stackTrace: stackTrace);
           },
         );
-        historicalData = await database.queryTimeseriesData(
-            entry.name ?? entry.key, sinceTime);
-        historicalData.addAll(buffer);
+        historicalData = Queue.from(await database.queryTimeseriesData(
+            entry.name ?? entry.key, sinceTime));
+        historicalData.addAll(buffer.toList());
         buffer.clear();
 
-        streamController.add(historicalData);
+        streamController.add(historicalData.toList());
       } catch (e) {
         logger.e('Failed to load historical data for key $key: $e');
         streamController.addError(e);

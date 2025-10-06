@@ -10,7 +10,6 @@ import '../widgets/base_scaffold.dart';
 import 'page_view.dart';
 import '../widgets/zoomable_canvas.dart';
 import '../page_creator/page.dart';
-import '../page_creator/assets/beckhoff.dart';
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/services.dart';

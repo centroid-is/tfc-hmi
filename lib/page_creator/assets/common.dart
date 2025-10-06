@@ -209,6 +209,7 @@ class _KeyFieldState extends ConsumerState<KeyField> {
     final result = await showDialog<Map<String, dynamic>>(
       context: context,
       builder: (context) => KeyMappingEntryDialog(
+        initialKey: _controller.text,
         initialKeyMappingEntry: KeyMappingEntry(),
       ),
     );
