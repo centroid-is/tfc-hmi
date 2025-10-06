@@ -21,6 +21,7 @@ import 'package:tfc/pages/ip_settings.dart';
 import 'package:tfc/pages/dbus_login.dart';
 import 'package:tfc/pages/history_view.dart';
 import 'package:tfc/pages/server_config.dart';
+import 'package:tfc/pages/about_linux.dart';
 import 'package:tfc/transition_delegate.dart';
 import 'package:tfc/providers/theme.dart';
 import 'package:tfc/core/preferences.dart';
@@ -81,7 +82,10 @@ void main() async {
       path: '/advanced',
       icon: Icons.settings,
       children: [
-        MenuItem(label: 'IP Settings', path: '/advanced/ip-settings', icon: Icons.settings_ethernet),
+        if (Platform.isLinux)
+          MenuItem(label: 'IP Settings', path: '/advanced/ip-settings', icon: Icons.settings_ethernet),
+        if (Platform.isLinux)
+          MenuItem(label: 'About Linux', path: '/advanced/about-linux', icon: Icons.settings_ethernet),
         if (environmentVariableIsGod) MenuItem(label: 'Page Editor', path: '/advanced/page-editor', icon: Icons.edit),
         if (environmentVariableIsGod)
           MenuItem(label: 'Preferences', path: '/advanced/preferences', icon: Icons.settings),
@@ -138,6 +142,35 @@ RoutesLocationBuilder createLocationBuilder(List<MenuItem> extraMenuItems) {
                     );
                   }
                   return IpSettingsPage(dbusClient: snapshot.data!);
+                },
+              );
+            },
+          ),
+        ),
+    '/advanced/about-linux': (context, state, args) => BeamPage(
+          key: const ValueKey('/advanced/about-linux'),
+          title: 'About Linux',
+          child: Consumer(
+            builder: (context, ref, _) {
+              // I dont like this but lets continue
+              return FutureBuilder<DBusClient>(
+                future: dbusCompleter.future,
+                builder: (context, snapshot) {
+                  if (!snapshot.hasData) {
+                    return BaseScaffold(
+                      title: 'About Linux',
+                      body: Center(
+                        child: LoginForm(
+                          onLoginSuccess: (newDbusClient) async {
+                            logger.i('Login successful');
+                            await Future.delayed(const Duration(milliseconds: 100));
+                            dbusCompleter.complete(newDbusClient);
+                          },
+                        ),
+                      ),
+                    );
+                  }
+                  return AboutLinuxPage(dbusClient: snapshot.data!);
                 },
               );
             },
