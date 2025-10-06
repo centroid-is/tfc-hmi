@@ -319,8 +319,8 @@ class _GraphState extends ConsumerState<Graph> {
         .mapping(x: 'x', y: 'y', color: 'series')
         .geomLine(strokeWidth: 2.0, yAxis: cs.YAxis.primary, alpha: 1.0)
         .geomLine(strokeWidth: 2.0, yAxis: cs.YAxis.secondary, alpha: 1.0)
-        .geomPoint(size: 2.5, alpha: 0.85, yAxis: cs.YAxis.primary)
-        .geomPoint(size: 2.5, alpha: 0.85, yAxis: cs.YAxis.secondary)
+        //.geomPoint(size: 2.5, alpha: 0.85, yAxis: cs.YAxis.primary)
+        //.geomPoint(size: 2.5, alpha: 0.85, yAxis: cs.YAxis.secondary)
         .scaleXContinuous(
           min: widget.config.xAxis.min,
           max: widget.config.xAxis.max,
@@ -404,7 +404,7 @@ class _GraphState extends ConsumerState<Graph> {
         .data(rowsRel)
         .mapping(x: 'x', y: 'y', color: 'series')
         .geomLine(strokeWidth: 2.0, yAxis: cs.YAxis.primary, alpha: 1.0)
-        .geomPoint(size: 2.0, alpha: 0.85, yAxis: cs.YAxis.primary)
+        // .geomPoint(size: 2.0, alpha: 0.85, yAxis: cs.YAxis.primary)
         .scaleXContinuous(
           // Force exact window: [0 .. spanMs]
           min: 0,
@@ -446,7 +446,7 @@ class _GraphState extends ConsumerState<Graph> {
     if (hasY2) {
       return chart
           .geomLine(strokeWidth: 2.0, yAxis: cs.YAxis.secondary, alpha: 1.0)
-          .geomPoint(size: 2.0, alpha: 0.85, yAxis: cs.YAxis.secondary)
+          //.geomPoint(size: 2.0, alpha: 0.85, yAxis: cs.YAxis.secondary)
           .mappingY2('y2')
           .scaleY2Continuous(
             min: widget.config.yAxis2?.min,
