@@ -312,10 +312,11 @@ class _GraphState extends ConsumerState<Graph> {
     final tooltipBuilder = _tooltipBuilder(isTimeseries: false);
     final chartTheme = ref.watch(chartThemeNotifierProvider);
 
-    return cs.CristalyseChart()
+    final hasY2 = f.rows.any((row) => row['y2'] != null);
+
+    final chart = cs.CristalyseChart()
         .data(f.rows)
         .mapping(x: 'x', y: 'y', color: 'series')
-        .mappingY2('y2')
         .geomLine(strokeWidth: 2.0, yAxis: cs.YAxis.primary, alpha: 1.0)
         .geomLine(strokeWidth: 2.0, yAxis: cs.YAxis.secondary, alpha: 1.0)
         .geomPoint(size: 2.5, alpha: 0.85, yAxis: cs.YAxis.primary)
@@ -329,11 +330,6 @@ class _GraphState extends ConsumerState<Graph> {
           min: widget.config.yAxis.min,
           max: widget.config.yAxis.max,
           labels: (v) => _numLabel(v, widget.config.yAxis.unit),
-        )
-        .scaleY2Continuous(
-          min: widget.config.yAxis2?.min,
-          max: widget.config.yAxis2?.max,
-          labels: (v) => _numLabel(v, widget.config.yAxis2?.unit ?? ''),
         )
         .customPalette(categoryColors: palette)
         .interaction(
@@ -353,8 +349,18 @@ class _GraphState extends ConsumerState<Graph> {
           ),
         )
         .theme(chartTheme)
-        .animate(duration: Duration.zero) // real-time friendly
-        .build();
+        .animate(duration: Duration.zero);
+    if (hasY2) {
+      return chart
+          .mappingY2('y2')
+          .scaleY2Continuous(
+            min: widget.config.yAxis2?.min,
+            max: widget.config.yAxis2?.max,
+            labels: (v) => _numLabel(v, widget.config.yAxis2?.unit ?? ''),
+          )
+          .build();
+    }
+    return chart.build();
   }
 
   Widget _buildTimeseries(
@@ -369,10 +375,14 @@ class _GraphState extends ConsumerState<Graph> {
     // Also auto-detect seconds input and upscale to ms.
     final bool sourceIsSeconds =
         f.rows.isNotEmpty && ((f.rows.first['x'] as num) < 3e10);
+    var hasY2 = false;
     final rowsRel = List<Map<String, dynamic>>.generate(
       f.rows.length,
       (i) {
         final r = f.rows[i];
+        if (r['y2'] != null) {
+          hasY2 = true;
+        }
         final raw = r['x'] as num;
         final absMs = sourceIsSeconds ? (raw * 1000.0) : raw.toDouble();
         return {
@@ -390,14 +400,11 @@ class _GraphState extends ConsumerState<Graph> {
       timeTransform: transform,
     );
 
-    return cs.CristalyseChart()
+    final chart = cs.CristalyseChart()
         .data(rowsRel)
         .mapping(x: 'x', y: 'y', color: 'series')
-        .mappingY2('y2')
         .geomLine(strokeWidth: 2.0, yAxis: cs.YAxis.primary, alpha: 1.0)
-        .geomLine(strokeWidth: 2.0, yAxis: cs.YAxis.secondary, alpha: 1.0)
         .geomPoint(size: 2.0, alpha: 0.85, yAxis: cs.YAxis.primary)
-        .geomPoint(size: 2.0, alpha: 0.85, yAxis: cs.YAxis.secondary)
         .scaleXContinuous(
           // Force exact window: [0 .. spanMs]
           min: 0,
@@ -408,11 +415,6 @@ class _GraphState extends ConsumerState<Graph> {
           min: widget.config.yAxis.min,
           max: widget.config.yAxis.max,
           labels: (v) => _numLabel(v, widget.config.yAxis.unit),
-        )
-        .scaleY2Continuous(
-          min: widget.config.yAxis2?.min,
-          max: widget.config.yAxis2?.max,
-          labels: (v) => _numLabel(v, widget.config.yAxis2?.unit ?? ''),
         )
         .customPalette(categoryColors: palette)
         .interaction(
@@ -433,14 +435,27 @@ class _GraphState extends ConsumerState<Graph> {
           ),
           tooltip: cs.TooltipConfig(
             builder: tooltipBuilder,
-            showDelay: Duration.zero,
-            hideDelay: const Duration(milliseconds: 200),
+            showDelay: const Duration(milliseconds: 500),
+            hideDelay: const Duration(milliseconds: 500),
             followPointer: false,
           ),
         )
         .theme(chartTheme)
         .animate(duration: Duration.zero)
-        .build();
+        .legend();
+    if (hasY2) {
+      return chart
+          .geomLine(strokeWidth: 2.0, yAxis: cs.YAxis.secondary, alpha: 1.0)
+          .geomPoint(size: 2.0, alpha: 0.85, yAxis: cs.YAxis.secondary)
+          .mappingY2('y2')
+          .scaleY2Continuous(
+            min: widget.config.yAxis2?.min,
+            max: widget.config.yAxis2?.max,
+            labels: (v) => _numLabel(v, widget.config.yAxis2?.unit ?? ''),
+          )
+          .build();
+    }
+    return chart.build();
   }
 
   /// ---------- Tooltip builders ----------
@@ -652,14 +667,14 @@ class ChartThemeNotifier extends _$ChartThemeNotifier {
         SolarizedColors.violet,
         SolarizedColors.cyan,
       ],
-      padding: const EdgeInsets.all(16.0),
+      padding: EdgeInsets.only(left: 80, right: 20, top: 20, bottom: 40),
       axisTextStyle: const TextStyle(
         color: SolarizedColors.base01,
         fontSize: 12,
         fontFamily: 'roboto-mono',
       ),
       axisLabelStyle: const TextStyle(
-        color: SolarizedColors.base0,
+        color: SolarizedColors.base00,
         fontSize: 10,
         fontFamily: 'roboto-mono',
       ),
@@ -689,7 +704,10 @@ class ChartThemeNotifier extends _$ChartThemeNotifier {
         SolarizedColors.cyan,
         SolarizedColors.yellow,
       ],
-      padding: const EdgeInsets.all(16.0),
+      // todo padding needs to be calculated based on the label size
+      // it needs to be taken into account if y2 is used
+      // todo implement functions
+      padding: EdgeInsets.only(left: 80, right: 20, top: 20, bottom: 40),
       axisTextStyle: const TextStyle(
         color: SolarizedColors.base00,
         fontSize: 12,
