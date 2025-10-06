@@ -1,4 +1,6 @@
 import 'dart:math' as math;
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:json_annotation/json_annotation.dart';
@@ -432,6 +434,33 @@ class AnalogBox extends ConsumerWidget {
         map[e.$1] = e.$2;
       }
       return map;
+    }).distinct((prev, curr) {
+      // Only consider the analog value for change detection
+      final prevAnalog = prev['analog'];
+      final currAnalog = curr['analog'];
+
+      if (prevAnalog == null || currAnalog == null) {
+        return prevAnalog == currAnalog; // Both null or both not null
+      }
+
+      if (!prevAnalog.isDouble && !prevAnalog.isInteger) {
+        return !currAnalog.isDouble && !currAnalog.isInteger;
+      }
+
+      if (!currAnalog.isDouble && !currAnalog.isInteger) {
+        return false; // Different types
+      }
+
+      final prevValue = prevAnalog.asDouble;
+      final currValue = currAnalog.asDouble;
+      final prevPercent =
+          _toPercent(prevValue, config.minValue, config.maxValue);
+      final currPercent =
+          _toPercent(currValue, config.minValue, config.maxValue);
+
+      // Return true if values are "the same" (change < 1%)
+      final change = (currPercent - prevPercent).abs();
+      return change < 0.01; // 1% threshold
     });
 
     return StreamBuilder<Map<String, DynamicValue>>(
