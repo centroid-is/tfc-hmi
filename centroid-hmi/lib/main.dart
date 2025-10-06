@@ -84,8 +84,7 @@ void main() async {
       children: [
         if (Platform.isLinux)
           MenuItem(label: 'IP Settings', path: '/advanced/ip-settings', icon: Icons.settings_ethernet),
-        if (Platform.isLinux)
-          MenuItem(label: 'About Linux', path: '/advanced/about-linux', icon: Icons.settings_ethernet),
+        if (Platform.isLinux) MenuItem(label: 'About Linux', path: '/advanced/about-linux', icon: Icons.info),
         if (environmentVariableIsGod) MenuItem(label: 'Page Editor', path: '/advanced/page-editor', icon: Icons.edit),
         if (environmentVariableIsGod)
           MenuItem(label: 'Preferences', path: '/advanced/preferences', icon: Icons.settings),
