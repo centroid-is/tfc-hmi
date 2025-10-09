@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:postgres/postgres.dart';
@@ -37,10 +39,7 @@ class _DatabaseConfigEditor extends ConsumerStatefulWidget {
   final DatabaseConfig config;
   final ValueChanged<DatabaseConfig> onSave;
 
-  const _DatabaseConfigEditor({
-    required this.config,
-    required this.onSave,
-  });
+  const _DatabaseConfigEditor({required this.config, required this.onSave});
 
   @override
   ConsumerState<_DatabaseConfigEditor> createState() =>
@@ -62,8 +61,9 @@ class _DatabaseConfigEditorState extends ConsumerState<_DatabaseConfigEditor> {
     super.initState();
     final endpoint = widget.config.postgres;
     hostController = TextEditingController(text: endpoint?.host ?? '');
-    portController =
-        TextEditingController(text: endpoint?.port.toString() ?? '');
+    portController = TextEditingController(
+      text: endpoint?.port.toString() ?? '5432',
+    );
     dbController = TextEditingController(text: endpoint?.database ?? '');
     userController = TextEditingController(text: endpoint?.username ?? '');
     passController = TextEditingController(text: endpoint?.password ?? '');
@@ -227,10 +227,12 @@ class _DatabaseConfigEditorState extends ConsumerState<_DatabaseConfigEditor> {
                               icon: const Icon(Icons.arrow_drop_down),
                               onChanged: (v) => setState(() => sslMode = v),
                               items: SslMode.values
-                                  .map((e) => DropdownMenuItem(
-                                        value: e,
-                                        child: Text(e.name),
-                                      ))
+                                  .map(
+                                    (e) => DropdownMenuItem(
+                                      value: e,
+                                      child: Text(e.name),
+                                    ),
+                                  )
                                   .toList(),
                               underline: const SizedBox(),
                             ),
@@ -284,8 +286,9 @@ class PreferencesKeysWidget extends ConsumerWidget {
           return const Center(child: CircularProgressIndicator());
         }
         final preferences = snapshot.data!;
-        final localPrefs =
-            SharedPreferencesWrapper(preferences.sharedPreferences);
+        final localPrefs = SharedPreferencesWrapper(
+          preferences.sharedPreferences,
+        );
 
         return FutureBuilder<Map<String, Object?>>(
           future: preferences.getAll(),
@@ -298,9 +301,7 @@ class PreferencesKeysWidget extends ConsumerWidget {
             }
             final allPrefs = keysSnap.data!;
             if (allPrefs.isEmpty) {
-              return const ListTile(
-                title: Text('No preferences found.'),
-              );
+              return const ListTile(title: Text('No preferences found.'));
             }
             return Card(
               child: Padding(
@@ -325,7 +326,8 @@ class PreferencesKeysWidget extends ConsumerWidget {
                           final list = allPrefs.entries.toList();
                           list.sort((a, b) => a.key.compareTo(b.key));
                           return list
-                              .map((e) => FutureBuilder<bool>(
+                              .map(
+                                (e) => FutureBuilder<bool>(
                                   future: preferences
                                       .isKeyInDatabase(e.key)
                                       .timeout(const Duration(seconds: 2)),
@@ -334,7 +336,8 @@ class PreferencesKeysWidget extends ConsumerWidget {
                                       return const Padding(
                                         padding: EdgeInsets.all(16.0),
                                         child: Center(
-                                            child: CircularProgressIndicator()),
+                                          child: CircularProgressIndicator(),
+                                        ),
                                       );
                                     }
                                     return _PreferenceKeyTile(
@@ -355,13 +358,19 @@ class PreferencesKeysWidget extends ConsumerWidget {
                                           await prefs.setInt(e.key, newValue);
                                         } else if (newValue is double) {
                                           await prefs.setDouble(
-                                              e.key, newValue);
+                                            e.key,
+                                            newValue,
+                                          );
                                         } else if (newValue is List<String>) {
                                           await prefs.setStringList(
-                                              e.key, newValue);
+                                            e.key,
+                                            newValue,
+                                          );
                                         } else if (newValue is String) {
                                           await prefs.setString(
-                                              e.key, newValue);
+                                            e.key,
+                                            newValue,
+                                          );
                                         }
                                         // Force refresh
                                         (context as Element).markNeedsBuild();
@@ -371,18 +380,25 @@ class PreferencesKeysWidget extends ConsumerWidget {
                                             await showDialog<bool>(
                                           context: context,
                                           builder: (context) => AlertDialog(
-                                            title:
-                                                const Text('Delete Preference'),
-                                            content: Text('Delete "${e.key}"?'),
+                                            title: const Text(
+                                              'Delete Preference',
+                                            ),
+                                            content: Text(
+                                              'Delete "${e.key}"?',
+                                            ),
                                             actions: [
                                               TextButton(
                                                 onPressed: () => Navigator.pop(
-                                                    context, false),
+                                                  context,
+                                                  false,
+                                                ),
                                                 child: const Text('Cancel'),
                                               ),
                                               TextButton(
                                                 onPressed: () => Navigator.pop(
-                                                    context, true),
+                                                  context,
+                                                  true,
+                                                ),
                                                 child: const Text('Delete'),
                                               ),
                                             ],
@@ -394,7 +410,9 @@ class PreferencesKeysWidget extends ConsumerWidget {
                                         }
                                       },
                                     );
-                                  }))
+                                  },
+                                ),
+                              )
                               .toList();
                         })(),
                       ),
@@ -524,8 +542,9 @@ class _PreferenceKeyTileState extends State<_PreferenceKeyTile> {
             title: Text(widget.keyName),
             subtitle: TextField(
               controller: _controller,
-              keyboardType:
-                  const TextInputType.numberWithOptions(decimal: true),
+              keyboardType: const TextInputType.numberWithOptions(
+                decimal: true,
+              ),
               onSubmitted: (v) {
                 final doubleVal = double.tryParse(v) ?? value;
                 widget.onChanged(doubleVal);
@@ -634,8 +653,10 @@ class _JsonEditorState extends State<_JsonEditor> {
         children: [
           Row(
             children: [
-              Text(widget.keyName,
-                  style: const TextStyle(fontWeight: FontWeight.bold)),
+              Text(
+                widget.keyName,
+                style: const TextStyle(fontWeight: FontWeight.bold),
+              ),
               const Spacer(),
               ElevatedButton(
                 onPressed: _formatJson,
@@ -668,8 +689,10 @@ class _JsonEditorState extends State<_JsonEditor> {
                 // Line numbers
                 Container(
                   color: Colors.grey[200],
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 4,
+                    vertical: 8,
+                  ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.end,
                     children: List.generate(
@@ -699,8 +722,10 @@ class _JsonEditorState extends State<_JsonEditor> {
                     ),
                     decoration: const InputDecoration(
                       border: InputBorder.none,
-                      contentPadding:
-                          EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                      contentPadding: EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 8,
+                      ),
                     ),
                   ),
                 ),
