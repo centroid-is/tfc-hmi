@@ -62,6 +62,9 @@ class ButtonConfig extends BaseAsset {
   @JsonKey(name: 'is_toggle')
   bool isToggle = false;
 
+  @JsonKey(name: 'server_writes_low')
+  bool serverWritesLow = false;
+
   @override
   Widget build(BuildContext context) {
     return Button(this);
@@ -104,6 +107,7 @@ class ButtonConfig extends BaseAsset {
     this.icon,
     this.feedback,
     this.isToggle = false,
+    this.serverWritesLow = false,
   });
 
   static const previewStr = 'Button preview';
@@ -115,7 +119,8 @@ class ButtonConfig extends BaseAsset {
         buttonType = ButtonType.circle,
         icon = null,
         feedback = null,
-        isToggle = false {
+        isToggle = false,
+        serverWritesLow = false {
     textPos = TextPos.right;
   }
 
@@ -240,11 +245,13 @@ class _ButtonState extends ConsumerState<Button> {
 
           if (!widget.config.isToggle) {
             // For regular buttons, write false
-            final client = await ref.read(stateManProvider.future);
             try {
-              await client.write(widget.config.key,
-                  DynamicValue(value: false, typeId: NodeId.boolean));
-              _log.d('Button ${widget.config.key} released');
+              if (!widget.config.serverWritesLow) {
+                final client = await ref.read(stateManProvider.future);
+                await client.write(widget.config.key,
+                    DynamicValue(value: false, typeId: NodeId.boolean));
+                _log.d('Button ${widget.config.key} released');
+              }
             } catch (e) {
               _log.e('Error writing button release', error: e);
             }
@@ -723,6 +730,20 @@ class _ConfigContentState extends State<_ConfigContent> {
                   });
                 }
               }
+            });
+          },
+        ),
+        const SizedBox(height: 16),
+
+        // Toggle behavior switch
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          title: const Text('Server Writes Low'),
+          subtitle: const Text('Server writes low when button is released'),
+          value: widget.config.serverWritesLow,
+          onChanged: (value) {
+            setState(() {
+              widget.config.serverWritesLow = value;
             });
           },
         ),
