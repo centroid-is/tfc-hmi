@@ -53,18 +53,18 @@ services:
     container_name: flutter
     group_add:
       - 992
-    #user: root
     volumes:
-      - /run/user/1000/bus:/run/user/1000/bus # need for dbus session socket
       - ./wayland-socket/user:/run/user
-      - ./local-share:/home/centroid/.local/share # shared preferences
+      - ./local-share:/home/centroid/.local/share/ # shared preferences
       - ./opcua_certs:/certs:ro
       - /var/run/dbus/system_bus_socket:/var/run/dbus/system_bus_socket
     environment:
       # TFC_GOD: true
       XDG_RUNTIME_DIR: /run/user/1000
       WAYLAND_DISPLAY: wayland-1
-      DBUS_SESSION_BUS_ADDRESS: unix:path=/run/user/1000/bus
+      SECRET_BACKEND: file
+      SECRET_FILE_TEST_PATH: /home/centroid/.local/share/keyrings/flutter.keyring
+      SECRET_FILE_TEST_PASSWORD: TODOSetThisStrongPassword # openssl rand -base64 32
     devices:
       - /dev/dri/renderD128
     depends_on:
