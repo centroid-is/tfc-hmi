@@ -265,25 +265,7 @@ class _BaseScaffoldState extends ConsumerState<BaseScaffold> {
                 ),
               ),
             ),
-      body: GestureDetector(
-        onVerticalDragEnd: (details) {
-          // Swipe down to exit fullscreen
-          if (details.primaryVelocity != null &&
-              details.primaryVelocity! > 500) {
-            if (_isFullscreen) {
-              _toggleFullscreen();
-            }
-          }
-          // Swipe up to enter fullscreen
-          else if (details.primaryVelocity != null &&
-              details.primaryVelocity! < -500) {
-            if (!_isFullscreen) {
-              _toggleFullscreen();
-            }
-          }
-        },
-        child: widget.body,
-      ),
+      body: widget.body,
       floatingActionButton: _isFullscreen
           ? FloatingActionButton(
               mini: true,
