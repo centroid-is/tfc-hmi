@@ -129,7 +129,7 @@ class SecureEnvelope {
 
 // ===================== Certificate Generator (unchanged) =====================
 class CertificateGenerator extends StatefulWidget {
-  final Function(File?, File?) onCertificatesGenerated;
+  final Function(Uint8List?, Uint8List?) onCertificatesGenerated;
 
   const CertificateGenerator({
     super.key,
@@ -143,18 +143,14 @@ class CertificateGenerator extends StatefulWidget {
 class _CertificateGeneratorState extends State<CertificateGenerator> {
   bool _isGenerating = false;
   String? _error;
-  File? _certFile;
-  File? _keyFile;
   late TextEditingController _commonNameController;
   late TextEditingController _organizationController;
   late TextEditingController _validityDaysController;
   late TextEditingController _countryController;
   late TextEditingController _stateController;
   late TextEditingController _localityController;
-  late TextEditingController _certFileNameController;
-  late TextEditingController _keyFileNameController;
-  late TextEditingController _saveLocationController;
-  Directory? _selectedDirectory;
+  Uint8List? _cert;
+  Uint8List? _key;
 
   @override
   void initState() {
@@ -177,28 +173,6 @@ class _CertificateGeneratorState extends State<CertificateGenerator> {
         TextEditingController(text: _getDefaultState(countryCode));
     _localityController =
         TextEditingController(text: _getDefaultLocality(countryCode));
-
-    // Initialize file naming and location controllers
-    _certFileNameController = TextEditingController(text: 'opcua.crt');
-    _keyFileNameController = TextEditingController(text: 'opcua.key');
-    _saveLocationController = TextEditingController();
-
-    // Set default save location
-    _setDefaultSaveLocation();
-  }
-
-  Future<void> _setDefaultSaveLocation() async {
-    try {
-      final Directory appDir = await getApplicationSupportDirectory();
-      final Directory certsDir = Directory(path.join(appDir.path, 'certs'));
-      _selectedDirectory = certsDir;
-      _saveLocationController.text = certsDir.path;
-    } catch (e) {
-      final appDir = await getApplicationDocumentsDirectory();
-      final certsDir = Directory(path.join(appDir.path, 'certs'));
-      _selectedDirectory = certsDir;
-      _saveLocationController.text = certsDir.path;
-    }
   }
 
   String _getDefaultState(String countryCode) {
@@ -247,32 +221,7 @@ class _CertificateGeneratorState extends State<CertificateGenerator> {
     _countryController.dispose();
     _stateController.dispose();
     _localityController.dispose();
-    _certFileNameController.dispose();
-    _keyFileNameController.dispose();
-    _saveLocationController.dispose();
     super.dispose();
-  }
-
-  Future<void> _selectSaveLocation() async {
-    try {
-      String? selectedDirectory = await FilePicker.platform.getDirectoryPath(
-        dialogTitle: 'Select Certificate Save Location',
-      );
-
-      if (selectedDirectory != null) {
-        _selectedDirectory = Directory(selectedDirectory);
-        _saveLocationController.text = selectedDirectory;
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error selecting directory: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    }
   }
 
   Future<void> _generateCertificates() async {
@@ -282,32 +231,15 @@ class _CertificateGeneratorState extends State<CertificateGenerator> {
     });
 
     try {
-      // Ensure save directory exists
-      if (_selectedDirectory == null) {
-        throw Exception('Please select a save location');
-      }
-
-      if (!await _selectedDirectory!.exists()) {
-        await _selectedDirectory!.create(recursive: true);
-      }
-
       final commonName = _commonNameController.text.trim();
       final organization = _organizationController.text.trim();
       final validityDays = int.tryParse(_validityDaysController.text) ?? 365;
       final country = _countryController.text.trim();
       final state = _stateController.text.trim();
       final locality = _localityController.text.trim();
-      final certFileName = _certFileNameController.text.trim();
-      final keyFileName = _keyFileNameController.text.trim();
 
       if (commonName.isEmpty) {
         throw Exception('Common Name is required');
-      }
-      if (certFileName.isEmpty) {
-        throw Exception('Certificate filename is required');
-      }
-      if (keyFileName.isEmpty) {
-        throw Exception('Private key filename is required');
       }
 
       // Generate RSA key pair
@@ -338,20 +270,15 @@ class _CertificateGeneratorState extends State<CertificateGenerator> {
         sans: ['localhost', '127.0.0.1'],
       );
 
-      // Save certificate and key files with user-specified names
-      final certFile = File(path.join(_selectedDirectory!.path, certFileName));
-      final keyFile = File(path.join(_selectedDirectory!.path, keyFileName));
-
-      await certFile.writeAsString(certPem);
-      await keyFile.writeAsString(CryptoUtils.encodeRSAPrivateKeyToPem(
+      Uint8List certFile = utf8.encode(certPem);
+      Uint8List keyString = utf8.encode(CryptoUtils.encodeRSAPrivateKeyToPem(
           keyPair.privateKey as RSAPrivateKey));
 
       setState(() {
-        _certFile = certFile;
-        _keyFile = keyFile;
+        _cert = certFile;
+        _key = keyString;
       });
-
-      widget.onCertificatesGenerated(_certFile, _keyFile);
+      widget.onCertificatesGenerated(certFile, keyString);
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -374,6 +301,7 @@ class _CertificateGeneratorState extends State<CertificateGenerator> {
 
   @override
   Widget build(BuildContext context) {
+    final isSmallScreen = MediaQuery.of(context).size.width < 600;
     return SingleChildScrollView(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -400,35 +328,68 @@ class _CertificateGeneratorState extends State<CertificateGenerator> {
           const SizedBox(height: 12),
 
           // Location fields
-          Row(
-            children: [
-              Expanded(
-                child: TextField(
-                  controller: _countryController,
-                  decoration: const InputDecoration(
-                    labelText: 'Country (C)',
-                    hintText: 'US/UK/DE/FR/IT/ES/NL/AU/BR/MX/IS',
-                    prefixIcon: FaIcon(FontAwesomeIcons.flag, size: 16),
-                  ),
-                  inputFormatters: [
-                    LengthLimitingTextInputFormatter(2),
-                    UpperCaseTextFormatter(),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final isNarrow = constraints.maxWidth < 400;
+              if (isNarrow) {
+                return Column(
+                  children: [
+                    TextField(
+                      controller: _countryController,
+                      decoration: const InputDecoration(
+                        labelText: 'Country (C)',
+                        hintText: 'US/UK/DE/FR/IT/ES/NL/AU/BR/MX/IS',
+                        prefixIcon: FaIcon(FontAwesomeIcons.flag, size: 16),
+                      ),
+                      inputFormatters: [
+                        LengthLimitingTextInputFormatter(2),
+                        UpperCaseTextFormatter(),
+                      ],
+                      textCapitalization: TextCapitalization.characters,
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: _stateController,
+                      decoration: const InputDecoration(
+                        labelText: 'State/Province (ST)',
+                        hintText: 'State',
+                        prefixIcon: FaIcon(FontAwesomeIcons.map, size: 16),
+                      ),
+                    ),
                   ],
-                  textCapitalization: TextCapitalization.characters,
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: TextField(
-                  controller: _stateController,
-                  decoration: const InputDecoration(
-                    labelText: 'State/Province (ST)',
-                    hintText: 'State',
-                    prefixIcon: FaIcon(FontAwesomeIcons.map, size: 16),
+                );
+              }
+              return Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _countryController,
+                      decoration: const InputDecoration(
+                        labelText: 'Country (C)',
+                        hintText: 'US/UK/DE/FR/IT/ES/NL/AU/BR/MX/IS',
+                        prefixIcon: FaIcon(FontAwesomeIcons.flag, size: 16),
+                      ),
+                      inputFormatters: [
+                        LengthLimitingTextInputFormatter(2),
+                        UpperCaseTextFormatter(),
+                      ],
+                      textCapitalization: TextCapitalization.characters,
+                    ),
                   ),
-                ),
-              ),
-            ],
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: TextField(
+                      controller: _stateController,
+                      decoration: const InputDecoration(
+                        labelText: 'State/Province (ST)',
+                        hintText: 'State',
+                        prefixIcon: FaIcon(FontAwesomeIcons.map, size: 16),
+                      ),
+                    ),
+                  ),
+                ],
+              );
+            },
           ),
           const SizedBox(height: 12),
 
@@ -450,83 +411,6 @@ class _CertificateGeneratorState extends State<CertificateGenerator> {
               prefixIcon: FaIcon(FontAwesomeIcons.calendar, size: 16),
             ),
             keyboardType: TextInputType.number,
-          ),
-          const SizedBox(height: 16),
-
-          // File naming and location section
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(16.0),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      const FaIcon(FontAwesomeIcons.folderOpen, size: 16),
-                      const SizedBox(width: 8),
-                      Text(
-                        'File Location & Naming',
-                        style: Theme.of(context).textTheme.titleSmall,
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-
-                  // Save location
-                  Row(
-                    children: [
-                      Expanded(
-                        child: TextField(
-                          controller: _saveLocationController,
-                          decoration: const InputDecoration(
-                            labelText: 'Save Location',
-                            prefixIcon:
-                                FaIcon(FontAwesomeIcons.folder, size: 16),
-                          ),
-                          readOnly: true,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      ElevatedButton.icon(
-                        onPressed: _selectSaveLocation,
-                        icon:
-                            const FaIcon(FontAwesomeIcons.folderOpen, size: 14),
-                        label: const Text('Browse'),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-
-                  // File names
-                  Row(
-                    children: [
-                      Expanded(
-                        child: TextField(
-                          controller: _certFileNameController,
-                          decoration: const InputDecoration(
-                            labelText: 'Certificate Filename',
-                            hintText: 'opcua_cert',
-                            prefixIcon:
-                                FaIcon(FontAwesomeIcons.certificate, size: 16),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: TextField(
-                          controller: _keyFileNameController,
-                          decoration: const InputDecoration(
-                            labelText: 'Private Key Filename',
-                            hintText: 'opcua_key',
-                            prefixIcon: FaIcon(FontAwesomeIcons.key, size: 16),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
           ),
           const SizedBox(height: 16),
 
@@ -554,7 +438,7 @@ class _CertificateGeneratorState extends State<CertificateGenerator> {
           ],
 
           // Certificate status
-          if (_certFile != null && _keyFile != null) ...[
+          if (_cert != null && _key != null) ...[
             Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
@@ -562,27 +446,21 @@ class _CertificateGeneratorState extends State<CertificateGenerator> {
                 borderRadius: BorderRadius.circular(8),
                 border: Border.all(color: Colors.green),
               ),
-              child: Row(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const FaIcon(FontAwesomeIcons.circleCheck,
-                      color: Colors.green, size: 16),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text('Certificates generated successfully!',
+                  Row(
+                    children: [
+                      const FaIcon(FontAwesomeIcons.circleCheck,
+                          color: Colors.green, size: 16),
+                      const SizedBox(width: 8),
+                      const Expanded(
+                        child: Text('Certificates generated successfully!',
                             style: TextStyle(fontWeight: FontWeight.bold)),
-                        Text('Certificate: ${path.basename(_certFile!.path)}',
-                            style: const TextStyle(fontSize: 12)),
-                        Text('Private Key: ${path.basename(_keyFile!.path)}',
-                            style: const TextStyle(fontSize: 12)),
-                        Text('Location: ${_certFile!.parent.path}',
-                            style: const TextStyle(
-                                fontSize: 10, color: Colors.grey)),
-                      ],
-                    ),
+                      ),
+                    ],
                   ),
+                  const SizedBox(height: 8),
                 ],
               ),
             ),
@@ -625,18 +503,18 @@ class ServerConfigPage extends ConsumerWidget {
 
     return BaseScaffold(
       title: 'Server Configuration',
-      body: Column(
-        children: [
-          // Database Configuration Section
-          DatabaseConfigWidget(key: ValueKey('db_$refreshKey')),
-          const SizedBox(height: 16),
+      body: SingleChildScrollView(
+        child: Column(
+          children: [
+            // Database Configuration Section
+            DatabaseConfigWidget(key: ValueKey('db_$refreshKey')),
+            const SizedBox(height: 16),
 
-          // OPC-UA Servers Section
-          Expanded(
-            child: _OpcUAServersSection(key: ValueKey('opcua_$refreshKey')),
-          ),
-          const ImportExportCard(),
-        ],
+            // OPC-UA Servers Section
+            _OpcUAServersSection(key: ValueKey('opcua_$refreshKey')),
+            const ImportExportCard(),
+          ],
+        ),
       ),
     );
   }
@@ -753,6 +631,13 @@ class _OpcUAServersSectionState extends ConsumerState<_OpcUAServersSection> {
               const SizedBox(height: 16),
               ElevatedButton(
                   onPressed: _loadConfig, child: const Text('Retry')),
+              ElevatedButton(
+                  onPressed: () => ref
+                      .read(preferencesProvider.future)
+                      .then((value) =>
+                          value.remove(StateManConfig.configKey, secret: true))
+                      .then((value) => _loadConfig()),
+                  child: const Text('Delete saved configuration')),
             ],
           ),
         ),
@@ -767,52 +652,99 @@ class _OpcUAServersSectionState extends ConsumerState<_OpcUAServersSection> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              children: [
-                const FaIcon(FontAwesomeIcons.server, size: 20),
-                const SizedBox(width: 8),
-                Text('OPC-UA Servers',
-                    style: Theme.of(context).textTheme.titleMedium),
-                if (_hasUnsavedChanges) ...[
-                  const SizedBox(width: 8),
-                  Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                    decoration: BoxDecoration(
-                        color: Colors.orange,
-                        borderRadius: BorderRadius.circular(12)),
-                    child: const Text('Unsaved Changes',
-                        style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 12,
-                            fontWeight: FontWeight.bold)),
-                  ),
-                ],
-                const Spacer(),
-                // Import/Export Buttons
-                const SizedBox(width: 8),
-                ElevatedButton.icon(
-                  onPressed: _addServer,
-                  icon: const FaIcon(FontAwesomeIcons.plus, size: 16),
-                  label: const Text('Add Server'),
-                ),
-              ],
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final isNarrow = constraints.maxWidth < 500;
+                if (isNarrow) {
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Row(
+                        children: [
+                          const FaIcon(FontAwesomeIcons.server, size: 20),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text('OPC-UA Servers',
+                                style: Theme.of(context).textTheme.titleMedium),
+                          ),
+                          if (_hasUnsavedChanges) ...[
+                            const SizedBox(width: 4),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                  color: Colors.orange,
+                                  borderRadius: BorderRadius.circular(12)),
+                              child: const Text('Unsaved',
+                                  style: TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.bold)),
+                            ),
+                          ],
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      ElevatedButton.icon(
+                        onPressed: _addServer,
+                        icon: const FaIcon(FontAwesomeIcons.plus, size: 16),
+                        label: const Text('Add Server'),
+                      ),
+                    ],
+                  );
+                }
+                return Row(
+                  children: [
+                    const FaIcon(FontAwesomeIcons.server, size: 20),
+                    const SizedBox(width: 8),
+                    Text('OPC-UA Servers',
+                        style: Theme.of(context).textTheme.titleMedium),
+                    if (_hasUnsavedChanges) ...[
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 4),
+                        decoration: BoxDecoration(
+                            color: Colors.orange,
+                            borderRadius: BorderRadius.circular(12)),
+                        child: const Text('Unsaved Changes',
+                            style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 12,
+                                fontWeight: FontWeight.bold)),
+                      ),
+                    ],
+                    const Spacer(),
+                    // Import/Export Buttons
+                    const SizedBox(width: 8),
+                    ElevatedButton.icon(
+                      onPressed: _addServer,
+                      icon: const FaIcon(FontAwesomeIcons.plus, size: 16),
+                      label: const Text('Add Server'),
+                    ),
+                  ],
+                );
+              },
             ),
             const SizedBox(height: 16),
-            Expanded(
-              child: config.opcua.isEmpty
-                  ? const _EmptyServersWidget()
-                  : ListView.builder(
-                      itemCount: config.opcua.length,
-                      itemBuilder: (context, index) {
-                        return _ServerConfigCard(
-                          server: config.opcua[index],
-                          onUpdate: (server) => _updateServer(index, server),
-                          onRemove: () => _removeServer(index),
-                        );
-                      },
-                    ),
-            ),
+            // Server list with constrained height
+            config.opcua.isEmpty
+                ? const SizedBox(
+                    height: 200,
+                    child: _EmptyServersWidget(),
+                  )
+                : ListView.builder(
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    itemCount: config.opcua.length,
+                    itemBuilder: (context, index) {
+                      return _ServerConfigCard(
+                        server: config.opcua[index],
+                        onUpdate: (server) => _updateServer(index, server),
+                        onRemove: () => _removeServer(index),
+                      );
+                    },
+                  ),
             const SizedBox(height: 16),
             // place import and export button in bottom right corner
             // place save config button in bottom left corner, it should take 60% of the width
@@ -928,12 +860,13 @@ class _ServerConfigCardState extends State<_ServerConfigCard> {
         type: FileType.custom,
         allowedExtensions: ['pem', 'crt', 'cer'],
         dialogTitle: 'Select Certificate File',
-        initialDirectory: widget.server.sslCert?.path,
+        initialDirectory: (await getApplicationSupportDirectory()).path,
       );
 
       if (result != null && result.files.single.path != null) {
-        setState(() {
-          widget.server.sslCert = File(result.files.single.path!);
+        setState(() async {
+          widget.server.sslCert =
+              await (File(result.files.single.path!).readAsBytes());
         });
         _updateServer();
       }
@@ -954,12 +887,13 @@ class _ServerConfigCardState extends State<_ServerConfigCard> {
         type: FileType.custom,
         allowedExtensions: ['pem', 'key'],
         dialogTitle: 'Select Private Key File',
-        initialDirectory: widget.server.sslKey?.path,
+        initialDirectory: (await getApplicationSupportDirectory()).path,
       );
 
       if (result != null && result.files.single.path != null) {
-        setState(() {
-          widget.server.sslKey = File(result.files.single.path!);
+        setState(() async {
+          widget.server.sslKey =
+              await (File(result.files.single.path!).readAsBytes());
         });
         _updateServer();
       }
@@ -977,31 +911,37 @@ class _ServerConfigCardState extends State<_ServerConfigCard> {
   void _showCertificateGenerator() {
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Generate SSL Certificates'),
-        content: SizedBox(
-          width: 600,
-          height: 600,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(0, 8, 0, 0),
-            child: CertificateGenerator(
-              onCertificatesGenerated: (cert, key) {
-                setState(() {
-                  widget.server.sslCert = cert;
-                  widget.server.sslKey = key;
-                });
-                _updateServer();
-                Navigator.of(context).pop();
-              },
+      builder: (context) {
+        final size = MediaQuery.of(context).size;
+        final isSmallScreen = size.width < 600;
+        return AlertDialog(
+          title: const Text('Generate SSL Certificates'),
+          content: SizedBox(
+            width: isSmallScreen ? size.width * 0.85 : 600,
+            height: isSmallScreen ? size.height * 0.6 : 600,
+            child: SingleChildScrollView(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(0, 8, 0, 0),
+                child: CertificateGenerator(
+                  onCertificatesGenerated: (cert, key) {
+                    setState(() {
+                      widget.server.sslCert = cert;
+                      widget.server.sslKey = key;
+                    });
+                    _updateServer();
+                    Navigator.of(context).pop();
+                  },
+                ),
+              ),
             ),
           ),
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text('Close')),
-        ],
-      ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text('Close')),
+          ],
+        );
+      },
     );
   }
 
@@ -1010,18 +950,25 @@ class _ServerConfigCardState extends State<_ServerConfigCard> {
     return Card(
       margin: const EdgeInsets.only(bottom: 16),
       child: ExpansionTile(
-        leading: FaIcon(FontAwesomeIcons.server,
-            size: 20,
-            color: widget.server.sslCert?.path == _certPlaceholder ||
-                    widget.server.sslKey?.path == _certPlaceholder
-                ? Theme.of(context).colorScheme.error
-                : null),
+        leading: FaIcon(
+          FontAwesomeIcons.server,
+          size: 20,
+          color: Colors
+              .amber, // widget.server.sslCert? == _certPlaceholder || //TODO: (ohg) => This is weird
+          // widget.server.sslKey? == _certPlaceholder
+          // ? Theme.of(context).colorScheme.error
+          // : null,
+        ),
         title: Text(
           widget.server.serverAlias ?? widget.server.endpoint,
           style: const TextStyle(fontWeight: FontWeight.bold),
+          overflow: TextOverflow.ellipsis,
+          maxLines: 1,
         ),
         subtitle: Text(widget.server.endpoint,
-            style: TextStyle(color: Colors.grey[600])),
+            style: TextStyle(color: Colors.grey[600]),
+            overflow: TextOverflow.ellipsis,
+            maxLines: 1),
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -1049,6 +996,7 @@ class _ServerConfigCardState extends State<_ServerConfigCard> {
                 );
               },
             ),
+            const SizedBox(width: 8),
             const FaIcon(FontAwesomeIcons.chevronDown, size: 16),
           ],
         ),
@@ -1078,157 +1026,136 @@ class _ServerConfigCardState extends State<_ServerConfigCard> {
                   onChanged: (_) => _updateServer(),
                 ),
                 const SizedBox(height: 12),
-                Row(
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        controller: _usernameController,
-                        decoration: const InputDecoration(
-                          labelText: 'Username (optional)',
-                          prefixIcon: FaIcon(FontAwesomeIcons.user, size: 16),
-                        ),
-                        onChanged: (_) => _updateServer(),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: TextField(
-                        controller: _passwordController,
-                        decoration: const InputDecoration(
-                          labelText: 'Password (optional)',
-                          prefixIcon: FaIcon(FontAwesomeIcons.lock, size: 16),
-                        ),
-                        obscureText: true,
-                        onChanged: (_) => _updateServer(),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 16),
-                Card(
-                  child: Padding(
-                    padding: const EdgeInsets.all(16.0),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+                LayoutBuilder(
+                  builder: (context, constraints) {
+                    final isNarrow = constraints.maxWidth < 400;
+                    if (isNarrow) {
+                      return Column(
+                        children: [
+                          TextField(
+                            controller: _usernameController,
+                            decoration: const InputDecoration(
+                              labelText: 'Username (optional)',
+                              prefixIcon:
+                                  FaIcon(FontAwesomeIcons.user, size: 16),
+                            ),
+                            onChanged: (_) => _updateServer(),
+                          ),
+                          const SizedBox(height: 12),
+                          TextField(
+                            controller: _passwordController,
+                            decoration: const InputDecoration(
+                              labelText: 'Password (optional)',
+                              prefixIcon:
+                                  FaIcon(FontAwesomeIcons.lock, size: 16),
+                            ),
+                            obscureText: true,
+                            onChanged: (_) => _updateServer(),
+                          ),
+                        ],
+                      );
+                    }
+                    return Row(
                       children: [
-                        Row(
-                          children: [
-                            const FaIcon(FontAwesomeIcons.certificate,
-                                size: 16),
-                            const SizedBox(width: 8),
-                            Text('SSL Certificates',
-                                style: Theme.of(context).textTheme.titleSmall),
-                          ],
+                        Expanded(
+                          child: TextField(
+                            controller: _usernameController,
+                            decoration: const InputDecoration(
+                              labelText: 'Username (optional)',
+                              prefixIcon:
+                                  FaIcon(FontAwesomeIcons.user, size: 16),
+                            ),
+                            onChanged: (_) => _updateServer(),
+                          ),
                         ),
-                        const SizedBox(height: 12),
-                        Row(
-                          children: [
-                            Expanded(
-                              child: TextField(
-                                readOnly: true,
-                                controller: TextEditingController(
-                                  text: widget.server.sslCert?.path ??
-                                      'No certificate selected',
-                                ),
-                                decoration: InputDecoration(
-                                  labelText: 'Certificate File',
-                                  prefixIcon: const FaIcon(
-                                      FontAwesomeIcons.certificate,
-                                      size: 16),
-                                  // Add red border if certificate path is the placeholder
-                                  border: widget.server.sslCert?.path ==
-                                          _certPlaceholder
-                                      ? const OutlineInputBorder(
-                                          borderSide: BorderSide(
-                                              color: Colors.red, width: 2),
-                                        )
-                                      : null,
-                                  enabledBorder: widget.server.sslCert?.path ==
-                                          _certPlaceholder
-                                      ? const OutlineInputBorder(
-                                          borderSide: BorderSide(
-                                              color: Colors.red, width: 2),
-                                        )
-                                      : null,
-                                  focusedBorder: widget.server.sslCert?.path ==
-                                          _certPlaceholder
-                                      ? const OutlineInputBorder(
-                                          borderSide: BorderSide(
-                                              color: Colors.red, width: 2),
-                                        )
-                                      : null,
-                                ),
-                              ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: TextField(
+                            controller: _passwordController,
+                            decoration: const InputDecoration(
+                              labelText: 'Password (optional)',
+                              prefixIcon:
+                                  FaIcon(FontAwesomeIcons.lock, size: 16),
                             ),
-                            const SizedBox(width: 8),
-                            ElevatedButton.icon(
-                              onPressed: _selectCertificate,
-                              icon: const FaIcon(FontAwesomeIcons.folderOpen,
-                                  size: 14),
-                              label: const Text('Browse'),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 12),
-                        Row(
-                          children: [
-                            Expanded(
-                              child: TextField(
-                                readOnly: true,
-                                controller: TextEditingController(
-                                  text: widget.server.sslKey?.path ??
-                                      'No private key selected',
-                                ),
-                                decoration: InputDecoration(
-                                  labelText: 'Private Key File',
-                                  prefixIcon: const FaIcon(FontAwesomeIcons.key,
-                                      size: 16),
-                                  // Add red border if key path is the placeholder
-                                  border: widget.server.sslKey?.path ==
-                                          _certPlaceholder
-                                      ? const OutlineInputBorder(
-                                          borderSide: BorderSide(
-                                              color: Colors.red, width: 2),
-                                        )
-                                      : null,
-                                  enabledBorder: widget.server.sslKey?.path ==
-                                          _certPlaceholder
-                                      ? const OutlineInputBorder(
-                                          borderSide: BorderSide(
-                                              color: Colors.red, width: 2),
-                                        )
-                                      : null,
-                                  focusedBorder: widget.server.sslKey?.path ==
-                                          _certPlaceholder
-                                      ? const OutlineInputBorder(
-                                          borderSide: BorderSide(
-                                              color: Colors.red, width: 2),
-                                        )
-                                      : null,
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            ElevatedButton.icon(
-                              onPressed: _selectPrivateKey,
-                              icon: const FaIcon(FontAwesomeIcons.folderOpen,
-                                  size: 14),
-                              label: const Text('Browse'),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 12),
-                        SizedBox(
-                          width: double.infinity,
-                          child: OutlinedButton.icon(
-                            onPressed: _showCertificateGenerator,
-                            icon: const FaIcon(FontAwesomeIcons.plus, size: 14),
-                            label: const Text('Generate New Certificates'),
+                            obscureText: true,
+                            onChanged: (_) => _updateServer(),
                           ),
                         ),
                       ],
-                    ),
-                  ),
+                    );
+                  },
+                ),
+                const SizedBox(height: 16),
+                LayoutBuilder(
+                  builder: (context, constraints) {
+                    final isNarrow = constraints.maxWidth < 400;
+                    return Card(
+                      child: Padding(
+                        padding: EdgeInsets.all(isNarrow ? 12.0 : 16.0),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                const FaIcon(FontAwesomeIcons.certificate,
+                                    size: 16),
+                                const SizedBox(width: 8),
+                                Text('SSL Certificates',
+                                    style:
+                                        Theme.of(context).textTheme.titleSmall),
+                              ],
+                            ),
+                            const SizedBox(height: 12),
+                            Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                widget.server.sslCert == null
+                                    ? Text(
+                                        'Please import or generate a certificate')
+                                    : Text('Certificate in place'),
+                                const SizedBox(height: 8),
+                                ElevatedButton.icon(
+                                  onPressed: _selectCertificate,
+                                  icon: const FaIcon(
+                                      FontAwesomeIcons.folderOpen,
+                                      size: 14),
+                                  label: const Text('Browse Certificate'),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 12),
+                            Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                widget.server.sslKey == null
+                                    ? Text(
+                                        'Please import or generate a private key')
+                                    : Text('Private key in place'),
+                                const SizedBox(height: 8),
+                                ElevatedButton.icon(
+                                  onPressed: _selectPrivateKey,
+                                  icon: const FaIcon(
+                                      FontAwesomeIcons.folderOpen,
+                                      size: 14),
+                                  label: const Text('Browse Private Key'),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 12),
+                            SizedBox(
+                              width: double.infinity,
+                              child: OutlinedButton.icon(
+                                onPressed: _showCertificateGenerator,
+                                icon: const FaIcon(FontAwesomeIcons.plus,
+                                    size: 14),
+                                label: const Text('Generate New Certificates'),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
                 ),
               ],
             ),
@@ -1250,26 +1177,56 @@ class ImportExportCard extends ConsumerWidget {
       child: Padding(
         padding: const EdgeInsets.all(16.0),
         child: LayoutBuilder(
-          builder: (context, c) => Row(
-            children: [
-              const Icon(Icons.sync_alt, size: 20),
-              const SizedBox(width: 8),
-              Text('Import / Export',
-                  style: Theme.of(context).textTheme.titleMedium),
-              const Spacer(),
-              FilledButton.icon(
-                onPressed: () => _onImport(context, ref),
-                icon: const Icon(Icons.file_upload),
-                label: const Text('Import'),
-              ),
-              const SizedBox(width: 8),
-              OutlinedButton.icon(
-                onPressed: () => _onExport(context, ref),
-                icon: const Icon(Icons.file_download),
-                label: const Text('Export'),
-              ),
-            ],
-          ),
+          builder: (context, constraints) {
+            final isNarrow = constraints.maxWidth < 500;
+            if (isNarrow) {
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    children: [
+                      const Icon(Icons.sync_alt, size: 20),
+                      const SizedBox(width: 8),
+                      Text('Import / Export',
+                          style: Theme.of(context).textTheme.titleMedium),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  FilledButton.icon(
+                    onPressed: () => _onImport(context, ref),
+                    icon: const Icon(Icons.file_upload),
+                    label: const Text('Import'),
+                  ),
+                  const SizedBox(height: 8),
+                  OutlinedButton.icon(
+                    onPressed: () => _onExport(context, ref),
+                    icon: const Icon(Icons.file_download),
+                    label: const Text('Export'),
+                  ),
+                ],
+              );
+            }
+            return Row(
+              children: [
+                const Icon(Icons.sync_alt, size: 20),
+                const SizedBox(width: 8),
+                Text('Import / Export',
+                    style: Theme.of(context).textTheme.titleMedium),
+                const Spacer(),
+                FilledButton.icon(
+                  onPressed: () => _onImport(context, ref),
+                  icon: const Icon(Icons.file_upload),
+                  label: const Text('Import'),
+                ),
+                const SizedBox(width: 8),
+                OutlinedButton.icon(
+                  onPressed: () => _onExport(context, ref),
+                  icon: const Icon(Icons.file_download),
+                  label: const Text('Export'),
+                ),
+              ],
+            );
+          },
         ),
       ),
     );
@@ -1321,20 +1278,39 @@ class ImportExportCard extends ConsumerWidget {
         context: context,
         builder: (ctx) => AlertDialog(
           title: const Text('Export Complete'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text('Encrypted file saved.'),
-              const SizedBox(height: 12),
-              const Text('Use this code to decrypt:'),
-              const SizedBox(height: 8),
-              SelectableText(postfix,
-                  style: const TextStyle(fontFamily: 'monospace')),
-              const SizedBox(height: 8),
-              Text('Location:\n${file.path}',
-                  style: const TextStyle(fontSize: 12, color: Colors.grey)),
-            ],
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('Encrypted file saved.'),
+                const SizedBox(height: 12),
+                const Text('Use this code to decrypt:'),
+                const SizedBox(height: 8),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.grey.withAlpha(50),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.grey),
+                  ),
+                  child: SelectableText(
+                    postfix,
+                    style: const TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 14,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Text('Location:',
+                    style: const TextStyle(fontWeight: FontWeight.bold)),
+                const SizedBox(height: 4),
+                SelectableText(file.path,
+                    style: const TextStyle(fontSize: 11, color: Colors.grey)),
+              ],
+            ),
           ),
           actions: [
             TextButton(
@@ -1382,15 +1358,28 @@ class ImportExportCard extends ConsumerWidget {
       final postfix = await showDialog<String?>(
         context: context,
         builder: (ctx) => AlertDialog(
-          title: const Text(
-              'Enter Code to Decrypt. \nCurrent server config will be overwritten!'),
-          content: TextField(
-            controller: ctrl,
-            decoration: const InputDecoration(
-              labelText: 'Code',
-              hintText: 'Enter the code shared with you',
+          title: const Text('Enter Code to Decrypt'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Current server config will be overwritten!',
+                  style: TextStyle(
+                      fontWeight: FontWeight.bold, color: Colors.orange),
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: ctrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Code',
+                    hintText: 'Enter the code shared with you',
+                  ),
+                  obscureText: true,
+                ),
+              ],
             ),
-            obscureText: true,
           ),
           actions: [
             TextButton(

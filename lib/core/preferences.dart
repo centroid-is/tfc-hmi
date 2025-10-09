@@ -276,8 +276,12 @@ class Preferences implements PreferencesApi {
   }
 
   @override
-  Future<void> remove(String key) {
-    sharedPreferences.remove(key);
+  Future<void> remove(String key, {bool secret = false}) {
+    if (secret) {
+      secureStorage.delete(key: key);
+    } else {
+      sharedPreferences.remove(key);
+    }
     // TODO: remove from postgres
     _onPreferencesChanged.add(key);
     return Future.value();

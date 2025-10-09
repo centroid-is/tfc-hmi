@@ -63,7 +63,7 @@ class _DatabaseConfigEditorState extends ConsumerState<_DatabaseConfigEditor> {
     final endpoint = widget.config.postgres;
     hostController = TextEditingController(text: endpoint?.host ?? '');
     portController =
-        TextEditingController(text: endpoint?.port?.toString() ?? '');
+        TextEditingController(text: endpoint?.port.toString() ?? '');
     dbController = TextEditingController(text: endpoint?.database ?? '');
     userController = TextEditingController(text: endpoint?.username ?? '');
     passController = TextEditingController(text: endpoint?.password ?? '');
@@ -141,9 +141,11 @@ class _DatabaseConfigEditorState extends ConsumerState<_DatabaseConfigEditor> {
                                 size: 16,
                               ),
                               const SizedBox(width: 8),
-                              Text(
-                                'Connection Status: ${snapshot.data ?? false ? "Connected" : "Disconnected"}',
-                                style: const TextStyle(fontSize: 12),
+                              Expanded(
+                                child: Text(
+                                  'Connection Status: ${snapshot.data ?? false ? "Connected" : "Disconnected"}',
+                                  style: const TextStyle(fontSize: 12),
+                                ),
                               ),
                             ],
                           ),
@@ -192,13 +194,15 @@ class _DatabaseConfigEditorState extends ConsumerState<_DatabaseConfigEditor> {
                       ),
                       obscureText: true,
                     ),
-                    const SizedBox(height: 12),
+                    const SizedBox(height: 8),
                     CheckboxListTile(
                       title: const Text('Is Unix Socket'),
                       value: isUnixSocket,
+                      contentPadding: EdgeInsets.zero,
                       onChanged: (v) =>
                           setState(() => isUnixSocket = v ?? false),
                     ),
+                    const SizedBox(height: 8),
                     Row(
                       children: [
                         const Text('SSL Mode: '),
