@@ -7,7 +7,8 @@ import 'package:nm/nm.dart' as nm;
 
 import '../widgets/base_scaffold.dart';
 
-import '../dbus/generated/hostname1.dart';
+import '../dbus/generated/hostname1.dart' as hostname1;
+import '../dbus/generated/login1.dart' as login1;
 
 class AboutLinuxPage extends StatefulWidget {
   final DBusClient dbusClient;
@@ -18,17 +19,24 @@ class AboutLinuxPage extends StatefulWidget {
 }
 
 class _AboutLinuxPageState extends State<AboutLinuxPage> {
-  late final OrgFreedesktopDBusPeer _hostnamed;
-  StreamSubscription<OrgFreedesktopDBusPeerPropertiesChanged>? _sub;
+  late final hostname1.OrgFreedesktopDBusPeer _hostnamed;
+  late final login1.OrgFreedesktopDBusPeer _login1;
+  StreamSubscription<hostname1.OrgFreedesktopDBusPeerPropertiesChanged>? _sub;
   Future<_HostInfo>? _infoFuture;
 
   @override
   void initState() {
     super.initState();
-    _hostnamed = OrgFreedesktopDBusPeer(
+    _hostnamed = hostname1.OrgFreedesktopDBusPeer(
       widget.dbusClient,
       'org.freedesktop.hostname1',
       DBusObjectPath('/org/freedesktop/hostname1'),
+    );
+
+    _login1 = login1.OrgFreedesktopDBusPeer(
+      widget.dbusClient,
+      'org.freedesktop.login1',
+      DBusObjectPath('/org/freedesktop/login1'),
     );
 
     // initial load
@@ -199,6 +207,86 @@ class _AboutLinuxPageState extends State<AboutLinuxPage> {
     );
   }
 
+  // Add this method for showing confirmation dialog
+  Future<bool> _showConfirmDialog({
+    required String title,
+    required String message,
+    required IconData icon,
+    required Color iconColor,
+  }) async {
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Row(
+          children: [
+            Icon(icon, color: iconColor),
+            const SizedBox(width: 12),
+            Text(title),
+          ],
+        ),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            style: FilledButton.styleFrom(
+              backgroundColor: iconColor,
+            ),
+            child: const Text('Confirm'),
+          ),
+        ],
+      ),
+    );
+    return result ?? false;
+  }
+
+  // Add this method for poweroff
+  Future<void> _handlePowerOff() async {
+    final confirmed = await _showConfirmDialog(
+      title: 'Power Off',
+      message: 'Are you sure you want to power off the system?',
+      icon: FontAwesomeIcons.powerOff,
+      iconColor: Colors.red,
+    );
+
+    if (!confirmed) return;
+
+    try {
+      await _login1.callPowerOff(false);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to power off: $e')),
+        );
+      }
+    }
+  }
+
+  // Add this method for reboot
+  Future<void> _handleReboot() async {
+    final confirmed = await _showConfirmDialog(
+      title: 'Reboot',
+      message: 'Are you sure you want to reboot the system?',
+      icon: FontAwesomeIcons.arrowsRotate,
+      iconColor: Colors.orange,
+    );
+
+    if (!confirmed) return;
+
+    try {
+      await _login1.callReboot(false);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to reboot: $e')),
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return BaseScaffold(
@@ -365,6 +453,38 @@ class _AboutLinuxPageState extends State<AboutLinuxPage> {
                     value: _fmtDate(info.osSupportEnd!),
                     caption: 'From org.freedesktop.hostname1 (local time).',
                   ),
+
+                const SizedBox(height: 24),
+
+                // Power control buttons at the bottom
+                Row(
+                  children: [
+                    Expanded(
+                      child: FilledButton.icon(
+                        onPressed: _handleReboot,
+                        icon: const FaIcon(FontAwesomeIcons.arrowsRotate,
+                            size: 18),
+                        label: const Text('Reboot'),
+                        style: FilledButton.styleFrom(
+                          backgroundColor: Colors.orange,
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: FilledButton.icon(
+                        onPressed: _handlePowerOff,
+                        icon: const FaIcon(FontAwesomeIcons.powerOff, size: 18),
+                        label: const Text('Power Off'),
+                        style: FilledButton.styleFrom(
+                          backgroundColor: Colors.red,
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ],
             ),
           );
