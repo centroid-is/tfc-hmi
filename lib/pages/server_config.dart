@@ -419,18 +419,19 @@ class _CertificateGeneratorState extends State<CertificateGenerator> {
             Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: Colors.red.withAlpha(25),
+                color: Theme.of(context).colorScheme.error.withAlpha(25),
                 borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: Colors.red),
+                border: Border.all(color: Theme.of(context).colorScheme.error),
               ),
               child: Row(
                 children: [
-                  const FaIcon(FontAwesomeIcons.triangleExclamation,
-                      color: Colors.red, size: 16),
+                  FaIcon(FontAwesomeIcons.triangleExclamation,
+                      color: Theme.of(context).colorScheme.error, size: 16),
                   const SizedBox(width: 8),
                   Expanded(
                       child: Text(_error!,
-                          style: const TextStyle(color: Colors.red))),
+                          style: TextStyle(
+                              color: Theme.of(context).colorScheme.error))),
                 ],
               ),
             ),
@@ -589,11 +590,12 @@ class _OpcUAServersSectionState extends ConsumerState<_OpcUAServersSection> {
         );
       }
     } catch (e) {
+      if (!context.mounted) return;
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
               content: Text('Failed to save configuration: $e'),
-              backgroundColor: Colors.red),
+              backgroundColor: Theme.of(context).colorScheme.error),
         );
       }
     }
@@ -624,8 +626,8 @@ class _OpcUAServersSectionState extends ConsumerState<_OpcUAServersSection> {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              const FaIcon(FontAwesomeIcons.triangleExclamation,
-                  size: 64, color: Colors.red),
+              FaIcon(FontAwesomeIcons.triangleExclamation,
+                  size: 64, color: Theme.of(context).colorScheme.error),
               const SizedBox(height: 16),
               Text('Error loading configuration: $_error'),
               const SizedBox(height: 16),
@@ -871,11 +873,12 @@ class _ServerConfigCardState extends State<_ServerConfigCard> {
         _updateServer();
       }
     } catch (e) {
+      if (!context.mounted) return;
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
               content: Text('Error selecting certificate: $e'),
-              backgroundColor: Colors.red),
+              backgroundColor: Theme.of(context).colorScheme.error),
         );
       }
     }
@@ -898,11 +901,12 @@ class _ServerConfigCardState extends State<_ServerConfigCard> {
         _updateServer();
       }
     } catch (e) {
+      if (!context.mounted) return;
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
               content: Text('Error selecting private key: $e'),
-              backgroundColor: Colors.red),
+              backgroundColor: Theme.of(context).colorScheme.error),
         );
       }
     }
@@ -953,11 +957,10 @@ class _ServerConfigCardState extends State<_ServerConfigCard> {
         leading: FaIcon(
           FontAwesomeIcons.server,
           size: 20,
-          color: Colors
-              .amber, // widget.server.sslCert? == _certPlaceholder || //TODO: (ohg) => This is weird
-          // widget.server.sslKey? == _certPlaceholder
-          // ? Theme.of(context).colorScheme.error
-          // : null,
+          color: widget.server.sslCert?.toString() == _certPlaceholder ||
+                  widget.server.sslKey?.toString() == _certPlaceholder
+              ? Theme.of(context).colorScheme.error
+              : null,
         ),
         title: Text(
           widget.server.serverAlias ?? widget.server.endpoint,
@@ -1111,8 +1114,17 @@ class _ServerConfigCardState extends State<_ServerConfigCard> {
                               children: [
                                 widget.server.sslCert == null
                                     ? Text(
-                                        'Please import or generate a certificate')
-                                    : Text('Certificate in place'),
+                                        'Please import or generate a certificate if needed')
+                                    : widget.server.sslCert!.toString() ==
+                                            _certPlaceholder
+                                        ? Text(
+                                            'Please import or generate a certificate',
+                                            style: TextStyle(
+                                                color: Theme.of(context)
+                                                    .colorScheme
+                                                    .error),
+                                          )
+                                        : Text('Certificate in place'),
                                 const SizedBox(height: 8),
                                 ElevatedButton.icon(
                                   onPressed: _selectCertificate,
@@ -1129,8 +1141,17 @@ class _ServerConfigCardState extends State<_ServerConfigCard> {
                               children: [
                                 widget.server.sslKey == null
                                     ? Text(
-                                        'Please import or generate a private key')
-                                    : Text('Private key in place'),
+                                        'Please import or generate a private key if needed')
+                                    : widget.server.sslKey!.toString() ==
+                                            _certPlaceholder
+                                        ? Text(
+                                            'Please import or generate a private key',
+                                            style: TextStyle(
+                                                color: Theme.of(context)
+                                                    .colorScheme
+                                                    .error),
+                                          )
+                                        : Text('Private key in place'),
                                 const SizedBox(height: 8),
                                 ElevatedButton.icon(
                                   onPressed: _selectPrivateKey,
@@ -1330,9 +1351,11 @@ class ImportExportCard extends ConsumerWidget {
         ),
       );
     } catch (e) {
+      if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-            content: Text('Export failed: $e'), backgroundColor: Colors.red),
+            content: Text('Export failed: $e'),
+            backgroundColor: Theme.of(context).colorScheme.error),
       );
     }
   }
@@ -1427,9 +1450,11 @@ class ImportExportCard extends ConsumerWidget {
         ),
       );
     } catch (e) {
+      if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-            content: Text('Import failed: $e'), backgroundColor: Colors.red),
+            content: Text('Import failed: $e'),
+            backgroundColor: Theme.of(context).colorScheme.error),
       );
     }
   }
