@@ -301,7 +301,6 @@ class _CertificateGeneratorState extends State<CertificateGenerator> {
 
   @override
   Widget build(BuildContext context) {
-    final isSmallScreen = MediaQuery.of(context).size.width < 600;
     return SingleChildScrollView(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -949,16 +948,23 @@ class _ServerConfigCardState extends State<_ServerConfigCard> {
     );
   }
 
+  String? uint8ListToString(Uint8List? ls) {
+    return ls != null ? String.fromCharCodes(ls) : null;
+  }
+
   @override
   Widget build(BuildContext context) {
+    final sslCertString = uint8ListToString(widget.server.sslCert);
+    final sslKeyString = uint8ListToString(widget.server.sslKey);
+
     return Card(
       margin: const EdgeInsets.only(bottom: 16),
       child: ExpansionTile(
         leading: FaIcon(
           FontAwesomeIcons.server,
           size: 20,
-          color: widget.server.sslCert?.toString() == _certPlaceholder ||
-                  widget.server.sslKey?.toString() == _certPlaceholder
+          color: sslCertString == _certPlaceholder ||
+                  sslKeyString == _certPlaceholder
               ? Theme.of(context).colorScheme.error
               : null,
         ),
@@ -1115,8 +1121,7 @@ class _ServerConfigCardState extends State<_ServerConfigCard> {
                                 widget.server.sslCert == null
                                     ? Text(
                                         'Please import or generate a certificate if needed')
-                                    : widget.server.sslCert!.toString() ==
-                                            _certPlaceholder
+                                    : sslCertString == _certPlaceholder
                                         ? Text(
                                             'Please import or generate a certificate',
                                             style: TextStyle(
@@ -1142,8 +1147,7 @@ class _ServerConfigCardState extends State<_ServerConfigCard> {
                                 widget.server.sslKey == null
                                     ? Text(
                                         'Please import or generate a private key if needed')
-                                    : widget.server.sslKey!.toString() ==
-                                            _certPlaceholder
+                                    : sslKeyString == _certPlaceholder
                                         ? Text(
                                             'Please import or generate a private key',
                                             style: TextStyle(
@@ -1473,8 +1477,10 @@ class ImportExportCard extends ConsumerWidget {
       for (final s in (copy['opcua'] as List)) {
         if (s is Map<String, dynamic>) {
           if ((s['ssl_cert'] != null) && (s['ssl_key'] != null)) {
-            s['ssl_cert'] = _certPlaceholder;
-            s['ssl_key'] = _certPlaceholder;
+            s['ssl_cert'] =
+                Base64Converter().toJson(utf8.encode(_certPlaceholder));
+            s['ssl_key'] =
+                Base64Converter().toJson(utf8.encode(_certPlaceholder));
           }
         }
       }
