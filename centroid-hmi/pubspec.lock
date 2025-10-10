@@ -757,10 +757,10 @@ packages:
     dependency: "direct main"
     description:
       name: open62541_libs
-      sha256: a26992f6c1b2ea1d96549d4a8436b3b2edf440b5b3651169f6b76831ffe3820c
+      sha256: bea65c749f26f7bc96b21940193a9faeedb742576ba7d6433bf0029b1b6af14a
       url: "https://pub.dev"
     source: hosted
-    version: "0.0.4"
+    version: "0.0.5"
   os_detect:
     dependency: transitive
     description:
