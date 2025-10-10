@@ -15,19 +15,19 @@ import 'preferences.dart';
 
 part 'state_man.g.dart';
 
-class FileConverter implements JsonConverter<File?, String?> {
-  const FileConverter();
+class Base64Converter implements JsonConverter<Uint8List?, String?> {
+  const Base64Converter();
 
   @override
-  File? fromJson(String? json) {
+  Uint8List? fromJson(String? json) {
     if (json == null) return null;
-    return File(json);
+    return base64Decode(json);
   }
 
   @override
-  String? toJson(File? file) {
-    if (file == null) return null;
-    return file.path;
+  String? toJson(Uint8List? certificateContents) {
+    if (certificateContents == null) return null;
+    return base64Encode(certificateContents);
   }
 }
 
@@ -36,12 +36,12 @@ class OpcUAConfig {
   String endpoint = "opc.tcp://localhost:4840";
   String? username;
   String? password;
-  @FileConverter()
+  @Base64Converter()
   @JsonKey(name: 'ssl_cert')
-  File? sslCert;
-  @FileConverter()
+  Uint8List? sslCert;
+  @Base64Converter()
   @JsonKey(name: 'ssl_key')
-  File? sslKey;
+  Uint8List? sslKey;
   @JsonKey(name: 'server_alias')
   String? serverAlias;
 
@@ -71,10 +71,10 @@ class StateManConfig {
   }
 
   static Future<StateManConfig> fromPrefs(Preferences prefs) async {
-    var configJson = await prefs.getString(_configKey, secret: true);
+    var configJson = await prefs.getString(configKey, secret: true);
     if (configJson == null) {
       configJson = jsonEncode(StateManConfig(opcua: [OpcUAConfig()]).toJson());
-      await prefs.setString(_configKey, configJson,
+      await prefs.setString(configKey, configJson,
           secret: true, saveToDb: false);
     }
     return StateManConfig.fromJson(jsonDecode(configJson));
@@ -82,15 +82,14 @@ class StateManConfig {
 
   Future<void> toPrefs(Preferences prefs) async {
     final configJson = jsonEncode(toJson());
-    await prefs.setString(_configKey, configJson,
-        secret: true, saveToDb: false);
+    await prefs.setString(configKey, configJson, secret: true, saveToDb: false);
   }
 
   factory StateManConfig.fromJson(Map<String, dynamic> json) =>
       _$StateManConfigFromJson(json);
   Map<String, dynamic> toJson() => _$StateManConfigToJson(this);
 
-  static const String _configKey = 'state_man_config';
+  static const String configKey = 'state_man_config';
 }
 
 @JsonSerializable()
@@ -315,8 +314,8 @@ class StateMan {
       MessageSecurityMode securityMode =
           MessageSecurityMode.UA_MESSAGESECURITYMODE_NONE;
       if (opcuaConfig.sslCert != null && opcuaConfig.sslKey != null) {
-        cert = await opcuaConfig.sslCert!.readAsBytes();
-        key = await opcuaConfig.sslKey!.readAsBytes();
+        cert = opcuaConfig.sslCert!;
+        key = opcuaConfig.sslKey!;
         securityMode =
             MessageSecurityMode.UA_MESSAGESECURITYMODE_SIGNANDENCRYPT;
       }

@@ -39,7 +39,7 @@ String formatTimestamp(DateTime timestamp) {
   return '$day-$month-$year $hour:$minute:$second';
 }
 
-class BaseScaffold extends ConsumerWidget {
+class BaseScaffold extends ConsumerStatefulWidget {
   final Widget body;
   final String title;
   final Widget? floatingActionButton;
@@ -50,6 +50,19 @@ class BaseScaffold extends ConsumerWidget {
     required this.title,
     this.floatingActionButton,
   });
+
+  @override
+  ConsumerState<BaseScaffold> createState() => _BaseScaffoldState();
+}
+
+class _BaseScaffoldState extends ConsumerState<BaseScaffold> {
+  bool _isFullscreen = false;
+
+  void _toggleFullscreen() {
+    setState(() {
+      _isFullscreen = !_isFullscreen;
+    });
+  }
 
   findTopLevelIndexForBeamer(MenuItem node, int? base, String path) {
     if (node.path != null) {
@@ -152,121 +165,142 @@ class BaseScaffold extends ConsumerWidget {
   }
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     final logger = Logger();
     // Retrieve the provider (if any)
     final globalLeftProvider = _tryGetGlobalAppBarLeftWidgetProvider(context);
 
     return Scaffold(
-      appBar: AppBar(
-        // Disable default leading so we can build our own.
-        automaticallyImplyLeading: false,
-        backgroundColor: Theme.of(context).appBarTheme.backgroundColor,
-        flexibleSpace: SafeArea(
-          child: Stack(
-            children: [
-              // CENTER: Always centered title widget.
-              Align(
-                alignment: Alignment.center,
-                child: _buildClockOrAlarm(context, ref),
-              ),
-              // LEFT SIDE: Back arrow (if available) + injected custom widget.
-              Align(
-                alignment: Alignment.centerLeft,
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
+      appBar: _isFullscreen
+          ? null
+          : AppBar(
+              // Disable default leading so we can build our own.
+              automaticallyImplyLeading: false,
+              backgroundColor: Theme.of(context).appBarTheme.backgroundColor,
+              flexibleSpace: SafeArea(
+                child: Stack(
                   children: [
-                    if (context.canBeamBack)
-                      IconButton(
-                        icon: const Icon(Icons.arrow_back),
-                        onPressed: () => context.beamBack(),
-                      ),
-                    globalLeftProvider?.buildAppBarLeftWidgets(context) ??
-                        const SizedBox.shrink(),
-                  ],
-                ),
-              ),
-              // RIGHT SIDE: Theme toggle and SVG icon.
-              Align(
-                alignment: Alignment.centerRight,
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Padding(
-                      padding: const EdgeInsets.only(right: 16.0),
-                      child: GestureDetector(
-                        onDoubleTap: () {
-                          exit(0);
-                        },
-                        child: SvgPicture.asset(
-                          'assets/centroid.svg',
-                          height: 50,
-                          package: 'tfc',
-                          colorFilter: ColorFilter.mode(
-                            Theme.of(context).colorScheme.onSurface,
-                            BlendMode.srcIn,
+                    // CENTER: Always centered title widget.
+                    Align(
+                      alignment: Alignment.center,
+                      child: _buildClockOrAlarm(context, ref),
+                    ),
+                    // LEFT SIDE: Back arrow (if available) + injected custom widget + fullscreen button.
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (context.canBeamBack)
+                            IconButton(
+                              icon: const Icon(Icons.arrow_back),
+                              onPressed: () => context.beamBack(),
+                            ),
+                          globalLeftProvider?.buildAppBarLeftWidgets(context) ??
+                              const SizedBox.shrink(),
+                          IconButton(
+                            icon: const Icon(Icons.fullscreen),
+                            onPressed: _toggleFullscreen,
+                            tooltip: 'Toggle Fullscreen',
                           ),
-                        ),
+                        ],
                       ),
                     ),
-                    Consumer(
-                      builder: (context, ref, child) {
-                        final notifier =
-                            ref.read(themeNotifierProvider.notifier);
-                        return FutureBuilder(
-                          future: ref.watch(themeNotifierProvider.future),
-                          builder: (context, snapshot) {
-                            if (snapshot.hasData) {
-                              final currentTheme = snapshot.data!;
-                              return IconButton(
-                                icon: const Icon(Icons.brightness_6),
-                                onPressed: () {
-                                  if (currentTheme == ThemeMode.light) {
-                                    notifier.setTheme(ThemeMode.dark);
-                                  } else {
-                                    notifier.setTheme(ThemeMode.light);
+                    // RIGHT SIDE: Theme toggle and SVG icon.
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          // Only show SVG if not in mobile portrait mode
+                          if (!(MediaQuery.of(context).orientation ==
+                                  Orientation.portrait &&
+                              MediaQuery.of(context).size.width < 600))
+                            Padding(
+                              padding: const EdgeInsets.only(right: 16.0),
+                              child: GestureDetector(
+                                onDoubleTap: () {
+                                  exit(0);
+                                },
+                                child: SvgPicture.asset(
+                                  'assets/centroid.svg',
+                                  height: 50,
+                                  package: 'tfc',
+                                  colorFilter: ColorFilter.mode(
+                                    Theme.of(context).colorScheme.onSurface,
+                                    BlendMode.srcIn,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          Consumer(
+                            builder: (context, ref, child) {
+                              final notifier =
+                                  ref.read(themeNotifierProvider.notifier);
+                              return FutureBuilder(
+                                future: ref.watch(themeNotifierProvider.future),
+                                builder: (context, snapshot) {
+                                  if (snapshot.hasData) {
+                                    final currentTheme = snapshot.data!;
+                                    return IconButton(
+                                      icon: const Icon(Icons.brightness_6),
+                                      onPressed: () {
+                                        if (currentTheme == ThemeMode.light) {
+                                          notifier.setTheme(ThemeMode.dark);
+                                        } else {
+                                          notifier.setTheme(ThemeMode.light);
+                                        }
+                                      },
+                                    );
                                   }
+                                  return const SizedBox();
                                 },
                               );
-                            }
-                            return const SizedBox();
-                          },
-                        );
-                      },
+                            },
+                          ),
+                        ],
+                      ),
                     ),
                   ],
                 ),
               ),
-            ],
-          ),
-        ),
-      ),
-      body: body,
-      floatingActionButton: floatingActionButton,
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: findTopLevelIndexForBeamer(
-          RouteRegistry().root,
-          null,
-          (context.currentBeamLocation.state as BeamState).uri.path,
-        ),
-        labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
-        destinations: [
-          ...RouteRegistry().menuItems.map<Widget>((item) {
-            if (item.children.isEmpty) {
-              return NavigationDestination(
-                  icon: Icon(item.icon), label: item.label);
-            }
-            return NavDropdown(
-              menuItem: item,
-            );
-          }),
-        ],
-        onDestinationSelected: (int index) {
-          logger.d('Item tapped: $index');
-          final item = RouteRegistry().menuItems[index];
-          beamSafelyKids(context, item);
-        },
-      ),
+            ),
+      body: widget.body,
+      floatingActionButton: _isFullscreen
+          ? FloatingActionButton(
+              mini: true,
+              onPressed: _toggleFullscreen,
+              child: const Icon(Icons.fullscreen_exit),
+            )
+          : widget.floatingActionButton,
+      floatingActionButtonLocation:
+          _isFullscreen ? FloatingActionButtonLocation.startFloat : null,
+      bottomNavigationBar: _isFullscreen
+          ? null
+          : NavigationBar(
+              selectedIndex: findTopLevelIndexForBeamer(
+                RouteRegistry().root,
+                null,
+                (context.currentBeamLocation.state as BeamState).uri.path,
+              ),
+              labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
+              destinations: [
+                ...RouteRegistry().menuItems.map<Widget>((item) {
+                  if (item.children.isEmpty) {
+                    return NavigationDestination(
+                        icon: Icon(item.icon), label: item.label);
+                  }
+                  return NavDropdown(
+                    menuItem: item,
+                  );
+                }),
+              ],
+              onDestinationSelected: (int index) {
+                logger.d('Item tapped: $index');
+                final item = RouteRegistry().menuItems[index];
+                beamSafelyKids(context, item);
+              },
+            ),
     );
   }
 }

@@ -10,8 +10,8 @@ OpcUAConfig _$OpcUAConfigFromJson(Map<String, dynamic> json) => OpcUAConfig()
   ..endpoint = json['endpoint'] as String
   ..username = json['username'] as String?
   ..password = json['password'] as String?
-  ..sslCert = const FileConverter().fromJson(json['ssl_cert'] as String?)
-  ..sslKey = const FileConverter().fromJson(json['ssl_key'] as String?)
+  ..sslCert = const Base64Converter().fromJson(json['ssl_cert'] as String?)
+  ..sslKey = const Base64Converter().fromJson(json['ssl_key'] as String?)
   ..serverAlias = json['server_alias'] as String?;
 
 Map<String, dynamic> _$OpcUAConfigToJson(OpcUAConfig instance) =>
@@ -19,8 +19,8 @@ Map<String, dynamic> _$OpcUAConfigToJson(OpcUAConfig instance) =>
       'endpoint': instance.endpoint,
       'username': instance.username,
       'password': instance.password,
-      'ssl_cert': const FileConverter().toJson(instance.sslCert),
-      'ssl_key': const FileConverter().toJson(instance.sslKey),
+      'ssl_cert': const Base64Converter().toJson(instance.sslCert),
+      'ssl_key': const Base64Converter().toJson(instance.sslKey),
       'server_alias': instance.serverAlias,
     };
 
