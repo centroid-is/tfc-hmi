@@ -352,9 +352,68 @@ class GraphAsset extends ConsumerStatefulWidget {
 }
 
 class _GraphAssetState extends ConsumerState<GraphAsset> {
-  bool _isRealTimePaused = false;
-  DateTime? _pausedAt;
-  List<List<dynamic>>? _pausedData;
+  Stream<List<List<List<double>>>>? _combined$;
+  List<String> _seriesKeys = [];
+  List<GraphSeriesConfig> _allSeries = [];
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _ensureCombinedStream();
+  }
+
+  @override
+  void didUpdateWidget(covariant GraphAsset oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _ensureCombinedStream();
+  }
+
+  void _ensureCombinedStream() {
+    final collector = ref.read(collectorProvider).value;
+    if (collector == null) return;
+
+    _allSeries = [
+      ...widget.config.primarySeries,
+      ...widget.config.secondarySeries
+    ];
+    final keys = _allSeries.map((s) => s.key).toList();
+
+    if (!_listEquals(keys, _seriesKeys)) {
+      _seriesKeys = keys;
+      // TODO: make this as time window, when panning is implemented better
+
+      Iterable<Stream<List<List<double>>>> streams = _allSeries.map((s) =>
+          collector
+              .collectStream(s.key,
+                  since: widget.config.timeWindowMinutes * 1.5)
+              .map((seriesData) => seriesData
+                  .map((sample) {
+                    final value = sample.value;
+                    final time = sample.time.millisecondsSinceEpoch.toDouble();
+                    double? y;
+                    if (value is num) {
+                      y = value.toDouble();
+                    } else if (value is Map && value['value'] is num) {
+                      y = (value['value'] as num).toDouble();
+                    }
+                    return y != null ? [time, y] : null;
+                  })
+                  .whereType<List<double>>()
+                  .toList()));
+      // cap UI update rate (e.g., 10–20 fps)
+      _combined$ = Rx.combineLatestList(streams)
+          .sampleTime(const Duration(milliseconds: 200)); // ~5 fps
+    }
+  }
+
+  bool _listEquals(List<String> a, List<String> b) {
+    if (identical(a, b) ||
+        a.length == b.length &&
+            a.asMap().entries.every((e) => e.value == b[e.key])) {
+      return true;
+    }
+    return false;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -366,33 +425,12 @@ class _GraphAssetState extends ConsumerState<GraphAsset> {
           return const Center(child: Text('No collector available'));
         }
 
-        // Gather all keys from both series lists
-        final allSeries = [
-          ...widget.config.primarySeries,
-          ...widget.config.secondarySeries,
-        ];
-
-        // For each key, get a stream of timeseries data
-        final streams = allSeries.map((series) {
-          return collector.collectStream(
-            series.key,
-            // TODO: make this as time window, when panning is implemented better
-            since: const Duration(days: 2),
-          );
-        }).toList();
-
-        return StreamBuilder<List<List<dynamic>>>(
-          stream: _isRealTimePaused ? null : Rx.combineLatestList(streams),
+        return StreamBuilder<List<List<List<double>>>>(
+          stream: _combined$,
           builder: (context, snapshot) {
-            List<List<dynamic>> data;
-
-            if (_isRealTimePaused && _pausedData != null) {
-              // Use paused data when real-time is paused
-              data = _pausedData!;
-            } else if (snapshot.hasData) {
-              // Use live data and store it for potential pause
+            List<List<List<double>>> data;
+            if (snapshot.hasData) {
               data = snapshot.data!;
-              _pausedData = data;
             } else {
               return const Center(child: CircularProgressIndicator());
             }
@@ -400,32 +438,14 @@ class _GraphAssetState extends ConsumerState<GraphAsset> {
             // Convert to the format expected by the Graph widget
             final graphData = <Map<GraphDataConfig, List<List<double>>>>[];
 
-            for (int i = 0; i < allSeries.length; i++) {
-              final series = allSeries[i];
-              final seriesData = data[i];
-              final points = <List<double>>[];
-
-              for (final sample in seriesData) {
-                // Expecting TimeseriesData<dynamic> with .value and .time
-                final value = sample.value;
-                final time = sample.time.millisecondsSinceEpoch.toDouble();
-                double? y;
-                if (value is num) {
-                  y = value.toDouble();
-                } else if (value is Map && value['value'] is num) {
-                  y = (value['value'] as num).toDouble();
-                }
-                if (y != null) {
-                  points.add([time, y]);
-                }
-              }
-
+            int i = 0;
+            for (var series in _allSeries) {
               graphData.add({
                 GraphDataConfig(
                   label: series.label,
                   mainAxis: widget.config.primarySeries.contains(series),
                   color: GraphConfig.colors[i],
-                ): points,
+                ): data[i++],
               });
             }
 
@@ -433,8 +453,8 @@ class _GraphAssetState extends ConsumerState<GraphAsset> {
               children: [
                 // Wrap the graph in a GestureDetector for interaction detection
                 GestureDetector(
-                  onTapDown: (_) => _pauseRealTime(),
-                  onPanStart: (_) => _pauseRealTime(),
+                  onTapDown: (_) => {},
+                  onPanStart: (_) => {},
                   child: Graph(
                     config: GraphConfig(
                       type: widget.config.graphType,
@@ -444,23 +464,9 @@ class _GraphAssetState extends ConsumerState<GraphAsset> {
                       xSpan: widget.config.timeWindowMinutes,
                     ),
                     data: graphData,
-                    showDate: _isRealTimePaused,
+                    showDate: false,
                   ),
                 ),
-                // Resume button
-                if (_isRealTimePaused)
-                  Positioned(
-                    top: 16,
-                    right: 16,
-                    child: _buildResumeButton(),
-                  ),
-                // Date indicator when paused
-                if (_isRealTimePaused && _pausedAt != null)
-                  Positioned(
-                    bottom: 16,
-                    right: 16,
-                    child: _buildDateIndicator(),
-                  ),
               ],
             );
           },
@@ -468,71 +474,6 @@ class _GraphAssetState extends ConsumerState<GraphAsset> {
       },
       loading: () => const Center(child: CircularProgressIndicator()),
       error: (e, st) => Center(child: Text('Error: $e')),
-    );
-  }
-
-  void _pauseRealTime() {
-    if (!_isRealTimePaused) {
-      setState(() {
-        _isRealTimePaused = true;
-        _pausedAt = DateTime.now();
-      });
-    }
-  }
-
-  void _resumeRealTime() {
-    setState(() {
-      _isRealTimePaused = false;
-      _pausedAt = null;
-      _pausedData = null; // Clear paused data to force fresh data load
-    });
-  }
-
-  Widget _buildResumeButton() {
-    return Card(
-      color: Theme.of(context).colorScheme.primaryContainer,
-      child: InkWell(
-        onTap: _resumeRealTime,
-        borderRadius: BorderRadius.circular(8),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                Icons.play_arrow,
-                color: Theme.of(context).colorScheme.onPrimaryContainer,
-                size: 20,
-              ),
-              const SizedBox(width: 4),
-              Text(
-                'Resume',
-                style: TextStyle(
-                  color: Theme.of(context).colorScheme.onPrimaryContainer,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildDateIndicator() {
-    return Card(
-      color: Theme.of(context).colorScheme.surfaceVariant.withAlpha(200),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-        child: Text(
-          'Paused at ${_pausedAt!.toString().substring(11, 19)}',
-          style: TextStyle(
-            color: Theme.of(context).colorScheme.onSurfaceVariant,
-            fontSize: 12,
-            fontWeight: FontWeight.w500,
-          ),
-        ),
-      ),
     );
   }
 }
