@@ -1,3 +1,5 @@
+// graph.dart (Graph Asset with 200% window + DB backfill on pan)
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -7,6 +9,10 @@ import 'package:tfc/converter/duration_converter.dart';
 import 'common.dart';
 import '../../providers/collector.dart';
 import '../../widgets/graph.dart';
+
+// NEW: DB access for backfill
+import '../../providers/database.dart';
+import '../../core/database.dart';
 
 part 'graph.g.dart';
 
@@ -329,7 +335,7 @@ class GraphContentConfigState extends State<GraphContentConfig> {
                   onChanged(GraphAxisConfig(
                     unit: axis!.unit,
                     min: axis.min,
-                    max: axis.max,
+                    max: double.tryParse(value),
                     step: double.tryParse(value),
                   ));
                 },
@@ -352,23 +358,52 @@ class GraphAsset extends ConsumerStatefulWidget {
 }
 
 class _GraphAssetState extends ConsumerState<GraphAsset> {
+  // --- NEW: local buffers & simple update stream ---
+  final Map<String, List<List<double>>> _buffers =
+      {}; // key -> [[t,y],...], t ms
+  final Map<String, StreamSubscription> _subs = {};
+  final _invalidate$ = PublishSubject<void>();
   Stream<List<List<List<double>>>>? _combined$;
+
+  // Keep order stable
   List<String> _seriesKeys = [];
   List<GraphSeriesConfig> _allSeries = [];
+
+  // Active viewport (absolute). If null, defaults to [now-window, now]
+  DateTimeRange? _viewportAbs;
+
+  @override
+  void initState() {
+    super.initState();
+    _combined$ = _invalidate$
+        .sampleTime(const Duration(milliseconds: 200)) // ~5 fps
+        .map((_) => _buildWindowData())
+        .shareReplay(maxSize: 1);
+  }
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    _ensureCombinedStream();
+    _ensureStreams();
   }
 
   @override
   void didUpdateWidget(covariant GraphAsset oldWidget) {
     super.didUpdateWidget(oldWidget);
-    _ensureCombinedStream();
+    _ensureStreams();
   }
 
-  void _ensureCombinedStream() {
+  @override
+  void dispose() {
+    for (final s in _subs.values) {
+      s.cancel();
+    }
+    _subs.clear();
+    _invalidate$.close();
+    super.dispose();
+  }
+
+  void _ensureStreams() {
     final collector = ref.read(collectorProvider).value;
     if (collector == null) return;
 
@@ -379,40 +414,282 @@ class _GraphAssetState extends ConsumerState<GraphAsset> {
     final keys = _allSeries.map((s) => s.key).toList();
 
     if (!_listEquals(keys, _seriesKeys)) {
+      // reset
+      for (final s in _subs.values) {
+        s.cancel();
+      }
+      _subs.clear();
+      _buffers.clear();
       _seriesKeys = keys;
-      // TODO: make this as time window, when panning is implemented better
 
-      Iterable<Stream<List<List<double>>>> streams = _allSeries.map((s) =>
-          collector
-              .collectStream(s.key,
-                  since: widget.config.timeWindowMinutes * 1.5)
-              .map((seriesData) => seriesData
-                  .map((sample) {
-                    final value = sample.value;
-                    final time = sample.time.millisecondsSinceEpoch.toDouble();
-                    double? y;
-                    if (value is num) {
-                      y = value.toDouble();
-                    } else if (value is Map && value['value'] is num) {
-                      y = (value['value'] as num).toDouble();
-                    }
-                    return y != null ? [time, y] : null;
-                  })
-                  .whereType<List<double>>()
-                  .toList()));
-      // cap UI update rate (e.g., 10–20 fps)
-      _combined$ = Rx.combineLatestList(streams)
-          .sampleTime(const Duration(milliseconds: 200)); // ~5 fps
+      // initialize viewport
+      final now = DateTime.now();
+      _viewportAbs = DateTimeRange(
+        start: now.subtract(widget.config.timeWindowMinutes),
+        end: now,
+      );
+
+      // Subscribe each series; keep a local buffer.
+      // We fetch a bit more past data at start to avoid immediate DB backfills.
+      final initialSince = widget.config.timeWindowMinutes * 2.0;
+      for (final s in _allSeries) {
+        _buffers[s.key] = <List<double>>[];
+        _subs[s.key] = collector
+            .collectStream(s.key, since: initialSince)
+            .listen((seriesData) => _mergeChunk(s.key, seriesData));
+      }
+      _invalidate$.add(null); // reslice to 200%
     }
   }
 
-  bool _listEquals(List<String> a, List<String> b) {
-    if (identical(a, b) ||
-        a.length == b.length &&
-            a.asMap().entries.every((e) => e.value == b[e.key])) {
-      return true;
+  void _mergeChunk(String key, List<TimeseriesData<dynamic>> chunk) {
+    if (chunk.isEmpty) return;
+    final buf = _buffers[key]!;
+
+    // Compute chunk min/max (ms) once
+    double cMin = double.infinity, cMax = double.negativeInfinity;
+    for (final s in chunk) {
+      final t = s.time.millisecondsSinceEpoch.toDouble();
+      if (t < cMin) cMin = t;
+      if (t > cMax) cMax = t;
     }
-    return false;
+
+    // If the buffer is empty, take everything
+    if (buf.isEmpty) {
+      buf.addAll(_convertSlice(chunk, 0, chunk.length));
+      _invalidateIfIntersects(cMin, cMax);
+      return;
+    }
+
+    final bufMin = buf.first[0];
+    final bufMax = buf.last[0];
+
+    // Quick exits: whole chunk is left or right
+    if (cMax < bufMin) {
+      // All older → prepend
+      _buffers[key] = [..._convertSlice(chunk, 0, chunk.length), ...buf];
+      _invalidateIfIntersects(cMin, cMax);
+      return;
+    }
+    if (cMin > bufMax) {
+      // All newer → append
+      buf.addAll(_convertSlice(chunk, 0, chunk.length));
+      _invalidateIfIntersects(cMin, cMax);
+      return;
+    }
+
+    // Partial overlap: take only true edges (t < bufMin) and (t > bufMax)
+    int lastOlder = -1; // last index with t < bufMin
+    int firstNewer = chunk.length; // first index with t > bufMax
+
+    for (int i = 0; i < chunk.length; i++) {
+      final t = chunk[i].time.millisecondsSinceEpoch.toDouble();
+      if (t < bufMin) lastOlder = i;
+      if (firstNewer == chunk.length && t > bufMax) firstNewer = i;
+    }
+
+    bool touched = false;
+
+    if (lastOlder >= 0) {
+      final older = _convertSlice(chunk, 0, lastOlder + 1);
+      _buffers[key] = [...older, ...buf];
+      touched = true;
+    }
+    if (firstNewer < chunk.length) {
+      final newer = _convertSlice(chunk, firstNewer, chunk.length);
+      buf.addAll(newer);
+      touched = true;
+    }
+
+    if (touched) {
+      final sMin = lastOlder >= 0 ? cMin : double.infinity;
+      final sMax = firstNewer < chunk.length ? cMax : double.negativeInfinity;
+      // intersect against requested 200% window
+      _invalidateIfIntersects(
+        sMin.isFinite ? sMin : bufMin,
+        sMax.isFinite ? sMax : bufMax,
+      );
+    }
+  }
+
+  List<List<double>> _convertSlice(
+      List<TimeseriesData<dynamic>> src, int from, int to) {
+    // [from, to)  — assumes src is chronological ASC (your DB query is ASC; RT ticks append)
+    final out = <List<double>>[];
+    for (int i = from; i < to; i++) {
+      final v = _numFrom(src[i].value);
+      if (v == null) continue;
+      out.add([src[i].time.millisecondsSinceEpoch.toDouble(), v]);
+    }
+    return out;
+  }
+
+  void _invalidateIfIntersects(double sliceMin, double sliceMax) {
+    final req = _requestedRange();
+    final rMin = req.start.millisecondsSinceEpoch.toDouble();
+    final rMax = req.end.millisecondsSinceEpoch.toDouble();
+    if (sliceMax >= rMin && sliceMin <= rMax) {
+      _invalidate$.add(null);
+    }
+  }
+
+  double? _numFrom(dynamic v) {
+    if (v is num) return v.toDouble();
+    if (v is Map && v['value'] is num) return (v['value'] as num).toDouble();
+    return null;
+  }
+
+  DateTimeRange _requestedRange() {
+    final span = _viewportAbs?.duration ?? widget.config.timeWindowMinutes;
+    final margin = span * 0.5;
+    final start = (_viewportAbs?.start ??
+            DateTime.now().subtract(widget.config.timeWindowMinutes))
+        .subtract(margin)
+        .toUtc();
+    final end = (_viewportAbs?.end ?? DateTime.now()).add(margin).toUtc();
+    return DateTimeRange(start: start, end: end);
+  }
+
+  // Slice current viewport ±50% (no copies of points; sublist keeps refs)
+  List<List<List<double>>> _buildWindowData() {
+    final List<List<List<double>>> out = [];
+    if (_viewportAbs == null) {
+      return List.generate(_allSeries.length, (_) => []);
+    }
+
+    final span = _viewportAbs!.duration;
+    final margin = span * 0.5;
+    final reqStart = (_viewportAbs!.start.subtract(margin)).toUtc();
+    final reqEnd = (_viewportAbs!.end.add(margin)).toUtc();
+    final minMs = reqStart.millisecondsSinceEpoch.toDouble();
+    final maxMs = reqEnd.millisecondsSinceEpoch.toDouble();
+
+    for (final s in _allSeries) {
+      final buf = _buffers[s.key]!;
+      if (buf.isEmpty) {
+        out.add([]);
+        continue;
+      }
+      final lo = _lowerBound(buf, minMs);
+      final hi = _upperBound(buf, maxMs);
+      final window = (lo < hi) ? buf.sublist(lo, hi) : const <List<double>>[];
+      out.add(window);
+    }
+    return out;
+  }
+
+  int _lowerBound(List<List<double>> a, double t) {
+    int l = 0, r = a.length;
+    while (l < r) {
+      final m = (l + r) >> 1;
+      if (a[m][0] < t) {
+        l = m + 1;
+      } else {
+        r = m;
+      }
+    }
+    return l;
+  }
+
+  int _upperBound(List<List<double>> a, double t) {
+    int l = 0, r = a.length;
+    while (l < r) {
+      final m = (l + r) >> 1;
+      if (a[m][0] <= t) {
+        l = m + 1;
+      } else {
+        r = m;
+      }
+    }
+    return l;
+  }
+
+  bool _listEquals(List<String> a, List<String> b) {
+    if (identical(a, b)) return true;
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
+  }
+
+  // --- DB backfill when pan reveals gaps outside current buffer ---
+  Future<void> _backfillIfMissing(DateTimeRange visible) async {
+    final dbAsync = ref.read(databaseProvider);
+    final db = dbAsync.value;
+    if (db == null) return;
+
+    final span = visible.duration;
+    final margin = span * 0.5;
+    final reqStart = visible.start.subtract(margin).toUtc();
+    final reqEnd = visible.end.add(margin).toUtc();
+
+    for (final s in _allSeries) {
+      final buf = _buffers[s.key]!;
+      if (buf.isEmpty) {
+        // Fetch full required window
+        final fetched = await db.queryTimeseriesData(
+          s.key,
+          reqEnd,
+          from: reqStart,
+        );
+        if (fetched.isNotEmpty) {
+          for (final row in fetched) {
+            final y = _numFrom(row.value);
+            if (y == null) continue;
+            buf.add([row.time.millisecondsSinceEpoch.toDouble(), y]);
+          }
+          buf.sort((a, b) => a[0].compareTo(b[0]));
+        }
+        continue;
+      }
+
+      final bufStart = DateTime.fromMillisecondsSinceEpoch(buf.first[0].toInt(),
+          isUtc: true);
+      final bufEnd =
+          DateTime.fromMillisecondsSinceEpoch(buf.last[0].toInt(), isUtc: true);
+
+      // Missing on the left?
+      if (reqStart.isBefore(bufStart)) {
+        final fetched = await db.queryTimeseriesData(
+          s.key,
+          bufStart, // to
+          from: reqStart,
+        );
+        if (fetched.isNotEmpty) {
+          final prepend = <List<double>>[];
+          for (final row in fetched) {
+            final y = _numFrom(row.value);
+            if (y == null) continue;
+            final t = row.time.millisecondsSinceEpoch.toDouble();
+            if (t < buf.first[0]) prepend.add([t, y]);
+          }
+          if (prepend.isNotEmpty) {
+            // Insert at front (keep sorted)
+            _buffers[s.key] = [...prepend, ...buf];
+          }
+        }
+      }
+
+      // Missing on the right?
+      if (reqEnd.isAfter(bufEnd)) {
+        final fetched = await db.queryTimeseriesData(
+          s.key,
+          reqEnd, // to
+          from: bufEnd,
+        );
+        if (fetched.isNotEmpty) {
+          for (final row in fetched) {
+            final y = _numFrom(row.value);
+            if (y == null) continue;
+            final t = row.time.millisecondsSinceEpoch.toDouble();
+            if (t > buf.last[0]) buf.add([t, y]);
+          }
+        }
+      }
+    }
+
+    _invalidate$.add(null);
   }
 
   @override
@@ -428,44 +705,62 @@ class _GraphAssetState extends ConsumerState<GraphAsset> {
         return StreamBuilder<List<List<List<double>>>>(
           stream: _combined$,
           builder: (context, snapshot) {
-            List<List<List<double>>> data;
-            if (snapshot.hasData) {
-              data = snapshot.data!;
-            } else {
+            if (!snapshot.hasData) {
+              // Kick an initial emission once we have subscriptions
+              _invalidate$.add(null);
               return const Center(child: CircularProgressIndicator());
             }
 
+            final sliced = snapshot.data!;
             // Convert to the format expected by the Graph widget
             final graphData = <Map<GraphDataConfig, List<List<double>>>>[];
 
             int i = 0;
             for (var series in _allSeries) {
+              final points =
+                  (i < sliced.length) ? sliced[i] : const <List<double>>[];
               graphData.add({
                 GraphDataConfig(
                   label: series.label,
                   mainAxis: widget.config.primarySeries.contains(series),
-                  color: GraphConfig.colors[i],
-                ): data[i++],
+                  color: GraphConfig.colors[i % GraphConfig.colors.length],
+                ): points,
               });
+              i++;
             }
 
             return Stack(
               children: [
-                // Wrap the graph in a GestureDetector for interaction detection
-                GestureDetector(
-                  onTapDown: (_) => {},
-                  onPanStart: (_) => {},
-                  child: Graph(
-                    config: GraphConfig(
-                      type: widget.config.graphType,
-                      xAxis: widget.config.xAxis,
-                      yAxis: widget.config.yAxis,
-                      yAxis2: widget.config.yAxis2,
-                      xSpan: widget.config.timeWindowMinutes,
-                    ),
-                    data: graphData,
-                    showDate: false,
+                Graph(
+                  config: GraphConfig(
+                    type: widget.config.graphType,
+                    xAxis: widget.config.xAxis,
+                    yAxis: widget.config.yAxis,
+                    yAxis2: widget.config.yAxis2,
+                    xSpan: widget.config.timeWindowMinutes,
+                    // xRange: _viewportAbs,
                   ),
+                  data: graphData,
+                  showDate: false,
+                  // NEW: update viewport live; backfill on end
+                  onPanUpdate: (ev) {
+                    if (ev.minTime != null && ev.maxTime != null) {
+                      _viewportAbs = DateTimeRange(
+                        start: ev.minTime!.toUtc(),
+                        end: ev.maxTime!.toUtc(),
+                      );
+                      _invalidate$.add(null); // reslice to 200%
+                    }
+                  },
+                  onPanEnd: (ev) async {
+                    if (ev.minTime != null && ev.maxTime != null) {
+                      _viewportAbs = DateTimeRange(
+                        start: ev.minTime!.toUtc(),
+                        end: ev.maxTime!.toUtc(),
+                      );
+                      await _backfillIfMissing(_viewportAbs!);
+                    }
+                  },
                 ),
               ],
             );
