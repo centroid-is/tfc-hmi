@@ -729,20 +729,20 @@ class _GraphAssetState extends ConsumerState<GraphAsset> {
               i++;
             }
 
-            return Stack(
-              children: [
-                Graph(
+            return Stack(children: [
+              RepaintBoundary(
+                // ⬅ isolate chart+legend painting
+                key: ValueKey('chart:${_seriesKeys.join("|")}'),
+                child: Graph(
                   config: GraphConfig(
                     type: widget.config.graphType,
                     xAxis: widget.config.xAxis,
                     yAxis: widget.config.yAxis,
                     yAxis2: widget.config.yAxis2,
                     xSpan: widget.config.timeWindowMinutes,
-                    // xRange: _viewportAbs,
                   ),
                   data: graphData,
                   showDate: false,
-                  // NEW: update viewport live; backfill on end
                   onPanUpdate: (ev) {
                     if (ev.minTime != null && ev.maxTime != null) {
                       _viewportAbs = DateTimeRange(
@@ -762,8 +762,8 @@ class _GraphAssetState extends ConsumerState<GraphAsset> {
                     }
                   },
                 ),
-              ],
-            );
+              ),
+            ]);
           },
         );
       },

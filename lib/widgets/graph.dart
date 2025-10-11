@@ -1,4 +1,5 @@
-// graph.dart
+// widgets/graph.dart — Cristalyse wrapper (with repaint isolation, palette cache, stable timeseries viewport)
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:json_annotation/json_annotation.dart';
@@ -11,7 +12,7 @@ import '../converter/color_converter.dart';
 
 part 'graph.g.dart';
 
-/// -------------------- Data models (kept compatible) --------------------
+/// -------------------- Data models --------------------
 
 @JsonSerializable(explicitToJson: true)
 class GraphDataConfig {
@@ -166,6 +167,15 @@ class Graph extends ConsumerStatefulWidget {
 }
 
 class _GraphState extends ConsumerState<Graph> {
+  // ---- Palette cache (rebuild only when series order changes)
+  Map<String, Color>? _paletteCache;
+  List<String>? _paletteOrderCache;
+
+  // ---- Timeseries viewport/tick stabilization (when xSpan is used)
+  int? _lastMaxAbsMs;
+  _TimeDomainTransform? _cachedTransform;
+  _Viewport? _cachedViewport;
+
   @override
   Widget build(BuildContext context) {
     // Early out keeps rebuilds cheap for RT charts
@@ -174,7 +184,7 @@ class _GraphState extends ConsumerState<Graph> {
     }
 
     final flattened = _flatten(widget.data);
-    final palette = _buildCategoryPalette(flattened.order, widget.data);
+    final palette = _buildCategoryPaletteCached(flattened.order, widget.data);
 
     // If timeseries, prepare viewport, transform & label formatter
     _Viewport? tsViewport;
@@ -182,34 +192,85 @@ class _GraphState extends ConsumerState<Graph> {
     String Function(num)? timeLabeler;
 
     if (widget.config.type == GraphType.timeseries) {
-      final vp = _computeTimeViewport(flattened.rows);
-      tsViewport = vp;
-
-      if (tsViewport != null) {
-        tsTransform = _TimeDomainTransform(
-          originMs: tsViewport.start.millisecondsSinceEpoch,
-          spanMs: tsViewport.end.difference(tsViewport.start).inMilliseconds,
+      // 1) explicit viewport has priority
+      if (widget.config.xRange != null) {
+        final start = widget.config.xRange!.start;
+        final end = widget.config.xRange!.end;
+        _cachedViewport = _Viewport(start: start, end: end);
+        _cachedTransform = _TimeDomainTransform(
+          originMs: start.millisecondsSinceEpoch,
+          spanMs: end.difference(start).inMilliseconds,
         );
+        tsViewport = _cachedViewport;
+        tsTransform = _cachedTransform;
+      }
+      // 2) time-span anchored to latest X (stable ticks)
+      else if (widget.config.xSpan != null) {
+        final latest = _latestAbsMsFromRaw(widget.data) ??
+            DateTime.now().millisecondsSinceEpoch;
+        // Only advance window when new data actually arrives
+        if (_lastMaxAbsMs == null || latest > _lastMaxAbsMs!) {
+          _lastMaxAbsMs = latest;
+          final end = DateTime.fromMillisecondsSinceEpoch(latest);
+          final start = end.subtract(widget.config.xSpan!);
+          _cachedViewport = _Viewport(start: start, end: end);
+          _cachedTransform = _TimeDomainTransform(
+            originMs: start.millisecondsSinceEpoch,
+            spanMs: widget.config.xSpan!.inMilliseconds,
+          );
+        }
+        tsViewport = _cachedViewport;
+        tsTransform = _cachedTransform;
+      }
+      // 3) auto-fit data (fallback)
+      else {
+        final auto = _autoFitViewport(flattened.rows);
+        if (auto != null) {
+          _cachedViewport = auto;
+          _cachedTransform = _TimeDomainTransform(
+            originMs: auto.start.millisecondsSinceEpoch,
+            spanMs: auto.end.difference(auto.start).inMilliseconds,
+          );
+        }
+        tsViewport = _cachedViewport;
+        tsTransform = _cachedTransform;
+      }
+
+      if (tsTransform != null) {
         timeLabeler = (num relMs) {
           final dt = tsTransform!.toAbsoluteTime(relMs);
           return _formatTimeBySpan(
             dt,
-            tsViewport!.end.difference(tsViewport.start),
+            Duration(milliseconds: tsTransform!.spanMs),
             showDate: widget.showDate,
           );
         };
       }
     }
 
+    // ---- Build the chart (wrapped in RepaintBoundary to isolate paints)
+    final Widget chartWidget;
     switch (widget.config.type) {
       case GraphType.line:
-        return _buildLine(flattened, palette);
+        chartWidget = _buildLine(flattened, palette);
+        break;
       case GraphType.timeseries:
-        return _buildTimeseries(
-            flattened, palette, tsViewport, tsTransform!, timeLabeler!);
+        if (tsViewport == null || tsTransform == null || timeLabeler == null) {
+          return const SizedBox.shrink();
+        }
+        chartWidget = _buildTimeseries(
+            flattened, palette, tsViewport, tsTransform, timeLabeler);
+        break;
       case GraphType.barTimeseries:
-        return const Text("Bar Timeseries");
+        chartWidget = const Text("Bar Timeseries");
+        break;
     }
+
+    // Key based on series order to prevent stale layers after data set changes
+    return RepaintBoundary(
+      key: ValueKey('chart:${flattened.order.join("|")}'),
+      child: chartWidget,
+    );
   }
 
   /// ---------- Data → Cristalyse rows ----------
@@ -242,10 +303,17 @@ class _GraphState extends ConsumerState<Graph> {
     return _Flattened(rows: rows, order: order);
   }
 
-  Map<String, Color> _buildCategoryPalette(
+  // ---- Palette cache
+  Map<String, Color> _buildCategoryPaletteCached(
     List<String> order,
     List<Map<GraphDataConfig, List<List<double>>>> source,
   ) {
+    if (_paletteCache != null &&
+        _paletteOrderCache != null &&
+        listEquals(_paletteOrderCache, order)) {
+      return _paletteCache!;
+    }
+
     final map = <String, Color>{};
     var idx = 0;
 
@@ -253,10 +321,12 @@ class _GraphState extends ConsumerState<Graph> {
     for (final seriesMap in source) {
       for (final entry in seriesMap.entries) {
         final label = entry.key.label;
-        if (map.containsKey(label)) continue;
-        map[label] = entry.key.color ??
-            GraphConfig.colors[idx % GraphConfig.colors.length];
-        idx++;
+        map.putIfAbsent(
+          label,
+          () =>
+              entry.key.color ??
+              GraphConfig.colors[idx++ % GraphConfig.colors.length],
+        );
       }
     }
     // Ensure all labels have a color
@@ -264,46 +334,54 @@ class _GraphState extends ConsumerState<Graph> {
       map.putIfAbsent(
           label, () => GraphConfig.colors[idx++ % GraphConfig.colors.length]);
     }
+
+    _paletteCache = map;
+    _paletteOrderCache = List<String>.from(order);
     return map;
   }
 
-  /// ---------- Timeseries viewport (absolute) ----------
-  _Viewport? _computeTimeViewport(List<Map<String, dynamic>> rows) {
-    DateTime? start;
-    DateTime? end;
+  /// ---------- Timeseries helpers ----------
 
-    if (widget.config.xRange != null) {
-      start = widget.config.xRange!.start;
-      end = widget.config.xRange!.end;
-    } else if (widget.config.xSpan != null) {
-      // Anchor to NOW: guarantees exact span
-      end = DateTime.now();
-      start = end.subtract(widget.config.xSpan!);
-    } else {
-      // Auto-fit data
-      if (rows.isNotEmpty) {
-        num minRaw = double.infinity;
-        num maxRaw = -double.infinity;
-        for (final r in rows) {
-          final x = r['x'] as num;
-          if (x < minRaw) minRaw = x;
-          if (x > maxRaw) maxRaw = x;
-        }
-        if (maxRaw.isFinite && minRaw.isFinite && maxRaw > minRaw) {
-          // Detect seconds vs milliseconds
-          final bool isSeconds = maxRaw < 3e10; // ~year 2968 in ms; safe cut
-          final minMs = isSeconds ? (minRaw * 1000).toInt() : minRaw.toInt();
-          final maxMs = isSeconds ? (maxRaw * 1000).toInt() : maxRaw.toInt();
-          start = DateTime.fromMillisecondsSinceEpoch(minMs);
-          end = DateTime.fromMillisecondsSinceEpoch(maxMs);
-        }
+  // Auto-fit when neither xRange nor xSpan is provided
+  _Viewport? _autoFitViewport(List<Map<String, dynamic>> rows) {
+    if (rows.isEmpty) return null;
+
+    num minRaw = double.infinity;
+    num maxRaw = -double.infinity;
+    for (final r in rows) {
+      final x = r['x'] as num;
+      if (x < minRaw) minRaw = x;
+      if (x > maxRaw) maxRaw = x;
+    }
+    if (!(maxRaw.isFinite && minRaw.isFinite) || maxRaw <= minRaw) {
+      return null;
+    }
+
+    // Detect seconds vs milliseconds (generous threshold)
+    final bool isSeconds = maxRaw < 3e10; // ~year 2968 in ms; safe cut
+    final minMs = isSeconds ? (minRaw * 1000).toInt() : minRaw.toInt();
+    final maxMs = isSeconds ? (maxRaw * 1000).toInt() : maxRaw.toInt();
+    return _Viewport(
+      start: DateTime.fromMillisecondsSinceEpoch(minMs),
+      end: DateTime.fromMillisecondsSinceEpoch(maxMs),
+    );
+  }
+
+  // Latest absolute (ms since epoch) from current data (detect seconds/ms)
+  int? _latestAbsMsFromRaw(
+    List<Map<GraphDataConfig, List<List<double>>>> data,
+  ) {
+    double? mx;
+    for (final series in data) {
+      for (final pts in series.values) {
+        if (pts.isEmpty) continue;
+        final lastX = pts.last[0];
+        if (mx == null || lastX > mx!) mx = lastX;
       }
     }
-
-    if (start != null && end != null) {
-      return _Viewport(start: start, end: end);
-    }
-    return null;
+    if (mx == null) return null;
+    final isSeconds = mx < 3e10;
+    return isSeconds ? (mx * 1000).toInt() : mx.toInt();
   }
 
   /// ---------- Chart builders ----------
@@ -349,7 +427,9 @@ class _GraphState extends ConsumerState<Graph> {
           ),
         )
         .theme(chartTheme)
-        .animate(duration: Duration.zero);
+        .animate(duration: Duration.zero)
+        .legend();
+
     if (hasY2) {
       return chart
           .mappingY2('y2')
@@ -366,13 +446,13 @@ class _GraphState extends ConsumerState<Graph> {
   Widget _buildTimeseries(
     _Flattened f,
     Map<String, Color> palette,
-    _Viewport? viewport,
+    _Viewport viewport,
     _TimeDomainTransform transform,
     String Function(num) timeLabeler,
   ) {
     final chartTheme = ref.watch(chartThemeNotifierProvider);
-    // Normalize X to "relative ms from start" to keep the domain small & consistent
-    // Also auto-detect seconds input and upscale to ms.
+
+    // Normalize X to relative ms from start; auto-detect seconds input
     final bool sourceIsSeconds =
         f.rows.isNotEmpty && ((f.rows.first['x'] as num) < 3e10);
     var hasY2 = false;
@@ -406,7 +486,7 @@ class _GraphState extends ConsumerState<Graph> {
         .geomLine(strokeWidth: 2.0, yAxis: cs.YAxis.primary, alpha: 1.0)
         // .geomPoint(size: 2.0, alpha: 0.85, yAxis: cs.YAxis.primary)
         .scaleXContinuous(
-          // Force exact window: [0 .. spanMs]
+          // Exact window: [0 .. spanMs]
           min: 0,
           max: transform.spanMs.toDouble(),
           labels: timeLabeler, // relMs -> absolute time label
@@ -426,10 +506,8 @@ class _GraphState extends ConsumerState<Graph> {
             onPanUpdate: _relayPan(
                 isTimeseries: true, end: false, timeTransform: transform),
             onPanEnd: (info) {
-              _relayPan(
-                  isTimeseries: true,
-                  end: true,
-                  timeTransform: transform)(info);
+              _relayPan(isTimeseries: true, end: true, timeTransform: transform)
+                  .call(info);
               widget.onPanCompleted?.call();
             },
           ),
@@ -443,6 +521,7 @@ class _GraphState extends ConsumerState<Graph> {
         .theme(chartTheme)
         .animate(duration: Duration.zero)
         .legend();
+
     if (hasY2) {
       return chart
           .geomLine(strokeWidth: 2.0, yAxis: cs.YAxis.secondary, alpha: 1.0)
@@ -617,7 +696,8 @@ class _TimeDomainTransform {
       DateTime.fromMillisecondsSinceEpoch(toAbsoluteMs(relMs));
 }
 
-/// Chart theme provider that integrates with the app's theme system
+/// -------------------- Chart theme (Riverpod) --------------------
+
 @riverpod
 class ChartThemeNotifier extends _$ChartThemeNotifier {
   @override
@@ -633,15 +713,8 @@ class ChartThemeNotifier extends _$ChartThemeNotifier {
   }
 
   cs.ChartTheme _createChartTheme(ThemeMode mode) {
-    // For system mode, we'll default to light theme
-    // The actual brightness will be handled by the MaterialApp
     final isDark = mode == ThemeMode.dark;
-
-    if (isDark) {
-      return _createDarkChartTheme();
-    } else {
-      return _createLightChartTheme();
-    }
+    return isDark ? _createDarkChartTheme() : _createLightChartTheme();
   }
 
   cs.ChartTheme _createDarkChartTheme() {
@@ -667,7 +740,7 @@ class ChartThemeNotifier extends _$ChartThemeNotifier {
         SolarizedColors.violet,
         SolarizedColors.cyan,
       ],
-      padding: EdgeInsets.only(left: 80, right: 20, top: 20, bottom: 40),
+      padding: const EdgeInsets.only(left: 80, right: 20, top: 20, bottom: 40),
       axisTextStyle: const TextStyle(
         color: SolarizedColors.base01,
         fontSize: 12,
@@ -704,10 +777,8 @@ class ChartThemeNotifier extends _$ChartThemeNotifier {
         SolarizedColors.cyan,
         SolarizedColors.yellow,
       ],
-      // todo padding needs to be calculated based on the label size
-      // it needs to be taken into account if y2 is used
-      // todo implement functions
-      padding: EdgeInsets.only(left: 80, right: 20, top: 20, bottom: 40),
+      // (Padding could be computed from label sizes if needed)
+      padding: const EdgeInsets.only(left: 80, right: 20, top: 20, bottom: 40),
       axisTextStyle: const TextStyle(
         color: SolarizedColors.base00,
         fontSize: 12,
