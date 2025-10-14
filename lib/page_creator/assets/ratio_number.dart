@@ -739,15 +739,16 @@ class RatioBarChart extends ConsumerWidget {
         color: Colors.red,
       ): key2GraphData,
     });
+    return Center(child: Text('TODO'));
 
-    return Graph(
-      config: GraphConfig(
-        type: GraphType.barTimeseries,
-        xAxis: GraphAxisConfig(unit: ''),
-        yAxis: GraphAxisConfig(unit: 'Count'),
-      ),
-      data: graphData,
-    );
+    // return Graph(
+    //   config: GraphConfig(
+    //     type: GraphType.barTimeseries,
+    //     xAxis: GraphAxisConfig(unit: ''),
+    //     yAxis: GraphAxisConfig(unit: 'Count'),
+    //   ),
+    //   data: graphData,
+    // );
   }
 
   List<DateTime> _createTimeBuckets() {

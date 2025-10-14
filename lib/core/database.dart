@@ -208,6 +208,32 @@ class Database {
     }
   }
 
+  Future<Map<String, List<TimeseriesData<dynamic>>>>
+      queryTimeseriesDataMultiple(List<String> tableNames, DateTime to,
+          {String? orderBy = 'time ASC', DateTime? from}) async {
+    Map<String, List<String>> tapleMap = {};
+    for (final tableName in tableNames) {
+      tapleMap[tableName] = ['value', 'time'];
+    }
+    final rows = await db.tableQueryMultiple(tapleMap,
+        where: r'time >= $1::timestamptz', whereArgs: [to], orderBy: orderBy);
+    final map = Map<String, List<TimeseriesData<dynamic>>>();
+    for (final row in rows) {
+      final time = row.data['time'];
+      if (time == null) continue;
+      final d = row.data;
+      final nonNullTuples =
+          d.entries.where((e) => e.value != null && e.key != 'time').toList();
+      for (final tuple in nonNullTuples) {
+        if (!map.containsKey(tuple.key)) {
+          map[tuple.key] = [];
+        }
+        map[tuple.key]!.add(TimeseriesData(tuple.value, time));
+      }
+    }
+    return map;
+  }
+
   /// Query time-series data with performance analysis
   Future<List<TimeseriesData<dynamic>>> queryTimeseriesData(
       String tableName, DateTime to,
@@ -266,6 +292,76 @@ class Database {
     }
 
     throw DatabaseException('Time column not found in table $tableName');
+  }
+
+  /// columns: {tableName: columnName}
+  Future<void> createView(String viewName, Map<String, String> columns) async {
+    if (columns.isEmpty) {
+      throw DatabaseException('createView("$viewName"): columns map is empty');
+    }
+
+    // Quote identifiers safely
+    String q(String ident) => '"${ident.replaceAll('"', '""')}"';
+
+    final qView = q(viewName);
+    final tables = columns.keys.toList();
+
+    // Build alias map t0, t1, ...
+    final aliasFor = <String, String>{};
+    for (var i = 0; i < tables.length; i++) {
+      aliasFor[tables[i]] = 't$i';
+    }
+
+    // CTE: all distinct timestamps across all tables
+    final allTimes =
+        tables.map((t) => 'SELECT time FROM ${q(t)}').join('\nUNION\n');
+
+    // SELECT list: time + requested columns, aliased as table_col
+    final selectCols = <String>['at.time AS "time"'];
+    for (final t in tables) {
+      final alias = aliasFor[t]!;
+      final col = columns[t]!;
+      final outAlias = '${t}_${col}';
+      selectCols.add('$alias.${q(col)} AS ${q(outAlias)}');
+    }
+
+    // LEFT JOIN each table to the all_times spine
+    final joins = tables.map((t) {
+      final alias = aliasFor[t]!;
+      return 'LEFT JOIN ${q(t)} $alias ON $alias.time = at.time';
+    }).join('\n');
+
+    final isPg = db.postgres; // PgDatabase vs. Native (sqlite)
+    final createKeyword = isPg ? 'MATERIALIZED VIEW' : 'VIEW';
+    final dropStmt = isPg
+        ? 'DROP MATERIALIZED VIEW IF EXISTS $qView CASCADE;'
+        : 'DROP VIEW IF EXISTS $qView CASCADE;';
+
+    final createSql = '''
+CREATE $createKeyword $qView AS
+WITH all_times AS (
+  $allTimes
+)
+SELECT
+  ${selectCols.join(',\n  ')}
+FROM all_times at
+$joins
+ORDER BY at.time;
+''';
+
+    // Execute (separate statements for compatibility)
+    await db.customStatement(dropStmt);
+    await db.customStatement(createSql);
+
+    // Postgres-only: add a UNIQUE index on time to allow REFRESH CONCURRENTLY
+    if (isPg) {
+      final idxName = ('${viewName}_time_uidx'
+              .toLowerCase()
+              .replaceAll(RegExp(r'[^a-z0-9_]+'), '_'))
+          .replaceAll(RegExp(r'_+'), '_');
+      await db.customStatement(
+          'CREATE UNIQUE INDEX IF NOT EXISTS $idxName ON $qView ("time");');
+    }
   }
 
   /// Count time-series data points in regular time intervals

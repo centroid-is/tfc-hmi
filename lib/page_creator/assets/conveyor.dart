@@ -1045,11 +1045,11 @@ class _ConveyorStatsGraphState extends State<ConveyorStatsGraph> {
                 color: Colors.red): freqData,
           }
         ];
-
-        return Graph(
-          config: graphConfig,
-          data: graphData,
-        );
+        return Center(child: Text('TODO'));
+        // return Graph(
+        //   config: graphConfig,
+        //   data: graphData,
+        // );
       },
     );
   }

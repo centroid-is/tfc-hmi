@@ -2231,8 +2231,8 @@ class _EL3054Graph extends ConsumerWidget {
                 ): entry.value
               };
             }).toList();
-
-            return Graph(config: cfg, data: data);
+            return Center(child: Text('TODO'));
+            // return Graph(config: cfg, data: data);
           },
         );
       },

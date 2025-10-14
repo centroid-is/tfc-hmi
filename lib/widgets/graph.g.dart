@@ -26,7 +26,6 @@ GraphAxisConfig _$GraphAxisConfigFromJson(Map<String, dynamic> json) =>
       unit: json['unit'] as String,
       min: (json['min'] as num?)?.toDouble(),
       max: (json['max'] as num?)?.toDouble(),
-      step: (json['step'] as num?)?.toDouble(),
     );
 
 Map<String, dynamic> _$GraphAxisConfigToJson(GraphAxisConfig instance) =>
@@ -34,7 +33,6 @@ Map<String, dynamic> _$GraphAxisConfigToJson(GraphAxisConfig instance) =>
       'unit': instance.unit,
       'min': instance.min,
       'max': instance.max,
-      'step': instance.step,
     };
 
 GraphConfig _$GraphConfigFromJson(Map<String, dynamic> json) => GraphConfig(
@@ -47,6 +45,9 @@ GraphConfig _$GraphConfigFromJson(Map<String, dynamic> json) => GraphConfig(
       xSpan: json['xSpan'] == null
           ? null
           : Duration(microseconds: (json['xSpan'] as num).toInt()),
+      pan: json['pan'] as bool? ?? true,
+      width: (json['width'] as num?)?.toInt() ?? 2,
+      zoom: json['zoom'] as bool? ?? true,
     );
 
 Map<String, dynamic> _$GraphConfigToJson(GraphConfig instance) =>
@@ -56,10 +57,16 @@ Map<String, dynamic> _$GraphConfigToJson(GraphConfig instance) =>
       'yAxis': instance.yAxis.toJson(),
       'yAxis2': instance.yAxis2?.toJson(),
       'xSpan': instance.xSpan?.inMicroseconds,
+      'pan': instance.pan,
+      'zoom': instance.zoom,
+      'width': instance.width,
     };
 
 const _$GraphTypeEnumMap = {
   GraphType.line: 'line',
+  GraphType.bar: 'bar',
+  GraphType.scatter: 'scatter',
+  GraphType.pie: 'pie',
   GraphType.timeseries: 'timeseries',
   GraphType.barTimeseries: 'barTimeseries',
 };
@@ -69,9 +76,9 @@ const _$GraphTypeEnumMap = {
 // **************************************************************************
 
 String _$chartThemeNotifierHash() =>
-    r'84be81c1b75854160d298b8b54d2e3a2d807bf23';
+    r'172f5503b8fa0a29aaa8128cae2be884bdefbc77';
 
-/// Chart theme provider that integrates with the app's theme system
+/// -------------------- Chart theme (Riverpod) --------------------
 ///
 /// Copied from [ChartThemeNotifier].
 @ProviderFor(ChartThemeNotifier)

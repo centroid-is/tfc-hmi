@@ -474,31 +474,33 @@ class _HistoryGraphPaneState extends ConsumerState<_HistoryGraphPane> {
                     final graphDisplayConfig =
                         widget.graphDisplayConfigs[graphIndex];
 
-                    return Expanded(
-                      child: Container(
-                        margin: const EdgeInsets.only(bottom: 8),
-                        child: Graph(
-                          config: GraphConfig(
-                            type: GraphType.timeseries,
-                            xAxis: GraphAxisConfig(unit: ''),
-                            yAxis: GraphAxisConfig(
-                              unit: graphDisplayConfig?.yAxisUnit ?? '',
-                            ),
-                            yAxis2:
-                                graphDisplayConfig?.yAxis2Unit?.isNotEmpty ==
-                                        true
-                                    ? GraphAxisConfig(
-                                        unit: graphDisplayConfig!.yAxis2Unit!)
-                                    : null,
-                            xSpan: widget.realtime ? xSpan : null,
-                            xRange: widget.realtime ? null : widget.range,
-                          ),
-                          data:
-                              graphData, // All fetched data is available for panning
-                          showDate: _paused,
-                        ),
-                      ),
-                    );
+                    return Center(child: Text('TODO'));
+
+                    // return Expanded(
+                    //   child: Container(
+                    //     margin: const EdgeInsets.only(bottom: 8),
+                    //     child: Graph(
+                    //       config: GraphConfig(
+                    //         type: GraphType.timeseries,
+                    //         xAxis: GraphAxisConfig(unit: ''),
+                    //         yAxis: GraphAxisConfig(
+                    //           unit: graphDisplayConfig?.yAxisUnit ?? '',
+                    //         ),
+                    //         yAxis2:
+                    //             graphDisplayConfig?.yAxis2Unit?.isNotEmpty ==
+                    //                     true
+                    //                 ? GraphAxisConfig(
+                    //                     unit: graphDisplayConfig!.yAxis2Unit!)
+                    //                 : null,
+                    //         xSpan: widget.realtime ? xSpan : null,
+                    //         xRange: widget.realtime ? null : widget.range,
+                    //       ),
+                    //       data:
+                    //           graphData, // All fetched data is available for panning
+                    //       showDate: _paused,
+                    //     ),
+                    //   ),
+                    // );
                   }).toList(),
                 ),
                 if (widget.realtime && _paused)

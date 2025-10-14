@@ -943,8 +943,9 @@ class _AnalogBoxGraph extends ConsumerWidget {
             final data = [
               {GraphDataConfig(label: keyName, mainAxis: true): series}
             ];
+            return Center(child: Text('TODO'));
 
-            return Graph(config: cfg, data: data);
+            // return Graph(config: cfg, data: data);
           },
         );
       },

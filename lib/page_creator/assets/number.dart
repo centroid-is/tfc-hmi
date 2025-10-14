@@ -350,36 +350,39 @@ class NumberWidget extends ConsumerWidget {
 
     showDialog(
       context: context,
-      builder: (context) => Dialog(
-        child: Container(
-          width: 600,
-          height: 400,
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text(
-                    config.graphConfig?.headerText ?? config.text ?? config.key,
-                    style: Theme.of(context).textTheme.titleLarge,
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.close),
-                    onPressed: () => Navigator.of(context).pop(),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 16),
-              Expanded(
-                child: GraphAsset(
-                  config.graphConfig!,
+      builder: (context) {
+        final size = MediaQuery.of(context).size;
+        return Dialog(
+          child: Container(
+            width: size.width * 0.7,
+            height: size.height * 0.7,
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      config.graphConfig?.headerText ?? config.text ?? config.key,
+                      style: Theme.of(context).textTheme.titleLarge,
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close),
+                      onPressed: () => Navigator.of(context).pop(),
+                    ),
+                  ],
                 ),
-              ),
-            ],
+                const SizedBox(height: 16),
+                Expanded(
+                  child: GraphAsset(
+                    config.graphConfig!,
+                  ),
+                ),
+              ],
+            ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 

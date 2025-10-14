@@ -1,4 +1,4 @@
-import 'package:drift/drift.dart';
+import 'package:drift/drift.dart' hide isNull;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:postgres/postgres.dart';
 import 'package:tfc/core/database.dart';
@@ -543,6 +543,128 @@ void main() {
         expect(result.length, 1);
         expect(result[0].value, largeData);
       }, skip: "Todo: fix Drift to handle JSON data in postgres");
+    });
+
+    group('Materialized View (createView)', () {
+      const mvName = 'mv_join_test';
+
+      setUp(() async {
+        // Make sure base tables exist as hypertables
+        await database.registerRetentionPolicy(
+          testTableName,
+          const RetentionPolicy(dropAfter: Duration(hours: 1)),
+        );
+        await database.registerRetentionPolicy(
+          testTableName2,
+          const RetentionPolicy(dropAfter: Duration(hours: 1)),
+        );
+      });
+
+      tearDown(() async {
+        // Clean up the MV explicitly (tables are dropped by outer tearDown)
+        try {
+          await database.db.customStatement(
+              'DROP MATERIALIZED VIEW IF EXISTS "$mvName" CASCADE');
+        } catch (_) {/* ignore */}
+      });
+
+      test('should create MV over two timeseries and join on time', () async {
+        final base = DateTime.now();
+
+        // Insert into table 1 at t0, t1
+        final t0 = base;
+        final t1 = base.add(const Duration(minutes: 1));
+        await database.insertTimeseriesData(testTableName, t0, 10);
+        await database.insertTimeseriesData(testTableName, t1, 20);
+
+        // Insert into table 2 at t1, t2
+        final t2 = base.add(const Duration(minutes: 2));
+        await database.insertTimeseriesData(testTableName2, t1, 200);
+        await database.insertTimeseriesData(testTableName2, t2, 300);
+
+        // Create MV with columns {table: column}
+        await database.createView(mvName, {
+          testTableName: 'value',
+          testTableName2: 'value',
+        });
+
+        final result = await database.queryTimeseriesData(mvName, base);
+
+        // Query MV
+        final rows = await database.db.customSelect('''
+      SELECT * FROM "$mvName" ORDER BY "time" ASC
+    ''').get();
+
+        // Expect union of times: t0, t1, t2
+        expect(rows.length, 3);
+
+        // Column names are <table>_<column> per implementation
+        final c1 = '${testTableName}_value'; // test_timeseries_value
+        final c2 = '${testTableName2}_value'; // test_timeseries_2_value
+
+        // Row 0 -> t0: value from table1 only
+        expect(rows[0].read<int?>(c1), 10);
+        expect(rows[0].read<int?>(c2), isNull);
+
+        // Row 1 -> t1: values from both tables
+        expect(rows[1].read<int?>(c1), 20);
+        expect(rows[1].read<int?>(c2), 200);
+
+        // Row 2 -> t2: value from table2 only
+        expect(rows[2].read<int?>(c1), isNull);
+        expect(rows[2].read<int?>(c2), 300);
+      });
+
+      test('should be safe to call createView again and reflect new data',
+          () async {
+        final base = DateTime.now();
+
+        // Seed some data
+        final t0 = base;
+        final t1 = base.add(const Duration(minutes: 1));
+        await database.insertTimeseriesData(testTableName, t0, 10);
+        await database.insertTimeseriesData(testTableName, t1, 20);
+
+        await database.insertTimeseriesData(testTableName2, t1, 200);
+
+        // First create
+        await database.createView(mvName, {
+          testTableName: 'value',
+          testTableName2: 'value',
+        });
+
+        // Verify initial row count
+        var rows = await database.db
+            .customSelect(
+              'SELECT * FROM "$mvName" ORDER BY "time" ASC',
+            )
+            .get();
+        expect(rows.length, 2);
+
+        // Add new data and call createView again (old impl drops & recreates)
+        final t2 = base.add(const Duration(minutes: 2));
+        await database.insertTimeseriesData(testTableName, t2, 40);
+
+        await database.createView(mvName, {
+          testTableName: 'value',
+          testTableName2: 'value',
+        });
+
+        // MV should now include the new timestamp
+        rows = await database.db
+            .customSelect(
+              'SELECT * FROM "$mvName" ORDER BY "time" ASC',
+            )
+            .get();
+        expect(rows.length, 3);
+
+        final c1 = '${testTableName}_value';
+        final c2 = '${testTableName2}_value';
+
+        // Last row corresponds to t2 -> value only from table1
+        expect(rows.last.read<int?>(c1), 40);
+        expect(rows.last.read<int?>(c2), isNull);
+      });
     });
   });
 }

@@ -519,6 +519,58 @@ class AppDatabase extends _$AppDatabase {
     return result;
   }
 
+  Future<List<QueryRow>> tableQueryMultiple(
+    // table name -> columns
+    Map<String, List<String>> tableNames, {
+    String? where,
+    List<dynamic>? whereArgs,
+    String? orderBy,
+  }) async {
+    if (tableNames.isEmpty) {
+      return [];
+    }
+    //select coalesce("cooler.temp.1".time, "cooler.temp.2".time, "cooler.compressor.on".time) as time, "cooler.temp.1".value as value1, "cooler.temp.2".value as value2, "cooler.compressor.on".value as compOnBaby from "cooler.temp.2" full outer join "cooler.temp.1" on ( "cooler.temp.1".time = "cooler.temp.2".time ) full outer join "cooler.compressor.on" on ("cooler.compressor.on".time = "cooler.temp.1".time) where "cooler.compressor.on".value = true limit 100;
+    String sql =
+        'WITH data AS (select coalesce(${tableNames.keys.map((e) => '"$e".time').join(', ')}) as time, ';
+    final columns = [];
+    for (final table in tableNames.entries) {
+      for (final column in table.value) {
+        if (column == 'time') {
+          continue;
+        }
+        if (column == 'value') {
+          columns.add('"${table.key}".$column as "${table.key}"');
+        } else {
+          columns.add('"${table.key}".$column as "${table.key}.$column"');
+        }
+      }
+    }
+    sql += columns.join(', ');
+
+    final master = tableNames.keys.first;
+    sql += ' from "$master" ';
+    for (final table in tableNames.entries.where((e) => e.key != master)) {
+      sql += ' full outer join "${table.key}" on (false) ';
+    }
+    sql += ' ) SELECT * FROM data ';
+    if (where != null) {
+      sql += ' where $where ';
+    }
+    if (orderBy != null) {
+      sql += ' order by $orderBy ';
+    }
+    final start = Stopwatch()..start();
+    print('⏱️  tableQueryMultiple: SQL: $sql');
+    final result = await customSelect(sql,
+            variables: whereArgs != null
+                ? [for (var arg in whereArgs) Variable(arg)]
+                : [])
+        .get();
+    print(
+        '⏱️  tableQueryMultiple: Query execution took ${start.elapsedMilliseconds}ms');
+    return result;
+  }
+
   /// TODO: SQLITE
   Future<void> updateRetentionPolicy(
       String tableName, RetentionPolicy retention) async {
