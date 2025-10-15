@@ -161,6 +161,7 @@ class Database {
   AppDatabase db;
   Map<String, RetentionPolicy> retentionPolicies = {};
   static final Logger logger = Logger();
+  final Map<String, Completer<void>> _tableCreationLocks = {};
 
   Future<void> open() async {
     try {
@@ -186,6 +187,11 @@ class Database {
   /// Insert a time-series data point
   Future<void> insertTimeseriesData(
       String tableName, DateTime time, dynamic value) async {
+    // Wait if another thread is already creating this table
+    while (_tableCreationLocks.containsKey(tableName)) {
+      await _tableCreationLocks[tableName]!.future;
+    }
+
     Future<void> insert() async {
       if (value is Map<String, dynamic>) {
         await db
@@ -215,8 +221,12 @@ class Database {
     for (final tableName in tableNames) {
       tapleMap[tableName] = ['value', 'time'];
     }
+    final where = from != null
+        ? r'time >= $1::timestamptz AND time <= $2::timestamptz'
+        : r'time >= $1::timestamptz';
+    final whereArgs = from != null ? [from, to] : [to];
     final rows = await db.tableQueryMultiple(tapleMap,
-        where: r'time >= $1::timestamptz', whereArgs: [to], orderBy: orderBy);
+        where: where, whereArgs: whereArgs, orderBy: orderBy);
     final map = Map<String, List<TimeseriesData<dynamic>>>();
     for (final row in rows) {
       final time = row.data['time'];
@@ -488,18 +498,29 @@ ORDER BY at.time;
   /// Returns true if the table was created successfully, false if it already exists or policy is missing
   Future<bool> _tryToCreateTimeseriesTable(
       String tableName, dynamic value) async {
-    // Check if table exists
+    // Check again after waiting - table might have been created
     if (await db.tableExists(tableName)) {
-      return false;
+      return true;
     }
+
     if (!retentionPolicies.containsKey(tableName)) {
       stderr.writeln(
           'Table $tableName does not exist, and no retention policy is set');
       return false;
     }
 
-    await _createTimeseriesTable(
-        tableName, retentionPolicies[tableName]!, value);
+    // Acquire lock for this table
+    final completer = Completer<void>();
+    _tableCreationLocks[tableName] = completer;
+
+    try {
+      await _createTimeseriesTable(
+          tableName, retentionPolicies[tableName]!, value);
+    } finally {
+      // Release lock
+      _tableCreationLocks.remove(tableName);
+      completer.complete();
+    }
     return true;
   }
 

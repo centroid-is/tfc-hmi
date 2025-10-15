@@ -548,9 +548,18 @@ class AppDatabase extends _$AppDatabase {
     sql += columns.join(', ');
 
     final master = tableNames.keys.first;
-    sql += ' from "$master" ';
+    if (where != null) {
+      sql += ' from (select * from "$master" where $where) as "$master" ';
+    } else {
+      sql += ' from "$master" ';
+    }
     for (final table in tableNames.entries.where((e) => e.key != master)) {
-      sql += ' full outer join "${table.key}" on (false) ';
+      if (where != null) {
+        sql +=
+            ' full outer join (select * from "${table.key}" where $where) as "${table.key}" using (time) ';
+      } else {
+        sql += ' full outer join "${table.key}" using (time) ';
+      }
     }
     sql += ' ) SELECT * FROM data ';
     if (where != null) {
