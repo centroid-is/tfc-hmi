@@ -359,8 +359,8 @@ class NumberWidget extends ConsumerWidget {
         final size = MediaQuery.of(context).size;
         return Dialog(
           child: Container(
-            width: size.width * 0.7,
-            height: size.height * 0.7,
+            width: size.width * 0.8,
+            height: size.height * 0.8,
             padding: const EdgeInsets.all(16),
             child: Column(
               children: [

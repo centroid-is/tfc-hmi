@@ -239,7 +239,7 @@ class Graph {
           pan: panConfig,
         )
         .animate(duration: Duration.zero)
-        .legend();
+        .legend(position: cs.LegendPosition.right, interactive: true);
 
     // TODO custom color palette !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
@@ -403,7 +403,7 @@ class ChartThemeNotifier extends _$ChartThemeNotifier {
       backgroundColor: SolarizedColors.base03,
       plotBackgroundColor: SolarizedColors.base02,
       primaryColor: SolarizedColors.blue,
-      borderColor: SolarizedColors.base01,
+      borderColor: Colors.transparent,
       gridColor: SolarizedColors.base01.withAlpha(75),
       axisColor: SolarizedColors.base01,
       gridWidth: 0.5,
@@ -421,7 +421,7 @@ class ChartThemeNotifier extends _$ChartThemeNotifier {
         SolarizedColors.violet,
         SolarizedColors.cyan,
       ],
-      padding: const EdgeInsets.only(left: 80, right: 20, top: 20, bottom: 40),
+      padding: const EdgeInsets.only(left: 40, right: 0, top: 0, bottom: 0),
       axisTextStyle: const TextStyle(
         color: SolarizedColors.base01,
         fontSize: 12,
@@ -440,7 +440,7 @@ class ChartThemeNotifier extends _$ChartThemeNotifier {
       backgroundColor: SolarizedColors.base3,
       plotBackgroundColor: SolarizedColors.base2,
       primaryColor: SolarizedColors.green,
-      borderColor: SolarizedColors.base00,
+      borderColor: Colors.transparent,
       gridColor: SolarizedColors.base00.withAlpha(75),
       axisColor: SolarizedColors.base00,
       gridWidth: 0.5,
