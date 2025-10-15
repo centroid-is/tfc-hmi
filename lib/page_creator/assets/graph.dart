@@ -102,8 +102,9 @@ class GraphContentConfig extends StatefulWidget {
 class GraphContentConfigState extends State<GraphContentConfig> {
   @override
   Widget build(BuildContext context) {
-    return ConstrainedBox(
-      constraints: const BoxConstraints(maxHeight: 900),
+    return SizedBox(
+      height:
+          MediaQuery.of(context).size.height * 0.8, // Use 80% of screen height
       child: SingleChildScrollView(
         child: Padding(
           padding: const EdgeInsets.all(16),
@@ -144,6 +145,7 @@ class GraphContentConfigState extends State<GraphContentConfig> {
                 'X Axis',
                 widget.config.xAxis,
                 (updated) => setState(() => widget.config.xAxis = updated!),
+                showBoolean: false,
               ),
               const SizedBox(height: 16),
               _buildAxisConfig(
@@ -268,11 +270,9 @@ class GraphContentConfigState extends State<GraphContentConfig> {
     );
   }
 
-  Widget _buildAxisConfig(
-    String label,
-    GraphAxisConfig? axis,
-    ValueChanged<GraphAxisConfig?> onChanged,
-  ) {
+  Widget _buildAxisConfig(String label, GraphAxisConfig? axis,
+      ValueChanged<GraphAxisConfig?> onChanged,
+      {bool showBoolean = true}) {
     axis ??= GraphAxisConfig(unit: '');
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -280,9 +280,8 @@ class GraphContentConfigState extends State<GraphContentConfig> {
         Text(label, style: const TextStyle(fontWeight: FontWeight.bold)),
         const SizedBox(height: 8),
         // Use Wrap for better responsive behavior
-        Wrap(
+        Row(
           spacing: 8,
-          runSpacing: 8,
           children: [
             SizedBox(
               width: 120,
@@ -294,6 +293,7 @@ class GraphContentConfigState extends State<GraphContentConfig> {
                     unit: value,
                     min: axis!.min,
                     max: axis.max,
+                    boolean: axis.boolean,
                   ));
                 },
               ),
@@ -309,6 +309,7 @@ class GraphContentConfigState extends State<GraphContentConfig> {
                     unit: axis!.unit,
                     min: double.tryParse(value),
                     max: axis.max,
+                    boolean: axis.boolean,
                   ));
                 },
               ),
@@ -324,12 +325,31 @@ class GraphContentConfigState extends State<GraphContentConfig> {
                     unit: axis!.unit,
                     min: axis.min,
                     max: double.tryParse(value),
+                    boolean: axis.boolean,
                   ));
                 },
               ),
             ),
           ],
         ),
+        if (showBoolean) const SizedBox(height: 8),
+        if (showBoolean)
+          Row(
+            children: [
+              const Text('Boolean'),
+              const SizedBox(width: 16),
+              Switch(
+                value: axis.boolean,
+                onChanged: (value) {
+                  onChanged(GraphAxisConfig(
+                      unit: axis!.unit,
+                      min: axis.min,
+                      max: axis.max,
+                      boolean: value));
+                },
+              ),
+            ],
+          ),
       ],
     );
   }
@@ -390,36 +410,47 @@ class _GraphAssetState extends ConsumerState<GraphAsset> {
     final secondarySeries =
         widget.config.secondarySeries.map((e) => e.key).toList();
     final keys = {'y': primarySeries, 'y2': secondarySeries};
-    final allKeys = [...primarySeries, ...secondarySeries];
+    //final allKeys = [...primarySeries, ...secondarySeries];
 
-    final res = await db.queryTimeseriesDataMultiple(allKeys, range.end,
-        from: range.start);
+    //final watch = Stopwatch()..start();
+
+    // final res = await db.queryTimeseriesDataMultiple(allKeys, range.end,
+    //     from: range.start);
+
+    //print('queryTimeseriesDataMultiple took ${watch.elapsed}');
+
+    // print('first result: ${res.entries.first.value.first.time}');
+    // print('last result: ${res.entries.first.value.last.time}');
 
     final result = <Map<String, dynamic>>[];
 
-    for (final foo in res.entries) {
-      for (final value in foo.value) {
-        result.add({
-          'x': value.time.millisecondsSinceEpoch.toDouble(),
-          'y': value.value, // todo
-          's': foo.key
-        });
-      }
-    }
-
-    // for (final entry in keys.entries) {
-    //   for (final key in entry.value) {
-    //     final data =
-    //         await db.queryTimeseriesData(key, range.end, from: range.start);
-    //     result.addAll(data
-    //         .map((e) => {
-    //               'x': e.time.millisecondsSinceEpoch.toDouble(),
-    //               entry.key: e.value,
-    //               's': key
-    //             })
-    //         .toList());
+    // for (final foo in res.entries) {
+    //   for (final value in foo.value) {
+    //     result.add({
+    //       'x': value.time.millisecondsSinceEpoch.toDouble(),
+    //       'y': value.value, // todo
+    //       's': foo.key
+    //     });
     //   }
     // }
+
+    for (final entry in keys.entries) {
+      for (final key in entry.value) {
+        final data =
+            await db.queryTimeseriesData(key, range.end, from: range.start);
+        result.addAll(data.map((e) {
+          dynamic value = e.value;
+          if (value is bool) {
+            value = e.value ? 1.0 : 0.0;
+          }
+          return {
+            'x': e.time.millisecondsSinceEpoch.toDouble(),
+            entry.key: value,
+            's': key
+          };
+        }).toList());
+      }
+    }
     return result;
   }
 
@@ -452,8 +483,8 @@ class _GraphAssetState extends ConsumerState<GraphAsset> {
       // fetch one time window of data
       final start = DateTime.fromMillisecondsSinceEpoch(_dataMinX.toInt())
           .subtract(widget.config.timeWindowMinutes);
-      print(
-          "fetching data from $start to ${DateTime.fromMillisecondsSinceEpoch(_dataMinX.toInt())}");
+      //print(
+      //    "fetching data from $start to ${DateTime.fromMillisecondsSinceEpoch(_dataMinX.toInt())}");
       final data = await _queryData(DateTimeRange(
         start: start,
         end: DateTime.fromMillisecondsSinceEpoch(_dataMinX.toInt()),

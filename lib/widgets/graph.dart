@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:intl/intl.dart';
 import 'package:flutter/material.dart';
 import 'package:json_annotation/json_annotation.dart';
@@ -50,11 +48,13 @@ class GraphAxisConfig {
   final String unit;
   final double? min;
   final double? max;
+  final bool boolean;
 
   const GraphAxisConfig({
     required this.unit,
     this.min,
     this.max,
+    this.boolean = false,
   });
 
   factory GraphAxisConfig.fromJson(Map<String, dynamic> json) =>
@@ -172,16 +172,34 @@ class Graph {
     this.onPanUpdate,
     this.onPanEnd,
     required this.redraw,
-  }) : _data = data {
+  })  : _data = data,
+        _chartWidget = Center(child: const CircularProgressIndicator()) {
     _chart = _createChart();
-    _chartWidget = _chart.build();
+    if (config.type == GraphType.timeseries ||
+        config.type == GraphType.barTimeseries && config.xSpan != null) {
+      _lastPanInfo = cs.PanInfo(
+          visibleMinX: DateTime.now()
+              .subtract(config.xSpan!)
+              .millisecondsSinceEpoch
+              .toDouble(),
+          visibleMaxX: DateTime.now().millisecondsSinceEpoch.toDouble(),
+          state: cs.PanState.start);
+    } else if (config.xAxis.min != null && config.xAxis.max != null) {
+      _lastPanInfo = cs.PanInfo(
+          visibleMinX: config.xAxis.min!,
+          visibleMaxX: config.xAxis.max!,
+          state: cs.PanState.start);
+    } else {
+      _lastPanInfo =
+          cs.PanInfo(visibleMinX: 0, visibleMaxX: 0, state: cs.PanState.start);
+    }
   }
 
   late final List<Map<String, dynamic>> _data;
   late final cs.CristalyseChart _chart;
-  late Widget _chartWidget;
+  Widget _chartWidget;
   bool _showDate = false; // if viewport is not today, show date
-  cs.PanInfo? _lastPanInfo;
+  late cs.PanInfo _lastPanInfo;
 
   void theme(cs.ChartTheme theme) {
     _chart.theme(theme);
@@ -215,14 +233,13 @@ class Graph {
         .scaleYContinuous(
           min: config.yAxis.min,
           max: config.yAxis.max,
-          labels: (v) => _numLabel(v, config.yAxis.unit),
+          labels: (v) => _numLabel(v, config.yAxis.unit, config.yAxis.boolean),
         )
         .interaction(
           pan: panConfig,
         )
         .animate(duration: Duration.zero)
-        .legend()
-        .data(_data);
+        .legend();
 
     // TODO custom color palette !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
@@ -272,7 +289,8 @@ class Graph {
       chart.mappingY2('y2').scaleY2Continuous(
             min: config.yAxis2?.min,
             max: config.yAxis2?.max,
-            labels: (v) => _numLabel(v, config.yAxis2?.unit ?? ''),
+            labels: (v) => _numLabel(
+                v, config.yAxis2?.unit ?? '', config.yAxis2?.boolean ?? false),
           );
     }
     return chart;
@@ -280,12 +298,7 @@ class Graph {
 
   void addAll(List<Map<String, dynamic>> input) {
     _data.addAll(input);
-    _chartWidget = _chart.build();
-    if (_lastPanInfo != null) {
-      _sliceAndRedraw(_lastPanInfo!);
-    } else {
-      redraw();
-    }
+    _sliceAndRedraw(_lastPanInfo);
   }
 
   Widget build() {
@@ -293,25 +306,17 @@ class Graph {
   }
 
   void _onPanStart(cs.PanInfo info) {
-    print(
-        "_onPanStart: ${DateTime.fromMillisecondsSinceEpoch(info.visibleMinX!.toInt())} ${DateTime.fromMillisecondsSinceEpoch(info.visibleMaxX!.toInt())}");
-
     _lastPanInfo = info;
     onPanStart?.call(GraphPanEvent(info));
   }
 
   void _onPanUpdate(cs.PanInfo info) {
-    print(
-        "_onPanUpdate: ${DateTime.fromMillisecondsSinceEpoch(info.visibleMinX!.toInt())} ${DateTime.fromMillisecondsSinceEpoch(info.visibleMaxX!.toInt())}");
-
     _lastPanInfo = info;
     _sliceAndRedraw(info);
     onPanUpdate?.call(GraphPanEvent(info));
   }
 
   void _onPanEnd(cs.PanInfo info) {
-    print(
-        "onPanEnd: ${DateTime.fromMillisecondsSinceEpoch(info.visibleMinX!.toInt())} ${DateTime.fromMillisecondsSinceEpoch(info.visibleMaxX!.toInt())}");
     _lastPanInfo = info;
     if (config.type == GraphType.timeseries ||
         config.type == GraphType.barTimeseries) {
@@ -326,7 +331,7 @@ class Graph {
       }
     }
     _sliceAndRedraw(info);
-    // TODO recompute the min/max of the y axes and y2 axes
+
     onPanEnd?.call(GraphPanEvent(info));
   }
 
@@ -336,46 +341,31 @@ class Graph {
     final visibleMaxX = info.visibleMaxX!;
     final windowSize = info.visibleMaxX! - info.visibleMinX!;
 
-    print(
-        'slice criteria lowest: ${DateTime.fromMillisecondsSinceEpoch((visibleMinX - windowSize).toInt())}, highest: ${DateTime.fromMillisecondsSinceEpoch((visibleMaxX + windowSize).toInt())}, windowSize: $windowSize');
-    final now = DateTime.now();
+    if (_data.isEmpty) return;
+
     final slicedData = _data
         .where((e) =>
             e['x'] >= visibleMinX - windowSize &&
             e['x'] <= visibleMaxX + windowSize)
         .toList();
-    print("took ${DateTime.now().difference(now).inMilliseconds}ms");
+
     _chart.data(slicedData);
-    if (slicedData.isNotEmpty) {
-      print(
-          'slicedData first: ${DateTime.fromMillisecondsSinceEpoch(slicedData.first['x'].toInt())} slicedData last: ${DateTime.fromMillisecondsSinceEpoch(slicedData.last['x'].toInt())}');
-    }
-    // print(
-    //     'slicedData first: ${DateTime.fromMillisecondsSinceEpoch(slicedData.first['x'].toInt())} slicedData last: ${DateTime.fromMillisecondsSinceEpoch(slicedData.last['x'].toInt())}');
     _chartWidget = _chart.build();
 
     redraw();
   }
 
-  static String _numLabel(num v, String unit) {
+  static String _numLabel(num v, String unit, bool boolean) {
+    if (boolean) {
+      return v == 0.0
+          ? 'False'
+          : v == 1.0
+              ? 'True'
+              : '';
+    }
     final text =
         (v == v.roundToDouble()) ? v.toInt().toString() : v.toStringAsFixed(1);
     return unit.isEmpty ? text : '$text $unit';
-  }
-
-  static String _formatTimeBySpan(DateTime dt, Duration span,
-      {required bool showDate}) {
-    if (span <= const Duration(minutes: 1)) {
-      return showDate ? _fmt(dt, 'MM/dd HH:mm:ss') : _fmt(dt, 'HH:mm:ss');
-    } else if (span <= const Duration(hours: 2)) {
-      return showDate ? _fmt(dt, 'MM/dd HH:mm') : _fmt(dt, 'HH:mm');
-    } else if (span <= const Duration(days: 2)) {
-      return showDate ? _fmt(dt, 'MM/dd HH:mm') : _fmt(dt, 'HH:mm');
-    } else if (span <= const Duration(days: 60)) {
-      return _fmt(dt, 'MM/dd');
-    } else {
-      return _fmt(dt, 'yyyy-MM-dd');
-    }
   }
 
   static String _formatTime(DateTime dt, {required bool showDate}) {

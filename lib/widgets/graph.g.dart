@@ -26,6 +26,7 @@ GraphAxisConfig _$GraphAxisConfigFromJson(Map<String, dynamic> json) =>
       unit: json['unit'] as String,
       min: (json['min'] as num?)?.toDouble(),
       max: (json['max'] as num?)?.toDouble(),
+      boolean: json['boolean'] as bool? ?? false,
     );
 
 Map<String, dynamic> _$GraphAxisConfigToJson(GraphAxisConfig instance) =>
@@ -33,6 +34,7 @@ Map<String, dynamic> _$GraphAxisConfigToJson(GraphAxisConfig instance) =>
       'unit': instance.unit,
       'min': instance.min,
       'max': instance.max,
+      'boolean': instance.boolean,
     };
 
 GraphConfig _$GraphConfigFromJson(Map<String, dynamic> json) => GraphConfig(

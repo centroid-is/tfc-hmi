@@ -96,170 +96,175 @@ class _NumberConfigEditorState extends State<_NumberConfigEditor> {
 
   @override
   Widget build(BuildContext context) {
-    return SingleChildScrollView(
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // LEFT COLUMN: Number config fields
-          Expanded(
-            flex: 2,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                KeyField(
-                  initialValue: widget.config.key,
-                  onChanged: (value) =>
-                      setState(() => widget.config.key = value),
-                ),
-                const SizedBox(height: 16),
-                TextFormField(
-                  initialValue: widget.config.text,
-                  decoration: const InputDecoration(labelText: 'Label'),
-                  onChanged: (value) =>
-                      setState(() => widget.config.text = value),
-                ),
-                const SizedBox(height: 16),
-                Row(
-                  children: [
-                    const SizedBox(width: 16),
-                    Expanded(
-                      child: TextFormField(
-                        initialValue: widget.config.decimalPlaces.toString(),
-                        decoration: const InputDecoration(
-                          labelText: 'Decimal Places',
-                          helperText: 'Range: 0-5',
-                        ),
-                        keyboardType: TextInputType.number,
-                        onChanged: (value) {
-                          final places = int.tryParse(value);
-                          if (places != null && places >= 0 && places <= 5) {
-                            setState(
-                                () => widget.config.decimalPlaces = places);
-                          }
-                        },
-                      ),
-                    ),
-                  ],
-                ),
-                Row(
-                  children: [
-                    const SizedBox(width: 16),
-                    Expanded(
-                      child: TextFormField(
-                        initialValue: widget.config.scale?.toString(),
-                        decoration: const InputDecoration(
-                          labelText: 'Scale',
-                          helperText: 'Scale the number, 1.0 is normal',
-                        ),
-                        keyboardType: TextInputType.number,
-                        onChanged: (value) {
-                          final scale = double.tryParse(value);
-                          if (scale != null) {
-                            setState(() => widget.config.scale = scale);
-                          }
-                        },
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 16),
-                TextFormField(
-                  controller: _unitsController,
-                  decoration: const InputDecoration(labelText: 'Units'),
-                  onChanged: (value) =>
-                      setState(() => widget.config.units = value),
-                ),
-                const SizedBox(height: 16),
-                SwitchListTile(
-                  title: const Text('Show Decimal Point'),
-                  value: widget.config.showDecimalPoint,
-                  onChanged: (value) =>
-                      setState(() => widget.config.showDecimalPoint = value),
-                ),
-                const SizedBox(height: 16),
-                DropdownButton<TextPos>(
-                  value: widget.config.textPos ?? TextPos.right,
-                  isExpanded: true,
-                  onChanged: (value) =>
-                      setState(() => widget.config.textPos = value!),
-                  items: TextPos.values
-                      .map((e) => DropdownMenuItem<TextPos>(
-                          value: e, child: Text(e.name)))
-                      .toList(),
-                ),
-                const SizedBox(height: 16),
-                CoordinatesField(
-                  initialValue: widget.config.coordinates,
-                  onChanged: (c) =>
-                      setState(() => widget.config.coordinates = c),
-                  enableAngle: true,
-                ),
-                const SizedBox(height: 16),
-                SizeField(
-                  initialValue: widget.config.size,
-                  onChanged: (size) =>
-                      setState(() => widget.config.size = size),
-                ),
-                const SizedBox(height: 16),
-
-                // Writable toggle (mutually exclusive with graph)
-                SwitchListTile(
-                  title: const Text('Writable (tap number to edit)'),
-                  subtitle: const Text('Disables graph'),
-                  value: widget.config.writable,
-                  onChanged: (v) => setState(() {
-                    widget.config.writable = v;
-                    if (v) {
-                      showGraph = false;
-                      widget.config.graphConfig = null;
-                    }
-                  }),
-                ),
-
-                // Graph toggle
-                SwitchListTile(
-                  title: const Text('Include Graph'),
-                  subtitle: const Text('Make number clickable to show graph'),
-                  value: showGraph,
-                  onChanged: (value) => setState(() {
-                    showGraph = value;
-                    if (value) {
-                      widget.config.writable = false; // enforce exclusivity
-                      if (widget.config.graphConfig == null) {
-                        widget.config.graphConfig = GraphAssetConfig.preview();
-                      }
-                    } else {
-                      widget.config.graphConfig = null;
-                    }
-                  }),
-                ),
-              ],
-            ),
-          ),
-          // RIGHT COLUMN: Graph config
-          if (showGraph && widget.config.graphConfig != null)
-            const SizedBox(width: 24),
-          if (showGraph && widget.config.graphConfig != null)
+    return SizedBox(
+      height:
+          MediaQuery.of(context).size.height * 0.8, // Use 80% of screen height
+      child: SingleChildScrollView(
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // LEFT COLUMN: Number config fields
             Expanded(
-              flex: 3,
-              child: Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+              flex: 2,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  KeyField(
+                    initialValue: widget.config.key,
+                    onChanged: (value) =>
+                        setState(() => widget.config.key = value),
+                  ),
+                  const SizedBox(height: 16),
+                  TextFormField(
+                    initialValue: widget.config.text,
+                    decoration: const InputDecoration(labelText: 'Label'),
+                    onChanged: (value) =>
+                        setState(() => widget.config.text = value),
+                  ),
+                  const SizedBox(height: 16),
+                  Row(
                     children: [
-                      Text(
-                        'Graph Configuration',
-                        style: Theme.of(context).textTheme.titleMedium,
+                      const SizedBox(width: 16),
+                      Expanded(
+                        child: TextFormField(
+                          initialValue: widget.config.decimalPlaces.toString(),
+                          decoration: const InputDecoration(
+                            labelText: 'Decimal Places',
+                            helperText: 'Range: 0-5',
+                          ),
+                          keyboardType: TextInputType.number,
+                          onChanged: (value) {
+                            final places = int.tryParse(value);
+                            if (places != null && places >= 0 && places <= 5) {
+                              setState(
+                                  () => widget.config.decimalPlaces = places);
+                            }
+                          },
+                        ),
                       ),
-                      const SizedBox(height: 16),
-                      GraphContentConfig(config: widget.config.graphConfig!),
                     ],
+                  ),
+                  Row(
+                    children: [
+                      const SizedBox(width: 16),
+                      Expanded(
+                        child: TextFormField(
+                          initialValue: widget.config.scale?.toString(),
+                          decoration: const InputDecoration(
+                            labelText: 'Scale',
+                            helperText: 'Scale the number, 1.0 is normal',
+                          ),
+                          keyboardType: TextInputType.number,
+                          onChanged: (value) {
+                            final scale = double.tryParse(value);
+                            if (scale != null) {
+                              setState(() => widget.config.scale = scale);
+                            }
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  TextFormField(
+                    controller: _unitsController,
+                    decoration: const InputDecoration(labelText: 'Units'),
+                    onChanged: (value) =>
+                        setState(() => widget.config.units = value),
+                  ),
+                  const SizedBox(height: 16),
+                  SwitchListTile(
+                    title: const Text('Show Decimal Point'),
+                    value: widget.config.showDecimalPoint,
+                    onChanged: (value) =>
+                        setState(() => widget.config.showDecimalPoint = value),
+                  ),
+                  const SizedBox(height: 16),
+                  DropdownButton<TextPos>(
+                    value: widget.config.textPos ?? TextPos.right,
+                    isExpanded: true,
+                    onChanged: (value) =>
+                        setState(() => widget.config.textPos = value!),
+                    items: TextPos.values
+                        .map((e) => DropdownMenuItem<TextPos>(
+                            value: e, child: Text(e.name)))
+                        .toList(),
+                  ),
+                  const SizedBox(height: 16),
+                  CoordinatesField(
+                    initialValue: widget.config.coordinates,
+                    onChanged: (c) =>
+                        setState(() => widget.config.coordinates = c),
+                    enableAngle: true,
+                  ),
+                  const SizedBox(height: 16),
+                  SizeField(
+                    initialValue: widget.config.size,
+                    onChanged: (size) =>
+                        setState(() => widget.config.size = size),
+                  ),
+                  const SizedBox(height: 16),
+
+                  // Writable toggle (mutually exclusive with graph)
+                  SwitchListTile(
+                    title: const Text('Writable (tap number to edit)'),
+                    subtitle: const Text('Disables graph'),
+                    value: widget.config.writable,
+                    onChanged: (v) => setState(() {
+                      widget.config.writable = v;
+                      if (v) {
+                        showGraph = false;
+                        widget.config.graphConfig = null;
+                      }
+                    }),
+                  ),
+
+                  // Graph toggle
+                  SwitchListTile(
+                    title: const Text('Include Graph'),
+                    subtitle: const Text('Make number clickable to show graph'),
+                    value: showGraph,
+                    onChanged: (value) => setState(() {
+                      showGraph = value;
+                      if (value) {
+                        widget.config.writable = false; // enforce exclusivity
+                        if (widget.config.graphConfig == null) {
+                          widget.config.graphConfig =
+                              GraphAssetConfig.preview();
+                        }
+                      } else {
+                        widget.config.graphConfig = null;
+                      }
+                    }),
+                  ),
+                ],
+              ),
+            ),
+            // RIGHT COLUMN: Graph config
+            if (showGraph && widget.config.graphConfig != null)
+              const SizedBox(width: 24),
+            if (showGraph && widget.config.graphConfig != null)
+              Expanded(
+                flex: 3,
+                child: Card(
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Graph Configuration',
+                          style: Theme.of(context).textTheme.titleMedium,
+                        ),
+                        const SizedBox(height: 16),
+                        GraphContentConfig(config: widget.config.graphConfig!),
+                      ],
+                    ),
                   ),
                 ),
               ),
-            ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -363,7 +368,9 @@ class NumberWidget extends ConsumerWidget {
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     Text(
-                      config.graphConfig?.headerText ?? config.text ?? config.key,
+                      config.graphConfig?.headerText ??
+                          config.text ??
+                          config.key,
                       style: Theme.of(context).textTheme.titleLarge,
                     ),
                     IconButton(
