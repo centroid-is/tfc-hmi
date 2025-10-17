@@ -2,6 +2,7 @@
 // ========================  DRIFT / DATABASE LAYER  ==========================
 // ============================================================================
 
+import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
 
@@ -111,6 +112,7 @@ class AppDatabase extends _$AppDatabase {
   final DatabaseConfig config;
   AppDatabase._(this.config, QueryExecutor executor) : super(executor);
   final logger = Logger();
+  pg.Connection? _notificationConnection;
 
   @override
   int get schemaVersion => 2;
@@ -145,6 +147,27 @@ class AppDatabase extends _$AppDatabase {
 
   Future<void> open() async {
     await executor.ensureOpen(this);
+  }
+
+  /// Get or create the dedicated channel connection
+  Future<pg.Connection?> _createNotificationConnection() async {
+    if (config.postgres == null) {
+      return null;
+    }
+    logger.i('Creating dedicated connection for LISTEN/NOTIFY channels');
+    return await pg.Connection.open(
+      config.postgres!,
+      settings: pg.ConnectionSettings(
+        sslMode: config.sslMode,
+      ),
+    ).timeout(
+      const Duration(seconds: 10),
+      onTimeout: () {
+        logger.e('Timeout creating notification connection');
+        throw TimeoutException(
+            'Failed to create notification connection after 10 seconds');
+      },
+    );
   }
 
   /// Factory: creates an [AppDatabase], in the current isolate.
@@ -633,6 +656,88 @@ class AppDatabase extends _$AppDatabase {
     );
   }
 
+  /// Listen to table changes via PostgreSQL NOTIFY
+  Stream<String> listenToChannel(String channelName) {
+    late StreamController<String> controller;
+    StreamSubscription? channelSubscription;
+
+    controller = StreamController<String>(
+      onListen: () async {
+        try {
+          _notificationConnection ??= await _createNotificationConnection();
+
+          if (_notificationConnection == null) {
+            logger.w('Cannot listen to channel: not using PostgreSQL');
+            await controller.close();
+            return;
+          }
+
+          logger.i('Starting to listen on channel: $channelName');
+          final channel = _notificationConnection!.channels[channelName];
+
+          channelSubscription = channel.listen(
+            (payload) {
+              controller.add(payload);
+            },
+            onError: (error) {
+              logger.w('Notification channel error: $error');
+              controller.addError(error);
+            },
+            onDone: () {
+              logger.i('Channel stream ended for: $channelName');
+              controller.close();
+            },
+          );
+        } catch (e) {
+          logger.w('Error setting up notification listener: $e');
+          controller.addError(e);
+          await controller.close();
+        }
+      },
+      onCancel: () async {
+        logger.i('Cancelling notification listener for: $channelName');
+        await channelSubscription?.cancel();
+      },
+    );
+
+    return controller.stream;
+  }
+
+  /// Enable notifications for a table
+  Future<void> enableNotificationChannel(String tableName) async {
+    final channelName = 'table_${tableName}_changes';
+
+    await customStatement('''
+      CREATE OR REPLACE FUNCTION notify_${tableName}_change()
+      RETURNS TRIGGER AS \$\$
+      BEGIN
+        PERFORM pg_notify(
+          '$channelName',
+          json_build_object(
+            'action', TG_OP,
+            'data', CASE
+              WHEN TG_OP = 'DELETE' THEN row_to_json(OLD)
+              ELSE row_to_json(NEW)
+            END
+          )::text
+        );
+        RETURN COALESCE(NEW, OLD);
+      END;
+      \$\$ LANGUAGE plpgsql;
+    ''');
+
+    await customStatement('''
+    DROP TRIGGER IF EXISTS ${tableName}_notify ON "$tableName";
+  ''');
+
+    await customStatement('''
+    CREATE TRIGGER ${tableName}_notify
+    AFTER INSERT OR UPDATE OR DELETE ON "$tableName"
+    FOR EACH ROW
+    EXECUTE FUNCTION notify_${tableName}_change();
+  ''');
+  }
+
   static Duration? parsePostgresInterval(String? interval) {
     if (interval == null) return null;
 
@@ -698,6 +803,12 @@ class AppDatabase extends _$AppDatabase {
     }
 
     throw FormatException('Unable to parse PostgreSQL interval: $interval');
+  }
+
+  @override
+  Future<void> close() async {
+    await _notificationConnection?.close();
+    await super.close();
   }
 
   /// Get table statistics for performance analysis

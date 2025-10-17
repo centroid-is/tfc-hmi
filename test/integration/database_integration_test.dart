@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:drift/drift.dart' hide isNull;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:postgres/postgres.dart';
@@ -664,6 +666,372 @@ void main() {
         // Last row corresponds to t2 -> value only from table1
         expect(rows.last.read<int?>(c1), 40);
         expect(rows.last.read<int?>(c2), isNull);
+      });
+    });
+
+    group('LISTEN/NOTIFY Tests', () {
+      const notifyTestTable = 'test_notify_table';
+
+      setUp(() async {
+        // Create test table before each test
+        await database.registerRetentionPolicy(
+          notifyTestTable,
+          const RetentionPolicy(dropAfter: Duration(hours: 1)),
+        );
+
+        // Insert one row to create the table
+        await database.insertTimeseriesData(
+          notifyTestTable,
+          DateTime.now(),
+          42,
+        );
+      });
+
+      tearDown(() async {
+        // Clean up after each test
+        try {
+          await database.db.customStatement(
+            'DROP TABLE IF EXISTS "$notifyTestTable" CASCADE',
+          );
+        } catch (_) {
+          // Ignore cleanup errors
+        }
+      });
+
+      test('should enable notification channel and create trigger', () async {
+        // Enable notifications
+        await database.db.enableNotificationChannel(notifyTestTable);
+
+        // Verify function exists
+        final functionResult = await database.db.customSelect(r'''
+      SELECT EXISTS (
+        SELECT FROM pg_proc 
+        WHERE proname = $1
+      )
+    ''', variables: [
+          Variable.withString('notify_${notifyTestTable}_change')
+        ]).get();
+
+        expect(functionResult[0].read<bool>('exists'), true);
+
+        // Verify trigger exists
+        final triggerResult = await database.db.customSelect(r'''
+      SELECT EXISTS (
+        SELECT FROM pg_trigger
+        WHERE tgname = $1
+      )
+    ''', variables: [Variable.withString('${notifyTestTable}_notify')]).get();
+
+        expect(triggerResult[0].read<bool>('exists'), true);
+      });
+
+      test('should receive notification on INSERT', () async {
+        await database.db.enableNotificationChannel(notifyTestTable);
+
+        final channelName = 'table_${notifyTestTable}_changes';
+        final notifications = <String>[];
+
+        // Start listening
+        final subscription =
+            database.db.listenToChannel(channelName).listen((payload) {
+          notifications.add(payload);
+        });
+
+        // Wait a bit for listener to be ready
+        await Future.delayed(const Duration(milliseconds: 100));
+
+        // Insert data to trigger notification
+        await database.insertTimeseriesData(
+          notifyTestTable,
+          DateTime.now(),
+          100,
+        );
+
+        // Wait for notification
+        await Future.delayed(const Duration(milliseconds: 500));
+
+        // Verify notification received
+        expect(notifications.length, 1);
+
+        final notification = jsonDecode(notifications[0]);
+        expect(notification['action'], 'INSERT');
+        expect(notification['data'], isA<Map>());
+        expect(notification['data']['value'], 100);
+        await subscription.cancel();
+      });
+
+      test('should receive notification on UPDATE', () async {
+        await database.db.enableNotificationChannel(notifyTestTable);
+
+        final channelName = 'table_${notifyTestTable}_changes';
+        final notifications = <String>[];
+
+        final subscription =
+            database.db.listenToChannel(channelName).listen((payload) {
+          notifications.add(payload);
+        });
+
+        await Future.delayed(const Duration(milliseconds: 100));
+
+        // Update data
+        await database.db.customStatement('''
+      UPDATE "$notifyTestTable" 
+      SET value = 999 
+      WHERE value = 42
+    ''');
+
+        await Future.delayed(const Duration(milliseconds: 500));
+
+        expect(notifications.length, 1);
+
+        final notification = jsonDecode(notifications[0]);
+        expect(notification['action'], 'UPDATE');
+        expect(notification['data']['value'], 999);
+
+        await subscription.cancel();
+      });
+
+      test('should receive notification on DELETE', () async {
+        await database.db.enableNotificationChannel(notifyTestTable);
+
+        final channelName = 'table_${notifyTestTable}_changes';
+        final notifications = <String>[];
+
+        final subscription =
+            database.db.listenToChannel(channelName).listen((payload) {
+          notifications.add(payload);
+        });
+
+        await Future.delayed(const Duration(milliseconds: 100));
+
+        // Delete data
+        await database.db.customStatement('''
+      DELETE FROM "$notifyTestTable" WHERE value = 42
+    ''');
+
+        await Future.delayed(const Duration(milliseconds: 500));
+
+        expect(notifications.length, 1);
+
+        final notification = jsonDecode(notifications[0]);
+        expect(notification['action'], 'DELETE');
+        expect(notification['data']['value'], 42);
+
+        await subscription.cancel();
+      });
+
+      test('should handle multiple notifications', () async {
+        await database.db.enableNotificationChannel(notifyTestTable);
+
+        final channelName = 'table_${notifyTestTable}_changes';
+        final notifications = <String>[];
+
+        final subscription =
+            database.db.listenToChannel(channelName).listen((payload) {
+          notifications.add(payload);
+        });
+
+        await Future.delayed(const Duration(milliseconds: 100));
+
+        // Insert multiple records
+        for (int i = 0; i < 5; i++) {
+          await database.insertTimeseriesData(
+            notifyTestTable,
+            DateTime.now().add(Duration(seconds: i)),
+            100 + i,
+          );
+        }
+
+        // Wait for all notifications
+        await Future.delayed(const Duration(seconds: 1));
+
+        expect(notifications.length, 5);
+
+        // Verify all are INSERT actions
+        for (final notif in notifications) {
+          final decoded = jsonDecode(notif);
+          expect(decoded['action'], 'INSERT');
+        }
+
+        await subscription.cancel();
+      });
+
+      test('should work with complex timeseries data', () async {
+        // Create a table with multiple columns
+        const complexTable = 'test_complex_notify';
+
+        await database.registerRetentionPolicy(
+          complexTable,
+          const RetentionPolicy(dropAfter: Duration(hours: 1)),
+        );
+
+        // Insert complex data to create table structure
+        final testData = {
+          'temperature': 25.5,
+          'humidity': 60.2,
+          'pressure': 1013.25,
+        };
+
+        await database.insertTimeseriesData(
+          complexTable,
+          DateTime.now(),
+          testData,
+        );
+
+        // Enable notifications
+        await database.db.enableNotificationChannel(complexTable);
+
+        final channelName = 'table_${complexTable}_changes';
+        final notifications = <String>[];
+
+        final subscription =
+            database.db.listenToChannel(channelName).listen((payload) {
+          notifications.add(payload);
+        });
+
+        await Future.delayed(const Duration(milliseconds: 100));
+
+        // Insert new data
+        final newData = {
+          'temperature': 30.0,
+          'humidity': 55.0,
+          'pressure': 1015.0,
+        };
+
+        await database.insertTimeseriesData(
+          complexTable,
+          DateTime.now(),
+          newData,
+        );
+
+        await Future.delayed(const Duration(milliseconds: 500));
+
+        expect(notifications.length, 1);
+
+        final notification = jsonDecode(notifications[0]);
+        expect(notification['action'], 'INSERT');
+        expect(notification['data']['temperature'], 30.0);
+        expect(notification['data']['humidity'], 55.0);
+        expect(notification['data']['pressure'], 1015.0);
+
+        await subscription.cancel();
+
+        // Cleanup
+        await database.db.customStatement(
+          'DROP TABLE IF EXISTS "$complexTable" CASCADE',
+        );
+      });
+
+      test('should handle multiple listeners on same channel', () async {
+        await database.db.enableNotificationChannel(notifyTestTable);
+
+        final channelName = 'table_${notifyTestTable}_changes';
+        final notifications1 = <String>[];
+        final notifications2 = <String>[];
+
+        // Two listeners on same channel
+        final sub1 = database.db.listenToChannel(channelName).listen((payload) {
+          notifications1.add(payload);
+        });
+
+        final sub2 = database.db.listenToChannel(channelName).listen((payload) {
+          notifications2.add(payload);
+        });
+
+        await Future.delayed(const Duration(milliseconds: 100));
+
+        await database.insertTimeseriesData(
+          notifyTestTable,
+          DateTime.now(),
+          777,
+        );
+
+        await Future.delayed(const Duration(milliseconds: 500));
+
+        // Both listeners should receive the notification
+        expect(notifications1.length, 1);
+        expect(notifications2.length, 1);
+
+        final notif1 = jsonDecode(notifications1[0]);
+        final notif2 = jsonDecode(notifications2[0]);
+
+        expect(notif1['data']['value'], 777);
+        expect(notif2['data']['value'], 777);
+
+        await sub1.cancel();
+        await sub2.cancel();
+      });
+
+      test('should not receive notifications after canceling subscription',
+          () async {
+        await database.db.enableNotificationChannel(notifyTestTable);
+
+        final channelName = 'table_${notifyTestTable}_changes';
+        final notifications = <String>[];
+
+        final subscription =
+            database.db.listenToChannel(channelName).listen((payload) {
+          notifications.add(payload);
+        });
+
+        await Future.delayed(const Duration(milliseconds: 100));
+
+        // Insert first record
+        await database.insertTimeseriesData(
+          notifyTestTable,
+          DateTime.now(),
+          111,
+        );
+
+        await Future.delayed(const Duration(milliseconds: 300));
+        expect(notifications.length, 1);
+
+        // Cancel subscription
+        await subscription.cancel();
+        await Future.delayed(const Duration(milliseconds: 100));
+
+        // Insert second record
+        await database.insertTimeseriesData(
+          notifyTestTable,
+          DateTime.now(),
+          222,
+        );
+
+        await Future.delayed(const Duration(milliseconds: 500));
+
+        // Should still be 1 (didn't receive second notification)
+        expect(notifications.length, 1);
+      });
+
+      test('should handle rapid succession of changes', () async {
+        await database.db.enableNotificationChannel(notifyTestTable);
+
+        final channelName = 'table_${notifyTestTable}_changes';
+        final notifications = <String>[];
+
+        final subscription =
+            database.db.listenToChannel(channelName).listen((payload) {
+          notifications.add(payload);
+        });
+
+        await Future.delayed(const Duration(milliseconds: 100));
+
+        // Rapid inserts
+        for (int i = 0; i < 20; i++) {
+          await database.insertTimeseriesData(
+            notifyTestTable,
+            DateTime.now().add(Duration(milliseconds: i)),
+            i,
+          );
+        }
+
+        // Wait for all notifications
+        await Future.delayed(const Duration(seconds: 2));
+
+        // Should receive all 20 notifications
+        expect(notifications.length, 20);
+
+        await subscription.cancel();
       });
     });
   });
