@@ -1,16 +1,15 @@
 import 'dart:async';
-import 'package:collection/collection.dart';
+
 import 'package:flutter/material.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:rxdart/rxdart.dart';
 import 'package:tfc/converter/duration_converter.dart';
 
 import 'common.dart';
-import '../../providers/collector.dart';
 import '../../widgets/graph.dart';
 import '../../providers/database.dart';
 import '../../core/database.dart';
+import '../../core/database_drift.dart' as drift_db;
 
 part 'graph.g.dart';
 
@@ -368,6 +367,7 @@ class _GraphAssetState extends ConsumerState<GraphAsset> {
   late Graph _graph;
   int _dataMinX;
   Database? _db;
+  final List<StreamSubscription<String>> _realtimeSubscriptions = [];
 
   _GraphAssetState() : _dataMinX = 0;
 
@@ -393,6 +393,7 @@ class _GraphAssetState extends ConsumerState<GraphAsset> {
       _dataMinX = start.millisecondsSinceEpoch.toInt();
       _addData(
           await _queryData(DateTimeRange(start: start, end: DateTime.now())));
+      _initRealtimeUpdates();
     });
   }
 
@@ -400,6 +401,44 @@ class _GraphAssetState extends ConsumerState<GraphAsset> {
   void didChangeDependencies() {
     super.didChangeDependencies();
     _graph.theme(ref.watch(chartThemeNotifierProvider));
+  }
+
+  void _initRealtimeUpdates() async {
+    if (_db == null) return; // this should never happen
+    final db = _db!;
+
+    Future<StreamSubscription<String>> initSeries(
+        GraphSeriesConfig series, bool isPrimary) async {
+      final tableName = series.key;
+      final channelName = await db.db.enableNotificationChannel(tableName);
+      final subscription = db.db.listenToChannel(channelName).listen((payload) {
+        drift_db.NotificationData notification =
+            drift_db.NotificationData.fromJson(payload);
+        if (notification.action == drift_db.NotificationAction.insert) {
+          if (notification.data.containsKey('time') &&
+              notification.data.containsKey('value')) {
+            final time = DateTime.parse(notification.data['time']);
+            final value = notification.data['value'];
+            _addData([
+              {
+                'x': time.millisecondsSinceEpoch.toDouble(),
+                isPrimary ? 'y' : 'y2': value,
+                's': series.key
+              }
+            ]);
+          }
+          // todo non time value case
+        }
+      });
+      return subscription;
+    }
+
+    for (final series in widget.config.primarySeries) {
+      _realtimeSubscriptions.add(await initSeries(series, true));
+    }
+    for (final series in widget.config.secondarySeries) {
+      _realtimeSubscriptions.add(await initSeries(series, false));
+    }
   }
 
   Future<List<Map<String, dynamic>>> _queryData(DateTimeRange range) async {
@@ -498,5 +537,14 @@ class _GraphAssetState extends ConsumerState<GraphAsset> {
   @override
   Widget build(BuildContext context) {
     return _graph.build();
+  }
+
+  @override
+  void dispose() {
+    super.dispose();
+    for (final subscription in _realtimeSubscriptions) {
+      subscription.cancel();
+    }
+    _realtimeSubscriptions.clear();
   }
 }

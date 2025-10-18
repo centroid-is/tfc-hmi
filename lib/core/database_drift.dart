@@ -704,38 +704,39 @@ class AppDatabase extends _$AppDatabase {
   }
 
   /// Enable notifications for a table
-  Future<void> enableNotificationChannel(String tableName) async {
+  Future<String> enableNotificationChannel(String tableName) async {
     final channelName = 'table_${tableName}_changes';
 
     await customStatement('''
-      CREATE OR REPLACE FUNCTION notify_${tableName}_change()
-      RETURNS TRIGGER AS \$\$
-      BEGIN
-        PERFORM pg_notify(
-          '$channelName',
-          json_build_object(
-            'action', TG_OP,
-            'data', CASE
-              WHEN TG_OP = 'DELETE' THEN row_to_json(OLD)
-              ELSE row_to_json(NEW)
-            END
-          )::text
-        );
-        RETURN COALESCE(NEW, OLD);
-      END;
-      \$\$ LANGUAGE plpgsql;
-    ''');
-
-    await customStatement('''
-    DROP TRIGGER IF EXISTS ${tableName}_notify ON "$tableName";
+    CREATE OR REPLACE FUNCTION "notify_${tableName}_change"()
+    RETURNS TRIGGER AS \$\$
+    BEGIN
+      PERFORM pg_notify(
+        '$channelName',
+        json_build_object(
+          'action', TG_OP,
+          'data', CASE
+            WHEN TG_OP = 'DELETE' THEN row_to_json(OLD)
+            ELSE row_to_json(NEW)
+          END
+        )::text
+      );
+      RETURN COALESCE(NEW, OLD);
+    END;
+    \$\$ LANGUAGE plpgsql;
   ''');
 
     await customStatement('''
-    CREATE TRIGGER ${tableName}_notify
-    AFTER INSERT OR UPDATE OR DELETE ON "$tableName"
-    FOR EACH ROW
-    EXECUTE FUNCTION notify_${tableName}_change();
+  DROP TRIGGER IF EXISTS "${tableName}_notify" ON "$tableName";
   ''');
+
+    await customStatement('''
+  CREATE TRIGGER "${tableName}_notify"
+  AFTER INSERT OR UPDATE OR DELETE ON "$tableName"
+  FOR EACH ROW
+  EXECUTE FUNCTION "notify_${tableName}_change"();
+  ''');
+    return channelName;
   }
 
   static Duration? parsePostgresInterval(String? interval) {
@@ -961,5 +962,26 @@ class AppDatabase extends _$AppDatabase {
     } catch (e) {
       print('❌ Raw connection test failed: $e');
     }
+  }
+}
+
+enum NotificationAction {
+  insert,
+  update,
+  delete,
+}
+
+class NotificationData {
+  final NotificationAction action;
+  final Map<String, dynamic> data;
+
+  NotificationData({required this.action, required this.data});
+
+  factory NotificationData.fromJson(String json) {
+    final data = jsonDecode(json);
+    return NotificationData(
+        action: NotificationAction.values
+            .byName((data['action'] as String).toLowerCase()),
+        data: data['data'] as Map<String, dynamic>);
   }
 }
