@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:drift/drift.dart' hide isNull;
@@ -1032,6 +1033,116 @@ void main() {
         expect(notifications.length, 20);
 
         await subscription.cancel();
+      });
+
+      test('should handle simultaneous changes from many tables', () async {
+        // Create 5 test tables
+        final tableNames = List.generate(5, (i) => 'test_notify_multi_$i');
+
+        // Setup: Create all tables and enable notifications
+        var i = 0;
+        for (final tableName in tableNames) {
+          await database.registerRetentionPolicy(
+            tableName,
+            const RetentionPolicy(dropAfter: Duration(hours: 1)),
+          );
+
+          // Insert initial data to create the table
+          await database.insertTimeseriesData(
+            tableName,
+            DateTime.now(),
+            i++ * 10,
+          );
+
+          // Enable notifications for this table
+          await database.db.enableNotificationChannel(tableName);
+        }
+
+        // Set up listeners for all tables
+        final allNotifications = <String, List<String>>{};
+        final subscriptions = <StreamSubscription>[];
+
+        for (final tableName in tableNames) {
+          final channelName = 'table_${tableName}_changes';
+          allNotifications[tableName] = [];
+
+          final subscription =
+              database.db.listenToChannel(channelName).listen((payload) {
+            allNotifications[tableName]!.add(payload);
+          });
+          subscriptions.add(subscription);
+        }
+
+        // Wait for listeners to be ready
+        await Future.delayed(const Duration(milliseconds: 500));
+
+        // Insert data into each table simultaneously
+        final now = DateTime.now();
+        for (int i = 0; i < tableNames.length; i++) {
+          await database.insertTimeseriesData(
+            tableNames[i],
+            now.add(Duration(milliseconds: i)),
+            100 + i,
+          );
+        }
+
+        // Wait for all notifications
+        await Future.delayed(const Duration(seconds: 1));
+
+        // Verify each table received exactly one notification
+        for (int i = 0; i < tableNames.length; i++) {
+          final tableName = tableNames[i];
+          final notifications = allNotifications[tableName]!;
+
+          expect(notifications.length, 1,
+              reason: 'Table $tableName should receive exactly 1 notification');
+
+          final notification = jsonDecode(notifications[0]);
+          expect(notification['action'], 'INSERT');
+          expect(notification['data']['value'], 100 + i,
+              reason: 'Table $tableName should have value ${100 + i}');
+        }
+
+        // Test cross-table isolation: update one table, verify only it gets notification
+        final notifications1Before = allNotifications[tableNames[0]]!.length;
+
+        await database.db.customStatement('''
+          UPDATE "${tableNames[2]}" 
+          SET value = 999 
+          WHERE value = 102
+        ''');
+
+        await Future.delayed(const Duration(milliseconds: 500));
+
+        // Table 0 should not receive new notification
+        expect(allNotifications[tableNames[0]]!.length, notifications1Before,
+            reason:
+                'Table ${tableNames[0]} should not receive notification from another table update');
+
+        // Table 2 should receive UPDATE notification
+        expect(allNotifications[tableNames[2]]!.length, 2,
+            reason:
+                'Table ${tableNames[2]} should have 2 notifications (INSERT + UPDATE)');
+
+        final updateNotif = jsonDecode(allNotifications[tableNames[2]]![1]);
+        expect(updateNotif['action'], 'UPDATE');
+        expect(updateNotif['data']['value'], 999);
+
+        // Cleanup subscriptions
+        for (final sub in subscriptions) {
+          await sub.cancel();
+        }
+
+        // Cleanup tables
+        for (final tableName in tableNames) {
+          try {
+            await database.db.customStatement(
+              'DROP TABLE IF EXISTS "$tableName" CASCADE',
+            );
+          } catch (_) {
+            // Ignore cleanup errors
+          }
+        }
       });
     });
   });
