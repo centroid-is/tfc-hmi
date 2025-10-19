@@ -196,13 +196,44 @@ class Graph {
   }
 
   late final List<Map<String, dynamic>> _data;
-  late final cs.CristalyseChart _chart;
+  late cs.CristalyseChart _chart;
   Widget _chartWidget;
   bool _showDate = false; // if viewport is not today, show date
   late cs.PanInfo _lastPanInfo;
+  bool _isLoading = true;
 
   void theme(cs.ChartTheme theme) {
     _chart.theme(theme);
+  }
+
+  void _setXAxis(cs.CristalyseChart chart) {
+    cs.LabelCallback? xLabels;
+    if (config.type == GraphType.timeseries ||
+        config.type == GraphType.barTimeseries) {
+      xLabels = (v) {
+        final date = DateTime.fromMillisecondsSinceEpoch(v.toInt());
+        return _formatTime(date, showDate: _showDate);
+      };
+    }
+    if (config.type == GraphType.timeseries) {
+      if (config.xRange != null) {
+        chart.scaleXContinuous(
+            min: config.xRange?.start.millisecondsSinceEpoch.toDouble(),
+            max: config.xRange?.end.millisecondsSinceEpoch.toDouble(),
+            labels: xLabels);
+      } else if (config.xSpan != null) {
+        chart.scaleXContinuous(
+            min: DateTime.now()
+                .subtract(config.xSpan!)
+                .millisecondsSinceEpoch
+                .toDouble(),
+            max: DateTime.now().millisecondsSinceEpoch.toDouble(),
+            labels: xLabels);
+      } else {
+        chart.scaleXContinuous(
+            min: config.xAxis.min, max: config.xAxis.max, labels: xLabels);
+      }
+    }
   }
 
   cs.CristalyseChart _createChart() {
@@ -218,18 +249,9 @@ class Graph {
         onPanStart: _onPanStart,
       );
     }
-    cs.LabelCallback? xLabels;
-    if (config.type == GraphType.timeseries ||
-        config.type == GraphType.barTimeseries) {
-      xLabels = (v) {
-        final date = DateTime.fromMillisecondsSinceEpoch(v.toInt());
-        return _formatTime(date, showDate: _showDate);
-      };
-    }
+
     final chart = cs.CristalyseChart()
         .mapping(x: 'x', y: 'y', color: 's')
-        .scaleXContinuous(
-            min: config.xAxis.min, max: config.xAxis.max, labels: xLabels)
         .scaleYContinuous(
           min: config.yAxis.min,
           max: config.yAxis.max,
@@ -268,22 +290,7 @@ class Graph {
       }
     }
 
-    if (config.type == GraphType.timeseries) {
-      if (config.xRange != null) {
-        chart.scaleXContinuous(
-            min: config.xRange?.start.millisecondsSinceEpoch.toDouble(),
-            max: config.xRange?.end.millisecondsSinceEpoch.toDouble(),
-            labels: xLabels);
-      } else if (config.xSpan != null) {
-        chart.scaleXContinuous(
-            min: DateTime.now()
-                .subtract(config.xSpan!)
-                .millisecondsSinceEpoch
-                .toDouble(),
-            max: DateTime.now().millisecondsSinceEpoch.toDouble(),
-            labels: xLabels);
-      }
-    }
+    _setXAxis(chart);
 
     if (config.yAxis2 != null) {
       chart.mappingY2('y2').scaleY2Continuous(
@@ -301,8 +308,132 @@ class Graph {
     _sliceAndRedraw(_lastPanInfo);
   }
 
-  Widget build() {
-    return _chartWidget;
+  Widget build(BuildContext context) {
+    // Overlay the button in the bottom-right corner. This avoids touching Cristalyse internals
+    // and visually places the control beneath the right-side legend.
+    return Column(
+      children: [
+        Expanded(child: _chartWidget),
+        if (!_isLoading)
+          Material(
+            color: Colors.transparent,
+            child: Container(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(
+                    color: Theme.of(context).colorScheme.onSurface, width: 1),
+                color: Theme.of(context).colorScheme.surface,
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Zoom out button
+                  Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      onTap: () => print("zoom out"),
+                      borderRadius:
+                          BorderRadius.horizontal(left: Radius.circular(20)),
+                      child: Container(
+                        padding:
+                            EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                        child: Icon(Icons.zoom_out, size: 20),
+                      ),
+                    ),
+                  ),
+                  // Divider
+                  Container(
+                    height: 30,
+                    width: 1,
+                    color: Theme.of(context).colorScheme.onSurface,
+                  ),
+                  // Set date button
+                  Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      onTap: () => print("set date"),
+                      child: Container(
+                        padding:
+                            EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.calendar_month, size: 20),
+                            SizedBox(width: 8),
+                            Text("Set date"),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                  // Divider
+                  Container(
+                    height: 30,
+                    width: 1,
+                    color: Theme.of(context).colorScheme.onSurface,
+                  ),
+                  // Now button (NEW)
+                  Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      onTap: () {
+                        _chart = _createChart();
+                        _chart.data(_data);
+                        _chartWidget = _chart.build();
+                        redraw();
+                        final now = DateTime.now();
+                        final info = cs.PanInfo(
+                          visibleMinX: now
+                              .subtract(config.xSpan!)
+                              .millisecondsSinceEpoch
+                              .toDouble(),
+                          visibleMaxX: now.millisecondsSinceEpoch.toDouble(),
+                          state: cs.PanState.end,
+                        );
+                        _lastPanInfo = info;
+                        _sliceAndRedraw(
+                            info); // ensures your slicedData matches the reset window
+                      },
+                      child: Container(
+                        padding:
+                            EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.schedule, size: 20),
+                            SizedBox(width: 8),
+                            Text("Now"),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                  // Divider
+                  Container(
+                    height: 30,
+                    width: 1,
+                    color: Theme.of(context).colorScheme.onSurface,
+                  ),
+                  // Zoom in button
+                  Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      onTap: () => print("zoom in"),
+                      borderRadius:
+                          BorderRadius.horizontal(right: Radius.circular(20)),
+                      child: Container(
+                        padding:
+                            EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                        child: Icon(Icons.zoom_in, size: 20),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+      ],
+    );
   }
 
   void _onPanStart(cs.PanInfo info) {
@@ -350,6 +481,7 @@ class Graph {
         .toList();
 
     _chart.data(slicedData);
+    _isLoading = false;
     _chartWidget = _chart.build();
 
     redraw();
@@ -421,7 +553,7 @@ class ChartThemeNotifier extends _$ChartThemeNotifier {
         SolarizedColors.violet,
         SolarizedColors.cyan,
       ],
-      padding: const EdgeInsets.only(left: 40, right: 0, top: 0, bottom: 0),
+      padding: const EdgeInsets.only(left: 20, right: 0, top: 0, bottom: 0),
       axisTextStyle: const TextStyle(
         color: SolarizedColors.base01,
         fontSize: 12,
@@ -429,7 +561,7 @@ class ChartThemeNotifier extends _$ChartThemeNotifier {
       ),
       axisLabelStyle: const TextStyle(
         color: SolarizedColors.base00,
-        fontSize: 10,
+        fontSize: 12,
         fontFamily: 'roboto-mono',
       ),
     );
@@ -467,7 +599,7 @@ class ChartThemeNotifier extends _$ChartThemeNotifier {
       ),
       axisLabelStyle: const TextStyle(
         color: SolarizedColors.base01,
-        fontSize: 10,
+        fontSize: 12,
         fontFamily: 'roboto-mono',
       ),
     );

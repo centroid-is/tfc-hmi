@@ -393,7 +393,7 @@ class _GraphAssetState extends ConsumerState<GraphAsset> {
       _dataMinX = start.millisecondsSinceEpoch.toInt();
       _addData(
           await _queryData(DateTimeRange(start: start, end: DateTime.now())));
-      _initRealtimeUpdates();
+      //_initRealtimeUpdates();
     });
   }
 
@@ -536,7 +536,7 @@ class _GraphAssetState extends ConsumerState<GraphAsset> {
 
   @override
   Widget build(BuildContext context) {
-    return _graph.build();
+    return _graph.build(context);
   }
 
   @override
