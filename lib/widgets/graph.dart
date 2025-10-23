@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:cristalyse/cristalyse.dart' as cs;
 import 'package:riverpod_annotation/riverpod_annotation.dart';
+import 'package:board_datetime_picker/board_datetime_picker.dart';
 
 import '../theme.dart';
 import '../providers/theme.dart';
@@ -201,6 +202,7 @@ class Graph {
   bool _showDate = false; // if viewport is not today, show date
   late cs.PanInfo _lastPanInfo;
   bool _isLoading = true;
+  final cs.PanController _panController = cs.PanController();
 
   void theme(cs.ChartTheme theme) {
     _chart.theme(theme);
@@ -247,6 +249,7 @@ class Graph {
         onPanUpdate: _onPanUpdate,
         onPanEnd: _onPanEnd,
         onPanStart: _onPanStart,
+        controller: _panController,
       );
     }
 
@@ -331,7 +334,28 @@ class Graph {
                   Material(
                     color: Colors.transparent,
                     child: InkWell(
-                      onTap: () => print("zoom out"),
+                      onTap: () {
+                        if (config.type == GraphType.timeseries ||
+                            config.type == GraphType.barTimeseries &&
+                                config.xSpan != null) {
+                          final visibleMinX = _lastPanInfo.visibleMinX;
+                          final visibleMaxX = _lastPanInfo.visibleMaxX;
+                          if (visibleMinX != null && visibleMaxX != null) {
+                            final windowSize = visibleMaxX - visibleMinX;
+                            final delta = windowSize * -1 / 10;
+                            final newVisibleMinX = visibleMinX + delta;
+                            final newVisibleMaxX = visibleMaxX - delta;
+
+                            _panController.panTo(cs.PanInfo(
+                              visibleMinX: newVisibleMinX,
+                              visibleMaxX: newVisibleMaxX,
+                              state: cs.PanState.end,
+                            ));
+                          } else {
+                            // dont know
+                          }
+                        }
+                      },
                       borderRadius:
                           BorderRadius.horizontal(left: Radius.circular(20)),
                       child: Container(
@@ -351,7 +375,87 @@ class Graph {
                   Material(
                     color: Colors.transparent,
                     child: InkWell(
-                      onTap: () => print("set date"),
+                      onTap: () async {
+                        DateTimeRange? currentDateRange;
+                        if (_lastPanInfo.visibleMinX != null &&
+                            _lastPanInfo.visibleMaxX != null) {
+                          currentDateRange = DateTimeRange(
+                            start: DateTime.fromMillisecondsSinceEpoch(
+                                _lastPanInfo.visibleMinX!.toInt()),
+                            end: DateTime.fromMillisecondsSinceEpoch(
+                                _lastPanInfo.visibleMaxX!.toInt()),
+                          );
+                        } else if (config.xSpan != null) {
+                          currentDateRange = DateTimeRange(
+                            start: DateTime.now().subtract(config.xSpan!),
+                            end: DateTime.now(),
+                          );
+                        }
+                        final result = await showBoardDateTimeMultiPicker(
+                          context: context,
+                          startDate: currentDateRange?.start,
+                          endDate: currentDateRange?.end,
+                          maximumDate: DateTime.now(),
+                          pickerType: DateTimePickerType.datetime,
+                          options: BoardDateTimeOptions(
+                            languages: BoardPickerLanguages(
+                              locale: 'en',
+                              today: 'Today',
+                              tomorrow: 'Tomorrow',
+                              now: 'Now',
+                            ),
+                            boardTitle: 'Select Date & Time Range',
+                            showDateButton: true,
+                            inputable: true,
+                            // withSecond: true, // todo !!!!! fix upstream
+                            pickerSubTitles: BoardDateTimeItemTitles(
+                              year: 'Year',
+                              month: 'Month',
+                              day: 'Day',
+                              hour: 'Hour',
+                              minute: 'Minute',
+                              second: 'Second', // todo !!!!! fix upstream
+                            ),
+                            // looks weird
+                            separators: BoardDateTimePickerSeparators(
+                              date: PickerSeparator.slash,
+                              dateSeparatorBuilder: (context, textStyle) {
+                                return Center(
+                                  child: Padding(
+                                    padding: const EdgeInsets.only(top: 30),
+                                    child: Text(
+                                      '/',
+                                      style: textStyle,
+                                    ),
+                                  ),
+                                );
+                              },
+                              time: PickerSeparator.colon,
+                              timeSeparatorBuilder: (context, textStyle) {
+                                return Center(
+                                  child: Padding(
+                                    padding: const EdgeInsets.only(top: 30),
+                                    child: Text(
+                                      ':',
+                                      style: textStyle,
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
+                          ),
+                        );
+
+                        if (result != null) {
+                          _panController.panTo(cs.PanInfo(
+                            visibleMinX:
+                                result.start.millisecondsSinceEpoch.toDouble(),
+                            visibleMaxX:
+                                result.end.millisecondsSinceEpoch.toDouble(),
+                            state: cs.PanState.end,
+                          ));
+                        }
+                      },
                       child: Container(
                         padding:
                             EdgeInsets.symmetric(horizontal: 16, vertical: 10),
@@ -377,22 +481,29 @@ class Graph {
                     color: Colors.transparent,
                     child: InkWell(
                       onTap: () {
-                        _chart = _createChart();
-                        _chart.data(_data);
-                        _chartWidget = _chart.build();
-                        redraw();
-                        final now = DateTime.now();
-                        final info = cs.PanInfo(
-                          visibleMinX: now
-                              .subtract(config.xSpan!)
-                              .millisecondsSinceEpoch
-                              .toDouble(),
-                          visibleMaxX: now.millisecondsSinceEpoch.toDouble(),
-                          state: cs.PanState.end,
-                        );
-                        _lastPanInfo = info;
-                        _sliceAndRedraw(
-                            info); // ensures your slicedData matches the reset window
+                        double window = 0;
+                        if (config.xSpan != null) {
+                          window = config.xSpan!.inMilliseconds.toDouble();
+                        }
+                        if (_lastPanInfo.visibleMinX != null &&
+                            _lastPanInfo.visibleMaxX != null) {
+                          window = _lastPanInfo.visibleMaxX! -
+                              _lastPanInfo.visibleMinX!;
+                        }
+                        if (config.type == GraphType.timeseries ||
+                            config.type == GraphType.barTimeseries &&
+                                window > 0) {
+                          _panController.panTo(cs.PanInfo(
+                            visibleMinX: DateTime.now()
+                                    .millisecondsSinceEpoch
+                                    .toDouble() -
+                                window,
+                            visibleMaxX: DateTime.now()
+                                .millisecondsSinceEpoch
+                                .toDouble(),
+                            state: cs.PanState.end,
+                          ));
+                        }
                       },
                       child: Container(
                         padding:
@@ -418,7 +529,28 @@ class Graph {
                   Material(
                     color: Colors.transparent,
                     child: InkWell(
-                      onTap: () => print("zoom in"),
+                      onTap: () {
+                        if (config.type == GraphType.timeseries ||
+                            config.type == GraphType.barTimeseries &&
+                                config.xSpan != null) {
+                          final visibleMinX = _lastPanInfo.visibleMinX;
+                          final visibleMaxX = _lastPanInfo.visibleMaxX;
+                          if (visibleMinX != null && visibleMaxX != null) {
+                            final windowSize = visibleMaxX - visibleMinX;
+                            final delta = windowSize * 1 / 10;
+                            final newVisibleMinX = visibleMinX + delta;
+                            final newVisibleMaxX = visibleMaxX - delta;
+
+                            _panController.panTo(cs.PanInfo(
+                              visibleMinX: newVisibleMinX,
+                              visibleMaxX: newVisibleMaxX,
+                              state: cs.PanState.end,
+                            ));
+                          } else {
+                            // dont know
+                          }
+                        }
+                      },
                       borderRadius:
                           BorderRadius.horizontal(right: Radius.circular(20)),
                       child: Container(

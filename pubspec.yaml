@@ -45,6 +45,7 @@ dependencies:
   cryptography_flutter: ^2.3.2
   cryptography: ^2.7.0
   flutter_secure_storage: ^9.2.4
+  board_datetime_picker: ^2.8.2
   cristalyse:
     # path: ../cristalyse
     git:
