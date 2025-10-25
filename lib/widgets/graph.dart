@@ -222,7 +222,8 @@ class Graph {
         chart.scaleXContinuous(
             min: config.xRange?.start.millisecondsSinceEpoch.toDouble(),
             max: config.xRange?.end.millisecondsSinceEpoch.toDouble(),
-            labels: xLabels);
+            labels: xLabels,
+            tickConfig: cs.TickConfig(simpleLinear: true));
       } else if (config.xSpan != null) {
         chart.scaleXContinuous(
             min: DateTime.now()
@@ -230,10 +231,14 @@ class Graph {
                 .millisecondsSinceEpoch
                 .toDouble(),
             max: DateTime.now().millisecondsSinceEpoch.toDouble(),
-            labels: xLabels);
+            labels: xLabels,
+            tickConfig: cs.TickConfig(simpleLinear: true));
       } else {
         chart.scaleXContinuous(
-            min: config.xAxis.min, max: config.xAxis.max, labels: xLabels);
+            min: config.xAxis.min,
+            max: config.xAxis.max,
+            labels: xLabels,
+            tickConfig: cs.TickConfig(simpleLinear: true));
       }
     }
   }
@@ -259,6 +264,9 @@ class Graph {
           min: config.yAxis.min,
           max: config.yAxis.max,
           labels: (v) => _numLabel(v, config.yAxis.unit, config.yAxis.boolean),
+          tickConfig: cs.TickConfig(
+              simpleLinear: true,
+              ticks: config.yAxis.boolean ? [0.0, 1.0] : null),
         )
         .interaction(
           pan: panConfig,
@@ -297,11 +305,13 @@ class Graph {
 
     if (config.yAxis2 != null) {
       chart.mappingY2('y2').scaleY2Continuous(
-            min: config.yAxis2?.min,
-            max: config.yAxis2?.max,
-            labels: (v) => _numLabel(
-                v, config.yAxis2?.unit ?? '', config.yAxis2?.boolean ?? false),
-          );
+          min: config.yAxis2?.min,
+          max: config.yAxis2?.max,
+          labels: (v) => _numLabel(
+              v, config.yAxis2?.unit ?? '', config.yAxis2?.boolean ?? false),
+          tickConfig: cs.TickConfig(
+              simpleLinear: true,
+              ticks: config.yAxis2?.boolean ?? false ? [0.0, 1.0] : null));
     }
     return chart;
   }
@@ -397,7 +407,53 @@ class Graph {
                           endDate: currentDateRange?.end,
                           maximumDate: DateTime.now(),
                           pickerType: DateTimePickerType.datetime,
+                          useRootNavigator: true,
+                          breakpoint: 1000,
+                          customCloseButtonBuilder:
+                              (context, isModal, onClose) {
+                            return Container(
+                              decoration: BoxDecoration(
+                                borderRadius: BorderRadius.circular(20),
+                                border: Border.all(
+                                    color:
+                                        Theme.of(context).colorScheme.onSurface,
+                                    width: 1),
+                                color: Theme.of(context).colorScheme.surface,
+                              ),
+                              child: Material(
+                                color: Colors.transparent,
+                                child: InkWell(
+                                  onTap: onClose,
+                                  borderRadius: BorderRadius.circular(20),
+                                  child: Container(
+                                    padding: EdgeInsets.symmetric(
+                                        horizontal: 16, vertical: 10),
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Icon(Icons.check_circle_outline,
+                                            size: 20,
+                                            color: Theme.of(context)
+                                                .colorScheme
+                                                .onSurface),
+                                        SizedBox(width: 8),
+                                        Text("Apply",
+                                            style: TextStyle(
+                                                color: Theme.of(context)
+                                                    .colorScheme
+                                                    .onSurface)),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            );
+                          },
                           options: BoardDateTimeOptions(
+                            textColor: Theme.of(context).colorScheme.onSurface,
+                            activeTextColor:
+                                Theme.of(context).colorScheme.onTertiary,
+                            activeColor: Theme.of(context).colorScheme.tertiary,
                             languages: BoardPickerLanguages(
                               locale: 'en',
                               today: 'Today',
@@ -407,41 +463,18 @@ class Graph {
                             boardTitle: 'Select Date & Time Range',
                             showDateButton: true,
                             inputable: true,
-                            // withSecond: true, // todo !!!!! fix upstream
+                            withSecond: true,
                             pickerSubTitles: BoardDateTimeItemTitles(
                               year: 'Year',
                               month: 'Month',
                               day: 'Day',
                               hour: 'Hour',
                               minute: 'Minute',
-                              second: 'Second', // todo !!!!! fix upstream
+                              second: 'Second',
                             ),
-                            // looks weird
                             separators: BoardDateTimePickerSeparators(
                               date: PickerSeparator.slash,
-                              dateSeparatorBuilder: (context, textStyle) {
-                                return Center(
-                                  child: Padding(
-                                    padding: const EdgeInsets.only(top: 30),
-                                    child: Text(
-                                      '/',
-                                      style: textStyle,
-                                    ),
-                                  ),
-                                );
-                              },
                               time: PickerSeparator.colon,
-                              timeSeparatorBuilder: (context, textStyle) {
-                                return Center(
-                                  child: Padding(
-                                    padding: const EdgeInsets.only(top: 30),
-                                    child: Text(
-                                      ':',
-                                      style: textStyle,
-                                    ),
-                                  ),
-                                );
-                              },
                             ),
                           ),
                         );

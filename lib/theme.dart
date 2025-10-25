@@ -54,17 +54,19 @@ abstract final class SolarizedColors {
 
   ThemeData themeFromColorScheme(ColorScheme scheme) {
     return ThemeData(
-      colorScheme: scheme,
-      fontFamily: 'roboto-mono',
-      textTheme: const TextTheme(),
-      scrollbarTheme: const ScrollbarThemeData(
-          thumbVisibility: WidgetStatePropertyAll(true)),
-      useMaterial3: true,
-      inputDecorationTheme: const InputDecorationTheme(
-        border: OutlineInputBorder(),
-      ),
-      shadowColor: scheme.surfaceBright,
-    );
+        colorScheme: scheme,
+        fontFamily: 'roboto-mono',
+        textTheme: const TextTheme(),
+        scrollbarTheme: const ScrollbarThemeData(
+            thumbVisibility: WidgetStatePropertyAll(true)),
+        useMaterial3: true,
+        inputDecorationTheme: const InputDecorationTheme(
+          border: OutlineInputBorder(),
+        ),
+        shadowColor: scheme.surfaceBright,
+        // The bottom sheet maximum is used for board datetime picker
+        bottomSheetTheme: BottomSheetThemeData(
+            constraints: BoxConstraints(maxWidth: 1000.0)));
   }
 
   final solarizedLight = themeFromColorScheme(solarizedLightColorScheme);
