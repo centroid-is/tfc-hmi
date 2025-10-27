@@ -393,6 +393,9 @@ class _GraphAssetState extends ConsumerState<GraphAsset> {
   Database? _db;
   bool _realTimeActive = true;
   final List<StreamSubscription<String>> _realtimeSubscriptions = [];
+  final _rtThrottleBuffer = List<Map<String, dynamic>>.empty(growable: true);
+  Timer? _rtThrottleTimer;
+  static const _rtThrottleInterval = Duration(seconds: 1);
 
   _GraphAssetState()
       : _dataMinX = 0,
@@ -453,14 +456,12 @@ class _GraphAssetState extends ConsumerState<GraphAsset> {
             final time = DateTime.parse(notification.data['time']);
             final value = notification.data['value'];
             _dataMaxX = time.millisecondsSinceEpoch.toInt();
-            _addData([
-              {
-                'x': time.millisecondsSinceEpoch.toDouble(),
-                isPrimary ? 'y' : 'y2': value,
-                's': series.legend
-              }
-            ]);
-            _graph.panForward(time.millisecondsSinceEpoch.toDouble());
+            final x = time.millisecondsSinceEpoch.toDouble();
+            final axis = isPrimary ? 'y' : 'y2';
+            _rtThrottleBuffer
+                .addAll(_unpackData(x, axis, value, series.legend));
+            // _addData(_unpackData(x, axis, value, series.legend));
+            // _graph.panForward(time.millisecondsSinceEpoch.toDouble());
           }
           // todo non time value case
         }
@@ -479,6 +480,14 @@ class _GraphAssetState extends ConsumerState<GraphAsset> {
     for (final series in widget.config.secondarySeries) {
       _realtimeSubscriptions.add(await initSeries(series, false));
     }
+
+    _rtThrottleTimer = Timer.periodic(_rtThrottleInterval, (timer) {
+      if (_rtThrottleBuffer.isNotEmpty && mounted) {
+        _addData(_rtThrottleBuffer);
+        _rtThrottleBuffer.clear();
+      }
+    });
+
     if (!_realTimeActive) {
       _disableRealtimeUpdates();
     }
@@ -486,6 +495,8 @@ class _GraphAssetState extends ConsumerState<GraphAsset> {
 
   void _disableRealtimeUpdates() {
     _realTimeActive = false;
+    _rtThrottleTimer?.cancel();
+    _rtThrottleBuffer.clear();
     _graph.setNowButtonDisabled(_realTimeActive);
     for (final subscription in _realtimeSubscriptions) {
       subscription.cancel();
@@ -496,6 +507,19 @@ class _GraphAssetState extends ConsumerState<GraphAsset> {
   void _onNowPressed() {
     _realTimeActive = true;
     _initRealtimeUpdates();
+  }
+
+  List<Map<String, dynamic>> _unpackData(
+      double x, String axis, dynamic value, String legend) {
+    if (value is List) {
+      int i = 1;
+      return value
+          .map((e) => {'x': x, axis: e, 's': "$legend.${i++}"})
+          .toList();
+    }
+    return [
+      {'x': x, axis: value, 's': legend}
+    ];
   }
 
   Future<List<Map<String, dynamic>>> _queryData(DateTimeRange range) async {
@@ -534,17 +558,14 @@ class _GraphAssetState extends ConsumerState<GraphAsset> {
       for (final series in entry.value) {
         final data = await db.queryTimeseriesData(series.key, range.end,
             from: range.start);
-        result.addAll(data.map((e) {
+        for (final e in data) {
           dynamic value = e.value;
           if (value is bool) {
             value = e.value ? 1.0 : 0.0;
           }
-          return {
-            'x': e.time.millisecondsSinceEpoch.toDouble(),
-            axisKey: value,
-            's': series.legend
-          };
-        }).toList());
+          final x = e.time.millisecondsSinceEpoch.toDouble();
+          result.addAll(_unpackData(x, axisKey, value, series.legend));
+        }
       }
     }
     return result;
