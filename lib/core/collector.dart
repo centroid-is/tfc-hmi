@@ -203,7 +203,6 @@ class Collector {
   /// This stream provides both historical data and real-time updates.
   Stream<List<TimeseriesData<dynamic>>> collectStream(String key,
       {Duration since = const Duration(days: 1)}) {
-    print("collectStream: $key");
     key = stateMan.resolveKey(key);
     final entry = _collectEntries[key];
 
@@ -266,8 +265,7 @@ class Collector {
                 historicalData.first.time.isBefore(cutoffTime)) {
               historicalData.removeFirst();
             }
-            print("not ading historicalData: $key ${historicalData.length}");
-            //streamController.add(historicalData.toList());
+            streamController.add(historicalData.toList());
           },
           onError: (error, stackTrace) {
             logger.e('Error collecting data for key $key',
@@ -279,7 +277,6 @@ class Collector {
         historicalData.addAll(buffer.toList());
         buffer.clear();
 
-        print("adding historicalData: $key ${historicalData.length}");
         streamController.add(historicalData.toList());
       } catch (e) {
         logger.e('Failed to load historical data for key $key: $e');

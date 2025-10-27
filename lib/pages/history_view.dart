@@ -6,7 +6,9 @@ import 'package:flutter/services.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:rxdart/rxdart.dart';
+import 'package:cristalyse/cristalyse.dart' as cs;
 
+import '../widgets/button_graph.dart';
 import '../widgets/base_scaffold.dart';
 import '../widgets/graph.dart'; // Graph, GraphConfig, GraphDataConfig, GraphAxisConfig, GraphType
 
@@ -341,6 +343,14 @@ class _HistoryGraphPaneState extends ConsumerState<_HistoryGraphPane> {
   bool _paused = false;
   DateTime? _pausedAt;
   List<List<dynamic>>? _pausedData;
+  cs.ChartTheme? _chartTheme;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // todo this does not work properly
+    _chartTheme = ref.watch(chartThemeNotifierProvider);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -407,7 +417,9 @@ class _HistoryGraphPaneState extends ConsumerState<_HistoryGraphPane> {
             final Map<int, List<Map<GraphDataConfig, List<List<double>>>>>
                 graphDataByIndex = {};
 
-            for (int i = 0; i < widget.keys.length; i++) {
+            for (int i = 0;
+                i < math.min(widget.keys.length, data.length);
+                i++) {
               final seriesKey = widget.keys[i];
               final seriesData = data[i];
               final config = widget.graphConfigs[seriesKey];
@@ -474,33 +486,70 @@ class _HistoryGraphPaneState extends ConsumerState<_HistoryGraphPane> {
                     final graphDisplayConfig =
                         widget.graphDisplayConfigs[graphIndex];
 
-                    return Center(child: Text('TODO'));
+                    return Expanded(
+                      child: Container(
+                        margin: const EdgeInsets.only(bottom: 8),
+                        child: Builder(
+                          builder: (context) {
+                            // Flatten data for Graph
+                            final flattened = <Map<String, dynamic>>[];
+                            for (final seriesMap in graphData) {
+                              // each map has a single entry: GraphDataConfig -> points
+                              final entry = seriesMap.entries.first;
+                              final gdc = entry.key; // GraphDataConfig
+                              final pts =
+                                  entry.value; // List<List<double>> [time, y]
+                              final axisKey = gdc.mainAxis ? 'y' : 'y2';
+                              for (final p in pts) {
+                                if (p.length < 2) continue;
+                                flattened.add({
+                                  'x': p[0],
+                                  axisKey: p[1],
+                                  's': gdc.label,
+                                });
+                              }
+                            }
 
-                    // return Expanded(
-                    //   child: Container(
-                    //     margin: const EdgeInsets.only(bottom: 8),
-                    //     child: Graph(
-                    //       config: GraphConfig(
-                    //         type: GraphType.timeseries,
-                    //         xAxis: GraphAxisConfig(unit: ''),
-                    //         yAxis: GraphAxisConfig(
-                    //           unit: graphDisplayConfig?.yAxisUnit ?? '',
-                    //         ),
-                    //         yAxis2:
-                    //             graphDisplayConfig?.yAxis2Unit?.isNotEmpty ==
-                    //                     true
-                    //                 ? GraphAxisConfig(
-                    //                     unit: graphDisplayConfig!.yAxis2Unit!)
-                    //                 : null,
-                    //         xSpan: widget.realtime ? xSpan : null,
-                    //         xRange: widget.realtime ? null : widget.range,
-                    //       ),
-                    //       data:
-                    //           graphData, // All fetched data is available for panning
-                    //       showDate: _paused,
-                    //     ),
-                    //   ),
-                    // );
+                            final displayCfg = graphDisplayConfig;
+                            final cfg = GraphConfig(
+                              type: GraphType.timeseries,
+                              xAxis: const GraphAxisConfig(unit: ''),
+                              yAxis: GraphAxisConfig(
+                                unit: displayCfg?.yAxisUnit ?? '',
+                              ),
+                              yAxis2: (displayCfg?.yAxis2Unit != null &&
+                                      displayCfg!.yAxis2Unit!.isNotEmpty)
+                                  ? GraphAxisConfig(
+                                      unit: displayCfg.yAxis2Unit!)
+                                  : null,
+                              xSpan: widget.realtime ? xSpan : null,
+                              xRange: widget.realtime ? null : widget.range,
+                              pan: false,
+                            );
+
+                            final graph = Graph(
+                              chartTheme: _chartTheme,
+                              config: cfg,
+                              data: flattened,
+                              onPanStart: (_) {},
+                              onPanUpdate: (_) {},
+                              onPanEnd: (_) {},
+                              onNowPressed: () {},
+                              onSetDatePressed: () {},
+                              redraw: () {
+                                if (mounted) setState(() {});
+                              },
+                              showButtons: false,
+                            );
+
+                            // Apply theme
+                            graph.theme(ref.watch(chartThemeNotifierProvider));
+
+                            return graph.build(context);
+                          },
+                        ),
+                      ),
+                    );
                   }).toList(),
                 ),
                 if (widget.realtime && _paused)
@@ -1804,8 +1853,7 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage>
                       ? 'Pick date & time range'
                       : '${_rangeLabel(_range!)}'),
                   onPressed: () async {
-                    final picked =
-                        await _pickDateTimeRangeWithSeconds(context, _range);
+                    final picked = await showSetDatePicker(context, _range);
                     if (picked != null) {
                       setState(() {
                         _range = picked;
@@ -2198,15 +2246,6 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage>
   }
 
   // ---- DateTime range picker with seconds -----------------------------------
-
-  Future<DateTimeRange?> _pickDateTimeRangeWithSeconds(
-      BuildContext context, DateTimeRange? initial) async {
-    final res = await showDialog<DateTimeRange>(
-      context: context,
-      builder: (context) => _DateTimeRangeDialog(initial: initial),
-    );
-    return res;
-  }
 
   static String _fmtDT(DateTime dt) {
     String two(int n) => n.toString().padLeft(2, '0');
@@ -2760,500 +2799,6 @@ class _GraphConfigurationDialogState extends State<_GraphConfigurationDialog> {
     return usedGraphs.isEmpty
         ? 1
         : (usedGraphs.reduce((a, b) => a > b ? a : b) + 1);
-  }
-}
-
-// -----------------------------------------------------------------------------
-// DateTimeRange editor dialog with unified H:M:S picker
-// -----------------------------------------------------------------------------
-class _DateTimeRangeDialog extends StatefulWidget {
-  final DateTimeRange? initial;
-  const _DateTimeRangeDialog({this.initial});
-
-  @override
-  State<_DateTimeRangeDialog> createState() => _DateTimeRangeDialogState();
-}
-
-class _DateTimeRangeDialogState extends State<_DateTimeRangeDialog> {
-  late DateTime _startDate;
-  late TimeOfDay _startTime;
-  int _startSec = 0;
-
-  late DateTime _endDate;
-  late TimeOfDay _endTime;
-  int _endSec = 0;
-
-  @override
-  void initState() {
-    super.initState();
-    final now = DateTime.now();
-    final init = widget.initial ??
-        DateTimeRange(
-          start: now.subtract(const Duration(hours: 1)),
-          end: now,
-        );
-    _startDate = DateTime(init.start.year, init.start.month, init.start.day);
-    _startTime = TimeOfDay(hour: init.start.hour, minute: init.start.minute);
-    _startSec = init.start.second;
-
-    _endDate = DateTime(init.end.year, init.end.month, init.end.day);
-    _endTime = TimeOfDay(hour: init.end.hour, minute: init.end.minute);
-    _endSec = init.end.second;
-  }
-
-  DateTime _compose(DateTime d, TimeOfDay t, int s) =>
-      DateTime(d.year, d.month, d.day, t.hour, t.minute, s.clamp(0, 59));
-
-  Future<void> _pickDate({required bool start}) async {
-    final base = start ? _startDate : _endDate;
-    final picked = await showDatePicker(
-      context: context,
-      firstDate: DateTime(2000),
-      lastDate: DateTime.now().add(const Duration(days: 365)),
-      initialDate: base,
-    );
-    if (picked != null) {
-      setState(() {
-        if (start) {
-          _startDate = picked;
-        } else {
-          _endDate = picked;
-        }
-      });
-    }
-  }
-
-  Future<void> _pickTimeHms({required bool start}) async {
-    final initial = Duration(
-      hours: start ? _startTime.hour : _endTime.hour,
-      minutes: start ? _startTime.minute : _endTime.minute,
-      seconds: start ? _startSec : _endSec,
-    );
-
-    final picked = await showDialog<Duration>(
-      context: context,
-      builder: (context) => _HmsTimePickerDialog(initial: initial),
-    );
-
-    if (picked != null) {
-      setState(() {
-        final h = picked.inHours % 24;
-        final m = picked.inMinutes % 60;
-        final s = picked.inSeconds % 60;
-        if (start) {
-          _startTime = TimeOfDay(hour: h, minute: m);
-          _startSec = s;
-        } else {
-          _endTime = TimeOfDay(hour: h, minute: m);
-          _endSec = s;
-        }
-      });
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final startDT = _compose(_startDate, _startTime, _startSec);
-    final endDT = _compose(_endDate, _endTime, _endSec);
-    final valid = !endDT.isBefore(startDT);
-
-    return AlertDialog(
-      title: const Text('Pick date & time range'),
-      content: SizedBox(
-        width: 560,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            _row(context,
-                label: 'Start',
-                date: _startDate,
-                time: _startTime,
-                secs: _startSec,
-                onPickDate: () => _pickDate(start: true),
-                onPickTimeHms: () => _pickTimeHms(start: true)),
-            const SizedBox(height: 12),
-            _row(context,
-                label: 'End',
-                date: _endDate,
-                time: _endTime,
-                secs: _endSec,
-                onPickDate: () => _pickDate(start: false),
-                onPickTimeHms: () => _pickTimeHms(start: false)),
-            if (!valid)
-              Padding(
-                padding: const EdgeInsets.only(top: 12),
-                child: Text(
-                  'End must be after start',
-                  style: TextStyle(color: Theme.of(context).colorScheme.error),
-                ),
-              ),
-          ],
-        ),
-      ),
-      actions: [
-        TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel')),
-        ElevatedButton(
-            onPressed: valid
-                ? () => Navigator.pop(
-                      context,
-                      DateTimeRange(start: startDT, end: endDT),
-                    )
-                : null,
-            child: const Text('Apply')),
-      ],
-    );
-  }
-
-  Widget _row(
-    BuildContext context, {
-    required String label,
-    required DateTime date,
-    required TimeOfDay time,
-    required int secs,
-    required VoidCallback onPickDate,
-    required VoidCallback onPickTimeHms,
-  }) {
-    final two = (int n) => n.toString().padLeft(2, '0');
-    return Row(
-      children: [
-        SizedBox(
-          width: 56,
-          child: Text(
-            label,
-            style: const TextStyle(fontWeight: FontWeight.bold),
-          ),
-        ),
-        const SizedBox(width: 8),
-        OutlinedButton.icon(
-          onPressed: onPickDate,
-          icon: const Icon(Icons.event),
-          label: Text('${date.year}-${two(date.month)}-${two(date.day)}'),
-        ),
-        const SizedBox(width: 8),
-        OutlinedButton.icon(
-          onPressed: onPickTimeHms,
-          icon: const Icon(Icons.schedule),
-          label: Text('${two(time.hour)}:${two(time.minute)}:${two(secs)}'),
-        ),
-      ],
-    );
-  }
-}
-
-// -----------------------------------------------------------------------------
-// Fancy Material HMS time picker dialog
-// - Two modes: "Wheel" (ListWheelScrollView) and "Numeric" (steppers)
-// - Syncs both ways; switch modes anytime
-// - Touch-friendly sizes, optional haptic feedback
-// -----------------------------------------------------------------------------
-class _HmsTimePickerDialog extends StatefulWidget {
-  final Duration initial;
-  const _HmsTimePickerDialog({required this.initial});
-
-  @override
-  State<_HmsTimePickerDialog> createState() => _HmsTimePickerDialogState();
-}
-
-enum _PickerMode { wheel, numeric }
-
-class _HmsTimePickerDialogState extends State<_HmsTimePickerDialog> {
-  // canonical state
-  late int _h;
-  late int _m;
-  late int _s;
-
-  // wheel controllers
-  late FixedExtentScrollController _hCtrl;
-  late FixedExtentScrollController _mCtrl;
-  late FixedExtentScrollController _sCtrl;
-
-  // numeric controllers
-  late final TextEditingController _hText;
-  late final TextEditingController _mText;
-  late final TextEditingController _sText;
-
-  _PickerMode _mode = _PickerMode.wheel;
-
-  @override
-  void initState() {
-    super.initState();
-    _h = widget.initial.inHours % 24;
-    _m = widget.initial.inMinutes % 60;
-    _s = widget.initial.inSeconds % 60;
-
-    _hCtrl = FixedExtentScrollController(initialItem: _h);
-    _mCtrl = FixedExtentScrollController(initialItem: _m);
-    _sCtrl = FixedExtentScrollController(initialItem: _s);
-
-    _hText = TextEditingController(text: _two(_h));
-    _mText = TextEditingController(text: _two(_m));
-    _sText = TextEditingController(text: _two(_s));
-  }
-
-  @override
-  void dispose() {
-    _hCtrl.dispose();
-    _mCtrl.dispose();
-    _sCtrl.dispose();
-    _hText.dispose();
-    _mText.dispose();
-    _sText.dispose();
-    super.dispose();
-  }
-
-  String _two(int n) => n.toString().padLeft(2, '0');
-
-  Future<void> _animateWheel(FixedExtentScrollController c, int v) async {
-    // clamp to safe range; caller already ensures bounds
-    final target = v.clamp(0, 9999); // controller guards anyway
-    if (!mounted) return;
-    await c.animateToItem(
-      target,
-      duration: const Duration(milliseconds: 180),
-      curve: Curves.easeOutCubic,
-    );
-  }
-
-  void _setH(int v, {bool fromWheel = false, bool fromField = false}) {
-    v = v.clamp(0, 23);
-    if (_h == v) return;
-    setState(() => _h = v);
-    if (!fromWheel) _animateWheel(_hCtrl, v);
-    if (!fromField) _hText.text = _two(v);
-    _haptic();
-  }
-
-  void _setM(int v, {bool fromWheel = false, bool fromField = false}) {
-    v = v.clamp(0, 59);
-    if (_m == v) return;
-    setState(() => _m = v);
-    if (!fromWheel) _animateWheel(_mCtrl, v);
-    if (!fromField) _mText.text = _two(v);
-    _haptic();
-  }
-
-  void _setS(int v, {bool fromWheel = false, bool fromField = false}) {
-    v = v.clamp(0, 59);
-    if (_s == v) return;
-    setState(() => _s = v);
-    if (!fromWheel) _animateWheel(_sCtrl, v);
-    if (!fromField) _sText.text = _two(v);
-    _haptic();
-  }
-
-  void _haptic() {
-    // optional: requires import 'package:flutter/services.dart';
-    // HapticFeedback.selectionClick();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final itemExtent = 48.0; // bigger touch targets
-    final textStyle = Theme.of(context).textTheme.titleMedium;
-
-    return AlertDialog(
-      title: const Text('Select time (HH:MM:SS)'),
-      content: SizedBox(
-        width: 460,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            _modeToggle(context),
-            const SizedBox(height: 12),
-            AnimatedSwitcher(
-              duration: const Duration(milliseconds: 200),
-              switchInCurve: Curves.easeOut,
-              switchOutCurve: Curves.easeIn,
-              child: _mode == _PickerMode.wheel
-                  ? _wheelContent(itemExtent, textStyle)
-                  : _numericContent(textStyle),
-            ),
-            const SizedBox(height: 12),
-            _previewChip(context),
-          ],
-        ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text('Cancel'),
-        ),
-        ElevatedButton(
-          onPressed: () {
-            Navigator.pop(
-              context,
-              Duration(hours: _h, minutes: _m, seconds: _s),
-            );
-          },
-          child: const Text('OK'),
-        ),
-      ],
-    );
-  }
-
-  Widget _modeToggle(BuildContext context) {
-    return ToggleButtons(
-      isSelected: [
-        _mode == _PickerMode.wheel,
-        _mode == _PickerMode.numeric,
-      ],
-      onPressed: (i) {
-        setState(() {
-          _mode = i == 0 ? _PickerMode.wheel : _PickerMode.numeric;
-        });
-      },
-      borderRadius: BorderRadius.circular(8),
-      children: const [
-        Padding(
-          padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          child: Text('Wheel'),
-        ),
-        Padding(
-          padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          child: Text('Numeric'),
-        ),
-      ],
-    );
-  }
-
-  Widget _previewChip(BuildContext context) {
-    final s = '${_two(_h)}:${_two(_m)}:${_two(_s)}';
-    return Align(
-      alignment: Alignment.centerRight,
-      child: Chip(
-        label: Text(
-          s,
-          style: const TextStyle(fontFeatures: [FontFeature.tabularFigures()]),
-        ),
-      ),
-    );
-  }
-
-  // ---------- Wheel mode ----------
-  Widget _wheelContent(double itemExtent, TextStyle? textStyle) {
-    return SizedBox(
-      height: 240,
-      child: Row(
-        key: const ValueKey('wheel'),
-        children: [
-          Expanded(
-            child: _wheel(
-              count: 24,
-              controller: _hCtrl,
-              onSelected: (v) => _setH(v, fromWheel: true),
-              itemExtent: itemExtent,
-              textStyle: textStyle,
-            ),
-          ),
-          _colon(context),
-          Expanded(
-            child: _wheel(
-              count: 60,
-              controller: _mCtrl,
-              onSelected: (v) => _setM(v, fromWheel: true),
-              itemExtent: itemExtent,
-              textStyle: textStyle,
-            ),
-          ),
-          _colon(context),
-          Expanded(
-            child: _wheel(
-              count: 60,
-              controller: _sCtrl,
-              onSelected: (v) => _setS(v, fromWheel: true),
-              itemExtent: itemExtent,
-              textStyle: textStyle,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _colon(BuildContext context) => Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 6),
-        child: Text(':', style: Theme.of(context).textTheme.headlineSmall),
-      );
-
-  Widget _wheel({
-    required int count,
-    required FixedExtentScrollController controller,
-    required ValueChanged<int> onSelected,
-    required double itemExtent,
-    required TextStyle? textStyle,
-  }) {
-    return Container(
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surfaceContainerHighest,
-        border: Border.all(color: Theme.of(context).dividerColor),
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(12),
-        child: ListWheelScrollView.useDelegate(
-          controller: controller,
-          itemExtent: itemExtent,
-          physics: const FixedExtentScrollPhysics(),
-          useMagnifier: true,
-          magnification: 1.12,
-          diameterRatio: 2.0, // flatter for readability
-          overAndUnderCenterOpacity: 0.45,
-          onSelectedItemChanged: onSelected,
-          childDelegate: ListWheelChildBuilderDelegate(
-            builder: (context, index) {
-              if (index < 0 || index >= count) return null;
-              return Center(
-                child: Text(
-                  _two(index),
-                  style: textStyle,
-                ),
-              );
-            },
-          ),
-        ),
-      ),
-    );
-  }
-
-  // ---------- Numeric (stepper) mode ----------
-  Widget _numericContent(TextStyle? textStyle) {
-    return Row(
-      key: const ValueKey('numeric'),
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        Expanded(
-          child: _StepperField(
-            label: 'HH',
-            controller: _hText,
-            min: 0,
-            max: 23,
-            onChanged: (v) => _setH(v, fromField: true),
-          ),
-        ),
-        _colon(context),
-        Expanded(
-          child: _StepperField(
-            label: 'MM',
-            controller: _mText,
-            min: 0,
-            max: 59,
-            onChanged: (v) => _setM(v, fromField: true),
-          ),
-        ),
-        _colon(context),
-        Expanded(
-          child: _StepperField(
-            label: 'SS',
-            controller: _sText,
-            min: 0,
-            max: 59,
-            onChanged: (v) => _setS(v, fromField: true),
-          ),
-        ),
-      ],
-    );
   }
 }
 

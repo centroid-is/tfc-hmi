@@ -1,13 +1,15 @@
+import 'dart:math' as math;
+
 import 'package:intl/intl.dart';
 import 'package:flutter/material.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:cristalyse/cristalyse.dart' as cs;
 import 'package:riverpod_annotation/riverpod_annotation.dart';
-import 'package:board_datetime_picker/board_datetime_picker.dart';
 
 import '../theme.dart';
 import '../providers/theme.dart';
 import '../converter/color_converter.dart';
+import 'button_graph.dart';
 
 part 'graph.g.dart';
 
@@ -161,6 +163,7 @@ class Graph {
   ///   {'x': 2, 'y': 3, 'y2': 92, 'category': 'B'},
   /// ])
   final List<Map<String, dynamic>> data;
+  final bool showButtons;
 
   /// Panning callbacks
   final void Function(GraphPanEvent event)? onPanStart;
@@ -178,12 +181,18 @@ class Graph {
     this.onPanEnd,
     this.onNowPressed,
     this.onSetDatePressed,
+    this.showButtons = true,
     required this.redraw,
+    cs.ChartTheme? chartTheme,
   })  : _data = data,
         _chartWidget = Center(child: const CircularProgressIndicator()) {
     _chart = _createChart();
-    if (config.type == GraphType.timeseries ||
-        config.type == GraphType.barTimeseries && config.xSpan != null) {
+    if (chartTheme != null) {
+      _chart.theme(chartTheme);
+    }
+    if ((config.type == GraphType.timeseries ||
+            config.type == GraphType.barTimeseries) &&
+        config.xSpan != null) {
       _lastPanInfo = cs.PanInfo(
           visibleMinX: DateTime.now()
               .subtract(config.xSpan!)
@@ -199,6 +208,11 @@ class Graph {
     } else {
       _lastPanInfo =
           cs.PanInfo(visibleMinX: 0, visibleMaxX: 0, state: cs.PanState.start);
+    }
+    if (_data.isNotEmpty) {
+      _chart.data(_data);
+      _chartWidget = _chart.build();
+      _isLoading = false;
     }
   }
 
@@ -372,316 +386,108 @@ class Graph {
   }
 
   Widget build(BuildContext context) {
-    // Overlay the button in the bottom-right corner. This avoids touching Cristalyse internals
-    // and visually places the control beneath the right-side legend.
+    DateTimeRange? currentDateRange;
+    if (_lastPanInfo.visibleMinX != null && _lastPanInfo.visibleMaxX != null) {
+      currentDateRange = DateTimeRange(
+        start: DateTime.fromMillisecondsSinceEpoch(
+            _lastPanInfo.visibleMinX!.toInt()),
+        end: DateTime.fromMillisecondsSinceEpoch(
+            _lastPanInfo.visibleMaxX!.toInt()),
+      );
+    } else if (config.xSpan != null) {
+      currentDateRange = DateTimeRange(
+        start: DateTime.now().subtract(config.xSpan!),
+        end: DateTime.now(),
+      );
+    }
+
     return Column(
       children: [
         Expanded(child: _chartWidget),
-        if (!_isLoading)
-          Material(
-            color: Colors.transparent,
-            child: Container(
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(
-                    color: Theme.of(context).colorScheme.onSurface, width: 1),
-                color: Theme.of(context).colorScheme.surface,
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  // Zoom out button
-                  Material(
-                    color: Colors.transparent,
-                    child: InkWell(
-                      onTap: () {
-                        if (config.type == GraphType.timeseries ||
-                            config.type == GraphType.barTimeseries &&
-                                config.xSpan != null) {
-                          final visibleMinX = _lastPanInfo.visibleMinX;
-                          final visibleMaxX = _lastPanInfo.visibleMaxX;
-                          if (visibleMinX != null && visibleMaxX != null) {
-                            final windowSize = visibleMaxX - visibleMinX;
-                            final delta = windowSize * -1 / 10;
-                            // lets just zoom to right side
-                            final newVisibleMinX = visibleMinX + delta;
-                            final newVisibleMaxX = visibleMaxX;
+        if (!_isLoading && showButtons)
+          ButtonGraph(
+              dateRange: currentDateRange,
+              nowDisabled: _nowDisabled,
+              onSetDatePressed: () {
+                onSetDatePressed?.call();
+              },
+              onSetDateResult: (dateRange) {
+                _panController.panTo(cs.PanInfo(
+                  visibleMinX:
+                      dateRange?.start.millisecondsSinceEpoch.toDouble(),
+                  visibleMaxX: dateRange?.end.millisecondsSinceEpoch.toDouble(),
+                  state: cs.PanState.end,
+                ));
+              },
+              onNow: () {
+                double window = 0;
+                if (config.xSpan != null) {
+                  window = config.xSpan!.inMilliseconds.toDouble();
+                }
+                if (_lastPanInfo.visibleMinX != null &&
+                    _lastPanInfo.visibleMaxX != null) {
+                  window =
+                      _lastPanInfo.visibleMaxX! - _lastPanInfo.visibleMinX!;
+                }
+                if (config.type == GraphType.timeseries ||
+                    config.type == GraphType.barTimeseries && window > 0) {
+                  _panController.panTo(cs.PanInfo(
+                    visibleMinX:
+                        DateTime.now().millisecondsSinceEpoch.toDouble() -
+                            window,
+                    visibleMaxX:
+                        DateTime.now().millisecondsSinceEpoch.toDouble(),
+                    state: cs.PanState.end,
+                  ));
+                }
+                onNowPressed?.call();
+              },
+              onZoomOut: () {
+                if (config.type == GraphType.timeseries ||
+                    config.type == GraphType.barTimeseries &&
+                        config.xSpan != null) {
+                  final visibleMinX = _lastPanInfo.visibleMinX;
+                  final visibleMaxX = _lastPanInfo.visibleMaxX;
+                  if (visibleMinX != null && visibleMaxX != null) {
+                    final windowSize = visibleMaxX - visibleMinX;
+                    final delta = windowSize * -1 / 10;
+                    // lets just zoom to right side
+                    final newVisibleMinX = visibleMinX + delta;
+                    final newVisibleMaxX = visibleMaxX;
 
-                            _panController.panTo(cs.PanInfo(
-                              visibleMinX: newVisibleMinX,
-                              visibleMaxX: newVisibleMaxX,
-                              state: cs.PanState.end,
-                            ));
-                          } else {
-                            // dont know
-                          }
-                        }
-                      },
-                      borderRadius:
-                          BorderRadius.horizontal(left: Radius.circular(20)),
-                      child: Container(
-                        padding:
-                            EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                        child: Icon(Icons.zoom_out,
-                            size: 20,
-                            color: Theme.of(context).colorScheme.onSurface),
-                      ),
-                    ),
-                  ),
-                  // Divider
-                  Container(
-                    height: 30,
-                    width: 1,
-                    color: Theme.of(context).colorScheme.onSurface,
-                  ),
-                  // Set date button
-                  Material(
-                    color: Colors.transparent,
-                    child: InkWell(
-                      onTap: () async {
-                        onSetDatePressed?.call();
-                        DateTimeRange? currentDateRange;
-                        if (_lastPanInfo.visibleMinX != null &&
-                            _lastPanInfo.visibleMaxX != null) {
-                          currentDateRange = DateTimeRange(
-                            start: DateTime.fromMillisecondsSinceEpoch(
-                                _lastPanInfo.visibleMinX!.toInt()),
-                            end: DateTime.fromMillisecondsSinceEpoch(
-                                _lastPanInfo.visibleMaxX!.toInt()),
-                          );
-                        } else if (config.xSpan != null) {
-                          currentDateRange = DateTimeRange(
-                            start: DateTime.now().subtract(config.xSpan!),
-                            end: DateTime.now(),
-                          );
-                        }
-                        final result = await showBoardDateTimeMultiPicker(
-                          context: context,
-                          startDate: currentDateRange?.start,
-                          endDate: currentDateRange?.end,
-                          maximumDate: DateTime.now(),
-                          pickerType: DateTimePickerType.datetime,
-                          useRootNavigator: true,
-                          breakpoint: 1000,
-                          customCloseButtonBuilder:
-                              (context, isModal, onClose) {
-                            return Container(
-                              decoration: BoxDecoration(
-                                borderRadius: BorderRadius.circular(20),
-                                border: Border.all(
-                                    color:
-                                        Theme.of(context).colorScheme.onSurface,
-                                    width: 1),
-                                color: Theme.of(context).colorScheme.surface,
-                              ),
-                              child: Material(
-                                color: Colors.transparent,
-                                child: InkWell(
-                                  onTap: onClose,
-                                  borderRadius: BorderRadius.circular(20),
-                                  child: Container(
-                                    padding: EdgeInsets.symmetric(
-                                        horizontal: 16, vertical: 10),
-                                    child: Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        Icon(Icons.check_circle_outline,
-                                            size: 20,
-                                            color: Theme.of(context)
-                                                .colorScheme
-                                                .onSurface),
-                                        SizedBox(width: 8),
-                                        Text("Apply",
-                                            style: TextStyle(
-                                                color: Theme.of(context)
-                                                    .colorScheme
-                                                    .onSurface)),
-                                      ],
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            );
-                          },
-                          options: BoardDateTimeOptions(
-                            textColor: Theme.of(context).colorScheme.onSurface,
-                            activeTextColor:
-                                Theme.of(context).colorScheme.onTertiary,
-                            activeColor: Theme.of(context).colorScheme.tertiary,
-                            languages: BoardPickerLanguages(
-                              locale: 'en',
-                              today: 'Today',
-                              tomorrow: 'Tomorrow',
-                              now: 'Now',
-                            ),
-                            boardTitle: 'Select Date & Time Range',
-                            showDateButton: true,
-                            inputable: true,
-                            withSecond: true,
-                            pickerSubTitles: BoardDateTimeItemTitles(
-                              year: 'Year',
-                              month: 'Month',
-                              day: 'Day',
-                              hour: 'Hour',
-                              minute: 'Minute',
-                              second: 'Second',
-                              multiFrom: 'From',
-                              multiTo: 'To',
-                            ),
-                            separators: BoardDateTimePickerSeparators(
-                              date: PickerSeparator.slash,
-                              time: PickerSeparator.colon,
-                            ),
-                          ),
-                        );
+                    _panController.panTo(cs.PanInfo(
+                      visibleMinX: newVisibleMinX,
+                      visibleMaxX: newVisibleMaxX,
+                      state: cs.PanState.end,
+                    ));
+                  } else {
+                    // dont know
+                  }
+                }
+              },
+              onZoomIn: () {
+                if (config.type == GraphType.timeseries ||
+                    config.type == GraphType.barTimeseries &&
+                        config.xSpan != null) {
+                  final visibleMinX = _lastPanInfo.visibleMinX;
+                  final visibleMaxX = _lastPanInfo.visibleMaxX;
+                  if (visibleMinX != null && visibleMaxX != null) {
+                    final windowSize = visibleMaxX - visibleMinX;
+                    final delta = windowSize * 1 / 10;
+                    // lets just zoom out from the left side
+                    final newVisibleMinX = visibleMinX + delta;
+                    final newVisibleMaxX = visibleMaxX;
 
-                        if (result != null) {
-                          _panController.panTo(cs.PanInfo(
-                            visibleMinX:
-                                result.start.millisecondsSinceEpoch.toDouble(),
-                            visibleMaxX:
-                                result.end.millisecondsSinceEpoch.toDouble(),
-                            state: cs.PanState.end,
-                          ));
-                        }
-                      },
-                      child: Container(
-                        padding:
-                            EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(Icons.calendar_month,
-                                size: 20,
-                                color: Theme.of(context).colorScheme.onSurface),
-                            SizedBox(width: 8),
-                            Text("Set date",
-                                style: TextStyle(
-                                    color: Theme.of(context)
-                                        .colorScheme
-                                        .onSurface)),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                  // Divider
-                  Container(
-                    height: 30,
-                    width: 1,
-                    color: Theme.of(context).colorScheme.onSurface,
-                  ),
-                  // Now button
-                  Material(
-                    color: Colors.transparent,
-                    child: InkWell(
-                      onTap: _nowDisabled
-                          ? null
-                          : () {
-                              double window = 0;
-                              if (config.xSpan != null) {
-                                window =
-                                    config.xSpan!.inMilliseconds.toDouble();
-                              }
-                              if (_lastPanInfo.visibleMinX != null &&
-                                  _lastPanInfo.visibleMaxX != null) {
-                                window = _lastPanInfo.visibleMaxX! -
-                                    _lastPanInfo.visibleMinX!;
-                              }
-                              if (config.type == GraphType.timeseries ||
-                                  config.type == GraphType.barTimeseries &&
-                                      window > 0) {
-                                _panController.panTo(cs.PanInfo(
-                                  visibleMinX: DateTime.now()
-                                          .millisecondsSinceEpoch
-                                          .toDouble() -
-                                      window,
-                                  visibleMaxX: DateTime.now()
-                                      .millisecondsSinceEpoch
-                                      .toDouble(),
-                                  state: cs.PanState.end,
-                                ));
-                              }
-                              onNowPressed?.call();
-                            },
-                      child: Container(
-                        padding:
-                            EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(Icons.schedule,
-                                size: 20,
-                                color: _nowDisabled
-                                    ? Theme.of(context)
-                                        .colorScheme
-                                        .onSurface
-                                        .withAlpha(80)
-                                    : Theme.of(context).colorScheme.onSurface),
-                            SizedBox(width: 8),
-                            Text("Now",
-                                style: TextStyle(
-                                    color: _nowDisabled
-                                        ? Theme.of(context)
-                                            .colorScheme
-                                            .onSurface
-                                            .withAlpha(80)
-                                        : Theme.of(context)
-                                            .colorScheme
-                                            .onSurface)),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                  // Divider
-                  Container(
-                    height: 30,
-                    width: 1,
-                    color: Theme.of(context).colorScheme.onSurface,
-                  ),
-                  // Zoom in button
-                  Material(
-                    color: Colors.transparent,
-                    child: InkWell(
-                      onTap: () {
-                        if (config.type == GraphType.timeseries ||
-                            config.type == GraphType.barTimeseries &&
-                                config.xSpan != null) {
-                          final visibleMinX = _lastPanInfo.visibleMinX;
-                          final visibleMaxX = _lastPanInfo.visibleMaxX;
-                          if (visibleMinX != null && visibleMaxX != null) {
-                            final windowSize = visibleMaxX - visibleMinX;
-                            final delta = windowSize * 1 / 10;
-                            // lets just zoom out from the left side
-                            final newVisibleMinX = visibleMinX + delta;
-                            final newVisibleMaxX = visibleMaxX;
-
-                            _panController.panTo(cs.PanInfo(
-                              visibleMinX: newVisibleMinX,
-                              visibleMaxX: newVisibleMaxX,
-                              state: cs.PanState.end,
-                            ));
-                          } else {
-                            // dont know
-                          }
-                        }
-                      },
-                      borderRadius:
-                          BorderRadius.horizontal(right: Radius.circular(20)),
-                      child: Container(
-                        padding:
-                            EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                        child: Icon(Icons.zoom_in,
-                            size: 20,
-                            color: Theme.of(context).colorScheme.onSurface),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
+                    _panController.panTo(cs.PanInfo(
+                      visibleMinX: newVisibleMinX,
+                      visibleMaxX: newVisibleMaxX,
+                      state: cs.PanState.end,
+                    ));
+                  } else {
+                    // dont know
+                  }
+                }
+              }),
       ],
     );
   }
