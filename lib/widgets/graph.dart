@@ -167,6 +167,7 @@ class Graph {
   final void Function(GraphPanEvent event)? onPanUpdate;
   final void Function(GraphPanEvent event)? onPanEnd;
   final void Function()? onNowPressed; // When the user clicks the now button
+  final void Function()? onSetDatePressed;
   final void Function() redraw;
 
   Graph({
@@ -176,6 +177,7 @@ class Graph {
     this.onPanUpdate,
     this.onPanEnd,
     this.onNowPressed,
+    this.onSetDatePressed,
     required this.redraw,
   })  : _data = data,
         _chartWidget = Center(child: const CircularProgressIndicator()) {
@@ -207,9 +209,38 @@ class Graph {
   late cs.PanInfo _lastPanInfo;
   bool _isLoading = true;
   final cs.PanController _panController = cs.PanController();
+  bool _nowDisabled = false;
 
   void theme(cs.ChartTheme theme) {
     _chart.theme(theme);
+  }
+
+  void panForward(double maxX) {
+    if (_lastPanInfo.visibleMaxX == null || _lastPanInfo.visibleMinX == null) {
+      return;
+    }
+    final currentWindowSize =
+        _lastPanInfo.visibleMaxX! - _lastPanInfo.visibleMinX!;
+    // check if visibleMaxX is already bigger than maxX
+    if (_lastPanInfo.visibleMaxX! > maxX) {
+      return;
+    }
+    // Check if we are half a percent from the new maxX if we are, we really dont need to pan
+    if ((maxX - _lastPanInfo.visibleMaxX!) / currentWindowSize <= 0.005) {
+      return;
+    }
+    final newMinX = maxX - currentWindowSize;
+    _panController.panTo(cs.PanInfo(
+      visibleMinX: newMinX,
+      visibleMaxX: maxX,
+      state: cs.PanState
+          .start, // start is the most innocent state, we dont want this to cause any heavy actions
+    ));
+  }
+
+  void setNowButtonDisabled(bool disabled) {
+    _nowDisabled = disabled;
+    redraw();
   }
 
   void _setXAxis(cs.CristalyseChart chart) {
@@ -262,7 +293,8 @@ class Graph {
           onPanEnd: _onPanEnd,
           onPanStart: _onPanStart,
           controller: _panController,
-          boundaryClampingX: true);
+          // It is hard to detect if there is gap in data, so if we got data from 14:00 - 15:00 and nothing betwen 15:00 and 17:00 and then real time after that, lets just keep this off
+          boundaryClampingX: false);
     }
 
     final chart = cs.CristalyseChart()
@@ -371,8 +403,9 @@ class Graph {
                           if (visibleMinX != null && visibleMaxX != null) {
                             final windowSize = visibleMaxX - visibleMinX;
                             final delta = windowSize * -1 / 10;
+                            // lets just zoom to right side
                             final newVisibleMinX = visibleMinX + delta;
-                            final newVisibleMaxX = visibleMaxX - delta;
+                            final newVisibleMaxX = visibleMaxX;
 
                             _panController.panTo(cs.PanInfo(
                               visibleMinX: newVisibleMinX,
@@ -389,7 +422,9 @@ class Graph {
                       child: Container(
                         padding:
                             EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                        child: Icon(Icons.zoom_out, size: 20),
+                        child: Icon(Icons.zoom_out,
+                            size: 20,
+                            color: Theme.of(context).colorScheme.onSurface),
                       ),
                     ),
                   ),
@@ -404,6 +439,7 @@ class Graph {
                     color: Colors.transparent,
                     child: InkWell(
                       onTap: () async {
+                        onSetDatePressed?.call();
                         DateTimeRange? currentDateRange;
                         if (_lastPanInfo.visibleMinX != null &&
                             _lastPanInfo.visibleMaxX != null) {
@@ -515,9 +551,15 @@ class Graph {
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            Icon(Icons.calendar_month, size: 20),
+                            Icon(Icons.calendar_month,
+                                size: 20,
+                                color: Theme.of(context).colorScheme.onSurface),
                             SizedBox(width: 8),
-                            Text("Set date"),
+                            Text("Set date",
+                                style: TextStyle(
+                                    color: Theme.of(context)
+                                        .colorScheme
+                                        .onSurface)),
                           ],
                         ),
                       ),
@@ -533,41 +575,60 @@ class Graph {
                   Material(
                     color: Colors.transparent,
                     child: InkWell(
-                      onTap: () {
-                        double window = 0;
-                        if (config.xSpan != null) {
-                          window = config.xSpan!.inMilliseconds.toDouble();
-                        }
-                        if (_lastPanInfo.visibleMinX != null &&
-                            _lastPanInfo.visibleMaxX != null) {
-                          window = _lastPanInfo.visibleMaxX! -
-                              _lastPanInfo.visibleMinX!;
-                        }
-                        if (config.type == GraphType.timeseries ||
-                            config.type == GraphType.barTimeseries &&
-                                window > 0) {
-                          _panController.panTo(cs.PanInfo(
-                            visibleMinX: DateTime.now()
-                                    .millisecondsSinceEpoch
-                                    .toDouble() -
-                                window,
-                            visibleMaxX: DateTime.now()
-                                .millisecondsSinceEpoch
-                                .toDouble(),
-                            state: cs.PanState.end,
-                          ));
-                        }
-                        onNowPressed?.call();
-                      },
+                      onTap: _nowDisabled
+                          ? null
+                          : () {
+                              double window = 0;
+                              if (config.xSpan != null) {
+                                window =
+                                    config.xSpan!.inMilliseconds.toDouble();
+                              }
+                              if (_lastPanInfo.visibleMinX != null &&
+                                  _lastPanInfo.visibleMaxX != null) {
+                                window = _lastPanInfo.visibleMaxX! -
+                                    _lastPanInfo.visibleMinX!;
+                              }
+                              if (config.type == GraphType.timeseries ||
+                                  config.type == GraphType.barTimeseries &&
+                                      window > 0) {
+                                _panController.panTo(cs.PanInfo(
+                                  visibleMinX: DateTime.now()
+                                          .millisecondsSinceEpoch
+                                          .toDouble() -
+                                      window,
+                                  visibleMaxX: DateTime.now()
+                                      .millisecondsSinceEpoch
+                                      .toDouble(),
+                                  state: cs.PanState.end,
+                                ));
+                              }
+                              onNowPressed?.call();
+                            },
                       child: Container(
                         padding:
                             EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            Icon(Icons.schedule, size: 20),
+                            Icon(Icons.schedule,
+                                size: 20,
+                                color: _nowDisabled
+                                    ? Theme.of(context)
+                                        .colorScheme
+                                        .onSurface
+                                        .withAlpha(80)
+                                    : Theme.of(context).colorScheme.onSurface),
                             SizedBox(width: 8),
-                            Text("Now"),
+                            Text("Now",
+                                style: TextStyle(
+                                    color: _nowDisabled
+                                        ? Theme.of(context)
+                                            .colorScheme
+                                            .onSurface
+                                            .withAlpha(80)
+                                        : Theme.of(context)
+                                            .colorScheme
+                                            .onSurface)),
                           ],
                         ),
                       ),
@@ -592,8 +653,9 @@ class Graph {
                           if (visibleMinX != null && visibleMaxX != null) {
                             final windowSize = visibleMaxX - visibleMinX;
                             final delta = windowSize * 1 / 10;
+                            // lets just zoom out from the left side
                             final newVisibleMinX = visibleMinX + delta;
-                            final newVisibleMaxX = visibleMaxX - delta;
+                            final newVisibleMaxX = visibleMaxX;
 
                             _panController.panTo(cs.PanInfo(
                               visibleMinX: newVisibleMinX,
@@ -610,7 +672,9 @@ class Graph {
                       child: Container(
                         padding:
                             EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                        child: Icon(Icons.zoom_in, size: 20),
+                        child: Icon(Icons.zoom_in,
+                            size: 20,
+                            color: Theme.of(context).colorScheme.onSurface),
                       ),
                     ),
                   ),

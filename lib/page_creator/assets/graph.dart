@@ -24,6 +24,8 @@ class GraphSeriesConfig {
     required this.label,
   });
 
+  String get legend => label.isNotEmpty ? label : key;
+
   factory GraphSeriesConfig.fromJson(Map<String, dynamic> json) =>
       _$GraphSeriesConfigFromJson(json);
   Map<String, dynamic> toJson() => _$GraphSeriesConfigToJson(this);
@@ -405,6 +407,7 @@ class _GraphAssetState extends ConsumerState<GraphAsset> {
         onPanUpdate: _onPanUpdate,
         onPanEnd: _onPanUpdate,
         onNowPressed: _onNowPressed,
+        onSetDatePressed: _disableRealtimeUpdates,
         redraw: () {
           if (mounted) {
             setState(() {});
@@ -432,6 +435,7 @@ class _GraphAssetState extends ConsumerState<GraphAsset> {
   }
 
   void _initRealtimeUpdates() async {
+    _graph.setNowButtonDisabled(_realTimeActive);
     if (!_realTimeActive) return;
     if (_db == null) return; // this should never happen
     final db = _db!;
@@ -448,13 +452,15 @@ class _GraphAssetState extends ConsumerState<GraphAsset> {
               notification.data.containsKey('value')) {
             final time = DateTime.parse(notification.data['time']);
             final value = notification.data['value'];
+            _dataMaxX = time.millisecondsSinceEpoch.toInt();
             _addData([
               {
                 'x': time.millisecondsSinceEpoch.toDouble(),
                 isPrimary ? 'y' : 'y2': value,
-                's': series.key
+                's': series.legend
               }
             ]);
+            _graph.panForward(time.millisecondsSinceEpoch.toDouble());
           }
           // todo non time value case
         }
@@ -480,6 +486,7 @@ class _GraphAssetState extends ConsumerState<GraphAsset> {
 
   void _disableRealtimeUpdates() {
     _realTimeActive = false;
+    _graph.setNowButtonDisabled(_realTimeActive);
     for (final subscription in _realtimeSubscriptions) {
       subscription.cancel();
     }
@@ -487,17 +494,17 @@ class _GraphAssetState extends ConsumerState<GraphAsset> {
   }
 
   void _onNowPressed() {
+    _realTimeActive = true;
     _initRealtimeUpdates();
   }
 
   Future<List<Map<String, dynamic>>> _queryData(DateTimeRange range) async {
     if (_db == null) return [];
     final db = _db!;
-    final primarySeries =
-        widget.config.primarySeries.map((e) => e.key).toList();
-    final secondarySeries =
-        widget.config.secondarySeries.map((e) => e.key).toList();
-    final keys = {'y': primarySeries, 'y2': secondarySeries};
+    final keys = {
+      'y': widget.config.primarySeries,
+      'y2': widget.config.secondarySeries
+    };
     //final allKeys = [...primarySeries, ...secondarySeries];
 
     //final watch = Stopwatch()..start();
@@ -523,9 +530,10 @@ class _GraphAssetState extends ConsumerState<GraphAsset> {
     // }
 
     for (final entry in keys.entries) {
-      for (final key in entry.value) {
-        final data =
-            await db.queryTimeseriesData(key, range.end, from: range.start);
+      final axisKey = entry.key;
+      for (final series in entry.value) {
+        final data = await db.queryTimeseriesData(series.key, range.end,
+            from: range.start);
         result.addAll(data.map((e) {
           dynamic value = e.value;
           if (value is bool) {
@@ -533,8 +541,8 @@ class _GraphAssetState extends ConsumerState<GraphAsset> {
           }
           return {
             'x': e.time.millisecondsSinceEpoch.toDouble(),
-            entry.key: value,
-            's': key
+            axisKey: value,
+            's': series.legend
           };
         }).toList());
       }
@@ -549,7 +557,11 @@ class _GraphAssetState extends ConsumerState<GraphAsset> {
   Future<void> _onPanUpdate(GraphPanEvent event) async {
     if (event.visibleMinX == null || event.visibleMaxX == null) return;
 
-    _disableRealtimeUpdates();
+    // if we are panning to the left, we disable realtime updates
+    // apperantly +dx is to the left and -dx is to the right
+    if (event.delta != null && event.delta!.dx > 0) {
+      _disableRealtimeUpdates();
+    }
 
     // When panning, the data size size will differ
     // To begin with it is 300% and the window shows the real time data
@@ -583,9 +595,10 @@ class _GraphAssetState extends ConsumerState<GraphAsset> {
     final double mustMax = math.min(event.visibleMaxX! + xWindowSize * 0.5,
         DateTime.now().millisecondsSinceEpoch.toDouble());
     final double capMin = event.visibleMinX! - xWindowSize * 2.0;
-    final double capMax = event.visibleMaxX! + xWindowSize * 2.0;
+    final double capMax = math.min(event.visibleMaxX! + xWindowSize * 2.0,
+        DateTime.now().millisecondsSinceEpoch.toDouble());
 
-    while (_dataMinX < mustMin) {
+    if (_dataMinX > mustMin) {
       // fetch one time window of data
       final end = DateTime.fromMillisecondsSinceEpoch(_dataMinX.toInt());
       final start = end.subtract(widget.config.timeWindowMinutes);
@@ -595,10 +608,20 @@ class _GraphAssetState extends ConsumerState<GraphAsset> {
       _addData(data);
     }
 
-    while (_dataMaxX < mustMax) {
+    if (_dataMaxX < mustMax) {
       // fetch one time window of data
       final start = DateTime.fromMillisecondsSinceEpoch(_dataMaxX.toInt());
       final end = start.add(widget.config.timeWindowMinutes);
+      _dataMaxX = end.millisecondsSinceEpoch.toInt();
+      final data = await _queryData(DateTimeRange(start: start, end: end));
+      _addData(data);
+    }
+
+    // if we are not yet within the must range, we might have jumped back in time or forward in time
+    if (_dataMinX > mustMin || _dataMaxX < mustMax) {
+      final start = DateTime.fromMillisecondsSinceEpoch(capMin.toInt());
+      final end = DateTime.fromMillisecondsSinceEpoch(capMax.toInt());
+      _dataMinX = start.millisecondsSinceEpoch.toInt();
       _dataMaxX = end.millisecondsSinceEpoch.toInt();
       final data = await _queryData(DateTimeRange(start: start, end: end));
       _addData(data);
