@@ -23,6 +23,7 @@ Map<String, dynamic> _$GraphDataConfigToJson(GraphDataConfig instance) =>
 
 GraphAxisConfig _$GraphAxisConfigFromJson(Map<String, dynamic> json) =>
     GraphAxisConfig(
+      title: json['title'] as String?,
       unit: json['unit'] as String,
       min: (json['min'] as num?)?.toDouble(),
       max: (json['max'] as num?)?.toDouble(),
@@ -31,6 +32,7 @@ GraphAxisConfig _$GraphAxisConfigFromJson(Map<String, dynamic> json) =>
 
 Map<String, dynamic> _$GraphAxisConfigToJson(GraphAxisConfig instance) =>
     <String, dynamic>{
+      'title': instance.title,
       'unit': instance.unit,
       'min': instance.min,
       'max': instance.max,
@@ -78,7 +80,7 @@ const _$GraphTypeEnumMap = {
 // **************************************************************************
 
 String _$chartThemeNotifierHash() =>
-    r'172f5503b8fa0a29aaa8128cae2be884bdefbc77';
+    r'62b1352e93f1aea589eefdb712f37d30c6895607';
 
 /// -------------------- Chart theme (Riverpod) --------------------
 ///

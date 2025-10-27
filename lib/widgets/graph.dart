@@ -46,12 +46,14 @@ enum GraphType {
 
 @JsonSerializable(explicitToJson: true)
 class GraphAxisConfig {
+  final String? title;
   final String unit;
   final double? min;
   final double? max;
   final bool boolean;
 
   const GraphAxisConfig({
+    this.title,
     required this.unit,
     this.min,
     this.max,
@@ -164,6 +166,7 @@ class Graph {
   final void Function(GraphPanEvent event)? onPanStart;
   final void Function(GraphPanEvent event)? onPanUpdate;
   final void Function(GraphPanEvent event)? onPanEnd;
+  final void Function()? onNowPressed; // When the user clicks the now button
   final void Function() redraw;
 
   Graph({
@@ -172,6 +175,7 @@ class Graph {
     this.onPanStart,
     this.onPanUpdate,
     this.onPanEnd,
+    this.onNowPressed,
     required this.redraw,
   })  : _data = data,
         _chartWidget = Center(child: const CircularProgressIndicator()) {
@@ -223,7 +227,8 @@ class Graph {
             min: config.xRange?.start.millisecondsSinceEpoch.toDouble(),
             max: config.xRange?.end.millisecondsSinceEpoch.toDouble(),
             labels: xLabels,
-            tickConfig: cs.TickConfig(simpleLinear: true));
+            tickConfig: cs.TickConfig(simpleLinear: true),
+            title: config.xAxis.title);
       } else if (config.xSpan != null) {
         chart.scaleXContinuous(
             min: DateTime.now()
@@ -232,13 +237,15 @@ class Graph {
                 .toDouble(),
             max: DateTime.now().millisecondsSinceEpoch.toDouble(),
             labels: xLabels,
-            tickConfig: cs.TickConfig(simpleLinear: true));
+            tickConfig: cs.TickConfig(simpleLinear: true),
+            title: config.xAxis.title);
       } else {
         chart.scaleXContinuous(
             min: config.xAxis.min,
             max: config.xAxis.max,
             labels: xLabels,
-            tickConfig: cs.TickConfig(simpleLinear: true));
+            tickConfig: cs.TickConfig(simpleLinear: true),
+            title: config.xAxis.title);
       }
     }
   }
@@ -247,15 +254,15 @@ class Graph {
     cs.PanConfig? panConfig;
     if (config.pan) {
       panConfig = cs.PanConfig(
-        enabled: true,
-        updateXDomain: true,
-        updateYDomain: false,
-        throttle: const Duration(milliseconds: 1000),
-        onPanUpdate: _onPanUpdate,
-        onPanEnd: _onPanEnd,
-        onPanStart: _onPanStart,
-        controller: _panController,
-      );
+          enabled: true,
+          updateXDomain: true,
+          updateYDomain: false,
+          throttle: const Duration(milliseconds: 1000),
+          onPanUpdate: _onPanUpdate,
+          onPanEnd: _onPanEnd,
+          onPanStart: _onPanStart,
+          controller: _panController,
+          boundaryClampingX: true);
     }
 
     final chart = cs.CristalyseChart()
@@ -267,12 +274,16 @@ class Graph {
           tickConfig: cs.TickConfig(
               simpleLinear: true,
               ticks: config.yAxis.boolean ? [0.0, 1.0] : null),
+          title: config.yAxis.title,
         )
         .interaction(
           pan: panConfig,
         )
         .animate(duration: Duration.zero)
-        .legend(position: cs.LegendPosition.right, interactive: true);
+        .legend(
+            position: cs.LegendPosition.right,
+            interactive: true,
+            showTitles: true);
 
     // TODO custom color palette !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
@@ -305,19 +316,26 @@ class Graph {
 
     if (config.yAxis2 != null) {
       chart.mappingY2('y2').scaleY2Continuous(
-          min: config.yAxis2?.min,
-          max: config.yAxis2?.max,
-          labels: (v) => _numLabel(
-              v, config.yAxis2?.unit ?? '', config.yAxis2?.boolean ?? false),
-          tickConfig: cs.TickConfig(
-              simpleLinear: true,
-              ticks: config.yAxis2?.boolean ?? false ? [0.0, 1.0] : null));
+            min: config.yAxis2?.min,
+            max: config.yAxis2?.max,
+            labels: (v) => _numLabel(
+                v, config.yAxis2?.unit ?? '', config.yAxis2?.boolean ?? false),
+            tickConfig: cs.TickConfig(
+                simpleLinear: true,
+                ticks: config.yAxis2?.boolean ?? false ? [0.0, 1.0] : null),
+            title: config.yAxis2?.title,
+          );
     }
     return chart;
   }
 
   void addAll(List<Map<String, dynamic>> input) {
     _data.addAll(input);
+    _sliceAndRedraw(_lastPanInfo);
+  }
+
+  void removeWhere(bool Function(Map<String, dynamic>) predicate) {
+    _data.removeWhere(predicate);
     _sliceAndRedraw(_lastPanInfo);
   }
 
@@ -471,6 +489,8 @@ class Graph {
                               hour: 'Hour',
                               minute: 'Minute',
                               second: 'Second',
+                              multiFrom: 'From',
+                              multiTo: 'To',
                             ),
                             separators: BoardDateTimePickerSeparators(
                               date: PickerSeparator.slash,
@@ -509,7 +529,7 @@ class Graph {
                     width: 1,
                     color: Theme.of(context).colorScheme.onSurface,
                   ),
-                  // Now button (NEW)
+                  // Now button
                   Material(
                     color: Colors.transparent,
                     child: InkWell(
@@ -537,6 +557,7 @@ class Graph {
                             state: cs.PanState.end,
                           ));
                         }
+                        onNowPressed?.call();
                       },
                       child: Container(
                         padding:

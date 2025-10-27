@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:json_annotation/json_annotation.dart';
@@ -278,7 +279,27 @@ class GraphContentConfigState extends State<GraphContentConfig> {
       children: [
         Text(label, style: const TextStyle(fontWeight: FontWeight.bold)),
         const SizedBox(height: 8),
-        // Use Wrap for better responsive behavior
+        Row(
+          spacing: 8,
+          children: [
+            Expanded(
+              child: TextFormField(
+                initialValue: axis.title,
+                decoration: const InputDecoration(labelText: 'Title'),
+                onChanged: (value) {
+                  onChanged(GraphAxisConfig(
+                    title: value,
+                    unit: axis!.unit,
+                    min: axis.min,
+                    max: axis.max,
+                    boolean: axis.boolean,
+                  ));
+                },
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 16),
         Row(
           spacing: 8,
           children: [
@@ -366,10 +387,14 @@ class GraphAsset extends ConsumerStatefulWidget {
 class _GraphAssetState extends ConsumerState<GraphAsset> {
   late Graph _graph;
   int _dataMinX;
+  int _dataMaxX;
   Database? _db;
+  bool _realTimeActive = true;
   final List<StreamSubscription<String>> _realtimeSubscriptions = [];
 
-  _GraphAssetState() : _dataMinX = 0;
+  _GraphAssetState()
+      : _dataMinX = 0,
+        _dataMaxX = 0;
 
   @override
   void initState() {
@@ -379,6 +404,7 @@ class _GraphAssetState extends ConsumerState<GraphAsset> {
         data: [],
         onPanUpdate: _onPanUpdate,
         onPanEnd: _onPanUpdate,
+        onNowPressed: _onNowPressed,
         redraw: () {
           if (mounted) {
             setState(() {});
@@ -389,11 +415,13 @@ class _GraphAssetState extends ConsumerState<GraphAsset> {
       if (!mounted) return;
       _db = db;
       final start =
-          DateTime.now().subtract(widget.config.timeWindowMinutes * 2);
+          // 300% of the time window, refer to panUpdate method for more details
+          DateTime.now().subtract(widget.config.timeWindowMinutes * 3);
+      final end = DateTime.now();
       _dataMinX = start.millisecondsSinceEpoch.toInt();
-      _addData(
-          await _queryData(DateTimeRange(start: start, end: DateTime.now())));
-      //_initRealtimeUpdates();
+      _dataMaxX = end.millisecondsSinceEpoch.toInt();
+      _addData(await _queryData(DateTimeRange(start: start, end: end)));
+      _initRealtimeUpdates();
     });
   }
 
@@ -404,6 +432,7 @@ class _GraphAssetState extends ConsumerState<GraphAsset> {
   }
 
   void _initRealtimeUpdates() async {
+    if (!_realTimeActive) return;
     if (_db == null) return; // this should never happen
     final db = _db!;
 
@@ -433,12 +462,32 @@ class _GraphAssetState extends ConsumerState<GraphAsset> {
       return subscription;
     }
 
+    // if we are already subscribing to realtime updates, don't do it again
+    if (_realtimeSubscriptions.isNotEmpty) {
+      return;
+    }
+
     for (final series in widget.config.primarySeries) {
       _realtimeSubscriptions.add(await initSeries(series, true));
     }
     for (final series in widget.config.secondarySeries) {
       _realtimeSubscriptions.add(await initSeries(series, false));
     }
+    if (!_realTimeActive) {
+      _disableRealtimeUpdates();
+    }
+  }
+
+  void _disableRealtimeUpdates() {
+    _realTimeActive = false;
+    for (final subscription in _realtimeSubscriptions) {
+      subscription.cancel();
+    }
+    _realtimeSubscriptions.clear();
+  }
+
+  void _onNowPressed() {
+    _initRealtimeUpdates();
   }
 
   Future<List<Map<String, dynamic>>> _queryData(DateTimeRange range) async {
@@ -497,40 +546,77 @@ class _GraphAssetState extends ConsumerState<GraphAsset> {
     _graph.addAll(data);
   }
 
-  static double? _numFrom(dynamic v) {
-    if (v is num) return v.toDouble();
-    if (v is Map && v['value'] is num) return (v['value'] as num).toDouble();
-    return null;
-  }
-
   Future<void> _onPanUpdate(GraphPanEvent event) async {
     if (event.visibleMinX == null || event.visibleMaxX == null) return;
 
+    _disableRealtimeUpdates();
+
+    // When panning, the data size size will differ
+    // To begin with it is 300% and the window shows the real time data
+
+    // Initial data size is 300%
+    // X axis
+    //
+    // | buffer1 | buffer2 |      window     |
+    // |   100%  |   100%  |     100%        |
+    // Now if we pan into buffer2, it becomes the case below rigth
+
+    // Min data size is 300%
     // X axis
     // | buffer1 |      window     | buffer2 |
-    // |   50%   |     100%        |   50%   |
+    // |   100%  |     100%        |   100%  |
+    // Now if we pan into buffer2 we fetch 100% data for that direction, see below
+
+    // Data size is 400%
+    // X axis
+    // | buffer1 |      window     | buffer2 | buffer3 |
+    // |   100%  |     100%        |   100%  |   100%  |
+
+    // Max data size is 500%
+    // X axis
+    // | buffer1 |      window     | buffer2 |
+    // |   200%  |     100%        |   200%  |
 
     final xWindowSize = event.visibleMaxX! - event.visibleMinX!;
 
-    // if _dataMinX is not within buffer1, we need to add to the data
+    final double mustMin = event.visibleMinX! - xWindowSize * 0.5;
+    final double mustMax = math.min(event.visibleMaxX! + xWindowSize * 0.5,
+        DateTime.now().millisecondsSinceEpoch.toDouble());
+    final double capMin = event.visibleMinX! - xWindowSize * 2.0;
+    final double capMax = event.visibleMaxX! + xWindowSize * 2.0;
 
-    final buffer1Min = event.visibleMinX! - xWindowSize * 0.5;
-    // ignore: unused_local_variable
-    final buffer1Max = event.visibleMinX!;
-
-    if (_dataMinX > buffer1Max) {
+    while (_dataMinX < mustMin) {
       // fetch one time window of data
-      final start = DateTime.fromMillisecondsSinceEpoch(_dataMinX.toInt())
-          .subtract(widget.config.timeWindowMinutes);
-      //print(
-      //    "fetching data from $start to ${DateTime.fromMillisecondsSinceEpoch(_dataMinX.toInt())}");
-      final data = await _queryData(DateTimeRange(
-        start: start,
-        end: DateTime.fromMillisecondsSinceEpoch(_dataMinX.toInt()),
-      ));
-      _dataMinX = start.millisecondsSinceEpoch.toInt();
-
+      final end = DateTime.fromMillisecondsSinceEpoch(_dataMinX.toInt());
+      final start = end.subtract(widget.config.timeWindowMinutes);
+      _dataMinX = start.millisecondsSinceEpoch
+          .toInt(); // we only want to query the data once, so if we get subsequent onpanupdate we don't query the same data again
+      final data = await _queryData(DateTimeRange(start: start, end: end));
       _addData(data);
+    }
+
+    while (_dataMaxX < mustMax) {
+      // fetch one time window of data
+      final start = DateTime.fromMillisecondsSinceEpoch(_dataMaxX.toInt());
+      final end = start.add(widget.config.timeWindowMinutes);
+      _dataMaxX = end.millisecondsSinceEpoch.toInt();
+      final data = await _queryData(DateTimeRange(start: start, end: end));
+      _addData(data);
+    }
+
+    // --- Prune to stay within the 500% cap ---
+    bool removed = false;
+    _graph.removeWhere((row) {
+      final x = row['x'];
+      final out = (x < capMin) || (x > capMax);
+      if (out) removed = true;
+      return out;
+    });
+
+    // Keep trackers consistent with pruning
+    if (removed) {
+      if (_dataMinX < capMin) _dataMinX = capMin.toInt();
+      if (_dataMaxX > capMax) _dataMaxX = capMax.toInt();
     }
   }
 
