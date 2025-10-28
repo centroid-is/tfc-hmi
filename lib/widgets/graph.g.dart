@@ -50,7 +50,7 @@ GraphConfig _$GraphConfigFromJson(Map<String, dynamic> json) => GraphConfig(
           ? null
           : Duration(microseconds: (json['xSpan'] as num).toInt()),
       pan: json['pan'] as bool? ?? true,
-      width: (json['width'] as num?)?.toInt() ?? 2,
+      width: (json['width'] as num?)?.toDouble() ?? 2,
       zoom: json['zoom'] as bool? ?? true,
     );
 

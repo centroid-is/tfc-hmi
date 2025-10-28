@@ -1,14 +1,17 @@
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:cristalyse/cristalyse.dart' as cs;
 import 'package:flutter/material.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:tfc/converter/duration_converter.dart';
+import 'package:tfc/core/state_man.dart';
 
 import 'common.dart';
 import '../../widgets/graph.dart';
 import '../../providers/database.dart';
+import '../../providers/state_man.dart';
 import '../../core/database.dart';
 import '../../core/database_drift.dart' as drift_db;
 
@@ -396,6 +399,8 @@ class _GraphAssetState extends ConsumerState<GraphAsset> {
   final _rtThrottleBuffer = List<Map<String, dynamic>>.empty(growable: true);
   Timer? _rtThrottleTimer;
   static const _rtThrottleInterval = Duration(seconds: 1);
+  StateMan? _stateMan;
+  late cs.ChartTheme _chartTheme;
 
   _GraphAssetState()
       : _dataMinX = 0,
@@ -404,6 +409,7 @@ class _GraphAssetState extends ConsumerState<GraphAsset> {
   @override
   void initState() {
     super.initState();
+    _chartTheme = ref.read(chartThemeNotifierProvider);
     _graph = Graph(
         config: widget.config.toGraphConfig(),
         data: [],
@@ -416,19 +422,46 @@ class _GraphAssetState extends ConsumerState<GraphAsset> {
             setState(() {});
           }
         });
+    _graph.theme(_chartTheme);
+    _init();
+  }
 
-    ref.read(databaseProvider.future).then((db) async {
-      if (!mounted) return;
-      _db = db;
-      final start =
-          // 300% of the time window, refer to panUpdate method for more details
-          DateTime.now().subtract(widget.config.timeWindowMinutes * 3);
-      final end = DateTime.now();
-      _dataMinX = start.millisecondsSinceEpoch.toInt();
-      _dataMaxX = end.millisecondsSinceEpoch.toInt();
-      _addData(await _queryData(DateTimeRange(start: start, end: end)));
-      _initRealtimeUpdates();
-    });
+  Future<void> _init() async {
+    _graph = Graph(
+        config: widget.config.toGraphConfig(),
+        data: [],
+        onPanUpdate: _onPanUpdate,
+        onPanEnd: _onPanUpdate,
+        onNowPressed: _onNowPressed,
+        onSetDatePressed: _disableRealtimeUpdates,
+        redraw: () {
+          if (mounted) {
+            setState(() {});
+          }
+        });
+    _graph.theme(ref.read(chartThemeNotifierProvider));
+    _stateMan = await ref.read(stateManProvider.future);
+    _db = await ref.read(databaseProvider.future);
+    if (!mounted) return;
+    final start =
+        // 300% of the time window, refer to panUpdate method for more details
+        DateTime.now().subtract(widget.config.timeWindowMinutes * 3);
+    final end = DateTime.now();
+    _dataMinX = start.millisecondsSinceEpoch.toInt();
+    _dataMaxX = end.millisecondsSinceEpoch.toInt();
+    _addData(await _queryData(DateTimeRange(start: start, end: end)));
+    _realTimeActive = true;
+    _initRealtimeUpdates();
+  }
+
+  @override
+  void didUpdateWidget(GraphAsset oldWidget) {
+    // Todo this is hacky
+    // Needed when stateman substitutions change, resolve key
+    super.didUpdateWidget(oldWidget);
+    _chartTheme = ref.read(chartThemeNotifierProvider);
+    _cleanup();
+    _init();
   }
 
   @override
@@ -445,7 +478,8 @@ class _GraphAssetState extends ConsumerState<GraphAsset> {
 
     Future<StreamSubscription<String>> initSeries(
         GraphSeriesConfig series, bool isPrimary) async {
-      final tableName = series.key;
+      final tableName = _stateMan!.resolveKey(
+          series.key); // would be nice if key would know how to resolve itself
       final channelName = await db.db.enableNotificationChannel(tableName);
       final subscription = db.db.listenToChannel(channelName).listen((payload) {
         drift_db.NotificationData notification =
@@ -485,6 +519,8 @@ class _GraphAssetState extends ConsumerState<GraphAsset> {
       if (_rtThrottleBuffer.isNotEmpty && mounted) {
         _addData(_rtThrottleBuffer);
         _rtThrottleBuffer.clear();
+        // not strictly correct, but yeah
+        _graph.panForward(DateTime.now().millisecondsSinceEpoch.toDouble());
       }
     });
 
@@ -556,7 +592,8 @@ class _GraphAssetState extends ConsumerState<GraphAsset> {
     for (final entry in keys.entries) {
       final axisKey = entry.key;
       for (final series in entry.value) {
-        final data = await db.queryTimeseriesData(series.key, range.end,
+        final tableName = _stateMan!.resolveKey(series.key);
+        final data = await db.queryTimeseriesData(tableName, range.end,
             from: range.start);
         for (final e in data) {
           dynamic value = e.value;
@@ -672,6 +709,10 @@ class _GraphAssetState extends ConsumerState<GraphAsset> {
   @override
   void dispose() {
     super.dispose();
+    _cleanup();
+  }
+
+  void _cleanup() {
     for (final subscription in _realtimeSubscriptions) {
       subscription.cancel();
     }

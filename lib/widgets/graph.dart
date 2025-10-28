@@ -88,7 +88,7 @@ class GraphConfig {
 
   // Stroke or bar width or point size
   @JsonKey(defaultValue: 2)
-  final int width;
+  final double width;
 
   /// Fallback palette for series without explicit color
   static const List<Color> colors = [
@@ -292,6 +292,8 @@ class Graph {
             tickConfig: cs.TickConfig(simpleLinear: true),
             title: config.xAxis.title);
       }
+    } else if (config.type == GraphType.barTimeseries) {
+      chart.scaleXOrdinal(labels: xLabels, title: config.xAxis.title);
     }
   }
 
@@ -340,20 +342,21 @@ class Graph {
       switch (config.type) {
         case GraphType.line:
         case GraphType.timeseries:
-          chart.geomLine(
-              strokeWidth: config.width.toDouble(), yAxis: yaxis, alpha: 1.0);
+          chart.geomLine(strokeWidth: config.width, yAxis: yaxis, alpha: 1.0);
           break;
         case GraphType.bar:
         case GraphType.barTimeseries:
           chart.geomBar(
-              width: config.width.toDouble(), yAxis: yaxis, alpha: 1.0);
+              width: config.width,
+              yAxis: yaxis,
+              alpha: 1.0,
+              style: cs.BarStyle.grouped);
           break;
         case GraphType.scatter:
-          chart.geomPoint(
-              size: config.width.toDouble(), yAxis: yaxis, alpha: 1.0);
+          chart.geomPoint(size: config.width, yAxis: yaxis, alpha: 1.0);
           break;
         case GraphType.pie:
-          chart.geomPie(strokeWidth: config.width.toDouble());
+          chart.geomPie(strokeWidth: config.width);
           break;
       }
     }

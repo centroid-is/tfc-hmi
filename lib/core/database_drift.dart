@@ -730,12 +730,20 @@ class AppDatabase extends _$AppDatabase {
   DROP TRIGGER IF EXISTS "${tableName}_notify" ON "$tableName";
   ''');
 
-    await customStatement('''
+    try {
+      await customStatement('''
   CREATE TRIGGER "${tableName}_notify"
   AFTER INSERT OR UPDATE OR DELETE ON "$tableName"
   FOR EACH ROW
   EXECUTE FUNCTION "notify_${tableName}_change"();
   ''');
+    } catch (e) {
+      // really dont care if the trigger already exists
+      if (e.toString().contains('already exists')) {
+        return channelName;
+      }
+      rethrow;
+    }
     return channelName;
   }
 
