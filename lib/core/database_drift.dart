@@ -2,6 +2,7 @@
 // ========================  DRIFT / DATABASE LAYER  ==========================
 // ============================================================================
 
+import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
 
@@ -111,6 +112,7 @@ class AppDatabase extends _$AppDatabase {
   final DatabaseConfig config;
   AppDatabase._(this.config, QueryExecutor executor) : super(executor);
   final logger = Logger();
+  pg.Connection? _notificationConnection;
 
   @override
   int get schemaVersion => 2;
@@ -145,6 +147,27 @@ class AppDatabase extends _$AppDatabase {
 
   Future<void> open() async {
     await executor.ensureOpen(this);
+  }
+
+  /// Get or create the dedicated channel connection
+  Future<pg.Connection?> _createNotificationConnection() async {
+    if (config.postgres == null) {
+      return null;
+    }
+    logger.i('Creating dedicated connection for LISTEN/NOTIFY channels');
+    return await pg.Connection.open(
+      config.postgres!,
+      settings: pg.ConnectionSettings(
+        sslMode: config.sslMode,
+      ),
+    ).timeout(
+      const Duration(seconds: 10),
+      onTimeout: () {
+        logger.e('Timeout creating notification connection');
+        throw TimeoutException(
+            'Failed to create notification connection after 10 seconds');
+      },
+    );
   }
 
   /// Factory: creates an [AppDatabase], in the current isolate.
@@ -519,6 +542,67 @@ class AppDatabase extends _$AppDatabase {
     return result;
   }
 
+  Future<List<QueryRow>> tableQueryMultiple(
+    // table name -> columns
+    Map<String, List<String>> tableNames, {
+    String? where,
+    List<dynamic>? whereArgs,
+    String? orderBy,
+  }) async {
+    if (tableNames.isEmpty) {
+      return [];
+    }
+    //select coalesce("cooler.temp.1".time, "cooler.temp.2".time, "cooler.compressor.on".time) as time, "cooler.temp.1".value as value1, "cooler.temp.2".value as value2, "cooler.compressor.on".value as compOnBaby from "cooler.temp.2" full outer join "cooler.temp.1" on ( "cooler.temp.1".time = "cooler.temp.2".time ) full outer join "cooler.compressor.on" on ("cooler.compressor.on".time = "cooler.temp.1".time) where "cooler.compressor.on".value = true limit 100;
+    String sql =
+        'WITH data AS (select coalesce(${tableNames.keys.map((e) => '"$e".time').join(', ')}) as time, ';
+    final columns = [];
+    for (final table in tableNames.entries) {
+      for (final column in table.value) {
+        if (column == 'time') {
+          continue;
+        }
+        if (column == 'value') {
+          columns.add('"${table.key}".$column as "${table.key}"');
+        } else {
+          columns.add('"${table.key}".$column as "${table.key}.$column"');
+        }
+      }
+    }
+    sql += columns.join(', ');
+
+    final master = tableNames.keys.first;
+    if (where != null) {
+      sql += ' from (select * from "$master" where $where) as "$master" ';
+    } else {
+      sql += ' from "$master" ';
+    }
+    for (final table in tableNames.entries.where((e) => e.key != master)) {
+      if (where != null) {
+        sql +=
+            ' full outer join (select * from "${table.key}" where $where) as "${table.key}" using (time) ';
+      } else {
+        sql += ' full outer join "${table.key}" using (time) ';
+      }
+    }
+    sql += ' ) SELECT * FROM data ';
+    if (where != null) {
+      sql += ' where $where ';
+    }
+    if (orderBy != null) {
+      sql += ' order by $orderBy ';
+    }
+    final start = Stopwatch()..start();
+    print('⏱️  tableQueryMultiple: SQL: $sql');
+    final result = await customSelect(sql,
+            variables: whereArgs != null
+                ? [for (var arg in whereArgs) Variable(arg)]
+                : [])
+        .get();
+    print(
+        '⏱️  tableQueryMultiple: Query execution took ${start.elapsedMilliseconds}ms');
+    return result;
+  }
+
   /// TODO: SQLITE
   Future<void> updateRetentionPolicy(
       String tableName, RetentionPolicy retention) async {
@@ -570,6 +654,97 @@ class AppDatabase extends _$AppDatabase {
       dropAfter: parsePostgresInterval(dropAfter)!,
       scheduleInterval: parsePostgresInterval(scheduleInterval),
     );
+  }
+
+  /// Listen to table changes via PostgreSQL NOTIFY
+  Stream<String> listenToChannel(String channelName) {
+    late StreamController<String> controller;
+    StreamSubscription? channelSubscription;
+
+    controller = StreamController<String>(
+      onListen: () async {
+        try {
+          _notificationConnection ??= await _createNotificationConnection();
+
+          if (_notificationConnection == null) {
+            logger.w('Cannot listen to channel: not using PostgreSQL');
+            await controller.close();
+            return;
+          }
+
+          logger.i('Starting to listen on channel: $channelName');
+          final channel = _notificationConnection!.channels[channelName];
+
+          channelSubscription = channel.listen(
+            (payload) {
+              controller.add(payload);
+            },
+            onError: (error) {
+              logger.w('Notification channel error: $error');
+              controller.addError(error);
+            },
+            onDone: () {
+              logger.i('Channel stream ended for: $channelName');
+              controller.close();
+            },
+          );
+        } catch (e) {
+          logger.w('Error setting up notification listener: $e');
+          controller.addError(e);
+          await controller.close();
+        }
+      },
+      onCancel: () async {
+        logger.i('Cancelling notification listener for: $channelName');
+        await channelSubscription?.cancel();
+      },
+    );
+
+    return controller.stream;
+  }
+
+  /// Enable notifications for a table
+  Future<String> enableNotificationChannel(String tableName) async {
+    final channelName = 'table_${tableName}_changes';
+
+    await customStatement('''
+    CREATE OR REPLACE FUNCTION "notify_${tableName}_change"()
+    RETURNS TRIGGER AS \$\$
+    BEGIN
+      PERFORM pg_notify(
+        '$channelName',
+        json_build_object(
+          'action', TG_OP,
+          'data', CASE
+            WHEN TG_OP = 'DELETE' THEN row_to_json(OLD)
+            ELSE row_to_json(NEW)
+          END
+        )::text
+      );
+      RETURN COALESCE(NEW, OLD);
+    END;
+    \$\$ LANGUAGE plpgsql;
+  ''');
+
+    await customStatement('''
+  DROP TRIGGER IF EXISTS "${tableName}_notify" ON "$tableName";
+  ''');
+
+    try {
+      await customStatement('''
+  CREATE TRIGGER "${tableName}_notify"
+  AFTER INSERT OR UPDATE OR DELETE ON "$tableName"
+  FOR EACH ROW
+  EXECUTE FUNCTION "notify_${tableName}_change"();
+  ''');
+    } catch (e) {
+      // really dont care if the trigger already exists
+      if (e.toString().contains('already exists')) {
+        return channelName;
+      }
+      rethrow;
+    }
+    return channelName;
   }
 
   static Duration? parsePostgresInterval(String? interval) {
@@ -637,6 +812,12 @@ class AppDatabase extends _$AppDatabase {
     }
 
     throw FormatException('Unable to parse PostgreSQL interval: $interval');
+  }
+
+  @override
+  Future<void> close() async {
+    await _notificationConnection?.close();
+    await super.close();
   }
 
   /// Get table statistics for performance analysis
@@ -789,5 +970,26 @@ class AppDatabase extends _$AppDatabase {
     } catch (e) {
       print('❌ Raw connection test failed: $e');
     }
+  }
+}
+
+enum NotificationAction {
+  insert,
+  update,
+  delete,
+}
+
+class NotificationData {
+  final NotificationAction action;
+  final Map<String, dynamic> data;
+
+  NotificationData({required this.action, required this.data});
+
+  factory NotificationData.fromJson(String json) {
+    final data = jsonDecode(json);
+    return NotificationData(
+        action: NotificationAction.values
+            .byName((data['action'] as String).toLowerCase()),
+        data: data['data'] as Map<String, dynamic>);
   }
 }

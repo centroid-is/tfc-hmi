@@ -161,6 +161,7 @@ class Database {
   AppDatabase db;
   Map<String, RetentionPolicy> retentionPolicies = {};
   static final Logger logger = Logger();
+  final Map<String, Completer<void>> _tableCreationLocks = {};
 
   Future<void> open() async {
     try {
@@ -186,6 +187,11 @@ class Database {
   /// Insert a time-series data point
   Future<void> insertTimeseriesData(
       String tableName, DateTime time, dynamic value) async {
+    // Wait if another thread is already creating this table
+    while (_tableCreationLocks.containsKey(tableName)) {
+      await _tableCreationLocks[tableName]!.future;
+    }
+
     Future<void> insert() async {
       if (value is Map<String, dynamic>) {
         await db
@@ -206,6 +212,36 @@ class Database {
         rethrow;
       }
     }
+  }
+
+  Future<Map<String, List<TimeseriesData<dynamic>>>>
+      queryTimeseriesDataMultiple(List<String> tableNames, DateTime to,
+          {String? orderBy = 'time ASC', DateTime? from}) async {
+    Map<String, List<String>> tapleMap = {};
+    for (final tableName in tableNames) {
+      tapleMap[tableName] = ['value', 'time'];
+    }
+    final where = from != null
+        ? r'time >= $1::timestamptz AND time <= $2::timestamptz'
+        : r'time >= $1::timestamptz';
+    final whereArgs = from != null ? [from, to] : [to];
+    final rows = await db.tableQueryMultiple(tapleMap,
+        where: where, whereArgs: whereArgs, orderBy: orderBy);
+    final map = Map<String, List<TimeseriesData<dynamic>>>();
+    for (final row in rows) {
+      final time = row.data['time'];
+      if (time == null) continue;
+      final d = row.data;
+      final nonNullTuples =
+          d.entries.where((e) => e.value != null && e.key != 'time').toList();
+      for (final tuple in nonNullTuples) {
+        if (!map.containsKey(tuple.key)) {
+          map[tuple.key] = [];
+        }
+        map[tuple.key]!.add(TimeseriesData(tuple.value, time));
+      }
+    }
+    return map;
   }
 
   /// Query time-series data with performance analysis
@@ -266,6 +302,76 @@ class Database {
     }
 
     throw DatabaseException('Time column not found in table $tableName');
+  }
+
+  /// columns: {tableName: columnName}
+  Future<void> createView(String viewName, Map<String, String> columns) async {
+    if (columns.isEmpty) {
+      throw DatabaseException('createView("$viewName"): columns map is empty');
+    }
+
+    // Quote identifiers safely
+    String q(String ident) => '"${ident.replaceAll('"', '""')}"';
+
+    final qView = q(viewName);
+    final tables = columns.keys.toList();
+
+    // Build alias map t0, t1, ...
+    final aliasFor = <String, String>{};
+    for (var i = 0; i < tables.length; i++) {
+      aliasFor[tables[i]] = 't$i';
+    }
+
+    // CTE: all distinct timestamps across all tables
+    final allTimes =
+        tables.map((t) => 'SELECT time FROM ${q(t)}').join('\nUNION\n');
+
+    // SELECT list: time + requested columns, aliased as table_col
+    final selectCols = <String>['at.time AS "time"'];
+    for (final t in tables) {
+      final alias = aliasFor[t]!;
+      final col = columns[t]!;
+      final outAlias = '${t}_${col}';
+      selectCols.add('$alias.${q(col)} AS ${q(outAlias)}');
+    }
+
+    // LEFT JOIN each table to the all_times spine
+    final joins = tables.map((t) {
+      final alias = aliasFor[t]!;
+      return 'LEFT JOIN ${q(t)} $alias ON $alias.time = at.time';
+    }).join('\n');
+
+    final isPg = db.postgres; // PgDatabase vs. Native (sqlite)
+    final createKeyword = isPg ? 'MATERIALIZED VIEW' : 'VIEW';
+    final dropStmt = isPg
+        ? 'DROP MATERIALIZED VIEW IF EXISTS $qView CASCADE;'
+        : 'DROP VIEW IF EXISTS $qView CASCADE;';
+
+    final createSql = '''
+CREATE $createKeyword $qView AS
+WITH all_times AS (
+  $allTimes
+)
+SELECT
+  ${selectCols.join(',\n  ')}
+FROM all_times at
+$joins
+ORDER BY at.time;
+''';
+
+    // Execute (separate statements for compatibility)
+    await db.customStatement(dropStmt);
+    await db.customStatement(createSql);
+
+    // Postgres-only: add a UNIQUE index on time to allow REFRESH CONCURRENTLY
+    if (isPg) {
+      final idxName = ('${viewName}_time_uidx'
+              .toLowerCase()
+              .replaceAll(RegExp(r'[^a-z0-9_]+'), '_'))
+          .replaceAll(RegExp(r'_+'), '_');
+      await db.customStatement(
+          'CREATE UNIQUE INDEX IF NOT EXISTS $idxName ON $qView ("time");');
+    }
   }
 
   /// Count time-series data points in regular time intervals
@@ -392,18 +498,29 @@ class Database {
   /// Returns true if the table was created successfully, false if it already exists or policy is missing
   Future<bool> _tryToCreateTimeseriesTable(
       String tableName, dynamic value) async {
-    // Check if table exists
+    // Check again after waiting - table might have been created
     if (await db.tableExists(tableName)) {
-      return false;
+      return true;
     }
+
     if (!retentionPolicies.containsKey(tableName)) {
       stderr.writeln(
           'Table $tableName does not exist, and no retention policy is set');
       return false;
     }
 
-    await _createTimeseriesTable(
-        tableName, retentionPolicies[tableName]!, value);
+    // Acquire lock for this table
+    final completer = Completer<void>();
+    _tableCreationLocks[tableName] = completer;
+
+    try {
+      await _createTimeseriesTable(
+          tableName, retentionPolicies[tableName]!, value);
+    } finally {
+      // Release lock
+      _tableCreationLocks.remove(tableName);
+      completer.complete();
+    }
     return true;
   }
 

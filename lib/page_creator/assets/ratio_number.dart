@@ -321,18 +321,24 @@ class _RatioNumberWidgetState extends ConsumerState<RatioNumberWidget> {
       builder: (context) => FutureBuilder<Database?>(
         future: ref.read(databaseProvider.future),
         builder: (context, snapshot) {
+          final size = MediaQuery.of(context).size;
+
           if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Dialog(
-              child: Padding(
-                padding: EdgeInsets.all(16),
-                child: Center(child: CircularProgressIndicator()),
+            return Dialog(
+              child: Container(
+                width: size.width * 0.8,
+                height: size.height * 0.8,
+                padding: const EdgeInsets.all(16),
+                child: const Center(child: CircularProgressIndicator()),
               ),
             );
           }
 
           if (snapshot.hasError || !snapshot.hasData || snapshot.data == null) {
             return Dialog(
-              child: Padding(
+              child: Container(
+                width: size.width * 0.8,
+                height: size.height * 0.8,
                 padding: const EdgeInsets.all(16),
                 child:
                     Text('Database not found: ${snapshot.error ?? "No data"}'),
@@ -348,17 +354,21 @@ class _RatioNumberWidgetState extends ConsumerState<RatioNumberWidget> {
             ]),
             builder: (context, queueSnapshot) {
               if (queueSnapshot.connectionState == ConnectionState.waiting) {
-                return const Dialog(
-                  child: Padding(
-                    padding: EdgeInsets.all(16),
-                    child: Center(child: CircularProgressIndicator()),
+                return Dialog(
+                  child: Container(
+                    width: size.width * 0.8,
+                    height: size.height * 0.8,
+                    padding: const EdgeInsets.all(16),
+                    child: const Center(child: CircularProgressIndicator()),
                   ),
                 );
               }
 
               if (queueSnapshot.hasError) {
                 return Dialog(
-                  child: Padding(
+                  child: Container(
+                    width: size.width * 0.8,
+                    height: size.height * 0.8,
                     padding: const EdgeInsets.all(16),
                     child: Text('Error loading data: ${queueSnapshot.error}'),
                   ),
@@ -371,8 +381,8 @@ class _RatioNumberWidgetState extends ConsumerState<RatioNumberWidget> {
 
               return Dialog(
                 child: Container(
-                  width: 800,
-                  height: 600,
+                  width: size.width * 0.8,
+                  height: size.height * 0.8,
                   padding: const EdgeInsets.all(16),
                   child: Column(
                     children: [
@@ -708,46 +718,35 @@ class RatioBarChart extends ConsumerWidget {
     final key1Data = _aggregateDataByBucket(key1Queue, buckets);
     final key2Data = _aggregateDataByBucket(key2Queue, buckets);
 
-    final graphData = <Map<GraphDataConfig, List<List<double>>>>[];
-
-    // Create data for key1
-    final key1GraphData = <List<double>>[];
+    final data = <Map<String, dynamic>>[];
     for (final entry in key1Data.entries) {
-      key1GraphData.add([
-        entry.key.millisecondsSinceEpoch.toDouble(),
-        entry.value.toDouble(),
-      ]);
+      data.add({
+        'x': entry.key.millisecondsSinceEpoch.toDouble(),
+        'y': entry.value.toDouble(),
+        's': config.getDisplayLabel(config.key1),
+      });
     }
-    graphData.add({
-      GraphDataConfig(
-        label: config.getDisplayLabel(config.key1),
-        color: Colors.blue,
-      ): key1GraphData,
-    });
-
-    // Create data for key2
-    final key2GraphData = <List<double>>[];
     for (final entry in key2Data.entries) {
-      key2GraphData.add([
-        entry.key.millisecondsSinceEpoch.toDouble(),
-        entry.value.toDouble(),
-      ]);
+      data.add({
+        'x': entry.key.millisecondsSinceEpoch.toDouble(),
+        'y': entry.value.toDouble(),
+        's': config.getDisplayLabel(config.key2),
+      });
     }
-    graphData.add({
-      GraphDataConfig(
-        label: config.getDisplayLabel(config.key2),
-        color: Colors.red,
-      ): key2GraphData,
-    });
 
     return Graph(
       config: GraphConfig(
         type: GraphType.barTimeseries,
         xAxis: GraphAxisConfig(unit: ''),
         yAxis: GraphAxisConfig(unit: 'Count'),
+        pan: false,
+        width: 0.5,
       ),
-      data: graphData,
-    );
+      data: data,
+      showButtons: false,
+      chartTheme: ref.watch(chartThemeNotifierProvider),
+      redraw: () {},
+    ).build(context);
   }
 
   List<DateTime> _createTimeBuckets() {

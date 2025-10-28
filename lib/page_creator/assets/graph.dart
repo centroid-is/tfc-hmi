@@ -1,12 +1,19 @@
+import 'dart:async';
+import 'dart:math' as math;
+
+import 'package:cristalyse/cristalyse.dart' as cs;
 import 'package:flutter/material.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:rxdart/rxdart.dart';
 import 'package:tfc/converter/duration_converter.dart';
+import 'package:tfc/core/state_man.dart';
 
 import 'common.dart';
-import '../../providers/collector.dart';
 import '../../widgets/graph.dart';
+import '../../providers/database.dart';
+import '../../providers/state_man.dart';
+import '../../core/database.dart';
+import '../../core/database_drift.dart' as drift_db;
 
 part 'graph.g.dart';
 
@@ -19,6 +26,8 @@ class GraphSeriesConfig {
     required this.key,
     required this.label,
   });
+
+  String get legend => label.isNotEmpty ? label : key;
 
   factory GraphSeriesConfig.fromJson(Map<String, dynamic> json) =>
       _$GraphSeriesConfigFromJson(json);
@@ -77,6 +86,14 @@ class GraphAssetConfig extends BaseAsset {
 
   @override
   Widget configure(BuildContext context) => GraphContentConfig(config: this);
+
+  GraphConfig toGraphConfig() => GraphConfig(
+        type: graphType,
+        xAxis: xAxis,
+        yAxis: yAxis,
+        yAxis2: yAxis2,
+        xSpan: timeWindowMinutes,
+      );
 }
 
 class GraphContentConfig extends StatefulWidget {
@@ -90,8 +107,9 @@ class GraphContentConfig extends StatefulWidget {
 class GraphContentConfigState extends State<GraphContentConfig> {
   @override
   Widget build(BuildContext context) {
-    return ConstrainedBox(
-      constraints: const BoxConstraints(maxHeight: 900),
+    return SizedBox(
+      height:
+          MediaQuery.of(context).size.height * 0.8, // Use 80% of screen height
       child: SingleChildScrollView(
         child: Padding(
           padding: const EdgeInsets.all(16),
@@ -132,6 +150,7 @@ class GraphContentConfigState extends State<GraphContentConfig> {
                 'X Axis',
                 widget.config.xAxis,
                 (updated) => setState(() => widget.config.xAxis = updated!),
+                showBoolean: false,
               ),
               const SizedBox(height: 16),
               _buildAxisConfig(
@@ -256,21 +275,38 @@ class GraphContentConfigState extends State<GraphContentConfig> {
     );
   }
 
-  Widget _buildAxisConfig(
-    String label,
-    GraphAxisConfig? axis,
-    ValueChanged<GraphAxisConfig?> onChanged,
-  ) {
+  Widget _buildAxisConfig(String label, GraphAxisConfig? axis,
+      ValueChanged<GraphAxisConfig?> onChanged,
+      {bool showBoolean = true}) {
     axis ??= GraphAxisConfig(unit: '');
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(label, style: const TextStyle(fontWeight: FontWeight.bold)),
         const SizedBox(height: 8),
-        // Use Wrap for better responsive behavior
-        Wrap(
+        Row(
           spacing: 8,
-          runSpacing: 8,
+          children: [
+            Expanded(
+              child: TextFormField(
+                initialValue: axis.title,
+                decoration: const InputDecoration(labelText: 'Title'),
+                onChanged: (value) {
+                  onChanged(GraphAxisConfig(
+                    title: value,
+                    unit: axis!.unit,
+                    min: axis.min,
+                    max: axis.max,
+                    boolean: axis.boolean,
+                  ));
+                },
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 16),
+        Row(
+          spacing: 8,
           children: [
             SizedBox(
               width: 120,
@@ -282,7 +318,7 @@ class GraphContentConfigState extends State<GraphContentConfig> {
                     unit: value,
                     min: axis!.min,
                     max: axis.max,
-                    step: axis.step,
+                    boolean: axis.boolean,
                   ));
                 },
               ),
@@ -298,7 +334,7 @@ class GraphContentConfigState extends State<GraphContentConfig> {
                     unit: axis!.unit,
                     min: double.tryParse(value),
                     max: axis.max,
-                    step: axis.step,
+                    boolean: axis.boolean,
                   ));
                 },
               ),
@@ -314,29 +350,31 @@ class GraphContentConfigState extends State<GraphContentConfig> {
                     unit: axis!.unit,
                     min: axis.min,
                     max: double.tryParse(value),
-                    step: axis.step,
-                  ));
-                },
-              ),
-            ),
-            SizedBox(
-              width: 120,
-              child: TextFormField(
-                initialValue: axis.step?.toString() ?? '',
-                decoration: const InputDecoration(labelText: 'Step'),
-                keyboardType: TextInputType.number,
-                onChanged: (value) {
-                  onChanged(GraphAxisConfig(
-                    unit: axis!.unit,
-                    min: axis.min,
-                    max: axis.max,
-                    step: double.tryParse(value),
+                    boolean: axis.boolean,
                   ));
                 },
               ),
             ),
           ],
         ),
+        if (showBoolean) const SizedBox(height: 8),
+        if (showBoolean)
+          Row(
+            children: [
+              const Text('Boolean'),
+              const SizedBox(width: 16),
+              Switch(
+                value: axis.boolean,
+                onChanged: (value) {
+                  onChanged(GraphAxisConfig(
+                      unit: axis!.unit,
+                      min: axis.min,
+                      max: axis.max,
+                      boolean: value));
+                },
+              ),
+            ],
+          ),
       ],
     );
   }
@@ -352,187 +390,332 @@ class GraphAsset extends ConsumerStatefulWidget {
 }
 
 class _GraphAssetState extends ConsumerState<GraphAsset> {
-  bool _isRealTimePaused = false;
-  DateTime? _pausedAt;
-  List<List<dynamic>>? _pausedData;
+  late Graph _graph;
+  int _dataMinX;
+  int _dataMaxX;
+  Database? _db;
+  bool _realTimeActive = true;
+  final List<StreamSubscription<String>> _realtimeSubscriptions = [];
+  final _rtThrottleBuffer = List<Map<String, dynamic>>.empty(growable: true);
+  Timer? _rtThrottleTimer;
+  static const _rtThrottleInterval = Duration(seconds: 1);
+  StateMan? _stateMan;
+  late cs.ChartTheme _chartTheme;
+
+  _GraphAssetState()
+      : _dataMinX = 0,
+        _dataMaxX = 0;
 
   @override
-  Widget build(BuildContext context) {
-    final collectorAsync = ref.watch(collectorProvider);
-
-    return collectorAsync.when(
-      data: (collector) {
-        if (collector == null) {
-          return const Center(child: Text('No collector available'));
-        }
-
-        // Gather all keys from both series lists
-        final allSeries = [
-          ...widget.config.primarySeries,
-          ...widget.config.secondarySeries,
-        ];
-
-        // For each key, get a stream of timeseries data
-        final streams = allSeries.map((series) {
-          return collector.collectStream(
-            series.key,
-            // TODO: make this as time window, when panning is implemented better
-            since: const Duration(days: 2),
-          );
-        }).toList();
-
-        return StreamBuilder<List<List<dynamic>>>(
-          stream: _isRealTimePaused ? null : Rx.combineLatestList(streams),
-          builder: (context, snapshot) {
-            List<List<dynamic>> data;
-
-            if (_isRealTimePaused && _pausedData != null) {
-              // Use paused data when real-time is paused
-              data = _pausedData!;
-            } else if (snapshot.hasData) {
-              // Use live data and store it for potential pause
-              data = snapshot.data!;
-              _pausedData = data;
-            } else {
-              return const Center(child: CircularProgressIndicator());
-            }
-
-            // Convert to the format expected by the Graph widget
-            final graphData = <Map<GraphDataConfig, List<List<double>>>>[];
-
-            for (int i = 0; i < allSeries.length; i++) {
-              final series = allSeries[i];
-              final seriesData = data[i];
-              final points = <List<double>>[];
-
-              for (final sample in seriesData) {
-                // Expecting TimeseriesData<dynamic> with .value and .time
-                final value = sample.value;
-                final time = sample.time.millisecondsSinceEpoch.toDouble();
-                double? y;
-                if (value is num) {
-                  y = value.toDouble();
-                } else if (value is Map && value['value'] is num) {
-                  y = (value['value'] as num).toDouble();
-                }
-                if (y != null) {
-                  points.add([time, y]);
-                }
-              }
-
-              graphData.add({
-                GraphDataConfig(
-                  label: series.label,
-                  mainAxis: widget.config.primarySeries.contains(series),
-                  color: GraphConfig.colors[i],
-                ): points,
-              });
-            }
-
-            return Stack(
-              children: [
-                // Wrap the graph in a GestureDetector for interaction detection
-                GestureDetector(
-                  onTapDown: (_) => _pauseRealTime(),
-                  onPanStart: (_) => _pauseRealTime(),
-                  child: Graph(
-                    config: GraphConfig(
-                      type: widget.config.graphType,
-                      xAxis: widget.config.xAxis,
-                      yAxis: widget.config.yAxis,
-                      yAxis2: widget.config.yAxis2,
-                      xSpan: widget.config.timeWindowMinutes,
-                    ),
-                    data: graphData,
-                    showDate: _isRealTimePaused,
-                  ),
-                ),
-                // Resume button
-                if (_isRealTimePaused)
-                  Positioned(
-                    top: 16,
-                    right: 16,
-                    child: _buildResumeButton(),
-                  ),
-                // Date indicator when paused
-                if (_isRealTimePaused && _pausedAt != null)
-                  Positioned(
-                    bottom: 16,
-                    right: 16,
-                    child: _buildDateIndicator(),
-                  ),
-              ],
-            );
-          },
-        );
-      },
-      loading: () => const Center(child: CircularProgressIndicator()),
-      error: (e, st) => Center(child: Text('Error: $e')),
-    );
+  void initState() {
+    super.initState();
+    _chartTheme = ref.read(chartThemeNotifierProvider);
+    _graph = Graph(
+        config: widget.config.toGraphConfig(),
+        data: [],
+        onPanUpdate: _onPanUpdate,
+        onPanEnd: _onPanUpdate,
+        onNowPressed: _onNowPressed,
+        onSetDatePressed: _disableRealtimeUpdates,
+        redraw: () {
+          if (mounted) {
+            setState(() {});
+          }
+        });
+    _graph.theme(_chartTheme);
+    _init();
   }
 
-  void _pauseRealTime() {
-    if (!_isRealTimePaused) {
-      setState(() {
-        _isRealTimePaused = true;
-        _pausedAt = DateTime.now();
+  Future<void> _init() async {
+    _graph = Graph(
+        config: widget.config.toGraphConfig(),
+        data: [],
+        onPanUpdate: _onPanUpdate,
+        onPanEnd: _onPanUpdate,
+        onNowPressed: _onNowPressed,
+        onSetDatePressed: _disableRealtimeUpdates,
+        redraw: () {
+          if (mounted) {
+            setState(() {});
+          }
+        });
+    _graph.theme(ref.read(chartThemeNotifierProvider));
+    _stateMan = await ref.read(stateManProvider.future);
+    _db = await ref.read(databaseProvider.future);
+    if (!mounted) return;
+    final start =
+        // 300% of the time window, refer to panUpdate method for more details
+        DateTime.now().subtract(widget.config.timeWindowMinutes * 3);
+    final end = DateTime.now();
+    _dataMinX = start.millisecondsSinceEpoch.toInt();
+    _dataMaxX = end.millisecondsSinceEpoch.toInt();
+    _addData(await _queryData(DateTimeRange(start: start, end: end)));
+    _realTimeActive = true;
+    _initRealtimeUpdates();
+  }
+
+  @override
+  void didUpdateWidget(GraphAsset oldWidget) {
+    // Todo this is hacky
+    // Needed when stateman substitutions change, resolve key
+    super.didUpdateWidget(oldWidget);
+    _chartTheme = ref.read(chartThemeNotifierProvider);
+    _cleanup();
+    _init();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _graph.theme(ref.watch(chartThemeNotifierProvider));
+  }
+
+  void _initRealtimeUpdates() async {
+    _graph.setNowButtonDisabled(_realTimeActive);
+    if (!_realTimeActive) return;
+    if (_db == null) return; // this should never happen
+    final db = _db!;
+
+    Future<StreamSubscription<String>> initSeries(
+        GraphSeriesConfig series, bool isPrimary) async {
+      final tableName = _stateMan!.resolveKey(
+          series.key); // would be nice if key would know how to resolve itself
+      final channelName = await db.db.enableNotificationChannel(tableName);
+      final subscription = db.db.listenToChannel(channelName).listen((payload) {
+        drift_db.NotificationData notification =
+            drift_db.NotificationData.fromJson(payload);
+        if (notification.action == drift_db.NotificationAction.insert) {
+          if (notification.data.containsKey('time') &&
+              notification.data.containsKey('value')) {
+            final time = DateTime.parse(notification.data['time']);
+            final value = notification.data['value'];
+            _dataMaxX = time.millisecondsSinceEpoch.toInt();
+            final x = time.millisecondsSinceEpoch.toDouble();
+            final axis = isPrimary ? 'y' : 'y2';
+            _rtThrottleBuffer
+                .addAll(_unpackData(x, axis, value, series.legend));
+            // _addData(_unpackData(x, axis, value, series.legend));
+            // _graph.panForward(time.millisecondsSinceEpoch.toDouble());
+          }
+          // todo non time value case
+        }
       });
+      return subscription;
+    }
+
+    // if we are already subscribing to realtime updates, don't do it again
+    if (_realtimeSubscriptions.isNotEmpty) {
+      return;
+    }
+
+    for (final series in widget.config.primarySeries) {
+      _realtimeSubscriptions.add(await initSeries(series, true));
+    }
+    for (final series in widget.config.secondarySeries) {
+      _realtimeSubscriptions.add(await initSeries(series, false));
+    }
+
+    _rtThrottleTimer = Timer.periodic(_rtThrottleInterval, (timer) {
+      if (_rtThrottleBuffer.isNotEmpty && mounted) {
+        _addData(_rtThrottleBuffer);
+        _rtThrottleBuffer.clear();
+        // not strictly correct, but yeah
+        _graph.panForward(DateTime.now().millisecondsSinceEpoch.toDouble());
+      }
+    });
+
+    if (!_realTimeActive) {
+      _disableRealtimeUpdates();
     }
   }
 
-  void _resumeRealTime() {
-    setState(() {
-      _isRealTimePaused = false;
-      _pausedAt = null;
-      _pausedData = null; // Clear paused data to force fresh data load
+  void _disableRealtimeUpdates() {
+    _realTimeActive = false;
+    _rtThrottleTimer?.cancel();
+    _rtThrottleBuffer.clear();
+    _graph.setNowButtonDisabled(_realTimeActive);
+    for (final subscription in _realtimeSubscriptions) {
+      subscription.cancel();
+    }
+    _realtimeSubscriptions.clear();
+  }
+
+  void _onNowPressed() {
+    _realTimeActive = true;
+    _initRealtimeUpdates();
+  }
+
+  List<Map<String, dynamic>> _unpackData(
+      double x, String axis, dynamic value, String legend) {
+    if (value is List) {
+      int i = 1;
+      return value
+          .map((e) => {'x': x, axis: e, 's': "$legend.${i++}"})
+          .toList();
+    }
+    return [
+      {'x': x, axis: value, 's': legend}
+    ];
+  }
+
+  Future<List<Map<String, dynamic>>> _queryData(DateTimeRange range) async {
+    if (_db == null) return [];
+    final db = _db!;
+    final keys = {
+      'y': widget.config.primarySeries,
+      'y2': widget.config.secondarySeries
+    };
+    //final allKeys = [...primarySeries, ...secondarySeries];
+
+    //final watch = Stopwatch()..start();
+
+    // final res = await db.queryTimeseriesDataMultiple(allKeys, range.end,
+    //     from: range.start);
+
+    //print('queryTimeseriesDataMultiple took ${watch.elapsed}');
+
+    // print('first result: ${res.entries.first.value.first.time}');
+    // print('last result: ${res.entries.first.value.last.time}');
+
+    final result = <Map<String, dynamic>>[];
+
+    // for (final foo in res.entries) {
+    //   for (final value in foo.value) {
+    //     result.add({
+    //       'x': value.time.millisecondsSinceEpoch.toDouble(),
+    //       'y': value.value, // todo
+    //       's': foo.key
+    //     });
+    //   }
+    // }
+
+    for (final entry in keys.entries) {
+      final axisKey = entry.key;
+      for (final series in entry.value) {
+        final tableName = _stateMan!.resolveKey(series.key);
+        final data = await db.queryTimeseriesData(tableName, range.end,
+            from: range.start);
+        for (final e in data) {
+          dynamic value = e.value;
+          if (value is bool) {
+            value = e.value ? 1.0 : 0.0;
+          }
+          final x = e.time.millisecondsSinceEpoch.toDouble();
+          result.addAll(_unpackData(x, axisKey, value, series.legend));
+        }
+      }
+    }
+    return result;
+  }
+
+  void _addData(List<Map<String, dynamic>> data) {
+    _graph.addAll(data);
+  }
+
+  Future<void> _onPanUpdate(GraphPanEvent event) async {
+    if (event.visibleMinX == null || event.visibleMaxX == null) return;
+
+    // if we are panning to the left, we disable realtime updates
+    // apperantly +dx is to the left and -dx is to the right
+    if (event.delta != null && event.delta!.dx > 0) {
+      _disableRealtimeUpdates();
+    }
+
+    // When panning, the data size size will differ
+    // To begin with it is 300% and the window shows the real time data
+
+    // Initial data size is 300%
+    // X axis
+    //
+    // | buffer1 | buffer2 |      window     |
+    // |   100%  |   100%  |     100%        |
+    // Now if we pan into buffer2, it becomes the case below rigth
+
+    // Min data size is 300%
+    // X axis
+    // | buffer1 |      window     | buffer2 |
+    // |   100%  |     100%        |   100%  |
+    // Now if we pan into buffer2 we fetch 100% data for that direction, see below
+
+    // Data size is 400%
+    // X axis
+    // | buffer1 |      window     | buffer2 | buffer3 |
+    // |   100%  |     100%        |   100%  |   100%  |
+
+    // Max data size is 500%
+    // X axis
+    // | buffer1 |      window     | buffer2 |
+    // |   200%  |     100%        |   200%  |
+
+    final xWindowSize = event.visibleMaxX! - event.visibleMinX!;
+
+    final double mustMin = event.visibleMinX! - xWindowSize * 0.5;
+    final double mustMax = math.min(event.visibleMaxX! + xWindowSize * 0.5,
+        DateTime.now().millisecondsSinceEpoch.toDouble());
+    final double capMin = event.visibleMinX! - xWindowSize * 2.0;
+    final double capMax = math.min(event.visibleMaxX! + xWindowSize * 2.0,
+        DateTime.now().millisecondsSinceEpoch.toDouble());
+
+    if (_dataMinX > mustMin) {
+      // fetch one time window of data
+      final end = DateTime.fromMillisecondsSinceEpoch(_dataMinX.toInt());
+      final start = end.subtract(widget.config.timeWindowMinutes);
+      _dataMinX = start.millisecondsSinceEpoch
+          .toInt(); // we only want to query the data once, so if we get subsequent onpanupdate we don't query the same data again
+      final data = await _queryData(DateTimeRange(start: start, end: end));
+      _addData(data);
+    }
+
+    if (_dataMaxX < mustMax) {
+      // fetch one time window of data
+      final start = DateTime.fromMillisecondsSinceEpoch(_dataMaxX.toInt());
+      final end = start.add(widget.config.timeWindowMinutes);
+      _dataMaxX = end.millisecondsSinceEpoch.toInt();
+      final data = await _queryData(DateTimeRange(start: start, end: end));
+      _addData(data);
+    }
+
+    // if we are not yet within the must range, we might have jumped back in time or forward in time
+    if (_dataMinX > mustMin || _dataMaxX < mustMax) {
+      final start = DateTime.fromMillisecondsSinceEpoch(capMin.toInt());
+      final end = DateTime.fromMillisecondsSinceEpoch(capMax.toInt());
+      _dataMinX = start.millisecondsSinceEpoch.toInt();
+      _dataMaxX = end.millisecondsSinceEpoch.toInt();
+      final data = await _queryData(DateTimeRange(start: start, end: end));
+      _addData(data);
+    }
+
+    // --- Prune to stay within the 500% cap ---
+    bool removed = false;
+    _graph.removeWhere((row) {
+      final x = row['x'];
+      final out = (x < capMin) || (x > capMax);
+      if (out) removed = true;
+      return out;
     });
+
+    // Keep trackers consistent with pruning
+    if (removed) {
+      if (_dataMinX < capMin) _dataMinX = capMin.toInt();
+      if (_dataMaxX > capMax) _dataMaxX = capMax.toInt();
+    }
   }
 
-  Widget _buildResumeButton() {
-    return Card(
-      color: Theme.of(context).colorScheme.primaryContainer,
-      child: InkWell(
-        onTap: _resumeRealTime,
-        borderRadius: BorderRadius.circular(8),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                Icons.play_arrow,
-                color: Theme.of(context).colorScheme.onPrimaryContainer,
-                size: 20,
-              ),
-              const SizedBox(width: 4),
-              Text(
-                'Resume',
-                style: TextStyle(
-                  color: Theme.of(context).colorScheme.onPrimaryContainer,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
+  @override
+  Widget build(BuildContext context) {
+    return _graph.build(context);
   }
 
-  Widget _buildDateIndicator() {
-    return Card(
-      color: Theme.of(context).colorScheme.surfaceVariant.withAlpha(200),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-        child: Text(
-          'Paused at ${_pausedAt!.toString().substring(11, 19)}',
-          style: TextStyle(
-            color: Theme.of(context).colorScheme.onSurfaceVariant,
-            fontSize: 12,
-            fontWeight: FontWeight.w500,
-          ),
-        ),
-      ),
-    );
+  @override
+  void dispose() {
+    super.dispose();
+    _cleanup();
+  }
+
+  void _cleanup() {
+    for (final subscription in _realtimeSubscriptions) {
+      subscription.cancel();
+    }
+    _realtimeSubscriptions.clear();
   }
 }

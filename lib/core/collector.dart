@@ -188,6 +188,17 @@ class Collector {
     _realTimeStreams[entry] = subscription;
   }
 
+  Stream<TimeseriesData<dynamic>> collectUpdates(String key) {
+    key = stateMan.resolveKey(key);
+    final entry = _collectEntries[key];
+
+    if (entry == null) {
+      return Stream.error(StateError('No collection configured for key: $key'));
+    }
+    return _realTimeStreams[entry]!
+        .map((value) => TimeseriesData<dynamic>(value, DateTime.now().toUtc()));
+  }
+
   /// Returns a Stream of the collected data.
   /// This stream provides both historical data and real-time updates.
   Stream<List<TimeseriesData<dynamic>>> collectStream(String key,
@@ -254,7 +265,6 @@ class Collector {
                 historicalData.first.time.isBefore(cutoffTime)) {
               historicalData.removeFirst();
             }
-
             streamController.add(historicalData.toList());
           },
           onError: (error, stackTrace) {

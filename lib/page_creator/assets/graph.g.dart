@@ -71,6 +71,7 @@ const _$GraphTypeEnumMap = {
   GraphType.line: 'line',
   GraphType.bar: 'bar',
   GraphType.scatter: 'scatter',
+  GraphType.pie: 'pie',
   GraphType.timeseries: 'timeseries',
   GraphType.barTimeseries: 'barTimeseries',
 };

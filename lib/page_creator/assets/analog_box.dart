@@ -10,12 +10,8 @@ import 'package:open62541/open62541.dart' show DynamicValue;
 import 'common.dart';
 import '../../providers/state_man.dart';
 import '../../core/state_man.dart';
-import '../../core/collector.dart';
-import '../../core/database.dart';
-import 'graph.dart';
 import '../../converter/color_converter.dart';
-import '../../providers/collector.dart';
-import '../../widgets/graph.dart';
+import 'graph.dart';
 
 part 'analog_box.g.dart';
 
@@ -862,14 +858,13 @@ class _AnalogBoxDialogState extends ConsumerState<_AnalogBoxDialog> {
                         ],
                       ),
                       const SizedBox(height: 12),
-                      SizedBox(
-                        width: 600,
-                        height: 280,
-                        child: _AnalogBoxGraph(
-                          keyName: widget.config.analogKey!,
-                          units: widget.config.units,
-                        ),
-                      ),
+                      if (widget.config.graphConfig != null)
+                        SizedBox(
+                            width: 600,
+                            height: 280,
+                            child: GraphAsset(widget.config.graphConfig!))
+                      else
+                        const Center(child: Text('No graph config')),
                     ],
                   ),
                 ),
@@ -884,70 +879,6 @@ class _AnalogBoxDialogState extends ConsumerState<_AnalogBoxDialog> {
           child: const Text('Close'),
         ),
       ],
-    );
-  }
-}
-
-/// MINI GRAPH (timeseries of analogKey)
-
-class _AnalogBoxGraph extends ConsumerWidget {
-  final String keyName;
-  final String? units;
-  const _AnalogBoxGraph({required this.keyName, this.units});
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    return FutureBuilder<Collector?>(
-      future: ref.watch(collectorProvider.future),
-      builder: (context, collectorSnapshot) {
-        if (!collectorSnapshot.hasData) {
-          return const Center(child: CircularProgressIndicator());
-        }
-        final collector = collectorSnapshot.data!;
-        return StreamBuilder<List<TimeseriesData<dynamic>>>(
-          stream:
-              collector.collectStream(keyName, since: const Duration(hours: 2)),
-          builder: (context, snapshot) {
-            if (!snapshot.hasData || snapshot.data!.isEmpty) {
-              return const Center(child: Text('No data'));
-            }
-            final samples = snapshot.data!;
-            final series = <List<double>>[];
-            double vmin = double.infinity, vmax = -double.infinity;
-            for (final s in samples) {
-              final v = s.value;
-              double? val;
-              if (v is num) {
-                val = v.toDouble();
-              } else if (v is DynamicValue && (v.isDouble || v.isInteger)) {
-                val = v.asDouble;
-              }
-              if (val == null) continue;
-              final t = s.time.millisecondsSinceEpoch.toDouble();
-              series.add([t, val]);
-              if (val < vmin) vmin = val;
-              if (val > vmax) vmax = val;
-            }
-            if (vmin == double.infinity) {
-              return const Center(child: Text('No numeric data'));
-            }
-            if (vmin == vmax) vmax = vmin + 1;
-
-            final cfg = GraphConfig(
-              type: GraphType.timeseries,
-              xAxis: GraphAxisConfig(unit: 'Time'),
-              yAxis: GraphAxisConfig(unit: units ?? '', min: vmin, max: vmax),
-              xSpan: const Duration(minutes: 15),
-            );
-
-            final data = [
-              {GraphDataConfig(label: keyName, mainAxis: true): series}
-            ];
-
-            return Graph(config: cfg, data: data);
-          },
-        );
-      },
     );
   }
 }

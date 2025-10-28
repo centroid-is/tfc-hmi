@@ -14,9 +14,7 @@ import '../../painter/beckhoff/io8.dart';
 import '../../core/state_man.dart';
 import '../../providers/state_man.dart';
 import '../page.dart';
-import '../../providers/collector.dart';
-import '../../core/collector.dart';
-import '../../core/database.dart';
+import '../../page_creator/assets/graph.dart';
 import '../../widgets/graph.dart';
 
 part 'beckhoff.g.dart';
@@ -2071,8 +2069,20 @@ class _BeckhoffEL3054 extends ConsumerWidget {
                         SizedBox(
                           width: 600,
                           height: 280,
-                          child: _EL3054Graph(
-                            keyName: config.stateKey!,
+                          child: GraphAsset(
+                            GraphAssetConfig(
+                              primarySeries: [
+                                GraphSeriesConfig(
+                                  key: config.stateKey!,
+                                  label: 'Analog Input',
+                                ),
+                              ],
+                              yAxis: GraphAxisConfig(
+                                title: 'Value',
+                                unit: 'relative',
+                              ),
+                              timeWindowMinutes: Duration(minutes: 10),
+                            ),
                           ),
                         ),
                       ],
@@ -2152,90 +2162,6 @@ class _InputValueCard extends StatelessWidget {
           ],
         ),
       ),
-    );
-  }
-}
-
-class _EL3054Graph extends ConsumerWidget {
-  final String keyName;
-
-  const _EL3054Graph({required this.keyName});
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    return FutureBuilder<Collector?>(
-      future: ref.watch(collectorProvider.future),
-      builder: (context, collectorSnapshot) {
-        if (!collectorSnapshot.hasData) {
-          return const Center(child: CircularProgressIndicator());
-        }
-        final collector = collectorSnapshot.data!;
-        return StreamBuilder<List<TimeseriesData<dynamic>>>(
-          stream:
-              collector.collectStream(keyName, since: const Duration(hours: 2)),
-          builder: (context, snapshot) {
-            if (!snapshot.hasData || snapshot.data!.isEmpty) {
-              return const Center(child: Text('No data'));
-            }
-            final samples = snapshot.data!;
-
-            // Create separate series for each array element
-            final seriesMap = <int, List<List<double>>>{};
-            double vmin = double.infinity, vmax = -double.infinity;
-
-            for (final s in samples) {
-              final v = s.value;
-              List<double>? values;
-              if (v is List) {
-                // Handle array data like [0,28829,0,0]
-                values = v.whereType<num>().map((e) => e.toDouble()).toList();
-              } else if (v is num) {
-                values = [v.toDouble()];
-              } else if (v is DynamicValue && v.isInteger) {
-                values = [v.asInt.toDouble()];
-              }
-              if (values == null || values.isEmpty) continue;
-
-              final t = s.time.millisecondsSinceEpoch.toDouble();
-              // Add each value from the array to its own series
-              for (int i = 0; i < values.length; i++) {
-                final val = values[i];
-                seriesMap.putIfAbsent(i, () => <List<double>>[]);
-                seriesMap[i]!.add([t, val]);
-                if (val < vmin) vmin = val;
-                if (val > vmax) vmax = val;
-              }
-            }
-
-            if (vmin == double.infinity) {
-              return const Center(child: Text('No numeric data'));
-            }
-            if (vmin == vmax) vmax = vmin + 1;
-
-            final cfg = GraphConfig(
-              type: GraphType.timeseries,
-              xAxis: GraphAxisConfig(unit: 'Time'),
-              yAxis: GraphAxisConfig(unit: 'Value', min: vmin, max: vmax),
-              xSpan: const Duration(minutes: 15),
-            );
-
-            // Convert seriesMap to the expected format
-            int i = 1;
-            final data = seriesMap.entries.map((entry) {
-              return {
-                GraphDataConfig(
-                  label: 'I${i++}',
-                  mainAxis: true,
-                  color:
-                      GraphConfig.colors[entry.key % GraphConfig.colors.length],
-                ): entry.value
-              };
-            }).toList();
-
-            return Graph(config: cfg, data: data);
-          },
-        );
-      },
     );
   }
 }
