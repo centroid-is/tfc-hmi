@@ -232,7 +232,7 @@ class MyApp extends ConsumerWidget {
     final (light, dark) = solarized();
 
     final app = MaterialApp.router(
-      title: 'Síldarvinnslan',
+      title: 'CentroidX',
       themeMode: themeAsync.when(
         data: (themeMode) => themeMode,
         loading: () => ThemeMode.system,

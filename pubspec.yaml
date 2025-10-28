@@ -45,7 +45,10 @@ dependencies:
   cryptography_flutter: ^2.3.2
   cryptography: ^2.7.0
   flutter_secure_storage: ^9.2.4
-  board_datetime_picker: ^2.8.3
+  board_datetime_picker:
+    git:
+      url: https://github.com/centroid-is/board_datetime_picker.git
+      ref: subtitle-for-start-end-date
   cristalyse:
     # path: ../cristalyse
     git:
