@@ -826,7 +826,7 @@ class _ConveyorState extends ConsumerState<Conveyor> {
 
                   // Graph
                   SizedBox(
-                    width: MediaQuery.of(context).size.width * 0.3,
+                    width: MediaQuery.of(context).size.width * 0.4,
                     height: MediaQuery.of(context).size.height * 0.3,
                     child: FutureBuilder<Collector?>(
                       future: ref.watch(collectorProvider.future),
@@ -964,7 +964,7 @@ class _ConveyorPainter extends CustomPainter {
       oldDelegate.showExclamation != showExclamation;
 }
 
-class ConveyorStatsGraph extends StatefulWidget {
+class ConveyorStatsGraph extends ConsumerStatefulWidget {
   final Collector? collector;
   final String keyName;
   const ConveyorStatsGraph({
@@ -974,10 +974,10 @@ class ConveyorStatsGraph extends StatefulWidget {
   });
 
   @override
-  State<ConveyorStatsGraph> createState() => _ConveyorStatsGraphState();
+  ConsumerState<ConveyorStatsGraph> createState() => _ConveyorStatsGraphState();
 }
 
-class _ConveyorStatsGraphState extends State<ConveyorStatsGraph> {
+class _ConveyorStatsGraphState extends ConsumerState<ConveyorStatsGraph> {
   @override
   void initState() {
     super.initState();
@@ -1033,23 +1033,19 @@ class _ConveyorStatsGraphState extends State<ConveyorStatsGraph> {
         );
 
         // Create data for the graph
-        final graphData = [
-          {
-            GraphDataConfig(
-                label: 'Current',
-                mainAxis: true,
-                color: Colors.blue): currentData,
-            GraphDataConfig(
-                label: 'Frequency',
-                mainAxis: false,
-                color: Colors.red): freqData,
-          }
-        ];
-        return Center(child: Text('TODO'));
-        // return Graph(
-        //   config: graphConfig,
-        //   data: graphData,
-        // );
+        final List<Map<String, dynamic>> data = [];
+        data.addAll(
+            currentData.map((e) => {'x': e[0], 'y': e[1], 's': 'Current'}));
+        data.addAll(
+            freqData.map((e) => {'x': e[0], 'y2': e[1], 's': 'Frequency'}));
+
+        return Graph(
+          config: graphConfig,
+          data: data,
+          showButtons: false,
+          chartTheme: ref.watch(chartThemeNotifierProvider),
+          redraw: () {},
+        ).build(context);
       },
     );
   }
