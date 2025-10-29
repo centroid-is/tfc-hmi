@@ -696,7 +696,13 @@ class AppDatabase extends _$AppDatabase {
       },
       onCancel: () async {
         logger.i('Cancelling notification listener for: $channelName');
-        await channelSubscription?.cancel();
+        try {
+          await channelSubscription?.cancel();
+        } catch (e) {
+          // If we get an error lets just close the connection
+          _notificationConnection?.close(force: true);
+          _notificationConnection = null;
+        }
       },
     );
 

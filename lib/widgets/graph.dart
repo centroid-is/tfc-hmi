@@ -404,9 +404,28 @@ class Graph {
       );
     }
 
+    Widget? noData;
+    if (_data.isEmpty) {
+      var txt =
+          "No data from: ${_lastPanInfo.visibleMinX} to: ${_lastPanInfo.visibleMaxX}";
+      if (config.type == GraphType.timeseries ||
+          config.type == GraphType.barTimeseries) {
+        txt =
+            "No data from: ${DateTime.fromMillisecondsSinceEpoch(_lastPanInfo.visibleMinX!.toInt())} to: ${DateTime.fromMillisecondsSinceEpoch(_lastPanInfo.visibleMaxX!.toInt())}";
+      }
+      noData = Center(
+        child: Text(txt),
+      );
+    }
+
     return Column(
       children: [
         Expanded(child: _chartWidget),
+        if (noData != null) noData,
+        if (noData != null)
+          SizedBox(
+            height: 10,
+          ),
         if (!_isLoading && showButtons)
           ButtonGraph(
               dateRange: currentDateRange,
@@ -530,8 +549,6 @@ class Graph {
     final visibleMinX = info.visibleMinX!;
     final visibleMaxX = info.visibleMaxX!;
     final windowSize = info.visibleMaxX! - info.visibleMinX!;
-
-    if (_data.isEmpty) return;
 
     final slicedData = _data
         .where((e) =>
