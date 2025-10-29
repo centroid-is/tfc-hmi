@@ -451,6 +451,7 @@ class _PreferenceKeyTileState extends State<_PreferenceKeyTile> {
   late TextEditingController _controller;
   final _expansionController =
       ExpansionTileController(); // todo deprecated since 3.31
+  bool _isExpanded = false;
 
   @override
   void initState() {
@@ -497,13 +498,13 @@ class _PreferenceKeyTileState extends State<_PreferenceKeyTile> {
           ),
           IconButton(
             icon: FaIcon(
-              _expansionController.isExpanded
+              _isExpanded
                   ? FontAwesomeIcons.chevronUp
                   : FontAwesomeIcons.chevronDown,
               size: 16,
             ),
             onPressed: () {
-              if (_expansionController.isExpanded) {
+              if (_isExpanded) {
                 _expansionController.collapse();
               } else {
                 _expansionController.expand();
@@ -513,9 +514,8 @@ class _PreferenceKeyTileState extends State<_PreferenceKeyTile> {
         ],
       ),
       onExpansionChanged: (expanded) {
-        // This will be called when the expansion state changes
         setState(() {
-          // Trigger rebuild to update the chevron icon
+          _isExpanded = expanded;
         });
       },
       children: [
