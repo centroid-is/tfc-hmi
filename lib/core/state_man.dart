@@ -251,21 +251,28 @@ class StateMan {
           logger.e('StateMan background run iterate task exited');
         }();
       }
+      if (wrapper.client is ClientIsolate) {
+        final clientref = wrapper.client as ClientIsolate;
+        () async {
+          while (true) {
+            try {
+              clientref.connect(wrapper.config.endpoint);
+              await clientref.runIterate();
+            } catch (error) {
+              logger.e("run iterate error: $error");
+              await clientref.disconnect();
+              // Throttle if often occuring error
+              await Future.delayed(const Duration(seconds: 1));
+            }
+          }
+        }();
+      }
 
       bool sessionLost = false;
       wrapper.client.stateStream.listen((value) {
         if (value.channelState ==
             SecureChannelState.UA_SECURECHANNELSTATE_CLOSED) {
-          logger
-              .e('Channel closed, reconnecting to ${wrapper.config.endpoint}');
-          // throttle slightly the reconnecting
-          Future.delayed(
-              const Duration(seconds: 1),
-              () => {
-                    wrapper.client.connect(wrapper.config.endpoint).onError(
-                        (e, stacktrace) => logger.e(
-                            'Failed to connect to ${wrapper.config.endpoint}: $e'))
-                  });
+          logger.e('Channel closed');
         }
         if (value.sessionState ==
                 SessionState.UA_SESSIONSTATE_CREATE_REQUESTED &&
