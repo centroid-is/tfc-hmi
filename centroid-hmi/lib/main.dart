@@ -102,7 +102,7 @@ void main() async {
 
   final upgrader = Upgrader(
     storeController: UpgraderStoreController(
-      onWindows: () => UpgraderWindowsStore(productId: '9N1C64WM15R1'),
+      onWindows: () => UpgraderWindowsStore(productId: '9NH89T11ZZ59'),
     ),
     debugLogging: true,
   );
