@@ -332,10 +332,12 @@ class StateMan {
         username = opcuaConfig.username;
         password = opcuaConfig.password;
       }
+      // empty is static linking
+      final libPath = Platform.isAndroid ? 'libopen62541.so' : '';
       clients.add(ClientWrapper(
           useIsolate
               ? await ClientIsolate.create(
-                  libraryPath: '', // empty is static linking
+                  libraryPath: libPath,
                   username: username,
                   password: password,
                   certificate: cert,
