@@ -5,10 +5,10 @@ import 'dart:io';
 import 'package:collection/collection.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:rxdart/rxdart.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:drift/drift.dart' show OrderingTerm, OrderingMode, Variable;
 
 import 'preferences.dart';
+import 'file_preferences.dart';
 import 'state_man.dart';
 import 'ring_buffer.dart';
 import 'boolean_expression.dart';
@@ -202,14 +202,14 @@ class AlarmMan {
 
   static Future<AlarmMan> create(
       Preferences preferences, StateMan stateMan) async {
-    final sharedPreferences = SharedPreferencesAsync();
+    final filePreferences = await FilePreferences.getInstance();
     var localConfigJson =
-        await sharedPreferences.getString('alarm_man_local_config');
+        await filePreferences.getString('alarm_man_local_config');
     if (localConfigJson == null) {
-      await sharedPreferences.setString('alarm_man_local_config',
+      await filePreferences.setString('alarm_man_local_config',
           jsonEncode(AlarmManLocalConfig(historyToDb: false).toJson()));
       localConfigJson =
-          await sharedPreferences.getString('alarm_man_local_config');
+          await filePreferences.getString('alarm_man_local_config');
     }
     final localConfig =
         AlarmManLocalConfig.fromJson(jsonDecode(localConfigJson!));

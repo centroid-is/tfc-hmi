@@ -751,3 +751,26 @@ class ViewActiveAlarm extends ConsumerWidget {
     );
   }
 }
+
+extension Colors on AlarmNotification {
+  /// Returns the background and text colors for this alarm level
+  (Color, Color) getColors(BuildContext context) {
+    switch (rule.level) {
+      case AlarmLevel.info:
+        return (
+          Theme.of(context).colorScheme.primaryContainer,
+          Theme.of(context).colorScheme.onPrimaryContainer
+        );
+      case AlarmLevel.warning:
+        return (
+          Theme.of(context).colorScheme.tertiaryContainer,
+          Theme.of(context).colorScheme.onTertiaryContainer
+        );
+      case AlarmLevel.error:
+        return (
+          Theme.of(context).colorScheme.errorContainer,
+          Theme.of(context).colorScheme.onErrorContainer
+        );
+    }
+  }
+}
