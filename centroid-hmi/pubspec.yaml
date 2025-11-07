@@ -50,6 +50,11 @@ dependencies:
   json_annotation: ^4.9.0
   rxdart: ^0.28.0
   amplify_secure_storage_dart: ^0.5.6
+  upgrader: ^11.5.1
+  microsoft_store_upgrader:
+    git:
+      url: https://github.com/centroid-is/microsoft-store-upgrader.git
+      ref: main
 
 dev_dependencies:
   flutter_native_splash: ^2.4.6

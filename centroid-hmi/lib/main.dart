@@ -8,6 +8,8 @@ import 'package:dbus/dbus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:amplify_secure_storage_dart/amplify_secure_storage_dart.dart';
+import 'package:upgrader/upgrader.dart';
+import 'package:microsoft_store_upgrader/microsoft_store_upgrader.dart';
 
 import 'package:tfc/route_registry.dart';
 import 'package:tfc/models/menu_item.dart';
@@ -98,7 +100,23 @@ void main() async {
 
   final locationBuilder = createLocationBuilder(extraMenuItems);
 
-  runApp(ProviderScope(child: MyApp(locationBuilder: locationBuilder)));
+  final upgrader = Upgrader(
+    storeController: UpgraderStoreController(
+      onWindows: () => UpgraderWindowsStore(productId: '9N1C64WM15R1'),
+    ),
+    debugLogging: true,
+  );
+
+  runApp(ProviderScope(
+      child: UpgradeAlert(
+    child: MyApp(locationBuilder: locationBuilder),
+    upgrader: upgrader,
+    onUpdate: () {
+      stderr.writeln("Updating software from store");
+      UpgraderWindowsStore.installUpdate();
+      return false;
+    },
+  )));
 }
 
 Completer<DBusClient> dbusCompleter = Completer();

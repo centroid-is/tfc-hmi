@@ -19,6 +19,11 @@ import 'schneider.dart';
 import 'icon.dart';
 import 'table.dart';
 import 'start_stop_button.dart';
+import 'aircab.dart';
+import 'checklists.dart';
+import 'elcab.dart';
+import 'recipes.dart';
+import 'speedbatcher.dart';
 
 class AssetRegistry {
   static final Logger _log = Logger();
@@ -52,6 +57,11 @@ class AssetRegistry {
     IconConfig: IconConfig.fromJson,
     TableAssetConfig: TableAssetConfig.fromJson,
     StartStopPillButtonConfig: StartStopPillButtonConfig.fromJson,
+    AirCabConfig: AirCabConfig.fromJson,
+    ChecklistsConfig: ChecklistsConfig.fromJson,
+    ElCabConfig: ElCabConfig.fromJson,
+    RecipesConfig: RecipesConfig.fromJson,
+    SpeedBatcherConfig: SpeedBatcherConfig.fromJson,
   };
 
   static final Map<Type, Asset Function()> defaultFactories = {
@@ -82,6 +92,11 @@ class AssetRegistry {
     IconConfig: IconConfig.preview,
     TableAssetConfig: TableAssetConfig.preview,
     StartStopPillButtonConfig: StartStopPillButtonConfig.preview,
+    AirCabConfig: AirCabConfig.preview,
+    ChecklistsConfig: ChecklistsConfig.preview,
+    ElCabConfig: ElCabConfig.preview,
+    RecipesConfig: RecipesConfig.preview,
+    SpeedBatcherConfig: SpeedBatcherConfig.preview
   };
 
   static void registerFromJsonFactory<T extends Asset>(
