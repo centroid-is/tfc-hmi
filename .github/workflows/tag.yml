@@ -62,3 +62,27 @@ jobs:
           git add centroid-hmi/pubspec.yaml
           git commit -m "Update version to ${GITHUB_REF#refs/tags/}"
           git push origin HEAD:main
+
+  ping-public-tfc-hmi-workflows:
+    runs-on: [self-hosted]
+    needs: [retag-pubspec]
+    container:
+      image: ghcr.io/centroid-is/tfc-toolchain:latest
+    steps:
+      - name: Install gh
+        run: |
+          (type -p wget >/dev/null || (apt update && apt-get install wget -y)) 
+          mkdir -p -m 755 /etc/apt/keyrings 
+          out=$(mktemp) 
+          wget -nv -O$out https://cli.github.com/packages/githubcli-archive-keyring.gpg 
+          cat $out | tee /etc/apt/keyrings/githubcli-archive-keyring.gpg > /dev/null 
+          chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg 
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null 
+          apt update 
+          apt install gh -y
+
+      - name: Ping public tfc-hmi-workflows to update
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          gh workflow run tag.yml --repo centroid-is/tfc-hmi-workflows --ref main
