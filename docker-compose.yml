@@ -58,6 +58,7 @@ services:
       - ./local-share:/home/centroid/.local/share/ # shared preferences
       - ./opcua_certs:/certs:ro
       - /var/run/dbus/system_bus_socket:/var/run/dbus/system_bus_socket
+      - /var/lib/dbus/machine-id:/var/lib/dbus/machine-id:ro
     environment:
       # TFC_GOD: true
       XDG_RUNTIME_DIR: /run/user/1000
