@@ -6,21 +6,6 @@ part of 'graph.dart';
 // JsonSerializableGenerator
 // **************************************************************************
 
-GraphDataConfig _$GraphDataConfigFromJson(Map<String, dynamic> json) =>
-    GraphDataConfig(
-      label: json['label'] as String,
-      mainAxis: json['mainAxis'] as bool? ?? true,
-      color: const OptionalColorConverter()
-          .fromJson(json['color'] as Map<String, dynamic>?),
-    );
-
-Map<String, dynamic> _$GraphDataConfigToJson(GraphDataConfig instance) =>
-    <String, dynamic>{
-      'label': instance.label,
-      'mainAxis': instance.mainAxis,
-      'color': const OptionalColorConverter().toJson(instance.color),
-    };
-
 GraphAxisConfig _$GraphAxisConfigFromJson(Map<String, dynamic> json) =>
     GraphAxisConfig(
       title: json['title'] as String?,

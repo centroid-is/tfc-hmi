@@ -10,12 +10,15 @@ GraphSeriesConfig _$GraphSeriesConfigFromJson(Map<String, dynamic> json) =>
     GraphSeriesConfig(
       key: json['key'] as String,
       label: json['label'] as String,
+      color: const OptionalColorConverter()
+          .fromJson(json['color'] as Map<String, dynamic>?),
     );
 
 Map<String, dynamic> _$GraphSeriesConfigToJson(GraphSeriesConfig instance) =>
     <String, dynamic>{
       'key': instance.key,
       'label': instance.label,
+      'color': const OptionalColorConverter().toJson(instance.color),
     };
 
 GraphAssetConfig _$GraphAssetConfigFromJson(Map<String, dynamic> json) =>

@@ -315,6 +315,21 @@ class _CollectorToggle extends ConsumerWidget {
   }
 }
 
+// TODO REMOVE
+class GraphDataConfig {
+  final String label;
+
+  /// true => primary Y axis (left); false => secondary Y axis (right)
+  final bool mainAxis;
+  final Color? color;
+
+  const GraphDataConfig({
+    required this.label,
+    this.mainAxis = true,
+    this.color,
+  });
+}
+
 // -----------------------------------------------------------------------------
 // Graph pane (realtime or range) – uses collectorProvider for history
 // -----------------------------------------------------------------------------

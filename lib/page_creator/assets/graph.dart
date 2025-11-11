@@ -5,6 +5,8 @@ import 'package:cristalyse/cristalyse.dart' as cs;
 import 'package:flutter/material.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_colorpicker/flutter_colorpicker.dart';
+import 'package:tfc/converter/color_converter.dart';
 import 'package:tfc/converter/duration_converter.dart';
 import 'package:tfc/core/state_man.dart';
 
@@ -21,11 +23,10 @@ part 'graph.g.dart';
 class GraphSeriesConfig {
   String key;
   String label;
+  @OptionalColorConverter()
+  Color? color;
 
-  GraphSeriesConfig({
-    required this.key,
-    required this.label,
-  });
+  GraphSeriesConfig({required this.key, required this.label, this.color});
 
   String get legend => label.isNotEmpty ? label : key;
 
@@ -93,6 +94,12 @@ class GraphAssetConfig extends BaseAsset {
         yAxis: yAxis,
         yAxis2: yAxis2,
         xSpan: timeWindowMinutes,
+      );
+
+  Map<String, Color> get colorPalette => Map.fromEntries(
+        [...primarySeries, ...secondarySeries]
+            .where((e) => e.color != null)
+            .map((e) => MapEntry(e.legend, e.color!)),
       );
 }
 
@@ -218,43 +225,105 @@ class GraphContentConfigState extends State<GraphContentConfig> {
           final config = entry.value;
           return Card(
             margin: const EdgeInsets.symmetric(vertical: 4),
-            child: ListTile(
-              title: Padding(
-                padding: const EdgeInsets.all(8.0),
-                child: TextFormField(
-                  initialValue: config.label,
-                  decoration: const InputDecoration(labelText: 'Label'),
-                  onChanged: (value) {
-                    final updated = List<GraphSeriesConfig>.from(series);
-                    updated[idx] = GraphSeriesConfig(
-                      key: config.key,
-                      label: value,
-                    );
-                    onChanged(updated);
-                  },
-                ),
-              ),
-              subtitle: Padding(
-                padding: const EdgeInsets.all(8.0),
-                child: KeyField(
-                  initialValue: config.key,
-                  onChanged: (value) {
-                    final updated = List<GraphSeriesConfig>.from(series);
-                    updated[idx] = GraphSeriesConfig(
-                      key: value,
-                      label: config.label,
-                    );
-                    onChanged(updated);
-                  },
-                ),
-              ),
-              trailing: IconButton(
-                icon: const Icon(Icons.delete),
-                onPressed: () {
-                  final updated = List<GraphSeriesConfig>.from(series)
-                    ..removeAt(idx);
-                  onChanged(updated);
-                },
+            child: Padding(
+              padding: const EdgeInsets.all(8.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextFormField(
+                          initialValue: config.label,
+                          decoration: const InputDecoration(labelText: 'Label'),
+                          onChanged: (value) {
+                            final updated =
+                                List<GraphSeriesConfig>.from(series);
+                            updated[idx] = GraphSeriesConfig(
+                              key: config.key,
+                              label: value,
+                              color: config.color,
+                            );
+                            onChanged(updated);
+                          },
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      IconButton(
+                        icon: const Icon(Icons.delete),
+                        onPressed: () {
+                          final updated = List<GraphSeriesConfig>.from(series)
+                            ..removeAt(idx);
+                          onChanged(updated);
+                        },
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  KeyField(
+                    initialValue: config.key,
+                    onChanged: (value) {
+                      final updated = List<GraphSeriesConfig>.from(series);
+                      updated[idx] = GraphSeriesConfig(
+                        key: value,
+                        label: config.label,
+                        color: config.color,
+                      );
+                      onChanged(updated);
+                    },
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      const Text('Color: '),
+                      const SizedBox(width: 8),
+                      GestureDetector(
+                        onTap: () => _showSeriesColorPicker(
+                          context,
+                          config.color,
+                          (color) {
+                            final updated =
+                                List<GraphSeriesConfig>.from(series);
+                            updated[idx] = GraphSeriesConfig(
+                              key: config.key,
+                              label: config.label,
+                              color: color,
+                            );
+                            onChanged(updated);
+                          },
+                        ),
+                        child: Container(
+                          width: 40,
+                          height: 40,
+                          decoration: BoxDecoration(
+                            color: config.color ?? Colors.grey.shade300,
+                            border: Border.all(color: Colors.grey),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: config.color == null
+                              ? Icon(Icons.close,
+                                  size: 20, color: Colors.grey.shade600)
+                              : null,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      if (config.color != null)
+                        TextButton(
+                          onPressed: () {
+                            final updated =
+                                List<GraphSeriesConfig>.from(series);
+                            updated[idx] = GraphSeriesConfig(
+                              key: config.key,
+                              label: config.label,
+                              color: null,
+                            );
+                            onChanged(updated);
+                          },
+                          child: const Text('Clear'),
+                        ),
+                    ],
+                  ),
+                ],
               ),
             ),
           );
@@ -378,6 +447,41 @@ class GraphContentConfigState extends State<GraphContentConfig> {
       ],
     );
   }
+
+  void _showSeriesColorPicker(BuildContext context, Color? currentColor,
+      ValueChanged<Color?> onColorChanged) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Select Series Color'),
+        content: SingleChildScrollView(
+          child: ColorPicker(
+            pickerColor: currentColor ?? Colors.blue,
+            onColorChanged: (color) => onColorChanged(color),
+            pickerAreaHeightPercent: 0.8,
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Cancel'),
+          ),
+          if (currentColor != null)
+            TextButton(
+              onPressed: () {
+                onColorChanged(null);
+                Navigator.of(context).pop();
+              },
+              child: const Text('Clear Color'),
+            ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 // The actual widget that displays the graph using the configuration
@@ -421,7 +525,8 @@ class _GraphAssetState extends ConsumerState<GraphAsset> {
           if (mounted) {
             setState(() {});
           }
-        });
+        },
+        categoryColors: widget.config.colorPalette);
     _graph.theme(_chartTheme);
     _init();
   }
@@ -438,7 +543,8 @@ class _GraphAssetState extends ConsumerState<GraphAsset> {
           if (mounted) {
             setState(() {});
           }
-        });
+        },
+        categoryColors: widget.config.colorPalette);
     _graph.theme(ref.read(chartThemeNotifierProvider));
     _stateMan = await ref.read(stateManProvider.future);
     _db = await ref.read(databaseProvider.future);

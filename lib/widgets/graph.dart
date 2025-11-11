@@ -15,26 +15,6 @@ part 'graph.g.dart';
 
 /// -------------------- Data models --------------------
 
-@JsonSerializable(explicitToJson: true)
-class GraphDataConfig {
-  final String label;
-
-  /// true => primary Y axis (left); false => secondary Y axis (right)
-  final bool mainAxis;
-  @OptionalColorConverter()
-  final Color? color;
-
-  const GraphDataConfig({
-    required this.label,
-    this.mainAxis = true,
-    this.color,
-  });
-
-  factory GraphDataConfig.fromJson(Map<String, dynamic> json) =>
-      _$GraphDataConfigFromJson(json);
-  Map<String, dynamic> toJson() => _$GraphDataConfigToJson(this);
-}
-
 @JsonEnum()
 enum GraphType {
   line,
@@ -164,6 +144,7 @@ class Graph {
   /// ])
   final List<Map<String, dynamic>> data;
   final bool showButtons;
+  final Map<String, Color> categoryColors;
 
   /// Panning callbacks
   final void Function(GraphPanEvent event)? onPanStart;
@@ -173,18 +154,19 @@ class Graph {
   final void Function()? onSetDatePressed;
   final void Function() redraw;
 
-  Graph({
-    required this.config,
-    required this.data,
-    this.onPanStart,
-    this.onPanUpdate,
-    this.onPanEnd,
-    this.onNowPressed,
-    this.onSetDatePressed,
-    this.showButtons = true,
-    required this.redraw,
-    cs.ChartTheme? chartTheme,
-  })  : _data = data,
+  Graph(
+      {required this.config,
+      required this.data,
+      this.onPanStart,
+      this.onPanUpdate,
+      this.onPanEnd,
+      this.onNowPressed,
+      this.onSetDatePressed,
+      this.showButtons = true,
+      required this.redraw,
+      cs.ChartTheme? chartTheme,
+      this.categoryColors = const {}})
+      : _data = data,
         _chartWidget = Center(child: const CircularProgressIndicator()) {
     _chart = _createChart();
     if (chartTheme != null) {
@@ -211,6 +193,9 @@ class Graph {
     }
     if (_data.isNotEmpty) {
       _chart.data(_data);
+      if (categoryColors.isNotEmpty) {
+        _chart.customPalette(categoryColors: categoryColors);
+      }
       _chartWidget = _chart.build();
       _isLoading = false;
     }
@@ -333,8 +318,6 @@ class Graph {
             interactive: true,
             showTitles: true);
 
-    // TODO custom color palette !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-
     for (final yaxis in [
       cs.YAxis.primary,
       if (config.yAxis2 != null) cs.YAxis.secondary
@@ -405,7 +388,7 @@ class Graph {
     }
 
     Widget? noData;
-    if (_data.isEmpty) {
+    if (_data.isEmpty && !_isLoading) {
       var txt =
           "No data from: ${_lastPanInfo.visibleMinX} to: ${_lastPanInfo.visibleMaxX}";
       if (config.type == GraphType.timeseries ||
@@ -557,6 +540,9 @@ class Graph {
         .toList();
 
     _chart.data(slicedData);
+    if (categoryColors.isNotEmpty) {
+      _chart.customPalette(categoryColors: categoryColors);
+    }
     _isLoading = false;
     _chartWidget = _chart.build();
 
