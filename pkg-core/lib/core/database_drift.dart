@@ -11,7 +11,6 @@ import 'package:drift/drift.dart';
 import 'package:drift/native.dart';
 import 'package:drift/isolate.dart';
 import 'package:drift_postgres/drift_postgres.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
 import 'package:postgres/postgres.dart' as pg;
 import 'package:logger/logger.dart';
@@ -172,7 +171,8 @@ class AppDatabase extends _$AppDatabase {
 
   /// Factory: creates an [AppDatabase], in the current isolate.
   /// sqlite: will be created in the background, if postgres is not provided
-  static Future<AppDatabase> create(DatabaseConfig config) async {
+  static Future<AppDatabase> create(DatabaseConfig config,
+      {Directory? sqliteFolder}) async {
     if (config.postgres != null) {
       final pool = pg.Pool.withEndpoints([config.postgres!],
           settings: pg.PoolSettings(
@@ -182,18 +182,22 @@ class AppDatabase extends _$AppDatabase {
       return AppDatabase._(
           config, PgDatabase.opened(pool, logStatements: config.debug));
     }
-    final dbFolder = await getApplicationSupportDirectory();
-    final file = File(p.join(dbFolder.path, 'db.sqlite'));
-    // Use a local NativeDatabase (or FlutterQueryExecutor).
-    final executor = NativeDatabase.createInBackground(
-      file,
-      logStatements: config.debug,
-    );
-    return AppDatabase._(config, executor);
+    if (sqliteFolder != null) {
+      final dbFolder = sqliteFolder;
+      final file = File(p.join(dbFolder.path, 'db.sqlite'));
+      // Use a local NativeDatabase (or FlutterQueryExecutor).
+      final executor = NativeDatabase.createInBackground(
+        file,
+        logStatements: config.debug,
+      );
+      return AppDatabase._(config, executor);
+    }
+    throw Exception("Unable to create database");
   }
 
   /// Factory: creates an [AppDatabase], spawning a DriftIsolate.
-  static Future<AppDatabase> spawn(DatabaseConfig config) async {
+  static Future<AppDatabase> spawn(DatabaseConfig config,
+      {Directory? sqliteFolder}) async {
     if (config.postgres != null) {
       // Spawn a DriftIsolate handling the Postgres connection off the main isolate.
       final isolate = await DriftIsolate.spawn(() {
@@ -206,8 +210,8 @@ class AppDatabase extends _$AppDatabase {
       });
       final executor = await isolate.connect();
       return AppDatabase._(config, executor);
-    } else {
-      final dbFolder = await getApplicationSupportDirectory();
+    } else if (sqliteFolder != null) {
+      final dbFolder = sqliteFolder;
       final file = File(p.join(dbFolder.path, 'db.sqlite'));
       // Use a local NativeDatabase (or FlutterQueryExecutor).
       final executor = NativeDatabase.createInBackground(
@@ -216,6 +220,7 @@ class AppDatabase extends _$AppDatabase {
       );
       return AppDatabase._(config, executor);
     }
+    throw Exception("Unable to create database from spawn");
   }
 
   // ----------------------------

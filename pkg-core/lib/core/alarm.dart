@@ -5,8 +5,6 @@ import 'dart:io';
 import 'package:collection/collection.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:rxdart/rxdart.dart';
-import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:drift/drift.dart' show OrderingTerm, OrderingMode, Variable;
 
 import 'preferences.dart';
@@ -203,17 +201,18 @@ class AlarmMan {
 
   static Future<AlarmMan> create(
       Preferences preferences, StateMan stateMan) async {
-    final sharedPreferences = SharedPreferencesAsync();
-    var localConfigJson =
-        await sharedPreferences.getString('alarm_man_local_config');
-    if (localConfigJson == null) {
-      await sharedPreferences.setString('alarm_man_local_config',
-          jsonEncode(AlarmManLocalConfig(historyToDb: false).toJson()));
-      localConfigJson =
-          await sharedPreferences.getString('alarm_man_local_config');
-    }
-    final localConfig =
-        AlarmManLocalConfig.fromJson(jsonDecode(localConfigJson!));
+    // final sharedPreferences = SharedPreferencesAsync();
+    // var localConfigJson =
+    //     await sharedPreferences.getString('alarm_man_local_config');
+    // if (localConfigJson == null) {
+    //   await sharedPreferences.setString('alarm_man_local_config',
+    //       jsonEncode(AlarmManLocalConfig(historyToDb: false).toJson()));
+    //   localConfigJson =
+    //       await sharedPreferences.getString('alarm_man_local_config');
+    // }
+    // final localConfig =
+    //     AlarmManLocalConfig.fromJson(jsonDecode(localConfigJson!));
+    final localConfig = AlarmManLocalConfig(historyToDb: true); // TODO
 
     var configJson = await preferences.getString('alarm_man_config');
     if (configJson == null) {
@@ -500,27 +499,6 @@ class AlarmNotification {
 
   @override
   int get hashCode => Object.hash(uid, active, expression, rule);
-
-  /// Returns the background and text colors for this alarm level
-  (Color, Color) getColors(BuildContext context) {
-    switch (rule.level) {
-      case AlarmLevel.info:
-        return (
-          Theme.of(context).colorScheme.primaryContainer,
-          Theme.of(context).colorScheme.onPrimaryContainer
-        );
-      case AlarmLevel.warning:
-        return (
-          Theme.of(context).colorScheme.tertiaryContainer,
-          Theme.of(context).colorScheme.onTertiaryContainer
-        );
-      case AlarmLevel.error:
-        return (
-          Theme.of(context).colorScheme.errorContainer,
-          Theme.of(context).colorScheme.onErrorContainer
-        );
-    }
-  }
 }
 
 class AlarmActive {

@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:drift/drift.dart' show Variable;
 
 import 'database.dart';
@@ -94,7 +93,7 @@ class KeyCache {
 class Preferences implements PreferencesApi {
   final Database? database;
   final KeyCache keyCache = KeyCache();
-  final SharedPreferencesAsync sharedPreferences = SharedPreferencesAsync();
+  // final SharedPreferencesAsync sharedPreferences = SharedPreferencesAsync();
   final MySecureStorage secureStorage;
   final StreamController<String> _onPreferencesChanged =
       StreamController<String>.broadcast();
@@ -138,12 +137,14 @@ class Preferences implements PreferencesApi {
 
   @override
   Future<Set<String>> getKeys({Set<String>? allowList}) async {
-    return await sharedPreferences.getKeys(allowList: allowList);
+    throw "todo";
+    // return await sharedPreferences.getKeys(allowList: allowList);
   }
 
   @override
   Future<Map<String, Object?>> getAll({Set<String>? allowList}) async {
-    return await sharedPreferences.getAll(allowList: allowList);
+    throw "todo";
+    // return await sharedPreferences.getAll(allowList: allowList);
   }
 
   @override
@@ -152,7 +153,8 @@ class Preferences implements PreferencesApi {
       final value = await secureStorage.read(key: key);
       return value == null ? null : value == 'true';
     } else {
-      return await sharedPreferences.getBool(key);
+      throw "todo";
+      // return await sharedPreferences.getBool(key);
     }
   }
 
@@ -162,7 +164,8 @@ class Preferences implements PreferencesApi {
       final value = await secureStorage.read(key: key);
       return value == null ? null : int.parse(value);
     } else {
-      return await sharedPreferences.getInt(key);
+      throw "todo";
+      // return await sharedPreferences.getInt(key);
     }
   }
 
@@ -172,7 +175,8 @@ class Preferences implements PreferencesApi {
       final value = await secureStorage.read(key: key);
       return value == null ? null : double.parse(value);
     } else {
-      return await sharedPreferences.getDouble(key);
+      throw "todo";
+      // return await sharedPreferences.getDouble(key);
     }
   }
 
@@ -181,7 +185,9 @@ class Preferences implements PreferencesApi {
     if (secret) {
       return await secureStorage.read(key: key);
     } else {
-      return await sharedPreferences.getString(key);
+      throw "todo";
+
+      // return await sharedPreferences.getString(key);
     }
   }
 
@@ -191,7 +197,9 @@ class Preferences implements PreferencesApi {
       final value = await secureStorage.read(key: key);
       return value?.split(',');
     } else {
-      return await sharedPreferences.getStringList(key);
+      throw "todo";
+
+      // return await sharedPreferences.getStringList(key);
     }
   }
 
@@ -201,7 +209,9 @@ class Preferences implements PreferencesApi {
       throw UnimplementedError(
           'containsKey is not implemented for secret storage');
     } else {
-      return await sharedPreferences.containsKey(key);
+      throw "todo";
+
+      // return await sharedPreferences.containsKey(key);
     }
   }
 
@@ -211,7 +221,9 @@ class Preferences implements PreferencesApi {
     if (secret) {
       await secureStorage.write(key: key, value: value.toString());
     } else {
-      await sharedPreferences.setBool(key, value);
+      throw "todo";
+
+      // await sharedPreferences.setBool(key, value);
     }
     if (saveToDb) {
       await _upsertToPostgres(key, value, 'bool');
@@ -225,7 +237,9 @@ class Preferences implements PreferencesApi {
     if (secret) {
       await secureStorage.write(key: key, value: value.toString());
     } else {
-      await sharedPreferences.setInt(key, value);
+      throw "todo";
+
+      // await sharedPreferences.setInt(key, value);
     }
     if (saveToDb) {
       await _upsertToPostgres(key, value, 'int');
@@ -239,7 +253,9 @@ class Preferences implements PreferencesApi {
     if (secret) {
       await secureStorage.write(key: key, value: value.toString());
     } else {
-      await sharedPreferences.setDouble(key, value);
+      throw "todo";
+
+      // await sharedPreferences.setDouble(key, value);
     }
     if (saveToDb) {
       await _upsertToPostgres(key, value, 'double');
@@ -253,7 +269,8 @@ class Preferences implements PreferencesApi {
     if (secret) {
       await secureStorage.write(key: key, value: value);
     } else {
-      await sharedPreferences.setString(key, value);
+      throw "todo";
+      // await sharedPreferences.setString(key, value);
     }
     if (saveToDb) {
       await _upsertToPostgres(key, value, 'String');
@@ -267,7 +284,9 @@ class Preferences implements PreferencesApi {
     if (secret) {
       await secureStorage.write(key: key, value: value.join(','));
     } else {
-      await sharedPreferences.setStringList(key, value);
+      throw "todo";
+
+      // await sharedPreferences.setStringList(key, value);
     }
     if (saveToDb) {
       await _upsertToPostgres(key, value, 'List<String>');
@@ -280,7 +299,9 @@ class Preferences implements PreferencesApi {
     if (secret) {
       secureStorage.delete(key: key);
     } else {
-      sharedPreferences.remove(key);
+      throw "todo";
+
+      // sharedPreferences.remove(key);
     }
     // TODO: remove from postgres
     _onPreferencesChanged.add(key);
@@ -289,7 +310,9 @@ class Preferences implements PreferencesApi {
 
   @override
   Future<void> clear({Set<String>? allowList}) {
-    return sharedPreferences.clear(allowList: allowList);
+    throw "todo";
+
+    // return sharedPreferences.clear(allowList: allowList);
   }
 
   Stream<String> get onPreferencesChanged => _onPreferencesChanged.stream;
@@ -335,27 +358,37 @@ class Preferences implements PreferencesApi {
       switch (type) {
         case 'bool':
           if (value != null) {
-            await sharedPreferences.setBool(key, value == 'true');
+            throw "todo";
+
+            // await sharedPreferences.setBool(key, value == 'true');
           }
           break;
         case 'int':
           if (value != null) {
-            await sharedPreferences.setInt(key, int.parse(value));
+            throw "todo";
+
+            // await sharedPreferences.setInt(key, int.parse(value));
           }
           break;
         case 'double':
           if (value != null) {
-            await sharedPreferences.setDouble(key, double.parse(value));
+            throw "todo";
+
+            // await sharedPreferences.setDouble(key, double.parse(value));
           }
           break;
         case 'String':
           if (value != null) {
-            await sharedPreferences.setString(key, value);
+            throw "todo";
+
+            // await sharedPreferences.setString(key, value);
           }
           break;
         case 'List<String>':
           if (value != null) {
-            await sharedPreferences.setStringList(key, value.split(','));
+            throw "todo";
+
+            // await sharedPreferences.setStringList(key, value.split(','));
           }
           break;
         default:
@@ -366,83 +399,83 @@ class Preferences implements PreferencesApi {
 }
 
 /// A wrapper around SharedPreferencesAsync that implements PreferencesApi
-class SharedPreferencesWrapper implements PreferencesApi {
-  final SharedPreferencesAsync _prefs;
+// class SharedPreferencesWrapper implements PreferencesApi {
+//   final SharedPreferencesAsync _prefs;
 
-  SharedPreferencesWrapper(this._prefs);
+//   SharedPreferencesWrapper(this._prefs);
 
-  @override
-  Future<Set<String>> getKeys({Set<String>? allowList}) {
-    return _prefs.getKeys(allowList: allowList);
-  }
+//   @override
+//   Future<Set<String>> getKeys({Set<String>? allowList}) {
+//     return _prefs.getKeys(allowList: allowList);
+//   }
 
-  @override
-  Future<Map<String, Object?>> getAll({Set<String>? allowList}) {
-    return _prefs.getAll(allowList: allowList);
-  }
+//   @override
+//   Future<Map<String, Object?>> getAll({Set<String>? allowList}) {
+//     return _prefs.getAll(allowList: allowList);
+//   }
 
-  @override
-  Future<bool?> getBool(String key) {
-    return _prefs.getBool(key);
-  }
+//   @override
+//   Future<bool?> getBool(String key) {
+//     return _prefs.getBool(key);
+//   }
 
-  @override
-  Future<int?> getInt(String key) {
-    return _prefs.getInt(key);
-  }
+//   @override
+//   Future<int?> getInt(String key) {
+//     return _prefs.getInt(key);
+//   }
 
-  @override
-  Future<double?> getDouble(String key) {
-    return _prefs.getDouble(key);
-  }
+//   @override
+//   Future<double?> getDouble(String key) {
+//     return _prefs.getDouble(key);
+//   }
 
-  @override
-  Future<String?> getString(String key) {
-    return _prefs.getString(key);
-  }
+//   @override
+//   Future<String?> getString(String key) {
+//     return _prefs.getString(key);
+//   }
 
-  @override
-  Future<List<String>?> getStringList(String key) {
-    return _prefs.getStringList(key);
-  }
+//   @override
+//   Future<List<String>?> getStringList(String key) {
+//     return _prefs.getStringList(key);
+//   }
 
-  @override
-  Future<bool> containsKey(String key) {
-    return _prefs.containsKey(key);
-  }
+//   @override
+//   Future<bool> containsKey(String key) {
+//     return _prefs.containsKey(key);
+//   }
 
-  @override
-  Future<void> setBool(String key, bool value) {
-    return _prefs.setBool(key, value);
-  }
+//   @override
+//   Future<void> setBool(String key, bool value) {
+//     return _prefs.setBool(key, value);
+//   }
 
-  @override
-  Future<void> setInt(String key, int value) {
-    return _prefs.setInt(key, value);
-  }
+//   @override
+//   Future<void> setInt(String key, int value) {
+//     return _prefs.setInt(key, value);
+//   }
 
-  @override
-  Future<void> setDouble(String key, double value) {
-    return _prefs.setDouble(key, value);
-  }
+//   @override
+//   Future<void> setDouble(String key, double value) {
+//     return _prefs.setDouble(key, value);
+//   }
 
-  @override
-  Future<void> setString(String key, String value) {
-    return _prefs.setString(key, value);
-  }
+//   @override
+//   Future<void> setString(String key, String value) {
+//     return _prefs.setString(key, value);
+//   }
 
-  @override
-  Future<void> setStringList(String key, List<String> value) {
-    return _prefs.setStringList(key, value);
-  }
+//   @override
+//   Future<void> setStringList(String key, List<String> value) {
+//     return _prefs.setStringList(key, value);
+//   }
 
-  @override
-  Future<void> remove(String key) {
-    return _prefs.remove(key);
-  }
+//   @override
+//   Future<void> remove(String key) {
+//     return _prefs.remove(key);
+//   }
 
-  @override
-  Future<void> clear({Set<String>? allowList}) {
-    return _prefs.clear(allowList: allowList);
-  }
-}
+//   @override
+//   Future<void> clear({Set<String>? allowList}) {
+//     return _prefs.clear(allowList: allowList);
+//   }
+// }

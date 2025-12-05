@@ -8,6 +8,7 @@ import 'package:json_annotation/json_annotation.dart' as json;
 export 'package:postgres/postgres.dart' show Sql;
 import 'package:logger/logger.dart';
 
+import 'condition_variable.dart';
 import 'secure_storage/secure_storage.dart';
 import 'database_drift.dart';
 import '../converter/duration_converter.dart';
@@ -187,10 +188,10 @@ class Database {
   /// Insert a time-series data point
   Future<void> insertTimeseriesData(
       String tableName, DateTime time, dynamic value) async {
-    // Wait if another thread is already creating this table
-    while (_tableCreationLocks.containsKey(tableName)) {
-      await _tableCreationLocks[tableName]!.future;
-    }
+    // Wait if another task is already creating this table
+    // while (_tableCreationLocks.containsKey(tableName)) {
+    //   await _tableCreationLocks[tableName]!.future;
+    // }
 
     Future<void> insert() async {
       if (value is Map<String, dynamic>) {
@@ -202,6 +203,12 @@ class Database {
       }
     }
 
+    if (busy) {
+      await cv.wait();
+    }
+
+    busy = true;
+
     try {
       await insert();
     } catch (e) {
@@ -212,8 +219,13 @@ class Database {
         rethrow;
       }
     }
+
+    busy = false;
+    cv.releaseOne();
   }
 
+  CV cv = CV();
+  bool busy = false;
   Future<Map<String, List<TimeseriesData<dynamic>>>>
       queryTimeseriesDataMultiple(List<String> tableNames, DateTime to,
           {String? orderBy = 'time ASC', DateTime? from}) async {
@@ -499,9 +511,9 @@ ORDER BY at.time;
   Future<bool> _tryToCreateTimeseriesTable(
       String tableName, dynamic value) async {
     // Check again after waiting - table might have been created
-    if (await db.tableExists(tableName)) {
-      return true;
-    }
+    // if (await db.tableExists(tableName)) {
+    //   return true;
+    // }
 
     if (!retentionPolicies.containsKey(tableName)) {
       stderr.writeln(
@@ -511,9 +523,12 @@ ORDER BY at.time;
 
     // Acquire lock for this table
     final completer = Completer<void>();
+    logger.t("Lock Creating table $tableName");
+
     _tableCreationLocks[tableName] = completer;
 
     try {
+      logger.t("Creating table $tableName");
       await _createTimeseriesTable(
           tableName, retentionPolicies[tableName]!, value);
     } finally {

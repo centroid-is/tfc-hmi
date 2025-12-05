@@ -7,6 +7,27 @@ import '../providers/alarm.dart';
 import 'base_scaffold.dart';
 import 'boolean_expression.dart';
 
+/// Returns the background and text colors for this alarm level
+(Color, Color) getColors(BuildContext context) {
+  switch (rule.level) {
+    case AlarmLevel.info:
+      return (
+        Theme.of(context).colorScheme.primaryContainer,
+        Theme.of(context).colorScheme.onPrimaryContainer
+      );
+    case AlarmLevel.warning:
+      return (
+        Theme.of(context).colorScheme.tertiaryContainer,
+        Theme.of(context).colorScheme.onTertiaryContainer
+      );
+    case AlarmLevel.error:
+      return (
+        Theme.of(context).colorScheme.errorContainer,
+        Theme.of(context).colorScheme.onErrorContainer
+      );
+  }
+}
+
 class ListAlarms extends ConsumerStatefulWidget {
   final void Function(AlarmConfig)? onEdit;
   final void Function(AlarmConfig)? onShow;

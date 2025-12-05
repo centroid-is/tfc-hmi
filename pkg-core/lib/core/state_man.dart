@@ -346,7 +346,7 @@ class StateMan {
                   logLevel: LogLevel.UA_LOGLEVEL_ERROR,
                 )
               : Client(
-                  loadOpen62541Library(staticLinking: true),
+                  loadOpen62541Library(staticLinking: false),
                   username: username,
                   password: password,
                   certificate: cert,
