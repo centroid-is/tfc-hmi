@@ -70,6 +70,21 @@ class StateManConfig {
     return 'StateManConfig(opcua: ${opcua.toString()})';
   }
 
+  static Future<StateManConfig> fromFile(String path) async {
+    final file = File(path);
+    if (!await file.exists()) {
+      throw Exception('Config file not found: $path');
+    }
+    final contents = await file.readAsString();
+    final Map<String, dynamic> json;
+    try {
+      json = jsonDecode(contents) as Map<String, dynamic>;
+    } on FormatException catch (e) {
+      throw Exception('Invalid JSON in config file: $path - ${e.message}');
+    }
+    return StateManConfig.fromJson(json);
+  }
+
   static Future<StateManConfig> fromPrefs(Preferences prefs) async {
     var configJson = await prefs.getString(configKey, secret: true);
     if (configJson == null) {
@@ -166,6 +181,19 @@ class KeyMappings {
   }
 
   Iterable<String> get keys => nodes.keys;
+
+  static Future<KeyMappings> fromPrefs(PreferencesApi prefs) async {
+    var keyMappingsJson = await prefs.getString('key_mappings');
+    if (keyMappingsJson == null) {
+      final defaultKeyMappings = KeyMappings(nodes: {
+        "exampleKey": KeyMappingEntry(
+            opcuaNode: OpcUANodeConfig(namespace: 42, identifier: "identifier"))
+      });
+      keyMappingsJson = jsonEncode(defaultKeyMappings.toJson());
+      await prefs.setString('key_mappings', keyMappingsJson);
+    }
+    return KeyMappings.fromJson(jsonDecode(keyMappingsJson));
+  }
 
   factory KeyMappings.fromJson(Map<String, dynamic> json) =>
       _$KeyMappingsFromJson(json);

@@ -1,8 +1,14 @@
 import 'dart:async';
 import 'dart:ffi';
+import 'dart:io';
+
+import 'package:args/args.dart';
 
 import 'package:tfc_core/core/collector.dart';
 import 'package:tfc_core/core/database.dart';
+import 'package:tfc_core/core/database_drift.dart';
+import 'package:tfc_core/core/preferences.dart';
+import 'package:tfc_core/core/secure_storage/secure_storage.dart';
 
 import 'data_acquisition.dart';
 import 'package:tfc_core/core/state_man.dart';
@@ -20,26 +26,20 @@ class TraceFilter extends LogFilter {
 }
 
 void main() async {
-  Logger.defaultFilter = () => TraceFilter();
-  final logger = Logger();
+  final databaseConfig = await DatabaseConfig.fromEnv();
+  final db = Database(await AppDatabase.spawn(databaseConfig));
+  final prefs =
+      Preferences(database: db, secureStorage: SecureStorage.getInstance());
 
-  // final prefs = await Preferences.create(db: null);
-  // final stateManConfig = await StateManConfig.fromPrefs(prefs);
-  final smConfig = StateManConfig(
-      opcua: [OpcUAConfig()..endpoint = "opc.tcp://10.50.10.10:4840"]);
-  final key = "mytest";
-  final keyMappings = KeyMappings(nodes: {});
-  for (var i = 0; i < 100; i++) {
-    final mykey = "$key$i";
-    keyMappings.nodes.addAll({
-      mykey: KeyMappingEntry(
-          opcuaNode: OpcUANodeConfig(
-        namespace: 4,
-        identifier: "GVL_IO.TemperatureSensor.hmi.Mapped_values",
-      )..arrayIndex = 2)
-        ..collect = CollectEntry(key: mykey)
-    });
+  final statemanConfigFilePath =
+      Platform.environment['CENTROID_STATEMAN_FILE_PATH'];
+  if (statemanConfigFilePath == null) {
+    throw Exception("Stateman Config file path needs to be set");
   }
+  final smConfig = await StateManConfig.fromFile(statemanConfigFilePath);
+
+  Logger.defaultFilter = () => TraceFilter();
+
   final dbConfig = DatabaseConfig(
       postgres: Endpoint(
           host: "10.50.10.11",
@@ -47,8 +47,10 @@ void main() async {
           username: "centroid",
           password: "FooBarHelloWorld"),
       sslMode: SslMode.require);
+
+  // look at the config, we need to split each server from stateman, and create DataAcquisition for each server in an isolate
   final da = DataAcquisition(
-      config: smConfig, mappings: keyMappings, dbConfig: dbConfig);
+      config: smConfig, dbConfig: dbConfig, enableStatsLogging: false);
 
   await Future.delayed(Duration(hours: 1));
 

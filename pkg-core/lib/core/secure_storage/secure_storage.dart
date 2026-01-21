@@ -16,8 +16,8 @@ class SecureStorage {
     if (_instance != null) {
       return _instance!;
     }
-    if (Platform.isLinux) {
-      return LinuxSecureStorage();
+    if (Platform.isLinux || Platform.isMacOS) {
+      return AwsSecureStorage();
     }
     throw Exception('SecureStorage instance not set for this platform');
   }

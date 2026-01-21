@@ -91,6 +91,39 @@ class DatabaseConfig {
 
   static const _configLocation = 'database_config';
 
+  static Future<DatabaseConfig> fromEnv() async {
+    if (Platform.environment['CENTROID_PGHOST'] == null) {
+      throw Exception("Please provide environment variable CENTROID_PGHOST");
+    }
+    final host = Platform.environment['CENTROID_PGHOST']!;
+    final port =
+        int.tryParse(Platform.environment['CENTROID_PGPORT'] ?? '') ?? 5432;
+    final database = Platform.environment['CENTROID_PGDATABASE'] ?? 'hmi';
+    final username = Platform.environment['CENTROID_PGUSER'];
+    final password = Platform.environment['CENTROID_PGPASSWORD'];
+    final sslModeStr = Platform.environment['CENTROID_PGSSLMODE'];
+    final debug = Platform.environment['CENTROID_DB_DEBUG'] == 'true';
+
+    final sslMode = sslModeStr != null
+        ? pg.SslMode.values.firstWhere(
+            (mode) => mode.name == sslModeStr,
+            orElse: () => pg.SslMode.disable,
+          )
+        : pg.SslMode.disable;
+
+    return DatabaseConfig(
+      postgres: pg.Endpoint(
+        host: host,
+        port: port,
+        database: database,
+        username: username,
+        password: password,
+      ),
+      sslMode: sslMode,
+      debug: debug,
+    );
+  }
+
   static Future<DatabaseConfig> fromPrefs() async {
     final prefs = SecureStorage.getInstance();
     var configJson = await prefs.read(key: _configLocation);
@@ -111,6 +144,11 @@ class DatabaseConfig {
     final prefs = SecureStorage.getInstance();
     final configJson = jsonEncode(toJson());
     await prefs.write(key: _configLocation, value: configJson);
+  }
+
+  @override
+  String toString() {
+    return "DatabaseConfig(${jsonEncode(toJson())})";
   }
 }
 
@@ -156,13 +194,36 @@ class RetentionPolicy {
       'RetentionPolicy(dropAfter: $dropAfter, scheduleInterval: $scheduleInterval)';
 }
 
+class _PendingWrite {
+  final DateTime time;
+  final dynamic value;
+
+  _PendingWrite(this.time, this.value);
+
+  Map<String, dynamic> toMap() {
+    if (value is Map<String, dynamic>) {
+      return {"time": time.toIso8601String(), ...value};
+    } else {
+      return {'time': time.toIso8601String(), 'value': value};
+    }
+  }
+}
+
 class Database {
-  Database(this.db);
+  Database(this.db) {
+    _startBatchFlushTimer();
+  }
 
   AppDatabase db;
   Map<String, RetentionPolicy> retentionPolicies = {};
   static final Logger logger = Logger();
   final Map<String, Completer<void>> _tableCreationLocks = {};
+
+  // Batch write buffering
+  final Map<String, List<_PendingWrite>> _writeBuffer = {};
+  Timer? _flushTimer;
+  static const _batchFlushInterval = Duration(milliseconds: 500);
+  static const _maxBatchSize = 50;
 
   Future<void> open() async {
     try {
@@ -185,47 +246,117 @@ class Database {
     }
   }
 
-  /// Insert a time-series data point
+  /// Insert a time-series data point (buffered for batch writes)
   Future<void> insertTimeseriesData(
       String tableName, DateTime time, dynamic value) async {
-    // Wait if another task is already creating this table
-    // while (_tableCreationLocks.containsKey(tableName)) {
-    //   await _tableCreationLocks[tableName]!.future;
-    // }
-
-    Future<void> insert() async {
-      if (value is Map<String, dynamic>) {
-        await db
-            .tableInsert(tableName, {"time": time.toIso8601String(), ...value});
-      } else {
-        await db.tableInsert(
-            tableName, {'time': time.toIso8601String(), 'value': value});
+    // Ensure table exists (only needed once per table)
+    if (!_writeBuffer.containsKey(tableName)) {
+      if (!await db.tableExists(tableName)) {
+        await _tryToCreateTimeseriesTable(tableName, value);
       }
     }
 
-    if (busy) {
-      await cv.wait();
-    }
+    // Add to buffer
+    _writeBuffer
+        .putIfAbsent(tableName, () => [])
+        .add(_PendingWrite(time, value));
 
-    busy = true;
+    // Flush immediately if batch size reached
+    if (_writeBuffer[tableName]!.length >= _maxBatchSize) {
+      final writes = _writeBuffer[tableName]!;
+      _writeBuffer[tableName] = [];
 
-    try {
-      await insert();
-    } catch (e) {
-      logger.e('error inserting $tableName $value: $e');
-      if (await _tryToCreateTimeseriesTable(tableName, value)) {
-        await insert();
-      } else {
+      _writeCount++;
+      _totalWriteTime.start();
+
+      try {
+        final rows = writes.map((w) => w.toMap()).toList();
+        await db.tableInsertBatch(tableName, rows);
+      } catch (e) {
+        logger.e('Error flushing batch for $tableName: $e');
         rethrow;
       }
-    }
 
-    busy = false;
-    cv.releaseOne();
+      _totalWriteTime.stop();
+    }
+  }
+
+  /// Get performance statistics
+  Map<String, dynamic> getStats() {
+    final uptime = _totalWriteTime.elapsed.inMilliseconds > 0
+        ? _totalWriteTime.elapsed.inSeconds
+        : 1;
+    return {
+      'total_writes': _writeCount,
+      'writes_per_sec': _writeCount / uptime,
+      'total_waits': _waitCount,
+      'avg_wait_ms':
+          _waitCount > 0 ? _totalWaitTime.elapsedMilliseconds / _waitCount : 0,
+      'total_write_time_ms': _totalWriteTime.elapsedMilliseconds,
+      'avg_write_ms': _writeCount > 0
+          ? _totalWriteTime.elapsedMilliseconds / _writeCount
+          : 0,
+    };
+  }
+
+  /// Reset performance statistics
+  void resetStats() {
+    _writeCount = 0;
+    _waitCount = 0;
+    _totalWaitTime.reset();
+    _totalWriteTime.reset();
+  }
+
+  /// Start the periodic batch flush timer
+  void _startBatchFlushTimer() {
+    _flushTimer = Timer.periodic(_batchFlushInterval, (_) async {
+      await _flushAllBatches();
+    });
+  }
+
+  /// Flush all pending writes to the database
+  Future<void> _flushAllBatches() async {
+    if (_writeBuffer.isEmpty) return;
+
+    // Snapshot the current buffer and clear it
+    final batchesToFlush = Map<String, List<_PendingWrite>>.from(_writeBuffer);
+    _writeBuffer.clear();
+
+    // Flush each table's batch
+    for (final entry in batchesToFlush.entries) {
+      final tableName = entry.key;
+      final writes = entry.value;
+      if (writes.isEmpty) continue;
+
+      try {
+        _writeCount++;
+        _totalWriteTime.start();
+
+        final rows = writes.map((w) => w.toMap()).toList();
+        await db.tableInsertBatch(tableName, rows);
+
+        _totalWriteTime.stop();
+      } catch (e) {
+        _totalWriteTime.stop();
+        logger.e('Error flushing batch for $tableName: $e');
+        // Optionally retry or handle the error
+      }
+    }
+  }
+
+  /// Dispose resources
+  void dispose() {
+    _flushTimer?.cancel();
   }
 
   CV cv = CV();
   bool busy = false;
+
+  // Performance instrumentation
+  int _writeCount = 0;
+  int _waitCount = 0;
+  final Stopwatch _totalWaitTime = Stopwatch();
+  final Stopwatch _totalWriteTime = Stopwatch();
   Future<Map<String, List<TimeseriesData<dynamic>>>>
       queryTimeseriesDataMultiple(List<String> tableNames, DateTime to,
           {String? orderBy = 'time ASC', DateTime? from}) async {

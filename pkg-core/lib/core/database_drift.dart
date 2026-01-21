@@ -519,6 +519,81 @@ class AppDatabase extends _$AppDatabase {
     );
   }
 
+  /// Batch insert multiple rows into a dynamic table
+  Future<int> tableInsertBatch(String tableName, List<Map<String, dynamic>> dataList) async {
+    if (dataList.isEmpty) return 0;
+
+    // All rows should have the same keys
+    final firstRow = dataList.first;
+    final keys = firstRow.keys.map((key) => '"$key"').join(', ');
+
+    // Build placeholders for all rows
+    final List<String> valuesClauses = [];
+    final List<Variable> allVariables = [];
+    int paramIndex = 1;
+
+    for (final data in dataList) {
+      final placeholders = data.keys.map((key) {
+        final value = data[key];
+        final index = paramIndex++;
+
+        if (key == 'time') {
+          return '\$$index::timestamptz';
+        } else if (value is List) {
+          if (value.isEmpty) {
+            return '\$$index::text[]';
+          }
+          final first = value.first;
+          if (first is int) {
+            return '\$$index::integer[]';
+          } else if (first is double) {
+            return '\$$index::double precision[]';
+          } else if (first is String) {
+            return '\$$index::text[]';
+          } else if (first is bool) {
+            return '\$$index::boolean[]';
+          } else {
+            return '\$$index::jsonb[]';
+          }
+        }
+        return '\$$index';
+      }).join(', ');
+
+      valuesClauses.add('($placeholders)');
+
+      // Add variables for this row
+      for (final value in data.values) {
+        if (value is List) {
+          if (value.isEmpty) {
+            allVariables.add(const Variable('{}'));
+          } else {
+            final first = value.first;
+            if (first is num) {
+              final arrayString = '{${value.join(',')}}';
+              allVariables.add(Variable(arrayString));
+            } else if (first is String) {
+              final arrayString = '{${value.map((e) => '"$e"').join(',')}}';
+              allVariables.add(Variable(arrayString));
+            } else if (first is bool) {
+              final arrayString = '{${value.join(',')}}';
+              allVariables.add(Variable(arrayString));
+            } else {
+              allVariables.add(Variable(jsonEncode(value)));
+            }
+          }
+        } else {
+          allVariables.add(Variable(value));
+        }
+      }
+    }
+
+    final valuesClause = valuesClauses.join(', ');
+    return await customInsert(
+      'INSERT INTO "$tableName" ($keys) VALUES $valuesClause',
+      variables: allVariables,
+    );
+  }
+
   /// Query data from a dynamic table with detailed analysis
   Future<List<QueryRow>> tableQuery(
     String tableName, {
@@ -649,7 +724,7 @@ class AppDatabase extends _$AppDatabase {
     try {
       result = await select.getSingle();
     } catch (e) {
-      logger.e('Error getting retention policy for $tableName: $e');
+      // No retention policy exists for this table yet - this is normal
       return null;
     }
     final dropAfter = result.read<String>('drop_after');

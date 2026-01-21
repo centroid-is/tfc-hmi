@@ -82,6 +82,14 @@ class Collector {
   final Map<CollectEntry, Evaluator> _evaluators = {};
   final Logger logger = Logger();
 
+  // Performance instrumentation
+  int _eventCount = 0;
+  int _insertCount = 0;
+  final Stopwatch _uptime = Stopwatch();
+  final Stopwatch _jsonConversionTime = Stopwatch();
+  final Stopwatch _insertTime = Stopwatch();
+  DateTime? _lastStatsReset;
+
   static const configLocation = 'collector_config';
 
   Collector({
@@ -89,6 +97,8 @@ class Collector {
     required this.stateMan,
     required this.database,
   }) {
+    _uptime.start();
+    _lastStatsReset = DateTime.now();
     final keyMappings = stateMan.keyMappings;
     for (var value in keyMappings.nodes.values) {
       if (value.collect != null) {
@@ -142,6 +152,7 @@ class Collector {
     DynamicValue? latestValue;
 
     Future<void> insertValue(DynamicValue newValue) async {
+      _insertCount++;
       await database.insertTimeseriesData(
         name,
         DateTime.now().toUtc(),
@@ -150,14 +161,16 @@ class Collector {
     }
 
     _subscriptions[entry] = subscription.listen(
-      (value) async {
+      (value) {
+        _eventCount++;
         if (entry.sampleInterval == null) {
           if (skipFirstSample) {
             skipFirstSample = false;
             return;
           }
           // No sampling - collect every value immediately
-          await insertValue(value);
+          // Don't await - just fire and forget for better performance
+          insertValue(value);
         } else {
           // Store the latest value for periodic sampling
           latestValue = value;
@@ -186,6 +199,36 @@ class Collector {
     }
 
     _realTimeStreams[entry] = subscription;
+  }
+
+  /// Get performance statistics
+  Map<String, dynamic> getStats() {
+    final uptimeSec = _uptime.elapsed.inSeconds > 0 ? _uptime.elapsed.inSeconds : 1;
+    return {
+      'total_events': _eventCount,
+      'events_per_sec': _eventCount / uptimeSec,
+      'total_inserts': _insertCount,
+      'inserts_per_sec': _insertCount / uptimeSec,
+      'uptime_seconds': uptimeSec,
+      'active_subscriptions': _subscriptions.length,
+      'json_conversion_ms': _jsonConversionTime.elapsedMilliseconds,
+      'avg_json_conversion_us': _insertCount > 0
+          ? (_jsonConversionTime.elapsedMicroseconds / _insertCount).toStringAsFixed(1)
+          : '0',
+      'insert_time_ms': _insertTime.elapsedMilliseconds,
+      'avg_insert_ms': _insertCount > 0
+          ? (_insertTime.elapsedMilliseconds / _insertCount).toStringAsFixed(2)
+          : '0',
+    };
+  }
+
+  /// Reset performance statistics
+  void resetStats() {
+    _eventCount = 0;
+    _insertCount = 0;
+    _uptime.reset();
+    _uptime.start();
+    _lastStatsReset = DateTime.now();
   }
 
   Stream<TimeseriesData<dynamic>> collectUpdates(String key) {
