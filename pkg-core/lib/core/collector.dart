@@ -13,7 +13,7 @@ import 'database.dart';
 
 part 'collector.g.dart';
 
-@JsonSerializable()
+@JsonSerializable(explicitToJson: true)
 class CollectEntry {
   String key;
   String? name;

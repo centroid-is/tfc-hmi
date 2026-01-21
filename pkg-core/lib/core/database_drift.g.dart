@@ -253,25 +253,21 @@ class $AlarmHistoryTable extends AlarmHistory
       type: DriftSqlType.string, requiredDuringInsert: false);
   static const VerificationMeta _activeMeta = const VerificationMeta('active');
   @override
-  late final GeneratedColumn<bool> active =
-      GeneratedColumn<bool>('active', aliasedName, false,
-          type: DriftSqlType.bool,
-          requiredDuringInsert: true,
-          defaultConstraints: GeneratedColumn.constraintsDependsOnDialect({
-            SqlDialect.sqlite: 'CHECK ("active" IN (0, 1))',
-            SqlDialect.postgres: '',
-          }));
+  late final GeneratedColumn<bool> active = GeneratedColumn<bool>(
+      'active', aliasedName, false,
+      type: DriftSqlType.bool,
+      requiredDuringInsert: true,
+      defaultConstraints:
+          GeneratedColumn.constraintIsAlways('CHECK ("active" IN (0, 1))'));
   static const VerificationMeta _pendingAckMeta =
       const VerificationMeta('pendingAck');
   @override
-  late final GeneratedColumn<bool> pendingAck =
-      GeneratedColumn<bool>('pending_ack', aliasedName, false,
-          type: DriftSqlType.bool,
-          requiredDuringInsert: true,
-          defaultConstraints: GeneratedColumn.constraintsDependsOnDialect({
-            SqlDialect.sqlite: 'CHECK ("pending_ack" IN (0, 1))',
-            SqlDialect.postgres: '',
-          }));
+  late final GeneratedColumn<bool> pendingAck = GeneratedColumn<bool>(
+      'pending_ack', aliasedName, false,
+      type: DriftSqlType.bool,
+      requiredDuringInsert: true,
+      defaultConstraints: GeneratedColumn.constraintIsAlways(
+          'CHECK ("pending_ack" IN (0, 1))'));
   static const VerificationMeta _createdAtMeta =
       const VerificationMeta('createdAt');
   @override
@@ -1315,15 +1311,13 @@ class $HistoryViewKeyTable extends HistoryViewKey
   static const VerificationMeta _useSecondYAxisMeta =
       const VerificationMeta('useSecondYAxis');
   @override
-  late final GeneratedColumn<bool> useSecondYAxis =
-      GeneratedColumn<bool>('use_second_y_axis', aliasedName, false,
-          type: DriftSqlType.bool,
-          requiredDuringInsert: false,
-          defaultConstraints: GeneratedColumn.constraintsDependsOnDialect({
-            SqlDialect.sqlite: 'CHECK ("use_second_y_axis" IN (0, 1))',
-            SqlDialect.postgres: '',
-          }),
-          defaultValue: const Constant(false));
+  late final GeneratedColumn<bool> useSecondYAxis = GeneratedColumn<bool>(
+      'use_second_y_axis', aliasedName, false,
+      type: DriftSqlType.bool,
+      requiredDuringInsert: false,
+      defaultConstraints: GeneratedColumn.constraintIsAlways(
+          'CHECK ("use_second_y_axis" IN (0, 1))'),
+      defaultValue: const Constant(false));
   static const VerificationMeta _graphIndexMeta =
       const VerificationMeta('graphIndex');
   @override
@@ -2330,9 +2324,6 @@ abstract class _$AppDatabase extends GeneratedDatabase {
           ),
         ],
       );
-  @override
-  DriftDatabaseOptions get options =>
-      const DriftDatabaseOptions(storeDateTimeAsText: true);
 }
 
 typedef $$AlarmTableCreateCompanionBuilder = AlarmCompanion Function({

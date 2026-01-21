@@ -159,7 +159,7 @@ class DatabaseException implements Exception {
 }
 
 // https://docs.tigerdata.com/api/latest/data-retention/add_retention_policy/
-@json.JsonSerializable()
+@json.JsonSerializable(explicitToJson: true)
 class RetentionPolicy {
   @DurationMinutesConverter()
   @json.JsonKey(name: 'drop_after_min')
@@ -219,6 +219,23 @@ class Database {
   static final Logger logger = Logger();
   final Map<String, Completer<void>> _tableCreationLocks = {};
 
+  /// Retry a database operation with exponential backoff
+  Future<T> _withRetry<T>(Future<T> Function() operation,
+      {int maxRetries = 5, Duration initialDelay = const Duration(seconds: 1)}) async {
+    var delay = initialDelay;
+    for (var attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        return await operation();
+      } catch (e) {
+        if (attempt == maxRetries - 1) rethrow;
+        logger.w('Database operation failed (attempt ${attempt + 1}/$maxRetries): $e');
+        await Future.delayed(delay);
+        delay *= 2; // Exponential backoff
+      }
+    }
+    throw StateError('Unreachable');
+  }
+
   // Batch write buffering
   final Map<String, List<_PendingWrite>> _writeBuffer = {};
   Timer? _flushTimer;
@@ -271,9 +288,9 @@ class Database {
 
       try {
         final rows = writes.map((w) => w.toMap()).toList();
-        await db.tableInsertBatch(tableName, rows);
+        await _withRetry(() => db.tableInsertBatch(tableName, rows));
       } catch (e) {
-        logger.e('Error flushing batch for $tableName: $e');
+        logger.e('Error flushing batch for $tableName after retries: $e');
         rethrow;
       }
 
@@ -333,13 +350,12 @@ class Database {
         _totalWriteTime.start();
 
         final rows = writes.map((w) => w.toMap()).toList();
-        await db.tableInsertBatch(tableName, rows);
+        await _withRetry(() => db.tableInsertBatch(tableName, rows));
 
         _totalWriteTime.stop();
       } catch (e) {
         _totalWriteTime.stop();
-        logger.e('Error flushing batch for $tableName: $e');
-        // Optionally retry or handle the error
+        logger.e('Error flushing batch for $tableName after retries: $e');
       }
     }
   }

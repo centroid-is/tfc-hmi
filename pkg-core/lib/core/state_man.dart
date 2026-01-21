@@ -31,7 +31,7 @@ class Base64Converter implements JsonConverter<Uint8List?, String?> {
   }
 }
 
-@JsonSerializable()
+@JsonSerializable(explicitToJson: true)
 class OpcUAConfig {
   String endpoint = "opc.tcp://localhost:4840";
   String? username;
@@ -107,7 +107,7 @@ class StateManConfig {
   static const String configKey = 'state_man_config';
 }
 
-@JsonSerializable()
+@JsonSerializable(explicitToJson: true)
 class OpcUANodeConfig {
   int namespace;
   String identifier;
@@ -136,7 +136,7 @@ class OpcUANodeConfig {
   }
 }
 
-@JsonSerializable()
+@JsonSerializable(explicitToJson: true)
 class KeyMappingEntry {
   @JsonKey(name: 'opcua_node')
   OpcUANodeConfig? opcuaNode;
@@ -157,7 +157,7 @@ class KeyMappingEntry {
   }
 }
 
-@JsonSerializable()
+@JsonSerializable(explicitToJson: true)
 class KeyMappings {
   Map<String, KeyMappingEntry> nodes;
 
@@ -182,9 +182,20 @@ class KeyMappings {
 
   Iterable<String> get keys => nodes.keys;
 
-  static Future<KeyMappings> fromPrefs(PreferencesApi prefs) async {
+  /// Filter key mappings to only include entries for a specific server alias.
+  KeyMappings filterByServer(String? serverAlias) {
+    final filtered = Map.fromEntries(
+      nodes.entries.where((e) => e.value.server == serverAlias),
+    );
+    return KeyMappings(nodes: filtered);
+  }
+
+  static Future<KeyMappings> fromPrefs(PreferencesApi prefs, {bool createDefault = true}) async {
     var keyMappingsJson = await prefs.getString('key_mappings');
     if (keyMappingsJson == null) {
+      if (!createDefault) {
+        throw Exception('key_mappings not found in preferences and createDefault is false');
+      }
       final defaultKeyMappings = KeyMappings(nodes: {
         "exampleKey": KeyMappingEntry(
             opcuaNode: OpcUANodeConfig(namespace: 42, identifier: "identifier"))

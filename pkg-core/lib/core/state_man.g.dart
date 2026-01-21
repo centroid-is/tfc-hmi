@@ -65,9 +65,9 @@ KeyMappingEntry _$KeyMappingEntryFromJson(Map<String, dynamic> json) =>
 
 Map<String, dynamic> _$KeyMappingEntryToJson(KeyMappingEntry instance) =>
     <String, dynamic>{
-      'opcua_node': instance.opcuaNode,
+      'opcua_node': instance.opcuaNode?.toJson(),
       'io': instance.io,
-      'collect': instance.collect,
+      'collect': instance.collect?.toJson(),
     };
 
 KeyMappings _$KeyMappingsFromJson(Map<String, dynamic> json) => KeyMappings(
@@ -79,5 +79,5 @@ KeyMappings _$KeyMappingsFromJson(Map<String, dynamic> json) => KeyMappings(
 
 Map<String, dynamic> _$KeyMappingsToJson(KeyMappings instance) =>
     <String, dynamic>{
-      'nodes': instance.nodes,
+      'nodes': instance.nodes.map((k, e) => MapEntry(k, e.toJson())),
     };

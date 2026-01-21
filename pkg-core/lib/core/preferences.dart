@@ -90,10 +90,64 @@ class KeyCache {
   Future<void>? cacheUpdate;
 }
 
+/// In-memory cache that mimics the SharedPreferences API.
+class InMemoryPreferences {
+  final Map<String, Object> _cache = {};
+
+  Future<Set<String>> getKeys({Set<String>? allowList}) async {
+    if (allowList == null) return _cache.keys.toSet();
+    return _cache.keys.where((k) => allowList.contains(k)).toSet();
+  }
+
+  Future<Map<String, Object?>> getAll({Set<String>? allowList}) async {
+    if (allowList == null) return Map.from(_cache);
+    return Map.fromEntries(
+      _cache.entries.where((e) => allowList.contains(e.key)),
+    );
+  }
+
+  Future<bool?> getBool(String key) async => _cache[key] as bool?;
+  Future<int?> getInt(String key) async => _cache[key] as int?;
+  Future<double?> getDouble(String key) async => _cache[key] as double?;
+  Future<String?> getString(String key) async => _cache[key] as String?;
+  Future<List<String>?> getStringList(String key) async =>
+      _cache[key] as List<String>?;
+
+  Future<bool> containsKey(String key) async => _cache.containsKey(key);
+
+  Future<void> setBool(String key, bool value) async => _cache[key] = value;
+  Future<void> setInt(String key, int value) async => _cache[key] = value;
+  Future<void> setDouble(String key, double value) async => _cache[key] = value;
+  Future<void> setString(String key, String value) async => _cache[key] = value;
+  Future<void> setStringList(String key, List<String> value) async =>
+      _cache[key] = value;
+
+  Future<void> remove(String key) async => _cache.remove(key);
+
+  void printAll() {
+    if (_cache.isEmpty) {
+      print('InMemoryPreferences: (empty)');
+      return;
+    }
+    print('InMemoryPreferences:');
+    for (final entry in _cache.entries) {
+      print('  ${entry.key}: ${entry.value}');
+    }
+  }
+
+  Future<void> clear({Set<String>? allowList}) async {
+    if (allowList == null) {
+      _cache.clear();
+    } else {
+      _cache.removeWhere((k, _) => allowList.contains(k));
+    }
+  }
+}
+
 class Preferences implements PreferencesApi {
   final Database? database;
   final KeyCache keyCache = KeyCache();
-  // final SharedPreferencesAsync sharedPreferences = SharedPreferencesAsync();
+  final InMemoryPreferences _memoryCache = InMemoryPreferences();
   final MySecureStorage secureStorage;
   final StreamController<String> _onPreferencesChanged =
       StreamController<String>.broadcast();
@@ -137,14 +191,12 @@ class Preferences implements PreferencesApi {
 
   @override
   Future<Set<String>> getKeys({Set<String>? allowList}) async {
-    throw "todo";
-    // return await sharedPreferences.getKeys(allowList: allowList);
+    return await _memoryCache.getKeys(allowList: allowList);
   }
 
   @override
   Future<Map<String, Object?>> getAll({Set<String>? allowList}) async {
-    throw "todo";
-    // return await sharedPreferences.getAll(allowList: allowList);
+    return await _memoryCache.getAll(allowList: allowList);
   }
 
   @override
@@ -153,8 +205,7 @@ class Preferences implements PreferencesApi {
       final value = await secureStorage.read(key: key);
       return value == null ? null : value == 'true';
     } else {
-      throw "todo";
-      // return await sharedPreferences.getBool(key);
+      return await _memoryCache.getBool(key);
     }
   }
 
@@ -164,8 +215,7 @@ class Preferences implements PreferencesApi {
       final value = await secureStorage.read(key: key);
       return value == null ? null : int.parse(value);
     } else {
-      throw "todo";
-      // return await sharedPreferences.getInt(key);
+      return await _memoryCache.getInt(key);
     }
   }
 
@@ -175,8 +225,7 @@ class Preferences implements PreferencesApi {
       final value = await secureStorage.read(key: key);
       return value == null ? null : double.parse(value);
     } else {
-      throw "todo";
-      // return await sharedPreferences.getDouble(key);
+      return await _memoryCache.getDouble(key);
     }
   }
 
@@ -185,9 +234,7 @@ class Preferences implements PreferencesApi {
     if (secret) {
       return await secureStorage.read(key: key);
     } else {
-      throw "todo";
-
-      // return await sharedPreferences.getString(key);
+      return await _memoryCache.getString(key);
     }
   }
 
@@ -197,9 +244,7 @@ class Preferences implements PreferencesApi {
       final value = await secureStorage.read(key: key);
       return value?.split(',');
     } else {
-      throw "todo";
-
-      // return await sharedPreferences.getStringList(key);
+      return await _memoryCache.getStringList(key);
     }
   }
 
@@ -209,9 +254,7 @@ class Preferences implements PreferencesApi {
       throw UnimplementedError(
           'containsKey is not implemented for secret storage');
     } else {
-      throw "todo";
-
-      // return await sharedPreferences.containsKey(key);
+      return await _memoryCache.containsKey(key);
     }
   }
 
@@ -221,9 +264,7 @@ class Preferences implements PreferencesApi {
     if (secret) {
       await secureStorage.write(key: key, value: value.toString());
     } else {
-      throw "todo";
-
-      // await sharedPreferences.setBool(key, value);
+      await _memoryCache.setBool(key, value);
     }
     if (saveToDb) {
       await _upsertToPostgres(key, value, 'bool');
@@ -237,9 +278,7 @@ class Preferences implements PreferencesApi {
     if (secret) {
       await secureStorage.write(key: key, value: value.toString());
     } else {
-      throw "todo";
-
-      // await sharedPreferences.setInt(key, value);
+      await _memoryCache.setInt(key, value);
     }
     if (saveToDb) {
       await _upsertToPostgres(key, value, 'int');
@@ -253,9 +292,7 @@ class Preferences implements PreferencesApi {
     if (secret) {
       await secureStorage.write(key: key, value: value.toString());
     } else {
-      throw "todo";
-
-      // await sharedPreferences.setDouble(key, value);
+      await _memoryCache.setDouble(key, value);
     }
     if (saveToDb) {
       await _upsertToPostgres(key, value, 'double');
@@ -269,8 +306,7 @@ class Preferences implements PreferencesApi {
     if (secret) {
       await secureStorage.write(key: key, value: value);
     } else {
-      throw "todo";
-      // await sharedPreferences.setString(key, value);
+      await _memoryCache.setString(key, value);
     }
     if (saveToDb) {
       await _upsertToPostgres(key, value, 'String');
@@ -284,9 +320,7 @@ class Preferences implements PreferencesApi {
     if (secret) {
       await secureStorage.write(key: key, value: value.join(','));
     } else {
-      throw "todo";
-
-      // await sharedPreferences.setStringList(key, value);
+      await _memoryCache.setStringList(key, value);
     }
     if (saveToDb) {
       await _upsertToPostgres(key, value, 'List<String>');
@@ -295,24 +329,19 @@ class Preferences implements PreferencesApi {
   }
 
   @override
-  Future<void> remove(String key, {bool secret = false}) {
+  Future<void> remove(String key, {bool secret = false}) async {
     if (secret) {
-      secureStorage.delete(key: key);
+      await secureStorage.delete(key: key);
     } else {
-      throw "todo";
-
-      // sharedPreferences.remove(key);
+      await _memoryCache.remove(key);
     }
     // TODO: remove from postgres
     _onPreferencesChanged.add(key);
-    return Future.value();
   }
 
   @override
   Future<void> clear({Set<String>? allowList}) {
-    throw "todo";
-
-    // return sharedPreferences.clear(allowList: allowList);
+    return _memoryCache.clear(allowList: allowList);
   }
 
   Stream<String> get onPreferencesChanged => _onPreferencesChanged.stream;
@@ -347,7 +376,7 @@ class Preferences implements PreferencesApi {
     keyCache.lastUpdated = DateTime.now();
   }
 
-  /// Loads all preferences from Postgres into shared preferences.
+  /// Loads all preferences from Postgres into memory cache.
   Future<void> loadFromPostgres() async {
     final db = database!.db;
     final result = await db.select(db.flutterPreferences).get();
@@ -358,37 +387,27 @@ class Preferences implements PreferencesApi {
       switch (type) {
         case 'bool':
           if (value != null) {
-            throw "todo";
-
-            // await sharedPreferences.setBool(key, value == 'true');
+            await _memoryCache.setBool(key, value == 'true');
           }
           break;
         case 'int':
           if (value != null) {
-            throw "todo";
-
-            // await sharedPreferences.setInt(key, int.parse(value));
+            await _memoryCache.setInt(key, int.parse(value));
           }
           break;
         case 'double':
           if (value != null) {
-            throw "todo";
-
-            // await sharedPreferences.setDouble(key, double.parse(value));
+            await _memoryCache.setDouble(key, double.parse(value));
           }
           break;
         case 'String':
           if (value != null) {
-            throw "todo";
-
-            // await sharedPreferences.setString(key, value);
+            await _memoryCache.setString(key, value);
           }
           break;
         case 'List<String>':
           if (value != null) {
-            throw "todo";
-
-            // await sharedPreferences.setStringList(key, value.split(','));
+            await _memoryCache.setStringList(key, value.split(','));
           }
           break;
         default:

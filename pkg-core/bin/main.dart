@@ -1,20 +1,13 @@
 import 'dart:async';
-import 'dart:ffi';
 import 'dart:io';
 
-import 'package:args/args.dart';
-
-import 'package:tfc_core/core/collector.dart';
 import 'package:tfc_core/core/database.dart';
 import 'package:tfc_core/core/database_drift.dart';
 import 'package:tfc_core/core/preferences.dart';
 import 'package:tfc_core/core/secure_storage/secure_storage.dart';
 
-import 'data_acquisition.dart';
+import 'data_acquisition_isolate.dart';
 import 'package:tfc_core/core/state_man.dart';
-import 'package:postgres/postgres.dart';
-
-import 'package:open62541/open62541.dart';
 
 import 'package:logger/logger.dart';
 
@@ -26,10 +19,12 @@ class TraceFilter extends LogFilter {
 }
 
 void main() async {
-  final databaseConfig = await DatabaseConfig.fromEnv();
-  final db = Database(await AppDatabase.spawn(databaseConfig));
-  final prefs =
-      Preferences(database: db, secureStorage: SecureStorage.getInstance());
+  Logger.defaultFilter = () => TraceFilter();
+  final logger = Logger();
+
+  final dbConfig = await DatabaseConfig.fromEnv();
+  final db = Database(await AppDatabase.spawn(dbConfig));
+  final prefs = await Preferences.create(db: db);
 
   final statemanConfigFilePath =
       Platform.environment['CENTROID_STATEMAN_FILE_PATH'];
@@ -38,60 +33,28 @@ void main() async {
   }
   final smConfig = await StateManConfig.fromFile(statemanConfigFilePath);
 
-  Logger.defaultFilter = () => TraceFilter();
+  final keyMappings = await KeyMappings.fromPrefs(prefs, createDefault: false);
 
-  final dbConfig = DatabaseConfig(
-      postgres: Endpoint(
-          host: "10.50.10.11",
-          database: "hmi",
-          username: "centroid",
-          password: "FooBarHelloWorld"),
-      sslMode: SslMode.require);
+  logger.i('Spawning ${smConfig.opcua.length} DataAcquisition isolate(s)');
 
-  // look at the config, we need to split each server from stateman, and create DataAcquisition for each server in an isolate
-  final da = DataAcquisition(
-      config: smConfig, dbConfig: dbConfig, enableStatsLogging: false);
+  // Spawn one isolate per OPC UA server
+  for (final server in smConfig.opcua) {
+    final filtered = keyMappings.filterByServer(server.serverAlias);
+    final collectedKeys = filtered.nodes.entries
+        .where((e) => e.value.collect != null)
+        .map((e) => e.key);
+    logger.i(
+        'Spawning isolate for server ${server.serverAlias} ${server.endpoint} with ${filtered.nodes.length} keys (${collectedKeys.length} collected):\n${collectedKeys.map((k) => '  - $k').join('\n')}');
 
-  await Future.delayed(Duration(hours: 1));
+    await spawnDataAcquisitionIsolate(
+      server: server,
+      dbConfig: dbConfig,
+      keyMappings: filtered,
+    );
+  }
 
-  // final lib = loadOpen62541Library(staticLinking: false);
-  // final client = Client(lib);
+  logger.i('All isolates spawned, main thread waiting...');
 
-  // // spawn a background task to keep the client active
-  // () async {
-  //   final clientref = client;
-  //   while (true) {
-  //     final endpoint = "opc.tcp://10.50.10.10:4840";
-  //     clientref.connect(endpoint).onError(
-  //         (e, stacktrace) => logger.e('Failed to connect to ${endpoint}: $e'));
-  //     while (clientref.runIterate(const Duration(milliseconds: 10)) && true) {
-  //       await Future.delayed(const Duration(milliseconds: 10));
-  //     }
-  //     logger.e('Disconnecting client');
-  //     clientref.disconnect();
-  //     await Future.delayed(const Duration(milliseconds: 1000));
-  //   }
-  //   logger.e('StateMan background run iterate task exited');
-  // }();
-
-  // final foo = await client.awaitConnect();
-
-  // await Future.delayed(Duration(seconds: 5));
-
-  // final subid = await client.subscriptionCreate();
-
-  // var cnts = <int>[];
-  // for (var i = 0; i < 100; i++) {
-  //   cnts.add(0);
-  //   client
-  //       .monitor(
-  //           NodeId.fromString(4, "GVL_IO.TemperatureSensor.hmi.Mapped_values"),
-  //           subid)
-  //       .listen((val) {
-  //     cnts[i] = cnts[i] + 1;
-  //     if (i == 99) {
-  //       print(cnts);
-  //     }
-  //   });
-  // }
+  // Keep main alive indefinitely
+  await Completer<void>().future;
 }

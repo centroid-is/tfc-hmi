@@ -25,10 +25,10 @@ Map<String, dynamic> _$CollectEntryToJson(CollectEntry instance) =>
     <String, dynamic>{
       'key': instance.key,
       'name': instance.name,
-      'retention': instance.retention,
+      'retention': instance.retention.toJson(),
       'sample_interval_us':
           const DurationMicrosecondsConverter().toJson(instance.sampleInterval),
-      'sample_expression': instance.sampleExpression,
+      'sample_expression': instance.sampleExpression?.toJson(),
     };
 
 CollectorConfig _$CollectorConfigFromJson(Map<String, dynamic> json) =>
