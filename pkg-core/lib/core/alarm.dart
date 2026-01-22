@@ -199,20 +199,9 @@ class AlarmMan {
     _activeAlarmsController.onCancel = () async {};
   }
 
-  static Future<AlarmMan> create(
-      Preferences preferences, StateMan stateMan) async {
-    // final sharedPreferences = SharedPreferencesAsync();
-    // var localConfigJson =
-    //     await sharedPreferences.getString('alarm_man_local_config');
-    // if (localConfigJson == null) {
-    //   await sharedPreferences.setString('alarm_man_local_config',
-    //       jsonEncode(AlarmManLocalConfig(historyToDb: false).toJson()));
-    //   localConfigJson =
-    //       await sharedPreferences.getString('alarm_man_local_config');
-    // }
-    // final localConfig =
-    //     AlarmManLocalConfig.fromJson(jsonDecode(localConfigJson!));
-    final localConfig = AlarmManLocalConfig(historyToDb: true); // TODO
+  static Future<AlarmMan> create(Preferences preferences, StateMan stateMan,
+      {historyToDb = false}) async {
+    final localConfig = AlarmManLocalConfig(historyToDb: historyToDb);
 
     var configJson = await preferences.getString('alarm_man_config');
     if (configJson == null) {

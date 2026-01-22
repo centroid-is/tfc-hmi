@@ -4,12 +4,11 @@ import 'dart:io';
 import 'package:tfc_core/core/database.dart';
 import 'package:tfc_core/core/database_drift.dart';
 import 'package:tfc_core/core/preferences.dart';
-import 'package:tfc_core/core/secure_storage/secure_storage.dart';
-
-import 'data_acquisition_isolate.dart';
 import 'package:tfc_core/core/state_man.dart';
+import 'package:tfc_core/core/alarm.dart';
 
 import 'package:logger/logger.dart';
+import 'data_acquisition_isolate.dart';
 
 class TraceFilter extends LogFilter {
   @override
@@ -34,6 +33,21 @@ void main() async {
   final smConfig = await StateManConfig.fromFile(statemanConfigFilePath);
 
   final keyMappings = await KeyMappings.fromPrefs(prefs, createDefault: false);
+
+  // Create StateMan for alarm monitoring
+  final stateMan = await StateMan.create(
+    config: smConfig,
+    keyMappings: keyMappings,
+    useIsolate: false,
+  );
+
+  // Setup alarm monitoring with database persistence
+  // ignore: unused_local_variable
+  final alarmHandler = await AlarmMan.create(
+    prefs,
+    stateMan,
+    historyToDb: true,
+  );
 
   logger.i('Spawning ${smConfig.opcua.length} DataAcquisition isolate(s)');
 
