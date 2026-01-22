@@ -1,8 +1,8 @@
 services:
   centroidx-backend:
     build:
-      context: ../../pkg-core
-      dockerfile: ../docker/backend/Dockerfile
+      context: ../../packages/tfc_dart
+      dockerfile: ../../docker/backend/Dockerfile
     container_name: centroidx-backend
     restart: unless-stopped
     environment:
