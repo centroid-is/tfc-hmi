@@ -11,8 +11,10 @@ import 'interface.dart';
 class AwsSecureStorage implements MySecureStorage {
   final _storage = AmplifySecureStorageDart.factoryFrom(
       macOSOptions: MacOSSecureStorageOptions(
-          useDataProtection: false, // todo
-          /*
+    useDataProtection: true, // todo
+    accessible: KeychainAttributeAccessible.accessibleAfterFirstUnlock,
+    accessGroup: 'is.centroid.centroidx',
+    /*
 dart compile exe bin/main.dart -o build/myapp
 
 entitlements.plist
@@ -30,7 +32,7 @@ entitlements.plist
 
 codesign -s - --force --entitlements entitlements.plist build/myapp
           */
-          accessGroup: null))(
+  ))(
     AmplifySecureStorageScope
         .awsCognitoAuthPlugin, // dont know if this makes sense
   );

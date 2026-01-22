@@ -5,8 +5,8 @@ import 'package:flutter_colorpicker/flutter_colorpicker.dart';
 
 import 'common.dart';
 import '../../providers/collector.dart';
-import '../../core/database.dart';
-import '../../converter/color_converter.dart';
+import 'package:tfc_core/core/database.dart';
+import 'package:tfc/converter/color_converter.dart';
 
 part 'table.g.dart';
 

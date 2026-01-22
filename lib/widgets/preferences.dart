@@ -8,8 +8,9 @@ import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:tfc/providers/database.dart';
 
 import '../providers/preferences.dart';
-import '../core/preferences.dart';
-import '../core/database.dart';
+import 'package:tfc_core/core/preferences.dart';
+import 'package:tfc/core/preferences.dart';
+import 'package:tfc_core/core/database.dart';
 import 'dart:convert';
 
 class DatabaseConfigWidget extends ConsumerWidget {
@@ -287,7 +288,7 @@ class PreferencesKeysWidget extends ConsumerWidget {
         }
         final preferences = snapshot.data!;
         final localPrefs = SharedPreferencesWrapper(
-          preferences.sharedPreferences,
+          SharedPreferencesAsync(),
         );
 
         return FutureBuilder<Map<String, Object?>>(

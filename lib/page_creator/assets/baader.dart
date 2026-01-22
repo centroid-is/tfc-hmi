@@ -7,7 +7,7 @@ import 'package:beamer/beamer.dart';
 
 import 'common.dart';
 import '../../widgets/baader.dart';
-import '../../converter/color_converter.dart';
+import 'package:tfc/converter/color_converter.dart';
 
 part 'baader.g.dart';
 

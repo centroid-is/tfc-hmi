@@ -8,10 +8,10 @@ import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../core/state_man.dart';
-import '../../core/collector.dart';
-import '../../core/database.dart';
-import '../../core/boolean_expression.dart';
+import 'package:tfc_core/core/state_man.dart';
+import 'package:tfc_core/core/collector.dart';
+import 'package:tfc_core/core/database.dart';
+import 'package:tfc_core/core/boolean_expression.dart';
 import '../../providers/state_man.dart';
 import '../../providers/preferences.dart';
 import '../../widgets/boolean_expression.dart';

@@ -3,11 +3,10 @@ import 'package:logger/logger.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:riverpod/riverpod.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
-import '../core/collector.dart';
+import 'package:tfc_core/core/collector.dart';
 
 import 'state_man.dart';
 import 'database.dart';
-import 'data_acquisition.dart';
 
 part 'collector.g.dart';
 
@@ -28,11 +27,6 @@ Future<Collector?> collector(Ref ref) async {
     await prefs.setString(Collector.configLocation, configJson);
   } else {
     config = CollectorConfig.fromJson(jsonDecode(configJson));
-  }
-
-  if (config.collect) {
-    // Start data acquisition in a separate isolate
-    final _ = await ref.watch(dataAcquisitionProvider.future);
   }
 
   return Collector(

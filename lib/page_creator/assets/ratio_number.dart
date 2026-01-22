@@ -7,9 +7,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'common.dart';
 import '../../providers/database.dart';
 import '../../widgets/graph.dart';
-import '../../converter/color_converter.dart';
-import '../../converter/duration_converter.dart';
-import '../../core/database.dart';
+import 'package:tfc/converter/color_converter.dart';
+import 'package:tfc_core/converter/duration_converter.dart';
+import 'package:tfc_core/core/database.dart';
 
 part 'ratio_number.g.dart';
 

@@ -3,8 +3,8 @@ import 'dart:async';
 import 'package:riverpod/riverpod.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
-import '../core/database.dart';
-import '../core/database_drift.dart';
+import 'package:tfc_core/core/database.dart';
+import 'package:tfc_core/core/database_drift.dart';
 
 part 'database.g.dart';
 

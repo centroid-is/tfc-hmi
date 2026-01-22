@@ -11,7 +11,8 @@ import '../models/menu_item.dart';
 import '../route_registry.dart';
 import '../providers/theme.dart';
 import '../providers/alarm.dart';
-import '../core/alarm.dart';
+import 'package:tfc_core/core/alarm.dart';
+import 'alarm.dart';
 // ===================
 // Provider Abstraction
 // ===================

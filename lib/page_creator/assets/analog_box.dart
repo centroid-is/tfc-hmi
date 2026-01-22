@@ -9,8 +9,8 @@ import 'package:open62541/open62541.dart' show DynamicValue;
 
 import 'common.dart';
 import '../../providers/state_man.dart';
-import '../../core/state_man.dart';
-import '../../converter/color_converter.dart';
+import 'package:tfc_core/core/state_man.dart';
+import 'package:tfc/converter/color_converter.dart';
 import 'graph.dart';
 
 part 'analog_box.g.dart';

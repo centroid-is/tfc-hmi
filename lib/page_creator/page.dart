@@ -6,8 +6,8 @@ import 'package:flutter/material.dart';
 import 'assets/common.dart';
 import 'assets/registry.dart';
 import '../models/menu_item.dart';
-import '../core/preferences.dart';
-import '../converter/icon.dart';
+import 'package:tfc_core/core/preferences.dart';
+import 'package:tfc/converter/icon.dart';
 
 part 'page.g.dart';
 
