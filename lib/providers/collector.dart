@@ -3,7 +3,7 @@ import 'package:logger/logger.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:riverpod/riverpod.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
-import 'package:tfc_core/core/collector.dart';
+import 'package:tfc_dart/core/collector.dart';
 
 import 'state_man.dart';
 import 'database.dart';

@@ -7,11 +7,11 @@ import 'package:rxdart/rxdart.dart';
 
 import 'package:tfc/page_creator/assets/button.dart';
 import 'package:tfc/page_creator/assets/common.dart';
-import 'package:tfc_core/core/state_man.dart';
+import 'package:tfc_dart/core/state_man.dart';
 import 'package:tfc/providers/state_man.dart';
 import 'package:tfc/providers/preferences.dart';
 import 'package:tfc/widgets/dynamic_value.dart';
-import 'package:tfc_core/converter/dynamic_value_converter.dart';
+import 'package:tfc_dart/converter/dynamic_value_converter.dart';
 
 import 'package:open62541/open62541.dart' show DynamicValue;
 

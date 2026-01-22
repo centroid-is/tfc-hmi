@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import 'package:tfc_core/core/alarm.dart';
-import 'package:tfc_core/core/boolean_expression.dart';
+import 'package:tfc_dart/core/alarm.dart';
+import 'package:tfc_dart/core/boolean_expression.dart';
 import '../providers/alarm.dart';
 import 'base_scaffold.dart';
 import 'boolean_expression.dart';

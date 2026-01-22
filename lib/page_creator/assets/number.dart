@@ -14,7 +14,7 @@ import 'package:rxdart/rxdart.dart';
 
 import 'common.dart';
 import '../../providers/state_man.dart';
-import 'package:tfc_core/core/state_man.dart';
+import 'package:tfc_dart/core/state_man.dart';
 import 'package:tfc/converter/color_converter.dart';
 import 'graph.dart';
 

@@ -11,7 +11,7 @@ import 'common.dart';
 import '../../painter/beckhoff/cx5010.dart';
 import '../../painter/beckhoff/ek1100.dart';
 import '../../painter/beckhoff/io8.dart';
-import 'package:tfc_core/core/state_man.dart';
+import 'package:tfc_dart/core/state_man.dart';
 import '../../providers/state_man.dart';
 import '../page.dart';
 import '../../page_creator/assets/graph.dart';

@@ -8,8 +8,8 @@ import 'common.dart';
 import '../../providers/database.dart';
 import '../../widgets/graph.dart';
 import 'package:tfc/converter/color_converter.dart';
-import 'package:tfc_core/converter/duration_converter.dart';
-import 'package:tfc_core/core/database.dart';
+import 'package:tfc_dart/converter/duration_converter.dart';
+import 'package:tfc_dart/core/database.dart';
 
 part 'ratio_number.g.dart';
 

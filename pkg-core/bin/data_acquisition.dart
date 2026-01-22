@@ -1,12 +1,12 @@
 import 'dart:io';
 import 'dart:async';
 import 'package:logger/logger.dart';
-import 'package:tfc_core/core/preferences.dart';
+import 'package:tfc_dart/core/preferences.dart';
 
-import 'package:tfc_core/core/state_man.dart';
-import 'package:tfc_core/core/collector.dart';
-import 'package:tfc_core/core/database.dart';
-import 'package:tfc_core/core/database_drift.dart';
+import 'package:tfc_dart/core/state_man.dart';
+import 'package:tfc_dart/core/collector.dart';
+import 'package:tfc_dart/core/database.dart';
+import 'package:tfc_dart/core/database_drift.dart';
 
 class _TraceFilter extends LogFilter {
   @override

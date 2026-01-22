@@ -1,7 +1,7 @@
 // Todo move local storage to file or sqlite, for now use shared preferences
 
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:tfc_core/core/preferences.dart';
+import 'package:tfc_dart/core/preferences.dart';
 
 // / A wrapper around SharedPreferencesAsync that implements PreferencesApi
 class SharedPreferencesWrapper implements PreferencesApi {

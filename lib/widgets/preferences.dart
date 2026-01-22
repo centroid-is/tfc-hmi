@@ -8,9 +8,9 @@ import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:tfc/providers/database.dart';
 
 import '../providers/preferences.dart';
-import 'package:tfc_core/core/preferences.dart';
+import 'package:tfc_dart/core/preferences.dart';
 import 'package:tfc/core/preferences.dart';
-import 'package:tfc_core/core/database.dart';
+import 'package:tfc_dart/core/database.dart';
 import 'dart:convert';
 
 class DatabaseConfigWidget extends ConsumerWidget {

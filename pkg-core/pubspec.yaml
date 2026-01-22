@@ -1,4 +1,4 @@
-name: tfc_core
+name: tfc_dart
 description: Core functionality and converters for TFC (Time For Change) display framework
 version: 1.0.0
 publish_to: none

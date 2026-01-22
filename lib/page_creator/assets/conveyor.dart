@@ -7,12 +7,12 @@ import 'common.dart';
 import 'dart:async';
 import 'package:logger/logger.dart';
 import '../../providers/state_man.dart';
-import 'package:tfc_core/core/state_man.dart';
+import 'package:tfc_dart/core/state_man.dart';
 import 'package:rxdart/rxdart.dart';
 import 'package:open62541/open62541.dart' show DynamicValue;
 import '../../widgets/graph.dart';
-import 'package:tfc_core/core/database.dart';
-import 'package:tfc_core/core/collector.dart';
+import 'package:tfc_dart/core/database.dart';
+import 'package:tfc_dart/core/collector.dart';
 
 part 'conveyor.g.dart';
 

@@ -17,8 +17,8 @@ import '../providers/collector.dart'; // collectorProvider
 import '../providers/database.dart'; // databaseProvider (Future<Database?>)
 import '../providers/preferences.dart'; // preferencesProvider
 
-import 'package:tfc_core/core/state_man.dart'; // KeyMappingEntry, KeyMappings
-import 'package:tfc_core/core/database.dart'; // TimeseriesData, Database wrapper class
+import 'package:tfc_dart/core/state_man.dart'; // KeyMappingEntry, KeyMappings
+import 'package:tfc_dart/core/database.dart'; // TimeseriesData, Database wrapper class
 
 // Use the dialog from your "common" assets
 import '../page_creator/assets/common.dart' show KeyMappingEntryDialog;

@@ -11,7 +11,7 @@ import 'package:path/path.dart' as path;
 import '../dbus/remote.dart';
 import '../theme.dart';
 import '../providers/theme.dart';
-import 'package:tfc_core/core/secure_storage/secure_storage.dart';
+import 'package:tfc_dart/core/secure_storage/secure_storage.dart';
 
 final logger = Logger();
 

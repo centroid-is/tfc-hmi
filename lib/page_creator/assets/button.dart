@@ -12,7 +12,7 @@ import 'package:open62541/open62541.dart' show DynamicValue, NodeId;
 import 'common.dart';
 import 'icon.dart'; // Reuse IconConfig + IconAsset
 import '../../providers/state_man.dart';
-import 'package:tfc_core/core/state_man.dart';
+import 'package:tfc_dart/core/state_man.dart';
 import 'package:tfc/converter/color_converter.dart';
 
 part 'button.g.dart';

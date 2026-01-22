@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:tfc_core/core/boolean_expression.dart';
+import 'package:tfc_dart/core/boolean_expression.dart';
 import '../page_creator/assets/common.dart';
 
 /// UI widget for building expressions

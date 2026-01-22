@@ -1,11 +1,11 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:tfc_core/core/database.dart';
-import 'package:tfc_core/core/database_drift.dart';
-import 'package:tfc_core/core/preferences.dart';
-import 'package:tfc_core/core/state_man.dart';
-import 'package:tfc_core/core/alarm.dart';
+import 'package:tfc_dart/core/database.dart';
+import 'package:tfc_dart/core/database_drift.dart';
+import 'package:tfc_dart/core/preferences.dart';
+import 'package:tfc_dart/core/state_man.dart';
+import 'package:tfc_dart/core/alarm.dart';
 
 import 'package:logger/logger.dart';
 import 'data_acquisition_isolate.dart';

@@ -1,4 +1,4 @@
-import 'package:tfc_core/core/preferences.dart';
+import 'package:tfc_dart/core/preferences.dart';
 import 'package:riverpod/riverpod.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
