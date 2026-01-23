@@ -1,5 +1,5 @@
-import 'package:flutter_test/flutter_test.dart';
-import 'package:tfc/converter/dynamic_value_converter.dart';
+import 'package:test/test.dart';
+import 'package:tfc_dart/converter/dynamic_value_converter.dart';
 import 'package:open62541/open62541.dart'
     show DynamicValue, NodeId, LocalizedText;
 import 'dart:collection';

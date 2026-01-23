@@ -8,7 +8,7 @@ on:
 
 jobs:
   test:
-    runs-on: [self-hosted]
+    runs-on: ubuntu-latest
     container:
       image: ghcr.io/cirruslabs/flutter:3.28.0
     
@@ -33,9 +33,12 @@ jobs:
     
     - name: Run widget tests
       run: flutter test test/widgets/
-      
-    - name: Run core tests
-      run: flutter test test/core/
+
+    - name: Run tfc_dart package tests
+      run: |
+        cd packages/tfc_dart
+        dart pub get
+        dart test
             
     - name: Upload test results
       uses: actions/upload-artifact@v4
