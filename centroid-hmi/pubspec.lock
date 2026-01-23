@@ -1184,6 +1184,13 @@ packages:
       relative: true
     source: path
     version: "2025.2.0"
+  tfc_core:
+    dependency: transitive
+    description:
+      path: "../pkg-core"
+      relative: true
+    source: path
+    version: "1.0.0"
   tuple:
     dependency: transitive
     description:
