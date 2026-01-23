@@ -11,9 +11,8 @@ import 'interface.dart';
 class AwsSecureStorage implements MySecureStorage {
   final _storage = AmplifySecureStorageDart.factoryFrom(
       macOSOptions: MacOSSecureStorageOptions(
-    useDataProtection: true, // todo
+    useDataProtection: false, // todo
     accessible: KeychainAttributeAccessible.accessibleAfterFirstUnlock,
-    accessGroup: 'is.centroid.centroidx',
     /*
 dart compile exe bin/main.dart -o build/myapp
 

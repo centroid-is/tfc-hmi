@@ -1,5 +1,3 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:postgres/postgres.dart';
@@ -292,7 +290,15 @@ class PreferencesKeysWidget extends ConsumerWidget {
         );
 
         return FutureBuilder<Map<String, Object?>>(
-          future: preferences.getAll(),
+          future: Future.wait([
+            preferences.getAll(),
+            localPrefs.getAll(),
+          ]).then((results) {
+            final merged = <String, Object?>{};
+            merged.addAll(results[1]); // local prefs first
+            merged.addAll(results[0]); // db prefs override duplicates
+            return merged;
+          }),
           builder: (context, keysSnap) {
             if (!keysSnap.hasData) {
               return const Padding(
@@ -406,7 +412,12 @@ class PreferencesKeysWidget extends ConsumerWidget {
                                           ),
                                         );
                                         if (confirmed == true) {
-                                          await preferences.remove(e.key);
+                                          final isInDb = snapshot.data!;
+                                          if (isInDb) {
+                                            await preferences.remove(e.key);
+                                          } else {
+                                            await localPrefs.remove(e.key);
+                                          }
                                           ref.invalidate(preferencesProvider);
                                         }
                                       },

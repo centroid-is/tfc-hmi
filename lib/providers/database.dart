@@ -11,6 +11,9 @@ part 'database.g.dart';
 @Riverpod(keepAlive: true)
 Future<Database?> database(Ref ref) async {
   final config = await DatabaseConfig.fromPrefs();
+  if (config.postgres == null) {
+    return null;
+  }
   final db = Database(await AppDatabase.spawn(config));
   try {
     await db.db.open();
