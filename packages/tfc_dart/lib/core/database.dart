@@ -8,7 +8,6 @@ import 'package:json_annotation/json_annotation.dart' as json;
 export 'package:postgres/postgres.dart' show Sql;
 import 'package:logger/logger.dart';
 
-import 'condition_variable.dart';
 import 'secure_storage/secure_storage.dart';
 import 'database_drift.dart';
 import '../converter/duration_converter.dart';
@@ -221,14 +220,16 @@ class Database {
 
   /// Retry a database operation with exponential backoff
   Future<T> _withRetry<T>(Future<T> Function() operation,
-      {int maxRetries = 5, Duration initialDelay = const Duration(seconds: 1)}) async {
+      {int maxRetries = 5,
+      Duration initialDelay = const Duration(seconds: 1)}) async {
     var delay = initialDelay;
     for (var attempt = 0; attempt < maxRetries; attempt++) {
       try {
         return await operation();
       } catch (e) {
         if (attempt == maxRetries - 1) rethrow;
-        logger.w('Database operation failed (attempt ${attempt + 1}/$maxRetries): $e');
+        logger.w(
+            'Database operation failed (attempt ${attempt + 1}/$maxRetries): $e');
         await Future.delayed(delay);
         delay *= 2; // Exponential backoff
       }
@@ -364,9 +365,6 @@ class Database {
   void dispose() {
     _flushTimer?.cancel();
   }
-
-  CV cv = CV();
-  bool busy = false;
 
   // Performance instrumentation
   int _writeCount = 0;
