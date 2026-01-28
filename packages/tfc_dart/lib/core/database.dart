@@ -267,6 +267,9 @@ class Database {
   /// Insert a time-series data point (buffered for batch writes)
   Future<void> insertTimeseriesData(
       String tableName, DateTime time, dynamic value) async {
+    if (tableName.isEmpty) {
+      throw ArgumentError('Table name cannot be empty');
+    }
     // Ensure table exists (only needed once per table)
     if (!_writeBuffer.containsKey(tableName)) {
       if (!await db.tableExists(tableName)) {
@@ -361,6 +364,9 @@ class Database {
     }
   }
 
+  /// Flush all pending writes immediately (useful for tests)
+  Future<void> flush() => _flushAllBatches();
+
   /// Dispose resources
   void dispose() {
     _flushTimer?.cancel();
@@ -420,13 +426,15 @@ class Database {
       final endTime = from.isBefore(to) ? to : from;
       // If from is provided, we need to query from that time
       // We need to query from the time of the first data point in the table
+      // Use ISO8601 strings for PostgreSQL timestamptz compatibility
       result = await db.tableQuery(tableName,
           where: r'time >= $1::timestamptz AND time <= $2::timestamptz',
-          whereArgs: [startTime, endTime],
+          whereArgs: [startTime.toUtc().toIso8601String(), endTime.toUtc().toIso8601String()],
           orderBy: orderBy);
     } else {
+      // Use ISO8601 string for PostgreSQL timestamptz compatibility
       result = await db.tableQuery(tableName,
-          where: r'time >= $1::timestamptz', whereArgs: [to], orderBy: orderBy);
+          where: r'time >= $1::timestamptz', whereArgs: [to.toUtc().toIso8601String()], orderBy: orderBy);
     }
 
     // final queryDuration = DateTime.now().difference(queryStart);
@@ -441,7 +449,16 @@ class Database {
 
     if (result.first.data.containsKey('time')) {
       final processed = result.map((row) {
-        final time = row.read<DateTime>('time');
+        // Read time as raw value - PostgreSQL returns DateTime directly
+        final rawTime = row.data['time'];
+        final DateTime time;
+        if (rawTime is DateTime) {
+          time = rawTime;
+        } else if (rawTime is String) {
+          time = DateTime.parse(rawTime);
+        } else {
+          throw DatabaseException('Unexpected time format: ${rawTime.runtimeType}');
+        }
         if (row.data.length == 2 && row.data.containsKey('value')) {
           return TimeseriesData(row.data['value'], time);
         }

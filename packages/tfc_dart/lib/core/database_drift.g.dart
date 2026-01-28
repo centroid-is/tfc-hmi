@@ -255,19 +255,13 @@ class $AlarmHistoryTable extends AlarmHistory
   @override
   late final GeneratedColumn<bool> active = GeneratedColumn<bool>(
       'active', aliasedName, false,
-      type: DriftSqlType.bool,
-      requiredDuringInsert: true,
-      defaultConstraints:
-          GeneratedColumn.constraintIsAlways('CHECK ("active" IN (0, 1))'));
+      type: DriftSqlType.bool, requiredDuringInsert: true);
   static const VerificationMeta _pendingAckMeta =
       const VerificationMeta('pendingAck');
   @override
   late final GeneratedColumn<bool> pendingAck = GeneratedColumn<bool>(
       'pending_ack', aliasedName, false,
-      type: DriftSqlType.bool,
-      requiredDuringInsert: true,
-      defaultConstraints: GeneratedColumn.constraintIsAlways(
-          'CHECK ("pending_ack" IN (0, 1))'));
+      type: DriftSqlType.bool, requiredDuringInsert: true);
   static const VerificationMeta _createdAtMeta =
       const VerificationMeta('createdAt');
   @override
@@ -1042,7 +1036,7 @@ class $HistoryViewTable extends HistoryView
       'created_at', aliasedName, false,
       type: DriftSqlType.dateTime,
       requiredDuringInsert: false,
-      defaultValue: currentDateAndTime);
+      clientDefault: () => DateTime.now());
   static const VerificationMeta _updatedAtMeta =
       const VerificationMeta('updatedAt');
   @override
@@ -1315,8 +1309,6 @@ class $HistoryViewKeyTable extends HistoryViewKey
       'use_second_y_axis', aliasedName, false,
       type: DriftSqlType.bool,
       requiredDuringInsert: false,
-      defaultConstraints: GeneratedColumn.constraintIsAlways(
-          'CHECK ("use_second_y_axis" IN (0, 1))'),
       defaultValue: const Constant(false));
   static const VerificationMeta _graphIndexMeta =
       const VerificationMeta('graphIndex');
@@ -1980,7 +1972,7 @@ class $HistoryViewPeriodTable extends HistoryViewPeriod
       'created_at', aliasedName, false,
       type: DriftSqlType.dateTime,
       requiredDuringInsert: false,
-      defaultValue: currentDateAndTime);
+      clientDefault: () => DateTime.now());
   @override
   List<GeneratedColumn> get $columns =>
       [id, viewId, name, startAt, endAt, createdAt];

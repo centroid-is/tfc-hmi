@@ -1,8 +1,8 @@
 import 'dart:io';
 
 import 'package:postgres/postgres.dart';
-import 'package:tfc/core/database.dart';
-import 'package:tfc/core/database_drift.dart';
+import 'package:tfc_dart/core/database.dart';
+import 'package:tfc_dart/core/database_drift.dart';
 
 final dockerComposePath = '${Directory.current.path}/test/integration';
 const databaseName = 'testdb';

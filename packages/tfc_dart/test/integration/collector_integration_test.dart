@@ -1,12 +1,12 @@
 import 'dart:async';
 import 'dart:collection';
 
-import 'package:flutter_test/flutter_test.dart';
+import 'package:test/test.dart';
 import 'package:open62541/open62541.dart' show DynamicValue;
-import 'package:tfc/core/collector.dart';
-import 'package:tfc/core/state_man.dart';
-import 'package:tfc/core/database.dart';
-import 'package:tfc/core/boolean_expression.dart';
+import 'package:tfc_dart/core/collector.dart';
+import 'package:tfc_dart/core/state_man.dart';
+import 'package:tfc_dart/core/database.dart';
+import 'package:tfc_dart/core/boolean_expression.dart';
 
 import 'docker_compose.dart';
 
@@ -44,20 +44,22 @@ void main() {
 
     Future<List<TimeseriesData<dynamic>>> waitUntilInserted(String tableName,
         {DateTime? sinceTime}) async {
-      late dynamic insertedData;
+      List<TimeseriesData<dynamic>> insertedData = [];
       sinceTime ??= DateTime.now().subtract(const Duration(days: 1));
-      for (var i = 0; i < 10; i++) {
-        // Wait for async processing
+      for (var i = 0; i < 20; i++) {
+        // Wait for async stream handlers to execute and add data to buffer
+        await Future.delayed(const Duration(milliseconds: 100));
+        // Flush the write buffer to ensure data is written
+        await database.flush();
         try {
           insertedData =
               await database.queryTimeseriesData(tableName, sinceTime);
-          if (insertedData.length > 0) {
+          if (insertedData.isNotEmpty) {
             break;
           }
         } catch (e) {
-          // Ignore
+          // Ignore - table might not exist yet
         }
-        await Future.delayed(const Duration(milliseconds: 100));
       }
       return insertedData;
     }
@@ -675,15 +677,20 @@ void main() {
       // Act
       await collector.collectEntry(entry);
 
-      // Insert random data to make sure the table is created
-      database.insertTimeseriesData(testName, DateTime.now().toUtc(), 25.0);
+      // Register retention policy and insert random data to make sure the table is created
+      database.registerRetentionPolicy(
+          testName,
+          const RetentionPolicy(
+            dropAfter: Duration(days: 1),
+          ));
+      await database.insertTimeseriesData(testName, DateTime.now().toUtc(), 25.0);
 
       // Test 1: System not running, data should not be collected
       dataController.add(DynamicValue(value: 30.0));
       await Future.delayed(const Duration(milliseconds: 100));
 
       var insertedData =
-          await waitUntilInserted(testName).timeout(const Duration(seconds: 1));
+          await waitUntilInserted(testName).timeout(const Duration(seconds: 5));
       expect(insertedData.length, 1,
           reason: 'Data should not be collected when system is not running');
 
@@ -696,7 +703,7 @@ void main() {
       await Future.delayed(const Duration(milliseconds: 100));
 
       insertedData =
-          await waitUntilInserted(testName).timeout(const Duration(seconds: 1));
+          await waitUntilInserted(testName).timeout(const Duration(seconds: 5));
       expect(insertedData.length, 1,
           reason:
               'Data should not be collected when system is running and the data is below 20');
@@ -710,7 +717,7 @@ void main() {
       await Future.delayed(const Duration(milliseconds: 100));
 
       insertedData =
-          await waitUntilInserted(testName).timeout(const Duration(seconds: 1));
+          await waitUntilInserted(testName).timeout(const Duration(seconds: 5));
       expect(insertedData.length, 2,
           reason:
               'Data should be collected when system is running and the data is above 20');
@@ -722,7 +729,7 @@ void main() {
       await Future.delayed(const Duration(milliseconds: 100));
 
       insertedData =
-          await waitUntilInserted(testName).timeout(const Duration(seconds: 1));
+          await waitUntilInserted(testName).timeout(const Duration(seconds: 5));
       expect(insertedData.length, 2,
           reason: 'Data should not be collected when system is not running');
 

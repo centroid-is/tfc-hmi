@@ -60,7 +60,7 @@ class FlutterPreferences extends Table {
 class HistoryView extends Table {
   IntColumn get id => integer().autoIncrement()();
   TextColumn get name => text()();
-  DateTimeColumn get createdAt => dateTime().withDefault(currentDateAndTime)();
+  DateTimeColumn get createdAt => dateTime().clientDefault(() => DateTime.now())();
   DateTimeColumn get updatedAt => dateTime().nullable()();
 }
 
@@ -94,7 +94,7 @@ class HistoryViewPeriod extends Table {
   TextColumn get name => text()();
   DateTimeColumn get startAt => dateTime()();
   DateTimeColumn get endAt => dateTime()();
-  DateTimeColumn get createdAt => dateTime().withDefault(currentDateAndTime)();
+  DateTimeColumn get createdAt => dateTime().clientDefault(() => DateTime.now())();
 }
 
 // Register all tables here

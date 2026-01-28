@@ -2,10 +2,10 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:drift/drift.dart' hide isNull;
-import 'package:flutter_test/flutter_test.dart';
+import 'package:test/test.dart';
 import 'package:postgres/postgres.dart';
-import 'package:tfc/core/database.dart';
-import 'package:tfc/core/database_drift.dart';
+import 'package:tfc_dart/core/database.dart';
+import 'package:tfc_dart/core/database_drift.dart';
 import 'docker_compose.dart';
 
 // docker exec -it test-db /bin/ash -c "psql -d testdb --user testuser -c 'select * from test_timeseries;'"
@@ -30,6 +30,10 @@ void main() {
     setUp(() async {});
 
     tearDown(() async {
+      // Flush any pending writes before dropping tables
+      try {
+        await database.flush();
+      } catch (_) {}
       // Clean up test tables
       try {
         // Remove retention policies first
@@ -180,6 +184,8 @@ void main() {
       });
 
       tearDown(() async {
+        // Flush any pending writes before dropping table
+        await database.flush();
         // Clean up after each test
         await database.db
             .customStatement('DROP TABLE IF EXISTS "$testTableName" CASCADE');
@@ -190,6 +196,7 @@ void main() {
         const testData = 42;
 
         await database.insertTimeseriesData(testTableName, now, testData);
+        await database.flush(); // Flush buffer to write data immediately
 
         final result = await database.queryTimeseriesData(
             testTableName, now.subtract(const Duration(days: 1)));
@@ -202,6 +209,7 @@ void main() {
         const testData = 24.5;
 
         await database.insertTimeseriesData(testTableName, now, testData);
+        await database.flush();
 
         final result = await database.queryTimeseriesData(
             testTableName, now.subtract(const Duration(days: 1)));
@@ -214,6 +222,7 @@ void main() {
         const testData = [24.5, 10.2, 99.9, 3.14159];
 
         await database.insertTimeseriesData(testTableName, now, testData);
+        await database.flush();
 
         final result = await database.queryTimeseriesData(
             testTableName, now.subtract(const Duration(days: 1)));
@@ -226,6 +235,7 @@ void main() {
         const testData = true;
 
         await database.insertTimeseriesData(testTableName, now, testData);
+        await database.flush();
 
         final result = await database.queryTimeseriesData(
             testTableName, now.subtract(const Duration(days: 1)));
@@ -238,6 +248,7 @@ void main() {
         const testData = "test_value";
 
         await database.insertTimeseriesData(testTableName, now, testData);
+        await database.flush();
 
         final result = await database.queryTimeseriesData(
             testTableName, now.subtract(const Duration(days: 1)));
@@ -250,6 +261,7 @@ void main() {
         final testData = {'value': 42, 'unit': 'celsius'};
 
         await database.insertTimeseriesData(testTableName, now, testData);
+        await database.flush();
 
         // Verify data was inserted
         final result = await database.queryTimeseriesData(
@@ -265,14 +277,16 @@ void main() {
         const testData2 = 42;
 
         await database.insertTimeseriesData(testTableName, now, testData);
+        await database.flush();
 
-        // Expect the second insert to throw an exception due to type mismatch
-        expect(
-          () => database.insertTimeseriesData(testTableName, now, testData2),
-          throwsA(isA<Exception>()),
-        );
+        // With buffering, insertTimeseriesData doesn't throw immediately.
+        // The error occurs during flush when the type mismatch is detected by PostgreSQL.
+        await database.insertTimeseriesData(testTableName, now, testData2);
 
-        // Verify only the first data point was inserted
+        // The flush will fail due to type mismatch, but it logs the error and continues
+        await database.flush();
+
+        // Verify only the first data point was inserted (second was rejected)
         final result = await database.queryTimeseriesData(
             testTableName, now.subtract(const Duration(days: 1)));
         expect(result.length, 1);
@@ -289,6 +303,7 @@ void main() {
         await database.insertTimeseriesData(testTableName, now, testData);
         await database.insertTimeseriesData(testTableName, now, testData2);
         await database.insertTimeseriesData(testTableName, now, testData3);
+        await database.flush();
 
         final result = await database.queryTimeseriesData(
             testTableName, now.subtract(const Duration(days: 1)));
@@ -313,6 +328,7 @@ void main() {
             dataPoints[i],
           );
         }
+        await database.flush();
 
         final result = await database.queryTimeseriesData(
             testTableName, baseTime.subtract(const Duration(days: 1)));
@@ -342,6 +358,7 @@ void main() {
           baseTime,
           newData,
         );
+        await database.flush();
 
         // Query only recent data
         final result = await database.queryTimeseriesData(
@@ -368,6 +385,7 @@ void main() {
             dataPoints[i],
           );
         }
+        await database.flush();
 
         // Query in descending order
         final result = await database.queryTimeseriesData(
@@ -442,6 +460,7 @@ void main() {
             baseTime.subtract(const Duration(hours: 1, minutes: 30)), 3);
         await database.insertTimeseriesData(
             testTableName, baseTime.subtract(const Duration(minutes: 30)), 4);
+        await database.flush();
 
         // Count in 1-hour intervals for the last 4 hours from baseTime
         final counts = await database.countTimeseriesDataMultiple(
@@ -483,7 +502,7 @@ void main() {
         expect(
           () => database
               .insertTimeseriesData('', DateTime.now(), {'test': 'data'}),
-          throwsA(isA<Exception>()),
+          throwsA(isA<ArgumentError>()),
         );
       });
 
@@ -516,6 +535,7 @@ void main() {
             {'value': i, 'batch': 'bulk_test'},
           );
         }
+        await database.flush();
 
         final result = await database.queryTimeseriesData(
             testTableName, baseTime.subtract(const Duration(days: 1)));
@@ -584,6 +604,7 @@ void main() {
         final t2 = base.add(const Duration(minutes: 2));
         await database.insertTimeseriesData(testTableName2, t1, 200);
         await database.insertTimeseriesData(testTableName2, t2, 300);
+        await database.flush();
 
         // Create MV with columns {table: column}
         await database.createView(mvName, {
@@ -629,6 +650,7 @@ void main() {
         await database.insertTimeseriesData(testTableName, t1, 20);
 
         await database.insertTimeseriesData(testTableName2, t1, 200);
+        await database.flush();
 
         // First create
         await database.createView(mvName, {
@@ -647,6 +669,7 @@ void main() {
         // Add new data and call createView again (old impl drops & recreates)
         final t2 = base.add(const Duration(minutes: 2));
         await database.insertTimeseriesData(testTableName, t2, 40);
+        await database.flush();
 
         await database.createView(mvName, {
           testTableName: 'value',
@@ -686,9 +709,14 @@ void main() {
           DateTime.now(),
           42,
         );
+        await database.flush();
       });
 
       tearDown(() async {
+        // Flush before cleanup
+        try {
+          await database.flush();
+        } catch (_) {}
         // Clean up after each test
         try {
           await database.db.customStatement(
@@ -747,6 +775,7 @@ void main() {
           DateTime.now(),
           100,
         );
+        await database.flush();
 
         // Wait for notification
         await Future.delayed(const Duration(milliseconds: 500));
@@ -842,6 +871,7 @@ void main() {
             100 + i,
           );
         }
+        await database.flush();
 
         // Wait for all notifications
         await Future.delayed(const Duration(seconds: 1));
@@ -878,6 +908,7 @@ void main() {
           DateTime.now(),
           testData,
         );
+        await database.flush();
 
         // Enable notifications
         await database.db.enableNotificationChannel(complexTable);
@@ -904,6 +935,7 @@ void main() {
           DateTime.now(),
           newData,
         );
+        await database.flush();
 
         await Future.delayed(const Duration(milliseconds: 500));
 
@@ -946,6 +978,7 @@ void main() {
           DateTime.now(),
           777,
         );
+        await database.flush();
 
         await Future.delayed(const Duration(milliseconds: 500));
 
@@ -983,6 +1016,7 @@ void main() {
           DateTime.now(),
           111,
         );
+        await database.flush();
 
         await Future.delayed(const Duration(milliseconds: 300));
         expect(notifications.length, 1);
@@ -997,6 +1031,7 @@ void main() {
           DateTime.now(),
           222,
         );
+        await database.flush();
 
         await Future.delayed(const Duration(milliseconds: 500));
 
@@ -1017,13 +1052,14 @@ void main() {
 
         await Future.delayed(const Duration(milliseconds: 100));
 
-        // Rapid inserts
+        // Rapid inserts - flush after each to test notification throughput
         for (int i = 0; i < 20; i++) {
           await database.insertTimeseriesData(
             notifyTestTable,
             DateTime.now().add(Duration(milliseconds: i)),
             i,
           );
+          await database.flush();
         }
 
         // Wait for all notifications
@@ -1053,6 +1089,7 @@ void main() {
             DateTime.now(),
             i++ * 10,
           );
+          await database.flush();
 
           // Enable notifications for this table
           await database.db.enableNotificationChannel(tableName);
@@ -1085,6 +1122,7 @@ void main() {
             100 + i,
           );
         }
+        await database.flush();
 
         // Wait for all notifications
         await Future.delayed(const Duration(seconds: 1));

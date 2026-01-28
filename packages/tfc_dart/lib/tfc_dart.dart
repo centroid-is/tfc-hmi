@@ -2,7 +2,6 @@
 export 'core/alarm.dart';
 export 'core/boolean_expression.dart';
 export 'core/collector.dart';
-export 'core/condition_variable.dart';
 export 'core/database.dart';
 export 'core/database_drift.dart' hide Alarm, AlarmHistory;
 export 'core/preferences.dart';
