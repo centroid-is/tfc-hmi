@@ -29,7 +29,7 @@ void main() {
 
     setUp(() {
       // Create a basic config for testing
-      config = CollectorConfig();
+      config = CollectorConfig(collect: true);
 
       collector = Collector(
         config: config,
@@ -297,6 +297,8 @@ void main() {
         await database.insertTimeseriesData(testName, data.time, data.value);
       }
 
+      await database.flush();
+
       // Act
       await collector.collectEntryImpl(entry, const Stream.empty());
       final stream =
@@ -338,6 +340,8 @@ void main() {
       for (final data in historicalData) {
         await database.insertTimeseriesData(testName, data.time, data.value);
       }
+
+      await database.flush();
 
       // Act
       await collector.collectEntryImpl(entry, streamController.stream);
@@ -398,6 +402,8 @@ void main() {
         await database.insertTimeseriesData(testName, d.time, d.value);
       }
 
+      await database.flush();
+
       // Act - query with since = 2 hours
       await collector.collectEntryImpl(entry, Stream.empty());
       final stream =
@@ -431,6 +437,8 @@ void main() {
           testName,
           DateTime.now().toUtc().subtract(const Duration(hours: 1)),
           'historical');
+
+      await database.flush();
 
       // Act
       await collector.collectEntryImpl(entry, streamController.stream);
@@ -504,6 +512,8 @@ void main() {
           DateTime.now().toUtc().subtract(const Duration(hours: 1)),
           complexHistoricalData);
 
+      await database.flush();
+
       // Act
       await collector.collectEntryImpl(entry, streamController.stream);
       final stream =
@@ -565,6 +575,8 @@ void main() {
           DateTime.now().toUtc().subtract(const Duration(hours: 1)),
           historicalArrayData);
 
+      await database.flush();
+
       // Act
       await collector.collectEntryImpl(entry, streamController.stream);
       final stream =
@@ -621,6 +633,8 @@ void main() {
           testName,
           DateTime.now().toUtc().subtract(const Duration(hours: 1)),
           'historical');
+
+      await database.flush();
 
       // Act
       await collector.collectEntryImpl(entry, streamController.stream);
@@ -683,11 +697,14 @@ void main() {
           const RetentionPolicy(
             dropAfter: Duration(days: 1),
           ));
-      await database.insertTimeseriesData(testName, DateTime.now().toUtc(), 25.0);
+      await database.insertTimeseriesData(
+          testName, DateTime.now().toUtc(), 25.0);
 
       // Test 1: System not running, data should not be collected
       dataController.add(DynamicValue(value: 30.0));
       await Future.delayed(const Duration(milliseconds: 100));
+
+      await database.flush();
 
       var insertedData =
           await waitUntilInserted(testName).timeout(const Duration(seconds: 5));
@@ -702,6 +719,8 @@ void main() {
       conditionController.add(DynamicValue(value: true));
       await Future.delayed(const Duration(milliseconds: 100));
 
+      await database.flush();
+
       insertedData =
           await waitUntilInserted(testName).timeout(const Duration(seconds: 5));
       expect(insertedData.length, 1,
@@ -710,11 +729,15 @@ void main() {
 
       // BAAAAAM
       dataController.add(DynamicValue(value: 35.0));
+      await database.flush();
+
       // Insert the same data again because the first value is skipped
       // That is because the first value is a value that we do not know when arrived,
       // the stream controller caches always the last value, so we skip the first value
       dataController.add(DynamicValue(value: 35.0));
       await Future.delayed(const Duration(milliseconds: 100));
+
+      await database.flush();
 
       insertedData =
           await waitUntilInserted(testName).timeout(const Duration(seconds: 5));
