@@ -190,11 +190,13 @@ class KeyMappings {
     return KeyMappings(nodes: filtered);
   }
 
-  static Future<KeyMappings> fromPrefs(PreferencesApi prefs, {bool createDefault = true}) async {
+  static Future<KeyMappings> fromPrefs(PreferencesApi prefs,
+      {bool createDefault = true}) async {
     var keyMappingsJson = await prefs.getString('key_mappings');
     if (keyMappingsJson == null) {
       if (!createDefault) {
-        throw Exception('key_mappings not found in preferences and createDefault is false');
+        throw Exception(
+            'key_mappings not found in preferences and createDefault is false');
       }
       final defaultKeyMappings = KeyMappings(nodes: {
         "exampleKey": KeyMappingEntry(
@@ -382,7 +384,7 @@ class StateMan {
                   certificate: cert,
                   privateKey: key,
                   securityMode: securityMode,
-                  logLevel: LogLevel.UA_LOGLEVEL_ERROR,
+                  logLevel: LogLevel.UA_LOGLEVEL_TRACE,
                 )
               : Client(
                   loadOpen62541Library(staticLinking: false),
@@ -391,7 +393,7 @@ class StateMan {
                   certificate: cert,
                   privateKey: key,
                   securityMode: securityMode,
-                  logLevel: LogLevel.UA_LOGLEVEL_ERROR,
+                  logLevel: LogLevel.UA_LOGLEVEL_TRACE,
                 ),
           opcuaConfig));
     }
