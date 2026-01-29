@@ -384,7 +384,7 @@ class StateMan {
                   certificate: cert,
                   privateKey: key,
                   securityMode: securityMode,
-                  logLevel: LogLevel.UA_LOGLEVEL_TRACE,
+                  logLevel: LogLevel.UA_LOGLEVEL_INFO,
                 )
               : Client(
                   loadOpen62541Library(staticLinking: false),
@@ -393,7 +393,7 @@ class StateMan {
                   certificate: cert,
                   privateKey: key,
                   securityMode: securityMode,
-                  logLevel: LogLevel.UA_LOGLEVEL_TRACE,
+                  logLevel: LogLevel.UA_LOGLEVEL_INFO,
                 ),
           opcuaConfig));
     }
