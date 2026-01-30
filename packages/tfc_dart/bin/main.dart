@@ -1,5 +1,9 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
+
+import 'package:basic_utils/basic_utils.dart';
 
 import 'package:tfc_dart/core/database.dart';
 import 'package:tfc_dart/core/database_drift.dart';
@@ -34,11 +38,22 @@ void main() async {
 
   final keyMappings = await KeyMappings.fromPrefs(prefs, createDefault: false);
 
-  // Create StateMan for alarm monitoring
+  // Generate a separate certificate for the alarm StateMan to avoid conflicts
+  // when two clients connect with the same certificate
+  final alarmSmConfig = smConfig.copy();
+  for (final opcuaConfig in alarmSmConfig.opcua) {
+    if (opcuaConfig.sslCert != null && opcuaConfig.sslKey != null) {
+      final (cert, key) = _generateSelfSignedCert();
+      opcuaConfig.sslCert = cert;
+      opcuaConfig.sslKey = key;
+    }
+  }
+
+  // Create StateMan for alarm monitoring (with separate certificate)
   final stateMan = await StateMan.create(
-    config: smConfig,
+    config: alarmSmConfig,
     keyMappings: keyMappings,
-    useIsolate: true,
+    useIsolate: false,
   );
 
   // Setup alarm monitoring with database persistence
@@ -71,4 +86,41 @@ void main() async {
 
   // Keep main alive indefinitely
   await Completer<void>().future;
+}
+
+/// Generates a self-signed certificate and private key using basic_utils.
+/// Returns a tuple of (certificate, privateKey) as Uint8List.
+(Uint8List, Uint8List) _generateSelfSignedCert() {
+  final keyPair = CryptoUtils.generateRSAKeyPair(keySize: 2048);
+
+  final attributes = {
+    'CN': 'AlarmHandler',
+    'O': 'Centroid',
+    'OU': 'OPC-UA',
+    'C': 'IS',
+    'ST': 'Hofudborgarsvaedid',
+    'L': 'Hafnarfjordur',
+  };
+
+  final csr = X509Utils.generateRsaCsrPem(
+    attributes,
+    keyPair.privateKey as RSAPrivateKey,
+    keyPair.publicKey as RSAPublicKey,
+    san: ['localhost', '127.0.0.1'],
+  );
+
+  final certPem = X509Utils.generateSelfSignedCertificate(
+    keyPair.privateKey as RSAPrivateKey,
+    csr,
+    3650,
+    sans: ['localhost', '127.0.0.1'],
+  );
+
+  final keyPem = CryptoUtils.encodeRSAPrivateKeyToPem(
+      keyPair.privateKey as RSAPrivateKey);
+
+  final cert = Uint8List.fromList(utf8.encode(certPem));
+  final key = Uint8List.fromList(utf8.encode(keyPem));
+
+  return (cert, key);
 }
