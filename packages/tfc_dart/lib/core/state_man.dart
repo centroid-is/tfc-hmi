@@ -15,6 +15,70 @@ import 'preferences.dart';
 
 part 'state_man.g.dart';
 
+/// Statistics tracker for runIterate timing
+class RunIterateStats {
+  final String clientName;
+  final Logger _logger = Logger();
+
+  DateTime? _lastCallTime;
+  int _callCount = 0;
+
+  // Time between calls (gaps)
+  Duration _maxGap = Duration.zero;
+  Duration _totalGap = Duration.zero;
+
+  // Execution time
+  Duration _maxExecTime = Duration.zero;
+  Duration _totalExecTime = Duration.zero;
+
+  // Report interval
+  final int _reportInterval = 1000; // Report every N calls
+
+  RunIterateStats(this.clientName);
+
+  void recordCall(Duration execTime) {
+    final now = DateTime.now();
+
+    if (_lastCallTime != null) {
+      final gap = now.difference(_lastCallTime!);
+      _totalGap += gap;
+      if (gap > _maxGap) {
+        _maxGap = gap;
+      }
+    }
+
+    _totalExecTime += execTime;
+    if (execTime > _maxExecTime) {
+      _maxExecTime = execTime;
+    }
+
+    _callCount++;
+    _lastCallTime = now;
+
+    // Log periodically
+    if (_callCount % _reportInterval == 0) {
+      _logStats();
+    }
+  }
+
+  void _logStats() {
+    if (_callCount == 0) return;
+
+    final avgGapMs = _callCount > 1
+        ? (_totalGap.inMicroseconds / (_callCount - 1) / 1000).toStringAsFixed(2)
+        : 'N/A';
+    final avgExecMs = (_totalExecTime.inMicroseconds / _callCount / 1000).toStringAsFixed(2);
+
+    _logger.i('[$clientName] runIterate stats after $_callCount calls: '
+        'gap(avg: ${avgGapMs}ms, max: ${_maxGap.inMilliseconds}ms) '
+        'exec(avg: ${avgExecMs}ms, max: ${_maxExecTime.inMilliseconds}ms)');
+  }
+
+  void logFinal() {
+    _logStats();
+  }
+}
+
 class Base64Converter implements JsonConverter<Uint8List?, String?> {
   const Base64Converter();
 
@@ -274,14 +338,21 @@ class StateMan {
         // spawn a background task to keep the client active
         () async {
           final clientref = wrapper.client as Client;
+          final stats = RunIterateStats(wrapper.config.endpoint);
           while (_shouldRun) {
             clientref.connect(wrapper.config.endpoint).onError(
                 (e, stacktrace) => logger
                     .e('Failed to connect to ${wrapper.config.endpoint}: $e'));
-            while (clientref.runIterate(const Duration(milliseconds: 10)) &&
-                _shouldRun) {
+            while (_shouldRun) {
+              final startTime = DateTime.now();
+              final continueRunning =
+                  clientref.runIterate(const Duration(milliseconds: 10));
+              final execTime = DateTime.now().difference(startTime);
+              stats.recordCall(execTime);
+              if (!continueRunning) break;
               await Future.delayed(const Duration(milliseconds: 10));
             }
+            stats.logFinal();
             logger.e('Disconnecting client');
             clientref.disconnect();
             await Future.delayed(const Duration(milliseconds: 1000));
