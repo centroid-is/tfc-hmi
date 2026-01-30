@@ -1,9 +1,5 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
-
-import 'package:basic_utils/basic_utils.dart';
 
 import 'package:tfc_dart/core/database.dart';
 import 'package:tfc_dart/core/database_drift.dart';
@@ -38,15 +34,12 @@ void main() async {
 
   final keyMappings = await KeyMappings.fromPrefs(prefs, createDefault: false);
 
-  // Generate a separate certificate for the alarm StateMan to avoid conflicts
-  // when two clients connect with the same certificate
+  // Disable SSL for alarm StateMan to test if the issue is specific to
+  // encrypted secure channel renewal
   final alarmSmConfig = smConfig.copy();
   for (final opcuaConfig in alarmSmConfig.opcua) {
-    if (opcuaConfig.sslCert != null && opcuaConfig.sslKey != null) {
-      final (cert, key) = _generateSelfSignedCert();
-      opcuaConfig.sslCert = cert;
-      opcuaConfig.sslKey = key;
-    }
+    opcuaConfig.sslCert = null;
+    opcuaConfig.sslKey = null;
   }
 
   // Create StateMan for alarm monitoring (with separate certificate)
@@ -65,10 +58,6 @@ void main() async {
   );
 
   logger.i('Spawning ${smConfig.opcua.length} DataAcquisition isolate(s)');
-
-  // Delay to stagger connection times with AlarmMan StateMan
-  // This avoids both clients attempting SecureChannel renewal at the same time
-  await Future.delayed(const Duration(seconds: 60));
 
   // Spawn one isolate per OPC UA server
   for (final server in smConfig.opcua) {
@@ -90,41 +79,4 @@ void main() async {
 
   // Keep main alive indefinitely
   await Completer<void>().future;
-}
-
-/// Generates a self-signed certificate and private key using basic_utils.
-/// Returns a tuple of (certificate, privateKey) as Uint8List.
-(Uint8List, Uint8List) _generateSelfSignedCert() {
-  final keyPair = CryptoUtils.generateRSAKeyPair(keySize: 2048);
-
-  final attributes = {
-    'CN': 'AlarmHandler',
-    'O': 'Centroid',
-    'OU': 'OPC-UA',
-    'C': 'IS',
-    'ST': 'Hofudborgarsvaedid',
-    'L': 'Hafnarfjordur',
-  };
-
-  final csr = X509Utils.generateRsaCsrPem(
-    attributes,
-    keyPair.privateKey as RSAPrivateKey,
-    keyPair.publicKey as RSAPublicKey,
-    san: ['localhost', '127.0.0.1'],
-  );
-
-  final certPem = X509Utils.generateSelfSignedCertificate(
-    keyPair.privateKey as RSAPrivateKey,
-    csr,
-    3650,
-    sans: ['localhost', '127.0.0.1'],
-  );
-
-  final keyPem = CryptoUtils.encodeRSAPrivateKeyToPem(
-      keyPair.privateKey as RSAPrivateKey);
-
-  final cert = Uint8List.fromList(utf8.encode(certPem));
-  final key = Uint8List.fromList(utf8.encode(keyPem));
-
-  return (cert, key);
 }
