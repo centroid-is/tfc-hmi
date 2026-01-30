@@ -66,6 +66,10 @@ void main() async {
 
   logger.i('Spawning ${smConfig.opcua.length} DataAcquisition isolate(s)');
 
+  // Delay to stagger connection times with AlarmMan StateMan
+  // This avoids both clients attempting SecureChannel renewal at the same time
+  await Future.delayed(const Duration(seconds: 60));
+
   // Spawn one isolate per OPC UA server
   for (final server in smConfig.opcua) {
     final filtered = keyMappings.filterByServer(server.serverAlias);
