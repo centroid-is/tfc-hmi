@@ -270,9 +270,6 @@ class StateMan {
     required this.clients,
   }) {
     for (final wrapper in clients) {
-      wrapper.client.connect(wrapper.config.endpoint).onError((e, stacktrace) =>
-          logger.e('Failed to connect to ${wrapper.config.endpoint}: $e'));
-
       if (wrapper.client is Client) {
         // spawn a background task to keep the client active
         () async {
