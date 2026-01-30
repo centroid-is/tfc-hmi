@@ -371,7 +371,7 @@ class StateMan {
         password = opcuaConfig.password;
       }
       // empty is static linking
-      final libPath = Platform.isAndroid ? 'libopen62541.so' : '';
+      final libPath = 'libopen62541.so'; // TODO !!!!!!!!!!!!!!!!!
       clients.add(ClientWrapper(
           useIsolate
               ? await ClientIsolate.create(
