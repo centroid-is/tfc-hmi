@@ -34,20 +34,20 @@ void main() async {
 
   final keyMappings = await KeyMappings.fromPrefs(prefs, createDefault: false);
 
-  // // Create StateMan for alarm monitoring
-  // final stateMan = await StateMan.create(
-  //   config: smConfig,
-  //   keyMappings: keyMappings,
-  //   useIsolate: false,
-  // );
+  // Create StateMan for alarm monitoring
+  final stateMan = await StateMan.create(
+    config: smConfig,
+    keyMappings: keyMappings,
+    useIsolate: true,
+  );
 
-  // // Setup alarm monitoring with database persistence
-  // // ignore: unused_local_variable
-  // final alarmHandler = await AlarmMan.create(
-  //   prefs,
-  //   stateMan,
-  //   historyToDb: true,
-  // );
+  // Setup alarm monitoring with database persistence
+  // ignore: unused_local_variable
+  final alarmHandler = await AlarmMan.create(
+    prefs,
+    stateMan,
+    historyToDb: true,
+  );
 
   logger.i('Spawning ${smConfig.opcua.length} DataAcquisition isolate(s)');
 
