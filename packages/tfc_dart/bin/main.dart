@@ -40,6 +40,8 @@ void main() async {
   for (final opcuaConfig in alarmSmConfig.opcua) {
     opcuaConfig.sslCert = null;
     opcuaConfig.sslKey = null;
+    opcuaConfig.password = null;
+    opcuaConfig.username = null;
   }
 
   // Create StateMan for alarm monitoring (with separate certificate)
