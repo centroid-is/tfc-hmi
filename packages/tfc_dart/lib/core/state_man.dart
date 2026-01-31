@@ -395,14 +395,17 @@ class StateMan {
           final timeSinceOpen = channelOpenedAt != null
               ? now.difference(channelOpenedAt!).inSeconds
               : 0;
-          logger.i('[$alias] SecureChannel state: ${lastChannelState?.name} -> ${value.channelState.name} '
+          logger.i(
+              '[$alias] SecureChannel state: ${lastChannelState?.name} -> ${value.channelState.name} '
               '(session: ${value.sessionState.name}, recovery: ${value.recoveryStatus}) '
               '[uptime: ${timeSinceOpen}s]');
 
           // Track when channel opens
-          if (value.channelState == SecureChannelState.UA_SECURECHANNELSTATE_OPEN) {
+          if (value.channelState ==
+              SecureChannelState.UA_SECURECHANNELSTATE_OPEN) {
             channelOpenedAt = now;
-            logger.i('[$alias] Channel opened at $now, renewal expected at ~${channelLifetimeSec * 0.75}s');
+            logger.i(
+                '[$alias] Channel opened at $now, renewal expected at ~${channelLifetimeSec * 0.75}s');
           }
 
           lastChannelState = value.channelState;
@@ -413,7 +416,8 @@ class StateMan {
           final timeSinceOpen = channelOpenedAt != null
               ? now.difference(channelOpenedAt!).inSeconds
               : 0;
-          logger.e('[$alias] Channel closed after ${timeSinceOpen}s (expected lifetime: ${channelLifetimeSec}s, '
+          logger.e(
+              '[$alias] Channel closed after ${timeSinceOpen}s (expected lifetime: ${channelLifetimeSec}s, '
               'renewal window: ${channelLifetimeSec * 0.75}s-${channelLifetimeSec}s)');
           channelOpenedAt = null;
         }
@@ -489,7 +493,7 @@ class StateMan {
         password = opcuaConfig.password;
       }
       // empty is static linking
-      final libPath = 'libopen62541.so'; // TODO !!!!!!!!!!!!!!!!!
+      final libPath = Platform.isAndroid ? 'libopen62541.so' : '';
       clients.add(ClientWrapper(
           useIsolate
               ? await ClientIsolate.create(
