@@ -400,7 +400,9 @@ class Database {
     final where = from != null
         ? r'time >= $1::timestamptz AND time <= $2::timestamptz'
         : r'time >= $1::timestamptz';
-    final whereArgs = from != null ? [from, to] : [to];
+    final whereArgs = from != null
+        ? [from.toUtc().toIso8601String(), to.toUtc().toIso8601String()]
+        : [to.toUtc().toIso8601String()];
     final rows = await db.tableQueryMultiple(tapleMap,
         where: where, whereArgs: whereArgs, orderBy: orderBy);
     final map = Map<String, List<TimeseriesData<dynamic>>>();
