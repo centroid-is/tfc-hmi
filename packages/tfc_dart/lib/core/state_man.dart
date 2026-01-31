@@ -342,7 +342,8 @@ class StateMan {
         // spawn a background task to keep the client active
         () async {
           final clientref = wrapper.client as Client;
-          final stats = RunIterateStats(wrapper.config.endpoint);
+          final stats =
+              RunIterateStats("${wrapper.config.endpoint} \"$alias\"");
           while (_shouldRun) {
             clientref.connect(wrapper.config.endpoint).onError(
                 (e, stacktrace) => logger

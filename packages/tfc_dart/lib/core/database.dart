@@ -240,6 +240,7 @@ class Database {
   // Batch write buffering
   final Map<String, List<_PendingWrite>> _writeBuffer = {};
   Timer? _flushTimer;
+  bool _flushInProgress = false;
   static const _batchFlushInterval = Duration(milliseconds: 500);
   static const _maxBatchSize = 50;
 
@@ -339,28 +340,40 @@ class Database {
   Future<void> _flushAllBatches() async {
     if (_writeBuffer.isEmpty) return;
 
+    if (_flushInProgress) {
+      final pendingCount = _writeBuffer.values.fold<int>(0, (sum, list) => sum + list.length);
+      logger.w('Flush already in progress, $pendingCount items waiting - not keeping up with data rate');
+      return;
+    }
+
+    _flushInProgress = true;
+
     // Snapshot the current buffer and clear it
     final batchesToFlush = Map<String, List<_PendingWrite>>.from(_writeBuffer);
     _writeBuffer.clear();
 
     // Flush each table's batch
-    for (final entry in batchesToFlush.entries) {
-      final tableName = entry.key;
-      final writes = entry.value;
-      if (writes.isEmpty) continue;
+    try {
+      for (final entry in batchesToFlush.entries) {
+        final tableName = entry.key;
+        final writes = entry.value;
+        if (writes.isEmpty) continue;
 
-      try {
-        _writeCount++;
-        _totalWriteTime.start();
+        try {
+          _writeCount++;
+          _totalWriteTime.start();
 
-        final rows = writes.map((w) => w.toMap()).toList();
-        await _withRetry(() => db.tableInsertBatch(tableName, rows));
+          final rows = writes.map((w) => w.toMap()).toList();
+          await _withRetry(() => db.tableInsertBatch(tableName, rows));
 
-        _totalWriteTime.stop();
-      } catch (e) {
-        _totalWriteTime.stop();
-        logger.e('Error flushing batch for $tableName after retries: $e');
+          _totalWriteTime.stop();
+        } catch (e) {
+          _totalWriteTime.stop();
+          logger.e('Error flushing batch for $tableName after retries: $e');
+        }
       }
+    } finally {
+      _flushInProgress = false;
     }
   }
 
