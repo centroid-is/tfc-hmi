@@ -383,20 +383,49 @@ class StateMan {
       }
 
       bool sessionLost = false;
+      SecureChannelState? lastChannelState;
+      DateTime? channelOpenedAt;
+      final channelLifetimeSec = 60; // 1 minute as configured
+
       wrapper.client.stateStream.listen((value) {
+        final now = DateTime.now();
+
+        // Log ALL SecureChannel state transitions with timestamps
+        if (value.channelState != lastChannelState) {
+          final timeSinceOpen = channelOpenedAt != null
+              ? now.difference(channelOpenedAt!).inSeconds
+              : 0;
+          logger.i('[$alias] SecureChannel state: ${lastChannelState?.name} -> ${value.channelState.name} '
+              '(session: ${value.sessionState.name}, recovery: ${value.recoveryStatus}) '
+              '[uptime: ${timeSinceOpen}s]');
+
+          // Track when channel opens
+          if (value.channelState == SecureChannelState.UA_SECURECHANNELSTATE_OPEN) {
+            channelOpenedAt = now;
+            logger.i('[$alias] Channel opened at $now, renewal expected at ~${channelLifetimeSec * 0.75}s');
+          }
+
+          lastChannelState = value.channelState;
+        }
+
         if (value.channelState ==
             SecureChannelState.UA_SECURECHANNELSTATE_CLOSED) {
-          logger.e('Channel closed');
+          final timeSinceOpen = channelOpenedAt != null
+              ? now.difference(channelOpenedAt!).inSeconds
+              : 0;
+          logger.e('[$alias] Channel closed after ${timeSinceOpen}s (expected lifetime: ${channelLifetimeSec}s, '
+              'renewal window: ${channelLifetimeSec * 0.75}s-${channelLifetimeSec}s)');
+          channelOpenedAt = null;
         }
         if (value.sessionState ==
                 SessionState.UA_SESSIONSTATE_CREATE_REQUESTED &&
             _subscriptions.isNotEmpty) {
-          logger.e('Session lost!');
+          logger.e('[$alias] Session lost!');
           sessionLost = true;
         }
         if (value.sessionState == SessionState.UA_SESSIONSTATE_ACTIVATED &&
             sessionLost) {
-          logger.e('Session lost, resubscribing');
+          logger.e('[$alias] Session lost, resubscribing');
           // Session was lost, resubscribe
           sessionLost = false;
           wrapper.subscriptionId = null;
@@ -407,13 +436,25 @@ class StateMan {
             SessionState.UA_SESSIONSTATE_ACTIVATED) {
           // Session was not lost, retransmit last data values.
           logger.w(
-              'Session regained on $alias, resending last values ${_subscriptions.length}');
+              '[$alias] Session regained, resending last values ${_subscriptions.length}');
           _resendLastValues();
         }
       }).onError((e, s) {
-        logger.e('Failed to listen to state stream: $e, $s');
+        logger.e('[$alias] Failed to listen to state stream: $e, $s');
       });
     }
+
+    // Periodic health check - log channel state every 15 seconds (only for direct Client, not isolates)
+    _healthCheckTimer = Timer.periodic(const Duration(seconds: 15), (timer) {
+      for (final wrapper in clients) {
+        if (wrapper.client is Client) {
+          final clientRef = wrapper.client as Client;
+          final state = clientRef.state;
+          logger.d('[$alias] Health check: channel=${state.channelState.name}, '
+              'session=${state.sessionState.name}, recovery=${state.recoveryStatus}');
+        }
+      }
+    });
   }
 
   void _resendLastValues() {
@@ -458,7 +499,7 @@ class StateMan {
                   certificate: cert,
                   privateKey: key,
                   securityMode: securityMode,
-                  logLevel: LogLevel.UA_LOGLEVEL_INFO,
+                  logLevel: LogLevel.UA_LOGLEVEL_DEBUG,
                   secureChannelLifeTime: Duration(
                       minutes:
                           1), // TODO can I reproduce the problem more often
@@ -470,7 +511,7 @@ class StateMan {
                   certificate: cert,
                   privateKey: key,
                   securityMode: securityMode,
-                  logLevel: LogLevel.UA_LOGLEVEL_INFO,
+                  logLevel: LogLevel.UA_LOGLEVEL_DEBUG,
                   secureChannelLifeTime: Duration(
                       minutes:
                           1), // TODO can I reproduce the problem more often
