@@ -503,7 +503,7 @@ class StateMan {
                   certificate: cert,
                   privateKey: key,
                   securityMode: securityMode,
-                  logLevel: LogLevel.UA_LOGLEVEL_DEBUG,
+                  logLevel: LogLevel.UA_LOGLEVEL_INFO,
                   secureChannelLifeTime: Duration(
                       minutes:
                           1), // TODO can I reproduce the problem more often
@@ -515,7 +515,7 @@ class StateMan {
                   certificate: cert,
                   privateKey: key,
                   securityMode: securityMode,
-                  logLevel: LogLevel.UA_LOGLEVEL_DEBUG,
+                  logLevel: LogLevel.UA_LOGLEVEL_INFO,
                   secureChannelLifeTime: Duration(
                       minutes:
                           1), // TODO can I reproduce the problem more often
