@@ -459,6 +459,9 @@ class StateMan {
                   privateKey: key,
                   securityMode: securityMode,
                   logLevel: LogLevel.UA_LOGLEVEL_INFO,
+                  secureChannelLifeTime: Duration(
+                      minutes:
+                          1), // TODO can I reproduce the problem more often
                 )
               : Client(
                   loadOpen62541Library(staticLinking: false),
@@ -468,6 +471,9 @@ class StateMan {
                   privateKey: key,
                   securityMode: securityMode,
                   logLevel: LogLevel.UA_LOGLEVEL_INFO,
+                  secureChannelLifeTime: Duration(
+                      minutes:
+                          1), // TODO can I reproduce the problem more often
                 ),
           opcuaConfig));
     }
