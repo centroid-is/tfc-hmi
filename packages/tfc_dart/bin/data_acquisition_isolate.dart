@@ -48,7 +48,7 @@ Future<void> dataAcquisitionIsolateEntry(
   final stateMan = await StateMan.create(
     config: smConfig,
     keyMappings: keyMappings,
-    useIsolate: true, // Already in isolate, no need for nested isolates
+    useIsolate: false, // Already in isolate, no need for nested isolates
     alias: 'data_acq',
   );
 

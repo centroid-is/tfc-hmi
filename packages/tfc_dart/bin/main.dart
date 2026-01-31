@@ -37,12 +37,12 @@ void main() async {
   // Disable SSL for alarm StateMan to test if the issue is specific to
   // encrypted secure channel renewal
   final alarmSmConfig = smConfig.copy();
-  for (final opcuaConfig in alarmSmConfig.opcua) {
-    opcuaConfig.sslCert = null;
-    opcuaConfig.sslKey = null;
-    opcuaConfig.password = null;
-    opcuaConfig.username = null;
-  }
+  // for (final opcuaConfig in alarmSmConfig.opcua) {
+  //   opcuaConfig.sslCert = null;
+  //   opcuaConfig.sslKey = null;
+  //   opcuaConfig.password = null;
+  //   opcuaConfig.username = null;
+  // }
 
   // Create StateMan for alarm monitoring (with separate certificate)
   final stateMan = await StateMan.create(
