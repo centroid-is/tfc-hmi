@@ -65,9 +65,11 @@ class RunIterateStats {
     if (_callCount == 0) return;
 
     final avgGapMs = _callCount > 1
-        ? (_totalGap.inMicroseconds / (_callCount - 1) / 1000).toStringAsFixed(2)
+        ? (_totalGap.inMicroseconds / (_callCount - 1) / 1000)
+            .toStringAsFixed(2)
         : 'N/A';
-    final avgExecMs = (_totalExecTime.inMicroseconds / _callCount / 1000).toStringAsFixed(2);
+    final avgExecMs =
+        (_totalExecTime.inMicroseconds / _callCount / 1000).toStringAsFixed(2);
 
     _logger.i('[$clientName] runIterate stats after $_callCount calls: '
         'gap(avg: ${avgGapMs}ms, max: ${_maxGap.inMilliseconds}ms) '
@@ -324,6 +326,7 @@ class StateMan {
   bool _shouldRun = true;
   final Map<String, String> _substitutions = {};
   final _subsMap$ = BehaviorSubject<Map<String, String>>.seeded(const {});
+  String alias;
 
   Timer? _healthCheckTimer;
 
@@ -332,6 +335,7 @@ class StateMan {
     required this.config,
     required this.keyMappings,
     required this.clients,
+    required this.alias,
   }) {
     for (final wrapper in clients) {
       if (wrapper.client is Client) {
@@ -402,7 +406,7 @@ class StateMan {
             SessionState.UA_SESSIONSTATE_ACTIVATED) {
           // Session was not lost, retransmit last data values.
           logger.w(
-              'Session regained, resending last values ${_subscriptions.length}');
+              'Session regained on $alias, resending last values ${_subscriptions.length}');
           _resendLastValues();
         }
       }).onError((e, s) {
@@ -421,6 +425,7 @@ class StateMan {
     required StateManConfig config,
     required KeyMappings keyMappings,
     bool useIsolate = true,
+    String alias = '',
   }) async {
     // Example directory: /Users/jonb/Library/Containers/is.centroid.sildarvinnsla.skammtalina/Data/Documents/certs
     List<ClientWrapper> clients = [];
@@ -466,10 +471,10 @@ class StateMan {
           opcuaConfig));
     }
     final stateMan = StateMan._(
-      config: config,
-      keyMappings: keyMappings,
-      clients: clients,
-    );
+        config: config,
+        keyMappings: keyMappings,
+        clients: clients,
+        alias: alias);
     return stateMan;
   }
 

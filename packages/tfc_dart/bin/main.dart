@@ -49,6 +49,7 @@ void main() async {
     config: alarmSmConfig,
     keyMappings: keyMappings,
     useIsolate: false,
+    alias: 'alarmman',
   );
 
   // Setup alarm monitoring with database persistence

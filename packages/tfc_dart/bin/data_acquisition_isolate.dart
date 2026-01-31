@@ -49,6 +49,7 @@ Future<void> dataAcquisitionIsolateEntry(
     config: smConfig,
     keyMappings: keyMappings,
     useIsolate: true, // Already in isolate, no need for nested isolates
+    alias: 'data_acq',
   );
 
   final collector = Collector(
