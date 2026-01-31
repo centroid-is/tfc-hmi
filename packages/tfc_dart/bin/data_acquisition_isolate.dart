@@ -30,7 +30,8 @@ class DataAcquisitionIsolateConfig {
 
 /// Isolate entry point for running DataAcquisition for a single server.
 @pragma('vm:entry-point')
-Future<void> dataAcquisitionIsolateEntry(DataAcquisitionIsolateConfig config) async {
+Future<void> dataAcquisitionIsolateEntry(
+    DataAcquisitionIsolateConfig config) async {
   Logger.defaultFilter = () => _TraceFilter();
   final logger = Logger();
 
@@ -38,7 +39,8 @@ Future<void> dataAcquisitionIsolateEntry(DataAcquisitionIsolateConfig config) as
   final dbConfig = DatabaseConfig.fromJson(config.dbConfigJson);
   final keyMappings = KeyMappings.fromJson(config.keyMappingsJson);
 
-  logger.i('Starting DataAcquisition isolate for server: ${server.serverAlias ?? server.endpoint}');
+  logger.i(
+      'Starting DataAcquisition isolate for server: ${server.serverAlias ?? server.endpoint}');
 
   final db = Database(await AppDatabase.create(dbConfig));
   final smConfig = StateManConfig(opcua: [server]);
@@ -46,7 +48,7 @@ Future<void> dataAcquisitionIsolateEntry(DataAcquisitionIsolateConfig config) as
   final stateMan = await StateMan.create(
     config: smConfig,
     keyMappings: keyMappings,
-    useIsolate: false, // Already in isolate, no need for nested isolates
+    useIsolate: true, // Already in isolate, no need for nested isolates
   );
 
   final collector = Collector(
@@ -55,7 +57,8 @@ Future<void> dataAcquisitionIsolateEntry(DataAcquisitionIsolateConfig config) as
     database: db,
   );
 
-  logger.i('DataAcquisition isolate running for ${server.serverAlias ?? server.endpoint}');
+  logger.i(
+      'DataAcquisition isolate running for ${server.serverAlias ?? server.endpoint}');
 
   // Keep isolate alive indefinitely
   await Completer<void>().future;
@@ -79,7 +82,8 @@ Future<void> spawnDataAcquisitionIsolate({
   errorPort.listen((message) {
     final error = message[0];
     final stackTrace = message[1];
-    stderr.writeln('Isolate error for ${server.serverAlias ?? server.endpoint}:');
+    stderr
+        .writeln('Isolate error for ${server.serverAlias ?? server.endpoint}:');
     stderr.writeln(error);
     stderr.writeln(stackTrace);
     exit(1);
@@ -87,7 +91,8 @@ Future<void> spawnDataAcquisitionIsolate({
 
   final exitPort = ReceivePort();
   exitPort.listen((_) {
-    Logger().e('Isolate exited unexpectedly for ${server.serverAlias ?? server.endpoint}');
+    Logger().e(
+        'Isolate exited unexpectedly for ${server.serverAlias ?? server.endpoint}');
     exit(1);
   });
 
