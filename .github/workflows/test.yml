@@ -9,12 +9,15 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/cirruslabs/flutter:stable
-    
+
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
+
+    - name: Setup Flutter
+      uses: subosito/flutter-action@v2
+      with:
+        channel: stable
 
     - name: Get dependencies
       run: flutter pub get
