@@ -6,8 +6,8 @@ import 'package:riverpod_annotation/riverpod_annotation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../core/state_man.dart';
-import '../core/preferences.dart';
+import 'package:tfc_dart/core/state_man.dart';
+import 'package:tfc_dart/core/preferences.dart';
 import 'preferences.dart';
 import 'collector.dart';
 
@@ -58,7 +58,7 @@ Future<StateMan> stateMan(Ref ref) async {
 
     ref.onDispose(() async {
       listener.cancel();
-      stateMan.close();
+      await stateMan.close();
     });
     return stateMan;
   } catch (e) {

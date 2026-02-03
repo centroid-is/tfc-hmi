@@ -1,0 +1,5 @@
+# Ignore actual config (keep example)
+config/stateman.json
+
+# Ignore generated certs
+certs/

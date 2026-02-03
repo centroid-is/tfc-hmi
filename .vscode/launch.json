@@ -1,0 +1,86 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Dart data acq",
+            "type": "dart",
+            "request": "launch",
+            "program": "bin/main.dart",
+            "cwd": "packages/tfc_dart"
+        },
+        {
+            "name": "Dart data acq (profile)",
+            "type": "dart",
+            "request": "launch",
+            "program": "bin/main.dart",
+            "cwd": "packages/tfc_dart",
+            "vmAdditionalArgs": [
+                "--observe",
+                "--enable-vm-service"
+            ]
+        },
+        {
+            "name": "tfc-hmi",
+            "request": "launch",
+            "type": "dart"
+        },
+        {
+            "name": "tfc-hmi (profile mode)",
+            "request": "launch",
+            "type": "dart",
+            "flutterMode": "profile"
+        },
+        {
+            "name": "tfc-hmi (release mode)",
+            "request": "launch",
+            "type": "dart",
+            "flutterMode": "release"
+        },
+        {
+            "name": "centroid-hmi",
+            "cwd": "centroid-hmi",
+            "request": "launch",
+            "type": "dart",
+            "env": {
+                "TFC_GOD": "true"
+            }
+        },
+        {
+            "name": "centroid-hmi (profile mode)",
+            "cwd": "centroid-hmi",
+            "request": "launch",
+            "type": "dart",
+            "flutterMode": "profile"
+        },
+        {
+            "name": "centroid-hmi (release mode)",
+            "cwd": "centroid-hmi",
+            "request": "launch",
+            "type": "dart",
+            "flutterMode": "release"
+        },
+        {
+            "name": "demo",
+            "cwd": "demo",
+            "request": "launch",
+            "type": "dart"
+        },
+        {
+            "name": "demo (profile mode)",
+            "cwd": "demo",
+            "request": "launch",
+            "type": "dart",
+            "flutterMode": "profile"
+        },
+        {
+            "name": "demo (release mode)",
+            "cwd": "demo",
+            "request": "launch",
+            "type": "dart",
+            "flutterMode": "release"
+        }
+    ]
+}

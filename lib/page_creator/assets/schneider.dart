@@ -8,7 +8,7 @@ import 'package:open62541/open62541.dart' show DynamicValue;
 
 import 'common.dart';
 import '../../painter/schneider/atv320.dart';
-import '../../core/state_man.dart';
+import 'package:tfc_dart/core/state_man.dart';
 import '../../providers/state_man.dart';
 import '../../widgets/dynamic_value.dart';
 

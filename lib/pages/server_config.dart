@@ -16,8 +16,8 @@ import 'package:cryptography_flutter/cryptography_flutter.dart' as crypto_fl;
 
 import '../widgets/base_scaffold.dart';
 import '../widgets/preferences.dart';
-import '../core/state_man.dart';
-import '../core/database.dart';
+import 'package:tfc_dart/core/state_man.dart';
+import 'package:tfc_dart/core/database.dart';
 import '../providers/state_man.dart';
 import '../providers/preferences.dart';
 import '../providers/database.dart';

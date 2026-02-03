@@ -1,5 +1,3 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:postgres/postgres.dart';
@@ -8,8 +6,9 @@ import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:tfc/providers/database.dart';
 
 import '../providers/preferences.dart';
-import '../core/preferences.dart';
-import '../core/database.dart';
+import 'package:tfc_dart/core/preferences.dart';
+import 'package:tfc/core/preferences.dart';
+import 'package:tfc_dart/core/database.dart';
 import 'dart:convert';
 
 class DatabaseConfigWidget extends ConsumerWidget {
@@ -287,11 +286,19 @@ class PreferencesKeysWidget extends ConsumerWidget {
         }
         final preferences = snapshot.data!;
         final localPrefs = SharedPreferencesWrapper(
-          preferences.sharedPreferences,
+          SharedPreferencesAsync(),
         );
 
         return FutureBuilder<Map<String, Object?>>(
-          future: preferences.getAll(),
+          future: Future.wait([
+            preferences.getAll(),
+            localPrefs.getAll(),
+          ]).then((results) {
+            final merged = <String, Object?>{};
+            merged.addAll(results[1]); // local prefs first
+            merged.addAll(results[0]); // db prefs override duplicates
+            return merged;
+          }),
           builder: (context, keysSnap) {
             if (!keysSnap.hasData) {
               return const Padding(
@@ -405,7 +412,12 @@ class PreferencesKeysWidget extends ConsumerWidget {
                                           ),
                                         );
                                         if (confirmed == true) {
-                                          await preferences.remove(e.key);
+                                          final isInDb = snapshot.data!;
+                                          if (isInDb) {
+                                            await preferences.remove(e.key);
+                                          } else {
+                                            await localPrefs.remove(e.key);
+                                          }
                                           ref.invalidate(preferencesProvider);
                                         }
                                       },

@@ -1,11 +1,34 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../core/alarm.dart';
-import '../core/boolean_expression.dart';
+import 'package:tfc_dart/core/alarm.dart';
+import 'package:tfc_dart/core/boolean_expression.dart';
 import '../providers/alarm.dart';
 import 'base_scaffold.dart';
 import 'boolean_expression.dart';
+
+extension AlarmNotificationColors on AlarmNotification {
+  /// Returns the background and text colors for this alarm level
+  (Color, Color) getColors(BuildContext context) {
+    switch (rule.level) {
+      case AlarmLevel.info:
+        return (
+          Theme.of(context).colorScheme.primaryContainer,
+          Theme.of(context).colorScheme.onPrimaryContainer
+        );
+      case AlarmLevel.warning:
+        return (
+          Theme.of(context).colorScheme.tertiaryContainer,
+          Theme.of(context).colorScheme.onTertiaryContainer
+        );
+      case AlarmLevel.error:
+        return (
+          Theme.of(context).colorScheme.errorContainer,
+          Theme.of(context).colorScheme.onErrorContainer
+        );
+    }
+  }
+}
 
 class ListAlarms extends ConsumerStatefulWidget {
   final void Function(AlarmConfig)? onEdit;

@@ -54,6 +54,8 @@ dependencies:
     git:
       url: https://github.com/centroid-is/cristalyse.git
       ref: dev
+  tfc_dart:
+    path: packages/tfc_dart
 dev_dependencies:
   build_runner: ^2.4.15
   json_serializable: ^6.9.4

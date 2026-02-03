@@ -8,7 +8,6 @@ import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../theme.dart';
 import '../providers/theme.dart';
-import '../converter/color_converter.dart';
 import 'button_graph.dart';
 
 part 'graph.g.dart';

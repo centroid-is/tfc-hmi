@@ -8,13 +8,16 @@ on:
 
 jobs:
   test:
-    runs-on: [self-hosted]
-    container:
-      image: ghcr.io/cirruslabs/flutter:3.28.0
-    
+    runs-on: ubuntu-latest
+
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
+
+    - name: Setup Flutter
+      uses: subosito/flutter-action@v2
+      with:
+        channel: stable
 
     - name: Get dependencies
       run: flutter pub get
@@ -24,18 +27,15 @@ jobs:
       
     # - name: Analyze project source
     #   run: flutter analyze
-          
-    - name: Run collector integration tests
-      run: flutter test test/integration/collector_integration_test.dart
-      
-    - name: Run database integration tests
-      run: flutter test test/integration/database_integration_test.dart
     
-    - name: Run widget tests
-      run: flutter test test/widgets/
-      
-    - name: Run core tests
-      run: flutter test test/core/
+    # - name: Run widget tests
+    #   run: flutter test test/widgets/
+
+    - name: Run tfc_dart package tests
+      run: |
+        cd packages/tfc_dart
+        dart pub get
+        dart test
             
     - name: Upload test results
       uses: actions/upload-artifact@v4

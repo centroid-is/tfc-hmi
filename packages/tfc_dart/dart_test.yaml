@@ -1,0 +1,3 @@
+# Run test files sequentially so integration tests that share
+# Docker Compose services don't race each other.
+concurrency: 1

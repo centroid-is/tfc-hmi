@@ -5,12 +5,11 @@ import 'package:flutter_colorpicker/flutter_colorpicker.dart';
 import 'package:rxdart/rxdart.dart';
 
 import 'common.dart';
-import '../../converter/icon.dart';
-import '../../converter/color_converter.dart';
-import '../../core/boolean_expression.dart';
+import 'package:tfc/converter/icon.dart';
+import 'package:tfc/converter/color_converter.dart';
+import 'package:tfc_dart/core/boolean_expression.dart';
 import '../../widgets/boolean_expression.dart';
 import '../../providers/state_man.dart';
-import '../../core/state_man.dart';
 
 part 'icon.g.dart';
 

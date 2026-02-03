@@ -1,0 +1,76 @@
+services:
+  centroidx-backend:
+    build:
+      context: ../../packages/tfc_dart
+      dockerfile: ../../docker/backend/Dockerfile
+    container_name: centroidx-backend
+    restart: unless-stopped
+    environment:
+      CENTROID_PGHOST: timescaledb
+      CENTROID_PGPORT: "5432"
+      CENTROID_PGDATABASE: hmi
+      CENTROID_PGUSER: centroid
+      CENTROID_PGPASSWORD: FooBarHelloWorld
+      CENTROID_PGSSLMODE: require
+      CENTROID_STATEMAN_FILE_PATH: /config/stateman.json
+    volumes:
+      - ./config:/config:ro
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    networks:
+      - data-net
+
+  timescaledb:
+    image: timescale/timescaledb:latest-pg17
+    container_name: timescaledb
+    restart: unless-stopped
+    depends_on:
+      pg-certs:
+        condition: service_completed_successfully
+    environment:
+      POSTGRES_DB: hmi
+      POSTGRES_USER: centroid
+      POSTGRES_PASSWORD: FooBarHelloWorld
+    volumes:
+      - timescale_data:/var/lib/postgresql/data
+      - ./certs:/certs:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U centroid -d hmi"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    command: >
+      postgres -c ssl=on
+               -c ssl_cert_file=/certs/server.crt
+               -c ssl_key_file=/certs/server.key
+               -c ssl_min_protocol_version=TLSv1.2
+    networks:
+      - data-net
+
+  pg-certs:
+    image: alpine:latest
+    container_name: pg-certs
+    restart: "no"
+    volumes:
+      - ./certs:/out
+    command: |
+      sh -euxc '
+        apk add --no-cache openssl
+        [ -f /out/server.key ] && [ -f /out/server.crt ] && { echo "TLS certs exist, skipping"; exit 0; }
+        openssl req -x509 -newkey rsa:2048 -nodes -days 365000 \
+          -subj "/C=IS/ST=Hofudborgarsvaedid/L=Hafnarfjordur/O=Centroid/CN=timescaledb" \
+          -keyout /out/server.key \
+          -out /out/server.crt
+        chown 70:70 /out/server.key /out/server.crt
+        chmod 600 /out/server.key
+        chmod 644 /out/server.crt
+        echo "Certs written to /out"
+      '
+
+volumes:
+  timescale_data:
+
+networks:
+  data-net:
+    driver: bridge

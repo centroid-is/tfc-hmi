@@ -3,14 +3,17 @@ import 'dart:async';
 import 'package:riverpod/riverpod.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
-import '../core/database.dart';
-import '../core/database_drift.dart';
+import 'package:tfc_dart/core/database.dart';
+import 'package:tfc_dart/core/database_drift.dart';
 
 part 'database.g.dart';
 
 @Riverpod(keepAlive: true)
 Future<Database?> database(Ref ref) async {
   final config = await DatabaseConfig.fromPrefs();
+  if (config.postgres == null) {
+    return null;
+  }
   final db = Database(await AppDatabase.spawn(config));
   try {
     await db.db.open();
