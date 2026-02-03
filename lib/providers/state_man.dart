@@ -58,7 +58,7 @@ Future<StateMan> stateMan(Ref ref) async {
 
     ref.onDispose(() async {
       listener.cancel();
-      stateMan.close();
+      await stateMan.close();
     });
     return stateMan;
   } catch (e) {

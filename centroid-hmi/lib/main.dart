@@ -33,9 +33,15 @@ import 'package:tfc/theme.dart';
 import 'package:tfc/page_creator/assets/registry.dart';
 import 'package:tfc/widgets/base_scaffold.dart';
 
+import 'package:tfc_dart/core/secure_storage/secure_storage.dart';
+import 'package:tfc/core/secure_storage/other.dart';
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   AmplifySecureStorageDart.registerWith();
+  if (Platform.isWindows) {
+    SecureStorage.setInstance(OtherSecureStorage());
+  }
 
   // Register your custom asset type
   // AssetRegistry.registerFromJsonFactory<ChecklistsConfig>(ChecklistsConfig.fromJson);

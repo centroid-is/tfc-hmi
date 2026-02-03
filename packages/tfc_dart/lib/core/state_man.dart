@@ -368,13 +368,19 @@ class StateMan {
       if (wrapper.client is ClientIsolate) {
         final clientref = wrapper.client as ClientIsolate;
         () async {
-          while (true) {
+          while (_shouldRun) {
             try {
-              clientref.connect(wrapper.config.endpoint);
+              clientref.connect(wrapper.config.endpoint).onError(
+                (e, stacktrace) => logger
+                    .e('Failed to connect to ${wrapper.config.endpoint}: $e'));
               await clientref.runIterate();
             } catch (error) {
               logger.e("run iterate error: $error");
-              await clientref.disconnect();
+              try {
+                // try to disconnect
+                await clientref.disconnect();
+              }
+              catch (_) {}
               // Throttle if often occuring error
               await Future.delayed(const Duration(seconds: 1));
             }
@@ -681,10 +687,19 @@ class StateMan {
   List<String> get keys => keyMappings.keys.toList();
 
   /// Close the connection to the server.
-  void close() {
+  Future<void> close() async {
     _shouldRun = false;
     logger.d('Closing connection');
     for (final wrapper in clients) {
+      try {
+        if (wrapper.client is ClientIsolate) {
+          await (wrapper.client as ClientIsolate).disconnect();
+        }
+        else {
+          (wrapper.client as Client).disconnect();
+        }
+      }
+      catch (_) {}
       wrapper.client.delete();
     }
     // Clean up subscriptions
