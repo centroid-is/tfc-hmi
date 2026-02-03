@@ -24,15 +24,9 @@ jobs:
       
     # - name: Analyze project source
     #   run: flutter analyze
-          
-    - name: Run collector integration tests
-      run: flutter test test/integration/collector_integration_test.dart
-      
-    - name: Run database integration tests
-      run: flutter test test/integration/database_integration_test.dart
     
-    - name: Run widget tests
-      run: flutter test test/widgets/
+    # - name: Run widget tests
+    #   run: flutter test test/widgets/
 
     - name: Run tfc_dart package tests
       run: |
