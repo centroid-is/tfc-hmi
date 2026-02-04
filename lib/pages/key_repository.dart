@@ -817,7 +817,7 @@ class _OpcUaConfigSectionState extends State<_OpcUaConfigSection> {
             const SizedBox(height: 12),
             // Server alias dropdown
             DropdownButtonFormField<String>(
-              initialValue: _selectedAlias,
+              value: _selectedAlias,
               decoration: const InputDecoration(
                 labelText: 'Server Alias',
                 prefixIcon: FaIcon(FontAwesomeIcons.server, size: 16),
