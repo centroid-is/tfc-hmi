@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
 import 'dart:math';
@@ -612,6 +613,39 @@ class _OpcUAServersSectionState extends ConsumerState<_OpcUAServersSection> {
     setState(() => _config!.opcua.removeAt(index));
   }
 
+  Widget _buildServerList(StateManConfig config) {
+    final stateManAsync = ref.watch(stateManProvider);
+    final StateMan? stateMan = stateManAsync.valueOrNull;
+
+    return ListView.builder(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      itemCount: config.opcua.length,
+      itemBuilder: (context, index) {
+        ClientWrapper? wrapper;
+        if (stateMan != null) {
+          final server = config.opcua[index];
+          wrapper = stateMan.clients.cast<ClientWrapper?>().firstWhere(
+                (w) =>
+                    (server.serverAlias != null &&
+                        server.serverAlias!.isNotEmpty &&
+                        w!.config.serverAlias == server.serverAlias) ||
+                    w!.config.endpoint == server.endpoint,
+                orElse: () => null,
+              );
+        }
+        return _ServerConfigCard(
+          server: config.opcua[index],
+          onUpdate: (server) => _updateServer(index, server),
+          onRemove: () => _removeServer(index),
+          connectionStatus: wrapper?.connectionStatus,
+          connectionStream: wrapper?.connectionStream,
+          stateManLoading: stateManAsync.isLoading,
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_isLoading) {
@@ -734,18 +768,7 @@ class _OpcUAServersSectionState extends ConsumerState<_OpcUAServersSection> {
                     height: 200,
                     child: _EmptyServersWidget(),
                   )
-                : ListView.builder(
-                    shrinkWrap: true,
-                    physics: const NeverScrollableScrollPhysics(),
-                    itemCount: config.opcua.length,
-                    itemBuilder: (context, index) {
-                      return _ServerConfigCard(
-                        server: config.opcua[index],
-                        onUpdate: (server) => _updateServer(index, server),
-                        onRemove: () => _removeServer(index),
-                      );
-                    },
-                  ),
+                : _buildServerList(config),
             const SizedBox(height: 16),
             // place import and export button in bottom right corner
             // place save config button in bottom left corner, it should take 60% of the width
@@ -804,9 +827,18 @@ class _ServerConfigCard extends StatefulWidget {
   final OpcUAConfig server;
   final Function(OpcUAConfig) onUpdate;
   final VoidCallback onRemove;
+  final ConnectionStatus? connectionStatus;
+  final Stream<ConnectionStatus>? connectionStream;
+  final bool stateManLoading;
 
-  const _ServerConfigCard(
-      {required this.server, required this.onUpdate, required this.onRemove});
+  const _ServerConfigCard({
+    required this.server,
+    required this.onUpdate,
+    required this.onRemove,
+    this.connectionStatus,
+    this.connectionStream,
+    this.stateManLoading = false,
+  });
 
   @override
   State<_ServerConfigCard> createState() => _ServerConfigCardState();
@@ -817,6 +849,8 @@ class _ServerConfigCardState extends State<_ServerConfigCard> {
   late TextEditingController _usernameController;
   late TextEditingController _passwordController;
   late TextEditingController _serverAliasController;
+  ConnectionStatus? _connectionStatus;
+  StreamSubscription<ConnectionStatus>? _stateSubscription;
 
   @override
   void initState() {
@@ -828,10 +862,29 @@ class _ServerConfigCardState extends State<_ServerConfigCard> {
         TextEditingController(text: widget.server.password ?? '');
     _serverAliasController =
         TextEditingController(text: widget.server.serverAlias ?? '');
+    _connectionStatus = widget.connectionStatus;
+    _listenToState();
+  }
+
+  @override
+  void didUpdateWidget(covariant _ServerConfigCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.connectionStream != widget.connectionStream) {
+      _stateSubscription?.cancel();
+      _connectionStatus = widget.connectionStatus;
+      _listenToState();
+    }
+  }
+
+  void _listenToState() {
+    _stateSubscription = widget.connectionStream?.listen((status) {
+      if (mounted) setState(() => _connectionStatus = status);
+    });
   }
 
   @override
   void dispose() {
+    _stateSubscription?.cancel();
     _endpointController.dispose();
     _usernameController.dispose();
     _passwordController.dispose();
@@ -952,6 +1005,45 @@ class _ServerConfigCardState extends State<_ServerConfigCard> {
     return ls != null ? String.fromCharCodes(ls) : null;
   }
 
+  Color _connectionStatusColor() {
+    if (_connectionStatus == null) {
+      return widget.stateManLoading ? Colors.orange : Colors.grey;
+    }
+    return switch (_connectionStatus!) {
+      ConnectionStatus.connected => Colors.green,
+      ConnectionStatus.connecting => Colors.orange,
+      ConnectionStatus.disconnected => Colors.red,
+    };
+  }
+
+  String _connectionStatusLabel() {
+    if (_connectionStatus == null) {
+      return widget.stateManLoading ? 'Loading...' : 'Not active';
+    }
+    return switch (_connectionStatus!) {
+      ConnectionStatus.connected => 'Connected',
+      ConnectionStatus.connecting => 'Connecting...',
+      ConnectionStatus.disconnected => 'Disconnected',
+    };
+  }
+
+  Widget _buildStatusChip() {
+    final color = _connectionStatusColor();
+    final label = _connectionStatusLabel();
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withAlpha(30),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withAlpha(120)),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w600),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final sslCertString = uint8ListToString(widget.server.sslCert);
@@ -981,6 +1073,8 @@ class _ServerConfigCardState extends State<_ServerConfigCard> {
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
+            _buildStatusChip(),
+            const SizedBox(width: 8),
             IconButton(
               icon: const FaIcon(FontAwesomeIcons.trash, size: 16),
               onPressed: () {

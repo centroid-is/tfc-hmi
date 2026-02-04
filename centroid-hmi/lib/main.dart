@@ -23,6 +23,7 @@ import 'package:tfc/pages/ip_settings.dart';
 import 'package:tfc/pages/dbus_login.dart';
 import 'package:tfc/pages/history_view.dart';
 import 'package:tfc/pages/server_config.dart';
+import 'package:tfc/pages/key_repository.dart';
 import 'package:tfc/pages/about_linux.dart';
 import 'package:tfc/transition_delegate.dart';
 import 'package:tfc/providers/theme.dart';
@@ -100,6 +101,7 @@ void main() async {
           MenuItem(label: 'Alarm Editor', path: '/advanced/alarm-editor', icon: Icons.alarm),
         MenuItem(label: 'History View', path: '/advanced/history-view', icon: Icons.history),
         MenuItem(label: 'Server Config', path: '/advanced/server-config', icon: FontAwesomeIcons.server),
+        MenuItem(label: 'Key Repository', path: '/advanced/key-repository', icon: FontAwesomeIcons.key),
       ],
     ),
   );
@@ -209,6 +211,8 @@ RoutesLocationBuilder createLocationBuilder(List<MenuItem> extraMenuItems) {
         BeamPage(key: const ValueKey('/advanced/history-view'), title: 'History View', child: HistoryViewPage()),
     '/advanced/server-config': (context, state, args) =>
         BeamPage(key: const ValueKey('/advanced/server-config'), title: 'Server Config', child: ServerConfigPage()),
+    '/advanced/key-repository': (context, state, args) =>
+        BeamPage(key: const ValueKey('/advanced/key-repository'), title: 'Key Repository', child: const KeyRepositoryPage()),
     '/alarm-view': (context, state, args) =>
         BeamPage(key: const ValueKey('/alarm-view'), title: 'Alarm View', child: AlarmViewPage()),
   };

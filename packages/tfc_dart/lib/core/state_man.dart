@@ -308,13 +308,47 @@ class SingleWorker {
   }
 }
 
+enum ConnectionStatus { connected, connecting, disconnected }
+
 class ClientWrapper {
   final ClientApi client;
   final OpcUAConfig config;
   int? subscriptionId;
   final SingleWorker worker = SingleWorker();
 
+  ConnectionStatus _connectionStatus = ConnectionStatus.disconnected;
+  final StreamController<ConnectionStatus> _connectionController =
+      StreamController<ConnectionStatus>.broadcast();
+
   ClientWrapper(this.client, this.config);
+
+  /// Current connection status (synchronous, always up-to-date).
+  ConnectionStatus get connectionStatus => _connectionStatus;
+
+  /// Stream of connection status changes. Subscribe anytime — read
+  /// [connectionStatus] for the current value.
+  Stream<ConnectionStatus> get connectionStream => _connectionController.stream;
+
+  void updateConnectionStatus(ClientState state) {
+    final next = _mapState(state);
+    if (next == _connectionStatus) return;
+    _connectionStatus = next;
+    _connectionController.add(next);
+  }
+
+  static ConnectionStatus _mapState(ClientState state) {
+    if (state.sessionState == SessionState.UA_SESSIONSTATE_ACTIVATED) {
+      return ConnectionStatus.connected;
+    }
+    if (state.channelState == SecureChannelState.UA_SECURECHANNELSTATE_OPEN) {
+      return ConnectionStatus.connecting;
+    }
+    return ConnectionStatus.disconnected;
+  }
+
+  void dispose() {
+    _connectionController.close();
+  }
 }
 
 class StateMan {
@@ -394,6 +428,7 @@ class StateMan {
       final channelLifetimeSec = 60; // 1 minute as configured
 
       wrapper.client.stateStream.listen((value) {
+        wrapper.updateConnectionStatus(value);
         final now = DateTime.now();
 
         // Log ALL SecureChannel state transitions with timestamps
@@ -701,6 +736,7 @@ class StateMan {
       }
       catch (_) {}
       wrapper.client.delete();
+      wrapper.dispose();
     }
     // Clean up subscriptions
     for (final entry in _subscriptions.values) {
