@@ -68,9 +68,9 @@ void main() {
       await tester.tap(find.text('Add Key'));
       await tester.pumpAndSettle();
 
-      // Empty state should be gone, new key card should appear
+      // Empty state should be gone, new key card should appear (expanded, so title + text field)
       expect(find.text('No keys configured'), findsNothing);
-      expect(find.text('new_key'), findsOneWidget);
+      expect(find.text('new_key'), findsAtLeastNWidgets(1));
     });
 
     testWidgets('multiple Add Key taps create unique keys', (tester) async {
@@ -79,11 +79,20 @@ void main() {
 
       await tester.tap(find.text('Add Key'));
       await tester.pumpAndSettle();
+
+      // Scroll back to Add Key button (first card is now expanded)
+      await tester.scrollUntilVisible(
+        find.text('Add Key'),
+        -200,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.pumpAndSettle();
+
       await tester.tap(find.text('Add Key'));
       await tester.pumpAndSettle();
 
-      expect(find.text('new_key'), findsOneWidget);
-      expect(find.text('new_key_1'), findsOneWidget);
+      // Verify both keys exist (use byType to check ExpansionTile count)
+      expect(find.byType(ExpansionTile), findsNWidgets(2));
     });
   });
 

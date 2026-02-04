@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -15,6 +16,8 @@ import 'package:tfc_dart/core/database.dart';
 import '../providers/preferences.dart';
 import '../providers/state_man.dart';
 import '../providers/database.dart';
+
+enum _KeyStatus { ok, error, serverDisconnected }
 
 /// The full page widget with BaseScaffold (used in navigation).
 class KeyRepositoryPage extends ConsumerWidget {
@@ -127,6 +130,8 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
   bool _isLoading = true;
   String? _error;
   String _searchQuery = '';
+  String? _newlyAddedKey;
+  Map<String, _KeyStatus> _keyStatuses = {};
 
   @override
   void initState() {
@@ -151,6 +156,7 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
     } finally {
       if (mounted) {
         setState(() => _isLoading = false);
+        _probeKeys();
       }
     }
   }
@@ -187,6 +193,8 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
     }
   }
 
+  final Map<String, GlobalKey> _cardKeys = {};
+
   void _addKey() {
     final baseName = 'new_key';
     var name = baseName;
@@ -195,17 +203,56 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
       name = '${baseName}_$i';
       i++;
     }
+    _cardKeys[name] = GlobalKey();
     setState(() {
       _keyMappings!.nodes[name] = KeyMappingEntry(
         opcuaNode: OpcUANodeConfig(namespace: 0, identifier: ''),
       );
+      _newlyAddedKey = name;
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final keyContext = _cardKeys[name]?.currentContext;
+      if (keyContext != null) {
+        Scrollable.ensureVisible(keyContext,
+            duration: const Duration(milliseconds: 300));
+      }
+      _newlyAddedKey = null;
     });
   }
 
   void _removeKey(String key) {
+    _cardKeys.remove(key);
+    _keyStatuses.remove(key);
     setState(() {
       _keyMappings!.nodes.remove(key);
     });
+  }
+
+  Future<void> _probeKeys() async {
+    if (_keyMappings == null || _keyMappings!.nodes.isEmpty) return;
+
+    final stateManAsync = ref.read(stateManProvider);
+    final stateMan = stateManAsync.valueOrNull;
+    if (stateMan == null) return;
+
+    final newStatuses = <String, _KeyStatus>{};
+    for (final key in _keyMappings!.nodes.keys) {
+      try {
+        await stateMan.read(key).timeout(const Duration(seconds: 5));
+        newStatuses[key] = _KeyStatus.ok;
+      } on TimeoutException {
+        newStatuses[key] = _KeyStatus.serverDisconnected;
+      } catch (e) {
+        final msg = e.toString().toLowerCase();
+        if (msg.contains('not found') || msg.contains('connect')) {
+          newStatuses[key] = _KeyStatus.serverDisconnected;
+        } else {
+          newStatuses[key] = _KeyStatus.error;
+        }
+      }
+      // Update UI incrementally
+      if (mounted) setState(() => _keyStatuses = Map.of(newStatuses));
+    }
   }
 
   void _renameKey(String oldKey, String newKey) {
@@ -403,13 +450,20 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
                     itemCount: filtered.length,
                     itemBuilder: (context, index) {
                       final entry = filtered[index];
+                      final isNew = entry.key == _newlyAddedKey;
+                      if (isNew) {
+                        _cardKeys.putIfAbsent(entry.key, () => GlobalKey());
+                      }
                       return _KeyMappingCard(
+                        key: _cardKeys[entry.key],
                         keyName: entry.key,
                         entry: entry.value,
                         serverAliases: _serverAliases,
                         onUpdate: (updated) => _updateEntry(entry.key, updated),
                         onRename: (newName) => _renameKey(entry.key, newName),
                         onRemove: () => _showDeleteDialog(entry.key),
+                        initiallyExpanded: isNew,
+                        status: _keyStatuses[entry.key],
                       );
                     },
                   ),
@@ -498,14 +552,19 @@ class _KeyMappingCard extends StatefulWidget {
   final Function(KeyMappingEntry) onUpdate;
   final Function(String) onRename;
   final VoidCallback onRemove;
+  final bool initiallyExpanded;
+  final _KeyStatus? status;
 
   const _KeyMappingCard({
+    super.key,
     required this.keyName,
     required this.entry,
     required this.serverAliases,
     required this.onUpdate,
     required this.onRename,
     required this.onRemove,
+    this.initiallyExpanded = false,
+    this.status,
   });
 
   @override
@@ -573,11 +632,52 @@ class _KeyMappingCardState extends State<_KeyMappingCard> {
     widget.onUpdate(updatedEntry);
   }
 
+  Widget _buildTrailing() {
+    final chip = _buildStatusChip();
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (chip != null) ...[
+          chip,
+          const SizedBox(width: 8),
+        ],
+        IconButton(
+          icon: const FaIcon(FontAwesomeIcons.trash, size: 16),
+          onPressed: widget.onRemove,
+        ),
+        const SizedBox(width: 8),
+        const FaIcon(FontAwesomeIcons.chevronDown, size: 16),
+      ],
+    );
+  }
+
+  Widget? _buildStatusChip() {
+    if (widget.status == null) return null;
+    final (color, label) = switch (widget.status!) {
+      _KeyStatus.ok => (Colors.green, 'OK'),
+      _KeyStatus.error => (Colors.red, 'Error'),
+      _KeyStatus.serverDisconnected => (Colors.red, 'Disconnected'),
+    };
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withAlpha(30),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withAlpha(120)),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w600),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Card(
       margin: const EdgeInsets.only(bottom: 8),
       child: ExpansionTile(
+        initiallyExpanded: widget.initiallyExpanded,
         leading: FaIcon(
           FontAwesomeIcons.key,
           size: 20,
@@ -595,17 +695,7 @@ class _KeyMappingCardState extends State<_KeyMappingCard> {
           overflow: TextOverflow.ellipsis,
           maxLines: 1,
         ),
-        trailing: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            IconButton(
-              icon: const FaIcon(FontAwesomeIcons.trash, size: 16),
-              onPressed: widget.onRemove,
-            ),
-            const SizedBox(width: 8),
-            const FaIcon(FontAwesomeIcons.chevronDown, size: 16),
-          ],
-        ),
+        trailing: _buildTrailing(),
         children: [
           Padding(
             padding: const EdgeInsets.all(16.0),
