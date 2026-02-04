@@ -403,7 +403,9 @@ void main() {
 
       expect(find.textContaining('Unsaved'), findsOneWidget);
 
-      // Tap Save
+      // Tap Save (scroll into view first since Browse button may push it off-screen)
+      await tester.ensureVisible(find.text('Save Key Mappings'));
+      await tester.pumpAndSettle();
       await tester.tap(find.text('Save Key Mappings'));
       await tester.pumpAndSettle();
 
@@ -501,7 +503,9 @@ void main() {
       await tester.tap(find.text('Add Key'));
       await tester.pumpAndSettle();
 
-      // Save
+      // Save (scroll into view first since Browse button may push it off-screen)
+      await tester.ensureVisible(find.text('Save Key Mappings'));
+      await tester.pumpAndSettle();
       await tester.tap(find.text('Save Key Mappings'));
       await tester.pumpAndSettle();
 

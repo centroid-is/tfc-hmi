@@ -28,7 +28,7 @@ dependencies:
   open62541:
     git:
       url: https://github.com/centroid-is/open62541_dart.git
-      ref: isolate-client
+      ref: isolate-client-browse
 
   # Utilities
   collection: ^1.18.0

@@ -8,8 +8,10 @@ import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as path;
+import 'package:open62541/open62541.dart' show ClientApi;
 
 import '../widgets/base_scaffold.dart';
+import '../widgets/opcua_browse.dart';
 import 'package:tfc_dart/core/state_man.dart';
 import 'package:tfc_dart/core/collector.dart';
 import 'package:tfc_dart/core/database.dart';
@@ -236,7 +238,8 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
     if (stateMan == null) return;
 
     final newStatuses = <String, _KeyStatus>{};
-    for (final key in _keyMappings!.nodes.keys) {
+    final keys = _keyMappings!.nodes.keys.toList();
+    for (final key in keys) {
       try {
         await stateMan.read(key).timeout(const Duration(seconds: 5));
         newStatuses[key] = _KeyStatus.ok;
@@ -743,7 +746,7 @@ class _KeyMappingCardState extends State<_KeyMappingCard> {
 
 // ===================== OPC UA Config Section (extensible for Modbus) =====================
 
-class _OpcUaConfigSection extends StatefulWidget {
+class _OpcUaConfigSection extends ConsumerStatefulWidget {
   final OpcUANodeConfig config;
   final List<String> serverAliases;
   final Function(OpcUANodeConfig) onChanged;
@@ -755,10 +758,10 @@ class _OpcUaConfigSection extends StatefulWidget {
   });
 
   @override
-  State<_OpcUaConfigSection> createState() => _OpcUaConfigSectionState();
+  ConsumerState<_OpcUaConfigSection> createState() => _OpcUaConfigSectionState();
 }
 
-class _OpcUaConfigSectionState extends State<_OpcUaConfigSection> {
+class _OpcUaConfigSectionState extends ConsumerState<_OpcUaConfigSection> {
   late TextEditingController _namespaceController;
   late TextEditingController _identifierController;
   late TextEditingController _arrayIndexController;
@@ -798,6 +801,50 @@ class _OpcUaConfigSectionState extends State<_OpcUaConfigSection> {
     widget.onChanged(config);
   }
 
+  Future<void> _openBrowseDialog(BuildContext context) async {
+    final stateManAsync = ref.read(stateManProvider);
+    final stateMan = stateManAsync.valueOrNull;
+    if (stateMan == null) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Server connections not ready yet')),
+      );
+      return;
+    }
+
+    // Find the ClientWrapper matching the selected alias (null alias matches null)
+    ClientApi? client;
+    for (final wrapper in stateMan.clients) {
+      if (wrapper.config.serverAlias == _selectedAlias) {
+        client = wrapper.client;
+        break;
+      }
+    }
+    if (client == null) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('No client found for alias "${_selectedAlias ?? "(none)"}"')),
+      );
+      return;
+    }
+
+    final result = await showOpcUaBrowseDialog(
+      context: context,
+      client: client!,
+      serverAlias: _selectedAlias ?? stateMan.clients.first.config.endpoint,
+    );
+
+    if (result != null) {
+      final nodeId = result.nodeId;
+      setState(() {
+        _namespaceController.text = nodeId.namespace.toString();
+        _identifierController.text =
+            nodeId.isString() ? nodeId.string : nodeId.numeric.toString();
+      });
+      _notifyChanged();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Card(
@@ -810,8 +857,19 @@ class _OpcUaConfigSectionState extends State<_OpcUaConfigSection> {
               children: [
                 const FaIcon(FontAwesomeIcons.server, size: 16),
                 const SizedBox(width: 8),
-                Text('OPC UA Node Configuration',
-                    style: Theme.of(context).textTheme.titleSmall),
+                Expanded(
+                  child: Text('OPC UA Node Configuration',
+                      style: Theme.of(context).textTheme.titleSmall),
+                ),
+                TextButton.icon(
+                  onPressed: () => _openBrowseDialog(context),
+                  icon: const FaIcon(FontAwesomeIcons.sitemap, size: 14),
+                  label: const Text('Browse'),
+                  style: TextButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    textStyle: const TextStyle(fontSize: 12),
+                  ),
+                ),
               ],
             ),
             const SizedBox(height: 12),

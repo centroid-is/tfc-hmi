@@ -767,8 +767,8 @@ packages:
     dependency: "direct main"
     description:
       path: "."
-      ref: isolate-client
-      resolved-ref: "3ddfb1c908bbdcb473994b0b8d7690dd9ca10064"
+      ref: isolate-client-browse
+      resolved-ref: "33ed12bbc59cab5d32d3f948e0c31f0bbd652056"
       url: "https://github.com/centroid-is/open62541_dart.git"
     source: git
     version: "0.0.0-dev.1"

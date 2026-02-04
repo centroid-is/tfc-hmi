@@ -26,10 +26,10 @@ dependencies:
   flutter_riverpod: ^2.6.1
   flutter_colorpicker: ^1.1.0
   open62541:
-    # path: ../open62541_bindings
+    # path: ../open62541_dart
     git:
       url: https://github.com/centroid-is/open62541_dart.git
-      ref: isolate-client
+      ref: isolate-client-browse
   postgres: ^3.4.5
   intl: ^0.20.2
   collection: ^1.18.0
