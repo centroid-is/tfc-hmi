@@ -25,7 +25,6 @@ COPY . .
 RUN dart build cli -t bin/main.dart -o build/main && \
     dart build cli -t bin/generate_certs.dart -o build/generate_certs
 
-
 # Stage 2: Runtime image
 FROM debian:bookworm-slim
 
