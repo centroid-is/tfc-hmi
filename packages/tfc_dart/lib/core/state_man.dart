@@ -505,7 +505,7 @@ class StateMan {
         if (wrapper.connectionStatus == ConnectionStatus.connected) {
           final serverTimeNode = NodeId.fromNumeric(0, 2258);
           wrapper.client
-              .read(serverTimeNode)
+              .readAttribute({serverTimeNode: [AttributeId.UA_ATTRIBUTEID_VALUE]})
               .timeout(const Duration(seconds: 5))
               .then((_) {
             // Read succeeded — connection is alive, nothing to do.
