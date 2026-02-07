@@ -199,11 +199,12 @@ class _BaseScaffoldState extends ConsumerState<BaseScaffold> {
                             ),
                           globalLeftProvider?.buildAppBarLeftWidgets(context) ??
                               const SizedBox.shrink(),
-                          IconButton(
-                            icon: const Icon(Icons.fullscreen),
-                            onPressed: _toggleFullscreen,
-                            tooltip: 'Toggle Fullscreen',
-                          ),
+                          if (Platform.isAndroid || Platform.isIOS)
+                            IconButton(
+                              icon: const Icon(Icons.fullscreen),
+                              onPressed: _toggleFullscreen,
+                              tooltip: 'Toggle Fullscreen',
+                            ),
                         ],
                       ),
                     ),
