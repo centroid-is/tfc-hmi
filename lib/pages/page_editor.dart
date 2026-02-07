@@ -30,6 +30,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   String? _copiedAssets;
   Map<String, AssetPage> _temporaryPages = {};
   String? _currentPage;
+  String _paletteSearchQuery = '';
 
   List<Asset> get assets {
     if (_currentPage == null) {
@@ -152,6 +153,12 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     return Focus(
       autofocus: true,
       onKeyEvent: (node, event) {
+        // Don't intercept keys when a text field has focus
+        final primaryFocus = FocusManager.instance.primaryFocus;
+        if (primaryFocus != null &&
+            primaryFocus.context?.widget is EditableText) {
+          return KeyEventResult.ignored;
+        }
         if (event is KeyDownEvent) {
           if (_isModifierPressed(
               HardwareKeyboard.instance.logicalKeysPressed)) {
@@ -167,7 +174,6 @@ class _PageEditorState extends ConsumerState<PageEditor> {
             }
           } else if (event.logicalKey == LogicalKeyboardKey.delete ||
               event.logicalKey == LogicalKeyboardKey.backspace) {
-            // Support both Delete and Backspace
             _handleDelete();
             return KeyEventResult.handled;
           }
@@ -451,38 +457,45 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   }
 
   Widget _buildPalette() {
+    final entries = AssetRegistry.defaultFactories.entries.where((entry) {
+      if (_paletteSearchQuery.isEmpty) return true;
+      final asset = entry.value();
+      return asset.displayName
+          .toLowerCase()
+          .contains(_paletteSearchQuery.toLowerCase());
+    }).toList();
+
     return Column(
       children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 16, 48, 8),
+          child: TextField(
+            decoration: const InputDecoration(
+              hintText: 'Search assets...',
+              prefixIcon: Icon(Icons.search),
+              isDense: true,
+              border: OutlineInputBorder(),
+            ),
+            onChanged: (value) =>
+                setState(() => _paletteSearchQuery = value),
+          ),
+        ),
         Expanded(
-          child: ListView.separated(
-            padding: const EdgeInsets.all(16.0),
-            itemCount: AssetRegistry.defaultFactories.length,
-            separatorBuilder: (context, index) => const SizedBox(height: 24),
+          child: GridView.builder(
+            padding: const EdgeInsets.all(12.0),
+            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 2,
+              childAspectRatio: 0.85,
+              crossAxisSpacing: 8,
+              mainAxisSpacing: 8,
+            ),
+            itemCount: entries.length,
             itemBuilder: (context, index) {
-              final entry =
-                  AssetRegistry.defaultFactories.entries.elementAt(index);
-              return Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  SizedBox(
-                    child: Draggable<Type>(
-                      data: entry.key,
-                      feedback: Material(
-                        color: Colors.transparent,
-                        child: SizedBox(
-                          width: 100,
-                          height: 100,
-                          child: entry.value().build(context),
-                        ),
-                      ),
-                      child: SizedBox(
-                        width: 100,
-                        height: 100,
-                        child: entry.value().build(context),
-                      ),
-                    ),
-                  ),
-                ],
+              final entry = entries[index];
+              final previewAsset = entry.value();
+              return _PaletteItem(
+                assetType: entry.key,
+                asset: previewAsset,
               );
             },
           ),
@@ -654,6 +667,75 @@ class _PageEditorState extends ConsumerState<PageEditor> {
             _temporaryPages[pageName] = updatedPage;
           },
         ),
+      ),
+    );
+  }
+}
+
+class _PaletteItem extends StatelessWidget {
+  final Type assetType;
+  final Asset asset;
+
+  const _PaletteItem({
+    required this.assetType,
+    required this.asset,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Draggable<Type>(
+      data: assetType,
+      feedback: Material(
+        color: Colors.transparent,
+        child: SizedBox(
+          width: 80,
+          height: 80,
+          child: Opacity(
+            opacity: 0.7,
+            child: asset.build(context),
+          ),
+        ),
+      ),
+      childWhenDragging: Opacity(
+        opacity: 0.3,
+        child: _buildThumbnail(context),
+      ),
+      child: _buildThumbnail(context),
+    );
+  }
+
+  Widget _buildThumbnail(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Theme.of(context).cardColor,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+            color: Theme.of(context).colorScheme.outlineVariant),
+      ),
+      padding: const EdgeInsets.all(6),
+      child: Column(
+        children: [
+          Expanded(
+            child: FittedBox(
+              fit: BoxFit.contain,
+              child: SizedBox(
+                width: 80,
+                height: 80,
+                child: IgnorePointer(
+                  child: asset.build(context),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            asset.displayName,
+            style: Theme.of(context).textTheme.bodySmall,
+            textAlign: TextAlign.center,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ],
       ),
     );
   }

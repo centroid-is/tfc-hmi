@@ -19,6 +19,11 @@ part 'analog_box.g.dart';
 
 @JsonSerializable(explicitToJson: true)
 class AnalogBoxConfig extends BaseAsset {
+  @override
+  String get displayName => 'Analog Box';
+  @override
+  String get category => 'Text & Numbers';
+
   /// Live analog value source
   @JsonKey(name: 'analog_key')
   String analogKey;

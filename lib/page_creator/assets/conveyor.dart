@@ -18,6 +18,11 @@ part 'conveyor.g.dart';
 
 @JsonSerializable(explicitToJson: true)
 class ConveyorColorPaletteConfig extends BaseAsset {
+  @override
+  String get displayName => 'Conveyor Palette';
+  @override
+  String get category => 'Visualization';
+
   ConveyorColorPaletteConfig();
   bool? preview = false;
 
@@ -77,14 +82,10 @@ class ConveyorColorPalette extends StatelessWidget {
             ),
           ),
 
-          // If we are not in preview mode, build five equally‐spaced color rows
-          if (!(config.preview ?? false))
-            Expanded(
+          Expanded(
               flex: 5,
               child: Column(
                 children: [
-                  // Each of these five Expanded(...) blocks will receive 20% of
-                  // the "remaining" vertical space (because flex:1 + flex:1 + ... = 5)
                   _buildColorRow(Colors.green, 'Auto', textColor: Colors.white),
                   _buildColorRow(Colors.blue, 'Clean', textColor: Colors.white),
                   _buildColorRow(Colors.yellow, 'Manual',
@@ -133,6 +134,11 @@ class ConveyorColorPalette extends StatelessWidget {
 
 @JsonSerializable(explicitToJson: true)
 class ConveyorConfig extends BaseAsset {
+  @override
+  String get displayName => 'Conveyor';
+  @override
+  String get category => 'Visualization';
+
   String? key;
   String? batchesKey;
   String? frequencyKey;
@@ -341,15 +347,7 @@ class _ConveyorState extends ConsumerState<Conveyor> {
   @override
   Widget build(BuildContext context) {
     if (widget.config.key == ConveyorConfig.previewStr) {
-      return Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          _buildConveyorVisual(context, Colors.grey),
-          const SizedBox(height: 12), // spacing between box and text
-          const Text('Conveyor preview'),
-        ],
-      );
+      return _buildConveyorVisual(context, Colors.grey);
     }
 
     // Determine which streams to subscribe to

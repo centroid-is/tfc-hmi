@@ -22,6 +22,11 @@ part 'number.g.dart';
 
 @JsonSerializable()
 class NumberConfig extends BaseAsset {
+  @override
+  String get displayName => 'Number';
+  @override
+  String get category => 'Text & Numbers';
+
   String key;
   bool showDecimalPoint;
   int decimalPlaces;

@@ -15,6 +15,11 @@ part 'ratio_number.g.dart';
 
 @JsonSerializable()
 class RatioNumberConfig extends BaseAsset {
+  @override
+  String get displayName => 'Ratio Number';
+  @override
+  String get category => 'Text & Numbers';
+
   String key1;
   String key2;
   @JsonKey(name: 'key1_label')
