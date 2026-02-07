@@ -2,6 +2,12 @@ name: Build and Push centroid-hmi Docker Image
 
 on:
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      ref:
+        description: 'Git ref to checkout (commit SHA, branch, tag)'
+        type: string
+        default: ''
   pull_request:
   push:
     branches:
@@ -23,6 +29,8 @@ jobs:
         run: git config --system --add safe.directory '*'
       - name: Checkout centroid-hmi
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
 
       - name: Get commit SHA
         id: get_sha
@@ -63,6 +71,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
 
       - name: Download build artifacts
         uses: actions/download-artifact@v4
@@ -93,6 +103,19 @@ jobs:
             ghcr.io/${{ github.repository_owner }}/centroid-hmi:${{ needs.elinux-build.outputs.centroid_hmi_sha }}
             ghcr.io/${{ github.repository_owner }}/centroid-hmi:latest
 
+      - name: Build and push Docker image (tag)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: docker/build-push-action@v4
+        with:
+          context: docker/frontend
+          push: true
+          build-args: |
+            APP_BIN=centroidx
+            APP_BUNDLE=bundle
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/centroid-hmi:${{ needs.elinux-build.outputs.centroid_hmi_sha }}
+            ghcr.io/${{ github.repository_owner }}/centroid-hmi:stable
+
       - name: Build and push Docker image (PR)
         if: github.event_name == 'pull_request'
         uses: docker/build-push-action@v4
@@ -110,6 +133,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
 
       - name: Get commit SHA
         id: get_sha
@@ -136,6 +161,17 @@ jobs:
           tags: |
             ghcr.io/${{ github.repository_owner }}/centroid-backend:${{ steps.get_sha.outputs.sha }}
             ghcr.io/${{ github.repository_owner }}/centroid-backend:latest
+
+      - name: Build and push backend Docker image (tag)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: docker/build-push-action@v4
+        with:
+          context: packages/tfc_dart
+          file: docker/backend/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/centroid-backend:${{ steps.get_sha.outputs.sha }}
+            ghcr.io/${{ github.repository_owner }}/centroid-backend:stable
 
       - name: Build and push backend Docker image (PR)
         if: github.event_name == 'pull_request'

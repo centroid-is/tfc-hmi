@@ -1,4 +1,4 @@
-name: Build and Push centroid-hmi Docker Image
+name: Tag Release
 
 on:
   workflow_dispatch:
@@ -13,6 +13,8 @@ permissions:
 jobs:
   retag-pubspec:
     runs-on: [self-hosted]
+    outputs:
+      ref: ${{ steps.push.outputs.ref }}
     container:
       image: ghcr.io/centroid-is/tfc-toolchain:latest
     steps:
@@ -55,6 +57,7 @@ jobs:
           echo "  Windows msix_version: $MSIX_VERSION"
 
       - name: Commit and push version changes
+        id: push
         if: startsWith(github.ref, 'refs/tags/')
         run: |
           git config user.name "github-actions[bot]"
@@ -62,27 +65,11 @@ jobs:
           git add centroid-hmi/pubspec.yaml
           git commit -m "Update version to ${GITHUB_REF#refs/tags/}"
           git push origin HEAD:main
+          echo "ref=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
-  ping-public-tfc-hmi-workflows:
-    runs-on: [self-hosted]
+  build:
     needs: [retag-pubspec]
-    container:
-      image: ghcr.io/centroid-is/tfc-toolchain:latest
-    steps:
-      - name: Install gh
-        run: |
-          (type -p wget >/dev/null || (apt update && apt-get install wget -y)) 
-          mkdir -p -m 755 /etc/apt/keyrings 
-          out=$(mktemp) 
-          wget -nv -O$out https://cli.github.com/packages/githubcli-archive-keyring.gpg 
-          cat $out | tee /etc/apt/keyrings/githubcli-archive-keyring.gpg > /dev/null 
-          chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg 
-          echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null 
-          apt update 
-          apt install gh -y
-
-      - name: Ping public tfc-hmi-workflows to update
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-        run: |
-          gh workflow run tag.yml --repo centroid-is/tfc-hmi-workflows --ref main
+    uses: ./.github/workflows/centroid-hmi.yml
+    with:
+      ref: ${{ needs.retag-pubspec.outputs.ref }}
+    secrets: inherit
