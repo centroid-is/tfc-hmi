@@ -118,7 +118,7 @@ dependency_overrides:
   postgres:
     git:
       url: https://github.com/centroid-is/postgresql-dart.git
-      ref: add-keepalive
+      ref: add-keepalive-w-lower-dart-sdk
   # drift:
   #   path: ../../drift/drift
   # drift_postgres:

@@ -22,7 +22,7 @@ dependencies:
   postgres:
     git:
       url: https://github.com/centroid-is/postgresql-dart.git
-      ref: add-keepalive
+      ref: add-keepalive-w-lower-dart-sdk
 
   # Secure storage
   amplify_secure_storage_dart: ^0.5.6
@@ -43,7 +43,7 @@ dependency_overrides:
   postgres:
     git:
       url: https://github.com/centroid-is/postgresql-dart.git
-      ref: add-keepalive
+      ref: add-keepalive-w-lower-dart-sdk
 
 dev_dependencies:
   lints: ^5.0.0
