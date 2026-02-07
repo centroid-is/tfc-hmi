@@ -115,8 +115,10 @@ dependency_overrides:
     git:
       url: https://github.com/centroid-is/open62541_dart.git
       ref: isolate-client-browse
-  # postgres:
-  #   path: ../../postgresql-dart
+  postgres:
+    git:
+      url: https://github.com/centroid-is/postgresql-dart.git
+      ref: add-keepalive
   # drift:
   #   path: ../../drift/drift
   # drift_postgres:

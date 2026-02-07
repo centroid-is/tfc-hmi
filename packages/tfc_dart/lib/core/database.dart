@@ -211,12 +211,36 @@ class _PendingWrite {
 class Database {
   Database(this.db) {
     _startBatchFlushTimer();
+    _initConnectionHealth();
   }
 
   AppDatabase db;
   Map<String, RetentionPolicy> retentionPolicies = {};
   static final Logger logger = Logger();
   final Map<String, Completer<void>> _tableCreationLocks = {};
+  bool _lastConnectionState = false;
+  final _connectionStateController = StreamController<bool>.broadcast();
+  StreamSubscription<bool>? _healthSub;
+
+  void _initConnectionHealth() {
+    _healthSub = db.connectionHealth?.listen((state) {
+      _lastConnectionState = state;
+      _connectionStateController.add(state);
+    });
+  }
+
+  /// Multi-subscription stream of connection health.
+  /// Each new listener immediately receives the last known state,
+  /// then gets live updates. Safe for multiple StreamBuilders.
+  late final Stream<bool> connectionState = Stream.multi((controller) {
+    controller.add(_lastConnectionState);
+    final sub = _connectionStateController.stream.listen(
+      controller.add,
+      onError: controller.addError,
+      onDone: controller.close,
+    );
+    controller.onCancel = sub.cancel;
+  });
 
   /// Retry a database operation with exponential backoff
   Future<T> _withRetry<T>(Future<T> Function() operation,
@@ -484,6 +508,8 @@ class Database {
   /// Dispose resources - flushes pending data before shutdown
   Future<void> dispose() async {
     _flushTimer?.cancel();
+    await _healthSub?.cancel();
+    await _connectionStateController.close();
     // Attempt to flush any remaining data
     try {
       await _flushAllBatches();
