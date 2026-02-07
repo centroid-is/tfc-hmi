@@ -252,7 +252,6 @@ class AppDatabase extends _$AppDatabase {
         // future. TCP keepalive detects dead connections, firing closed.
         // On death, sends false and re-acquires a new connection.
         _startPoolHealthMonitor(pool, healthSendPort);
-
         return PgDatabase.opened(pool, logStatements: config.debug);
       });
       final executor = await isolate.connect();
