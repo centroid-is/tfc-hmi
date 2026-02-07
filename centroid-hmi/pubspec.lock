@@ -170,6 +170,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "8.12.0"
+  change_case:
+    dependency: transitive
+    description:
+      name: change_case
+      sha256: e41ef3df58521194ef8d7649928954805aeb08061917cf658322305e61568003
+      url: "https://pub.dev"
+    source: hosted
+    version: "2.2.0"
   characters:
     dependency: transitive
     description:
@@ -210,6 +218,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.1.2"
+  code_assets:
+    dependency: transitive
+    description:
+      name: code_assets
+      sha256: "83ccdaa064c980b5596c35dd64a8d3ecc68620174ab9b90b6343b753aa721687"
+      url: "https://pub.dev"
+    source: hosted
+    version: "1.0.0"
   code_builder:
     dependency: transitive
     description:
@@ -570,6 +586,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.3.2"
+  hooks:
+    dependency: transitive
+    description:
+      name: hooks
+      sha256: "7a08a0d684cb3b8fb604b78455d5d352f502b68079f7b80b831c62220ab0a4f6"
+      url: "https://pub.dev"
+    source: hosted
+    version: "1.0.1"
   html:
     dependency: transitive
     description:
@@ -582,10 +606,10 @@ packages:
     dependency: transitive
     description:
       name: http
-      sha256: bb2ce4590bc2667c96f318d68cac1b5a7987ec819351d32b1c987239a815e007
+      sha256: "87721a4a50b19c7f1d49001e51409bddc46303966ce89a65af4f4e6004896412"
       url: "https://pub.dev"
     source: hosted
-    version: "1.5.0"
+    version: "1.6.0"
   http2:
     dependency: transitive
     description:
@@ -755,6 +779,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "3.16.12"
+  native_toolchain_cmake:
+    dependency: transitive
+    description:
+      name: native_toolchain_cmake
+      sha256: fe40e8483183ced98e851e08a9cd2a547fd412cccab98277aa23f2377e43d66f
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.2.4"
   nm:
     dependency: transitive
     description:
@@ -767,19 +799,11 @@ packages:
     dependency: "direct main"
     description:
       path: "."
-      ref: isolate-client-browse
-      resolved-ref: "33ed12bbc59cab5d32d3f948e0c31f0bbd652056"
+      ref: main
+      resolved-ref: de6865ac7b0c3fc7926d1f1d6521d14f047ddbb7
       url: "https://github.com/centroid-is/open62541_dart.git"
     source: git
-    version: "0.0.0-dev.1"
-  open62541_libs:
-    dependency: "direct main"
-    description:
-      name: open62541_libs
-      sha256: bea65c749f26f7bc96b21940193a9faeedb742576ba7d6433bf0029b1b6af14a
-      url: "https://pub.dev"
-    source: hosted
-    version: "0.0.5"
+    version: "1.5.0-dev.1"
   os_detect:
     dependency: transitive
     description:
@@ -1417,5 +1441,5 @@ packages:
     source: hosted
     version: "3.1.3"
 sdks:
-  dart: ">=3.8.0 <4.0.0"
+  dart: ">=3.10.0 <4.0.0"
   flutter: ">=3.29.0"

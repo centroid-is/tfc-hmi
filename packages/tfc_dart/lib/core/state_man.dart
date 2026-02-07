@@ -505,19 +505,22 @@ class StateMan {
         if (wrapper.connectionStatus == ConnectionStatus.connected) {
           final serverTimeNode = NodeId.fromNumeric(0, 2258);
           wrapper.client
-              .readAttribute({serverTimeNode: [AttributeId.UA_ATTRIBUTEID_VALUE]})
+              .readAttribute({
+                serverTimeNode: [AttributeId.UA_ATTRIBUTEID_VALUE]
+              })
               .timeout(const Duration(seconds: 5))
               .then((_) {
-            // Read succeeded — connection is alive, nothing to do.
-          }).catchError((e) {
-            logger.e(
-                '[$alias] Health check read failed for ${wrapper.config.endpoint}: $e — marking disconnected');
-            wrapper.updateConnectionStatus(ClientState(
-              channelState: SecureChannelState.UA_SECURECHANNELSTATE_CLOSED,
-              sessionState: SessionState.UA_SESSIONSTATE_CLOSED,
-              recoveryStatus: 0,
-            ));
-          });
+                // Read succeeded — connection is alive, nothing to do.
+              })
+              .catchError((e) {
+                logger.e(
+                    '[$alias] Health check read failed for ${wrapper.config.endpoint}: $e — marking disconnected');
+                wrapper.updateConnectionStatus(ClientState(
+                  channelState: SecureChannelState.UA_SECURECHANNELSTATE_CLOSED,
+                  sessionState: SessionState.UA_SESSIONSTATE_CLOSED,
+                  recoveryStatus: 0,
+                ));
+              });
         }
       }
     });
@@ -554,12 +557,9 @@ class StateMan {
         username = opcuaConfig.username;
         password = opcuaConfig.password;
       }
-      // empty is static linking
-      final libPath = Platform.isAndroid ? 'libopen62541.so' : '';
       clients.add(ClientWrapper(
           useIsolate
               ? await ClientIsolate.create(
-                  libraryPath: libPath,
                   username: username,
                   password: password,
                   certificate: cert,
@@ -571,7 +571,6 @@ class StateMan {
                           1), // TODO can I reproduce the problem more often
                 )
               : Client(
-                  loadOpen62541Library(staticLinking: false),
                   username: username,
                   password: password,
                   certificate: cert,

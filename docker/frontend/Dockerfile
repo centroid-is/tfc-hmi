@@ -48,4 +48,5 @@ RUN chown -R centroid:centroid $APP_DIR \
     && chmod +x $APP_DIR/${BINARY}
 
 USER centroid
-CMD ["/bin/sh", "-c", "./${BINARY} --bundle=. --fullscreen --onscreen-keyboard"]
+
+CMD ["/bin/sh", "-c", "LD_LIBRARY_PATH=./lib ./${BINARY} --bundle=. --fullscreen --onscreen-keyboard"]
