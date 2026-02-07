@@ -17,6 +17,9 @@ class TraceFilter extends LogFilter {
 }
 
 void main() async {
+  // Exit cleanly on SIGTERM (Docker stop) even if stuck in a retry loop
+  ProcessSignal.sigterm.watch().listen((_) => exit(0));
+
   Logger.defaultFilter = () => TraceFilter();
   final logger = Logger();
 
