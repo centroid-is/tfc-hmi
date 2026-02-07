@@ -115,6 +115,10 @@ class AppDatabase extends _$AppDatabase {
   final logger = Logger();
   pg.Connection? _notificationConnection;
 
+  @override
+  DriftDatabaseOptions get options =>
+      const DriftDatabaseOptions(storeDateTimeAsText: true);
+
   /// The DriftIsolate backing this database (null when using create() or sqlite).
   DriftIsolate? _driftIsolate;
 
@@ -133,7 +137,7 @@ class AppDatabase extends _$AppDatabase {
   }
 
   @override
-  int get schemaVersion => 2;
+  int get schemaVersion => 3;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -147,6 +151,26 @@ class AppDatabase extends _$AppDatabase {
             await m.createTable(historyViewKey);
             await m.createTable(historyViewGraph);
             await m.createTable(historyViewPeriod);
+          }
+          if (from < 3) {
+            // Migrate datetime columns from integer (unix epoch) to text
+            // (ISO 8601). Only needed for SQLite; Postgres already stores
+            // datetimes as timestamptz text.
+            if (native) {
+              for (final stmt in [
+                "UPDATE alarm_history SET created_at = strftime('%Y-%m-%dT%H:%M:%S', created_at, 'unixepoch') || 'Z' WHERE typeof(created_at) = 'integer'",
+                "UPDATE alarm_history SET deactivated_at = strftime('%Y-%m-%dT%H:%M:%S', deactivated_at, 'unixepoch') || 'Z' WHERE typeof(deactivated_at) = 'integer'",
+                "UPDATE alarm_history SET acknowledged_at = strftime('%Y-%m-%dT%H:%M:%S', acknowledged_at, 'unixepoch') || 'Z' WHERE typeof(acknowledged_at) = 'integer'",
+                "UPDATE history_view SET created_at = strftime('%Y-%m-%dT%H:%M:%S', created_at, 'unixepoch') || 'Z' WHERE typeof(created_at) = 'integer'",
+                "UPDATE history_view SET updated_at = strftime('%Y-%m-%dT%H:%M:%S', updated_at, 'unixepoch') || 'Z' WHERE typeof(updated_at) = 'integer'",
+                "UPDATE history_view_period SET start_at = strftime('%Y-%m-%dT%H:%M:%S', start_at, 'unixepoch') || 'Z' WHERE typeof(start_at) = 'integer'",
+                "UPDATE history_view_period SET end_at = strftime('%Y-%m-%dT%H:%M:%S', end_at, 'unixepoch') || 'Z' WHERE typeof(end_at) = 'integer'",
+                "UPDATE history_view_period SET created_at = strftime('%Y-%m-%dT%H:%M:%S', created_at, 'unixepoch') || 'Z' WHERE typeof(created_at) = 'integer'",
+              ]) {
+                await m.database.customStatement(stmt);
+              }
+              logger.i('Migrated SQLite datetime columns from int to text');
+            }
           }
         },
       );
