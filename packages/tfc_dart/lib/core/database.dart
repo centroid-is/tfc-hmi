@@ -214,6 +214,43 @@ class Database {
     _initConnectionHealth();
   }
 
+  /// Lightweight check if the database is reachable.
+  /// Opens and immediately closes a single connection. Throws on failure.
+  static Future<void> probe(DatabaseConfig config) async {
+    final conn = await pg.Connection.open(
+      config.postgres!,
+      settings: pg.ConnectionSettings(
+        sslMode: config.sslMode ?? pg.SslMode.disable,
+      ),
+    ).timeout(const Duration(seconds: 5));
+    await conn.close();
+  }
+
+  /// Probe the database, create an [AppDatabase], and open the connection.
+  /// Retries every [retryDelay] until the database is reachable.
+  /// Set [useIsolate] to false when already running inside an isolate.
+  static Future<Database> connectWithRetry(
+    DatabaseConfig config, {
+    Duration retryDelay = const Duration(seconds: 2),
+    bool useIsolate = true,
+  }) async {
+    while (true) {
+      try {
+        await probe(config);
+        final appDb = useIsolate
+            ? await AppDatabase.spawn(config)
+            : await AppDatabase.create(config);
+        final db = Database(appDb);
+        await db.db.open();
+        logger.i('Database connected');
+        return db;
+      } catch (e) {
+        logger.w('Database not reachable, retrying in ${retryDelay.inSeconds}s: $e');
+        await Future.delayed(retryDelay);
+      }
+    }
+  }
+
   AppDatabase db;
   Map<String, RetentionPolicy> retentionPolicies = {};
   static final Logger logger = Logger();

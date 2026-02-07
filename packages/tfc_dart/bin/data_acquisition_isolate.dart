@@ -4,7 +4,6 @@ import 'dart:isolate';
 import 'package:logger/logger.dart';
 import 'package:tfc_dart/core/collector.dart';
 import 'package:tfc_dart/core/database.dart';
-import 'package:tfc_dart/core/database_drift.dart';
 import 'package:tfc_dart/core/state_man.dart';
 
 class _TraceFilter extends LogFilter {
@@ -41,50 +40,27 @@ Future<void> dataAcquisitionIsolateEntry(
 
   logger.i('Starting DataAcquisition isolate for server: $serverName');
 
-  // Retry initialization with exponential backoff
-  var delay = const Duration(seconds: 2);
-  const maxDelay = Duration(seconds: 30);
-  const maxAttempts = 10;
+  final db = await Database.connectWithRetry(dbConfig, useIsolate: false);
+  final smConfig = StateManConfig(opcua: [server]);
 
-  for (var attempt = 1; attempt <= maxAttempts; attempt++) {
-    try {
-      final db = Database(await AppDatabase.create(dbConfig));
-      final smConfig = StateManConfig(opcua: [server]);
+  final stateMan = await StateMan.create(
+    config: smConfig,
+    keyMappings: keyMappings,
+    useIsolate: false, // Already in isolate, no need for nested isolates
+    alias: 'data_acq',
+  );
 
-      final stateMan = await StateMan.create(
-        config: smConfig,
-        keyMappings: keyMappings,
-        useIsolate: false, // Already in isolate, no need for nested isolates
-        alias: 'data_acq',
-      );
+  // ignore: unused_local_variable
+  final collector = Collector(
+    config: CollectorConfig(collect: true),
+    stateMan: stateMan,
+    database: db,
+  );
 
-      // ignore: unused_local_variable
-      final collector = Collector(
-        config: CollectorConfig(collect: true),
-        stateMan: stateMan,
-        database: db,
-      );
+  logger.i('DataAcquisition isolate running for $serverName');
 
-      logger.i('DataAcquisition isolate running for $serverName');
-
-      // Keep isolate alive indefinitely
-      await Completer<void>().future;
-      return;
-    } catch (e, st) {
-      if (attempt == maxAttempts) {
-        logger.e(
-            'Failed to initialize isolate for $serverName after $maxAttempts attempts',
-            error: e,
-            stackTrace: st);
-        rethrow; // Let isolate die, triggers respawn
-      }
-      logger.w(
-          'Initialization attempt $attempt/$maxAttempts failed for $serverName: $e');
-      await Future.delayed(delay);
-      delay = delay * 2;
-      if (delay > maxDelay) delay = maxDelay;
-    }
-  }
+  // Keep isolate alive indefinitely
+  await Completer<void>().future;
 }
 
 /// Spawn a DataAcquisition isolate for a single server.

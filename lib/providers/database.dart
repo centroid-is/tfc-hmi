@@ -1,6 +1,5 @@
 import 'dart:io' as io;
 import 'dart:async';
-import 'package:postgres/postgres.dart' as pg;
 import 'package:riverpod/riverpod.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
@@ -47,21 +46,11 @@ void _scheduleRetry(Ref ref, DatabaseConfig config) {
   _retryTimer?.cancel();
   _retryTimer = Timer(const Duration(seconds: 2), () async {
     try {
-      // Lightweight probe: open a single pg connection to check reachability.
-      // Does NOT spawn a DriftIsolate or pool — avoids leaked isolates.
-      final conn = await pg.Connection.open(
-        config.postgres!,
-        settings: pg.ConnectionSettings(
-          sslMode: config.sslMode ?? pg.SslMode.disable,
-        ),
-      ).timeout(const Duration(seconds: 5));
-      await conn.close();
+      await Database.probe(config);
     } catch (e) {
-      // Still failing, schedule another attempt
       _scheduleRetry(ref, config);
       return;
     }
-    // DB is reachable - invalidate the provider to recreate everything cleanly
     ref.invalidateSelf();
   });
 }

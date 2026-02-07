@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:tfc_dart/core/database.dart';
-import 'package:tfc_dart/core/database_drift.dart';
 import 'package:tfc_dart/core/preferences.dart';
 import 'package:tfc_dart/core/state_man.dart';
 import 'package:tfc_dart/core/alarm.dart';
@@ -22,7 +21,7 @@ void main() async {
   final logger = Logger();
 
   final dbConfig = await DatabaseConfig.fromEnv();
-  final db = Database(await AppDatabase.spawn(dbConfig));
+  final db = await Database.connectWithRetry(dbConfig);
   final prefs = await Preferences.create(db: db);
 
   final statemanConfigFilePath =
