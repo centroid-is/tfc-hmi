@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:rxdart/rxdart.dart';
 import 'package:cristalyse/cristalyse.dart' as cs;
+import 'package:tfc_dart/core/database.dart';
 
 import 'graph.dart';
 import '../providers/collector.dart';
@@ -93,7 +94,34 @@ class _HistoryGraphPaneState extends ConsumerState<HistoryGraphPane> {
 
         final streams = widget.keys.map((k) {
           if (widget.realtime) {
-            return collector.collectStream(k, since: since);
+            // Combine a DB backfill query (full window) with the live stream.
+            // collectStream caches internally, so if the user increases the
+            // window the cached stream won't have older data. The DB query
+            // fills in the gap.
+            final liveStream = collector.collectStream(k, since: since);
+            final cutoff = DateTime.now().toUtc().subtract(since);
+            final dbStream = Stream.fromFuture(
+              collector.database.queryTimeseriesData(
+                  k, DateTime.now().toUtc(),
+                  from: cutoff),
+            );
+            return Rx.combineLatest2<List<TimeseriesData<dynamic>>,
+                List<TimeseriesData<dynamic>>, List<dynamic>>(
+              dbStream,
+              liveStream,
+              (dbData, liveData) {
+                final merged = <int, TimeseriesData<dynamic>>{};
+                for (final d in dbData) {
+                  merged[d.time.millisecondsSinceEpoch] = d;
+                }
+                for (final d in liveData) {
+                  merged[d.time.millisecondsSinceEpoch] = d;
+                }
+                final result = merged.values.toList()
+                  ..sort((a, b) => a.time.compareTo(b.time));
+                return result;
+              },
+            );
           } else {
             return Stream.fromFuture(collector.database.queryTimeseriesData(
                 k, fetchRange!.end,

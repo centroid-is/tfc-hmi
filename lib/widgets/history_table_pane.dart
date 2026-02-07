@@ -91,7 +91,30 @@ class _HistoryTablePaneState extends ConsumerState<HistoryTablePane> {
 
         final streams = widget.keys.map((k) {
           if (widget.realtime) {
-            return collector.collectStream(k, since: since);
+            final liveStream = collector.collectStream(k, since: since);
+            final cutoff = DateTime.now().toUtc().subtract(since);
+            final dbStream = Stream.fromFuture(
+              collector.database.queryTimeseriesData(
+                  k, DateTime.now().toUtc(),
+                  from: cutoff),
+            );
+            return Rx.combineLatest2<List<TimeseriesData<dynamic>>,
+                List<TimeseriesData<dynamic>>, List<TimeseriesData<dynamic>>>(
+              dbStream,
+              liveStream,
+              (dbData, liveData) {
+                final merged = <int, TimeseriesData<dynamic>>{};
+                for (final d in dbData) {
+                  merged[d.time.millisecondsSinceEpoch] = d;
+                }
+                for (final d in liveData) {
+                  merged[d.time.millisecondsSinceEpoch] = d;
+                }
+                final result = merged.values.toList()
+                  ..sort((a, b) => a.time.compareTo(b.time));
+                return result;
+              },
+            );
           } else {
             // Use extended range for fetching
             return Stream.fromFuture(collector.database.queryTimeseriesData(
