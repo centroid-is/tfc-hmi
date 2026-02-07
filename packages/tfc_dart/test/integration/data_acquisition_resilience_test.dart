@@ -39,6 +39,10 @@ void main() {
       setUp(() async {
         database = await connectToDatabase();
       });
+      tearDown(() async {
+        await database.dispose();
+        await database.close();
+      });
       test(
           'WHEN database is down THEN inserts are queued and flushed on recovery',
           () async {
@@ -230,6 +234,14 @@ void main() {
 
       setUp(() async {
         database = await connectToDatabase();
+      });
+      tearDown(() async {
+        try {
+          await database.dispose();
+          await database.close();
+        } catch (_) {
+          // Database may already be disposed/closed by the test
+        }
       });
 
       test('WHEN dispose is called THEN pending data is flushed', () async {
