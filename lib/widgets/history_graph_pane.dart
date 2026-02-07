@@ -516,11 +516,19 @@ class _HistoryGraphPaneState extends ConsumerState<HistoryGraphPane> {
       xAxis: const GraphAxisConfig(unit: ''),
       yAxis: GraphAxisConfig(
         unit: displayCfg?.yAxisUnit ?? '',
+        title: (displayCfg?.yAxisUnit ?? '').isNotEmpty
+            ? displayCfg!.yAxisUnit
+            : 'Y',
       ),
       yAxis2: (displayCfg?.yAxis2Unit != null &&
               displayCfg!.yAxis2Unit!.isNotEmpty)
-          ? GraphAxisConfig(unit: displayCfg.yAxis2Unit!)
-          : null,
+          ? GraphAxisConfig(
+              unit: displayCfg.yAxis2Unit!,
+              title: displayCfg.yAxis2Unit,
+            )
+          : graphData.any((m) => m.keys.any((k) => !k.mainAxis))
+              ? const GraphAxisConfig(unit: '', title: 'Y2')
+              : null,
       xSpan: widget.realtime ? xSpan : null,
       xRange: widget.realtime ? null : widget.range,
       pan: false,

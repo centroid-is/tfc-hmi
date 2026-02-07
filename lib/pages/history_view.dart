@@ -1446,35 +1446,57 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage> {
                                   : key,
                               style: const TextStyle(fontSize: 13),
                             ),
-                            trailing: SegmentedButton<bool>(
-                              segments: const [
-                                ButtonSegment(
-                                  value: false,
-                                  label: Text('Y1',
-                                      style: TextStyle(fontSize: 11)),
+                            trailing: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                SegmentedButton<bool>(
+                                  segments: const [
+                                    ButtonSegment(
+                                      value: false,
+                                      label: Text('Y1',
+                                          style: TextStyle(fontSize: 11)),
+                                    ),
+                                    ButtonSegment(
+                                      value: true,
+                                      label: Text('Y2',
+                                          style: TextStyle(fontSize: 11)),
+                                    ),
+                                  ],
+                                  selected: {
+                                    config?.useSecondYAxis ?? false
+                                  },
+                                  onSelectionChanged: (v) {
+                                    setState(() {
+                                      _keyConfigs[key] = config!
+                                          .copyWith(useSecondYAxis: v.first);
+                                    });
+                                    setDialogState(() {});
+                                  },
+                                  showSelectedIcon: false,
+                                  style: const ButtonStyle(
+                                    visualDensity: VisualDensity.compact,
+                                    tapTargetSize:
+                                        MaterialTapTargetSize.shrinkWrap,
+                                  ),
                                 ),
-                                ButtonSegment(
-                                  value: true,
-                                  label: Text('Y2',
-                                      style: TextStyle(fontSize: 11)),
+                                const SizedBox(width: 4),
+                                IconButton(
+                                  icon: Icon(Icons.close, size: 18,
+                                    color: Theme.of(ctx).colorScheme.error),
+                                  onPressed: () {
+                                    setState(() {
+                                      _selected.remove(key);
+                                      _keyConfigs.remove(key);
+                                    });
+                                    keysOnGraph.remove(key);
+                                    setDialogState(() {});
+                                  },
+                                  tooltip: 'Remove key',
+                                  visualDensity: VisualDensity.compact,
+                                  constraints: const BoxConstraints(
+                                      minWidth: 28, minHeight: 28),
                                 ),
                               ],
-                              selected: {
-                                config?.useSecondYAxis ?? false
-                              },
-                              onSelectionChanged: (v) {
-                                setState(() {
-                                  _keyConfigs[key] = config!
-                                      .copyWith(useSecondYAxis: v.first);
-                                });
-                                setDialogState(() {});
-                              },
-                              showSelectedIcon: false,
-                              style: const ButtonStyle(
-                                visualDensity: VisualDensity.compact,
-                                tapTargetSize:
-                                    MaterialTapTargetSize.shrinkWrap,
-                              ),
                             ),
                           );
                         }).toList(),
