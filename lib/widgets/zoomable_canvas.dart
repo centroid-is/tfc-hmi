@@ -11,7 +11,7 @@ class ZoomableCanvas extends StatefulWidget {
   const ZoomableCanvas({
     Key? key,
     required this.child,
-    this.minScale = 0.5,
+    this.minScale = 1.0,
     this.maxScale = 4.0,
     this.aspectRatio = 16 / 9,
     this.panEnabled = true,
@@ -38,6 +38,8 @@ class _ZoomableCanvasState extends State<ZoomableCanvas> {
 
   @override
   Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+
     return Center(
       child: AspectRatio(
         aspectRatio: widget.aspectRatio,
@@ -48,14 +50,14 @@ class _ZoomableCanvasState extends State<ZoomableCanvas> {
                 transformationController: _transformationController,
                 minScale: widget.minScale,
                 maxScale: widget.maxScale,
-                boundaryMargin: EdgeInsets.all(double.infinity),
+                boundaryMargin: EdgeInsets.zero,
                 panEnabled: widget.panEnabled,
                 scaleEnabled: widget.scaleEnabled,
                 child: Stack(
                   fit: StackFit.expand,
                   children: [
                     Container(
-                      color: Theme.of(context).colorScheme.surface,
+                      color: colorScheme.surface,
                     ),
                     widget.child,
                   ],
@@ -67,16 +69,17 @@ class _ZoomableCanvasState extends State<ZoomableCanvas> {
                 child: ValueListenableBuilder<Matrix4>(
                   valueListenable: _transformationController,
                   builder: (context, matrix, child) {
-                    if (matrix == Matrix4.identity()) {
+                    final scale = matrix.getMaxScaleOnAxis();
+                    if (scale <= 1.0) {
                       return const SizedBox.shrink();
                     }
                     return FloatingActionButton(
                       mini: true,
-                      heroTag: null, // Allow multiple instances
-                      backgroundColor: Theme.of(context).colorScheme.primary,
+                      heroTag: null,
+                      backgroundColor: colorScheme.primary,
                       onPressed: _resetZoom,
-                      child:
-                          const Icon(Icons.zoom_out_map, color: Colors.white),
+                      child: const Icon(Icons.zoom_out_map,
+                          color: Colors.white),
                     );
                   },
                 ),
