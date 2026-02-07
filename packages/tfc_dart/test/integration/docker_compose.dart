@@ -115,3 +115,27 @@ Future<Database> connectToDatabase() async {
   await db.db.open();
   return db;
 }
+
+/// Stops just the timescaledb container (simulates DB outage)
+Future<void> stopTimescaleDb() async {
+  final result = await Process.run(
+    'docker',
+    ['stop', 'test-db'],
+  );
+  if (result.exitCode != 0) {
+    throw Exception('Failed to stop timescaledb: ${result.stderr}');
+  }
+  print('TimescaleDB stopped');
+}
+
+/// Starts just the timescaledb container (simulates DB recovery)
+Future<void> startTimescaleDb() async {
+  final result = await Process.run(
+    'docker',
+    ['start', 'test-db'],
+  );
+  if (result.exitCode != 0) {
+    throw Exception('Failed to start timescaledb: ${result.stderr}');
+  }
+  print('TimescaleDB started');
+}

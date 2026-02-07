@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:io';
 import 'dart:isolate';
 
 import 'package:logger/logger.dart';
@@ -38,34 +37,58 @@ Future<void> dataAcquisitionIsolateEntry(
   final server = OpcUAConfig.fromJson(config.serverJson);
   final dbConfig = DatabaseConfig.fromJson(config.dbConfigJson);
   final keyMappings = KeyMappings.fromJson(config.keyMappingsJson);
+  final serverName = server.serverAlias ?? server.endpoint;
 
-  logger.i(
-      'Starting DataAcquisition isolate for server: ${server.serverAlias ?? server.endpoint}');
+  logger.i('Starting DataAcquisition isolate for server: $serverName');
 
-  final db = Database(await AppDatabase.create(dbConfig));
-  final smConfig = StateManConfig(opcua: [server]);
+  // Retry initialization with exponential backoff
+  var delay = const Duration(seconds: 2);
+  const maxDelay = Duration(seconds: 30);
+  const maxAttempts = 10;
 
-  final stateMan = await StateMan.create(
-    config: smConfig,
-    keyMappings: keyMappings,
-    useIsolate: false, // Already in isolate, no need for nested isolates
-    alias: 'data_acq',
-  );
+  for (var attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      final db = Database(await AppDatabase.create(dbConfig));
+      final smConfig = StateManConfig(opcua: [server]);
 
-  final collector = Collector(
-    config: CollectorConfig(collect: true),
-    stateMan: stateMan,
-    database: db,
-  );
+      final stateMan = await StateMan.create(
+        config: smConfig,
+        keyMappings: keyMappings,
+        useIsolate: false, // Already in isolate, no need for nested isolates
+        alias: 'data_acq',
+      );
 
-  logger.i(
-      'DataAcquisition isolate running for ${server.serverAlias ?? server.endpoint}');
+      // ignore: unused_local_variable
+      final collector = Collector(
+        config: CollectorConfig(collect: true),
+        stateMan: stateMan,
+        database: db,
+      );
 
-  // Keep isolate alive indefinitely
-  await Completer<void>().future;
+      logger.i('DataAcquisition isolate running for $serverName');
+
+      // Keep isolate alive indefinitely
+      await Completer<void>().future;
+      return;
+    } catch (e, st) {
+      if (attempt == maxAttempts) {
+        logger.e(
+            'Failed to initialize isolate for $serverName after $maxAttempts attempts',
+            error: e,
+            stackTrace: st);
+        rethrow; // Let isolate die, triggers respawn
+      }
+      logger.w(
+          'Initialization attempt $attempt/$maxAttempts failed for $serverName: $e');
+      await Future.delayed(delay);
+      delay = delay * 2;
+      if (delay > maxDelay) delay = maxDelay;
+    }
+  }
 }
 
 /// Spawn a DataAcquisition isolate for a single server.
+/// Automatically respawns the isolate on failure with exponential backoff.
 Future<void> spawnDataAcquisitionIsolate({
   required OpcUAConfig server,
   required DatabaseConfig dbConfig,
@@ -79,28 +102,53 @@ Future<void> spawnDataAcquisitionIsolate({
     enableStatsLogging: enableStatsLogging,
   );
 
-  final errorPort = ReceivePort();
-  errorPort.listen((message) {
-    final error = message[0];
-    final stackTrace = message[1];
-    stderr
-        .writeln('Isolate error for ${server.serverAlias ?? server.endpoint}:');
-    stderr.writeln(error);
-    stderr.writeln(stackTrace);
-    exit(1);
-  });
+  final serverName = server.serverAlias ?? server.endpoint;
+  final logger = Logger();
+  var restartDelay = const Duration(seconds: 2);
+  const maxDelay = Duration(seconds: 30);
 
-  final exitPort = ReceivePort();
-  exitPort.listen((_) {
-    Logger().e(
-        'Isolate exited unexpectedly for ${server.serverAlias ?? server.endpoint}');
-    exit(1);
-  });
+  Future<void> spawn() async {
+    final errorPort = ReceivePort();
+    final exitPort = ReceivePort();
 
-  await Isolate.spawn(
-    dataAcquisitionIsolateEntry,
-    config,
-    onError: errorPort.sendPort,
-    onExit: exitPort.sendPort,
-  );
+    void scheduleRespawn(String reason) {
+      errorPort.close();
+      exitPort.close();
+      logger.w(
+          'Respawning isolate for $serverName in ${restartDelay.inSeconds}s ($reason)');
+      Future.delayed(restartDelay, () {
+        restartDelay = restartDelay * 2;
+        if (restartDelay > maxDelay) restartDelay = maxDelay;
+        spawn();
+      });
+    }
+
+    errorPort.listen((message) {
+      final error = message[0];
+      final stackTrace = message[1];
+      logger.e('Isolate error for $serverName:\n$error\n$stackTrace');
+      scheduleRespawn('uncaught error');
+    });
+
+    exitPort.listen((_) {
+      logger.e('Isolate exited unexpectedly for $serverName');
+      scheduleRespawn('unexpected exit');
+    });
+
+    try {
+      await Isolate.spawn(
+        dataAcquisitionIsolateEntry,
+        config,
+        onError: errorPort.sendPort,
+        onExit: exitPort.sendPort,
+      );
+      // Reset backoff on successful spawn
+      restartDelay = const Duration(seconds: 2);
+    } catch (e) {
+      logger.e('Failed to spawn isolate for $serverName: $e');
+      scheduleRespawn('spawn failure');
+    }
+  }
+
+  await spawn();
 }
