@@ -778,6 +778,7 @@ class AppDatabase extends _$AppDatabase {
       // No retention policy exists for this table yet - this is normal
       return null;
     }
+
     final dropAfter = result.read<String>('drop_after');
     final scheduleInterval = result.read<String>('schedule_interval');
 
