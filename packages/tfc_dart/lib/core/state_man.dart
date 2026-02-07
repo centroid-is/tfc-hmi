@@ -405,16 +405,15 @@ class StateMan {
           while (_shouldRun) {
             try {
               clientref.connect(wrapper.config.endpoint).onError(
-                (e, stacktrace) => logger
-                    .e('Failed to connect to ${wrapper.config.endpoint}: $e'));
+                  (e, stacktrace) => logger.e(
+                      'Failed to connect to ${wrapper.config.endpoint}: $e'));
               await clientref.runIterate();
             } catch (error) {
               logger.e("run iterate error: $error");
               try {
                 // try to disconnect
                 await clientref.disconnect();
-              }
-              catch (_) {}
+              } catch (_) {}
               // Throttle if often occuring error
               await Future.delayed(const Duration(seconds: 1));
             }
@@ -489,14 +488,36 @@ class StateMan {
       });
     }
 
-    // Periodic health check - log channel state every 15 seconds (only for direct Client, not isolates)
-    _healthCheckTimer = Timer.periodic(const Duration(seconds: 15), (timer) {
+    // Periodic health check - actively probe each connected server.
+    // This detects half-open TCP connections where the remote has disappeared
+    // but the local TCP stack hasn't noticed (due to long keepalive defaults).
+    _healthCheckTimer = Timer.periodic(const Duration(seconds: 10), (timer) {
       for (final wrapper in clients) {
         if (wrapper.client is Client) {
           final clientRef = wrapper.client as Client;
           final state = clientRef.state;
           logger.d('[$alias] Health check: channel=${state.channelState.name}, '
               'session=${state.sessionState.name}, recovery=${state.recoveryStatus}');
+        }
+        // Active probe: if we think we're connected, try reading the server's
+        // current time (ns=0;i=2258). If it times out, the connection is dead.
+        // I would really like to add SO_KEEPALIVE to open62541 .......
+        if (wrapper.connectionStatus == ConnectionStatus.connected) {
+          final serverTimeNode = NodeId.fromNumeric(0, 2258);
+          wrapper.client
+              .read(serverTimeNode)
+              .timeout(const Duration(seconds: 5))
+              .then((_) {
+            // Read succeeded — connection is alive, nothing to do.
+          }).catchError((e) {
+            logger.e(
+                '[$alias] Health check read failed for ${wrapper.config.endpoint}: $e — marking disconnected');
+            wrapper.updateConnectionStatus(ClientState(
+              channelState: SecureChannelState.UA_SECURECHANNELSTATE_CLOSED,
+              sessionState: SessionState.UA_SESSIONSTATE_CLOSED,
+              recoveryStatus: 0,
+            ));
+          });
         }
       }
     });
@@ -729,12 +750,10 @@ class StateMan {
       try {
         if (wrapper.client is ClientIsolate) {
           await (wrapper.client as ClientIsolate).disconnect();
-        }
-        else {
+        } else {
           (wrapper.client as Client).disconnect();
         }
-      }
-      catch (_) {}
+      } catch (_) {}
       wrapper.client.delete();
       wrapper.dispose();
     }
