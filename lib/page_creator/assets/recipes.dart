@@ -19,6 +19,11 @@ part 'recipes.g.dart';
 
 @JsonSerializable()
 class RecipesConfig extends BaseAsset {
+  @override
+  String get displayName => 'Recipes';
+  @override
+  String get category => 'Application';
+
   String key;
   String label;
 

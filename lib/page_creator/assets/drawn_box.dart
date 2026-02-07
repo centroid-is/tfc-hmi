@@ -14,6 +14,11 @@ part 'drawn_box.g.dart';
 
 @JsonSerializable()
 class DrawnBoxConfig extends BaseAsset {
+  @override
+  String get displayName => 'Drawn Box';
+  @override
+  String get category => 'Basic Indicators';
+
   @ColorConverter()
   Color color;
   double lineWidth;

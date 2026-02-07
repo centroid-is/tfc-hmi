@@ -9,6 +9,11 @@ part 'aircab.g.dart';
 
 @JsonSerializable()
 class AirCabConfig extends BaseAsset {
+  @override
+  String get displayName => 'Air Cabinet';
+  @override
+  String get category => 'Industrial Equipment';
+
   String label;
   String pressureKey;
   String softStartKey;
@@ -38,9 +43,6 @@ class AirCabConfig extends BaseAsset {
 
   @override
   Widget build(BuildContext context) {
-    if (label == previewStr && pressureKey.isEmpty && softStartKey.isEmpty && buttonKey.isEmpty) {
-      return const Text(previewStr);
-    }
     return AirCab(config: this);
   }
 

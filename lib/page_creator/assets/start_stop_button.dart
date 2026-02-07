@@ -18,6 +18,11 @@ enum _Segment { run, clean, stop }
 
 @JsonSerializable()
 class StartStopPillButtonConfig extends BaseAsset {
+  @override
+  String get displayName => 'Start/Stop Button';
+  @override
+  String get category => 'Interactive Controls';
+
   // pulses (true on press, false on release)
   String runKey;
   String stopKey;

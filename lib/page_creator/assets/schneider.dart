@@ -16,6 +16,11 @@ part 'schneider.g.dart';
 
 @JsonSerializable()
 class SchneiderATV320Config extends BaseAsset {
+  @override
+  String get displayName => 'Schneider ATV320';
+  @override
+  String get category => 'Schneider Devices';
+
   String? label;
   String? hmisKey;
   String? freqKey;

@@ -37,6 +37,11 @@ class GraphSeriesConfig {
 
 @JsonSerializable(explicitToJson: true)
 class GraphAssetConfig extends BaseAsset {
+  @override
+  String get displayName => 'Graph';
+  @override
+  String get category => 'Visualization';
+
   @JsonKey(name: 'graph_type')
   GraphType graphType;
   @JsonKey(name: 'primary_series')
@@ -83,7 +88,12 @@ class GraphAssetConfig extends BaseAsset {
         timeWindowMinutes = const Duration(minutes: 10);
 
   @override
-  Widget build(BuildContext context) => GraphAsset(this);
+  Widget build(BuildContext context) {
+    if (primarySeries.isEmpty && secondarySeries.isEmpty) {
+      return CustomPaint(painter: _GraphPreviewPainter());
+    }
+    return GraphAsset(this);
+  }
 
   @override
   Widget configure(BuildContext context) => GraphContentConfig(config: this);
@@ -824,4 +834,46 @@ class _GraphAssetState extends ConsumerState<GraphAsset> {
     }
     _realtimeSubscriptions.clear();
   }
+}
+
+class _GraphPreviewPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final axisPaint = Paint()
+      ..color = Colors.grey.shade600
+      ..strokeWidth = 1.5
+      ..style = PaintingStyle.stroke;
+
+    // Draw axes
+    final left = size.width * 0.12;
+    final bottom = size.height * 0.85;
+    final right = size.width * 0.95;
+    final top = size.height * 0.1;
+    canvas.drawLine(Offset(left, top), Offset(left, bottom), axisPaint);
+    canvas.drawLine(Offset(left, bottom), Offset(right, bottom), axisPaint);
+
+    // Draw a sample line
+    final linePaint = Paint()
+      ..color = Colors.blue
+      ..strokeWidth = 2
+      ..style = PaintingStyle.stroke;
+
+    final path = Path();
+    final points = [0.0, 0.3, 0.25, 0.6, 0.5, 0.45, 0.7, 0.8, 0.65, 0.9];
+    final w = right - left;
+    final h = bottom - top;
+    for (int i = 0; i < points.length; i++) {
+      final x = left + w * (i / (points.length - 1));
+      final y = bottom - h * points[i];
+      if (i == 0) {
+        path.moveTo(x, y);
+      } else {
+        path.lineTo(x, y);
+      }
+    }
+    canvas.drawPath(path, linePaint);
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }

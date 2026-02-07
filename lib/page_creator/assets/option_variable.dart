@@ -26,6 +26,11 @@ class OptionItem {
 
 @JsonSerializable()
 class OptionVariableConfig extends BaseAsset {
+  @override
+  String get displayName => 'Option Variable';
+  @override
+  String get category => 'Interactive Controls';
+
   /// The variable name that will be set in StateMan
   /// Example: "current_baader_machine"
   String variableName;

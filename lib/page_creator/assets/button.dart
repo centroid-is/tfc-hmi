@@ -38,6 +38,11 @@ enum ButtonType {
 
 @JsonSerializable()
 class ButtonConfig extends BaseAsset {
+  @override
+  String get displayName => 'Button';
+  @override
+  String get category => 'Interactive Controls';
+
   String key;
 
   /// Optional live feedback indicator (key + color)

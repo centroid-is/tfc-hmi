@@ -30,6 +30,11 @@ const Map<String, Asset Function()> _availableSubdevices = {
 
 @JsonSerializable()
 class BeckhoffCX5010Config extends BaseAsset {
+  @override
+  String get displayName => 'Beckhoff CX5010';
+  @override
+  String get category => 'Beckhoff Devices';
+
   @AssetListConverter()
   List<Asset> subdevices = [];
   BeckhoffCX5010Config();
@@ -291,6 +296,11 @@ class _CXxxxxConfigContentState extends State<_CXxxxxConfigContent> {
 
 @JsonSerializable()
 class BeckhoffEK1100Config extends BaseAsset {
+  @override
+  String get displayName => 'Beckhoff EK1100';
+  @override
+  String get category => 'Beckhoff Devices';
+
   @AssetListConverter()
   List<Asset> subdevices = [];
   BeckhoffEK1100Config();
@@ -525,6 +535,11 @@ class _EK1100ConfigContentState extends State<_EK1100ConfigContent> {
 
 @JsonSerializable()
 class BeckhoffEL1008Config extends BaseAsset {
+  @override
+  String get displayName => 'Beckhoff EL1008';
+  @override
+  String get category => 'Beckhoff Devices';
+
   String nameOrId;
   String? descriptionsKey;
   String? rawStateKey;
@@ -545,7 +560,10 @@ class BeckhoffEL1008Config extends BaseAsset {
 
   @override
   Widget build(BuildContext context) {
-    return _BeckhoffEL1008(config: this);
+    return FittedBox(
+      fit: BoxFit.contain,
+      child: _BeckhoffEL1008(config: this),
+    );
   }
 
   @override
@@ -671,6 +689,11 @@ class _EL1008ConfigContentState extends State<_EL1008ConfigContent> {
 
 @JsonSerializable()
 class BeckhoffEL2008Config extends BaseAsset {
+  @override
+  String get displayName => 'Beckhoff EL2008';
+  @override
+  String get category => 'Beckhoff Devices';
+
   String nameOrId;
   String? descriptionsKey;
   String? rawStateKey;
@@ -685,7 +708,10 @@ class BeckhoffEL2008Config extends BaseAsset {
 
   @override
   Widget build(BuildContext context) {
-    return _BeckhoffEL2008(config: this);
+    return FittedBox(
+      fit: BoxFit.contain,
+      child: _BeckhoffEL2008(config: this),
+    );
   }
 
   @override
@@ -908,6 +934,11 @@ class _BeckhoffEL2008 extends ConsumerWidget {
 
 @JsonSerializable()
 class BeckhoffEL9222Config extends BaseAsset {
+  @override
+  String get displayName => 'Beckhoff EL9222';
+  @override
+  String get category => 'Beckhoff Devices';
+
   String nameOrId;
   String? descriptionsKey;
 
@@ -918,7 +949,10 @@ class BeckhoffEL9222Config extends BaseAsset {
 
   @override
   Widget build(BuildContext context) {
-    return _BeckhoffEL9222(config: this);
+    return FittedBox(
+      fit: BoxFit.contain,
+      child: _BeckhoffEL9222(config: this),
+    );
   }
 
   @override
@@ -1038,11 +1072,19 @@ class _BeckhoffEL9222 extends StatelessWidget {
 
 @JsonSerializable()
 class BeckhoffEL9187Config extends BaseAsset {
+  @override
+  String get displayName => 'Beckhoff EL9187';
+  @override
+  String get category => 'Beckhoff Devices';
+
   BeckhoffEL9187Config();
 
   @override
   Widget build(BuildContext context) {
-    return _BeckhoffEL9187(config: this);
+    return FittedBox(
+      fit: BoxFit.contain,
+      child: _BeckhoffEL9187(config: this),
+    );
   }
 
   @override
@@ -1144,11 +1186,19 @@ class _BeckhoffEL9187 extends StatelessWidget {
 
 @JsonSerializable()
 class BeckhoffEL9186Config extends BaseAsset {
+  @override
+  String get displayName => 'Beckhoff EL9186';
+  @override
+  String get category => 'Beckhoff Devices';
+
   BeckhoffEL9186Config();
 
   @override
   Widget build(BuildContext context) {
-    return _BeckhoffEL9186(config: this);
+    return FittedBox(
+      fit: BoxFit.contain,
+      child: _BeckhoffEL9186(config: this),
+    );
   }
 
   @override
@@ -1713,6 +1763,11 @@ class TriangleBoxPainter extends CustomPainter {
 
 @JsonSerializable()
 class BeckhoffEL3054Config extends BaseAsset {
+  @override
+  String get displayName => 'Beckhoff EL3054';
+  @override
+  String get category => 'Beckhoff Devices';
+
   String nameOrId;
   String? descriptionsKey;
   String? stateKey;
@@ -1727,7 +1782,10 @@ class BeckhoffEL3054Config extends BaseAsset {
 
   @override
   Widget build(BuildContext context) {
-    return _BeckhoffEL3054(config: this);
+    return FittedBox(
+      fit: BoxFit.contain,
+      child: _BeckhoffEL3054(config: this),
+    );
   }
 
   @override

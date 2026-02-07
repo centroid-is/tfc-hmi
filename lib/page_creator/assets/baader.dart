@@ -13,6 +13,11 @@ part 'baader.g.dart';
 
 @JsonSerializable()
 class Baader221Config extends BaseAsset {
+  @override
+  String get displayName => 'Baader 221';
+  @override
+  String get category => 'Industrial Equipment';
+
   @ColorConverter()
   Color color;
   @JsonKey(name: 'stroke_width')

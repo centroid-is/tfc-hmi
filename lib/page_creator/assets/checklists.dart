@@ -9,6 +9,11 @@ part 'checklists.g.dart';
 
 @JsonSerializable()
 class ChecklistsConfig extends BaseAsset {
+  @override
+  String get displayName => 'Checklists';
+  @override
+  String get category => 'Application';
+
   List<LEDConfig> line1;
   List<LEDConfig> line2;
   List<LEDConfig> line3;

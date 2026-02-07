@@ -13,6 +13,11 @@ part 'text.g.dart';
 
 @JsonSerializable()
 class TextAssetConfig extends BaseAsset {
+  @override
+  String get displayName => 'Text';
+  @override
+  String get category => 'Text & Numbers';
+
   /// The text content to display with variable substitution support
   /// Example: "Temperature is: $temp and pressure is $press"
   String textContent;
