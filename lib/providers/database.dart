@@ -14,25 +14,43 @@ Future<Database?> database(Ref ref) async {
   if (config.postgres == null) {
     return null;
   }
-  final db = Database(await AppDatabase.spawn(config));
+  AppDatabase? appDb;
   try {
+    appDb = await AppDatabase.spawn(config);
+    final db = Database(appDb);
     await db.db.open();
+
+    // Clean up when the provider is invalidated or disposed
+    ref.onDispose(() async {
+      _retryTimer?.cancel();
+      await db.dispose();
+      await db.db.close();
+    });
+
     return db;
   } catch (e) {
+    // close() now properly kills the DriftIsolate via shutdownAll()
+    await appDb?.close();
     io.stderr.writeln('Error opening database: $e');
-    _scheduleRetry(ref, db);
+    _scheduleRetry(ref, config);
+    ref.onDispose(() {
+      _retryTimer?.cancel();
+    });
   }
   return null;
 }
 
-void _scheduleRetry(Ref ref, Database db) {
-  Timer.periodic(const Duration(seconds: 2), (timer) async {
+Timer? _retryTimer;
+
+void _scheduleRetry(Ref ref, DatabaseConfig config) {
+  _retryTimer?.cancel();
+  _retryTimer = Timer(const Duration(seconds: 2), () async {
     try {
-      await db.db.open();
-      timer.cancel();
-      ref.invalidateSelf();
+      await Database.probe(config);
     } catch (e) {
-      // io.stderr.writeln('Error opening database: $e');
+      _scheduleRetry(ref, config);
+      return;
     }
+    ref.invalidateSelf();
   });
 }

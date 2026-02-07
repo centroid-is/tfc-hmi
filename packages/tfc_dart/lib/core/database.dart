@@ -211,12 +211,73 @@ class _PendingWrite {
 class Database {
   Database(this.db) {
     _startBatchFlushTimer();
+    _initConnectionHealth();
+  }
+
+  /// Lightweight check if the database is reachable.
+  /// Opens and immediately closes a single connection. Throws on failure.
+  static Future<void> probe(DatabaseConfig config) async {
+    final conn = await pg.Connection.open(
+      config.postgres!,
+      settings: pg.ConnectionSettings(
+        sslMode: config.sslMode ?? pg.SslMode.disable,
+      ),
+    ).timeout(const Duration(seconds: 5));
+    await conn.close();
+  }
+
+  /// Probe the database, create an [AppDatabase], and open the connection.
+  /// Retries every [retryDelay] until the database is reachable.
+  /// Set [useIsolate] to false when already running inside an isolate.
+  static Future<Database> connectWithRetry(
+    DatabaseConfig config, {
+    Duration retryDelay = const Duration(seconds: 2),
+    bool useIsolate = true,
+  }) async {
+    while (true) {
+      try {
+        await probe(config);
+        final appDb = useIsolate
+            ? await AppDatabase.spawn(config)
+            : await AppDatabase.create(config);
+        final db = Database(appDb);
+        await db.db.open();
+        logger.i('Database connected');
+        return db;
+      } catch (e) {
+        logger.w('Database not reachable, retrying in ${retryDelay.inSeconds}s: $e');
+        await Future.delayed(retryDelay);
+      }
+    }
   }
 
   AppDatabase db;
   Map<String, RetentionPolicy> retentionPolicies = {};
   static final Logger logger = Logger();
   final Map<String, Completer<void>> _tableCreationLocks = {};
+  bool _lastConnectionState = false;
+  final _connectionStateController = StreamController<bool>.broadcast();
+  StreamSubscription<bool>? _healthSub;
+
+  void _initConnectionHealth() {
+    _healthSub = db.connectionHealth?.listen((state) {
+      _lastConnectionState = state;
+      _connectionStateController.add(state);
+    });
+  }
+
+  /// Multi-subscription stream of connection health.
+  /// Each new listener immediately receives the last known state,
+  /// then gets live updates. Safe for multiple StreamBuilders.
+  late final Stream<bool> connectionState = Stream.multi((controller) {
+    controller.add(_lastConnectionState);
+    final sub = _connectionStateController.stream.listen(
+      controller.add,
+      onError: controller.addError,
+      onDone: controller.close,
+    );
+    controller.onCancel = sub.cancel;
+  });
 
   /// Retry a database operation with exponential backoff
   Future<T> _withRetry<T>(Future<T> Function() operation,
@@ -244,6 +305,11 @@ class Database {
   static const _batchFlushInterval = Duration(milliseconds: 500);
   static const _maxBatchSize = 50;
 
+  // Retry queue for failed writes (survives extended DB outages)
+  final Map<String, List<_PendingWrite>> _retryQueue = {};
+  bool _retryInProgress = false;
+  static const _maxRetryQueueSize = 100; // per table
+
   Future<void> open() async {
     try {
       await db.open();
@@ -257,13 +323,21 @@ class Database {
     retentionPolicies[tableName] = retention;
     // We will actually create the table when the first data point is inserted,
     // because we need to know the type of the value column beforehand
-    if (await db.tableExists(tableName)) {
-      final currentRetention = await db.getRetentionPolicy(tableName);
-      if (currentRetention != retention) {
-        await db.updateRetentionPolicy(tableName, retention);
+    try {
+      if (await db.tableExists(tableName)) {
+        final currentRetention = await db.getRetentionPolicy(tableName);
+        if (currentRetention != retention) {
+          await db.updateRetentionPolicy(tableName, retention);
+        }
       }
+    } catch (e) {
+      logger.w('Could not check/update retention policy for $tableName (DB may be down): $e');
+      // Will be applied when table is created during first insert
     }
   }
+
+  // Track tables that need creation (when DB was down during first insert)
+  final Set<String> _pendingTableCreation = {};
 
   /// Insert a time-series data point (buffered for batch writes)
   Future<void> insertTimeseriesData(
@@ -271,17 +345,36 @@ class Database {
     if (tableName.isEmpty) {
       throw ArgumentError('Table name cannot be empty');
     }
-    // Ensure table exists (only needed once per table)
-    if (!_writeBuffer.containsKey(tableName)) {
-      if (!await db.tableExists(tableName)) {
-        await _tryToCreateTimeseriesTable(tableName, value);
+
+    // Try to ensure table exists, but don't fail if DB is unavailable
+    if (!_writeBuffer.containsKey(tableName) && !_pendingTableCreation.contains(tableName)) {
+      try {
+        if (!await db.tableExists(tableName)) {
+          await _tryToCreateTimeseriesTable(tableName, value);
+        }
+      } catch (e) {
+        logger.w('Could not verify table $tableName exists (DB may be down), will retry: $e');
+        _pendingTableCreation.add(tableName);
       }
     }
 
-    // Add to buffer
-    _writeBuffer
-        .putIfAbsent(tableName, () => [])
-        .add(_PendingWrite(time, value));
+    // Always add to buffer, even if DB is down
+    final buffer = _writeBuffer.putIfAbsent(tableName, () => []);
+    buffer.add(_PendingWrite(time, value));
+
+    // Enforce max queue size across writeBuffer + retryQueue (drop oldest)
+    final retryQueue = _retryQueue[tableName] ?? [];
+    final totalPending = buffer.length + retryQueue.length;
+    if (totalPending > _maxRetryQueueSize) {
+      // Drop from retryQueue first (oldest), then from buffer
+      if (retryQueue.isNotEmpty) {
+        final dropped = retryQueue.removeAt(0);
+        logger.w('Queue overflow for $tableName, dropping oldest from ${dropped.time}');
+      } else if (buffer.length > 1) {
+        final dropped = buffer.removeAt(0);
+        logger.w('Queue overflow for $tableName, dropping oldest from ${dropped.time}');
+      }
+    }
 
     // Flush immediately if batch size reached
     if (_writeBuffer[tableName]!.length >= _maxBatchSize) {
@@ -292,15 +385,29 @@ class Database {
       _totalWriteTime.start();
 
       try {
-        final rows = writes.map((w) => w.toMap()).toList();
-        await _withRetry(() => db.tableInsertBatch(tableName, rows));
+        await _ensureTableAndInsert(tableName, writes);
       } catch (e) {
-        logger.e('Error flushing batch for $tableName after retries: $e');
-        rethrow;
+        _totalWriteTime.stop();
+        logger.w('Batch flush failed for $tableName, queuing ${writes.length} items for retry: $e');
+        _queueForRetry(tableName, writes);
+        return;
       }
 
       _totalWriteTime.stop();
     }
+  }
+
+  /// Ensure table exists and insert rows
+  Future<void> _ensureTableAndInsert(String tableName, List<_PendingWrite> writes) async {
+    // Create table if it was pending
+    if (_pendingTableCreation.contains(tableName)) {
+      if (!await db.tableExists(tableName)) {
+        await _tryToCreateTimeseriesTable(tableName, writes.first.value);
+      }
+      _pendingTableCreation.remove(tableName);
+    }
+    final rows = writes.map((w) => w.toMap()).toList();
+    await _withRetry(() => db.tableInsertBatch(tableName, rows));
   }
 
   /// Get performance statistics
@@ -363,13 +470,13 @@ class Database {
           _writeCount++;
           _totalWriteTime.start();
 
-          final rows = writes.map((w) => w.toMap()).toList();
-          await _withRetry(() => db.tableInsertBatch(tableName, rows));
+          await _ensureTableAndInsert(tableName, writes);
 
           _totalWriteTime.stop();
         } catch (e) {
           _totalWriteTime.stop();
-          logger.e('Error flushing batch for $tableName after retries: $e');
+          logger.w('Batch flush failed for $tableName, queuing ${writes.length} items for retry: $e');
+          _queueForRetry(tableName, writes);
         }
       }
     } finally {
@@ -380,9 +487,72 @@ class Database {
   /// Flush all pending writes immediately (useful for tests)
   Future<void> flush() => _flushAllBatches();
 
-  /// Dispose resources
-  void dispose() {
+  /// Queue failed writes for later retry (drops oldest if queue full)
+  void _queueForRetry(String tableName, List<_PendingWrite> writes) {
+    final queue = _retryQueue.putIfAbsent(tableName, () => []);
+    for (final write in writes) {
+      if (queue.length >= _maxRetryQueueSize) {
+        final dropped = queue.removeAt(0);
+        logger.w('Retry queue full for $tableName, dropping oldest from ${dropped.time}');
+      }
+      queue.add(write);
+    }
+    _scheduleRetryFlush();
+  }
+
+  /// Schedule periodic retry of queued writes
+  void _scheduleRetryFlush() {
+    if (_retryInProgress || _retryQueue.isEmpty) return;
+    _retryInProgress = true;
+
+    Future.delayed(const Duration(seconds: 5), () async {
+      // Snapshot and clear
+      final batch = Map<String, List<_PendingWrite>>.from(_retryQueue);
+      _retryQueue.clear();
+
+      for (final entry in batch.entries) {
+        final tableName = entry.key;
+        final writes = entry.value;
+        if (writes.isEmpty) continue;
+
+        try {
+          await _ensureTableAndInsert(tableName, writes);
+          logger.i('Retry flush succeeded for $tableName: ${writes.length} items');
+        } catch (e) {
+          // Still failing — re-queue (drops oldest if full)
+          logger.w('Retry flush failed for $tableName, re-queuing ${writes.length} items');
+          final queue = _retryQueue.putIfAbsent(tableName, () => []);
+          for (final write in writes) {
+            if (queue.length >= _maxRetryQueueSize) {
+              queue.removeAt(0);
+            }
+            queue.add(write);
+          }
+        }
+      }
+
+      _retryInProgress = false;
+
+      // Schedule another flush if items remain
+      if (_retryQueue.isNotEmpty) {
+        final total = _retryQueue.values.fold<int>(0, (sum, list) => sum + list.length);
+        logger.w('Retry queue: $total items still pending');
+        _scheduleRetryFlush();
+      }
+    });
+  }
+
+  /// Dispose resources - flushes pending data before shutdown
+  Future<void> dispose() async {
     _flushTimer?.cancel();
+    await _healthSub?.cancel();
+    await _connectionStateController.close();
+    // Attempt to flush any remaining data
+    try {
+      await _flushAllBatches();
+    } catch (e) {
+      logger.w('Failed to flush remaining data on dispose: $e');
+    }
   }
 
   // Performance instrumentation

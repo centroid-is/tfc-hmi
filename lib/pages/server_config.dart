@@ -561,7 +561,9 @@ class _OpcUAServersSectionState extends ConsumerState<_OpcUAServersSection> {
     } catch (e) {
       _error = e.toString();
     } finally {
-      setState(() => _isLoading = false);
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
     }
   }
 
@@ -1039,7 +1041,8 @@ class _ServerConfigCardState extends State<_ServerConfigCard> {
       ),
       child: Text(
         label,
-        style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w600),
+        style:
+            TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w600),
       ),
     );
   }

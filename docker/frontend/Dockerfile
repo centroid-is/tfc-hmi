@@ -1,4 +1,4 @@
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
 
 # Install only the required libraries
 RUN apt-get update && apt-get install -y --no-install-recommends \

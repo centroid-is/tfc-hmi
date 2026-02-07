@@ -104,11 +104,13 @@ flutter:
 
 
 
-# dependency_overrides:
+dependency_overrides:
 #   open62541:
 #     path: ../open62541_bindings
-#   postgres:
-#     path: ../postgresql-dart
+  postgres:
+    git:
+      url: https://github.com/centroid-is/postgresql-dart.git
+      ref: add-keepalive
 #   stream_channel: ^2.1.4
 #   stack_trace: ^1.12.1
 #   meta: ^1.16.0

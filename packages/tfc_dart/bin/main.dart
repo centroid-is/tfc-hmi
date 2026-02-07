@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:tfc_dart/core/database.dart';
-import 'package:tfc_dart/core/database_drift.dart';
 import 'package:tfc_dart/core/preferences.dart';
 import 'package:tfc_dart/core/state_man.dart';
 import 'package:tfc_dart/core/alarm.dart';
@@ -18,11 +17,14 @@ class TraceFilter extends LogFilter {
 }
 
 void main() async {
+  // Exit cleanly on SIGTERM (Docker stop) even if stuck in a retry loop
+  ProcessSignal.sigterm.watch().listen((_) => exit(0));
+
   Logger.defaultFilter = () => TraceFilter();
   final logger = Logger();
 
   final dbConfig = await DatabaseConfig.fromEnv();
-  final db = Database(await AppDatabase.spawn(dbConfig));
+  final db = await Database.connectWithRetry(dbConfig);
   final prefs = await Preferences.create(db: db);
 
   final statemanConfigFilePath =

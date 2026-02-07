@@ -4,9 +4,9 @@
 
 import 'dart:async';
 import 'dart:io';
+import 'dart:isolate';
 import 'dart:convert';
 
-import 'package:drift/backends.dart';
 import 'package:drift/drift.dart';
 import 'package:drift/native.dart';
 import 'package:drift/isolate.dart';
@@ -60,7 +60,8 @@ class FlutterPreferences extends Table {
 class HistoryView extends Table {
   IntColumn get id => integer().autoIncrement()();
   TextColumn get name => text()();
-  DateTimeColumn get createdAt => dateTime().clientDefault(() => DateTime.now())();
+  DateTimeColumn get createdAt =>
+      dateTime().clientDefault(() => DateTime.now())();
   DateTimeColumn get updatedAt => dateTime().nullable()();
 }
 
@@ -94,7 +95,8 @@ class HistoryViewPeriod extends Table {
   TextColumn get name => text()();
   DateTimeColumn get startAt => dateTime()();
   DateTimeColumn get endAt => dateTime()();
-  DateTimeColumn get createdAt => dateTime().clientDefault(() => DateTime.now())();
+  DateTimeColumn get createdAt =>
+      dateTime().clientDefault(() => DateTime.now())();
 }
 
 // Register all tables here
@@ -112,6 +114,23 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase._(this.config, QueryExecutor executor) : super(executor);
   final logger = Logger();
   pg.Connection? _notificationConnection;
+
+  /// The DriftIsolate backing this database (null when using create() or sqlite).
+  DriftIsolate? _driftIsolate;
+
+  /// Port for receiving connection health events from the Pool inside the DriftIsolate.
+  ReceivePort? _healthPort;
+  Stream<bool>? _connectionHealthBroadcast;
+
+  /// Connection health stream driven by TCP keepalive inside the DriftIsolate.
+  /// Broadcast stream — safe for multiple listeners (e.g. multiple StreamBuilders).
+  Stream<bool>? get connectionHealth {
+    if (_connectionHealthBroadcast == null && _healthPort != null) {
+      _connectionHealthBroadcast =
+          _healthPort!.cast<bool>().asBroadcastStream();
+    }
+    return _connectionHealthBroadcast;
+  }
 
   @override
   int get schemaVersion => 2;
@@ -135,13 +154,17 @@ class AppDatabase extends _$AppDatabase {
   bool get native => executor is NativeDatabase;
   bool get postgres => executor is PgDatabase;
 
-  /// Check if the connection is open.
+  /// Check if the database is reachable by running a real query.
+  /// Returns false if the query fails or times out.
   Future<bool> get isOpen async {
-    if (executor is DelegatedDatabase) {
-      return await (executor as DelegatedDatabase).delegate.isOpen;
+    try {
+      await customSelect('SELECT 1').getSingle().timeout(
+            const Duration(seconds: 3),
+          );
+      return true;
+    } catch (_) {
+      return false;
     }
-    // TODO: This is a hack to check if the connection is open, maybe not correct
-    return await executor.ensureOpen(this);
   }
 
   Future<void> open() async {
@@ -174,13 +197,23 @@ class AppDatabase extends _$AppDatabase {
   static Future<AppDatabase> create(DatabaseConfig config,
       {Directory? sqliteFolder}) async {
     if (config.postgres != null) {
+      final healthPort = ReceivePort();
       final pool = pg.Pool.withEndpoints([config.postgres!],
           settings: pg.PoolSettings(
             maxConnectionCount: 20,
             sslMode: config.sslMode,
+            keepAlive: true,
+            keepAliveIdle: const Duration(seconds: 10),
+            keepAliveInterval: const Duration(seconds: 5),
+            keepAliveCount: 3,
           ));
-      return AppDatabase._(
+
+      _startPoolHealthMonitor(pool, healthPort.sendPort);
+
+      final db = AppDatabase._(
           config, PgDatabase.opened(pool, logStatements: config.debug));
+      db._healthPort = healthPort;
+      return db;
     }
     if (sqliteFolder != null) {
       final dbFolder = sqliteFolder;
@@ -199,17 +232,34 @@ class AppDatabase extends _$AppDatabase {
   static Future<AppDatabase> spawn(DatabaseConfig config,
       {Directory? sqliteFolder}) async {
     if (config.postgres != null) {
+      // Create a ReceivePort for health events from the Pool inside the isolate.
+      final healthPort = ReceivePort();
+      final healthSendPort = healthPort.sendPort;
+
       // Spawn a DriftIsolate handling the Postgres connection off the main isolate.
       final isolate = await DriftIsolate.spawn(() {
         final pool = pg.Pool.withEndpoints([config.postgres!],
             settings: pg.PoolSettings(
               maxConnectionCount: 20,
               sslMode: config.sslMode,
+              keepAlive: true,
+              keepAliveIdle: const Duration(seconds: 10),
+              keepAliveInterval: const Duration(seconds: 5),
+              keepAliveCount: 3,
             ));
+
+        // Health monitor: holds one pool connection and awaits its closed
+        // future. TCP keepalive detects dead connections, firing closed.
+        // On death, sends false and re-acquires a new connection.
+        _startPoolHealthMonitor(pool, healthSendPort);
+
         return PgDatabase.opened(pool, logStatements: config.debug);
       });
       final executor = await isolate.connect();
-      return AppDatabase._(config, executor);
+      final db = AppDatabase._(config, executor);
+      db._driftIsolate = isolate;
+      db._healthPort = healthPort;
+      return db;
     } else if (sqliteFolder != null) {
       final dbFolder = sqliteFolder;
       final file = File(p.join(dbFolder.path, 'db.sqlite'));
@@ -520,7 +570,8 @@ class AppDatabase extends _$AppDatabase {
   }
 
   /// Batch insert multiple rows into a dynamic table
-  Future<int> tableInsertBatch(String tableName, List<Map<String, dynamic>> dataList) async {
+  Future<int> tableInsertBatch(
+      String tableName, List<Map<String, dynamic>> dataList) async {
     if (dataList.isEmpty) return 0;
 
     // All rows should have the same keys
@@ -727,6 +778,7 @@ class AppDatabase extends _$AppDatabase {
       // No retention policy exists for this table yet - this is normal
       return null;
     }
+
     final dropAfter = result.read<String>('drop_after');
     final scheduleInterval = result.read<String>('schedule_interval');
 
@@ -902,8 +954,10 @@ class AppDatabase extends _$AppDatabase {
 
   @override
   Future<void> close() async {
+    _healthPort?.close();
     await _notificationConnection?.close();
     await super.close();
+    await _driftIsolate?.shutdownAll();
   }
 
   /// Get table statistics for performance analysis
@@ -1057,6 +1111,30 @@ class AppDatabase extends _$AppDatabase {
       print('❌ Raw connection test failed: $e');
     }
   }
+}
+
+/// Holds one pool connection and awaits its [closed] future.
+/// When TCP keepalive kills the connection, [closed] completes and we send
+/// `false` via [port], then re-acquire a new connection from the pool.
+/// This is running inside the drift spawned isolate
+void _startPoolHealthMonitor(pg.Pool pool, SendPort port) {
+  Future<void> monitor() async {
+    while (pool.isOpen) {
+      try {
+        await pool.withConnection((conn) async {
+          port.send(true);
+          await conn.closed;
+          port.send(false);
+        });
+      } catch (_) {
+        port.send(false);
+      }
+      // Wait before retrying after a disconnection
+      await Future.delayed(const Duration(seconds: 5));
+    }
+  }
+
+  unawaited(monitor());
 }
 
 enum NotificationAction {

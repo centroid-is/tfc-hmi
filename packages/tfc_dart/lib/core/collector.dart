@@ -153,11 +153,13 @@ class Collector {
 
     Future<void> insertValue(DynamicValue newValue) async {
       _insertCount++;
-      await database.insertTimeseriesData(
-        name,
-        DateTime.now().toUtc(),
-        const DynamicValueConverter().toJson(newValue, slim: true),
-      );
+      final time = DateTime.now().toUtc();
+      final value = const DynamicValueConverter().toJson(newValue, slim: true);
+      try {
+        await database.insertTimeseriesData(name, time, value);
+      } catch (e) {
+        logger.w('Insert failed for $name: $e');
+      }
     }
 
     _subscriptions[entry] = subscription.listen(
@@ -170,7 +172,7 @@ class Collector {
           }
           // No sampling - collect every value immediately
           // Don't await - just fire and forget for better performance
-          insertValue(value);
+          unawaited(insertValue(value));
         } else {
           // Store the latest value for periodic sampling
           latestValue = value;

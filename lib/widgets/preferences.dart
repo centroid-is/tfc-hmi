@@ -92,8 +92,9 @@ class _DatabaseConfigEditorState extends ConsumerState<_DatabaseConfigEditor> {
           child: ExpansionTile(
             leading: const FaIcon(FontAwesomeIcons.database, size: 20),
             title: const Text('Database Configuration'),
-            subtitle: FutureBuilder<bool>(
-              future: prefs.database?.db.isOpen,
+            subtitle: StreamBuilder<bool>(
+              stream: prefs.database?.connectionState,
+              initialData: false,
               builder: (context, connectionSnapshot) {
                 final isConnected = connectionSnapshot.data ?? false;
                 return Text(
@@ -112,8 +113,9 @@ class _DatabaseConfigEditorState extends ConsumerState<_DatabaseConfigEditor> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    FutureBuilder<bool>(
-                      future: prefs.database?.db.isOpen,
+                    StreamBuilder<bool>(
+                      stream: prefs.database?.connectionState,
+                      initialData: false,
                       builder: (context, snapshot) {
                         return Container(
                           padding: const EdgeInsets.all(12),
