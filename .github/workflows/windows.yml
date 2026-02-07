@@ -1,62 +1,134 @@
-# name: Windows Build
+name: Windows Store Publish
 
-# on:
-#   workflow_dispatch: 
-#   push:
-#     branches:
-#       - main
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - auto-deploy
 
-# permissions:
-#   contents: write
-#   packages: write
-#   checks: write 
+permissions:
+  contents: write
+  packages: write
 
-# jobs:
-#   build:
-#     runs-on: windows-latest
-#     steps:
-#       - uses: actions/checkout@v4
-#       - name: Setup Flutter
-#         uses: subosito/flutter-action@v2
-#         with: { channel: stable }
+jobs:
+  publish:
+    runs-on: windows-latest
+    env:
+      STORE_APP_ID:        ${{ secrets.STORE_PRODUCT_ID }}
+      STORE_TENANT_ID:     ${{ secrets.STORE_TENANT_ID }}
+      STORE_CLIENT_ID:     ${{ secrets.STORE_CLIENT_ID }}
+      STORE_CLIENT_SECRET: ${{ secrets.STORE_CLIENT_SECRET }}
 
-#       - name: Build Windows
-#         working-directory: centroid-hmi
-#         run: flutter build windows --release
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
-#       - name: Create MSIX for Store
-#         working-directory: centroid-hmi
-#         run: |
-#           dart run msix:create --store
-#         shell: powershell
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
 
-#       - name: Locate MSIX
-#         working-directory: centroid-hmi
-#         id: locate
-#         shell: powershell
-#         run: |
-#             $msix = Get-ChildItem -Recurse -Filter *.msix | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-#             if (-not $msix) { throw "No .msix file found" }
-#             "msix=$($msix.FullName)"     | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+      - name: Build Windows
+        working-directory: centroid-hmi
+        run: flutter build windows --release
 
-#       - name: Upload build artifacts
-#         uses: actions/upload-artifact@v4
-#         with:
-#           name: centroid-hmi.msix
-#           path: ${{ steps.locate.outputs.msix }}
+      - name: Create MSIX for Store
+        working-directory: centroid-hmi
+        shell: powershell
+        run: |
+          dart run msix:create --store
 
-#       - name: Run Windows App Certification Kit
-#         uses: ChristopheLav/wack-certification@v1
-#         with:
-#           name: 'WACK (x64)'
-#           package-path: '${{ steps.locate.outputs.msix }}'   # or .appxbundle
-#           report-name: 'centroid-hmi.Certification.xml'
-#           # ignore-rules: '38,81'                      # optional
-#           # threat-as-warning-rules: '83'              # optional
+      - name: Find built MSIX
+        id: pkg
+        working-directory: centroid-hmi
+        shell: powershell
+        run: |
+          $msix = Get-ChildItem -Recurse -Filter *.msix | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if (-not $msix) { throw "No .msix found" }
+          "msix=$($msix.FullName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
-#       - name: Upload WACK report
-#         if: always()
-#         uses: actions/upload-artifact@v4
-#         with:
-#           name: wack-report
-#           path: wack-certification/centroid-hmi.Certification.xml
+      - name: Upload artifact (.msix)
+        uses: actions/upload-artifact@v4
+        with:
+          name: centroid-hmi.msix
+          path: ${{ steps.pkg.outputs.msix }}
+
+      - name: Publish via StoreBroker
+        working-directory: centroid-hmi
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
+          Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force | Out-Null
+          Set-PSRepository -Name 'PSGallery' -InstallationPolicy Trusted
+          Install-Module StoreBroker -Scope CurrentUser -Force
+          Import-Module StoreBroker
+
+          # Validate required secrets
+          $required = @('STORE_APP_ID','STORE_TENANT_ID','STORE_CLIENT_ID','STORE_CLIENT_SECRET')
+          $missing  = $required | Where-Object {
+            [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($_))
+          }
+          if ($missing.Count) { throw "Missing required secrets: $($missing -join ', ')" }
+
+          # Authenticate
+          $sec  = ConvertTo-SecureString $env:STORE_CLIENT_SECRET -AsPlainText -Force
+          $cred = New-Object pscredential($env:STORE_CLIENT_ID, $sec)
+          Set-StoreBrokerAuthentication -TenantId $env:STORE_TENANT_ID -Credential $cred
+
+          # Resolve paths
+          $ConfigPath = Join-Path (Get-Location) 'submission.json'
+          $OutDir     = Join-Path (Get-Location) 'out'
+          $OutName    = 'package'
+          $MsixPath   = "${{ steps.pkg.outputs.msix }}"
+
+          if (-not (Test-Path $ConfigPath)) {
+            New-StoreBrokerConfigFile -Path $ConfigPath -AppId $env:STORE_APP_ID
+          }
+
+          # Produce package.zip + package.json from the MSIX
+          New-SubmissionPackage -ConfigPath $ConfigPath `
+                                -AppxPath   $MsixPath `
+                                -OutPath    $OutDir `
+                                -OutName    $OutName
+
+          # Create a fresh submission
+          $sub = New-ApplicationSubmission -AppId $env:STORE_APP_ID -Force
+
+          # Upload the ZIP
+          $packageZip = Join-Path $OutDir "$OutName.zip"
+          Set-SubmissionPackage -PackagePath $packageZip -UploadUrl $sub.fileUploadUrl
+
+          # Replace package list with newly generated ones
+          $sub.applicationPackages | ForEach-Object { $_.fileStatus = 'PendingDelete' }
+          $pkg = Get-Content (Join-Path $OutDir "$OutName.json") -Raw | ConvertFrom-Json
+          $sub.applicationPackages += $pkg.applicationPackages
+
+          # Save and commit submission
+          Set-ApplicationSubmission -AppId $env:STORE_APP_ID -UpdatedSubmission $sub
+          Complete-ApplicationSubmission -AppId $env:STORE_APP_ID -SubmissionId $sub.id
+
+          # Poll until terminal state
+          $submissionId = $sub.id
+          $inProgress  = @('PendingCommit','CommitStarted','PreProcessing','Certification','PendingPublication','Publishing')
+          $terminalOk  = @('Published','Release')
+          $terminalBad = @('CommitFailed','PreProcessingFailed','CertificationFailed','PublishFailed','ReleaseFailed','Canceled')
+
+          do {
+            Start-Sleep -Seconds 30
+            $status = (Get-ApplicationSubmissionStatus -AppId $env:STORE_APP_ID -SubmissionId $submissionId).status
+            Write-Host "Submission $submissionId status: $status"
+          } while ($inProgress -contains $status)
+
+          if ($terminalBad -contains $status) { throw "Store submission failed: $status" }
+          if ($terminalOk  -contains $status) { Write-Host "Store submission completed: $status" }
+          else { Write-Warning "Unexpected terminal status: $status" }
+
+      - name: Upload submission artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: store-out
+          path: centroid-hmi/out
