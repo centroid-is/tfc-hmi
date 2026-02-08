@@ -1641,6 +1641,11 @@ class $HistoryViewGraphTable extends HistoryViewGraph
   late final GeneratedColumn<int> graphIndex = GeneratedColumn<int>(
       'graph_index', aliasedName, false,
       type: DriftSqlType.int, requiredDuringInsert: true);
+  static const VerificationMeta _nameMeta = const VerificationMeta('name');
+  @override
+  late final GeneratedColumn<String> name = GeneratedColumn<String>(
+      'name', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
   static const VerificationMeta _yAxisUnitMeta =
       const VerificationMeta('yAxisUnit');
   @override
@@ -1655,7 +1660,7 @@ class $HistoryViewGraphTable extends HistoryViewGraph
       type: DriftSqlType.string, requiredDuringInsert: false);
   @override
   List<GeneratedColumn> get $columns =>
-      [id, viewId, graphIndex, yAxisUnit, yAxis2Unit];
+      [id, viewId, graphIndex, name, yAxisUnit, yAxis2Unit];
   @override
   String get aliasedName => _alias ?? actualTableName;
   @override
@@ -1684,6 +1689,10 @@ class $HistoryViewGraphTable extends HistoryViewGraph
     } else if (isInserting) {
       context.missing(_graphIndexMeta);
     }
+    if (data.containsKey('name')) {
+      context.handle(
+          _nameMeta, name.isAcceptableOrUnknown(data['name']!, _nameMeta));
+    }
     if (data.containsKey('y_axis_unit')) {
       context.handle(
           _yAxisUnitMeta,
@@ -1711,6 +1720,8 @@ class $HistoryViewGraphTable extends HistoryViewGraph
           .read(DriftSqlType.int, data['${effectivePrefix}view_id'])!,
       graphIndex: attachedDatabase.typeMapping
           .read(DriftSqlType.int, data['${effectivePrefix}graph_index'])!,
+      name: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}name']),
       yAxisUnit: attachedDatabase.typeMapping
           .read(DriftSqlType.string, data['${effectivePrefix}y_axis_unit']),
       yAxis2Unit: attachedDatabase.typeMapping
@@ -1729,12 +1740,14 @@ class HistoryViewGraphData extends DataClass
   final int id;
   final int viewId;
   final int graphIndex;
+  final String? name;
   final String? yAxisUnit;
   final String? yAxis2Unit;
   const HistoryViewGraphData(
       {required this.id,
       required this.viewId,
       required this.graphIndex,
+      this.name,
       this.yAxisUnit,
       this.yAxis2Unit});
   @override
@@ -1743,6 +1756,9 @@ class HistoryViewGraphData extends DataClass
     map['id'] = Variable<int>(id);
     map['view_id'] = Variable<int>(viewId);
     map['graph_index'] = Variable<int>(graphIndex);
+    if (!nullToAbsent || name != null) {
+      map['name'] = Variable<String>(name);
+    }
     if (!nullToAbsent || yAxisUnit != null) {
       map['y_axis_unit'] = Variable<String>(yAxisUnit);
     }
@@ -1757,6 +1773,7 @@ class HistoryViewGraphData extends DataClass
       id: Value(id),
       viewId: Value(viewId),
       graphIndex: Value(graphIndex),
+      name: name == null && nullToAbsent ? const Value.absent() : Value(name),
       yAxisUnit: yAxisUnit == null && nullToAbsent
           ? const Value.absent()
           : Value(yAxisUnit),
@@ -1773,6 +1790,7 @@ class HistoryViewGraphData extends DataClass
       id: serializer.fromJson<int>(json['id']),
       viewId: serializer.fromJson<int>(json['viewId']),
       graphIndex: serializer.fromJson<int>(json['graphIndex']),
+      name: serializer.fromJson<String?>(json['name']),
       yAxisUnit: serializer.fromJson<String?>(json['yAxisUnit']),
       yAxis2Unit: serializer.fromJson<String?>(json['yAxis2Unit']),
     );
@@ -1784,6 +1802,7 @@ class HistoryViewGraphData extends DataClass
       'id': serializer.toJson<int>(id),
       'viewId': serializer.toJson<int>(viewId),
       'graphIndex': serializer.toJson<int>(graphIndex),
+      'name': serializer.toJson<String?>(name),
       'yAxisUnit': serializer.toJson<String?>(yAxisUnit),
       'yAxis2Unit': serializer.toJson<String?>(yAxis2Unit),
     };
@@ -1793,12 +1812,14 @@ class HistoryViewGraphData extends DataClass
           {int? id,
           int? viewId,
           int? graphIndex,
+          Value<String?> name = const Value.absent(),
           Value<String?> yAxisUnit = const Value.absent(),
           Value<String?> yAxis2Unit = const Value.absent()}) =>
       HistoryViewGraphData(
         id: id ?? this.id,
         viewId: viewId ?? this.viewId,
         graphIndex: graphIndex ?? this.graphIndex,
+        name: name.present ? name.value : this.name,
         yAxisUnit: yAxisUnit.present ? yAxisUnit.value : this.yAxisUnit,
         yAxis2Unit: yAxis2Unit.present ? yAxis2Unit.value : this.yAxis2Unit,
       );
@@ -1808,6 +1829,7 @@ class HistoryViewGraphData extends DataClass
       viewId: data.viewId.present ? data.viewId.value : this.viewId,
       graphIndex:
           data.graphIndex.present ? data.graphIndex.value : this.graphIndex,
+      name: data.name.present ? data.name.value : this.name,
       yAxisUnit: data.yAxisUnit.present ? data.yAxisUnit.value : this.yAxisUnit,
       yAxis2Unit:
           data.yAxis2Unit.present ? data.yAxis2Unit.value : this.yAxis2Unit,
@@ -1820,6 +1842,7 @@ class HistoryViewGraphData extends DataClass
           ..write('id: $id, ')
           ..write('viewId: $viewId, ')
           ..write('graphIndex: $graphIndex, ')
+          ..write('name: $name, ')
           ..write('yAxisUnit: $yAxisUnit, ')
           ..write('yAxis2Unit: $yAxis2Unit')
           ..write(')'))
@@ -1828,7 +1851,7 @@ class HistoryViewGraphData extends DataClass
 
   @override
   int get hashCode =>
-      Object.hash(id, viewId, graphIndex, yAxisUnit, yAxis2Unit);
+      Object.hash(id, viewId, graphIndex, name, yAxisUnit, yAxis2Unit);
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
@@ -1836,6 +1859,7 @@ class HistoryViewGraphData extends DataClass
           other.id == this.id &&
           other.viewId == this.viewId &&
           other.graphIndex == this.graphIndex &&
+          other.name == this.name &&
           other.yAxisUnit == this.yAxisUnit &&
           other.yAxis2Unit == this.yAxis2Unit);
 }
@@ -1844,12 +1868,14 @@ class HistoryViewGraphCompanion extends UpdateCompanion<HistoryViewGraphData> {
   final Value<int> id;
   final Value<int> viewId;
   final Value<int> graphIndex;
+  final Value<String?> name;
   final Value<String?> yAxisUnit;
   final Value<String?> yAxis2Unit;
   const HistoryViewGraphCompanion({
     this.id = const Value.absent(),
     this.viewId = const Value.absent(),
     this.graphIndex = const Value.absent(),
+    this.name = const Value.absent(),
     this.yAxisUnit = const Value.absent(),
     this.yAxis2Unit = const Value.absent(),
   });
@@ -1857,6 +1883,7 @@ class HistoryViewGraphCompanion extends UpdateCompanion<HistoryViewGraphData> {
     this.id = const Value.absent(),
     required int viewId,
     required int graphIndex,
+    this.name = const Value.absent(),
     this.yAxisUnit = const Value.absent(),
     this.yAxis2Unit = const Value.absent(),
   })  : viewId = Value(viewId),
@@ -1865,6 +1892,7 @@ class HistoryViewGraphCompanion extends UpdateCompanion<HistoryViewGraphData> {
     Expression<int>? id,
     Expression<int>? viewId,
     Expression<int>? graphIndex,
+    Expression<String>? name,
     Expression<String>? yAxisUnit,
     Expression<String>? yAxis2Unit,
   }) {
@@ -1872,6 +1900,7 @@ class HistoryViewGraphCompanion extends UpdateCompanion<HistoryViewGraphData> {
       if (id != null) 'id': id,
       if (viewId != null) 'view_id': viewId,
       if (graphIndex != null) 'graph_index': graphIndex,
+      if (name != null) 'name': name,
       if (yAxisUnit != null) 'y_axis_unit': yAxisUnit,
       if (yAxis2Unit != null) 'y_axis2_unit': yAxis2Unit,
     });
@@ -1881,12 +1910,14 @@ class HistoryViewGraphCompanion extends UpdateCompanion<HistoryViewGraphData> {
       {Value<int>? id,
       Value<int>? viewId,
       Value<int>? graphIndex,
+      Value<String?>? name,
       Value<String?>? yAxisUnit,
       Value<String?>? yAxis2Unit}) {
     return HistoryViewGraphCompanion(
       id: id ?? this.id,
       viewId: viewId ?? this.viewId,
       graphIndex: graphIndex ?? this.graphIndex,
+      name: name ?? this.name,
       yAxisUnit: yAxisUnit ?? this.yAxisUnit,
       yAxis2Unit: yAxis2Unit ?? this.yAxis2Unit,
     );
@@ -1904,6 +1935,9 @@ class HistoryViewGraphCompanion extends UpdateCompanion<HistoryViewGraphData> {
     if (graphIndex.present) {
       map['graph_index'] = Variable<int>(graphIndex.value);
     }
+    if (name.present) {
+      map['name'] = Variable<String>(name.value);
+    }
     if (yAxisUnit.present) {
       map['y_axis_unit'] = Variable<String>(yAxisUnit.value);
     }
@@ -1919,6 +1953,7 @@ class HistoryViewGraphCompanion extends UpdateCompanion<HistoryViewGraphData> {
           ..write('id: $id, ')
           ..write('viewId: $viewId, ')
           ..write('graphIndex: $graphIndex, ')
+          ..write('name: $name, ')
           ..write('yAxisUnit: $yAxisUnit, ')
           ..write('yAxis2Unit: $yAxis2Unit')
           ..write(')'))
@@ -3762,6 +3797,7 @@ typedef $$HistoryViewGraphTableCreateCompanionBuilder
   Value<int> id,
   required int viewId,
   required int graphIndex,
+  Value<String?> name,
   Value<String?> yAxisUnit,
   Value<String?> yAxis2Unit,
 });
@@ -3770,6 +3806,7 @@ typedef $$HistoryViewGraphTableUpdateCompanionBuilder
   Value<int> id,
   Value<int> viewId,
   Value<int> graphIndex,
+  Value<String?> name,
   Value<String?> yAxisUnit,
   Value<String?> yAxis2Unit,
 });
@@ -3809,6 +3846,9 @@ class $$HistoryViewGraphTableFilterComposer
 
   ColumnFilters<int> get graphIndex => $composableBuilder(
       column: $table.graphIndex, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get name => $composableBuilder(
+      column: $table.name, builder: (column) => ColumnFilters(column));
 
   ColumnFilters<String> get yAxisUnit => $composableBuilder(
       column: $table.yAxisUnit, builder: (column) => ColumnFilters(column));
@@ -3852,6 +3892,9 @@ class $$HistoryViewGraphTableOrderingComposer
   ColumnOrderings<int> get graphIndex => $composableBuilder(
       column: $table.graphIndex, builder: (column) => ColumnOrderings(column));
 
+  ColumnOrderings<String> get name => $composableBuilder(
+      column: $table.name, builder: (column) => ColumnOrderings(column));
+
   ColumnOrderings<String> get yAxisUnit => $composableBuilder(
       column: $table.yAxisUnit, builder: (column) => ColumnOrderings(column));
 
@@ -3893,6 +3936,9 @@ class $$HistoryViewGraphTableAnnotationComposer
 
   GeneratedColumn<int> get graphIndex => $composableBuilder(
       column: $table.graphIndex, builder: (column) => column);
+
+  GeneratedColumn<String> get name =>
+      $composableBuilder(column: $table.name, builder: (column) => column);
 
   GeneratedColumn<String> get yAxisUnit =>
       $composableBuilder(column: $table.yAxisUnit, builder: (column) => column);
@@ -3948,6 +3994,7 @@ class $$HistoryViewGraphTableTableManager extends RootTableManager<
             Value<int> id = const Value.absent(),
             Value<int> viewId = const Value.absent(),
             Value<int> graphIndex = const Value.absent(),
+            Value<String?> name = const Value.absent(),
             Value<String?> yAxisUnit = const Value.absent(),
             Value<String?> yAxis2Unit = const Value.absent(),
           }) =>
@@ -3955,6 +4002,7 @@ class $$HistoryViewGraphTableTableManager extends RootTableManager<
             id: id,
             viewId: viewId,
             graphIndex: graphIndex,
+            name: name,
             yAxisUnit: yAxisUnit,
             yAxis2Unit: yAxis2Unit,
           ),
@@ -3962,6 +4010,7 @@ class $$HistoryViewGraphTableTableManager extends RootTableManager<
             Value<int> id = const Value.absent(),
             required int viewId,
             required int graphIndex,
+            Value<String?> name = const Value.absent(),
             Value<String?> yAxisUnit = const Value.absent(),
             Value<String?> yAxis2Unit = const Value.absent(),
           }) =>
@@ -3969,6 +4018,7 @@ class $$HistoryViewGraphTableTableManager extends RootTableManager<
             id: id,
             viewId: viewId,
             graphIndex: graphIndex,
+            name: name,
             yAxisUnit: yAxisUnit,
             yAxis2Unit: yAxis2Unit,
           ),
