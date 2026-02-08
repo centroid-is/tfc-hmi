@@ -174,9 +174,16 @@ class AppDatabase extends _$AppDatabase {
             }
           }
           if (from < 4) {
-            await m.database.customStatement(
-              'ALTER TABLE history_view_graph ADD COLUMN name TEXT',
-            );
+            if (native) {
+              await m.database.customStatement(
+                'ALTER TABLE history_view_graph ADD COLUMN name TEXT',
+              );
+            } else {
+              // Postgres: use IF NOT EXISTS to be idempotent
+              await m.database.customStatement(
+                'ALTER TABLE history_view_graph ADD COLUMN IF NOT EXISTS name TEXT',
+              );
+            }
           }
         },
       );
