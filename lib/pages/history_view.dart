@@ -1372,22 +1372,24 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage> {
             ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
 
           return AlertDialog(
-            title: TextField(
-              controller: nameCtrl,
-              decoration: InputDecoration(
-                border: InputBorder.none,
-                hintText: 'Graph ${graphIndex + 1}',
-                isDense: true,
-                contentPadding: EdgeInsets.zero,
-              ),
-              style: Theme.of(ctx).textTheme.headlineSmall,
-            ),
+            title: Text('Graph ${graphIndex + 1}'),
             content: SizedBox(
               width: 480,
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  // Graph name
+                  TextField(
+                    controller: nameCtrl,
+                    decoration: InputDecoration(
+                      labelText: 'Name',
+                      border: const OutlineInputBorder(),
+                      hintText: 'Graph ${graphIndex + 1}',
+                      isDense: true,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
                   // Y-axis units
                   Row(
                     children: [
