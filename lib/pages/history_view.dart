@@ -1534,7 +1534,7 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage> {
                   ),
                   child: const Text('Remove graph'),
                 ),
-              const Spacer(),
+              const SizedBox(width: 32),
               TextButton(
                 onPressed: () => Navigator.pop(ctx),
                 child: const Text('Cancel'),

@@ -77,12 +77,13 @@ class HistoryViewKey extends Table {
       integer().withDefault(const Constant(0))(); // Add graph index
 }
 
-/// Graph-level configuration (Y-axis units)
+/// Graph-level configuration (name, Y-axis units)
 class HistoryViewGraph extends Table {
   IntColumn get id => integer().autoIncrement()();
   IntColumn get viewId =>
       integer().references(HistoryView, #id, onDelete: KeyAction.cascade)();
   IntColumn get graphIndex => integer()();
+  TextColumn get name => text().nullable()();
   TextColumn get yAxisUnit => text().nullable()();
   TextColumn get yAxis2Unit => text().nullable()();
 }
@@ -137,7 +138,7 @@ class AppDatabase extends _$AppDatabase {
   }
 
   @override
-  int get schemaVersion => 3;
+  int get schemaVersion => 4;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -171,6 +172,11 @@ class AppDatabase extends _$AppDatabase {
               }
               logger.i('Migrated SQLite datetime columns from int to text');
             }
+          }
+          if (from < 4) {
+            await m.database.customStatement(
+              'ALTER TABLE history_view_graph ADD COLUMN name TEXT',
+            );
           }
         },
       );
@@ -334,6 +340,7 @@ class AppDatabase extends _$AppDatabase {
                 .insert(HistoryViewGraphCompanion.insert(
               viewId: id,
               graphIndex: graphIndex,
+              name: Value(config['name'] as String?),
               yAxisUnit: Value(config['yAxisUnit'] ?? ''),
               yAxis2Unit: Value(config['yAxis2Unit'] ?? ''),
             ));
@@ -378,6 +385,7 @@ class AppDatabase extends _$AppDatabase {
                 .insert(HistoryViewGraphCompanion.insert(
               viewId: id,
               graphIndex: graphIndex,
+              name: Value(config['name'] as String?),
               yAxisUnit: Value(config['yAxisUnit'] ?? ''),
               yAxis2Unit: Value(config['yAxis2Unit'] ?? ''),
             ));
@@ -428,6 +436,7 @@ class AppDatabase extends _$AppDatabase {
     final configs = <int, Map<String, dynamic>>{};
     for (final row in rows) {
       configs[row.graphIndex] = {
+        'name': row.name ?? '',
         'yAxisUnit': row.yAxisUnit ?? '',
         'yAxis2Unit': row.yAxis2Unit ?? '',
       };
