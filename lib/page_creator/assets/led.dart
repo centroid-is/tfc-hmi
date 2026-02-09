@@ -21,6 +21,11 @@ enum LEDType {
 
 @JsonSerializable(explicitToJson: true)
 class LEDConfig extends BaseAsset {
+  @override
+  String get displayName => 'LED';
+  @override
+  String get category => 'Basic Indicators';
+
   String key;
   @ColorConverter()
   @JsonKey(name: 'on_color')
@@ -218,6 +223,9 @@ class Led extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    if (config.key.isEmpty || config.key == LEDConfig.previewStr) {
+      return LedRaw(config, value: null);
+    }
     return StreamBuilder<bool>(
       stream: ref.watch(stateManProvider.future).asStream().asyncExpand(
             (stateMan) => stateMan

@@ -37,6 +37,11 @@ class ConditionalIconState {
 
 @JsonSerializable(explicitToJson: true)
 class IconConfig extends BaseAsset {
+  @override
+  String get displayName => 'Icon';
+  @override
+  String get category => 'Basic Indicators';
+
   @IconDataConverter()
   IconData iconData;
   @OptionalColorConverter()

@@ -76,10 +76,7 @@ void main() async {
   final pageManager = PageManager(pages: {}, prefs: prefs);
   await pageManager.load();
 
-  // Sort pages by navigationPriority first, then map to menu items
-  final sortedPages = pageManager.pages.values.toList()
-    ..sort((a, b) => (a.navigationPriority ?? 0).compareTo(b.navigationPriority ?? 0));
-  final extraMenuItems = sortedPages.map((page) => page.menuItem).toList();
+  final extraMenuItems = pageManager.getRootMenuItems();
 
   for (final menuItem in extraMenuItems) {
     registry.addMenuItem(menuItem);
@@ -218,10 +215,8 @@ RoutesLocationBuilder createLocationBuilder(List<MenuItem> extraMenuItems) {
   };
 
   addRoute(MenuItem menuItem) {
-    if (menuItem.path == null) {
-      return;
-    }
-    if (menuItem.children.isEmpty) {
+    // Register route for this item if it has a non-empty path
+    if (menuItem.path != null && menuItem.path!.isNotEmpty) {
       routes[menuItem.path!] = (context, state, args) => BeamPage(
             key: ValueKey(menuItem.path!),
             title: menuItem.label,
@@ -231,10 +226,11 @@ RoutesLocationBuilder createLocationBuilder(List<MenuItem> extraMenuItems) {
               },
             ),
           );
-      return;
     }
-    // Currently only supports one child per parent
-    addRoute(menuItem.children.first);
+    // Recurse into all children
+    for (final child in menuItem.children) {
+      addRoute(child);
+    }
   }
 
   for (final menuItem in extraMenuItems) {

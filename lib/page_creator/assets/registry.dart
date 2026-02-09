@@ -7,7 +7,6 @@ import 'arrow.dart';
 import 'led_column.dart';
 import 'drawn_box.dart';
 import 'number.dart';
-import 'checkweigher.dart';
 import 'graph.dart';
 import 'ratio_number.dart';
 import 'baader.dart';
@@ -38,7 +37,6 @@ class AssetRegistry {
     LEDColumnConfig: LEDColumnConfig.fromJson,
     DrawnBoxConfig: DrawnBoxConfig.fromJson,
     NumberConfig: NumberConfig.fromJson,
-    CheckweigherConfig: CheckweigherConfig.fromJson,
     GraphAssetConfig: GraphAssetConfig.fromJson,
     RatioNumberConfig: RatioNumberConfig.fromJson,
     Baader221Config: Baader221Config.fromJson,
@@ -66,16 +64,15 @@ class AssetRegistry {
 
   static final Map<Type, Asset Function()> defaultFactories = {
     LEDConfig: LEDConfig.preview,
+    LEDColumnConfig: LEDColumnConfig.preview,
     ButtonConfig: ButtonConfig.preview,
+    ArrowConfig: ArrowConfig.preview,
     ConveyorConfig: ConveyorConfig.preview,
     ConveyorColorPaletteConfig: ConveyorColorPaletteConfig.preview,
-    ArrowConfig: ArrowConfig.preview,
-    LEDColumnConfig: LEDColumnConfig.preview,
-    DrawnBoxConfig: DrawnBoxConfig.preview,
     NumberConfig: NumberConfig.preview,
-    CheckweigherConfig: CheckweigherConfig.preview,
-    GraphAssetConfig: GraphAssetConfig.preview,
     RatioNumberConfig: RatioNumberConfig.preview,
+    TableAssetConfig: TableAssetConfig.preview,
+    GraphAssetConfig: GraphAssetConfig.preview,
     Baader221Config: Baader221Config.preview,
     AnalogBoxConfig: AnalogBoxConfig.preview,
     OptionVariableConfig: OptionVariableConfig.preview,
@@ -90,7 +87,7 @@ class AssetRegistry {
     BeckhoffEL3054Config: BeckhoffEL3054Config.preview,
     SchneiderATV320Config: SchneiderATV320Config.preview,
     IconConfig: IconConfig.preview,
-    TableAssetConfig: TableAssetConfig.preview,
+    DrawnBoxConfig: DrawnBoxConfig.preview,
     StartStopPillButtonConfig: StartStopPillButtonConfig.preview,
     AirCabConfig: AirCabConfig.preview,
     ChecklistsConfig: ChecklistsConfig.preview,

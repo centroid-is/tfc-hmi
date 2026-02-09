@@ -77,6 +77,8 @@ class RelativeSize {
 
 abstract class Asset {
   String get assetName;
+  String get displayName;
+  String get category;
   String? get text;
   set text(String? text);
   TextPos? get textPos;
@@ -102,6 +104,36 @@ abstract class BaseAsset implements Asset {
     if (variant == 'unknown') {
       variant = runtimeType.toString();
     }
+  }
+
+  @override
+  String get displayName => _humanize(runtimeType.toString());
+
+  @override
+  String get category => 'General';
+
+  static String _humanize(String typeName) {
+    String name = typeName;
+    if (name.endsWith('Config')) {
+      name = name.substring(0, name.length - 6);
+    }
+    final buffer = StringBuffer();
+    for (int i = 0; i < name.length; i++) {
+      final ch = name[i];
+      if (i > 0 && ch.toUpperCase() == ch && ch.toLowerCase() != ch) {
+        final prev = name[i - 1];
+        final nextIsLower = i + 1 < name.length &&
+            name[i + 1].toLowerCase() == name[i + 1] &&
+            name[i + 1].toUpperCase() != name[i + 1];
+        if (prev.toLowerCase() == prev && prev.toUpperCase() != prev) {
+          buffer.write(' ');
+        } else if (nextIsLower && prev.toUpperCase() == prev) {
+          buffer.write(' ');
+        }
+      }
+      buffer.write(ch);
+    }
+    return buffer.toString();
   }
 
   @JsonKey(name: 'coordinates')

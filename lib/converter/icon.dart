@@ -873,6 +873,9 @@ class IconDataConverter implements JsonConverter<IconData, String> {
     }
   }
 
+  /// Public accessor for icon name lookup.
+  static String getIconName(IconData iconData) => _getIconName(iconData);
+
   // Helper method to get icon name from IconData
   static String _getIconName(IconData iconData) {
     // This is a simplified mapping - you might need to expand this

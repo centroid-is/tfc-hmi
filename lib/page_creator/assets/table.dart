@@ -12,6 +12,11 @@ part 'table.g.dart';
 
 @JsonSerializable()
 class TableAssetConfig extends BaseAsset {
+  @override
+  String get displayName => 'Table';
+  @override
+  String get category => 'Visualization';
+
   /// The key to collect data from
   String entryKey;
 
@@ -69,7 +74,12 @@ class TableAssetConfig extends BaseAsset {
   }
 
   @override
-  Widget build(BuildContext context) => TableAssetWidget(this);
+  Widget build(BuildContext context) {
+    if (entryKey == exampleKey) {
+      return CustomPaint(painter: _TablePreviewPainter());
+    }
+    return TableAssetWidget(this);
+  }
 
   /// Make configure() consistent with your other assets:
   /// SingleChildScrollView → Container(width: 300) → _TableConfigContent
@@ -462,6 +472,63 @@ class _TableAssetWidgetState extends ConsumerState<TableAssetWidget> {
       ),
     );
   }
+}
+
+class _TablePreviewPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final borderPaint = Paint()
+      ..color = Colors.grey.shade400
+      ..strokeWidth = 1
+      ..style = PaintingStyle.stroke;
+
+    final headerPaint = Paint()
+      ..color = Colors.blueGrey.shade100
+      ..style = PaintingStyle.fill;
+
+    final cellTextPaint = Paint()
+      ..color = Colors.grey.shade300
+      ..style = PaintingStyle.fill;
+
+    const cols = 3;
+    const rows = 4;
+    final colW = size.width / cols;
+    final rowH = size.height / (rows + 1);
+
+    // Header row
+    canvas.drawRect(
+      Rect.fromLTWH(0, 0, size.width, rowH),
+      headerPaint,
+    );
+
+    // Grid lines
+    for (int r = 0; r <= rows + 1; r++) {
+      final y = r * rowH;
+      canvas.drawLine(Offset(0, y), Offset(size.width, y), borderPaint);
+    }
+    for (int c = 0; c <= cols; c++) {
+      final x = c * colW;
+      canvas.drawLine(Offset(x, 0), Offset(x, size.height), borderPaint);
+    }
+
+    // Fake cell content (small rectangles)
+    for (int r = 1; r <= rows; r++) {
+      for (int c = 0; c < cols; c++) {
+        final x = c * colW + colW * 0.15;
+        final y = r * rowH + rowH * 0.3;
+        canvas.drawRRect(
+          RRect.fromRectAndRadius(
+            Rect.fromLTWH(x, y, colW * 0.7, rowH * 0.4),
+            const Radius.circular(2),
+          ),
+          cellTextPaint,
+        );
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 
 ///

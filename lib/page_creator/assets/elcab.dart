@@ -10,6 +10,11 @@ part 'elcab.g.dart';
 
 @JsonSerializable()
 class ElCabConfig extends BaseAsset {
+  @override
+  String get displayName => 'Electrical Cabinet';
+  @override
+  String get category => 'Industrial Equipment';
+
   String key;
 
   ElCabConfig({
@@ -25,9 +30,6 @@ class ElCabConfig extends BaseAsset {
 
   @override
   Widget build(BuildContext context) {
-    if (key.isEmpty) {
-      return const Text("ElCab preview");
-    }
     return ElCab(config: this);
   }
 

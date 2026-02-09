@@ -9,6 +9,11 @@ part 'led_column.g.dart';
 
 @JsonSerializable()
 class LEDColumnConfig extends BaseAsset {
+  @override
+  String get displayName => 'LED Column';
+  @override
+  String get category => 'Basic Indicators';
+
   List<LEDConfig> leds;
   double? spacing;
 

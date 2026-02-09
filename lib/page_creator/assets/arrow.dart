@@ -12,6 +12,11 @@ part 'arrow.g.dart';
 
 @JsonSerializable()
 class ArrowConfig extends BaseAsset {
+  @override
+  String get displayName => 'Arrow';
+  @override
+  String get category => 'Basic Indicators';
+
   String key;
   String label;
 
@@ -31,7 +36,7 @@ class ArrowConfig extends BaseAsset {
   @override
   Widget build(BuildContext context) {
     if (label == "Arrow preview") {
-      return const Text("Arrow preview");
+      return const Icon(Icons.arrow_forward, size: 48, color: Colors.grey);
     }
     return ArrowWidget(config: this);
   }

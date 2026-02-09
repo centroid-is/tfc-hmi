@@ -14,6 +14,11 @@ part 'speedbatcher.g.dart';
 
 @JsonSerializable()
 class SpeedBatcherConfig extends BaseAsset {
+  @override
+  String get displayName => 'Speed Batcher';
+  @override
+  String get category => 'Application';
+
   String label;
   String key;
 
@@ -33,11 +38,6 @@ class SpeedBatcherConfig extends BaseAsset {
 
   @override
   Widget build(BuildContext context) {
-    // If this is the preview, just show text
-    if (label == "SpeedBatcher preview") {
-      return const Text("SpeedBatcher preview");
-    }
-    // Otherwise, show the full widget
     return SpeedBatcher(config: this);
   }
 
