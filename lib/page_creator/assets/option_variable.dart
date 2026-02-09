@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:logger/logger.dart';
 import 'package:beamer/beamer.dart';
 import 'common.dart';
+import '../../widgets/fuzzy_search_bar.dart';
 import '../../providers/state_man.dart';
 part 'option_variable.g.dart';
 
@@ -388,16 +389,11 @@ class _OptionVariableWidgetState extends ConsumerState<OptionVariableWidget> {
   }
 
   List<OptionItem> get _filteredOptions {
-    if (_searchQuery.isEmpty) return widget.config.options;
-
-    return widget.config.options.where((option) {
-      return option.label.toLowerCase().contains(_searchQuery.toLowerCase()) ||
-          option.value.toLowerCase().contains(_searchQuery.toLowerCase()) ||
-          (option.description
-                  ?.toLowerCase()
-                  .contains(_searchQuery.toLowerCase()) ??
-              false);
-    }).toList();
+    return fuzzyFilter(widget.config.options, _searchQuery, [
+      (o) => o.label,
+      (o) => o.value,
+      (o) => o.description ?? '',
+    ]);
   }
 
   String _getSelectedLabel() {
