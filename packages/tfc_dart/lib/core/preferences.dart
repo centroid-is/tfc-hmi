@@ -149,23 +149,40 @@ class Preferences implements PreferencesApi {
   final KeyCache keyCache = KeyCache();
   final InMemoryPreferences _memoryCache = InMemoryPreferences();
   final MySecureStorage secureStorage;
+  final PreferencesApi? localCache;
   final StreamController<String> _onPreferencesChanged =
       StreamController<String>.broadcast();
 
-  Preferences({required this.database, required this.secureStorage});
+  Preferences(
+      {required this.database,
+      required this.secureStorage,
+      this.localCache});
 
-  static Future<Preferences> create({required Database? db}) async {
+  static Future<Preferences> create(
+      {required Database? db, PreferencesApi? localCache}) async {
     final secureStorage = SecureStorage.getInstance();
     try {
       if (db == null) {
-        return Preferences(database: null, secureStorage: secureStorage);
+        final prefs = Preferences(
+            database: null,
+            secureStorage: secureStorage,
+            localCache: localCache);
+        if (localCache != null) {
+          await prefs._loadFromLocalCache();
+        }
+        return prefs;
       }
-      final prefs = Preferences(database: db, secureStorage: secureStorage);
+      final prefs = Preferences(
+          database: db, secureStorage: secureStorage, localCache: localCache);
       await prefs.loadFromPostgres();
+      if (localCache != null) {
+        await prefs._syncToLocalCache();
+      }
       return prefs;
     } on PreferencesException catch (e) {
       stderr.writeln(e.message);
-      return Preferences(database: db, secureStorage: secureStorage);
+      return Preferences(
+          database: db, secureStorage: secureStorage, localCache: localCache);
     }
   }
 
@@ -266,6 +283,7 @@ class Preferences implements PreferencesApi {
       await secureStorage.write(key: key, value: value.toString());
     } else {
       await _memoryCache.setBool(key, value);
+      await localCache?.setBool(key, value);
     }
     if (saveToDb) {
       await _upsertToPostgres(key, value, 'bool');
@@ -280,6 +298,7 @@ class Preferences implements PreferencesApi {
       await secureStorage.write(key: key, value: value.toString());
     } else {
       await _memoryCache.setInt(key, value);
+      await localCache?.setInt(key, value);
     }
     if (saveToDb) {
       await _upsertToPostgres(key, value, 'int');
@@ -294,6 +313,7 @@ class Preferences implements PreferencesApi {
       await secureStorage.write(key: key, value: value.toString());
     } else {
       await _memoryCache.setDouble(key, value);
+      await localCache?.setDouble(key, value);
     }
     if (saveToDb) {
       await _upsertToPostgres(key, value, 'double');
@@ -308,6 +328,7 @@ class Preferences implements PreferencesApi {
       await secureStorage.write(key: key, value: value);
     } else {
       await _memoryCache.setString(key, value);
+      await localCache?.setString(key, value);
     }
     if (saveToDb) {
       await _upsertToPostgres(key, value, 'String');
@@ -322,6 +343,7 @@ class Preferences implements PreferencesApi {
       await secureStorage.write(key: key, value: value.join(','));
     } else {
       await _memoryCache.setStringList(key, value);
+      await localCache?.setStringList(key, value);
     }
     if (saveToDb) {
       await _upsertToPostgres(key, value, 'List<String>');
@@ -335,14 +357,16 @@ class Preferences implements PreferencesApi {
       await secureStorage.delete(key: key);
     } else {
       await _memoryCache.remove(key);
+      await localCache?.remove(key);
     }
     // TODO: remove from postgres
     _onPreferencesChanged.add(key);
   }
 
   @override
-  Future<void> clear({Set<String>? allowList}) {
-    return _memoryCache.clear(allowList: allowList);
+  Future<void> clear({Set<String>? allowList}) async {
+    await _memoryCache.clear(allowList: allowList);
+    await localCache?.clear(allowList: allowList);
   }
 
   Stream<String> get onPreferencesChanged => _onPreferencesChanged.stream;
@@ -375,6 +399,50 @@ class Preferences implements PreferencesApi {
         .whereType<String>()
         .toSet();
     keyCache.lastUpdated = DateTime.now();
+  }
+
+  /// Loads all preferences from local cache into memory cache.
+  /// Used as fallback when DB is unavailable.
+  Future<void> _loadFromLocalCache() async {
+    final cache = localCache!;
+    final all = await cache.getAll();
+    for (final entry in all.entries) {
+      final value = entry.value;
+      if (value == null) continue;
+      if (value is bool) {
+        await _memoryCache.setBool(entry.key, value);
+      } else if (value is int) {
+        await _memoryCache.setInt(entry.key, value);
+      } else if (value is double) {
+        await _memoryCache.setDouble(entry.key, value);
+      } else if (value is String) {
+        await _memoryCache.setString(entry.key, value);
+      } else if (value is List<String>) {
+        await _memoryCache.setStringList(entry.key, value);
+      }
+    }
+  }
+
+  /// Syncs all in-memory preferences to local cache.
+  /// Called after loading from Postgres so local cache stays up to date.
+  Future<void> _syncToLocalCache() async {
+    final cache = localCache!;
+    final all = await _memoryCache.getAll();
+    for (final entry in all.entries) {
+      final value = entry.value;
+      if (value == null) continue;
+      if (value is bool) {
+        await cache.setBool(entry.key, value);
+      } else if (value is int) {
+        await cache.setInt(entry.key, value);
+      } else if (value is double) {
+        await cache.setDouble(entry.key, value);
+      } else if (value is String) {
+        await cache.setString(entry.key, value);
+      } else if (value is List<String>) {
+        await cache.setStringList(entry.key, value);
+      }
+    }
   }
 
   /// Loads all preferences from Postgres into memory cache.
