@@ -12,6 +12,7 @@ import 'package:upgrader/upgrader.dart';
 import 'package:microsoft_store_upgrader/microsoft_store_upgrader.dart';
 
 import 'package:tfc/route_registry.dart';
+import 'package:tfc/routes.dart';
 import 'package:tfc/models/menu_item.dart';
 import 'package:tfc/pages/page_view.dart';
 import 'package:tfc/pages/page_editor.dart';
@@ -210,7 +211,7 @@ RoutesLocationBuilder createLocationBuilder(List<MenuItem> extraMenuItems) {
         BeamPage(key: const ValueKey('/advanced/server-config'), title: 'Server Config', child: ServerConfigPage()),
     '/advanced/key-repository': (context, state, args) =>
         BeamPage(key: const ValueKey('/advanced/key-repository'), title: 'Key Repository', child: const KeyRepositoryPage()),
-    '/alarm-view': (context, state, args) =>
+    AppRoutes.alarmView: (context, state, args) =>
         BeamPage(key: const ValueKey('/alarm-view'), title: 'Alarm View', child: AlarmViewPage()),
   };
 
