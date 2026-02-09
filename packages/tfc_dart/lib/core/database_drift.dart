@@ -77,12 +77,13 @@ class HistoryViewKey extends Table {
       integer().withDefault(const Constant(0))(); // Add graph index
 }
 
-/// Graph-level configuration (Y-axis units)
+/// Graph-level configuration (name, Y-axis units)
 class HistoryViewGraph extends Table {
   IntColumn get id => integer().autoIncrement()();
   IntColumn get viewId =>
       integer().references(HistoryView, #id, onDelete: KeyAction.cascade)();
   IntColumn get graphIndex => integer()();
+  TextColumn get name => text().nullable()();
   TextColumn get yAxisUnit => text().nullable()();
   TextColumn get yAxis2Unit => text().nullable()();
 }
@@ -115,6 +116,10 @@ class AppDatabase extends _$AppDatabase {
   final logger = Logger();
   pg.Connection? _notificationConnection;
 
+  @override
+  DriftDatabaseOptions get options =>
+      const DriftDatabaseOptions(storeDateTimeAsText: true);
+
   /// The DriftIsolate backing this database (null when using create() or sqlite).
   DriftIsolate? _driftIsolate;
 
@@ -133,7 +138,7 @@ class AppDatabase extends _$AppDatabase {
   }
 
   @override
-  int get schemaVersion => 2;
+  int get schemaVersion => 4;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -147,6 +152,38 @@ class AppDatabase extends _$AppDatabase {
             await m.createTable(historyViewKey);
             await m.createTable(historyViewGraph);
             await m.createTable(historyViewPeriod);
+          }
+          if (from < 3) {
+            // Migrate datetime columns from integer (unix epoch) to text
+            // (ISO 8601). Only needed for SQLite; Postgres already stores
+            // datetimes as timestamptz text.
+            if (native) {
+              for (final stmt in [
+                "UPDATE alarm_history SET created_at = strftime('%Y-%m-%dT%H:%M:%S', created_at, 'unixepoch') || 'Z' WHERE typeof(created_at) = 'integer'",
+                "UPDATE alarm_history SET deactivated_at = strftime('%Y-%m-%dT%H:%M:%S', deactivated_at, 'unixepoch') || 'Z' WHERE typeof(deactivated_at) = 'integer'",
+                "UPDATE alarm_history SET acknowledged_at = strftime('%Y-%m-%dT%H:%M:%S', acknowledged_at, 'unixepoch') || 'Z' WHERE typeof(acknowledged_at) = 'integer'",
+                "UPDATE history_view SET created_at = strftime('%Y-%m-%dT%H:%M:%S', created_at, 'unixepoch') || 'Z' WHERE typeof(created_at) = 'integer'",
+                "UPDATE history_view SET updated_at = strftime('%Y-%m-%dT%H:%M:%S', updated_at, 'unixepoch') || 'Z' WHERE typeof(updated_at) = 'integer'",
+                "UPDATE history_view_period SET start_at = strftime('%Y-%m-%dT%H:%M:%S', start_at, 'unixepoch') || 'Z' WHERE typeof(start_at) = 'integer'",
+                "UPDATE history_view_period SET end_at = strftime('%Y-%m-%dT%H:%M:%S', end_at, 'unixepoch') || 'Z' WHERE typeof(end_at) = 'integer'",
+                "UPDATE history_view_period SET created_at = strftime('%Y-%m-%dT%H:%M:%S', created_at, 'unixepoch') || 'Z' WHERE typeof(created_at) = 'integer'",
+              ]) {
+                await m.database.customStatement(stmt);
+              }
+              logger.i('Migrated SQLite datetime columns from int to text');
+            }
+          }
+          if (from < 4) {
+            if (native) {
+              await m.database.customStatement(
+                'ALTER TABLE history_view_graph ADD COLUMN name TEXT',
+              );
+            } else {
+              // Postgres: use IF NOT EXISTS to be idempotent
+              await m.database.customStatement(
+                'ALTER TABLE history_view_graph ADD COLUMN IF NOT EXISTS name TEXT',
+              );
+            }
           }
         },
       );
@@ -310,6 +347,7 @@ class AppDatabase extends _$AppDatabase {
                 .insert(HistoryViewGraphCompanion.insert(
               viewId: id,
               graphIndex: graphIndex,
+              name: Value(config['name'] as String?),
               yAxisUnit: Value(config['yAxisUnit'] ?? ''),
               yAxis2Unit: Value(config['yAxis2Unit'] ?? ''),
             ));
@@ -354,6 +392,7 @@ class AppDatabase extends _$AppDatabase {
                 .insert(HistoryViewGraphCompanion.insert(
               viewId: id,
               graphIndex: graphIndex,
+              name: Value(config['name'] as String?),
               yAxisUnit: Value(config['yAxisUnit'] ?? ''),
               yAxis2Unit: Value(config['yAxis2Unit'] ?? ''),
             ));
@@ -404,6 +443,7 @@ class AppDatabase extends _$AppDatabase {
     final configs = <int, Map<String, dynamic>>{};
     for (final row in rows) {
       configs[row.graphIndex] = {
+        'name': row.name ?? '',
         'yAxisUnit': row.yAxisUnit ?? '',
         'yAxis2Unit': row.yAxis2Unit ?? '',
       };
