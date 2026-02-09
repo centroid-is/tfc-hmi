@@ -13,6 +13,7 @@ import '../providers/theme.dart';
 import '../providers/alarm.dart';
 import 'package:tfc_dart/core/alarm.dart';
 import 'alarm.dart';
+import '../routes.dart';
 // ===================
 // Provider Abstraction
 // ===================
@@ -106,50 +107,53 @@ class _BaseScaffoldState extends ConsumerState<BaseScaffold> {
             final highestPriorAlarms =
                 filteredAlarms.sublist(0, math.min(2, filteredAlarms.length));
 
-            return Column(
-              mainAxisSize: MainAxisSize.min,
-              children: highestPriorAlarms.map((e) {
-                final (backgroundColor, textColor) =
-                    e.notification.getColors(context);
-                return Container(
-                  margin: const EdgeInsets.symmetric(vertical: 1),
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 2, vertical: 1),
-                  decoration: BoxDecoration(
-                    color: backgroundColor,
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                  child: RichText(
-                    text: TextSpan(
-                      style: TextStyle(
-                        color: textColor,
-                        fontSize:
-                            Theme.of(context).textTheme.bodySmall!.fontSize,
-                      ),
-                      children: [
-                        TextSpan(
-                          text:
-                              '${formatTimestamp(e.notification.timestamp)}: ',
-                        ),
-                        TextSpan(
-                          text: '${e.alarm.config.title}: ',
-                          style: const TextStyle(fontWeight: FontWeight.bold),
-                        ),
-                        TextSpan(
-                          text: (() {
-                            final description = e.alarm.config.description
-                                .replaceAll('\n', ' ')
-                                .trim();
-                            return description.length > 100
-                                ? description.substring(0, 97) + '...'
-                                : description;
-                          })(),
-                        ),
-                      ],
+            return GestureDetector(
+              onTap: () => context.beamToNamed(AppRoutes.alarmView),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: highestPriorAlarms.map((e) {
+                  final (backgroundColor, textColor) =
+                      e.notification.getColors(context);
+                  return Container(
+                    margin: const EdgeInsets.symmetric(vertical: 1),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 2, vertical: 1),
+                    decoration: BoxDecoration(
+                      color: backgroundColor,
+                      borderRadius: BorderRadius.circular(4),
                     ),
-                  ),
-                );
-              }).toList(),
+                    child: RichText(
+                      text: TextSpan(
+                        style: TextStyle(
+                          color: textColor,
+                          fontSize:
+                              Theme.of(context).textTheme.bodySmall!.fontSize,
+                        ),
+                        children: [
+                          TextSpan(
+                            text:
+                                '${formatTimestamp(e.notification.timestamp)}: ',
+                          ),
+                          TextSpan(
+                            text: '${e.alarm.config.title}: ',
+                            style: const TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                          TextSpan(
+                            text: (() {
+                              final description = e.alarm.config.description
+                                  .replaceAll('\n', ' ')
+                                  .trim();
+                              return description.length > 100
+                                  ? description.substring(0, 97) + '...'
+                                  : description;
+                            })(),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                }).toList(),
+              ),
             );
           }
           return StreamBuilder(
