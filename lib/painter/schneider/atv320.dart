@@ -65,7 +65,7 @@ class ATV320 extends CustomPainter {
     'j': [false, true, true, true, false, false, false],
     'l': [false, false, false, true, true, true, false],
     'n': [false, false, true, false, true, false, true],
-    'o': [false, true, true, true, true, false, false],
+    'o': [false, false, true, true, true, false, true],
     'p': [true, true, false, false, true, true, true],
     'q': [true, true, true, true, false, true, true],
     'r': [false, false, false, false, true, false, true],
@@ -83,7 +83,10 @@ class ATV320 extends CustomPainter {
     double width,
     double height,
   ) {
-    final segments = sevenSegmentMap[char] ?? sevenSegmentMap[' ']!;
+    final segments = sevenSegmentMap[char] ??
+        sevenSegmentMap[char.toLowerCase()] ??
+        sevenSegmentMap[char.toUpperCase()] ??
+        sevenSegmentMap[' ']!;
 
     final segmentPaint = Paint()
       ..color = const Color(0xFF00FF00) // Green segments
