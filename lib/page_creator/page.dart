@@ -2,7 +2,6 @@ import 'dart:convert';
 
 import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter/material.dart';
-
 import 'assets/common.dart';
 import 'assets/registry.dart';
 import '../models/menu_item.dart';
@@ -239,6 +238,53 @@ class PageManager {
     return _fromJson(json);
   }
 
+  /// Returns fully resolved root menu items with children looked up
+  /// from the flat map so nested sections have their actual children.
+  List<MenuItem> getRootMenuItems() {
+    final childLabels = <String>{};
+    for (final entry in pages.entries) {
+      collectChildLabels(entry.value.menuItem.children, childLabels, entry.key);
+    }
+    final rootNames = pages.keys
+        .where((name) => !childLabels.contains(name))
+        .toList();
+    rootNames.sort((a, b) =>
+        (pages[a]?.navigationPriority ?? 0)
+            .compareTo(pages[b]?.navigationPriority ?? 0));
+    return rootNames.map((name) => _resolveMenuItem(name)).toList();
+  }
+
+  /// Recursively resolves a page's MenuItem by looking up each child
+  /// from the flat map to get its current children list.
+  MenuItem _resolveMenuItem(String pageName) {
+    final page = pages[pageName]!;
+    final resolvedChildren = page.menuItem.children.map((child) {
+      // Don't recurse into self-references
+      if (child.label == pageName) return child;
+      // Resolve from the flat map if the child exists there
+      if (pages.containsKey(child.label)) {
+        return _resolveMenuItem(child.label);
+      }
+      return child;
+    }).toList();
+    return MenuItem(
+      label: page.menuItem.label,
+      path: page.menuItem.path,
+      icon: page.menuItem.icon,
+      children: resolvedChildren,
+    );
+  }
+
+  static void collectChildLabels(
+      List<MenuItem> items, Set<String> labels, String excludeKey) {
+    for (final item in items) {
+      if (item.label != excludeKey) {
+        labels.add(item.label);
+      }
+      collectChildLabels(item.children, labels, excludeKey);
+    }
+  }
+
   static Map<String, AssetPage> _fromJson(String jsonString) {
     final json = jsonDecode(jsonString) as Map<String, dynamic>;
     return json.map((name, pageJson) => MapEntry(
@@ -251,11 +297,15 @@ class PageManager {
 class CreatePageWidget extends StatefulWidget {
   final AssetPage? initialPage;
   final Function(AssetPage) onSave;
+  final bool isSection;
+  final String basePath;
 
   const CreatePageWidget({
     super.key,
     this.initialPage,
     required this.onSave,
+    this.isSection = false,
+    this.basePath = '',
   });
 
   @override
@@ -264,87 +314,55 @@ class CreatePageWidget extends StatefulWidget {
 
 class _CreatePageWidgetState extends State<CreatePageWidget> {
   late TextEditingController _labelController;
-  late TextEditingController _pathController;
-  late TextEditingController _navigationPriorityController;
   late IconData _selectedIcon;
-  late MenuItem? _child;
+  late bool _mirroringDisabled;
 
   @override
   void initState() {
     super.initState();
     _labelController =
         TextEditingController(text: widget.initialPage?.menuItem.label ?? '');
-    _pathController =
-        TextEditingController(text: widget.initialPage?.menuItem.path ?? '/');
-    _navigationPriorityController = TextEditingController(
-        text: widget.initialPage?.navigationPriority?.toString() ?? '');
-    _selectedIcon = widget.initialPage?.menuItem.icon ?? Icons.pageview;
-    // Get the first child if it exists, otherwise null
-    _child = widget.initialPage?.menuItem.children.isNotEmpty == true
-        ? widget.initialPage!.menuItem.children.first
-        : null;
+    _selectedIcon = widget.initialPage?.menuItem.icon ??
+        (widget.isSection ? Icons.folder : Icons.pageview);
+    _mirroringDisabled = widget.initialPage?.mirroringDisabled ?? false;
+  }
+
+  String _buildPath(String label) {
+    if (widget.isSection) return '';
+    final slug = label.toLowerCase()
+        .replaceAll(RegExp(r'[^a-z0-9\s]'), '')
+        .replaceAll(RegExp(r'\s+'), '-');
+    final base = widget.basePath;
+    return slug.isEmpty ? '$base/' : '$base/$slug';
   }
 
   @override
   void dispose() {
     _labelController.dispose();
-    _pathController.dispose();
-    _navigationPriorityController.dispose();
     super.dispose();
   }
 
   void _showIconPicker() {
+    // Pre-build icon name pairs for searching
+    final iconEntries = iconList.map((icon) {
+      final name = IconDataConverter.getIconName(icon);
+      return (icon: icon, name: name);
+    }).toList();
+
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Select Icon'),
-        content: SizedBox(
-          width: 300,
-          height: 400,
-          child: GridView.builder(
-            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-              crossAxisCount: 6,
-              childAspectRatio: 1,
-            ),
-            itemCount: iconList.length,
-            itemBuilder: (context, index) {
-              final icon = iconList[index];
-              return InkWell(
-                onTap: () {
-                  setState(() {
-                    _selectedIcon = icon;
-                  });
-                  Navigator.pop(context);
-                },
-                child: Icon(icon),
-              );
-            },
-          ),
-        ),
-      ),
+      builder: (context) {
+        return _IconPickerDialog(
+          iconEntries: iconEntries,
+          onSelected: (icon) {
+            setState(() {
+              _selectedIcon = icon;
+            });
+            Navigator.pop(context);
+          },
+        );
+      },
     );
-  }
-
-  void _addChild() {
-    setState(() {
-      _child = MenuItem(
-        label: 'New Child',
-        path: '/child',
-        icon: Icons.folder,
-      );
-    });
-  }
-
-  void _removeChild() {
-    setState(() {
-      _child = null;
-    });
-  }
-
-  void _updateChild(MenuItem updatedChild) {
-    setState(() {
-      _child = updatedChild;
-    });
   }
 
   @override
@@ -355,21 +373,8 @@ class _CreatePageWidgetState extends State<CreatePageWidget> {
         children: [
           TextField(
             controller: _labelController,
-            decoration: const InputDecoration(labelText: 'Page Name'),
-          ),
-          const SizedBox(height: 16),
-          TextField(
-            controller: _pathController,
-            decoration: const InputDecoration(labelText: 'Path'),
-          ),
-          const SizedBox(height: 16),
-          TextField(
-            controller: _navigationPriorityController,
-            decoration: const InputDecoration(
-              labelText: 'Navigation Priority',
-              hintText: 'Lower numbers = higher priority (optional)',
-            ),
-            keyboardType: TextInputType.number,
+            decoration: InputDecoration(
+                labelText: widget.isSection ? 'Section Name' : 'Page Name'),
           ),
           const SizedBox(height: 16),
           Row(
@@ -382,38 +387,19 @@ class _CreatePageWidgetState extends State<CreatePageWidget> {
               ),
             ],
           ),
-          const SizedBox(height: 16),
-          Row(
-            children: [
-              const Text('Mirroring Disabled: '),
-              Switch(
-                  value: widget.initialPage?.mirroringDisabled ?? false,
-                  onChanged: (value) {
-                    setState(() {
-                      widget.initialPage?.mirroringDisabled = value;
-                    });
-                  }),
-            ],
-          ),
-          // Child management section
-          Row(
-            children: [
-              const Text('Child Menu Item:'),
-              const Spacer(),
-              if (_child == null)
-                IconButton(
-                  icon: const Icon(Icons.add),
-                  onPressed: _addChild,
-                  tooltip: 'Add Child',
-                ),
-            ],
-          ),
-          if (_child != null) ...[
-            const SizedBox(height: 8),
-            _ChildMenuItemEditor(
-              child: _child!,
-              onUpdate: _updateChild,
-              onRemove: _removeChild,
+          if (!widget.isSection) ...[
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                const Text('Mirroring Disabled: '),
+                Switch(
+                    value: _mirroringDisabled,
+                    onChanged: (value) {
+                      setState(() {
+                        _mirroringDisabled = value;
+                      });
+                    }),
+              ],
             ),
           ],
           const SizedBox(height: 16),
@@ -426,28 +412,32 @@ class _CreatePageWidgetState extends State<CreatePageWidget> {
               ),
               ElevatedButton(
                 onPressed: () {
-                  final navigationPriority =
-                      _navigationPriorityController.text.isNotEmpty
-                          ? int.tryParse(_navigationPriorityController.text)
-                          : null;
-
+                  final label = _labelController.text.trim();
+                  if (label.isEmpty) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                          content: Text('Name cannot be empty')),
+                    );
+                    return;
+                  }
                   final menuItem = MenuItem(
-                    label: _labelController.text,
-                    path: _pathController.text,
+                    label: label,
+                    path: _buildPath(label),
                     icon: _selectedIcon,
-                    children: _child != null ? [_child!] : [],
+                    // Preserve existing children from the tree structure
+                    children:
+                        widget.initialPage?.menuItem.children ?? const [],
                   );
                   final page = AssetPage(
                     menuItem: menuItem,
                     assets: widget.initialPage?.assets ?? [],
-                    mirroringDisabled:
-                        widget.initialPage?.mirroringDisabled ?? false,
-                    navigationPriority: navigationPriority,
+                    mirroringDisabled: _mirroringDisabled,
+                    navigationPriority: widget.initialPage?.navigationPriority,
                   );
                   widget.onSave(page);
                   Navigator.pop(context);
                 },
-                child: const Text('Save'),
+                child: Text(widget.initialPage != null ? 'Update' : 'Create'),
               ),
             ],
           ),
@@ -457,207 +447,120 @@ class _CreatePageWidgetState extends State<CreatePageWidget> {
   }
 }
 
-// Updated widget for editing child menu items with recursive support
-class _ChildMenuItemEditor extends StatefulWidget {
-  final MenuItem child;
-  final Function(MenuItem) onUpdate;
-  final VoidCallback onRemove;
+typedef _IconEntry = ({IconData icon, String name});
 
-  const _ChildMenuItemEditor({
-    required this.child,
-    required this.onUpdate,
-    required this.onRemove,
+class _IconPickerDialog extends StatefulWidget {
+  final List<_IconEntry> iconEntries;
+  final ValueChanged<IconData> onSelected;
+
+  const _IconPickerDialog({
+    required this.iconEntries,
+    required this.onSelected,
   });
 
   @override
-  State<_ChildMenuItemEditor> createState() => _ChildMenuItemEditorState();
+  State<_IconPickerDialog> createState() => _IconPickerDialogState();
 }
 
-class _ChildMenuItemEditorState extends State<_ChildMenuItemEditor> {
-  late TextEditingController _labelController;
-  late TextEditingController _pathController;
-  late IconData _selectedIcon;
-  bool _isExpanded = false;
+class _IconPickerDialogState extends State<_IconPickerDialog> {
+  final _searchController = TextEditingController();
+  List<_IconEntry> _filtered = [];
 
   @override
   void initState() {
     super.initState();
-    _labelController = TextEditingController(text: widget.child.label);
-    _pathController = TextEditingController(text: widget.child.path ?? '');
-    _selectedIcon = widget.child.icon;
+    _filtered = widget.iconEntries;
   }
 
   @override
   void dispose() {
-    _labelController.dispose();
-    _pathController.dispose();
+    _searchController.dispose();
     super.dispose();
   }
 
-  void _showIconPicker() {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Select Icon'),
-        content: SizedBox(
-          width: 300,
-          height: 400,
-          child: GridView.builder(
-            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-              crossAxisCount: 6,
-              childAspectRatio: 1,
-            ),
-            itemCount: iconList.length,
-            itemBuilder: (context, index) {
-              final icon = iconList[index];
-              return InkWell(
-                onTap: () {
-                  setState(() {
-                    _selectedIcon = icon;
-                  });
-                  _updateParent(); // Add this line to update the parent when icon changes
-                  Navigator.pop(context);
-                },
-                child: Icon(icon),
-              );
-            },
-          ),
-        ),
-      ),
-    );
-  }
-
-  void _updateParent() {
-    final updatedChild = MenuItem(
-      label: _labelController.text,
-      path: _pathController.text,
-      icon: _selectedIcon,
-      children: widget.child.children,
-    );
-    widget.onUpdate(updatedChild);
+  void _onSearchChanged(String query) {
+    setState(() {
+      if (query.isEmpty) {
+        _filtered = widget.iconEntries;
+        return;
+      }
+      final queryWords =
+          query.toLowerCase().split(RegExp(r'\s+')).where((w) => w.isNotEmpty);
+      _filtered = widget.iconEntries.where((entry) {
+        final name = entry.name.replaceAll('_', ' ').toLowerCase();
+        return queryWords.every((word) => name.contains(word));
+      }).toList();
+    });
   }
 
   @override
   Widget build(BuildContext context) {
-    return Card(
-      margin: const EdgeInsets.symmetric(vertical: 4),
-      child: Column(
-        children: [
-          ListTile(
-            leading: Icon(_selectedIcon),
-            title: Text(_labelController.text.isEmpty
-                ? 'New Child'
-                : _labelController.text),
-            subtitle: Text(_pathController.text.isEmpty
-                ? 'No path'
-                : _pathController.text),
-            trailing: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                IconButton(
-                  icon:
-                      Icon(_isExpanded ? Icons.expand_less : Icons.expand_more),
-                  onPressed: () {
-                    setState(() {
-                      _isExpanded = !_isExpanded;
-                    });
-                  },
-                ),
-                IconButton(
-                  icon: const Icon(Icons.delete),
-                  onPressed: widget.onRemove,
-                ),
-              ],
+    return AlertDialog(
+      title: const Text('Select Icon'),
+      content: SizedBox(
+        width: 350,
+        height: 450,
+        child: Column(
+          children: [
+            TextField(
+              controller: _searchController,
+              decoration: InputDecoration(
+                hintText: 'Search icons...',
+                prefixIcon: const Icon(Icons.search),
+                suffixIcon: _searchController.text.isNotEmpty
+                    ? IconButton(
+                        icon: const Icon(Icons.clear),
+                        onPressed: () {
+                          _searchController.clear();
+                          _onSearchChanged('');
+                        },
+                      )
+                    : null,
+                isDense: true,
+              ),
+              onChanged: _onSearchChanged,
+              autofocus: true,
             ),
-            onTap: () {
-              setState(() {
-                _isExpanded = !_isExpanded;
-              });
-            },
-          ),
-          if (_isExpanded) ...[
-            Padding(
-              padding: const EdgeInsets.all(16.0),
-              child: Column(
-                children: [
-                  TextField(
-                    controller: _labelController,
-                    decoration: const InputDecoration(labelText: 'Child Name'),
-                    onChanged: (value) => _updateParent(),
-                  ),
-                  const SizedBox(height: 8),
-                  TextField(
-                    controller: _pathController,
-                    decoration: const InputDecoration(labelText: 'Child Path'),
-                    onChanged: (value) => _updateParent(),
-                  ),
-                  const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      const Text('Icon: '),
-                      Icon(_selectedIcon),
-                      IconButton(
-                        icon: const Icon(Icons.edit),
-                        onPressed: _showIconPicker,
+            const SizedBox(height: 8),
+            Expanded(
+              child: _filtered.isEmpty
+                  ? const Center(child: Text('No icons found'))
+                  : GridView.builder(
+                      gridDelegate:
+                          const SliverGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: 5,
+                        childAspectRatio: 0.8,
                       ),
-                    ],
-                  ),
-                  // Recursive child management - this child can have its own child
-                  const SizedBox(height: 16),
-                  Row(
-                    children: [
-                      const Text('Grandchild Menu Item:'),
-                      const Spacer(),
-                      if (widget.child.children.isEmpty)
-                        IconButton(
-                          icon: const Icon(Icons.add),
-                          onPressed: () {
-                            final newGrandchild = MenuItem(
-                              label: 'New Grandchild',
-                              path: '/grandchild',
-                              icon: Icons.folder_open,
-                            );
-                            final updatedChild = MenuItem(
-                              label: _labelController.text,
-                              path: _pathController.text,
-                              icon: _selectedIcon,
-                              children: [newGrandchild],
-                            );
-                            widget.onUpdate(updatedChild);
-                          },
-                          tooltip: 'Add Grandchild',
-                        ),
-                    ],
-                  ),
-                  if (widget.child.children.isNotEmpty) ...[
-                    const SizedBox(height: 8),
-                    _ChildMenuItemEditor(
-                      child: widget.child.children.first,
-                      onUpdate: (updatedGrandchild) {
-                        final updatedChild = MenuItem(
-                          label: _labelController.text,
-                          path: _pathController.text,
-                          icon: _selectedIcon,
-                          children: [updatedGrandchild],
+                      itemCount: _filtered.length,
+                      itemBuilder: (context, index) {
+                        final entry = _filtered[index];
+                        final displayName =
+                            entry.name.replaceAll('_', ' ');
+                        return Tooltip(
+                          message: displayName,
+                          child: InkWell(
+                            onTap: () => widget.onSelected(entry.icon),
+                            borderRadius: BorderRadius.circular(8),
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(entry.icon, size: 28),
+                                const SizedBox(height: 2),
+                                Text(
+                                  displayName,
+                                  style: const TextStyle(fontSize: 9),
+                                  overflow: TextOverflow.ellipsis,
+                                  textAlign: TextAlign.center,
+                                ),
+                              ],
+                            ),
+                          ),
                         );
-                        widget.onUpdate(updatedChild);
-                      },
-                      onRemove: () {
-                        final updatedChild = MenuItem(
-                          label: _labelController.text,
-                          path: _pathController.text,
-                          icon: _selectedIcon,
-                          children: [], // Remove grandchild
-                        );
-                        widget.onUpdate(updatedChild);
                       },
                     ),
-                  ],
-                ],
-              ),
             ),
           ],
-        ],
+        ),
       ),
     );
   }

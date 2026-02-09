@@ -1,4 +1,4 @@
-import 'dart:convert'; // For JSON encoding
+import 'dart:convert';
 import 'dart:io' show Platform;
 
 import 'package:flutter/material.dart';
@@ -10,6 +10,7 @@ import '../widgets/base_scaffold.dart';
 import 'page_view.dart';
 import '../widgets/zoomable_canvas.dart';
 import '../page_creator/page.dart';
+import '../models/menu_item.dart';
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/services.dart';
@@ -31,6 +32,8 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   Map<String, AssetPage> _temporaryPages = {};
   String? _currentPage;
   String _paletteSearchQuery = '';
+  String _savedJson = '';
+  String _currentJson = '';
 
   List<Asset> get assets {
     if (_currentPage == null) {
@@ -49,9 +52,18 @@ class _PageEditorState extends ConsumerState<PageEditor> {
       setState(() {
         _temporaryPages = pageManager.copyWith().pages;
         _currentPage = pageManager.pages.keys.firstOrNull;
+        _updateCurrentJson();
+        _savedJson = _currentJson;
       });
     });
   }
+
+  void _updateCurrentJson() {
+    _currentJson = jsonEncode(
+        _temporaryPages.map((name, page) => MapEntry(name, page.toJson())));
+  }
+
+  bool get _hasUnsavedChanges => _currentJson != _savedJson;
 
   String _assetsToJson(List<Asset> theAssets) {
     return jsonEncode({
@@ -63,17 +75,21 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     final pageManager = await ref.read(pageManagerProvider.future);
     pageManager.pages = PageManager.copyPages(_temporaryPages);
     await pageManager.save();
+    setState(() {
+      _updateCurrentJson();
+      _savedJson = _currentJson;
+    });
   }
 
   void _updateState(VoidCallback fn) {
     setState(() {
       fn();
+      _updateCurrentJson();
     });
   }
 
   void _saveToHistory() {
     _undoHistory.add(PageManager.copyPages(_temporaryPages));
-
     if (_undoHistory.length > 50) {
       _undoHistory.removeAt(0);
     }
@@ -83,6 +99,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     if (_undoHistory.isNotEmpty) {
       setState(() {
         _temporaryPages = _undoHistory.removeLast();
+        _updateCurrentJson();
       });
     }
   }
@@ -135,6 +152,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
         assets.add(asset);
         _selectedAssets.add(asset);
       }
+      _updateCurrentJson();
     });
   }
 
@@ -145,6 +163,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     setState(() {
       assets.removeWhere((asset) => _selectedAssets.contains(asset));
       _selectedAssets.clear();
+      _updateCurrentJson();
     });
   }
 
@@ -206,10 +225,12 @@ class _PageEditorState extends ConsumerState<PageEditor> {
 
                       final newAsset =
                           AssetRegistry.createDefaultAsset(details.data);
+                      _saveToHistory();
                       setState(() {
                         newAsset.coordinates =
                             Coordinates(x: relativeX, y: relativeY);
                         assets.add(newAsset);
+                        _updateCurrentJson();
                       });
                     },
                     builder: (context, candidateData, rejectedData) {
@@ -357,8 +378,9 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                         FloatingActionButton(
                           mini: true,
                           heroTag: 'save',
-                          backgroundColor:
-                              Theme.of(context).colorScheme.primary,
+                          backgroundColor: _hasUnsavedChanges
+                              ? Colors.orange
+                              : Theme.of(context).colorScheme.primary,
                           onPressed: _saveToPrefs,
                           child: const Icon(Icons.save, color: Colors.white),
                         ),
@@ -546,7 +568,9 @@ class _PageEditorState extends ConsumerState<PageEditor> {
         ),
       ),
     ).then((_) {
-      setState(() {});
+      setState(() {
+        _updateCurrentJson();
+      });
     });
   }
 
@@ -580,14 +604,15 @@ class _PageEditorState extends ConsumerState<PageEditor> {
           height: (asset.size.height * factor).clamp(0.01, 1.0),
         );
       }
+      _updateCurrentJson();
     });
   }
 
   Widget _buildPageSelector() {
-    final pages = _temporaryPages;
-    final currentPage = _currentPage ?? pages.keys.firstOrNull ?? 'Empty';
+    final currentPage = _currentPage ?? _temporaryPages.keys.firstOrNull ?? 'Empty';
 
-    return PopupMenuButton<String>(
+    return GestureDetector(
+      onTap: _showPageManagerDialog,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         decoration: BoxDecoration(
@@ -604,71 +629,754 @@ class _PageEditorState extends ConsumerState<PageEditor> {
           ],
         ),
       ),
-      itemBuilder: (context) => [
-        ...pages.keys.map((pageName) => PopupMenuItem(
-              value: pageName,
-              child: Row(
+    );
+  }
+
+  /// Returns page names that are not referenced as children of any OTHER page.
+  /// Handles self-references (e.g. "IOs" entry with menuItem.label "Diagnostics"
+  /// that has child {label: "IOs"}).
+  List<String> _getRootPageNames() {
+    final childLabels = <String>{};
+    for (final entry in _temporaryPages.entries) {
+      PageManager.collectChildLabels(
+          entry.value.menuItem.children, childLabels, entry.key);
+    }
+    final roots = _temporaryPages.keys
+        .where((name) => !childLabels.contains(name))
+        .toList();
+    roots.sort((a, b) {
+      final pa = _temporaryPages[a]?.navigationPriority ?? 999;
+      final pb = _temporaryPages[b]?.navigationPriority ?? 999;
+      return pa.compareTo(pb);
+    });
+    return roots;
+  }
+
+  void _showPageManagerDialog() {
+    showDialog(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, dialogSetState) {
+          final roots = _getRootPageNames();
+          return AlertDialog(
+            title: const Text('Pages'),
+            content: SizedBox(
+              width: 550,
+              height: 550,
+              child: Column(
                 children: [
-                  Expanded(child: Text(pageName)),
-                  IconButton(
-                    icon: const Icon(Icons.edit, size: 16),
-                    onPressed: () =>
-                        _showEditPageDialog(pageName, pages[pageName]!),
+                  Text(
+                    'Tap to select. Sections are navigation groups.',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                  const SizedBox(height: 8),
+                  Expanded(
+                    child: ReorderableListView(
+                      buildDefaultDragHandles: false,
+                      onReorder: (oldIndex, newIndex) {
+                        _onReorderRoots(
+                            roots, oldIndex, newIndex, dialogSetState);
+                      },
+                      children: [
+                        for (int i = 0; i < roots.length; i++)
+                          _buildTreeNode(
+                            roots[i],
+                            dialogSetState,
+                            dialogContext,
+                            depth: 0,
+                            reorderIndex: i,
+                          ),
+                      ],
+                    ),
+                  ),
+                  const Divider(),
+                  _buildAddButtons(null, dialogSetState, dialogContext),
+                ],
+              ),
+            ),
+            actions: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      'Navigation changes require app restart.',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                            color: Theme.of(context).colorScheme.outline,
+                          ),
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () => Navigator.pop(dialogContext),
+                    child: const Text('Close'),
                   ),
                 ],
               ),
-            )),
-        const PopupMenuDivider(),
-        const PopupMenuItem(
-          value: 'add',
-          child: Row(
-            children: [
-              Icon(Icons.add),
-              SizedBox(width: 8),
-              Text('Add Page'),
             ],
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildTreeNode(
+    String pageName,
+    StateSetter dialogSetState,
+    BuildContext dialogContext, {
+    required int depth,
+    required int reorderIndex,
+  }) {
+    final page = _temporaryPages[pageName];
+    if (page == null) return SizedBox(key: ValueKey(pageName));
+
+    final isSelected = _currentPage == pageName;
+    final displayName = page.menuItem.label;
+    final hasChildren = page.menuItem.children.isNotEmpty;
+    final hasSelfRef =
+        page.menuItem.children.any((c) => c.label == pageName);
+    final isSection = (page.menuItem.path ?? '').isEmpty || hasSelfRef;
+
+    return Padding(
+      key: ValueKey(pageName),
+      padding: EdgeInsets.only(left: depth > 0 ? 20.0 : 0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          ListTile(
+            dense: true,
+            leading: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ReorderableDragStartListener(
+                  index: reorderIndex,
+                  child: const Icon(Icons.drag_handle, size: 20, color: Colors.grey),
+                ),
+                const SizedBox(width: 4),
+                Icon(
+                  page.menuItem.icon,
+                  color: isSelected && !isSection
+                      ? Theme.of(dialogContext).colorScheme.primary
+                      : null,
+                ),
+              ],
+            ),
+            title: Text(
+              displayName,
+              style: TextStyle(
+                fontWeight:
+                    isSelected && !isSection ? FontWeight.bold : FontWeight.normal,
+                color: isSelected && !isSection
+                    ? Theme.of(dialogContext).colorScheme.primary
+                    : null,
+              ),
+            ),
+            subtitle: isSection ? const Text('Section') : null,
+            selected: isSelected && !isSection,
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (isSection && depth < 3)
+                  PopupMenuButton<String>(
+                    icon: const Icon(Icons.add, size: 18),
+                    tooltip: 'Add child',
+                    onSelected: (value) {
+                      _addItem(
+                        parentName: pageName,
+                        isSection: value == 'section',
+                        dialogSetState: dialogSetState,
+                        dialogContext: dialogContext,
+                      );
+                    },
+                    itemBuilder: (context) => [
+                      const PopupMenuItem(
+                        value: 'page',
+                        child: Text('Add Page'),
+                      ),
+                      const PopupMenuItem(
+                        value: 'section',
+                        child: Text('Add Section'),
+                      ),
+                    ],
+                  )
+                else if (isSection)
+                  IconButton(
+                    icon: const Icon(Icons.add, size: 18),
+                    tooltip: 'Add page',
+                    onPressed: () => _addItem(
+                      parentName: pageName,
+                      isSection: false,
+                      dialogSetState: dialogSetState,
+                      dialogContext: dialogContext,
+                    ),
+                  ),
+                IconButton(
+                  icon: const Icon(Icons.edit, size: 18),
+                  onPressed: () => _editPage(
+                      pageName, page, dialogSetState, dialogContext),
+                  tooltip: 'Edit',
+                ),
+                IconButton(
+                  icon: const Icon(Icons.delete, size: 18),
+                  onPressed: () => _deletePage(
+                      pageName, dialogSetState, dialogContext),
+                  tooltip: 'Delete',
+                ),
+              ],
+            ),
+            onTap: isSection
+                ? null
+                : () {
+                    setState(() => _currentPage = pageName);
+                    Navigator.pop(dialogContext);
+                  },
+          ),
+          // Render children recursively with reordering
+          if (hasChildren)
+            ReorderableListView(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              buildDefaultDragHandles: false,
+              onReorder: (oldIndex, newIndex) {
+                _onReorderChildren(
+                    pageName, oldIndex, newIndex, dialogSetState);
+              },
+              children: [
+                for (int i = 0; i < page.menuItem.children.length; i++)
+                  if (page.menuItem.children[i].label == pageName)
+                    _buildSelfRefChild(
+                      page.menuItem.children[i],
+                      pageName,
+                      dialogSetState,
+                      dialogContext,
+                      depth: depth + 1,
+                      reorderIndex: i,
+                    )
+                  else
+                    _buildTreeNode(
+                      page.menuItem.children[i].label,
+                      dialogSetState,
+                      dialogContext,
+                      depth: depth + 1,
+                      reorderIndex: i,
+                    ),
+              ],
+            ),
+        ],
+      ),
+    );
+  }
+
+  /// Renders a self-referencing child as a leaf page.
+  /// E.g. the "IOs" entry has label "Diagnostics" with child {label: "IOs"}.
+  /// The child is the actual clickable page that selects this entry for editing.
+  Widget _buildSelfRefChild(
+    MenuItem childItem,
+    String mapKey,
+    StateSetter dialogSetState,
+    BuildContext dialogContext, {
+    required int depth,
+    required int reorderIndex,
+  }) {
+    final isSelected = _currentPage == mapKey;
+    final page = _temporaryPages[mapKey];
+
+    return Padding(
+      key: ValueKey('selfref-$mapKey'),
+      padding: const EdgeInsets.only(left: 20.0),
+      child: ListTile(
+        dense: true,
+        leading: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ReorderableDragStartListener(
+              index: reorderIndex,
+              child: const Icon(Icons.drag_handle, size: 20, color: Colors.grey),
+            ),
+            const SizedBox(width: 4),
+            Icon(
+              childItem.icon,
+              color: isSelected
+                  ? Theme.of(dialogContext).colorScheme.primary
+                  : null,
+            ),
+          ],
+        ),
+        title: Text(
+          childItem.label,
+          style: TextStyle(
+            fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+            color: isSelected
+                ? Theme.of(dialogContext).colorScheme.primary
+                : null,
+          ),
+        ),
+        selected: isSelected,
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (page != null)
+              IconButton(
+                icon: const Icon(Icons.edit, size: 18),
+                onPressed: () => _editSelfRefChild(
+                    mapKey, childItem, dialogSetState, dialogContext),
+                tooltip: 'Edit',
+              ),
+            IconButton(
+              icon: const Icon(Icons.delete, size: 18),
+              onPressed: () =>
+                  _deletePage(mapKey, dialogSetState, dialogContext),
+              tooltip: 'Delete',
+            ),
+          ],
+        ),
+        onTap: () {
+          setState(() => _currentPage = mapKey);
+          Navigator.pop(dialogContext);
+        },
+      ),
+    );
+  }
+
+  void _onReorderRoots(
+    List<String> roots,
+    int oldIndex,
+    int newIndex,
+    StateSetter dialogSetState,
+  ) {
+    if (oldIndex < newIndex) newIndex -= 1;
+    setState(() {
+      final movedName = roots[oldIndex];
+      roots.removeAt(oldIndex);
+      roots.insert(newIndex, movedName);
+      for (int i = 0; i < roots.length; i++) {
+        final page = _temporaryPages[roots[i]]!;
+        _temporaryPages[roots[i]] = AssetPage(
+          menuItem: page.menuItem,
+          assets: page.assets,
+          mirroringDisabled: page.mirroringDisabled,
+          navigationPriority: i,
+        );
+      }
+      _updateCurrentJson();
+    });
+    dialogSetState(() {});
+  }
+
+  void _onReorderChildren(
+    String parentName,
+    int oldIndex,
+    int newIndex,
+    StateSetter dialogSetState,
+  ) {
+    if (oldIndex < newIndex) newIndex -= 1;
+    setState(() {
+      final parent = _temporaryPages[parentName]!;
+      final children = List<MenuItem>.from(parent.menuItem.children);
+      final moved = children.removeAt(oldIndex);
+      children.insert(newIndex, moved);
+      _temporaryPages[parentName] = AssetPage(
+        menuItem: MenuItem(
+          label: parent.menuItem.label,
+          path: parent.menuItem.path,
+          icon: parent.menuItem.icon,
+          children: children,
+        ),
+        assets: parent.assets,
+        mirroringDisabled: parent.mirroringDisabled,
+        navigationPriority: parent.navigationPriority,
+      );
+      // Update navigationPriority on each child page
+      for (int i = 0; i < children.length; i++) {
+        final childPage = _temporaryPages[children[i].label];
+        if (childPage != null) {
+          _temporaryPages[children[i].label] = AssetPage(
+            menuItem: childPage.menuItem,
+            assets: childPage.assets,
+            mirroringDisabled: childPage.mirroringDisabled,
+            navigationPriority: i,
+          );
+        }
+      }
+      _updateCurrentJson();
+    });
+    dialogSetState(() {});
+  }
+
+  /// Edit a self-referencing child's properties (label, path, icon).
+  /// Updates both the child MenuItem in the parent and the map entry.
+  void _editSelfRefChild(
+    String mapKey,
+    MenuItem childItem,
+    StateSetter dialogSetState,
+    BuildContext dialogContext,
+  ) {
+    final page = _temporaryPages[mapKey]!;
+    // Create a temporary AssetPage with the child's MenuItem for editing
+    final childPage = AssetPage(
+      menuItem: childItem,
+      assets: page.assets,
+      mirroringDisabled: page.mirroringDisabled,
+      navigationPriority: page.navigationPriority,
+    );
+
+    showDialog(
+      context: dialogContext,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Edit Page'),
+        content: SizedBox(
+          width: 400,
+          child: CreatePageWidget(
+            initialPage: childPage,
+            basePath: _buildBasePath(mapKey),
+            onSave: (updatedPage) {
+              setState(() {
+                final newLabel = updatedPage.menuItem.label;
+                // Update the child MenuItem in the parent's children list
+                final parentPage = _temporaryPages[mapKey]!;
+                final updatedChildren =
+                    parentPage.menuItem.children.map((c) {
+                  if (c.label == childItem.label) {
+                    return MenuItem(
+                      label: newLabel,
+                      path: updatedPage.menuItem.path,
+                      icon: updatedPage.menuItem.icon,
+                      children: c.children,
+                    );
+                  }
+                  return c;
+                }).toList();
+                _temporaryPages[mapKey] = AssetPage(
+                  menuItem: MenuItem(
+                    label: parentPage.menuItem.label,
+                    path: parentPage.menuItem.path,
+                    icon: parentPage.menuItem.icon,
+                    children: updatedChildren,
+                  ),
+                  assets: parentPage.assets,
+                  mirroringDisabled: updatedPage.mirroringDisabled,
+                  navigationPriority: updatedPage.navigationPriority,
+                );
+                _updateCurrentJson();
+              });
+              dialogSetState(() {});
+            },
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildAddButtons(
+    String? parentName,
+    StateSetter dialogSetState,
+    BuildContext dialogContext, {
+    int depth = 0,
+  }) {
+    if (depth >= 3) return const SizedBox.shrink();
+
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        TextButton.icon(
+          icon: const Icon(Icons.add, size: 16),
+          label: const Text('Page'),
+          onPressed: () => _addItem(
+            parentName: parentName,
+            isSection: false,
+            dialogSetState: dialogSetState,
+            dialogContext: dialogContext,
+          ),
+        ),
+        TextButton.icon(
+          icon: const Icon(Icons.create_new_folder, size: 16),
+          label: const Text('Section'),
+          onPressed: () => _addItem(
+            parentName: parentName,
+            isSection: true,
+            dialogSetState: dialogSetState,
+            dialogContext: dialogContext,
           ),
         ),
       ],
-      onSelected: (value) {
-        if (value == 'add') {
-          _showCreatePageDialog();
-        } else {
-          setState(() {
-            _currentPage = value;
-          });
-        }
-      },
     );
   }
 
-  void _showCreatePageDialog() {
+  String _buildBasePath(String? parentName) {
+    if (parentName == null) return '';
+    final segments = <String>[];
+    String? current = parentName;
+    final visited = <String>{};
+    while (current != null && !visited.contains(current)) {
+      visited.add(current);
+      final page = _temporaryPages[current];
+      if (page == null) break;
+      final path = page.menuItem.path ?? '';
+      if (path.isNotEmpty) {
+        segments.insertAll(
+            0, path.split('/').where((s) => s.isNotEmpty).toList());
+        break;
+      }
+      // Section without path — use label as slug
+      segments.insert(0, _slugify(page.menuItem.label));
+      current = _findParentOf(current);
+    }
+    if (segments.isEmpty) return '';
+    return '/${segments.join('/')}';
+  }
+
+  String? _findParentOf(String childName) {
+    for (final entry in _temporaryPages.entries) {
+      if (entry.key != childName &&
+          entry.value.menuItem.children.any((c) => c.label == childName)) {
+        return entry.key;
+      }
+    }
+    return null;
+  }
+
+  static String _slugify(String text) {
+    return text
+        .trim()
+        .toLowerCase()
+        .replaceAll(RegExp(r'[^a-z0-9\s]'), '')
+        .replaceAll(RegExp(r'\s+'), '-');
+  }
+
+  void _addItem({
+    required String? parentName,
+    required bool isSection,
+    required StateSetter dialogSetState,
+    required BuildContext dialogContext,
+  }) {
     showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Create Page'),
-        content: CreatePageWidget(
+      context: dialogContext,
+      builder: (ctx) => AlertDialog(
+        title: Text(isSection ? 'Add Section' : 'Add Page'),
+        content: SizedBox(
+          width: 400,
+          child: CreatePageWidget(
+          isSection: isSection,
+          basePath: isSection ? '' : _buildBasePath(parentName),
           onSave: (page) {
-            _temporaryPages[page.menuItem.label] = page;
+            setState(() {
+              // Auto-assign priority: put at end of its level
+              final int priority;
+              if (parentName != null) {
+                final parent = _temporaryPages[parentName];
+                priority = parent?.menuItem.children.length ?? 0;
+              } else {
+                priority = _getRootPageNames().length;
+              }
+              final pageWithPriority = AssetPage(
+                menuItem: page.menuItem,
+                assets: page.assets,
+                mirroringDisabled: page.mirroringDisabled,
+                navigationPriority: priority,
+              );
+              _temporaryPages[pageWithPriority.menuItem.label] = pageWithPriority;
+              // Add as child of parent if specified
+              if (parentName != null) {
+                final parent = _temporaryPages[parentName];
+                if (parent != null) {
+                  final updatedChildren =
+                      List<MenuItem>.from(parent.menuItem.children)
+                        ..add(pageWithPriority.menuItem);
+                  _temporaryPages[parentName] = AssetPage(
+                    menuItem: MenuItem(
+                      label: parent.menuItem.label,
+                      path: parent.menuItem.path,
+                      icon: parent.menuItem.icon,
+                      children: updatedChildren,
+                    ),
+                    assets: parent.assets,
+                    mirroringDisabled: parent.mirroringDisabled,
+                    navigationPriority: parent.navigationPriority,
+                  );
+                }
+              }
+              if (!isSection) {
+                _currentPage = pageWithPriority.menuItem.label;
+              }
+              _updateCurrentJson();
+            });
+            dialogSetState(() {});
           },
+        ),
         ),
       ),
     );
   }
 
-  void _showEditPageDialog(String pageName, AssetPage page) {
+  void _editPage(
+    String pageName,
+    AssetPage page,
+    StateSetter dialogSetState,
+    BuildContext dialogContext,
+  ) {
     showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Edit Page'),
-        content: CreatePageWidget(
-          initialPage: page,
-          onSave: (updatedPage) {
-            _temporaryPages[pageName] = updatedPage;
-          },
+      context: dialogContext,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Edit'),
+        content: SizedBox(
+          width: 400,
+          child: CreatePageWidget(
+            initialPage: page,
+            isSection: (page.menuItem.path ?? '').isEmpty,
+            basePath: _buildBasePath(_findParentOf(pageName)),
+            onSave: (updatedPage) {
+              setState(() {
+                final newName = updatedPage.menuItem.label;
+                if (newName != pageName) {
+                  _temporaryPages.remove(pageName);
+                  // Update parent references
+                  _renameChildInParents(pageName, newName);
+                  if (_currentPage == pageName) {
+                    _currentPage = newName;
+                  }
+                }
+                _temporaryPages[newName] = updatedPage;
+                _updateCurrentJson();
+              });
+              dialogSetState(() {});
+            },
+          ),
         ),
       ),
     );
+  }
+
+  void _renameChildInParents(String oldName, String newName) {
+    final updates = <String, AssetPage>{};
+    for (final entry in _temporaryPages.entries) {
+      final page = entry.value;
+      final updated = _renameInChildren(page.menuItem.children, oldName, newName);
+      if (updated != null) {
+        updates[entry.key] = AssetPage(
+          menuItem: MenuItem(
+            label: page.menuItem.label,
+            path: page.menuItem.path,
+            icon: page.menuItem.icon,
+            children: updated,
+          ),
+          assets: page.assets,
+          mirroringDisabled: page.mirroringDisabled,
+          navigationPriority: page.navigationPriority,
+        );
+      }
+    }
+    _temporaryPages.addAll(updates);
+  }
+
+  List<MenuItem>? _renameInChildren(
+      List<MenuItem> children, String oldName, String newName) {
+    bool changed = false;
+    final result = children.map((child) {
+      MenuItem updated = child;
+      if (child.label == oldName) {
+        changed = true;
+        final newPage = _temporaryPages[newName];
+        updated = MenuItem(
+          label: newName,
+          path: newPage?.menuItem.path ?? child.path,
+          icon: newPage?.menuItem.icon ?? child.icon,
+          children: child.children,
+        );
+      }
+      final subUpdated = _renameInChildren(updated.children, oldName, newName);
+      if (subUpdated != null) {
+        changed = true;
+        updated = MenuItem(
+          label: updated.label,
+          path: updated.path,
+          icon: updated.icon,
+          children: subUpdated,
+        );
+      }
+      return updated;
+    }).toList();
+    return changed ? result : null;
+  }
+
+  void _deletePage(
+    String pageName,
+    StateSetter dialogSetState,
+    BuildContext dialogContext,
+  ) {
+    showDialog(
+      context: dialogContext,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete'),
+        content: Text('Delete "$pageName"?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () {
+              setState(() {
+                _temporaryPages.remove(pageName);
+                // Remove from parent children lists
+                _removeChildFromParents(pageName);
+                if (_currentPage == pageName) {
+                  _currentPage = _temporaryPages.keys.firstOrNull;
+                }
+                _updateCurrentJson();
+              });
+              dialogSetState(() {});
+              Navigator.pop(ctx);
+            },
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _removeChildFromParents(String name) {
+    final updates = <String, AssetPage>{};
+    for (final entry in _temporaryPages.entries) {
+      final page = entry.value;
+      final updated = _removeFromChildren(page.menuItem.children, name);
+      if (updated != null) {
+        updates[entry.key] = AssetPage(
+          menuItem: MenuItem(
+            label: page.menuItem.label,
+            path: page.menuItem.path,
+            icon: page.menuItem.icon,
+            children: updated,
+          ),
+          assets: page.assets,
+          mirroringDisabled: page.mirroringDisabled,
+          navigationPriority: page.navigationPriority,
+        );
+      }
+    }
+    _temporaryPages.addAll(updates);
+  }
+
+  List<MenuItem>? _removeFromChildren(List<MenuItem> children, String name) {
+    bool changed = false;
+    final result = <MenuItem>[];
+    for (final child in children) {
+      if (child.label == name) {
+        changed = true;
+        continue;
+      }
+      final subUpdated = _removeFromChildren(child.children, name);
+      if (subUpdated != null) {
+        changed = true;
+        result.add(MenuItem(
+          label: child.label,
+          path: child.path,
+          icon: child.icon,
+          children: subUpdated,
+        ));
+      } else {
+        result.add(child);
+      }
+    }
+    return changed ? result : null;
   }
 }
 

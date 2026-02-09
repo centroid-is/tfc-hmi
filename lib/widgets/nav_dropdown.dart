@@ -34,7 +34,8 @@ class TopLevelNavIndicator extends StatelessWidget {
 }
 
 class NavDropdown extends StatelessWidget {
-  static const double itemHeight = 56.0;
+  static const double itemHeight = 48.0;
+  static const double menuWidth = 260.0;
   final MenuItem menuItem;
 
   const NavDropdown({
@@ -54,34 +55,60 @@ class NavDropdown extends StatelessWidget {
     return null;
   }
 
-  PopupMenuItem<MenuItem> buildMenu(MenuItem root, BuildContext context) {
-    if (root.children.isNotEmpty) {
-      // Allow each child to build it's own list
-      final children =
-          root.children.map((child) => buildMenu(child, context)).toList();
-      return PopupMenuItem<MenuItem>(
-        height: NavDropdown.itemHeight,
-        child: ExpansionTile(
-          leading: Icon(root.icon),
-          title: Text(
-            root.label,
+  /// Flattens the menu tree into indented PopupMenuItems.
+  /// Sections (items with children) appear as disabled headers;
+  /// leaf pages are clickable.
+  List<PopupMenuEntry<MenuItem>> buildFlatMenu(MenuItem root, {int depth = 0}) {
+    final items = <PopupMenuEntry<MenuItem>>[];
+    for (final child in root.children) {
+      final indent = EdgeInsets.only(left: depth * 16.0);
+      if (child.children.isNotEmpty) {
+        // Section header (not clickable)
+        items.add(PopupMenuItem<MenuItem>(
+          enabled: false,
+          height: NavDropdown.itemHeight,
+          child: Padding(
+            padding: indent,
+            child: Row(
+              children: [
+                Icon(child.icon, size: 20),
+                const SizedBox(width: 12),
+                Text(child.label, style: const TextStyle(fontWeight: FontWeight.bold)),
+              ],
+            ),
           ),
-          children: children,
-        ),
-      );
-    } else {
-      // Node has no children. Return simple listtile
-      return PopupMenuItem<MenuItem>(
-        height: NavDropdown.itemHeight,
-        value: root,
-        child: ListTile(
-          leading: Icon(root.icon),
-          title: Text(
-            root.label,
+        ));
+        items.addAll(buildFlatMenu(child, depth: depth + 1));
+      } else {
+        items.add(PopupMenuItem<MenuItem>(
+          height: NavDropdown.itemHeight,
+          value: child,
+          child: Padding(
+            padding: indent,
+            child: Row(
+              children: [
+                Icon(child.icon, size: 20),
+                const SizedBox(width: 12),
+                Flexible(child: Text(child.label, overflow: TextOverflow.ellipsis)),
+              ],
+            ),
           ),
-        ),
-      );
+        ));
+      }
     }
+    return items;
+  }
+
+  /// Recursively counts all items (sections + pages) in the tree.
+  int _countAllItems(MenuItem item) {
+    int count = 0;
+    for (final child in item.children) {
+      count += 1;
+      if (child.children.isNotEmpty) {
+        count += _countAllItems(child);
+      }
+    }
+    return count;
   }
 
   @override
@@ -97,32 +124,38 @@ class NavDropdown extends StatelessWidget {
       builder: (innerContext) {
         return InkWell(
           onTap: () async {
-            // Calculate dynamic upward offset so menu appears above nav bar
-            final totalItems = menuItem.children.length;
+            final totalItems = _countAllItems(menuItem);
             final menuHeight = totalItems * NavDropdown.itemHeight;
             final RenderBox button =
                 innerContext.findRenderObject() as RenderBox;
             final RenderBox overlay = Overlay.of(innerContext)
                 .context
                 .findRenderObject() as RenderBox;
-            final origin = button.localToGlobal(Offset.zero, ancestor: overlay);
-            final bottomRight = button.localToGlobal(
-              button.size.bottomRight(Offset.zero),
-              ancestor: overlay,
+            final buttonPos =
+                button.localToGlobal(Offset.zero, ancestor: overlay);
+            final overlaySize = overlay.size;
+
+            // Center the popup horizontally over the nav item
+            final buttonCenterX = buttonPos.dx + button.size.width / 2;
+            final menuLeft = (buttonCenterX - menuWidth / 2)
+                .clamp(0.0, overlaySize.width - menuWidth);
+            final menuTop = buttonPos.dy - menuHeight;
+
+            final position = RelativeRect.fromLTRB(
+              menuLeft,
+              menuTop,
+              overlaySize.width - menuLeft - menuWidth,
+              overlaySize.height - buttonPos.dy,
             );
-            final shiftedRect =
-                Rect.fromPoints(origin, bottomRight).translate(0, -menuHeight);
-            final RelativeRect position = RelativeRect.fromRect(
-              shiftedRect,
-              Offset.zero & overlay.size,
-            );
-            // Show the menu and wait until it's fully closed
+
             final MenuItem? selectedItem = await showMenu<MenuItem>(
               context: parentContext,
               position: position,
-              items: menuItem.children
-                  .map((node) => buildMenu(node, innerContext))
-                  .toList(),
+              items: buildFlatMenu(menuItem),
+              constraints: const BoxConstraints(
+                minWidth: menuWidth,
+                maxWidth: menuWidth,
+              ),
             );
             if (selectedItem != null) {
               // todo get rid of the warning
