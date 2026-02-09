@@ -1,7 +1,7 @@
 import 'dart:io';
 import 'dart:async';
 import 'dart:convert';
-import 'package:drift/drift.dart' show QueryRow;
+import 'package:drift/drift.dart' show QueryRow, Variable;
 import 'package:postgres/postgres.dart' as pg;
 import 'package:postgres/postgres.dart' show Endpoint, SslMode;
 import 'package:json_annotation/json_annotation.dart' as json;
@@ -661,6 +661,140 @@ class Database {
     }
 
     throw DatabaseException('Time column not found in table $tableName');
+  }
+
+  /// Query time-series data with server-side downsampling using TimescaleDB time_bucket().
+  ///
+  /// For each bucket, returns 3 points: min value, max value, and last value,
+  /// preserving spikes and step changes while reducing density.
+  ///
+  /// The bucket interval is auto-calculated from the time range and [maxPoints]:
+  ///   bucketInterval = (to - from) / (maxPoints / 3)
+  ///
+  /// Supports scalar numeric columns (DOUBLE PRECISION, INTEGER) and
+  /// numeric array columns (DOUBLE PRECISION[]). For unsupported column types
+  /// (boolean, text, jsonb), falls back to the raw query.
+  Future<List<TimeseriesData<dynamic>>> queryTimeseriesDataDownsampled(
+      String tableName, DateTime from, DateTime to,
+      {int maxPoints = 1000}) async {
+    final startTime = from.isBefore(to) ? from : to;
+    final endTime = from.isBefore(to) ? to : from;
+    final rangeMs = endTime.difference(startTime).inMilliseconds;
+
+    // If the range is tiny, just return raw data
+    if (rangeMs <= 0) {
+      return queryTimeseriesData(tableName, endTime, from: startTime);
+    }
+
+    // Each bucket produces 3 points (min, max, last), so we need maxPoints/3 buckets
+    final numBuckets = (maxPoints / 3).floor();
+    if (numBuckets <= 0) {
+      return queryTimeseriesData(tableName, endTime, from: startTime);
+    }
+
+    final bucketMs = (rangeMs / numBuckets).ceil();
+    final intervalStr = '$bucketMs milliseconds';
+    final quotedTable = tableName.replaceAll('"', '""');
+
+    // Detect column type to choose the right SQL
+    final typeResult = await db.customSelect(
+      r'''
+      SELECT data_type, udt_name
+      FROM information_schema.columns
+      WHERE table_name = $1 AND column_name = 'value'
+      ''',
+      variables: [Variable.withString(tableName)],
+    ).get();
+
+    if (typeResult.isEmpty) {
+      return queryTimeseriesData(tableName, endTime, from: startTime);
+    }
+
+    final dataType = typeResult.first.data['data_type'] as String;
+    final udtName = typeResult.first.data['udt_name'] as String;
+    final isArray = dataType == 'ARRAY' || udtName.startsWith('_');
+
+    // Only support numeric types
+    const scalarNumericTypes = {'double precision', 'integer', 'bigint', 'real', 'smallint', 'numeric'};
+    const arrayNumericUdts = {'_float8', '_float4', '_int4', '_int8', '_int2', '_numeric'};
+    if (!scalarNumericTypes.contains(dataType) && !arrayNumericUdts.contains(udtName)) {
+      return queryTimeseriesData(tableName, endTime, from: startTime);
+    }
+
+    final String sql;
+    if (isArray) {
+      // Unnest array elements, aggregate per-index, re-assemble arrays
+      sql = r'''
+        WITH elements AS (
+          SELECT
+            time,
+            val,
+            idx
+          FROM "''' + quotedTable + r'''"
+          CROSS JOIN LATERAL unnest(value) WITH ORDINALITY AS t(val, idx)
+          WHERE time >= $2::timestamptz AND time <= $3::timestamptz
+        ),
+        agg AS (
+          SELECT
+            time_bucket($1::interval, time) AS bucket,
+            idx,
+            min(val)                                   AS min_val,
+            max(val)                                   AS max_val,
+            (array_agg(val ORDER BY time DESC))[1]     AS last_val
+          FROM elements
+          GROUP BY bucket, idx
+        )
+        SELECT bucket AS time, array_agg(min_val ORDER BY idx) AS value FROM agg GROUP BY bucket
+        UNION ALL
+        SELECT bucket + $1::interval * 0.5, array_agg(max_val ORDER BY idx) FROM agg GROUP BY bucket
+        UNION ALL
+        SELECT bucket + $1::interval, array_agg(last_val ORDER BY idx) FROM agg GROUP BY bucket
+        ORDER BY 1
+      ''';
+    } else {
+      sql = r'''
+        WITH agg AS (
+          SELECT
+            time_bucket($1::interval, time) AS bucket,
+            min(value)                                   AS min_val,
+            max(value)                                   AS max_val,
+            (array_agg(value ORDER BY time DESC))[1]     AS last_val
+          FROM "''' + quotedTable + r'''"
+          WHERE time >= $2::timestamptz AND time <= $3::timestamptz
+          GROUP BY bucket
+        )
+        SELECT bucket              AS time, min_val  AS value FROM agg
+        UNION ALL
+        SELECT bucket + $1::interval * 0.5,  max_val  AS value FROM agg
+        UNION ALL
+        SELECT bucket + $1::interval,         last_val AS value FROM agg
+        ORDER BY 1
+      ''';
+    }
+
+    final result = await db.customSelect(sql, variables: [
+      Variable.withString(intervalStr),
+      Variable.withString(startTime.toUtc().toIso8601String()),
+      Variable.withString(endTime.toUtc().toIso8601String()),
+    ]).get();
+
+    if (result.isEmpty) {
+      return [];
+    }
+
+    return result.map((row) {
+      final rawTime = row.data['time'];
+      final DateTime time;
+      if (rawTime is DateTime) {
+        time = rawTime;
+      } else if (rawTime is String) {
+        time = DateTime.parse(rawTime);
+      } else {
+        throw DatabaseException(
+            'Unexpected time format: ${rawTime.runtimeType}');
+      }
+      return TimeseriesData(row.data['value'], time);
+    }).toList();
   }
 
   /// columns: {tableName: columnName}

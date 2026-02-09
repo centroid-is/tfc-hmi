@@ -497,6 +497,415 @@ void main() {
       });
     });
 
+    group('Downsampled Query', () {
+      setUp(() async {
+        await database.registerRetentionPolicy(testTableName,
+            const RetentionPolicy(dropAfter: Duration(hours: 2)));
+      });
+
+      tearDown(() async {
+        await database.flush();
+        await database.db
+            .customStatement('DROP TABLE IF EXISTS "$testTableName" CASCADE');
+      });
+
+      test('should downsample 100 points to ~30 using time_bucket', () async {
+        final baseTime = DateTime.now().subtract(const Duration(minutes: 60));
+
+        // Insert 100 points over 60 minutes (~36s apart)
+        for (int i = 0; i < 100; i++) {
+          final t = baseTime.add(Duration(seconds: i * 36));
+          await database.insertTimeseriesData(
+              testTableName, t, (i % 20).toDouble());
+        }
+        await database.flush();
+
+        final from = baseTime.subtract(const Duration(seconds: 1));
+        final to = baseTime.add(const Duration(minutes: 61));
+
+        // Request maxPoints=30 → 10 buckets × 3 points = 30
+        final result = await database.queryTimeseriesDataDownsampled(
+            testTableName, from, to,
+            maxPoints: 30);
+
+        // Should get ~30 points (10 buckets * 3), not 100
+        expect(result.length, lessThanOrEqualTo(33)); // small tolerance
+        expect(result.length, greaterThan(3)); // at least one bucket
+
+        // Results should be time-ordered
+        for (int i = 1; i < result.length; i++) {
+          expect(result[i].time.millisecondsSinceEpoch,
+              greaterThanOrEqualTo(result[i - 1].time.millisecondsSinceEpoch));
+        }
+
+        // All values should be doubles
+        for (final point in result) {
+          expect(point.value, isA<double>());
+        }
+      });
+
+      test('should preserve min/max spike in downsampled output', () async {
+        final baseTime = DateTime.now().subtract(const Duration(minutes: 60));
+
+        // Insert 60 points: all 10.0 except one spike at 999.0
+        for (int i = 0; i < 60; i++) {
+          final t = baseTime.add(Duration(minutes: i));
+          final value = (i == 30) ? 999.0 : 10.0;
+          await database.insertTimeseriesData(testTableName, t, value);
+        }
+        await database.flush();
+
+        final from = baseTime.subtract(const Duration(seconds: 1));
+        final to = baseTime.add(const Duration(minutes: 61));
+
+        // Downsample to 15 points (5 buckets)
+        final result = await database.queryTimeseriesDataDownsampled(
+            testTableName, from, to,
+            maxPoints: 15);
+
+        // The spike at 999.0 must be preserved as a max value
+        final values = result.map((r) => r.value as double).toList();
+        expect(values, contains(999.0));
+
+        // The min value of 10.0 should also be present
+        expect(values, contains(10.0));
+      });
+
+      test('should return empty list for empty table', () async {
+        // Create the table by inserting and removing
+        await database.insertTimeseriesData(
+            testTableName, DateTime.now(), 1.0);
+        await database.flush();
+        await database.db.customStatement(
+            'DELETE FROM "$testTableName"');
+
+        final result = await database.queryTimeseriesDataDownsampled(
+            testTableName,
+            DateTime.now().subtract(const Duration(hours: 1)),
+            DateTime.now());
+
+        expect(result, isEmpty);
+      });
+
+      test('should downsample array columns per-element', () async {
+        final baseTime = DateTime.now().subtract(const Duration(minutes: 60));
+
+        // Insert 30 array data points over 60 minutes
+        for (int i = 0; i < 30; i++) {
+          final t = baseTime.add(Duration(minutes: i * 2));
+          // Array with 3 elements, middle element spikes at i==15
+          await database.insertTimeseriesData(testTableName, t, [
+            (i % 5).toDouble(),
+            i == 15 ? 999.0 : 10.0,
+            50.0 + i,
+          ]);
+        }
+        await database.flush();
+
+        final from = baseTime.subtract(const Duration(seconds: 1));
+        final to = baseTime.add(const Duration(minutes: 61));
+
+        final result = await database.queryTimeseriesDataDownsampled(
+            testTableName, from, to,
+            maxPoints: 15);
+
+        // Should get downsampled results, not all 30 raw rows
+        expect(result.length, lessThan(30));
+        expect(result.length, greaterThan(3));
+
+        // Results should be time-ordered
+        for (int i = 1; i < result.length; i++) {
+          expect(result[i].time.millisecondsSinceEpoch,
+              greaterThanOrEqualTo(result[i - 1].time.millisecondsSinceEpoch));
+        }
+
+        // Each value should be a list with 3 elements
+        for (final point in result) {
+          expect(point.value, isA<List>());
+          final arr = point.value as List;
+          expect(arr.length, 3);
+        }
+
+        // The spike at 999.0 should be preserved in element [1]
+        final allElement1 =
+            result.map((r) => (r.value as List)[1] as double).toList();
+        expect(allElement1, contains(999.0));
+      });
+
+      test('should return correct min, max, and last per bucket', () async {
+        // Use a time range that fits exactly 1 bucket when maxPoints=3
+        final baseTime =
+            DateTime.now().subtract(const Duration(minutes: 10));
+
+        // Insert 5 values within a small window (all within 1 bucket):
+        //   t+0: 5.0, t+1: 2.0, t+2: 8.0, t+3: 3.0, t+4: 6.0
+        // Expected per bucket: min=2.0, max=8.0, last=6.0
+        final values = [5.0, 2.0, 8.0, 3.0, 6.0];
+        for (int i = 0; i < values.length; i++) {
+          final t = baseTime.add(Duration(minutes: i));
+          await database.insertTimeseriesData(testTableName, t, values[i]);
+        }
+        await database.flush();
+
+        final from = baseTime.subtract(const Duration(seconds: 1));
+        final to = baseTime.add(const Duration(minutes: 10));
+
+        // maxPoints=3 → 1 bucket → 3 points (min, max, last)
+        final result = await database.queryTimeseriesDataDownsampled(
+            testTableName, from, to,
+            maxPoints: 3);
+
+        // Should get exactly 3 points from 1 bucket
+        expect(result.length, 3);
+
+        final resultValues =
+            result.map((r) => r.value as double).toList();
+
+        // The three points should be: min=2.0 (at bucket), max=8.0 (at bucket+0.5*interval), last=6.0 (at bucket+interval)
+        expect(resultValues[0], 2.0, reason: 'First point should be min');
+        expect(resultValues[1], 8.0, reason: 'Second point should be max');
+        expect(resultValues[2], 6.0, reason: 'Third point should be last');
+
+        // Timestamps should be strictly ordered
+        expect(result[0].time.isBefore(result[1].time), isTrue,
+            reason: 'min timestamp < max timestamp');
+        expect(result[1].time.isBefore(result[2].time), isTrue,
+            reason: 'max timestamp < last timestamp');
+      });
+
+      test('should fall back to raw query for boolean columns', () async {
+        final baseTime = DateTime.now().subtract(const Duration(minutes: 10));
+
+        for (int i = 0; i < 10; i++) {
+          final t = baseTime.add(Duration(minutes: i));
+          await database.insertTimeseriesData(
+              testTableName, t, i.isEven);
+        }
+        await database.flush();
+
+        // Should not throw, should fall back to raw query
+        final result = await database.queryTimeseriesDataDownsampled(
+            testTableName,
+            baseTime.subtract(const Duration(seconds: 1)),
+            baseTime.add(const Duration(minutes: 11)),
+            maxPoints: 6);
+
+        // Falls back to raw → returns all 10 points
+        expect(result.length, 10);
+      });
+
+      test('should handle swapped from/to arguments', () async {
+        final baseTime = DateTime.now().subtract(const Duration(minutes: 10));
+        final values = [1.0, 5.0, 3.0];
+        for (int i = 0; i < values.length; i++) {
+          final t = baseTime.add(Duration(minutes: i));
+          await database.insertTimeseriesData(testTableName, t, values[i]);
+        }
+        await database.flush();
+
+        final from = baseTime.subtract(const Duration(seconds: 1));
+        final to = baseTime.add(const Duration(minutes: 10));
+
+        // Pass to before from — should still work
+        final result = await database.queryTimeseriesDataDownsampled(
+            testTableName, to, from,
+            maxPoints: 3);
+
+        expect(result.length, 3);
+        final resultValues = result.map((r) => r.value as double).toList();
+        expect(resultValues[0], 1.0, reason: 'min');
+        expect(resultValues[1], 5.0, reason: 'max');
+        expect(resultValues[2], 3.0, reason: 'last');
+      });
+
+      test('should handle single data point', () async {
+        final baseTime = DateTime.now().subtract(const Duration(minutes: 5));
+        await database.insertTimeseriesData(testTableName, baseTime, 42.0);
+        await database.flush();
+
+        final result = await database.queryTimeseriesDataDownsampled(
+            testTableName,
+            baseTime.subtract(const Duration(minutes: 1)),
+            baseTime.add(const Duration(minutes: 1)),
+            maxPoints: 3);
+
+        // 1 bucket → 3 points, but min=max=last=42.0
+        expect(result.length, 3);
+        for (final point in result) {
+          expect(point.value, 42.0);
+        }
+      });
+
+      test('should handle all identical values', () async {
+        final baseTime = DateTime.now().subtract(const Duration(minutes: 10));
+        for (int i = 0; i < 20; i++) {
+          final t = baseTime.add(Duration(seconds: i * 30));
+          await database.insertTimeseriesData(testTableName, t, 7.0);
+        }
+        await database.flush();
+
+        final result = await database.queryTimeseriesDataDownsampled(
+            testTableName,
+            baseTime.subtract(const Duration(seconds: 1)),
+            baseTime.add(const Duration(minutes: 11)),
+            maxPoints: 9);
+
+        expect(result, isNotEmpty);
+        // Every point should be 7.0 since min=max=last=7.0
+        for (final point in result) {
+          expect(point.value, 7.0);
+        }
+      });
+
+      test('should handle negative values correctly', () async {
+        final baseTime = DateTime.now().subtract(const Duration(minutes: 10));
+        // Insert: -10, 5, -20, 15, -3
+        final values = [-10.0, 5.0, -20.0, 15.0, -3.0];
+        for (int i = 0; i < values.length; i++) {
+          final t = baseTime.add(Duration(minutes: i));
+          await database.insertTimeseriesData(testTableName, t, values[i]);
+        }
+        await database.flush();
+
+        final result = await database.queryTimeseriesDataDownsampled(
+            testTableName,
+            baseTime.subtract(const Duration(seconds: 1)),
+            baseTime.add(const Duration(minutes: 10)),
+            maxPoints: 3);
+
+        expect(result.length, 3);
+        final resultValues = result.map((r) => r.value as double).toList();
+        expect(resultValues[0], -20.0, reason: 'min should be -20.0');
+        expect(resultValues[1], 15.0, reason: 'max should be 15.0');
+        expect(resultValues[2], -3.0, reason: 'last should be -3.0');
+      });
+
+      test('should fallback when maxPoints is 1 or 2', () async {
+        final baseTime = DateTime.now().subtract(const Duration(minutes: 10));
+        for (int i = 0; i < 5; i++) {
+          final t = baseTime.add(Duration(minutes: i));
+          await database.insertTimeseriesData(
+              testTableName, t, i.toDouble());
+        }
+        await database.flush();
+
+        final from = baseTime.subtract(const Duration(seconds: 1));
+        final to = baseTime.add(const Duration(minutes: 10));
+
+        // maxPoints=1 → numBuckets=(1/3).floor()=0 → fallback to raw
+        final result1 = await database.queryTimeseriesDataDownsampled(
+            testTableName, from, to,
+            maxPoints: 1);
+        expect(result1.length, 5, reason: 'maxPoints=1 should fallback to raw');
+
+        // maxPoints=2 → numBuckets=(2/3).floor()=0 → fallback to raw
+        final result2 = await database.queryTimeseriesDataDownsampled(
+            testTableName, from, to,
+            maxPoints: 2);
+        expect(result2.length, 5, reason: 'maxPoints=2 should fallback to raw');
+      });
+
+      test('should handle from == to (zero range)', () async {
+        final baseTime = DateTime.now().subtract(const Duration(minutes: 5));
+        await database.insertTimeseriesData(testTableName, baseTime, 1.0);
+        await database.flush();
+
+        // from == to → rangeMs=0 → fallback to raw
+        final result = await database.queryTimeseriesDataDownsampled(
+            testTableName, baseTime, baseTime,
+            maxPoints: 3);
+
+        // Raw query with from==to might return 0 or 1 row depending on
+        // exact timestamp matching; should not throw
+        expect(result, isA<List>());
+      });
+
+      test('should handle non-existent table', () async {
+        // The table doesn't exist at all
+        expect(
+          () => database.queryTimeseriesDataDownsampled(
+              'non_existent_table_xyz',
+              DateTime.now().subtract(const Duration(hours: 1)),
+              DateTime.now(),
+              maxPoints: 3),
+          throwsA(anything),
+        );
+      });
+
+      test('should handle query range with no data', () async {
+        final baseTime = DateTime.now().subtract(const Duration(minutes: 60));
+        // Insert data in the past
+        for (int i = 0; i < 5; i++) {
+          final t = baseTime.add(Duration(minutes: i));
+          await database.insertTimeseriesData(testTableName, t, i.toDouble());
+        }
+        await database.flush();
+
+        // Query a future range where there is no data
+        final result = await database.queryTimeseriesDataDownsampled(
+            testTableName,
+            DateTime.now().add(const Duration(hours: 1)),
+            DateTime.now().add(const Duration(hours: 2)),
+            maxPoints: 3);
+
+        expect(result, isEmpty);
+      });
+
+      test('should handle multiple buckets with precise values', () async {
+        // Place two groups of data far apart so they definitely land in
+        // separate buckets regardless of epoch alignment.
+        final baseTime = DateTime.now().subtract(const Duration(hours: 2));
+
+        // Group A: 4 points within a 1-minute window → min=1, max=20, last=5
+        final groupA = [10.0, 1.0, 20.0, 5.0];
+        for (int i = 0; i < groupA.length; i++) {
+          final t = baseTime.add(Duration(seconds: i * 10));
+          await database.insertTimeseriesData(testTableName, t, groupA[i]);
+        }
+
+        // Group B: 4 points ~1 hour later → min=50, max=200, last=75
+        final groupB = [100.0, 50.0, 200.0, 75.0];
+        for (int i = 0; i < groupB.length; i++) {
+          final t = baseTime.add(Duration(hours: 1, seconds: i * 10));
+          await database.insertTimeseriesData(testTableName, t, groupB[i]);
+        }
+        await database.flush();
+
+        final from = baseTime.subtract(const Duration(minutes: 1));
+        final to = baseTime.add(const Duration(hours: 1, minutes: 1));
+
+        // maxPoints=6 → 2 buckets. Each bucket ~30 minutes, groups are 1h apart
+        // so they'll be in separate buckets.
+        final result = await database.queryTimeseriesDataDownsampled(
+            testTableName, from, to,
+            maxPoints: 6);
+
+        // time_bucket aligns to epoch, so we might get 2-3 buckets,
+        // but each group's points are <1min apart so they stay together.
+        // Result count must be a multiple of 3.
+        expect(result.length % 3, 0, reason: 'Points come in triples');
+        expect(result.length, greaterThanOrEqualTo(6));
+
+        final vals = result.map((r) => r.value as double).toList();
+
+        // Group A values must be present: min=1.0, max=20.0, last=5.0
+        expect(vals, contains(1.0));
+        expect(vals, contains(20.0));
+        expect(vals, contains(5.0));
+
+        // Group B values must be present: min=50.0, max=200.0, last=75.0
+        expect(vals, contains(50.0));
+        expect(vals, contains(200.0));
+        expect(vals, contains(75.0));
+
+        // Results must be time-ordered
+        for (int i = 1; i < result.length; i++) {
+          expect(result[i].time.millisecondsSinceEpoch,
+              greaterThanOrEqualTo(result[i - 1].time.millisecondsSinceEpoch));
+        }
+      });
+    });
+
     group('Error Handling', () {
       test('should handle invalid table names', () async {
         expect(
