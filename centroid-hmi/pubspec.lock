@@ -277,12 +277,11 @@ packages:
   cristalyse:
     dependency: transitive
     description:
-      path: "."
-      ref: dev
-      resolved-ref: d89dfbacf6e3f11c814d03a2ff17c7b494120902
-      url: "https://github.com/centroid-is/cristalyse.git"
-    source: git
-    version: "1.11.1"
+      name: cristalyse
+      sha256: "7bfa69d60d29aa01dfa6d9acdcbab2c79640362ae634960a6ec8f20ff9daf91a"
+      url: "https://pub.dev"
+    source: hosted
+    version: "1.17.3"
   cross_file:
     dependency: transitive
     description:
