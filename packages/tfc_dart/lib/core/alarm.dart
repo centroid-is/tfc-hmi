@@ -11,6 +11,7 @@ import 'preferences.dart';
 import 'state_man.dart';
 import 'ring_buffer.dart';
 import 'boolean_expression.dart';
+import 'fuzzy_match.dart';
 
 part 'alarm.g.dart';
 
@@ -283,17 +284,10 @@ class AlarmMan {
         return b.notification.timestamp.compareTo(a.notification.timestamp);
       });
 
-    // Filter alarms based on search query
-    if (searchQuery.isNotEmpty) {
-      filteredAlarms = filteredAlarms.where((alarm) {
-        final title = alarm.alarm.config.title.toLowerCase();
-        final description = alarm.alarm.config.description.toLowerCase();
-        final query = searchQuery.toLowerCase();
-        return title.contains(query) || description.contains(query);
-      }).toList();
-    }
-
-    return filteredAlarms;
+    return fuzzyFilter(filteredAlarms, searchQuery, [
+      (a) => a.alarm.config.title,
+      (a) => a.alarm.config.description,
+    ]);
   }
 
   void _saveConfig() async {

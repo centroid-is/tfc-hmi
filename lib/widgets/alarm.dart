@@ -6,6 +6,7 @@ import 'package:tfc_dart/core/boolean_expression.dart';
 import '../providers/alarm.dart';
 import 'base_scaffold.dart';
 import 'boolean_expression.dart';
+import 'fuzzy_search_bar.dart';
 
 extension AlarmNotificationColors on AlarmNotification {
   /// Returns the background and text colors for this alarm level
@@ -57,27 +58,10 @@ class _ListAlarmsState extends ConsumerState<ListAlarms> {
       future: ref.watch(alarmManProvider.future),
       builder: (context, snapshot) {
         if (snapshot.hasData) {
-          final alarms = snapshot.data!.alarms.where((alarm) {
-            if (_searchQuery.isEmpty) return true;
-
-            // Search in title
-            if (alarm.config.title
-                .toLowerCase()
-                .contains(_searchQuery.toLowerCase())) {
-              return true;
-            }
-
-            // Search in expressions
-            for (final rule in alarm.config.rules) {
-              if (rule.expression.value.formula
-                  .toLowerCase()
-                  .contains(_searchQuery.toLowerCase())) {
-                return true;
-              }
-            }
-
-            return false;
-          }).toList();
+          final alarms = fuzzyFilter<Alarm>(snapshot.data!.alarms.toList(), _searchQuery, [
+            (a) => a.config.title,
+            (a) => a.config.rules.map((r) => r.expression.value.formula).join(' '),
+          ]);
 
           return Column(
             children: [
@@ -92,9 +76,8 @@ class _ListAlarmsState extends ConsumerState<ListAlarms> {
                       },
                     ),
                     Expanded(
-                      child: SearchBar(
+                      child: FuzzySearchBar(
                         hintText: 'Search alarms...',
-                        leading: const Icon(Icons.search),
                         onChanged: (value) {
                           setState(() {
                             _searchQuery = value;
@@ -465,6 +448,7 @@ class ListActiveAlarms extends ConsumerStatefulWidget {
 class _ListActiveAlarmsState extends ConsumerState<ListActiveAlarms> {
   String _searchQuery = '';
   bool _showHistory = false;
+  final _searchBarKey = GlobalKey<FuzzySearchBarState>();
 
   @override
   Widget build(BuildContext context) {
@@ -488,7 +472,12 @@ class _ListActiveAlarmsState extends ConsumerState<ListActiveAlarms> {
         }
 
         var (alarmMan, alarms) = snapshot.data!;
-        if (!_showHistory) {
+        if (_showHistory) {
+          alarms = fuzzyFilter(alarms, _searchQuery, [
+            (e) => e.$1.alarm.config.title,
+            (e) => e.$1.alarm.config.description,
+          ]);
+        } else {
           alarms = alarmMan
               .filterAlarms(alarms.map((a) => a.$1).toList(), _searchQuery)
               .map((a) => (a, null as DateTime?))
@@ -572,15 +561,10 @@ class _ListActiveAlarmsState extends ConsumerState<ListActiveAlarms> {
             children: [
               // Search field
               Expanded(
-                child: TextField(
-                  decoration: InputDecoration(
-                    hintText:
-                        'Search ${_showHistory ? "historical" : "active"} alarms...',
-                    prefixIcon: const Icon(Icons.search),
-                    border: InputBorder.none,
-                    contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 16, vertical: 14),
-                  ),
+                child: FuzzySearchBar(
+                  key: _searchBarKey,
+                  hintText:
+                      'Search ${_showHistory ? "historical" : "active"} alarms...',
                   onChanged: (value) {
                     setState(() {
                       _searchQuery = value;
@@ -614,6 +598,7 @@ class _ListActiveAlarmsState extends ConsumerState<ListActiveAlarms> {
                     setState(() {
                       _showHistory = newSelection.first;
                       _searchQuery = '';
+                      _searchBarKey.currentState?.clear();
                     });
                     widget.onViewChanged?.call();
                   },

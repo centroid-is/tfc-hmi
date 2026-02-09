@@ -15,6 +15,7 @@ import '../widgets/opcua_browse.dart';
 import 'package:tfc_dart/core/state_man.dart';
 import 'package:tfc_dart/core/collector.dart';
 import 'package:tfc_dart/core/database.dart';
+import '../widgets/fuzzy_search_bar.dart';
 import '../providers/preferences.dart';
 import '../providers/state_man.dart';
 import '../providers/database.dart';
@@ -281,17 +282,11 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
   List<MapEntry<String, KeyMappingEntry>> get _filteredEntries {
     if (_keyMappings == null) return [];
     final entries = _keyMappings!.nodes.entries.toList();
-    if (_searchQuery.isEmpty) return entries;
-    final query = _searchQuery.toLowerCase();
-    return entries.where((e) {
-      if (e.key.toLowerCase().contains(query)) return true;
-      final node = e.value.opcuaNode;
-      if (node != null) {
-        if (node.identifier.toLowerCase().contains(query)) return true;
-        if (node.serverAlias?.toLowerCase().contains(query) ?? false) return true;
-      }
-      return false;
-    }).toList();
+    return fuzzyFilter(entries, _searchQuery, [
+      (e) => e.key,
+      (e) => e.value.opcuaNode?.identifier ?? '',
+      (e) => e.value.opcuaNode?.serverAlias ?? '',
+    ]);
   }
 
   List<String> get _serverAliases {
