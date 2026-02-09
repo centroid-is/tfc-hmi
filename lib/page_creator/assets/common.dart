@@ -8,6 +8,7 @@ import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'package:open62541/open62541.dart' show DynamicValue;
 import 'package:tfc_dart/core/state_man.dart';
 import 'package:tfc_dart/core/collector.dart';
 import 'package:tfc_dart/core/database.dart';
@@ -231,8 +232,9 @@ class _KeyFieldState extends ConsumerState<KeyField> {
       ),
     );
     if (result != null) {
-      _controller.text = result;
-      widget.onChanged?.call(result);
+      final finalKey = await _checkArrayAndPrompt(result);
+      _controller.text = finalKey;
+      widget.onChanged?.call(finalKey);
       setState(() {});
     }
   }
@@ -255,9 +257,54 @@ class _KeyFieldState extends ConsumerState<KeyField> {
       final prefs = await ref.read(preferencesProvider.future);
       await prefs.setString('key_mappings', jsonEncode(keyMappings.toJson()));
 
-      _controller.text = key;
-      widget.onChanged?.call(key);
+      final finalKey = await _checkArrayAndPrompt(key);
+      _controller.text = finalKey;
+      widget.onChanged?.call(finalKey);
       setState(() {});
+    }
+  }
+
+  /// If [key] maps to an array OPC UA node (no array index set),
+  /// prompts the user to pick an index and creates a derived key.
+  /// Returns the original key if not an array or user cancels.
+  Future<String> _checkArrayAndPrompt(String key) async {
+    if (key.isEmpty) return key;
+    try {
+      final stateMan = await ref.read(stateManProvider.future);
+      final value = await stateMan.read(key);
+      if (!value.isArray) return key;
+      if (!mounted) return key;
+
+      final selectedIndex = await showDialog<int>(
+        context: context,
+        builder: (context) => _ArrayIndexDialog(
+          arrayValue: value,
+          keyName: key,
+        ),
+      );
+      if (selectedIndex == null) return key;
+
+      // Create a new indexed key
+      final newKey = '$key[$selectedIndex]';
+      final existingEntry = stateMan.keyMappings.nodes[key];
+      if (existingEntry?.opcuaNode != null) {
+        final srcNode = existingEntry!.opcuaNode!;
+        final indexedNode = OpcUANodeConfig(
+          namespace: srcNode.namespace,
+          identifier: srcNode.identifier,
+        )
+          ..arrayIndex = selectedIndex
+          ..serverAlias = srcNode.serverAlias;
+        final indexedEntry = KeyMappingEntry(opcuaNode: indexedNode);
+        stateMan.keyMappings.nodes[newKey] = indexedEntry;
+        final prefs = await ref.read(preferencesProvider.future);
+        await prefs.setString(
+            'key_mappings', jsonEncode(stateMan.keyMappings.toJson()));
+      }
+      return newKey;
+    } catch (_) {
+      // Read failed (not connected, key not found, etc.) — just use as-is
+      return key;
     }
   }
 
@@ -314,6 +361,7 @@ class KeySearchDialog extends ConsumerStatefulWidget {
 class _KeySearchDialogState extends ConsumerState<KeySearchDialog> {
   late TextEditingController _searchController;
   List<String> _searchResults = [];
+  KeyMappings? _keyMappings;
 
   @override
   void initState() {
@@ -329,10 +377,9 @@ class _KeySearchDialogState extends ConsumerState<KeySearchDialog> {
   }
 
   void _performSearch(String query) async {
-    List<String> allKeys = widget.allKeys ??
-        await ref
-            .read(stateManProvider.future)
-            .then((stateMan) => stateMan.keys);
+    final stateMan = await ref.read(stateManProvider.future);
+    List<String> allKeys = widget.allKeys ?? stateMan.keys;
+    _keyMappings ??= stateMan.keyMappings;
     setState(() {
       _searchResults = allKeys
           .where((key) => key.toLowerCase().contains(query.toLowerCase()))
@@ -340,8 +387,22 @@ class _KeySearchDialogState extends ConsumerState<KeySearchDialog> {
     });
   }
 
+  String? _buildSubtitle(String key) {
+    final entry = _keyMappings?.nodes[key];
+    if (entry?.opcuaNode == null) return null;
+    final node = entry!.opcuaNode!;
+    final id = int.tryParse(node.identifier) != null
+        ? 'ns=${node.namespace};i=${node.identifier}'
+        : 'ns=${node.namespace};s=${node.identifier}';
+    if (node.arrayIndex != null) {
+      return '$id [idx: ${node.arrayIndex}]';
+    }
+    return id;
+  }
+
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
     return AlertDialog(
       title: const Text('Search Keys'),
       content: SizedBox(
@@ -365,9 +426,15 @@ class _KeySearchDialogState extends ConsumerState<KeySearchDialog> {
                 itemCount: _searchResults.length,
                 itemBuilder: (context, index) {
                   final key = _searchResults[index];
+                  final subtitle = _buildSubtitle(key);
                   return ListTile(
                     dense: true,
                     title: Text(key),
+                    subtitle: subtitle != null
+                        ? Text(subtitle,
+                            style: TextStyle(
+                                fontSize: 11, color: cs.secondary))
+                        : null,
                     onTap: () => Navigator.of(context).pop(key),
                   );
                 },
@@ -456,6 +523,152 @@ class _KeyFieldDialogState extends State<_KeyFieldDialog> {
             Navigator.of(context).pop(nodeId);
           },
           child: const Text('OK'),
+        ),
+      ],
+    );
+  }
+}
+
+class _ArrayIndexDialog extends StatefulWidget {
+  final DynamicValue arrayValue;
+  final String keyName;
+
+  const _ArrayIndexDialog({
+    required this.arrayValue,
+    required this.keyName,
+  });
+
+  @override
+  State<_ArrayIndexDialog> createState() => _ArrayIndexDialogState();
+}
+
+class _ArrayIndexDialogState extends State<_ArrayIndexDialog> {
+  late TextEditingController _indexController;
+  int? _selectedIndex;
+
+  List<DynamicValue> get _elements => widget.arrayValue.asArray;
+
+  @override
+  void initState() {
+    super.initState();
+    _indexController = TextEditingController();
+  }
+
+  @override
+  void dispose() {
+    _indexController.dispose();
+    super.dispose();
+  }
+
+  String _formatValue(DynamicValue dv) {
+    if (dv.isNull) return 'null';
+    if (dv.isArray) return '[Array(${dv.asArray.length})]';
+    if (dv.isObject) return '{Object(${dv.asObject.keys.length})}';
+    final s = dv.value?.toString() ?? 'null';
+    return s.length > 60 ? '${s.substring(0, 57)}...' : s;
+  }
+
+  bool get _isValid {
+    final idx = int.tryParse(_indexController.text);
+    return idx != null && idx >= 0 && idx < _elements.length;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return AlertDialog(
+      title: Text('Array: ${widget.keyName}'),
+      content: SizedBox(
+        width: 400,
+        height: 400,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '${_elements.length} elements (index 0 to ${_elements.length - 1})',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: cs.secondary,
+                  ),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _indexController,
+              keyboardType: TextInputType.number,
+              decoration: InputDecoration(
+                labelText: 'Index',
+                hintText: '0..${_elements.length - 1}',
+                errorText: _indexController.text.isNotEmpty && !_isValid
+                    ? 'Must be 0..${_elements.length - 1}'
+                    : null,
+              ),
+              onChanged: (_) => setState(() {
+                _selectedIndex = int.tryParse(_indexController.text);
+              }),
+            ),
+            const SizedBox(height: 12),
+            Expanded(
+              child: ListView.builder(
+                itemCount: _elements.length,
+                itemBuilder: (context, index) {
+                  final isSelected = _selectedIndex == index;
+                  return InkWell(
+                    onTap: () {
+                      setState(() {
+                        _selectedIndex = index;
+                        _indexController.text = index.toString();
+                      });
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 6),
+                      color: isSelected
+                          ? cs.primaryContainer
+                          : Colors.transparent,
+                      child: Row(
+                        children: [
+                          SizedBox(
+                            width: 40,
+                            child: Text(
+                              '[$index]',
+                              style: TextStyle(
+                                color: cs.secondary,
+                                fontSize: 12,
+                                fontFamily: 'monospace',
+                              ),
+                            ),
+                          ),
+                          Expanded(
+                            child: Text(
+                              _formatValue(_elements[index]),
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: isSelected
+                                    ? FontWeight.bold
+                                    : FontWeight.normal,
+                              ),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        ElevatedButton(
+          onPressed: _isValid
+              ? () => Navigator.of(context).pop(_selectedIndex)
+              : null,
+          child: const Text('Create Indexed Key'),
         ),
       ],
     );
@@ -699,6 +912,7 @@ class _KeyMappingEntryDialogState extends ConsumerState<KeyMappingEntryDialog> {
   late TextEditingController _keyController;
   late TextEditingController _namespaceController;
   late TextEditingController _identifierController;
+  late TextEditingController _arrayIndexController;
   late TextEditingController _collectNameController;
   late TextEditingController _collectIntervalController;
   late TextEditingController _retentionDaysController;
@@ -721,6 +935,8 @@ class _KeyMappingEntryDialogState extends ConsumerState<KeyMappingEntryDialog> {
           text: entry.opcuaNode?.namespace.toString() ?? '0');
       _identifierController =
           TextEditingController(text: entry.opcuaNode?.identifier ?? '');
+      _arrayIndexController = TextEditingController(
+          text: entry.opcuaNode?.arrayIndex?.toString() ?? '');
       _selectedServerAlias = entry.opcuaNode?.serverAlias;
 
       // Initialize collect settings if they exist
@@ -755,6 +971,7 @@ class _KeyMappingEntryDialogState extends ConsumerState<KeyMappingEntryDialog> {
       _keyController = TextEditingController(text: widget.initialKey ?? '');
       _namespaceController = TextEditingController(text: '0');
       _identifierController = TextEditingController();
+      _arrayIndexController = TextEditingController();
       _collectNameController = TextEditingController();
       _collectIntervalController = TextEditingController();
       _retentionDaysController = TextEditingController(text: '365');
@@ -769,6 +986,7 @@ class _KeyMappingEntryDialogState extends ConsumerState<KeyMappingEntryDialog> {
     _keyController.dispose();
     _namespaceController.dispose();
     _identifierController.dispose();
+    _arrayIndexController.dispose();
     _collectNameController.dispose();
     _collectIntervalController.dispose();
     _retentionDaysController.dispose();
@@ -841,6 +1059,14 @@ class _KeyMappingEntryDialogState extends ConsumerState<KeyMappingEntryDialog> {
                   decoration: const InputDecoration(
                     labelText: 'Identifier',
                   ),
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: _arrayIndexController,
+                  decoration: const InputDecoration(
+                    labelText: 'Array Index (optional)',
+                  ),
+                  keyboardType: TextInputType.number,
                 ),
                 const SizedBox(height: 16),
                 Row(
@@ -947,7 +1173,11 @@ class _KeyMappingEntryDialogState extends ConsumerState<KeyMappingEntryDialog> {
                 final nodeConfig = OpcUANodeConfig(
                   namespace: ns,
                   identifier: id,
-                )..serverAlias = _selectedServerAlias;
+                )
+                  ..arrayIndex = _arrayIndexController.text.isNotEmpty
+                      ? int.tryParse(_arrayIndexController.text)
+                      : null
+                  ..serverAlias = _selectedServerAlias;
 
                 CollectEntry? collectEntry;
                 if (_isCollecting) {
