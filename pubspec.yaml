@@ -49,7 +49,10 @@ dependencies:
     git:
       url: https://github.com/centroid-is/board_datetime_picker.git
       ref: subtitle-for-start-end-date
-  cristalyse: ^1.17.3
+  cristalyse:
+    git:
+      url: https://github.com/centroid-is/cristalyse.git
+      ref: fix/preserve-viewport-on-data-change
   tfc_dart:
     path: packages/tfc_dart
 dev_dependencies:
