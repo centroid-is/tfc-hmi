@@ -19,6 +19,12 @@ import 'package:tfc_dart/core/database_drift.dart' as drift_db;
 
 part 'graph.g.dart';
 
+@JsonEnum()
+enum Aggregation {
+  none,
+  minMaxLast,
+}
+
 @JsonSerializable(explicitToJson: true)
 class GraphSeriesConfig {
   String key;
@@ -59,6 +65,8 @@ class GraphAssetConfig extends BaseAsset {
   Duration timeWindowMinutes;
   @JsonKey(name: 'header_text')
   String? headerText;
+  @JsonKey(defaultValue: Aggregation.none)
+  Aggregation aggregation;
 
   GraphAssetConfig({
     this.graphType = GraphType.line,
@@ -69,6 +77,7 @@ class GraphAssetConfig extends BaseAsset {
     this.yAxis2,
     this.timeWindowMinutes = const Duration(minutes: 10),
     this.headerText,
+    this.aggregation = Aggregation.none,
   })  : primarySeries = primarySeries ?? [],
         secondarySeries = secondarySeries ?? [],
         xAxis = xAxis ?? GraphAxisConfig(unit: 's'),
@@ -85,7 +94,8 @@ class GraphAssetConfig extends BaseAsset {
         secondarySeries = [],
         xAxis = GraphAxisConfig(unit: 's'),
         yAxis = GraphAxisConfig(unit: ''),
-        timeWindowMinutes = const Duration(minutes: 10);
+        timeWindowMinutes = const Duration(minutes: 10),
+        aggregation = Aggregation.none;
 
   @override
   Widget build(BuildContext context) {
@@ -202,6 +212,24 @@ class GraphContentConfigState extends State<GraphContentConfig> {
                 onChanged: (value) {
                   setState(() => widget.config.headerText = value);
                 },
+              ),
+              const SizedBox(height: 16),
+              DropdownButton<Aggregation>(
+                value: widget.config.aggregation,
+                isExpanded: true,
+                onChanged: (value) {
+                  setState(() {
+                    widget.config.aggregation = value!;
+                  });
+                },
+                items: Aggregation.values
+                    .map((e) => DropdownMenuItem(
+                          value: e,
+                          child: Text(e == Aggregation.none
+                              ? 'No aggregation'
+                              : 'Min / Max / Last'),
+                        ))
+                    .toList(),
               ),
               const SizedBox(height: 16),
               SizeField(
@@ -516,6 +544,10 @@ class _GraphAssetState extends ConsumerState<GraphAsset> {
   StateMan? _stateMan;
   late cs.ChartTheme _chartTheme;
 
+  /// The visible window size (ms) when data was last fetched with aggregation.
+  /// Used to detect zoom changes that require re-fetching at a different bucket resolution.
+  double _lastFetchWindowMs = 0;
+
   _GraphAssetState()
       : _dataMinX = 0,
         _dataMaxX = 0;
@@ -565,6 +597,7 @@ class _GraphAssetState extends ConsumerState<GraphAsset> {
     final end = DateTime.now();
     _dataMinX = start.millisecondsSinceEpoch.toInt();
     _dataMaxX = end.millisecondsSinceEpoch.toInt();
+    _lastFetchWindowMs = widget.config.timeWindowMinutes.inMilliseconds.toDouble();
     _addData(await _queryData(DateTimeRange(start: start, end: end)));
     _realTimeActive = true;
     _initRealtimeUpdates();
@@ -709,8 +742,14 @@ class _GraphAssetState extends ConsumerState<GraphAsset> {
       final axisKey = entry.key;
       for (final series in entry.value) {
         final tableName = _stateMan!.resolveKey(series.key);
-        final data = await db.queryTimeseriesData(tableName, range.end,
-            from: range.start);
+        final List<TimeseriesData<dynamic>> data;
+        if (widget.config.aggregation == Aggregation.minMaxLast) {
+          data = await db.queryTimeseriesDataDownsampled(
+              tableName, range.start, range.end);
+        } else {
+          data = await db.queryTimeseriesData(tableName, range.end,
+              from: range.start);
+        }
         for (final e in data) {
           dynamic value = e.value;
           if (value is bool) {
@@ -764,6 +803,31 @@ class _GraphAssetState extends ConsumerState<GraphAsset> {
     // |   200%  |     100%        |   200%  |
 
     final xWindowSize = event.visibleMaxX! - event.visibleMinX!;
+
+    // When aggregation is active, detect zoom changes that need re-fetching
+    // at a different bucket resolution. If window shrunk to <50% or grew to >200%
+    // of the last fetch, clear data and re-fetch the visible range + buffers.
+    if (widget.config.aggregation != Aggregation.none &&
+        _lastFetchWindowMs > 0 &&
+        (xWindowSize < _lastFetchWindowMs * 0.5 ||
+            xWindowSize > _lastFetchWindowMs * 2.0)) {
+      _lastFetchWindowMs = xWindowSize;
+      final start = DateTime.fromMillisecondsSinceEpoch(
+          (event.visibleMinX! - xWindowSize).toInt());
+      final end = DateTime.fromMillisecondsSinceEpoch(
+          math.min(event.visibleMaxX! + xWindowSize,
+                  DateTime.now().millisecondsSinceEpoch.toDouble())
+              .toInt());
+      // Fetch new data at finer/coarser resolution in the background,
+      // keeping old data visible until the new data arrives.
+      final data = await _queryData(DateTimeRange(start: start, end: end));
+      if (!mounted) return;
+      _dataMinX = start.millisecondsSinceEpoch;
+      _dataMaxX = end.millisecondsSinceEpoch;
+      _graph.removeWhere((_) => true);
+      _addData(data);
+      return;
+    }
 
     final double mustMin = event.visibleMinX! - xWindowSize * 0.5;
     final double mustMax = math.min(event.visibleMaxX! + xWindowSize * 0.5,
