@@ -984,8 +984,8 @@ packages:
     dependency: "direct overridden"
     description:
       path: "."
-      ref: add-keepalive
-      resolved-ref: "652b83cb2081789bee1ebe9a5c456258abfbc520"
+      ref: add-keepalive-test
+      resolved-ref: "79d469cd517bff44ae6e2974409128d8be4fe04e"
       url: "https://github.com/centroid-is/postgresql-dart.git"
     source: git
     version: "3.5.9"
