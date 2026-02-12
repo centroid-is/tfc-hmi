@@ -239,8 +239,6 @@ class AppDatabase extends _$AppDatabase {
           settings: pg.PoolSettings(
             maxConnectionCount: 20,
             sslMode: config.sslMode,
-            keepAlive: true,
-            keepAliveIdle: const Duration(seconds: 10),
             keepAliveInterval: const Duration(seconds: 5),
             keepAliveCount: 3,
           ));
@@ -279,8 +277,6 @@ class AppDatabase extends _$AppDatabase {
             settings: pg.PoolSettings(
               maxConnectionCount: 20,
               sslMode: config.sslMode,
-              keepAlive: true,
-              keepAliveIdle: const Duration(seconds: 10),
               keepAliveInterval: const Duration(seconds: 5),
               keepAliveCount: 3,
             ));
