@@ -38,6 +38,8 @@ class RatioNumberConfig extends BaseAsset {
   Duration pollInterval;
   @JsonKey(name: 'graph_header')
   String? graphHeader;
+  @JsonKey(name: 'bars_clock_aligned', defaultValue: false)
+  bool barsClockAligned;
 
   RatioNumberConfig({
     required this.key1,
@@ -49,6 +51,7 @@ class RatioNumberConfig extends BaseAsset {
     this.howMany = 10,
     this.pollInterval = const Duration(seconds: 1),
     this.graphHeader,
+    this.barsClockAligned = false,
   });
 
   RatioNumberConfig.preview()
@@ -59,7 +62,8 @@ class RatioNumberConfig extends BaseAsset {
         textColor = Colors.black,
         sinceMinutes = const Duration(minutes: 10),
         howMany = 10,
-        pollInterval = const Duration(seconds: 1);
+        pollInterval = const Duration(seconds: 1),
+        barsClockAligned = false;
 
   factory RatioNumberConfig.fromJson(Map<String, dynamic> json) =>
       _$RatioNumberConfigFromJson(json);
@@ -214,10 +218,29 @@ class _RatioNumberConfigEditorState
               }
             },
           ),
+          const SizedBox(height: 16),
+          SwitchListTile(
+            title: const Text('Clock-Aligned Bars'),
+            subtitle: const Text(
+                'Align bar chart buckets to clock boundaries (e.g. on the hour)'),
+            value: widget.config.barsClockAligned,
+            onChanged: (value) =>
+                setState(() => widget.config.barsClockAligned = value),
+          ),
         ],
       ),
     );
   }
+}
+
+/// Returns the end of the current clock-aligned bucket.
+/// E.g., with a 1-hour interval at 10:35, returns 11:00.
+DateTime _clockAlignedEnd(DateTime time, Duration interval) {
+  final ms = interval.inMilliseconds;
+  final startOfDay = DateTime(time.year, time.month, time.day);
+  final msSinceStartOfDay = time.difference(startOfDay).inMilliseconds;
+  final bucketStart = (msSinceStartOfDay ~/ ms) * ms;
+  return startOfDay.add(Duration(milliseconds: bucketStart + ms));
 }
 
 class RatioNumberWidget extends ConsumerStatefulWidget {
@@ -313,10 +336,12 @@ class _RatioNumberWidgetState extends ConsumerState<RatioNumberWidget> {
 
   Future<List<TimeseriesData<dynamic>>> _getQueue(
       Database db, String key) async {
+    final endTime = widget.config.barsClockAligned
+        ? _clockAlignedEnd(DateTime.now(), widget.config.sinceMinutes)
+        : DateTime.now();
     return await db.queryTimeseriesData(
         key,
-        DateTime.now()
-            .subtract(widget.config.sinceMinutes * widget.config.howMany),
+        endTime.subtract(widget.config.sinceMinutes * widget.config.howMany),
         orderBy: 'time DESC');
   }
 
@@ -757,7 +782,9 @@ class RatioBarChart extends ConsumerWidget {
   List<DateTime> _createTimeBuckets() {
     final buckets = <DateTime>[];
     final bucketDuration = config.sinceMinutes;
-    final endTime = DateTime.now();
+    final endTime = config.barsClockAligned
+        ? _clockAlignedEnd(DateTime.now(), bucketDuration)
+        : DateTime.now();
 
     for (int i = config.howMany - 1; i >= 0; i--) {
       final bucketStart = endTime.subtract(bucketDuration * (i + 1));
