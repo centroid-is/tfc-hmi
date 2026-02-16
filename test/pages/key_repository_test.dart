@@ -96,6 +96,223 @@ void main() {
     });
   });
 
+  // ==================== Group: Copy Key ====================
+  group('Copy key', () {
+    testWidgets('tapping copy button duplicates the key', (tester) async {
+      await tester.pumpWidget(buildTestableKeyRepository(
+        keyMappings: KeyMappings(nodes: {
+          'original_key': KeyMappingEntry(
+            opcuaNode: OpcUANodeConfig(namespace: 2, identifier: 'MyNode')
+              ..serverAlias = 'main_server',
+          ),
+        }),
+        stateManConfig: sampleStateManConfig(),
+      ));
+      await tester.pumpAndSettle();
+
+      // Tap the copy button
+      final copyButtons = find.byWidgetPredicate(
+          (w) => w is FaIcon && w.icon == FontAwesomeIcons.copy);
+      expect(copyButtons, findsOneWidget);
+      await tester.tap(copyButtons.first);
+      await tester.pumpAndSettle();
+
+      // Should now have 2 cards
+      expect(find.byType(ExpansionTile), findsNWidgets(2));
+      expect(find.text('original_key'), findsOneWidget);
+      expect(find.text('original_key_copy'), findsAtLeastNWidgets(1));
+    });
+
+    testWidgets('copied key is placed right after the original', (tester) async {
+      late Preferences testPrefs;
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            preferencesProvider.overrideWith((ref) async {
+              testPrefs = await createTestPreferences(
+                keyMappings: KeyMappings(nodes: {
+                  'first_key': KeyMappingEntry(
+                    opcuaNode:
+                        OpcUANodeConfig(namespace: 1, identifier: 'A'),
+                  ),
+                  'second_key': KeyMappingEntry(
+                    opcuaNode:
+                        OpcUANodeConfig(namespace: 2, identifier: 'B'),
+                  ),
+                  'third_key': KeyMappingEntry(
+                    opcuaNode:
+                        OpcUANodeConfig(namespace: 3, identifier: 'C'),
+                  ),
+                }),
+              );
+              return testPrefs;
+            }),
+            databaseProvider.overrideWith((ref) async => null),
+          ],
+          child: MaterialApp(
+            home: Scaffold(body: KeyRepositoryContent()),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // Copy the second key
+      final copyButtons = find.byWidgetPredicate(
+          (w) => w is FaIcon && w.icon == FontAwesomeIcons.copy);
+      // second_key is the 2nd card, so its copy button is at index 1
+      await tester.tap(copyButtons.at(1));
+      await tester.pumpAndSettle();
+
+      // Save to inspect the order
+      await tester.ensureVisible(find.text('Save Key Mappings'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Save Key Mappings'));
+      await tester.pumpAndSettle();
+
+      final savedJson = await testPrefs.getString('key_mappings');
+      final saved = KeyMappings.fromJson(jsonDecode(savedJson!));
+      final keys = saved.nodes.keys.toList();
+      expect(keys, [
+        'first_key',
+        'second_key',
+        'second_key_copy',
+        'third_key',
+      ]);
+    });
+
+    testWidgets('copied key preserves OPC UA config', (tester) async {
+      late Preferences testPrefs;
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            preferencesProvider.overrideWith((ref) async {
+              testPrefs = await createTestPreferences(
+                keyMappings: KeyMappings(nodes: {
+                  'src_key': KeyMappingEntry(
+                    opcuaNode:
+                        OpcUANodeConfig(namespace: 5, identifier: 'SrcNode')
+                          ..serverAlias = 'main_server',
+                  ),
+                }),
+                stateManConfig: sampleStateManConfig(),
+              );
+              return testPrefs;
+            }),
+            databaseProvider.overrideWith((ref) async => null),
+          ],
+          child: MaterialApp(
+            home: Scaffold(body: KeyRepositoryContent()),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // Copy the key
+      final copyButtons = find.byWidgetPredicate(
+          (w) => w is FaIcon && w.icon == FontAwesomeIcons.copy);
+      await tester.tap(copyButtons.first);
+      await tester.pumpAndSettle();
+
+      // Save
+      await tester.ensureVisible(find.text('Save Key Mappings'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Save Key Mappings'));
+      await tester.pumpAndSettle();
+
+      // Verify the copy has the same OPC UA config
+      final savedJson = await testPrefs.getString('key_mappings');
+      final saved = KeyMappings.fromJson(jsonDecode(savedJson!));
+      expect(saved.nodes.containsKey('src_key_copy'), isTrue);
+      final copy = saved.nodes['src_key_copy']!;
+      expect(copy.opcuaNode?.namespace, 5);
+      expect(copy.opcuaNode?.identifier, 'SrcNode');
+      expect(copy.opcuaNode?.serverAlias, 'main_server');
+    });
+
+    testWidgets('renaming a copied key and saving persists the new name',
+        (tester) async {
+      late Preferences testPrefs;
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            preferencesProvider.overrideWith((ref) async {
+              testPrefs = await createTestPreferences(
+                keyMappings: KeyMappings(nodes: {
+                  'original': KeyMappingEntry(
+                    opcuaNode:
+                        OpcUANodeConfig(namespace: 1, identifier: 'Node1'),
+                  ),
+                }),
+              );
+              return testPrefs;
+            }),
+            databaseProvider.overrideWith((ref) async => null),
+          ],
+          child: MaterialApp(
+            home: Scaffold(body: KeyRepositoryContent()),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // Copy the key (creates 'original_copy', auto-expanded)
+      final copyButton = find.byWidgetPredicate(
+          (w) => w is FaIcon && w.icon == FontAwesomeIcons.copy);
+      await tester.tap(copyButton.first);
+      await tester.pumpAndSettle();
+
+      // Rename the copied key without pressing Enter
+      final keyNameField =
+          find.widgetWithText(TextField, 'original_copy');
+      expect(keyNameField, findsOneWidget);
+      await tester.enterText(keyNameField, 'my_renamed_copy');
+      await tester.pumpAndSettle();
+
+      // Save
+      await tester.ensureVisible(find.text('Save Key Mappings'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Save Key Mappings'));
+      await tester.pumpAndSettle();
+
+      // Verify the renamed key is saved, not 'original_copy'
+      final savedJson = await testPrefs.getString('key_mappings');
+      final saved = KeyMappings.fromJson(jsonDecode(savedJson!));
+      expect(saved.nodes.containsKey('my_renamed_copy'), isTrue,
+          reason: 'Copied key should be saved with renamed name');
+      expect(saved.nodes.containsKey('original_copy'), isFalse,
+          reason: 'Old copy name should no longer exist');
+      expect(saved.nodes.containsKey('original'), isTrue,
+          reason: 'Original key should still exist');
+    });
+
+    testWidgets('copying multiple times creates unique names', (tester) async {
+      await tester.pumpWidget(buildTestableKeyRepository(
+        keyMappings: KeyMappings(nodes: {
+          'my_key': KeyMappingEntry(
+            opcuaNode: OpcUANodeConfig(namespace: 1, identifier: 'X'),
+          ),
+        }),
+      ));
+      await tester.pumpAndSettle();
+
+      // Copy twice — scroll back to the original's copy button each time
+      for (var i = 0; i < 2; i++) {
+        final copyButtons = find.byWidgetPredicate(
+            (w) => w is FaIcon && w.icon == FontAwesomeIcons.copy);
+        await tester.ensureVisible(copyButtons.first);
+        await tester.pumpAndSettle();
+        await tester.tap(copyButtons.first);
+        await tester.pumpAndSettle();
+      }
+
+      // Should have 3 cards: my_key, my_key_copy, my_key_copy_1
+      expect(find.byType(ExpansionTile), findsNWidgets(3));
+    });
+  });
+
   // ==================== Group 3: Delete Key ====================
   group('Delete key', () {
     testWidgets('tapping delete button shows confirmation dialog',
@@ -190,6 +407,56 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('new_name'), findsWidgets);
+    });
+
+    testWidgets('key name updates immediately as user types', (tester) async {
+      late Preferences testPrefs;
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            preferencesProvider.overrideWith((ref) async {
+              testPrefs = await createTestPreferences(
+                keyMappings: KeyMappings(nodes: {
+                  'original': KeyMappingEntry(
+                    opcuaNode:
+                        OpcUANodeConfig(namespace: 1, identifier: 'Node1'),
+                  ),
+                }),
+              );
+              return testPrefs;
+            }),
+            databaseProvider.overrideWith((ref) async => null),
+          ],
+          child: MaterialApp(
+            home: Scaffold(body: KeyRepositoryContent()),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // Expand the card
+      await tester.tap(find.text('original'));
+      await tester.pumpAndSettle();
+
+      // Type a new key name (no Enter, no blur)
+      final keyNameField = find.widgetWithText(TextField, 'original');
+      await tester.enterText(keyNameField, 'renamed');
+      await tester.pumpAndSettle();
+
+      // The underlying data should already reflect the rename
+      // Verify by saving without any focus changes
+      await tester.ensureVisible(find.text('Save Key Mappings'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Save Key Mappings'));
+      await tester.pumpAndSettle();
+
+      final savedJson = await testPrefs.getString('key_mappings');
+      final saved = KeyMappings.fromJson(jsonDecode(savedJson!));
+      expect(saved.nodes.containsKey('renamed'), isTrue,
+          reason: 'Key name should update as user types');
+      expect(saved.nodes.containsKey('original'), isFalse,
+          reason: 'Old key name should be gone');
     });
 
     testWidgets('can set OPC UA namespace and identifier', (tester) async {
@@ -515,6 +782,55 @@ void main() {
       final savedKeyMappings =
           KeyMappings.fromJson(jsonDecode(savedJson!));
       expect(savedKeyMappings.nodes.containsKey('new_key'), isTrue);
+    });
+
+    testWidgets('renaming key name and saving persists the new name',
+        (tester) async {
+      late Preferences testPrefs;
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            preferencesProvider.overrideWith((ref) async {
+              testPrefs = await createTestPreferences();
+              return testPrefs;
+            }),
+            databaseProvider.overrideWith((ref) async => null),
+          ],
+          child: MaterialApp(
+            home: Scaffold(
+              body: KeyRepositoryContent(),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // Add a key (creates 'new_key', auto-expanded)
+      await tester.tap(find.text('Add Key'));
+      await tester.pumpAndSettle();
+
+      // Change the key name without pressing Enter
+      final keyNameField = find.widgetWithText(TextField, 'new_key');
+      expect(keyNameField, findsOneWidget);
+      await tester.enterText(keyNameField, 'my_sensor');
+      await tester.pumpAndSettle();
+
+      // Tap Save (this moves focus away from text field)
+      await tester.ensureVisible(find.text('Save Key Mappings'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Save Key Mappings'));
+      await tester.pumpAndSettle();
+
+      // Verify prefs contain the renamed key, not 'new_key'
+      final savedJson = await testPrefs.getString('key_mappings');
+      expect(savedJson, isNotNull);
+      final savedKeyMappings =
+          KeyMappings.fromJson(jsonDecode(savedJson!));
+      expect(savedKeyMappings.nodes.containsKey('my_sensor'), isTrue,
+          reason: 'Key should be saved with renamed name "my_sensor"');
+      expect(savedKeyMappings.nodes.containsKey('new_key'), isFalse,
+          reason: 'Old name "new_key" should no longer exist');
     });
 
     testWidgets('page loads existing key mappings from preferences',
