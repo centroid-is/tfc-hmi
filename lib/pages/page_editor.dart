@@ -534,9 +534,8 @@ class _PageEditorState extends ConsumerState<PageEditor> {
           child: Padding(
             padding: const EdgeInsets.all(16.0),
             child: Column(
-              mainAxisSize: MainAxisSize.min,
               children: [
-                asset.configure(context),
+                Expanded(child: asset.configure(context)),
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
