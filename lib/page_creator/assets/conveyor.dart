@@ -144,13 +144,17 @@ class ConveyorConfig extends BaseAsset {
   String? frequencyKey;
   String? tripKey;
   bool? simulateBatches;
+  bool? bidirectional;
+  bool? reverseDirection;
 
   ConveyorConfig(
       {this.key,
       this.batchesKey,
       this.frequencyKey,
       this.tripKey,
-      this.simulateBatches});
+      this.simulateBatches,
+      this.bidirectional,
+      this.reverseDirection});
 
   static const previewStr = 'Conveyor Preview';
 
@@ -224,6 +228,30 @@ class _ConveyorConfigContentState extends State<_ConveyorConfigContent> {
                     setState(() => widget.config.simulateBatches = val)),
           ],
         ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            const Text('Bidirectional:'),
+            const SizedBox(width: 8),
+            Checkbox(
+                value: widget.config.bidirectional ?? false,
+                onChanged: (val) =>
+                    setState(() => widget.config.bidirectional = val)),
+          ],
+        ),
+        if (widget.config.bidirectional ?? false) ...[
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              const Text('Reverse direction:'),
+              const SizedBox(width: 8),
+              Checkbox(
+                  value: widget.config.reverseDirection ?? false,
+                  onChanged: (val) =>
+                      setState(() => widget.config.reverseDirection = val)),
+            ],
+          ),
+        ],
         const SizedBox(height: 16),
         SizeField(
           initialValue: widget.config.size,
@@ -328,7 +356,7 @@ class _ConveyorState extends ConsumerState<Conveyor> {
       if (frequencyValue != null) {
         try {
           final frequency = frequencyValue.asDouble;
-          if (frequency > 0) {
+          if (frequency != 0) {
             return Colors.green; // Running
           } else {
             return Colors.grey; // Stopped
@@ -354,7 +382,7 @@ class _ConveyorState extends ConsumerState<Conveyor> {
     final streams = <Stream<DynamicValue>>[];
     final streamLabels = <String>[];
 
-    if (widget.config.key != null) {
+    if (widget.config.key != null && widget.config.key!.isNotEmpty) {
       streams.add(ref.watch(stateManProvider.future).asStream().switchMap(
             (stateMan) => stateMan
                 .subscribe(widget.config.key!)
@@ -364,7 +392,7 @@ class _ConveyorState extends ConsumerState<Conveyor> {
       streamLabels.add('drive');
     }
 
-    if (widget.config.batchesKey != null) {
+    if (widget.config.batchesKey != null && widget.config.batchesKey!.isNotEmpty) {
       streams.add(ref.watch(stateManProvider.future).asStream().switchMap(
             (stateMan) => stateMan
                 .subscribe(widget.config.batchesKey!)
@@ -374,7 +402,7 @@ class _ConveyorState extends ConsumerState<Conveyor> {
       streamLabels.add('batches');
     }
 
-    if (widget.config.frequencyKey != null) {
+    if (widget.config.frequencyKey != null && widget.config.frequencyKey!.isNotEmpty) {
       streams.add(ref.watch(stateManProvider.future).asStream().switchMap(
             (stateMan) => stateMan
                 .subscribe(widget.config.frequencyKey!)
@@ -384,7 +412,7 @@ class _ConveyorState extends ConsumerState<Conveyor> {
       streamLabels.add('frequency');
     }
 
-    if (widget.config.tripKey != null) {
+    if (widget.config.tripKey != null && widget.config.tripKey!.isNotEmpty) {
       streams.add(ref.watch(stateManProvider.future).asStream().switchMap(
             (stateMan) => stateMan
                 .subscribe(widget.config.tripKey!)
@@ -434,6 +462,13 @@ class _ConveyorState extends ConsumerState<Conveyor> {
           tripValue: dynValue['trip'],
         );
 
+        double? freq;
+        if (dynValue['frequency'] != null) {
+          try {
+            freq = dynValue['frequency']!.asDouble;
+          } catch (_) {}
+        }
+
         if (widget.config.simulateBatches ?? false) {
           _startSimulateBatchesTimer();
         } else {
@@ -444,10 +479,14 @@ class _ConveyorState extends ConsumerState<Conveyor> {
           _updateBatches(dynValue['batches']!);
         }
 
-        return GestureDetector(
-          onTap: () => _showDetailsDialog(context),
-          child: _buildConveyorVisual(context, color),
-        );
+        final hasMainKey = widget.config.key != null && widget.config.key!.isNotEmpty;
+        if (hasMainKey) {
+          return GestureDetector(
+            onTap: () => _showDetailsDialog(context),
+            child: _buildConveyorVisual(context, color, null, freq),
+          );
+        }
+        return _buildConveyorVisual(context, color, null, freq);
       },
     );
   }
@@ -479,6 +518,7 @@ class _ConveyorState extends ConsumerState<Conveyor> {
     BuildContext context,
     Color color, [
     bool? showExclamation,
+    double? frequency,
   ]) {
     return LayoutRotatedBox(
       angle: (widget.config.coordinates.angle ?? 0.0) * pi / 180,
@@ -487,6 +527,9 @@ class _ConveyorState extends ConsumerState<Conveyor> {
         painter: _ConveyorPainter(
           color: color,
           showExclamation: showExclamation ?? false,
+          bidirectional: widget.config.bidirectional ?? false,
+          reverseDirection: widget.config.reverseDirection ?? false,
+          frequency: frequency,
           batches: _batches,
           angle: widget.config.coordinates.angle ?? 0.0,
         ),
@@ -868,11 +911,17 @@ class _ConveyorPainter extends CustomPainter {
   final Map<String, Batch> batches;
   final Color color;
   final bool showExclamation;
+  final bool bidirectional;
+  final bool reverseDirection;
+  final double? frequency;
   final double angle;
 
   _ConveyorPainter(
       {required this.color,
       this.showExclamation = false,
+      this.bidirectional = false,
+      this.reverseDirection = false,
+      this.frequency,
       required this.batches,
       required this.angle});
 
@@ -954,12 +1003,56 @@ class _ConveyorPainter extends CustomPainter {
       // border (optional)
       canvas.drawRRect(rrect, paintBorder);
     }
+
+    // Draw direction arrow for bidirectional conveyors
+    if (bidirectional && frequency != null && frequency != 0) {
+      canvas.save();
+      canvas.translate(size.width / 2, size.height / 2);
+
+      final arrowLength = size.width * 0.4;
+      final arrowSize = size.shortestSide * 0.25;
+      final arrowPaint = Paint()
+        ..color = Colors.black
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.0
+        ..strokeCap = StrokeCap.round
+        ..strokeJoin = StrokeJoin.round;
+
+      // Determine direction: positive frequency = right, unless reversed
+      final pointsRight = (frequency! > 0) ^ reverseDirection;
+
+      // Shaft
+      canvas.drawLine(
+        Offset(-arrowLength / 2, 0),
+        Offset(arrowLength / 2, 0),
+        arrowPaint,
+      );
+
+      // Single arrowhead in the running direction
+      if (pointsRight) {
+        final head = Path()
+          ..moveTo(arrowLength / 2 - arrowSize, -arrowSize * 0.5)
+          ..lineTo(arrowLength / 2, 0)
+          ..lineTo(arrowLength / 2 - arrowSize, arrowSize * 0.5);
+        canvas.drawPath(head, arrowPaint);
+      } else {
+        final head = Path()
+          ..moveTo(-arrowLength / 2 + arrowSize, -arrowSize * 0.5)
+          ..lineTo(-arrowLength / 2, 0)
+          ..lineTo(-arrowLength / 2 + arrowSize, arrowSize * 0.5);
+        canvas.drawPath(head, arrowPaint);
+      }
+
+      canvas.restore();
+    }
   }
 
   @override
   bool shouldRepaint(covariant _ConveyorPainter oldDelegate) =>
       oldDelegate.color != color ||
-      oldDelegate.showExclamation != showExclamation;
+      oldDelegate.showExclamation != showExclamation ||
+      oldDelegate.bidirectional != bidirectional ||
+      oldDelegate.frequency != frequency;
 }
 
 class ConveyorStatsGraph extends ConsumerStatefulWidget {
