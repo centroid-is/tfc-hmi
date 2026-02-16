@@ -43,6 +43,8 @@ ConveyorConfig _$ConveyorConfigFromJson(Map<String, dynamic> json) =>
       frequencyKey: json['frequencyKey'] as String?,
       tripKey: json['tripKey'] as String?,
       simulateBatches: json['simulateBatches'] as bool?,
+      bidirectional: json['bidirectional'] as bool?,
+      reverseDirection: json['reverseDirection'] as bool?,
     )
       ..variant = json['asset_name'] as String
       ..coordinates =
@@ -63,4 +65,6 @@ Map<String, dynamic> _$ConveyorConfigToJson(ConveyorConfig instance) =>
       'frequencyKey': instance.frequencyKey,
       'tripKey': instance.tripKey,
       'simulateBatches': instance.simulateBatches,
+      'bidirectional': instance.bidirectional,
+      'reverseDirection': instance.reverseDirection,
     };
