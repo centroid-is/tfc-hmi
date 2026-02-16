@@ -32,6 +32,8 @@ class GraphAxisConfig {
   final double? min;
   final double? max;
   final bool boolean;
+  @JsonKey(defaultValue: false)
+  final bool integersOnly;
 
   const GraphAxisConfig({
     this.title,
@@ -39,6 +41,7 @@ class GraphAxisConfig {
     this.min,
     this.max,
     this.boolean = false,
+    this.integersOnly = false,
   });
 
   factory GraphAxisConfig.fromJson(Map<String, dynamic> json) =>
@@ -305,6 +308,7 @@ class Graph {
           labels: (v) => _numLabel(v, config.yAxis.unit, config.yAxis.boolean),
           tickConfig: cs.TickConfig(
               simpleLinear: true,
+              integersOnly: config.yAxis.integersOnly,
               ticks: config.yAxis.boolean ? [0.0, 1.0] : null),
           title: config.yAxis.title,
         )
@@ -353,6 +357,7 @@ class Graph {
                 v, config.yAxis2?.unit ?? '', config.yAxis2?.boolean ?? false),
             tickConfig: cs.TickConfig(
                 simpleLinear: true,
+                integersOnly: config.yAxis2?.integersOnly ?? false,
                 ticks: config.yAxis2?.boolean ?? false ? [0.0, 1.0] : null),
             title: config.yAxis2?.title,
           );

@@ -40,6 +40,8 @@ class RatioNumberConfig extends BaseAsset {
   String? graphHeader;
   @JsonKey(name: 'bars_clock_aligned', defaultValue: false)
   bool barsClockAligned;
+  @JsonKey(name: 'integers_only', defaultValue: false)
+  bool integersOnly;
 
   RatioNumberConfig({
     required this.key1,
@@ -52,6 +54,7 @@ class RatioNumberConfig extends BaseAsset {
     this.pollInterval = const Duration(seconds: 1),
     this.graphHeader,
     this.barsClockAligned = false,
+    this.integersOnly = false,
   });
 
   RatioNumberConfig.preview()
@@ -63,7 +66,8 @@ class RatioNumberConfig extends BaseAsset {
         sinceMinutes = const Duration(minutes: 10),
         howMany = 10,
         pollInterval = const Duration(seconds: 1),
-        barsClockAligned = false;
+        barsClockAligned = false,
+        integersOnly = false;
 
   factory RatioNumberConfig.fromJson(Map<String, dynamic> json) =>
       _$RatioNumberConfigFromJson(json);
@@ -226,6 +230,14 @@ class _RatioNumberConfigEditorState
             value: widget.config.barsClockAligned,
             onChanged: (value) =>
                 setState(() => widget.config.barsClockAligned = value),
+          ),
+          SwitchListTile(
+            title: const Text('Integer Ticks'),
+            subtitle:
+                const Text('Only show whole numbers on the bar chart Y-axis'),
+            value: widget.config.integersOnly,
+            onChanged: (value) =>
+                setState(() => widget.config.integersOnly = value),
           ),
         ],
       ),
@@ -768,7 +780,7 @@ class RatioBarChart extends ConsumerWidget {
       config: GraphConfig(
         type: GraphType.barTimeseries,
         xAxis: GraphAxisConfig(unit: ''),
-        yAxis: GraphAxisConfig(unit: 'Count'),
+        yAxis: GraphAxisConfig(unit: 'Count', integersOnly: config.integersOnly),
         pan: false,
         width: 0.5,
       ),
