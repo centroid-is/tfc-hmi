@@ -172,6 +172,8 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
 
   Future<void> _saveKeyMappings() async {
     if (_keyMappings == null) return;
+    // Unfocus active text field to commit pending changes (e.g. key rename)
+    FocusManager.instance.primaryFocus?.unfocus();
     try {
       final prefs = await ref.read(preferencesProvider.future);
       await prefs.setString('key_mappings', jsonEncode(_keyMappings!.toJson()));
@@ -223,6 +225,43 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
     });
   }
 
+  void _duplicateKey(String key) {
+    final original = _keyMappings!.nodes[key];
+    if (original == null) return;
+    final copy = KeyMappingEntry.fromJson(
+        jsonDecode(jsonEncode(original.toJson())) as Map<String, dynamic>);
+    var newName = '${key}_copy';
+    var i = 1;
+    while (_keyMappings!.nodes.containsKey(newName)) {
+      newName = '${key}_copy_$i';
+      i++;
+    }
+    if (copy.collect != null) {
+      copy.collect!.key = newName;
+    }
+    _cardKeys[newName] = GlobalKey();
+    // Insert copy right after the original, preserving order
+    final newNodes = <String, KeyMappingEntry>{};
+    for (final kv in _keyMappings!.nodes.entries) {
+      newNodes[kv.key] = kv.value;
+      if (kv.key == key) {
+        newNodes[newName] = copy;
+      }
+    }
+    setState(() {
+      _keyMappings!.nodes = newNodes;
+      _newlyAddedKey = newName;
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final keyContext = _cardKeys[newName]?.currentContext;
+      if (keyContext != null) {
+        Scrollable.ensureVisible(keyContext,
+            duration: const Duration(milliseconds: 300));
+      }
+      _newlyAddedKey = null;
+    });
+  }
+
   void _removeKey(String key) {
     _cardKeys.remove(key);
     _keyStatuses.remove(key);
@@ -262,15 +301,23 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
   void _renameKey(String oldKey, String newKey) {
     if (oldKey == newKey) return;
     if (_keyMappings!.nodes.containsKey(newKey)) return;
-    final entry = _keyMappings!.nodes.remove(oldKey);
-    if (entry != null) {
-      if (entry.collect != null) {
-        entry.collect!.key = newKey;
-      }
-      setState(() {
-        _keyMappings!.nodes[newKey] = entry;
-      });
+    final entry = _keyMappings!.nodes[oldKey];
+    if (entry == null) return;
+    if (entry.collect != null) {
+      entry.collect!.key = newKey;
     }
+    final cardKey = _cardKeys.remove(oldKey);
+    if (cardKey != null) _cardKeys[newKey] = cardKey;
+    final status = _keyStatuses.remove(oldKey);
+    if (status != null) _keyStatuses[newKey] = status;
+    // Rebuild map preserving insertion order
+    final newNodes = <String, KeyMappingEntry>{};
+    for (final kv in _keyMappings!.nodes.entries) {
+      newNodes[kv.key == oldKey ? newKey : kv.key] = kv.value;
+    }
+    setState(() {
+      _keyMappings!.nodes = newNodes;
+    });
   }
 
   void _updateEntry(String key, KeyMappingEntry entry) {
@@ -459,6 +506,7 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
                         serverAliases: _serverAliases,
                         onUpdate: (updated) => _updateEntry(entry.key, updated),
                         onRename: (newName) => _renameKey(entry.key, newName),
+                        onCopy: () => _duplicateKey(entry.key),
                         onRemove: () => _showDeleteDialog(entry.key),
                         initiallyExpanded: isNew,
                         status: _keyStatuses[entry.key],
@@ -549,6 +597,7 @@ class _KeyMappingCard extends StatefulWidget {
   final List<String> serverAliases;
   final Function(KeyMappingEntry) onUpdate;
   final Function(String) onRename;
+  final VoidCallback onCopy;
   final VoidCallback onRemove;
   final bool initiallyExpanded;
   final _KeyStatus? status;
@@ -560,6 +609,7 @@ class _KeyMappingCard extends StatefulWidget {
     required this.serverAliases,
     required this.onUpdate,
     required this.onRename,
+    required this.onCopy,
     required this.onRemove,
     this.initiallyExpanded = false,
     this.status,
@@ -571,17 +621,34 @@ class _KeyMappingCard extends StatefulWidget {
 
 class _KeyMappingCardState extends State<_KeyMappingCard> {
   late TextEditingController _keyNameController;
+  late FocusNode _keyNameFocusNode;
   bool _collectEnabled = false;
 
   @override
   void initState() {
     super.initState();
     _keyNameController = TextEditingController(text: widget.keyName);
+    _keyNameFocusNode = FocusNode();
+    _keyNameFocusNode.addListener(_onKeyNameFocusChange);
     _collectEnabled = widget.entry.collect != null;
+  }
+
+  void _onKeyNameFocusChange() {
+    if (!_keyNameFocusNode.hasFocus) {
+      _submitKeyName(_keyNameController.text);
+    }
+  }
+
+  void _submitKeyName(String value) {
+    if (value.isNotEmpty && value != widget.keyName) {
+      widget.onRename(value);
+    }
   }
 
   @override
   void dispose() {
+    _keyNameFocusNode.removeListener(_onKeyNameFocusChange);
+    _keyNameFocusNode.dispose();
     _keyNameController.dispose();
     super.dispose();
   }
@@ -639,6 +706,10 @@ class _KeyMappingCardState extends State<_KeyMappingCard> {
           chip,
           const SizedBox(width: 8),
         ],
+        IconButton(
+          icon: const FaIcon(FontAwesomeIcons.copy, size: 16),
+          onPressed: widget.onCopy,
+        ),
         IconButton(
           icon: const FaIcon(FontAwesomeIcons.trash, size: 16),
           onPressed: widget.onRemove,
@@ -703,15 +774,13 @@ class _KeyMappingCardState extends State<_KeyMappingCard> {
                 // Key name
                 TextField(
                   controller: _keyNameController,
+                  focusNode: _keyNameFocusNode,
                   decoration: const InputDecoration(
                     labelText: 'Key Name',
                     prefixIcon: FaIcon(FontAwesomeIcons.tag, size: 16),
                   ),
-                  onSubmitted: (value) {
-                    if (value.isNotEmpty && value != widget.keyName) {
-                      widget.onRename(value);
-                    }
-                  },
+                  onChanged: (value) => _submitKeyName(value),
+                  onSubmitted: (value) => _submitKeyName(value),
                 ),
                 const SizedBox(height: 16),
                 // OPC UA Config Section
