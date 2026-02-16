@@ -422,6 +422,7 @@ class StateMan {
       }
 
       bool sessionLost = false;
+      bool hadSession = false;
       SecureChannelState? lastChannelState;
       DateTime? channelOpenedAt;
       final channelLifetimeSec = 60; // 1 minute as configured
@@ -463,25 +464,25 @@ class StateMan {
         }
         if (value.sessionState ==
                 SessionState.UA_SESSIONSTATE_CREATE_REQUESTED &&
+            hadSession &&
             _subscriptions.isNotEmpty) {
           logger.e('[$alias] Session lost!');
           sessionLost = true;
         }
-        if (value.sessionState == SessionState.UA_SESSIONSTATE_ACTIVATED &&
-            sessionLost) {
-          logger.e('[$alias] Session lost, resubscribing');
-          // Session was lost, resubscribe
-          sessionLost = false;
-          wrapper.subscriptionId = null;
-          for (final entry in _subscriptions.values) {
-            _monitor(entry.key, resub: true);
+        if (value.sessionState == SessionState.UA_SESSIONSTATE_ACTIVATED) {
+          if (sessionLost) {
+            logger.e('[$alias] Session lost, resubscribing');
+            sessionLost = false;
+            wrapper.subscriptionId = null;
+            for (final entry in _subscriptions.values) {
+              _monitor(entry.key, resub: true);
+            }
+          } else if (hadSession) {
+            logger.w(
+                '[$alias] Session regained, resending last values ${_subscriptions.length}');
+            _resendLastValues();
           }
-        } else if (value.sessionState ==
-            SessionState.UA_SESSIONSTATE_ACTIVATED) {
-          // Session was not lost, retransmit last data values.
-          logger.w(
-              '[$alias] Session regained, resending last values ${_subscriptions.length}');
-          _resendLastValues();
+          hadSession = true;
         }
       }).onError((e, s) {
         logger.e('[$alias] Failed to listen to state stream: $e, $s');
@@ -837,21 +838,23 @@ class StateMan {
         if (wrapper.subscriptionId == null) {
           continue;
         }
-        var stream =
-            client.monitor(id, wrapper.subscriptionId!).asBroadcastStream();
+
+        // Verify node is accessible before creating monitored items.
+        // Previously used stream.first.timeout() on a broadcast stream,
+        // but abandoned streams leaked monitored items in open62541's
+        // MonitorItemsTree (asBroadcastStream never cancels its source).
+        final readValue =
+            await client.read(id).timeout(const Duration(seconds: 1));
+        final firstValue = idx != null ? readValue[idx] : readValue;
+
+        // Only create monitored items after confirming the node is readable.
+        // The raw stream goes directly to AutoDisposingStream — its _rawSub
+        // cancel properly triggers UA_Client_MonitoredItems_delete_async.
+        var stream = client.monitor(id, wrapper.subscriptionId!);
         if (idx != null) {
           stream = stream.map((value) => value[idx]);
         }
 
-        // Test for first value
-        final firstValue = await stream.first.timeout(
-          const Duration(seconds: 1),
-          onTimeout: () {
-            throw TimeoutException('No value received within 1 seconds');
-          },
-        );
-
-        // Got first value, create subscription
         _subscriptions[key]!.subscribe(stream, firstValue);
 
         return _subscriptions[key]!.stream;
