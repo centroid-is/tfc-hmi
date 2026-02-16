@@ -32,7 +32,8 @@ class SpeedBatcherConfig extends BaseAsset {
       : label = "SpeedBatcher preview",
         key = "";
 
-  factory SpeedBatcherConfig.fromJson(Map<String, dynamic> json) => _$SpeedBatcherConfigFromJson(json);
+  factory SpeedBatcherConfig.fromJson(Map<String, dynamic> json) =>
+      _$SpeedBatcherConfigFromJson(json);
   @override
   Map<String, dynamic> toJson() => _$SpeedBatcherConfigToJson(this);
 
@@ -42,7 +43,8 @@ class SpeedBatcherConfig extends BaseAsset {
   }
 
   @override
-  Widget configure(BuildContext context) => _SpeedBatcherConfigEditor(config: this);
+  Widget configure(BuildContext context) =>
+      _SpeedBatcherConfigEditor(config: this);
 }
 
 class _SpeedBatcherConfigEditor extends StatefulWidget {
@@ -50,7 +52,8 @@ class _SpeedBatcherConfigEditor extends StatefulWidget {
   const _SpeedBatcherConfigEditor({required this.config});
 
   @override
-  State<_SpeedBatcherConfigEditor> createState() => _SpeedBatcherConfigEditorState();
+  State<_SpeedBatcherConfigEditor> createState() =>
+      _SpeedBatcherConfigEditorState();
 }
 
 class _SpeedBatcherConfigEditorState extends State<_SpeedBatcherConfigEditor> {
@@ -108,19 +111,19 @@ class SpeedBatcher extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     return StreamBuilder<DynamicValue>(
-      stream: ref
-          .watch(stateManProvider.future)
-          .asStream()
-          .asyncExpand((stateMan) => stateMan.subscribe(config.key).asStream().switchMap((s) => s)),
+      stream: ref.watch(stateManProvider.future).asStream().asyncExpand(
+          (stateMan) =>
+              stateMan.subscribe(config.key).asStream().switchMap((s) => s)),
       builder: (context, snapshot) {
         if (snapshot.hasError || snapshot.hasData == false) {
-          return speedBatcher([null, null, null, null]);
+          return speedBatcher([null, null, null, null, null]);
         }
         final dyn = snapshot.data!;
         return speedBatcher([
           dyn['p_stat_Running'].asBool,
           dyn['p_stat_Cleaning'].asBool,
           dyn['p_stat_BatchReady'].asBool,
+          dyn['p_stat_DropOk'].asBool,
           dyn['p_stat_Dropped'].asBool
         ]);
       },
@@ -128,11 +131,17 @@ class SpeedBatcher extends ConsumerWidget {
   }
 
   Widget speedBatcher(List<bool?> values) {
-    assert(values.length == 4);
+    assert(values.length == 5);
 
     // Build your LEDConfig list exactly as before
     final ledConfigs = <LEDConfig>[
-      for (final e in ['Running', 'Cleaning', 'Batch ready', 'Dropped Batch'])
+      for (final e in [
+        'Running',
+        'Cleaning',
+        'Batch ready',
+        'Drop Ok from PLC',
+        'Dropped Batch'
+      ])
         LEDConfig(
           key: "",
           onColor: (e == 'Cleaning') ? Colors.blue : Colors.green,
@@ -155,9 +164,9 @@ class SpeedBatcher extends ConsumerWidget {
           border: Border.all(color: Colors.grey.shade300),
         ),
         child: Column(
-          // We want 5 equally‐spaced “rows”: 4 for LED/status, 1 for the label.
+          // We want 6 equally‐spaced "rows": 5 for LED/status, 1 for the label.
           children: [
-            for (int i = 0; i < 4; i++)
+            for (int i = 0; i < 5; i++)
               Expanded(
                 flex: 1, // Each LED row is 1/5 of the square’s height
                 child: Row(
@@ -220,7 +229,8 @@ class GateStatusConfig extends BaseAsset {
 
   GateStatusConfig.preview() : key = "";
 
-  factory GateStatusConfig.fromJson(Map<String, dynamic> json) => _$GateStatusConfigFromJson(json);
+  factory GateStatusConfig.fromJson(Map<String, dynamic> json) =>
+      _$GateStatusConfigFromJson(json);
   @override
   Map<String, dynamic> toJson() => _$GateStatusConfigToJson(this);
 
@@ -230,7 +240,8 @@ class GateStatusConfig extends BaseAsset {
   }
 
   @override
-  Widget configure(BuildContext context) => _GateStatusConfigEditor(config: this);
+  Widget configure(BuildContext context) =>
+      _GateStatusConfigEditor(config: this);
 }
 
 class _GateStatusConfigEditor extends StatefulWidget {
@@ -238,7 +249,8 @@ class _GateStatusConfigEditor extends StatefulWidget {
   const _GateStatusConfigEditor({required this.config});
 
   @override
-  State<_GateStatusConfigEditor> createState() => _GateStatusConfigEditorState();
+  State<_GateStatusConfigEditor> createState() =>
+      _GateStatusConfigEditorState();
 }
 
 class _GateStatusConfigEditorState extends State<_GateStatusConfigEditor> {
@@ -276,29 +288,31 @@ class GateStatus extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    if (config.key.isEmpty) {
-      return CustomPaint(
-        painter: GatePainter(color: Colors.grey),
+    Widget buildGate(Color color) {
+      return LayoutRotatedBox(
+        angle: (config.coordinates.angle ?? 0.0) * pi / 180,
+        child: CustomPaint(
+          size: config.size.toSize(MediaQuery.of(context).size),
+          painter: GatePainter(color: color),
+        ),
       );
     }
 
+    if (config.key.isEmpty) {
+      return buildGate(Colors.grey);
+    }
+
     return StreamBuilder<DynamicValue>(
-      stream: ref
-          .watch(stateManProvider.future)
-          .asStream()
-          .asyncExpand((stateMan) => stateMan.subscribe(config.key).asStream().switchMap((s) => s)),
+      stream: ref.watch(stateManProvider.future).asStream().asyncExpand(
+          (stateMan) =>
+              stateMan.subscribe(config.key).asStream().switchMap((s) => s)),
       builder: (context, snapshot) {
         final color = !snapshot.hasData
             ? Colors.grey
             : snapshot.data!.asBool
                 ? Colors.red
                 : Colors.green;
-        return Transform.rotate(
-          angle: (config.coordinates.angle ?? 0.0) * pi / 180,
-          child: CustomPaint(
-            painter: GatePainter(color: color),
-          ),
-        );
+        return buildGate(color);
       },
     );
   }
@@ -321,7 +335,8 @@ class GatePainter extends CustomPainter {
     // Draw top bubble
     canvas.drawCircle(Offset(size.width / 2, topCenterY), circleRadius, paint);
     // Draw bottom bubble
-    canvas.drawCircle(Offset(size.width / 2, bottomCenterY), circleRadius, paint);
+    canvas.drawCircle(
+        Offset(size.width / 2, bottomCenterY), circleRadius, paint);
 
     // Draw line: start/end inside the circles
     final linePaint = Paint()
