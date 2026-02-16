@@ -32,6 +32,8 @@ class GraphAxisConfig {
   final double? min;
   final double? max;
   final bool boolean;
+  @JsonKey(defaultValue: false)
+  final bool integersOnly;
 
   const GraphAxisConfig({
     this.title,
@@ -39,6 +41,7 @@ class GraphAxisConfig {
     this.min,
     this.max,
     this.boolean = false,
+    this.integersOnly = false,
   });
 
   factory GraphAxisConfig.fromJson(Map<String, dynamic> json) =>
@@ -64,6 +67,9 @@ class GraphConfig {
   final bool pan;
   @JsonKey(defaultValue: true)
   final bool zoom;
+
+  @JsonKey(defaultValue: false)
+  final bool tooltip;
 
   // Stroke or bar width or point size
   @JsonKey(defaultValue: 2)
@@ -99,6 +105,7 @@ class GraphConfig {
     this.pan = true,
     this.width = 2,
     this.zoom = true,
+    this.tooltip = false,
   });
 
   factory GraphConfig.fromJson(Map<String, dynamic> json) =>
@@ -152,6 +159,7 @@ class Graph {
   final void Function()? onNowPressed; // When the user clicks the now button
   final void Function()? onSetDatePressed;
   final void Function() redraw;
+  final cs.TooltipBuilder? tooltipBuilder;
 
   Graph(
       {required this.config,
@@ -164,6 +172,7 @@ class Graph {
       this.showButtons = true,
       required this.redraw,
       cs.ChartTheme? chartTheme,
+      this.tooltipBuilder,
       this.categoryColors = const {}})
       : _data = data,
         _chartWidget = Center(child: const CircularProgressIndicator()) {
@@ -305,11 +314,18 @@ class Graph {
           labels: (v) => _numLabel(v, config.yAxis.unit, config.yAxis.boolean),
           tickConfig: cs.TickConfig(
               simpleLinear: true,
+              integersOnly: config.yAxis.integersOnly,
               ticks: config.yAxis.boolean ? [0.0, 1.0] : null),
           title: config.yAxis.title,
         )
         .interaction(
           pan: panConfig,
+          tooltip: config.tooltip ? cs.TooltipConfig(
+            builder: tooltipBuilder ?? cs.DefaultTooltips.simple('y'),
+            showDelay: const Duration(milliseconds: 50),
+            hideDelay: const Duration(milliseconds: 500),
+            followPointer: false,
+          ) : null,
         )
         .animate(duration: Duration.zero)
         .legend(
@@ -353,6 +369,7 @@ class Graph {
                 v, config.yAxis2?.unit ?? '', config.yAxis2?.boolean ?? false),
             tickConfig: cs.TickConfig(
                 simpleLinear: true,
+                integersOnly: config.yAxis2?.integersOnly ?? false,
                 ticks: config.yAxis2?.boolean ?? false ? [0.0, 1.0] : null),
             title: config.yAxis2?.title,
           );

@@ -52,7 +52,7 @@ dependencies:
   cristalyse:
     git:
       url: https://github.com/centroid-is/cristalyse.git
-      ref: fix/preserve-viewport-on-data-change
+      ref: dev
   tfc_dart:
     path: packages/tfc_dart
 dev_dependencies:

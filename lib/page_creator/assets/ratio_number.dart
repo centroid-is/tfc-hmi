@@ -38,6 +38,14 @@ class RatioNumberConfig extends BaseAsset {
   Duration pollInterval;
   @JsonKey(name: 'graph_header')
   String? graphHeader;
+  @JsonKey(name: 'bars_clock_aligned', defaultValue: false)
+  bool barsClockAligned;
+  @JsonKey(name: 'integers_only', defaultValue: false)
+  bool integersOnly;
+  @JsonKey(name: 'bars_interactive', defaultValue: false)
+  bool barsInteractive;
+  @JsonKey(name: 'interval_presets', defaultValue: [1, 5, 10, 60, 240])
+  List<int> intervalPresets;
 
   RatioNumberConfig({
     required this.key1,
@@ -49,6 +57,10 @@ class RatioNumberConfig extends BaseAsset {
     this.howMany = 10,
     this.pollInterval = const Duration(seconds: 1),
     this.graphHeader,
+    this.barsClockAligned = false,
+    this.integersOnly = false,
+    this.barsInteractive = false,
+    this.intervalPresets = const [1, 5, 10, 60, 240],
   });
 
   RatioNumberConfig.preview()
@@ -59,7 +71,11 @@ class RatioNumberConfig extends BaseAsset {
         textColor = Colors.black,
         sinceMinutes = const Duration(minutes: 10),
         howMany = 10,
-        pollInterval = const Duration(seconds: 1);
+        pollInterval = const Duration(seconds: 1),
+        barsClockAligned = false,
+        integersOnly = false,
+        barsInteractive = false,
+        intervalPresets = const [1, 5, 10, 60, 240];
 
   factory RatioNumberConfig.fromJson(Map<String, dynamic> json) =>
       _$RatioNumberConfigFromJson(json);
@@ -214,10 +230,79 @@ class _RatioNumberConfigEditorState
               }
             },
           ),
+          const SizedBox(height: 16),
+          SwitchListTile(
+            title: const Text('Clock-Aligned Bars'),
+            subtitle: const Text(
+                'Align bar chart buckets to clock boundaries (e.g. on the hour)'),
+            value: widget.config.barsClockAligned,
+            onChanged: (value) =>
+                setState(() => widget.config.barsClockAligned = value),
+          ),
+          SwitchListTile(
+            title: const Text('Integer Ticks'),
+            subtitle:
+                const Text('Only show whole numbers on the bar chart Y-axis'),
+            value: widget.config.integersOnly,
+            onChanged: (value) =>
+                setState(() => widget.config.integersOnly = value),
+          ),
+          SwitchListTile(
+            title: const Text('Interactive Bars'),
+            subtitle:
+                const Text('Show tooltip on hover/tap in bar chart'),
+            value: widget.config.barsInteractive,
+            onChanged: (value) =>
+                setState(() => widget.config.barsInteractive = value),
+          ),
+          const SizedBox(height: 16),
+          const Text('Available Intervals',
+              style: TextStyle(fontWeight: FontWeight.bold)),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 4,
+            children: [1, 5, 10, 30, 60, 240, 720, 1440].map((minutes) {
+              final selected =
+                  widget.config.intervalPresets.contains(minutes);
+              return FilterChip(
+                label: Text(_formatIntervalMinutes(minutes)),
+                selected: selected,
+                onSelected: (value) {
+                  setState(() {
+                    if (value) {
+                      widget.config.intervalPresets.add(minutes);
+                      widget.config.intervalPresets.sort();
+                    } else {
+                      widget.config.intervalPresets.remove(minutes);
+                    }
+                  });
+                },
+              );
+            }).toList(),
+          ),
         ],
       ),
     );
   }
+}
+
+String _formatIntervalMinutes(int minutes) {
+  if (minutes < 60) return '${minutes}m';
+  if (minutes < 1440) return '${minutes ~/ 60}h';
+  return '${minutes ~/ 1440}d';
+}
+
+String _formatInterval(Duration d) => _formatIntervalMinutes(d.inMinutes);
+
+/// Returns the end of the current clock-aligned bucket.
+/// E.g., with a 1-hour interval at 10:35, returns 11:00.
+DateTime _clockAlignedEnd(DateTime time, Duration interval) {
+  final ms = interval.inMilliseconds;
+  final startOfDay = DateTime(time.year, time.month, time.day);
+  final msSinceStartOfDay = time.difference(startOfDay).inMilliseconds;
+  final bucketStart = (msSinceStartOfDay ~/ ms) * ms;
+  return startOfDay.add(Duration(milliseconds: bucketStart + ms));
 }
 
 class RatioNumberWidget extends ConsumerStatefulWidget {
@@ -313,120 +398,71 @@ class _RatioNumberWidgetState extends ConsumerState<RatioNumberWidget> {
 
   Future<List<TimeseriesData<dynamic>>> _getQueue(
       Database db, String key) async {
+    final endTime = widget.config.barsClockAligned
+        ? _clockAlignedEnd(DateTime.now(), widget.config.sinceMinutes)
+        : DateTime.now();
     return await db.queryTimeseriesData(
         key,
-        DateTime.now()
-            .subtract(widget.config.sinceMinutes * widget.config.howMany),
+        endTime.subtract(widget.config.sinceMinutes * widget.config.howMany),
         orderBy: 'time DESC');
   }
 
-  void _showBarChartDialog(BuildContext context) {
+  void _showBarChartDialog(BuildContext context) async {
+    final navigator = Navigator.of(context);
+    final db = await ref.read(databaseProvider.future);
+    if (db == null || !mounted) return;
+    final results = await Future.wait([
+      _getQueue(db, widget.config.key1),
+      _getQueue(db, widget.config.key2),
+    ]);
+    if (!mounted) return;
+    final key1Queue = results[0];
+    final key2Queue = results[1];
+
     showDialog(
-      context: context,
-      builder: (context) => FutureBuilder<Database?>(
-        future: ref.read(databaseProvider.future),
-        builder: (context, snapshot) {
-          final size = MediaQuery.of(context).size;
-
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return Dialog(
-              child: Container(
-                width: size.width * 0.8,
-                height: size.height * 0.8,
-                padding: const EdgeInsets.all(16),
-                child: const Center(child: CircularProgressIndicator()),
-              ),
-            );
-          }
-
-          if (snapshot.hasError || !snapshot.hasData || snapshot.data == null) {
-            return Dialog(
-              child: Container(
-                width: size.width * 0.8,
-                height: size.height * 0.8,
-                padding: const EdgeInsets.all(16),
-                child:
-                    Text('Database not found: ${snapshot.error ?? "No data"}'),
-              ),
-            );
-          }
-
-          final database = snapshot.data!;
-          return FutureBuilder<List<List<TimeseriesData<dynamic>>>>(
-            future: Future.wait([
-              _getQueue(database, widget.config.key1),
-              _getQueue(database, widget.config.key2),
-            ]),
-            builder: (context, queueSnapshot) {
-              if (queueSnapshot.connectionState == ConnectionState.waiting) {
-                return Dialog(
-                  child: Container(
-                    width: size.width * 0.8,
-                    height: size.height * 0.8,
-                    padding: const EdgeInsets.all(16),
-                    child: const Center(child: CircularProgressIndicator()),
-                  ),
-                );
-              }
-
-              if (queueSnapshot.hasError) {
-                return Dialog(
-                  child: Container(
-                    width: size.width * 0.8,
-                    height: size.height * 0.8,
-                    padding: const EdgeInsets.all(16),
-                    child: Text('Error loading data: ${queueSnapshot.error}'),
-                  ),
-                );
-              }
-
-              final queues = queueSnapshot.data!;
-              final key1Queue = queues[0];
-              final key2Queue = queues[1];
-
-              return Dialog(
-                child: Container(
-                  width: size.width * 0.8,
-                  height: size.height * 0.8,
-                  padding: const EdgeInsets.all(16),
-                  child: Column(
-                    children: [
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(
-                            widget.config.graphHeader ??
-                                widget.config.text ??
-                                'Ratio Analysis',
-                            style: Theme.of(context).textTheme.titleLarge,
-                          ),
-                          IconButton(
-                            icon: const Icon(Icons.close),
-                            onPressed: () => Navigator.of(context).pop(),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 16),
-                      Expanded(
-                        child: RatioAnalysisView(
-                          config: widget.config,
-                          key1Queue: key1Queue,
-                          key2Queue: key2Queue,
-                        ),
-                      ),
-                    ],
+      context: navigator.context,
+      builder: (context) {
+        final size = MediaQuery.of(context).size;
+        return Dialog(
+          child: Container(
+            width: size.width * 0.8,
+            height: size.height * 0.8,
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      widget.config.graphHeader ??
+                          widget.config.text ??
+                          'Ratio Analysis',
+                      style: Theme.of(context).textTheme.titleLarge,
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close),
+                      onPressed: () => Navigator.of(context).pop(),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                Expanded(
+                  child: RatioAnalysisView(
+                    config: widget.config,
+                    key1Queue: key1Queue,
+                    key2Queue: key2Queue,
                   ),
                 ),
-              );
-            },
-          );
-        },
-      ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 }
 
-class RatioAnalysisView extends StatefulWidget {
+class RatioAnalysisView extends ConsumerStatefulWidget {
   final RatioNumberConfig config;
   final List<TimeseriesData<dynamic>> key1Queue;
   final List<TimeseriesData<dynamic>> key2Queue;
@@ -439,50 +475,183 @@ class RatioAnalysisView extends StatefulWidget {
   });
 
   @override
-  State<RatioAnalysisView> createState() => _RatioAnalysisViewState();
+  ConsumerState<RatioAnalysisView> createState() => _RatioAnalysisViewState();
 }
 
-class _RatioAnalysisViewState extends State<RatioAnalysisView> {
+class _RatioAnalysisViewState extends ConsumerState<RatioAnalysisView> {
   bool _showChart = true;
+  late Duration _selectedInterval;
+  late List<TimeseriesData<dynamic>> _key1Queue;
+  late List<TimeseriesData<dynamic>> _key2Queue;
+  bool _isLoading = false;
+
+  // Cache: interval → (key1Data, key2Data)
+  final Map<Duration, (List<TimeseriesData<dynamic>>, List<TimeseriesData<dynamic>>)> _cache = {};
+
+  @override
+  void initState() {
+    super.initState();
+    _selectedInterval = widget.config.sinceMinutes;
+    _key1Queue = widget.key1Queue;
+    _key2Queue = widget.key2Queue;
+    // Seed cache with initial data
+    _cache[_selectedInterval] = (_key1Queue, _key2Queue);
+    // Prefetch other intervals after first frame renders
+    WidgetsBinding.instance.addPostFrameCallback((_) => _prefetchAll());
+  }
+
+  Future<void> _prefetchAll() async {
+    final db = await ref.read(databaseProvider.future);
+    if (db == null || !mounted) return;
+    final presets = widget.config.intervalPresets
+        .map((m) => Duration(minutes: m))
+        .toList();
+    for (final interval in presets) {
+      if (_cache.containsKey(interval)) continue;
+      final data = await _fetchForInterval(db, interval);
+      if (!mounted) return;
+      _cache[interval] = data;
+    }
+  }
+
+  Future<(List<TimeseriesData<dynamic>>, List<TimeseriesData<dynamic>>)>
+      _fetchForInterval(Database db, Duration interval) async {
+    final endTime = widget.config.barsClockAligned
+        ? _clockAlignedEnd(DateTime.now(), interval)
+        : DateTime.now();
+    final since = interval * widget.config.howMany;
+    final results = await Future.wait([
+      db.queryTimeseriesData(
+          widget.config.key1, endTime.subtract(since),
+          orderBy: 'time DESC'),
+      db.queryTimeseriesData(
+          widget.config.key2, endTime.subtract(since),
+          orderBy: 'time DESC'),
+    ]);
+    return (results[0], results[1]);
+  }
+
+  Future<void> _fetchData() async {
+    setState(() => _isLoading = true);
+    try {
+      final db = await ref.read(databaseProvider.future);
+      if (db == null) return;
+      // Fetch current view first
+      final data = await _fetchForInterval(db, _selectedInterval);
+      if (!mounted) return;
+      _cache[_selectedInterval] = data;
+      setState(() {
+        _key1Queue = data.$1;
+        _key2Queue = data.$2;
+        _isLoading = false;
+      });
+      // Then refresh all other cached intervals in background
+      final presets = widget.config.intervalPresets
+          .map((m) => Duration(minutes: m))
+          .toList();
+      for (final interval in presets) {
+        if (interval == _selectedInterval) continue;
+        final other = await _fetchForInterval(db, interval);
+        if (!mounted) return;
+        _cache[interval] = other;
+      }
+    } catch (_) {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  void _changeInterval(Duration interval) {
+    _selectedInterval = interval;
+    final cached = _cache[interval];
+    if (cached != null) {
+      setState(() {
+        _key1Queue = cached.$1;
+        _key2Queue = cached.$2;
+      });
+    } else {
+      _fetchData();
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
+    final presets = widget.config.intervalPresets
+        .map((m) => Duration(minutes: m))
+        .toList();
+
     return Column(
       children: [
-        // Toggle button row
-        Row(
-          mainAxisAlignment: MainAxisAlignment.center,
+        // Control bar: interval toggles | chart/table toggle (centered) | refresh
+        Stack(
+          alignment: Alignment.center,
           children: [
+            // Chart/Table toggle (true center)
             ToggleButtons(
               isSelected: [_showChart, !_showChart],
               onPressed: (index) {
-                setState(() {
-                  _showChart = index == 0;
-                });
+                setState(() => _showChart = index == 0);
               },
               borderRadius: BorderRadius.circular(8),
+              constraints:
+                  const BoxConstraints(minHeight: 36, minWidth: 48),
               children: const [
                 Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  padding:
+                      EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Icon(Icons.bar_chart),
-                      SizedBox(width: 8),
+                      Icon(Icons.bar_chart, size: 18),
+                      SizedBox(width: 4),
                       Text('Chart'),
                     ],
                   ),
                 ),
                 Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  padding:
+                      EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Icon(Icons.table_chart),
-                      SizedBox(width: 8),
+                      Icon(Icons.table_chart, size: 18),
+                      SizedBox(width: 4),
                       Text('Table'),
                     ],
                   ),
+                ),
+              ],
+            ),
+            // Interval toggles (left) + refresh (right)
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                if (presets.length > 1)
+                  ToggleButtons(
+                    isSelected:
+                        presets.map((p) => p == _selectedInterval).toList(),
+                    onPressed: (i) => _changeInterval(presets[i]),
+                    borderRadius: BorderRadius.circular(8),
+                    constraints:
+                        const BoxConstraints(minHeight: 36, minWidth: 48),
+                    children: presets
+                        .map((d) => Padding(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 12, vertical: 6),
+                              child: Text(_formatInterval(d)),
+                            ))
+                        .toList(),
+                  )
+                else
+                  const SizedBox.shrink(),
+                IconButton(
+                  icon: _isLoading
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2))
+                      : const Icon(Icons.refresh),
+                  onPressed: _isLoading ? null : _fetchData,
+                  tooltip: 'Refresh',
                 ),
               ],
             ),
@@ -494,13 +663,14 @@ class _RatioAnalysisViewState extends State<RatioAnalysisView> {
           child: _showChart
               ? RatioBarChart(
                   config: widget.config,
-                  key1Queue: widget.key1Queue,
-                  key2Queue: widget.key2Queue,
+                  key1Queue: _key1Queue,
+                  key2Queue: _key2Queue,
+                  intervalOverride: _selectedInterval,
                 )
               : RatioTableView(
                   config: widget.config,
-                  key1Queue: widget.key1Queue,
-                  key2Queue: widget.key2Queue,
+                  key1Queue: _key1Queue,
+                  key2Queue: _key2Queue,
                 ),
         ),
       ],
@@ -708,12 +878,14 @@ class RatioBarChart extends ConsumerWidget {
   final RatioNumberConfig config;
   final List<TimeseriesData<dynamic>> key1Queue;
   final List<TimeseriesData<dynamic>> key2Queue;
+  final Duration? intervalOverride;
 
   const RatioBarChart({
     super.key,
     required this.config,
     required this.key1Queue,
     required this.key2Queue,
+    this.intervalOverride,
   });
 
   @override
@@ -739,25 +911,51 @@ class RatioBarChart extends ConsumerWidget {
       });
     }
 
+    final key1Label = config.getDisplayLabel(config.key1);
+    final key2Label = config.getDisplayLabel(config.key2);
+
     return Graph(
       config: GraphConfig(
         type: GraphType.barTimeseries,
         xAxis: GraphAxisConfig(unit: ''),
-        yAxis: GraphAxisConfig(unit: 'Count'),
+        yAxis: GraphAxisConfig(unit: 'Count', integersOnly: config.integersOnly),
         pan: false,
+        tooltip: config.barsInteractive,
         width: 0.5,
       ),
       data: data,
       showButtons: false,
       chartTheme: ref.watch(chartThemeNotifierProvider),
       redraw: () {},
+      tooltipBuilder: (point) {
+        final x = point.xValue as double;
+        // Find both series for this time bucket
+        final match1 = data.where((d) => d['x'] == x && d['s'] == key1Label);
+        final match2 = data.where((d) => d['x'] == x && d['s'] == key2Label);
+        final v1 = match1.isNotEmpty ? (match1.first['y'] as double).round() : 0;
+        final v2 = match2.isNotEmpty ? (match2.first['y'] as double).round() : 0;
+        final total = v1 + v2;
+        final pct = total > 0 ? (v1 / total * 100).toStringAsFixed(1) : '0.0';
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('$key1Label: $v1', style: const TextStyle(color: Colors.white, fontSize: 12)),
+            Text('$key2Label: $v2', style: const TextStyle(color: Colors.white, fontSize: 12)),
+            const Divider(height: 8, color: Colors.white54),
+            Text('Ratio: $pct%', style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold)),
+          ],
+        );
+      },
     ).build(context);
   }
 
   List<DateTime> _createTimeBuckets() {
     final buckets = <DateTime>[];
-    final bucketDuration = config.sinceMinutes;
-    final endTime = DateTime.now();
+    final bucketDuration = intervalOverride ?? config.sinceMinutes;
+    final endTime = config.barsClockAligned
+        ? _clockAlignedEnd(DateTime.now(), bucketDuration)
+        : DateTime.now();
 
     for (int i = config.howMany - 1; i >= 0; i--) {
       final bucketStart = endTime.subtract(bucketDuration * (i + 1));
@@ -772,7 +970,7 @@ class RatioBarChart extends ConsumerWidget {
     final result = <DateTime, int>{};
 
     for (final bucket in buckets) {
-      final bucketEnd = bucket.add(config.sinceMinutes);
+      final bucketEnd = bucket.add(intervalOverride ?? config.sinceMinutes);
       final count = dataPoints
           .where((point) =>
               point.time.isAfter(bucket) && point.time.isBefore(bucketEnd))

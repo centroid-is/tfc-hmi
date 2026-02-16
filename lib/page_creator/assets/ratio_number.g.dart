@@ -24,6 +24,13 @@ RatioNumberConfig _$RatioNumberConfigFromJson(Map<String, dynamic> json) =>
           ? const Duration(seconds: 1)
           : Duration(microseconds: (json['poll_interval'] as num).toInt()),
       graphHeader: json['graph_header'] as String?,
+      barsClockAligned: json['bars_clock_aligned'] as bool? ?? false,
+      integersOnly: json['integers_only'] as bool? ?? false,
+      barsInteractive: json['bars_interactive'] as bool? ?? false,
+      intervalPresets: (json['interval_presets'] as List<dynamic>?)
+              ?.map((e) => (e as num).toInt())
+              .toList() ??
+          [1, 5, 10, 60, 240],
     )
       ..variant = json['asset_name'] as String
       ..coordinates =
@@ -48,6 +55,10 @@ Map<String, dynamic> _$RatioNumberConfigToJson(RatioNumberConfig instance) =>
       'how_many': instance.howMany,
       'poll_interval': instance.pollInterval.inMicroseconds,
       'graph_header': instance.graphHeader,
+      'bars_clock_aligned': instance.barsClockAligned,
+      'integers_only': instance.integersOnly,
+      'bars_interactive': instance.barsInteractive,
+      'interval_presets': instance.intervalPresets,
     };
 
 const _$TextPosEnumMap = {

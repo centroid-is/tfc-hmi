@@ -13,6 +13,7 @@ GraphAxisConfig _$GraphAxisConfigFromJson(Map<String, dynamic> json) =>
       min: (json['min'] as num?)?.toDouble(),
       max: (json['max'] as num?)?.toDouble(),
       boolean: json['boolean'] as bool? ?? false,
+      integersOnly: json['integersOnly'] as bool? ?? false,
     );
 
 Map<String, dynamic> _$GraphAxisConfigToJson(GraphAxisConfig instance) =>
@@ -22,6 +23,7 @@ Map<String, dynamic> _$GraphAxisConfigToJson(GraphAxisConfig instance) =>
       'min': instance.min,
       'max': instance.max,
       'boolean': instance.boolean,
+      'integersOnly': instance.integersOnly,
     };
 
 GraphConfig _$GraphConfigFromJson(Map<String, dynamic> json) => GraphConfig(
@@ -37,6 +39,7 @@ GraphConfig _$GraphConfigFromJson(Map<String, dynamic> json) => GraphConfig(
       pan: json['pan'] as bool? ?? true,
       width: (json['width'] as num?)?.toDouble() ?? 2,
       zoom: json['zoom'] as bool? ?? true,
+      tooltip: json['tooltip'] as bool? ?? false,
     );
 
 Map<String, dynamic> _$GraphConfigToJson(GraphConfig instance) =>
@@ -48,6 +51,7 @@ Map<String, dynamic> _$GraphConfigToJson(GraphConfig instance) =>
       'xSpan': instance.xSpan?.inMicroseconds,
       'pan': instance.pan,
       'zoom': instance.zoom,
+      'tooltip': instance.tooltip,
       'width': instance.width,
     };
 
