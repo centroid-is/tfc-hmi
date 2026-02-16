@@ -60,6 +60,7 @@ class AssetRegistry {
     ElCabConfig: ElCabConfig.fromJson,
     RecipesConfig: RecipesConfig.fromJson,
     SpeedBatcherConfig: SpeedBatcherConfig.fromJson,
+    GateStatusConfig: GateStatusConfig.fromJson,
   };
 
   static final Map<Type, Asset Function()> defaultFactories = {
@@ -93,7 +94,8 @@ class AssetRegistry {
     ChecklistsConfig: ChecklistsConfig.preview,
     ElCabConfig: ElCabConfig.preview,
     RecipesConfig: RecipesConfig.preview,
-    SpeedBatcherConfig: SpeedBatcherConfig.preview
+    SpeedBatcherConfig: SpeedBatcherConfig.preview,
+    GateStatusConfig: GateStatusConfig.preview,
   };
 
   static void registerFromJsonFactory<T extends Asset>(
