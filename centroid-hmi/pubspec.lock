@@ -278,8 +278,8 @@ packages:
     dependency: transitive
     description:
       path: "."
-      ref: "fix/preserve-viewport-on-data-change"
-      resolved-ref: e018b8876451aebadd383ae63cf3abcb2c5903fc
+      ref: dev
+      resolved-ref: c9afc9db1032dc1f14096c703f11a0a3bc90c40b
       url: "https://github.com/centroid-is/cristalyse.git"
     source: git
     version: "1.17.3"

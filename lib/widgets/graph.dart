@@ -68,6 +68,9 @@ class GraphConfig {
   @JsonKey(defaultValue: true)
   final bool zoom;
 
+  @JsonKey(defaultValue: false)
+  final bool tooltip;
+
   // Stroke or bar width or point size
   @JsonKey(defaultValue: 2)
   final double width;
@@ -102,6 +105,7 @@ class GraphConfig {
     this.pan = true,
     this.width = 2,
     this.zoom = true,
+    this.tooltip = false,
   });
 
   factory GraphConfig.fromJson(Map<String, dynamic> json) =>
@@ -155,6 +159,7 @@ class Graph {
   final void Function()? onNowPressed; // When the user clicks the now button
   final void Function()? onSetDatePressed;
   final void Function() redraw;
+  final cs.TooltipBuilder? tooltipBuilder;
 
   Graph(
       {required this.config,
@@ -167,6 +172,7 @@ class Graph {
       this.showButtons = true,
       required this.redraw,
       cs.ChartTheme? chartTheme,
+      this.tooltipBuilder,
       this.categoryColors = const {}})
       : _data = data,
         _chartWidget = Center(child: const CircularProgressIndicator()) {
@@ -314,6 +320,12 @@ class Graph {
         )
         .interaction(
           pan: panConfig,
+          tooltip: config.tooltip ? cs.TooltipConfig(
+            builder: tooltipBuilder ?? cs.DefaultTooltips.simple('y'),
+            showDelay: const Duration(milliseconds: 50),
+            hideDelay: const Duration(milliseconds: 500),
+            followPointer: false,
+          ) : null,
         )
         .animate(duration: Duration.zero)
         .legend(

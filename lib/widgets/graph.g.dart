@@ -39,6 +39,7 @@ GraphConfig _$GraphConfigFromJson(Map<String, dynamic> json) => GraphConfig(
       pan: json['pan'] as bool? ?? true,
       width: (json['width'] as num?)?.toDouble() ?? 2,
       zoom: json['zoom'] as bool? ?? true,
+      tooltip: json['tooltip'] as bool? ?? false,
     );
 
 Map<String, dynamic> _$GraphConfigToJson(GraphConfig instance) =>
@@ -50,6 +51,7 @@ Map<String, dynamic> _$GraphConfigToJson(GraphConfig instance) =>
       'xSpan': instance.xSpan?.inMicroseconds,
       'pan': instance.pan,
       'zoom': instance.zoom,
+      'tooltip': instance.tooltip,
       'width': instance.width,
     };
 
