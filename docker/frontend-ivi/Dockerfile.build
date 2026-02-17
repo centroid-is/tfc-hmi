@@ -159,6 +159,10 @@ COPY --from=homescreen-builder /opt/homescreen/bin/homescreen ./
 # Copy assembled Flutter bundle from stage 2
 COPY --from=flutter-builder /bundle/ ./bundle/
 
+# Symlink so package_info_plus can find version.json
+# (it looks relative to the executable, not the bundle path)
+RUN ln -s bundle/data data
+
 RUN chown -R centroid:centroid $APP_DIR \
     && chmod +x ./homescreen
 
