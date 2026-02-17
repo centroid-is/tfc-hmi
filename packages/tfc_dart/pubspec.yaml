@@ -44,6 +44,7 @@ dependency_overrides:
     git:
       url: https://github.com/centroid-is/postgresql-dart.git
       ref: add-keepalive-test
+  archive: 4.0.2 # TODO remove, 4.0.7 made clashes with pointycastle and or basic_utils
 
 dev_dependencies:
   lints: ^5.0.0
