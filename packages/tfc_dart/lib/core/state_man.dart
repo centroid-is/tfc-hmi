@@ -422,7 +422,6 @@ class StateMan {
       }
 
       bool sessionLost = false;
-      bool hadSession = false;
       SecureChannelState? lastChannelState;
       DateTime? channelOpenedAt;
       final channelLifetimeSec = 60; // 1 minute as configured
@@ -437,7 +436,7 @@ class StateMan {
               ? now.difference(channelOpenedAt!).inSeconds
               : 0;
           logger.i(
-              '[$alias] SecureChannel state: ${lastChannelState?.name} -> ${value.channelState.name} '
+              '[$alias ${wrapper.config.endpoint}] SecureChannel state: ${lastChannelState?.name} -> ${value.channelState.name} '
               '(session: ${value.sessionState.name}, recovery: ${value.recoveryStatus}) '
               '[uptime: ${timeSinceOpen}s]');
 
@@ -446,7 +445,7 @@ class StateMan {
               SecureChannelState.UA_SECURECHANNELSTATE_OPEN) {
             channelOpenedAt = now;
             logger.i(
-                '[$alias] Channel opened at $now, renewal expected at ~${channelLifetimeSec * 0.75}s');
+                '[$alias ${wrapper.config.endpoint}] Channel opened at $now, renewal expected at ~${channelLifetimeSec * 0.75}s');
           }
 
           lastChannelState = value.channelState;
@@ -458,31 +457,37 @@ class StateMan {
               ? now.difference(channelOpenedAt!).inSeconds
               : 0;
           logger.e(
-              '[$alias] Channel closed after ${timeSinceOpen}s (expected lifetime: ${channelLifetimeSec}s, '
+              '[$alias ${wrapper.config.endpoint}] Channel closed after ${timeSinceOpen}s (expected lifetime: ${channelLifetimeSec}s, '
               'renewal window: ${channelLifetimeSec * 0.75}s-${channelLifetimeSec}s)');
           channelOpenedAt = null;
         }
+        // Only treat as session loss if this wrapper actually had a subscription
         if (value.sessionState ==
                 SessionState.UA_SESSIONSTATE_CREATE_REQUESTED &&
-            hadSession &&
-            _subscriptions.isNotEmpty) {
-          logger.e('[$alias] Session lost!');
+            wrapper.subscriptionId != null) {
+          logger.e('[$alias ${wrapper.config.endpoint}] Session lost!');
           sessionLost = true;
         }
         if (value.sessionState == SessionState.UA_SESSIONSTATE_ACTIVATED) {
           if (sessionLost) {
-            logger.e('[$alias] Session lost, resubscribing');
+            logger.e(
+                '[$alias ${wrapper.config.endpoint}] Session lost, resubscribing (old sub=${wrapper.subscriptionId})');
             sessionLost = false;
             wrapper.subscriptionId = null;
-            for (final entry in _subscriptions.values) {
-              _monitor(entry.key, resub: true);
+            // Only resubscribe keys belonging to this wrapper
+            final lostAlias = wrapper.config.serverAlias;
+            final keysToResub = _subscriptions.values
+                .where((e) => keyMappings.lookupServerAlias(e.key) == lostAlias)
+                .map((e) => e.key)
+                .toList();
+            logger.i(
+                '[$alias ${wrapper.config.endpoint}] Resubscribing ${keysToResub.length} keys');
+            for (final key in keysToResub) {
+              _monitor(key, resub: true);
             }
-          } else if (hadSession) {
-            logger.w(
-                '[$alias] Session regained, resending last values ${_subscriptions.length}');
+          } else {
             _resendLastValues();
           }
-          hadSession = true;
         }
       }).onError((e, s) {
         logger.e('[$alias] Failed to listen to state stream: $e, $s');
@@ -787,10 +792,20 @@ class StateMan {
 
   Future<Stream<DynamicValue>> _monitor(String key,
       {bool resub = false}) async {
-    bool keyExists = _subscriptions.containsKey(key);
-
-    if (keyExists && !resub) {
+    if (_subscriptions.containsKey(key) && !resub) {
       return _subscriptions[key]!.stream;
+    }
+
+    logger.d(
+        '[$alias] _monitor($key, resub=$resub) hasExisting=${_subscriptions.containsKey(key)}');
+
+    // Register entry synchronously before any await so concurrent
+    // callers for the same key hit the early return above.
+    if (!_subscriptions.containsKey(key)) {
+      _subscriptions[key] = AutoDisposingStream(key, (key) {
+        _subscriptions.remove(key);
+        logger.d('Unsubscribed from $key');
+      });
     }
 
     late ClientApi client;
@@ -809,16 +824,6 @@ class StateMan {
     }
     final (id, idx) = nodeId;
 
-    // async boundary between the last check, let's make sure the key still exists or not
-    keyExists = _subscriptions.containsKey(key);
-
-    if (!keyExists && !resub) {
-      _subscriptions[key] = AutoDisposingStream(key, (key) {
-        _subscriptions.remove(key);
-        logger.d('Unsubscribed from $key');
-      });
-    }
-
     int retries = 0;
     while (true) {
       try {
@@ -829,6 +834,8 @@ class StateMan {
             await wrapper.worker.doTheWork()) {
           try {
             wrapper.subscriptionId = await client.subscriptionCreate();
+            logger.i(
+                '[$alias ${wrapper.config.endpoint}] Created subscription ${wrapper.subscriptionId}');
           } catch (e) {
             logger.e('Failed to create subscription: $e');
           } finally {
@@ -840,9 +847,6 @@ class StateMan {
         }
 
         // Verify node is accessible before creating monitored items.
-        // Previously used stream.first.timeout() on a broadcast stream,
-        // but abandoned streams leaked monitored items in open62541's
-        // MonitorItemsTree (asBroadcastStream never cancels its source).
         final readValue =
             await client.read(id).timeout(const Duration(seconds: 1));
         final firstValue = idx != null ? readValue[idx] : readValue;
@@ -850,12 +854,16 @@ class StateMan {
         // Only create monitored items after confirming the node is readable.
         // The raw stream goes directly to AutoDisposingStream — its _rawSub
         // cancel properly triggers UA_Client_MonitoredItems_delete_async.
+        logger.d(
+            '[$alias] Creating monitored items for $key on sub=${wrapper.subscriptionId}');
         var stream = client.monitor(id, wrapper.subscriptionId!);
         if (idx != null) {
           stream = stream.map((value) => value[idx]);
         }
 
+        final hadPrevious = _subscriptions[key]!._rawSub != null;
         _subscriptions[key]!.subscribe(stream, firstValue);
+        logger.d('[$alias] Subscribed $key (replaced previous: $hadPrevious)');
 
         return _subscriptions[key]!.stream;
       } catch (e) {
