@@ -63,7 +63,7 @@ jobs:
           file: docker/frontend-ivi/Dockerfile.build
           push: true
           build-args: |
-            BUILD_MODE=${{ inputs.release && 'release' || 'debug' }}
+            BUILD_MODE=release
           cache-from: type=gha
           cache-to: type=gha,mode=max
           tags: |
@@ -78,7 +78,7 @@ jobs:
           file: docker/frontend-ivi/Dockerfile.build
           push: true
           build-args: |
-            BUILD_MODE=${{ inputs.release && 'release' || 'debug' }}
+            BUILD_MODE=release
           cache-from: type=gha
           cache-to: type=gha,mode=max
           tags: |
@@ -93,7 +93,7 @@ jobs:
           file: docker/frontend-ivi/Dockerfile.build
           push: true
           build-args: |
-            BUILD_MODE=${{ inputs.release && 'release' || 'debug' }}
+            BUILD_MODE=release
           cache-from: type=gha
           cache-to: type=gha,mode=max
           tags: |
