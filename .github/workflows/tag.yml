@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   retag-pubspec:
-    runs-on: [self-hosted]
+    runs-on: ubuntu-latest
     outputs:
       ref: ${{ steps.push.outputs.ref }}
     container:
