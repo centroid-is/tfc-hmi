@@ -8,6 +8,10 @@ on:
         description: 'Git ref to checkout (commit SHA, branch, tag)'
         type: string
         default: ''
+      release:
+        description: 'Build in release mode'
+        type: boolean
+        default: false
   pull_request:
   push:
     branches:
@@ -51,13 +55,13 @@ jobs:
 
       - name: Build for eLinux
         working-directory: centroid-hmi
-        run: flutter-elinux build elinux --debug
+        run: flutter-elinux build elinux ${{ inputs.release && '--release' || '--debug' }}
 
       - name: Move build artifacts
         working-directory: centroid-hmi
         run: |
           mkdir -p assets
-          mv build/elinux/x64/debug/bundle/* assets/
+          mv build/elinux/x64/${{ inputs.release && 'release' || 'debug' }}/bundle/* assets/
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4

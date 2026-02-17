@@ -72,4 +72,5 @@ jobs:
     uses: ./.github/workflows/centroid-hmi.yml
     with:
       ref: ${{ needs.retag-pubspec.outputs.ref }}
+      release: true
     secrets: inherit
