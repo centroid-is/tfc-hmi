@@ -22,6 +22,8 @@ import 'package:tfc_dart/core/database.dart';
 import '../providers/state_man.dart';
 import '../providers/preferences.dart';
 import '../providers/database.dart';
+// TODO not the best place but cross platform
+import 'package:package_info_plus/package_info_plus.dart';
 
 part 'server_config.g.dart';
 
@@ -1288,19 +1290,45 @@ class _ServerConfigCardState extends State<_ServerConfigCard> {
   }
 }
 
-class ImportExportCard extends ConsumerWidget {
+class ImportExportCard extends ConsumerStatefulWidget {
   const ImportExportCard({super.key});
 
   static const String _compiledPrefix = 'Flottur köttur:'; // same secret prefix
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<ImportExportCard> createState() => _ImportExportCardState();
+}
+
+class _ImportExportCardState extends ConsumerState<ImportExportCard> {
+  PackageInfo? _packageInfo;
+
+  @override
+  void initState() {
+    super.initState();
+    PackageInfo.fromPlatform().then((info) {
+      if (mounted) setState(() => _packageInfo = info);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16.0),
         child: LayoutBuilder(
           builder: (context, constraints) {
             final isNarrow = constraints.maxWidth < 500;
+            final versionText = _packageInfo != null
+                ? Text(
+                    'v${_packageInfo!.version}+${_packageInfo!.buildNumber}',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: Theme.of(context)
+                              .colorScheme
+                              .onSurface
+                              .withAlpha(100),
+                        ),
+                  )
+                : null;
             if (isNarrow) {
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1325,6 +1353,10 @@ class ImportExportCard extends ConsumerWidget {
                     icon: const Icon(Icons.file_download),
                     label: const Text('Export'),
                   ),
+                  if (versionText != null) ...[
+                    const SizedBox(height: 12),
+                    Center(child: versionText),
+                  ],
                 ],
               );
             }
@@ -1334,7 +1366,9 @@ class ImportExportCard extends ConsumerWidget {
                 const SizedBox(width: 8),
                 Text('Import / Export',
                     style: Theme.of(context).textTheme.titleMedium),
-                const Spacer(),
+                if (versionText != null)
+                  Expanded(child: Center(child: versionText)),
+                if (versionText == null) const Spacer(),
                 FilledButton.icon(
                   onPressed: () => _onImport(context, ref),
                   icon: const Icon(Icons.file_upload),
@@ -1369,7 +1403,7 @@ class ImportExportCard extends ConsumerWidget {
       final postfix = _generatePostfix(12);
       final envelope = await SecureEnvelope.encrypt(
         jsonConfig: jsonMap,
-        compiledPrefix: _compiledPrefix,
+        compiledPrefix: ImportExportCard._compiledPrefix,
         exportPostfix: postfix,
       );
 
@@ -1520,7 +1554,7 @@ class ImportExportCard extends ConsumerWidget {
       // Decrypt & scrub
       final decrypted = await SecureEnvelope.decrypt(
         envelope: envelope,
-        compiledPrefix: _compiledPrefix,
+        compiledPrefix: ImportExportCard._compiledPrefix,
         postfix: postfix,
       );
 

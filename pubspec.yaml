@@ -45,6 +45,7 @@ dependencies:
   cryptography_flutter: ^2.3.2
   cryptography: ^2.7.0
   flutter_secure_storage: ^9.2.4
+  package_info_plus: ^8.0.0
   board_datetime_picker:
     git:
       url: https://github.com/centroid-is/board_datetime_picker.git
