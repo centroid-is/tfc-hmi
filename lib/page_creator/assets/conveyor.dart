@@ -83,19 +83,18 @@ class ConveyorColorPalette extends StatelessWidget {
           ),
 
           Expanded(
-              flex: 5,
-              child: Column(
-                children: [
-                  _buildColorRow(Colors.green, 'Auto', textColor: Colors.white),
-                  _buildColorRow(Colors.blue, 'Clean', textColor: Colors.white),
-                  _buildColorRow(Colors.yellow, 'Manual',
-                      textColor: Colors.blueGrey),
-                  _buildColorRow(Colors.grey, 'Stopped',
-                      textColor: Colors.white),
-                  _buildColorRow(Colors.red, 'Fault', textColor: Colors.white),
-                ],
-              ),
+            flex: 5,
+            child: Column(
+              children: [
+                _buildColorRow(Colors.green, 'Auto', textColor: Colors.white),
+                _buildColorRow(Colors.blue, 'Clean', textColor: Colors.white),
+                _buildColorRow(Colors.yellow, 'Manual',
+                    textColor: Colors.blueGrey),
+                _buildColorRow(Colors.grey, 'Stopped', textColor: Colors.white),
+                _buildColorRow(Colors.red, 'Fault', textColor: Colors.white),
+              ],
             ),
+          ),
         ],
       ),
     );
@@ -392,7 +391,8 @@ class _ConveyorState extends ConsumerState<Conveyor> {
       streamLabels.add('drive');
     }
 
-    if (widget.config.batchesKey != null && widget.config.batchesKey!.isNotEmpty) {
+    if (widget.config.batchesKey != null &&
+        widget.config.batchesKey!.isNotEmpty) {
       streams.add(ref.watch(stateManProvider.future).asStream().switchMap(
             (stateMan) => stateMan
                 .subscribe(widget.config.batchesKey!)
@@ -402,7 +402,8 @@ class _ConveyorState extends ConsumerState<Conveyor> {
       streamLabels.add('batches');
     }
 
-    if (widget.config.frequencyKey != null && widget.config.frequencyKey!.isNotEmpty) {
+    if (widget.config.frequencyKey != null &&
+        widget.config.frequencyKey!.isNotEmpty) {
       streams.add(ref.watch(stateManProvider.future).asStream().switchMap(
             (stateMan) => stateMan
                 .subscribe(widget.config.frequencyKey!)
@@ -433,9 +434,6 @@ class _ConveyorState extends ConsumerState<Conveyor> {
         (List<DynamicValue> values) {
           final result = <String, DynamicValue>{};
           for (int i = 0; i < streamLabels.length; i++) {
-            if (streamLabels[i] == 'frequency') {
-              print('frequency: ${values[i]}');
-            }
             result[streamLabels[i]] = values[i];
           }
           return result;
@@ -443,7 +441,7 @@ class _ConveyorState extends ConsumerState<Conveyor> {
       ),
       builder: (context, snapshot) {
         if (widget.config.key == null || widget.config.key == '') {
-          print('no key');
+          // print('no key');
         }
         if (snapshot.hasError) {
           _log.e(
@@ -479,7 +477,8 @@ class _ConveyorState extends ConsumerState<Conveyor> {
           _updateBatches(dynValue['batches']!);
         }
 
-        final hasMainKey = widget.config.key != null && widget.config.key!.isNotEmpty;
+        final hasMainKey =
+            widget.config.key != null && widget.config.key!.isNotEmpty;
         if (hasMainKey) {
           return GestureDetector(
             onTap: () => _showDetailsDialog(context),
