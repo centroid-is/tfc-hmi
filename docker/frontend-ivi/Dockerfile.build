@@ -164,4 +164,4 @@ RUN chown -R centroid:centroid $APP_DIR \
 
 USER centroid
 
-CMD ["/bin/sh", "-c", "LD_LIBRARY_PATH=./bundle/lib ./homescreen -b ./bundle --f"]
+CMD ["/bin/sh", "-c", "LD_LIBRARY_PATH=./bundle/lib ./homescreen -b ./bundle -f"]
