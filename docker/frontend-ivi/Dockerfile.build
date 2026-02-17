@@ -57,10 +57,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libsecret-1-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Flutter SDK
-ARG FLUTTER_CHANNEL=stable
+# Install Flutter SDK (pinned to ensure engine hash matches ardera/flutter-ci releases)
+ARG FLUTTER_VERSION=3.38.7
 RUN git clone https://github.com/flutter/flutter.git /opt/flutter \
-    -b ${FLUTTER_CHANNEL} --depth 1
+    --depth 1 --branch ${FLUTTER_VERSION}
 ENV PATH="/opt/flutter/bin:/opt/flutter/bin/cache/dart-sdk/bin:${PATH}"
 RUN flutter precache --linux
 
@@ -100,20 +100,20 @@ RUN BUILD_DIR=$(find build/linux -path "*/${BUILD_MODE}/bundle" -type d | head -
     && echo "=== ivi-homescreen bundle ===" \
     && find /bundle -type f | sort
 
-# Download standalone libflutter_engine.so from Flutter artifact storage
-# (newer Flutter SDKs statically link the engine into the GTK embedder,
-#  but ivi-homescreen needs the standalone .so for dlopen)
+# Download standalone libflutter_engine.so from ardera/flutter-ci
+# (Google only ships debug standalone engines; ardera builds all modes from source)
 RUN ENGINE_HASH=$(cat /opt/flutter/bin/internal/engine.version) \
     && ARCH=$(dpkg-architecture -qDEB_HOST_ARCH) \
     && case "$ARCH" in \
-         amd64) FLUTTER_ARCH="linux-x64" ;; \
-         arm64) FLUTTER_ARCH="linux-arm64" ;; \
+         amd64) ENGINE_ARCH="x64" ;; \
+         arm64) ENGINE_ARCH="aarch64" ;; \
          *) echo "Unsupported arch: $ARCH"; exit 1 ;; \
        esac \
-    && echo "Downloading Flutter engine ${ENGINE_HASH} for ${FLUTTER_ARCH}..." \
-    && curl -sL "https://storage.googleapis.com/flutter_infra_release/flutter/${ENGINE_HASH}/${FLUTTER_ARCH}/${FLUTTER_ARCH}-embedder.zip" -o /tmp/engine.zip \
-    && unzip -o /tmp/engine.zip libflutter_engine.so -d /bundle/lib/ \
-    && rm /tmp/engine.zip \
+    && echo "Downloading Flutter engine ${ENGINE_HASH} (${BUILD_MODE}) for ${ENGINE_ARCH}..." \
+    && curl -sL "https://github.com/ardera/flutter-ci/releases/download/engine%2F${ENGINE_HASH}/engine-${ENGINE_ARCH}-generic-${BUILD_MODE}.tar.xz" \
+       -o /tmp/engine.tar.xz \
+    && tar -xJf /tmp/engine.tar.xz -C /bundle/lib/ \
+    && rm /tmp/engine.tar.xz \
     && ls -la /bundle/lib/libflutter_engine.so
 
 # =============================================================================
