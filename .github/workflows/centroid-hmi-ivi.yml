@@ -1,0 +1,270 @@
+name: Build and Push centroid-hmi Docker Image (ivi-homescreen)
+
+on:
+  workflow_dispatch:
+    inputs:
+      release:
+        description: 'Build in release mode'
+        type: boolean
+        default: false
+  workflow_call:
+    inputs:
+      ref:
+        description: 'Git ref to checkout (commit SHA, branch, tag)'
+        type: string
+        default: ''
+      release:
+        description: 'Build in release mode'
+        type: boolean
+        default: false
+  # Uncomment to enable on push/PR (currently manual-only for exploration)
+  # pull_request:
+  # push:
+  #   branches:
+  #     - main
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  ivi-build:
+    runs-on: ubuntu-latest
+    outputs:
+      centroid_hmi_sha: ${{ steps.get_sha.outputs.sha }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - name: Get commit SHA
+        id: get_sha
+        run: |
+          SHA=$(git rev-parse --short HEAD) || exit 1
+          test -n "$SHA" || (echo "Empty SHA"; exit 1)
+          echo "SHA: $SHA"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+
+      # ---- Build ivi-homescreen from source ----
+
+      - name: Install ivi-homescreen build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake git pkg-config \
+            libwayland-dev wayland-protocols \
+            mesa-common-dev libegl1-mesa-dev libgles2-mesa-dev \
+            libxkbcommon-dev
+
+      - name: Cache ivi-homescreen build
+        id: cache-homescreen
+        uses: actions/cache@v4
+        with:
+          path: /tmp/ivi-homescreen-install
+          key: ivi-homescreen-build-v1
+
+      - name: Clone and build ivi-homescreen
+        if: steps.cache-homescreen.outputs.cache-hit != 'true'
+        run: |
+          git clone --recurse-submodules -j8 \
+            https://github.com/toyota-connected/ivi-homescreen.git \
+            /tmp/ivi-homescreen
+
+          mkdir -p /tmp/ivi-homescreen/build
+          cd /tmp/ivi-homescreen/build
+
+          cmake .. \
+            -DCMAKE_STAGING_PREFIX=/tmp/ivi-homescreen-install \
+            -DCMAKE_INSTALL_PREFIX=/tmp/ivi-homescreen-install \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_BACKEND_WAYLAND_EGL=ON \
+            -DBUILD_BACKEND_WAYLAND_VULKAN=OFF \
+            -DENABLE_XDG_CLIENT=ON \
+            -DENABLE_AGL_CLIENT=OFF \
+            -DENABLE_IVI_SHELL_CLIENT=OFF \
+            -DENABLE_DLT=OFF \
+            -DBUILD_UNIT_TESTS=OFF \
+            -DBUILD_DOCS=OFF
+
+          make install -j$(nproc)
+
+          echo "=== ivi-homescreen install contents ==="
+          find /tmp/ivi-homescreen-install -type f | sort
+
+      # ---- Build Flutter app ----
+
+      - name: Setup Flutter SDK
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Install Flutter Linux build dependencies
+        run: |
+          sudo apt-get install -y --no-install-recommends \
+            clang ninja-build libgtk-3-dev liblzma-dev
+
+      - name: Create Linux platform support
+        working-directory: centroid-hmi
+        run: flutter create --platforms=linux .
+
+      - name: Get Flutter packages
+        working-directory: centroid-hmi
+        run: flutter pub get
+
+      - name: Build Flutter app for Linux
+        working-directory: centroid-hmi
+        run: flutter build linux ${{ inputs.release && '--release' || '--debug' }}
+
+      # ---- Assemble ivi-homescreen bundle ----
+
+      - name: Assemble bundle
+        run: |
+          BUILD_MODE=${{ inputs.release && 'release' || 'debug' }}
+          FLUTTER_BUILD="centroid-hmi/build/linux/x64/${BUILD_MODE}/bundle"
+
+          echo "Flutter build output:"
+          find "${FLUTTER_BUILD}" -type f | sort
+
+          mkdir -p assets/bundle/data assets/bundle/lib
+
+          # Copy ivi-homescreen binary
+          cp /tmp/ivi-homescreen-install/bin/homescreen assets/
+
+          # Copy Flutter engine
+          cp "${FLUTTER_BUILD}/lib/libflutter_engine.so" assets/bundle/lib/
+
+          # Copy native asset libraries (open62541, etc.) and AOT lib
+          for f in "${FLUTTER_BUILD}"/lib/*.so; do
+            name=$(basename "$f")
+            case "$name" in
+              libflutter_linux_gtk.so) ;; # Skip GTK embedder
+              libflutter_engine.so) ;;    # Already copied
+              *) cp "$f" assets/bundle/lib/ ;;
+            esac
+          done
+
+          # Copy Flutter assets and ICU data
+          cp -r "${FLUTTER_BUILD}/data/"* assets/bundle/data/
+
+          echo ""
+          echo "=== Final bundle contents ==="
+          find assets/ -type f | sort
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: centroid-hmi-ivi-artifacts
+          path: assets/
+
+  docker-build:
+    needs: ivi-build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: centroid-hmi-ivi-artifacts
+          path: docker/frontend-ivi/
+
+      - name: List bundle contents
+        run: find docker/frontend-ivi/ -type f | sort
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v2
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Docker image (main)
+        if: github.ref == 'refs/heads/main'
+        uses: docker/build-push-action@v4
+        with:
+          context: docker/frontend-ivi
+          file: docker/frontend-ivi/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/centroid-hmi-ivi:${{ needs.ivi-build.outputs.centroid_hmi_sha }}
+            ghcr.io/${{ github.repository_owner }}/centroid-hmi-ivi:latest
+
+      - name: Build and push Docker image (tag)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: docker/build-push-action@v4
+        with:
+          context: docker/frontend-ivi
+          file: docker/frontend-ivi/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/centroid-hmi-ivi:${{ needs.ivi-build.outputs.centroid_hmi_sha }}
+            ghcr.io/${{ github.repository_owner }}/centroid-hmi-ivi:stable
+
+      - name: Build and push Docker image (PR)
+        if: github.event_name == 'pull_request'
+        uses: docker/build-push-action@v4
+        with:
+          context: docker/frontend-ivi
+          file: docker/frontend-ivi/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/centroid-hmi-ivi:pr-${{ github.event.pull_request.number }}
+
+  backend-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - name: Get commit SHA
+        id: get_sha
+        run: |
+          SHA=$(git rev-parse --short HEAD) || exit 1
+          test -n "$SHA" || (echo "Empty SHA"; exit 1)
+          echo "SHA: $SHA"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v2
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push backend Docker image (main)
+        if: github.ref == 'refs/heads/main'
+        uses: docker/build-push-action@v4
+        with:
+          context: packages/tfc_dart
+          file: docker/backend/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/centroid-backend:${{ steps.get_sha.outputs.sha }}
+            ghcr.io/${{ github.repository_owner }}/centroid-backend:latest
+
+      - name: Build and push backend Docker image (tag)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: docker/build-push-action@v4
+        with:
+          context: packages/tfc_dart
+          file: docker/backend/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/centroid-backend:${{ steps.get_sha.outputs.sha }}
+            ghcr.io/${{ github.repository_owner }}/centroid-backend:stable
+
+      - name: Build and push backend Docker image (PR)
+        if: github.event_name == 'pull_request'
+        uses: docker/build-push-action@v4
+        with:
+          context: packages/tfc_dart
+          file: docker/backend/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/centroid-backend:pr-${{ github.event.pull_request.number }}

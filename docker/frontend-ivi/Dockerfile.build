@@ -1,0 +1,147 @@
+# Multi-stage Dockerfile for local testing / self-contained builds.
+# Builds ivi-homescreen + Flutter app + packages everything.
+#
+# Usage from project root:
+#   docker build -f docker/frontend-ivi/Dockerfile.build -t centroid-hmi-ivi .
+#   docker build -f docker/frontend-ivi/Dockerfile.build --build-arg BUILD_MODE=release -t centroid-hmi-ivi .
+
+# =============================================================================
+# Stage 1: Build ivi-homescreen embedder from source
+# =============================================================================
+FROM debian:trixie-slim AS homescreen-builder
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential cmake git pkg-config ca-certificates \
+    libwayland-dev wayland-protocols \
+    libvulkan-dev \
+    libxkbcommon-dev \
+    libglib2.0-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+ARG IVI_HOMESCREEN_REF=v2.0
+RUN git clone --recurse-submodules -j8 \
+    https://github.com/toyota-connected/ivi-homescreen.git \
+    /src/ivi-homescreen \
+    && cd /src/ivi-homescreen && git checkout ${IVI_HOMESCREEN_REF}
+
+WORKDIR /src/ivi-homescreen/build
+RUN cmake .. \
+    -DCMAKE_STAGING_PREFIX=/opt/homescreen \
+    -DCMAKE_INSTALL_PREFIX=/opt/homescreen \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DBUILD_BACKEND_WAYLAND_EGL=OFF \
+    -DBUILD_BACKEND_WAYLAND_VULKAN=ON \
+    -DENABLE_XDG_CLIENT=ON \
+    -DENABLE_AGL_CLIENT=OFF \
+    -DENABLE_IVI_SHELL_CLIENT=OFF \
+    -DENABLE_DLT=OFF \
+    -DBUILD_UNIT_TESTS=OFF \
+    -DBUILD_DOCS=OFF \
+    && make install -j$(nproc)
+
+# =============================================================================
+# Stage 2: Build Flutter app (native assets + AOT + assets)
+# =============================================================================
+FROM debian:trixie-slim AS flutter-builder
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl git unzip xz-utils zip ca-certificates \
+    clang cmake ninja-build pkg-config \
+    build-essential python3 \
+    libgtk-3-dev liblzma-dev libstdc++-14-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Flutter SDK
+ARG FLUTTER_CHANNEL=stable
+RUN git clone https://github.com/flutter/flutter.git /opt/flutter \
+    -b ${FLUTTER_CHANNEL} --depth 1
+ENV PATH="/opt/flutter/bin:/opt/flutter/bin/cache/dart-sdk/bin:${PATH}"
+RUN flutter precache --linux
+
+# Copy project source
+WORKDIR /app
+COPY pubspec.yaml ./
+COPY packages/ ./packages/
+COPY centroid-hmi/ ./centroid-hmi/
+
+WORKDIR /app/centroid-hmi
+
+RUN flutter pub get
+
+# Build for Linux desktop - this compiles:
+#   - Dart assets (flutter_assets/)
+#   - AOT library (libapp.so, release only)
+#   - Native FFI assets (open62541, etc.)
+#   - Flutter engine (libflutter_engine.so)
+ARG BUILD_MODE=debug
+RUN flutter build linux --${BUILD_MODE}
+
+# Assemble the ivi-homescreen bundle from the Linux build output
+RUN BUILD_DIR="build/linux/x64/${BUILD_MODE}/bundle" \
+    && mkdir -p /bundle/data /bundle/lib \
+    && cp "${BUILD_DIR}/lib/libflutter_engine.so" /bundle/lib/ \
+    && for f in "${BUILD_DIR}"/lib/*.so; do \
+         name=$(basename "$f"); \
+         case "$name" in \
+           libflutter_linux_gtk.so) ;; \
+           libflutter_engine.so) ;; \
+           *) cp "$f" /bundle/lib/ ;; \
+         esac; \
+       done \
+    && cp -r "${BUILD_DIR}/data/"* /bundle/data/ \
+    && echo "=== Bundle contents ===" \
+    && find /bundle -type f | sort
+
+# =============================================================================
+# Stage 3: Runtime
+# =============================================================================
+FROM debian:trixie-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libstdc++6 \
+    libgcc-s1 \
+    libc6 \
+    libfontconfig1 \
+    libxkbcommon0 \
+    libwayland-client0 \
+    libwayland-cursor0 \
+    libvulkan1 \
+    mesa-vulkan-drivers \
+    libfreetype6 \
+    libexpat1 \
+    libffi8 \
+    zlib1g \
+    libpng16-16 \
+    libglib2.0-0 \
+    libsecret-1-0 \
+    sqlite3 \
+    dpkg-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Hacks for amplify secure storage (arch-agnostic)
+RUN LIBDIR=$(dpkg-architecture -qDEB_HOST_MULTIARCH) \
+    && ln -sf /usr/lib/${LIBDIR}/libgio-2.0.so.0 /usr/lib/${LIBDIR}/libgio-2.0.so \
+    && ln -sf /usr/lib/${LIBDIR}/libglib-2.0.so.0 /usr/lib/${LIBDIR}/libglib-2.0.so \
+    && ln -sf /usr/lib/${LIBDIR}/libsecret-1.so.0 /usr/lib/${LIBDIR}/libsecret-1.so
+
+RUN useradd -m centroid
+
+ARG APP_DIR=/flutter-app
+WORKDIR $APP_DIR
+
+# Copy ivi-homescreen binary from stage 1
+COPY --from=homescreen-builder /opt/homescreen/bin/homescreen ./
+
+# Copy assembled Flutter bundle from stage 2
+COPY --from=flutter-builder /bundle/ ./bundle/
+
+RUN chown -R centroid:centroid $APP_DIR \
+    && chmod +x ./homescreen
+
+USER centroid
+
+CMD ["/bin/sh", "-c", "LD_LIBRARY_PATH=./bundle/lib ./homescreen --b=./bundle --f"]
