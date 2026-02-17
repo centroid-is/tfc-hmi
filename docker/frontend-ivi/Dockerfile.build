@@ -16,6 +16,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential cmake git pkg-config ca-certificates \
     libwayland-dev wayland-protocols \
     libvulkan-dev \
+    libegl1-mesa-dev libgles2-mesa-dev \
     libxkbcommon-dev \
     libglib2.0-dev \
     && rm -rf /var/lib/apt/lists/*
@@ -50,9 +51,10 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl git unzip xz-utils zip ca-certificates \
-    clang cmake ninja-build pkg-config \
+    clang llvm lld cmake ninja-build pkg-config \
     build-essential python3 \
     libgtk-3-dev liblzma-dev libstdc++-14-dev \
+    libsecret-1-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Flutter SDK
@@ -62,9 +64,11 @@ RUN git clone https://github.com/flutter/flutter.git /opt/flutter \
 ENV PATH="/opt/flutter/bin:/opt/flutter/bin/cache/dart-sdk/bin:${PATH}"
 RUN flutter precache --linux
 
-# Copy project source
+# Copy project source (root is the 'tfc' package, centroid-hmi depends on it via path: ../)
 WORKDIR /app
 COPY pubspec.yaml ./
+COPY lib/ ./lib/
+COPY assets/ ./assets/
 COPY packages/ ./packages/
 COPY centroid-hmi/ ./centroid-hmi/
 
@@ -81,20 +85,36 @@ ARG BUILD_MODE=debug
 RUN flutter build linux --${BUILD_MODE}
 
 # Assemble the ivi-homescreen bundle from the Linux build output
-RUN BUILD_DIR="build/linux/x64/${BUILD_MODE}/bundle" \
+RUN BUILD_DIR=$(find build/linux -path "*/${BUILD_MODE}/bundle" -type d | head -1) \
+    && echo "=== Flutter build output ===" \
+    && find "${BUILD_DIR}" -type f | sort \
     && mkdir -p /bundle/data /bundle/lib \
-    && cp "${BUILD_DIR}/lib/libflutter_engine.so" /bundle/lib/ \
     && for f in "${BUILD_DIR}"/lib/*.so; do \
          name=$(basename "$f"); \
          case "$name" in \
            libflutter_linux_gtk.so) ;; \
-           libflutter_engine.so) ;; \
            *) cp "$f" /bundle/lib/ ;; \
          esac; \
        done \
     && cp -r "${BUILD_DIR}/data/"* /bundle/data/ \
-    && echo "=== Bundle contents ===" \
+    && echo "=== ivi-homescreen bundle ===" \
     && find /bundle -type f | sort
+
+# Download standalone libflutter_engine.so from Flutter artifact storage
+# (newer Flutter SDKs statically link the engine into the GTK embedder,
+#  but ivi-homescreen needs the standalone .so for dlopen)
+RUN ENGINE_HASH=$(cat /opt/flutter/bin/internal/engine.version) \
+    && ARCH=$(dpkg-architecture -qDEB_HOST_ARCH) \
+    && case "$ARCH" in \
+         amd64) FLUTTER_ARCH="linux-x64" ;; \
+         arm64) FLUTTER_ARCH="linux-arm64" ;; \
+         *) echo "Unsupported arch: $ARCH"; exit 1 ;; \
+       esac \
+    && echo "Downloading Flutter engine ${ENGINE_HASH} for ${FLUTTER_ARCH}..." \
+    && curl -sL "https://storage.googleapis.com/flutter_infra_release/flutter/${ENGINE_HASH}/${FLUTTER_ARCH}/${FLUTTER_ARCH}-embedder.zip" -o /tmp/engine.zip \
+    && unzip -o /tmp/engine.zip libflutter_engine.so -d /bundle/lib/ \
+    && rm /tmp/engine.zip \
+    && ls -la /bundle/lib/libflutter_engine.so
 
 # =============================================================================
 # Stage 3: Runtime
