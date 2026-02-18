@@ -21,7 +21,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libglib2.0-dev \
     && rm -rf /var/lib/apt/lists/*
 
-ARG IVI_HOMESCREEN_REF=text-input-v3
+ARG IVI_HOMESCREEN_REF=45630f35c1a8dbfc91c1eadf8e5a4b2be33e8ae6
 RUN git clone --recurse-submodules -j8 \
     https://github.com/centroid-is/ivi-homescreen.git \
     /src/ivi-homescreen \
