@@ -21,14 +21,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libglib2.0-dev \
     && rm -rf /var/lib/apt/lists/*
 
-ARG IVI_HOMESCREEN_REF=v2.0
+ARG IVI_HOMESCREEN_REF=text-input-v3
 RUN git clone --recurse-submodules -j8 \
-    https://github.com/toyota-connected/ivi-homescreen.git \
+    https://github.com/centroid-is/ivi-homescreen.git \
     /src/ivi-homescreen \
     && cd /src/ivi-homescreen && git checkout ${IVI_HOMESCREEN_REF}
 
 WORKDIR /src/ivi-homescreen/build
-RUN cmake .. \
+RUN WAYLAND_PROTOCOLS_DIR=$(pkg-config --variable=pkgdatadir wayland-protocols) \
+    && cmake .. \
     -DCMAKE_STAGING_PREFIX=/opt/homescreen \
     -DCMAKE_INSTALL_PREFIX=/opt/homescreen \
     -DCMAKE_BUILD_TYPE=Release \
@@ -40,6 +41,7 @@ RUN cmake .. \
     -DENABLE_DLT=OFF \
     -DBUILD_UNIT_TESTS=OFF \
     -DBUILD_DOCS=OFF \
+    -DEXT_PROTOCOL="${WAYLAND_PROTOCOLS_DIR}/unstable/text-input/text-input-unstable-v3.xml" \
     && make install -j$(nproc)
 
 # =============================================================================
