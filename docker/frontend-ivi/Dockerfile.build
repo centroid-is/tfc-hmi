@@ -41,7 +41,7 @@ RUN WAYLAND_PROTOCOLS_DIR=$(pkg-config --variable=pkgdatadir wayland-protocols) 
     -DENABLE_DLT=OFF \
     -DBUILD_UNIT_TESTS=OFF \
     -DBUILD_DOCS=OFF \
-    -DEXT_PROTOCOL="${WAYLAND_PROTOCOLS_DIR}/unstable/text-input/text-input-unstable-v3.xml" \
+    -DEXT_PROTOCOL="${WAYLAND_PROTOCOLS_DIR}/unstable/text-input/text-input-unstable-v1.xml" \
     && make install -j$(nproc)
 
 # =============================================================================
