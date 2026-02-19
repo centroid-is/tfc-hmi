@@ -878,4 +878,287 @@ void main() {
       );
     });
   });
+
+  // ==================== Group 11: Modbus Key Mappings ====================
+  group('Modbus key mappings', () {
+    testWidgets('shows Modbus subtitle for Modbus keys', (tester) async {
+      await tester.pumpWidget(buildTestableKeyRepository(
+        keyMappings: sampleMixedKeyMappings(),
+        stateManConfig: sampleMixedStateManConfig(),
+      ));
+      await tester.pumpAndSettle();
+
+      // Modbus key subtitle: registerType@address (dataType) @ serverAlias
+      expect(find.textContaining('holdingRegister@100'), findsOneWidget);
+      expect(find.textContaining('coil@0'), findsOneWidget);
+      // OPC UA key subtitle: ns=X; id=Y
+      expect(find.textContaining('ns=2'), findsOneWidget);
+    });
+
+    testWidgets('protocol selector appears in expanded card', (tester) async {
+      await tester.pumpWidget(buildTestableKeyRepository(
+        keyMappings: sampleMixedKeyMappings(),
+        stateManConfig: sampleMixedStateManConfig(),
+      ));
+      await tester.pumpAndSettle();
+
+      // Expand an OPC UA key
+      await tester.tap(find.text('temperature_sensor'));
+      await tester.pumpAndSettle();
+
+      // Protocol selector should be visible
+      expect(find.text('OPC UA'), findsOneWidget);
+      expect(find.text('Modbus TCP'), findsOneWidget);
+    });
+
+    testWidgets('switching protocol from OPC UA to Modbus shows Modbus config',
+        (tester) async {
+      await tester.pumpWidget(buildTestableKeyRepository(
+        keyMappings: KeyMappings(nodes: {
+          'test_key': KeyMappingEntry(
+            opcuaNode: OpcUANodeConfig(namespace: 0, identifier: ''),
+          ),
+        }),
+        stateManConfig: sampleMixedStateManConfig(),
+      ));
+      await tester.pumpAndSettle();
+
+      // Expand card
+      await tester.tap(find.text('test_key'));
+      await tester.pumpAndSettle();
+
+      // Should show OPC UA fields initially
+      expect(find.text('Namespace'), findsOneWidget);
+      expect(find.text('Identifier'), findsOneWidget);
+
+      // Tap "Modbus TCP" in the protocol selector
+      await tester.tap(find.text('Modbus TCP'));
+      await tester.pumpAndSettle();
+
+      // Should now show Modbus fields
+      expect(find.text('Modbus Node Configuration'), findsOneWidget);
+      expect(find.text('Register Type'), findsOneWidget);
+      expect(find.text('Address'), findsOneWidget);
+      expect(find.text('Data Type'), findsOneWidget);
+      // OPC UA fields should be gone
+      expect(find.text('Namespace'), findsNothing);
+      expect(find.text('Identifier'), findsNothing);
+    });
+
+    testWidgets('Modbus config section shows correct fields when expanded',
+        (tester) async {
+      await tester.pumpWidget(buildTestableKeyRepository(
+        keyMappings: KeyMappings(nodes: {
+          'modbus_key': KeyMappingEntry(
+            modbusNode: ModbusNodeConfig(
+              registerType: ModbusRegisterType.holdingRegister,
+              address: 42,
+              dataType: ModbusDataType.float32,
+              serverAlias: 'modbus_plc',
+            ),
+          ),
+        }),
+        stateManConfig: sampleMixedStateManConfig(),
+      ));
+      await tester.pumpAndSettle();
+
+      // Expand the Modbus key
+      await tester.tap(find.text('modbus_key'));
+      await tester.pumpAndSettle();
+
+      // All Modbus config fields should be present
+      expect(find.text('Modbus Node Configuration'), findsOneWidget);
+      expect(find.text('Server Alias'), findsOneWidget);
+      expect(find.text('Register Type'), findsOneWidget);
+      expect(find.text('Address'), findsOneWidget);
+      expect(find.text('Data Type'), findsOneWidget);
+      expect(find.text('Poll Group (optional)'), findsOneWidget);
+    });
+
+    testWidgets('Modbus server alias dropdown only shows Modbus servers',
+        (tester) async {
+      await tester.pumpWidget(buildTestableKeyRepository(
+        keyMappings: KeyMappings(nodes: {
+          'modbus_key': KeyMappingEntry(
+            modbusNode: ModbusNodeConfig(
+              registerType: ModbusRegisterType.holdingRegister,
+              address: 0,
+              dataType: ModbusDataType.uint16,
+            ),
+          ),
+        }),
+        stateManConfig: sampleMixedStateManConfig(),
+      ));
+      await tester.pumpAndSettle();
+
+      // Expand the Modbus key
+      await tester.tap(find.text('modbus_key'));
+      await tester.pumpAndSettle();
+
+      // Find the Server Alias dropdown and tap it
+      final dropdown = find.byType(DropdownButtonFormField<String>);
+      expect(dropdown, findsOneWidget);
+      await tester.tap(dropdown);
+      await tester.pumpAndSettle();
+
+      // Modbus server should appear, OPC UA server should not
+      expect(find.text('modbus_plc').last, findsOneWidget);
+      // The OPC UA-only server 'main_server' should NOT be in the dropdown
+      // (but it might appear in the background, so check that only one 'main_server' exists)
+      expect(find.text('main_server'), findsNothing);
+    });
+
+    testWidgets('saving Modbus key persists Modbus config', (tester) async {
+      late Preferences testPrefs;
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            preferencesProvider.overrideWith((ref) async {
+              testPrefs = await createTestPreferences(
+                keyMappings: KeyMappings(nodes: {
+                  'modbus_key': KeyMappingEntry(
+                    modbusNode: ModbusNodeConfig(
+                      registerType: ModbusRegisterType.holdingRegister,
+                      address: 100,
+                      dataType: ModbusDataType.float32,
+                      serverAlias: 'modbus_plc',
+                      pollGroup: 'fast',
+                    ),
+                  ),
+                }),
+                stateManConfig: sampleMixedStateManConfig(),
+              );
+              return testPrefs;
+            }),
+            databaseProvider.overrideWith((ref) async => null),
+          ],
+          child: MaterialApp(
+            home: Scaffold(body: KeyRepositoryContent()),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // Make a change to trigger unsaved state (add a key then save)
+      await tester.tap(find.text('Add Key'));
+      await tester.pumpAndSettle();
+
+      // Save
+      await tester.ensureVisible(find.text('Save Key Mappings'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Save Key Mappings'));
+      await tester.pumpAndSettle();
+
+      // Verify Modbus config persisted
+      final savedJson = await testPrefs.getString('key_mappings');
+      final saved = KeyMappings.fromJson(jsonDecode(savedJson!));
+      expect(saved.nodes.containsKey('modbus_key'), isTrue);
+      final entry = saved.nodes['modbus_key']!;
+      expect(entry.isModbus, isTrue);
+      expect(entry.modbusNode!.registerType,
+          ModbusRegisterType.holdingRegister);
+      expect(entry.modbusNode!.address, 100);
+      expect(entry.modbusNode!.dataType, ModbusDataType.float32);
+      expect(entry.modbusNode!.serverAlias, 'modbus_plc');
+      expect(entry.modbusNode!.pollGroup, 'fast');
+    });
+
+    testWidgets('search filters by Modbus register type', (tester) async {
+      await tester.pumpWidget(buildTestableKeyRepository(
+        keyMappings: sampleMixedKeyMappings(),
+        stateManConfig: sampleMixedStateManConfig(),
+      ));
+      await tester.pumpAndSettle();
+
+      // All keys visible
+      expect(find.text('temperature_sensor'), findsOneWidget);
+      expect(find.text('motor_speed'), findsOneWidget);
+      expect(find.text('pump_running'), findsOneWidget);
+
+      // Search by register type
+      final searchField = find.widgetWithText(TextField, 'Search keys...');
+      await tester.enterText(searchField, 'coil');
+      await tester.pumpAndSettle();
+
+      // Only coil key should match
+      expect(find.text('pump_running'), findsOneWidget);
+      expect(find.text('motor_speed'), findsNothing);
+      expect(find.text('temperature_sensor'), findsNothing);
+    });
+
+    testWidgets('search filters by Modbus server alias', (tester) async {
+      await tester.pumpWidget(buildTestableKeyRepository(
+        keyMappings: sampleMixedKeyMappings(),
+        stateManConfig: sampleMixedStateManConfig(),
+      ));
+      await tester.pumpAndSettle();
+
+      // Search by modbus server alias
+      final searchField = find.widgetWithText(TextField, 'Search keys...');
+      await tester.enterText(searchField, 'modbus_plc');
+      await tester.pumpAndSettle();
+
+      // Both modbus keys should match
+      expect(find.text('motor_speed'), findsOneWidget);
+      expect(find.text('pump_running'), findsOneWidget);
+      // OPC UA key should not
+      expect(find.text('temperature_sensor'), findsNothing);
+    });
+
+    testWidgets('copied Modbus key preserves Modbus config', (tester) async {
+      late Preferences testPrefs;
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            preferencesProvider.overrideWith((ref) async {
+              testPrefs = await createTestPreferences(
+                keyMappings: KeyMappings(nodes: {
+                  'modbus_src': KeyMappingEntry(
+                    modbusNode: ModbusNodeConfig(
+                      registerType: ModbusRegisterType.inputRegister,
+                      address: 50,
+                      dataType: ModbusDataType.int16,
+                      serverAlias: 'modbus_plc',
+                    ),
+                  ),
+                }),
+                stateManConfig: sampleMixedStateManConfig(),
+              );
+              return testPrefs;
+            }),
+            databaseProvider.overrideWith((ref) async => null),
+          ],
+          child: MaterialApp(
+            home: Scaffold(body: KeyRepositoryContent()),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // Copy the key
+      final copyButton = find.byWidgetPredicate(
+          (w) => w is FaIcon && w.icon == FontAwesomeIcons.copy);
+      await tester.tap(copyButton.first);
+      await tester.pumpAndSettle();
+
+      // Save
+      await tester.ensureVisible(find.text('Save Key Mappings'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Save Key Mappings'));
+      await tester.pumpAndSettle();
+
+      // Verify the copy has the same Modbus config
+      final savedJson = await testPrefs.getString('key_mappings');
+      final saved = KeyMappings.fromJson(jsonDecode(savedJson!));
+      expect(saved.nodes.containsKey('modbus_src_copy'), isTrue);
+      final copy = saved.nodes['modbus_src_copy']!;
+      expect(copy.isModbus, isTrue);
+      expect(copy.modbusNode!.registerType, ModbusRegisterType.inputRegister);
+      expect(copy.modbusNode!.address, 50);
+      expect(copy.modbusNode!.dataType, ModbusDataType.int16);
+      expect(copy.modbusNode!.serverAlias, 'modbus_plc');
+    });
+  });
 }
