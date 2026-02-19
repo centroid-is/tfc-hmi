@@ -114,7 +114,7 @@ dependency_overrides:
   open62541:
     git:
       url: https://github.com/centroid-is/open62541_dart.git
-      ref: main
+      ref: isolate-client-browse
   postgres:
     git:
       url: https://github.com/centroid-is/postgresql-dart.git
