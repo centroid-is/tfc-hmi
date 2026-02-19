@@ -566,6 +566,7 @@ class StateMan {
       clients.add(ClientWrapper(
           useIsolate
               ? await ClientIsolate.create(
+                  libraryPath: '', // empty is static linking
                   username: username,
                   password: password,
                   certificate: cert,
@@ -577,6 +578,7 @@ class StateMan {
                           1), // TODO can I reproduce the problem more often
                 )
               : Client(
+                  loadOpen62541Library(staticLinking: true),
                   username: username,
                   password: password,
                   certificate: cert,
