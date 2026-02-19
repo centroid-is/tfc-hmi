@@ -3,7 +3,7 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'dart:convert';
 
-import 'package:meta/meta.dart'; // Add this import at the top
+import 'package:meta/meta.dart';
 import 'package:logger/logger.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:open62541/open62541.dart';
@@ -11,6 +11,7 @@ import 'package:rxdart/rxdart.dart';
 import 'package:collection/collection.dart';
 
 import 'collector.dart';
+import 'modbus_client.dart';
 import 'preferences.dart';
 
 part 'state_man.g.dart';
@@ -123,17 +124,99 @@ class OpcUAConfig {
   Map<String, dynamic> toJson() => _$OpcUAConfigToJson(this);
 }
 
+@JsonEnum()
+enum ModbusRegisterType { coil, discreteInput, holdingRegister, inputRegister }
+
+@JsonEnum()
+enum ModbusDataType { bit, int16, uint16, int32, uint32, float32, int64, uint64, float64 }
+
+@JsonSerializable(explicitToJson: true)
+class ModbusPollGroup {
+  String name;
+  @JsonKey(name: 'poll_interval_ms')
+  int pollIntervalMs;
+
+  ModbusPollGroup({required this.name, required this.pollIntervalMs});
+
+  factory ModbusPollGroup.fromJson(Map<String, dynamic> json) =>
+      _$ModbusPollGroupFromJson(json);
+  Map<String, dynamic> toJson() => _$ModbusPollGroupToJson(this);
+}
+
+@JsonSerializable(explicitToJson: true)
+class ModbusConfig {
+  String host;
+  int port;
+  @JsonKey(name: 'unit_id')
+  int unitId;
+  @JsonKey(name: 'poll_groups')
+  List<ModbusPollGroup> pollGroups;
+  @JsonKey(name: 'server_alias')
+  String? serverAlias;
+
+  ModbusConfig({
+    this.host = 'localhost',
+    this.port = 502,
+    this.unitId = 1,
+    List<ModbusPollGroup>? pollGroups,
+    this.serverAlias,
+  }) : pollGroups = pollGroups ??
+            [ModbusPollGroup(name: 'default', pollIntervalMs: 1000)];
+
+  @override
+  String toString() {
+    return 'ModbusConfig(host: $host, port: $port, unitId: $unitId, serverAlias: $serverAlias)';
+  }
+
+  factory ModbusConfig.fromJson(Map<String, dynamic> json) =>
+      _$ModbusConfigFromJson(json);
+  Map<String, dynamic> toJson() => _$ModbusConfigToJson(this);
+}
+
+@JsonSerializable(explicitToJson: true)
+class ModbusNodeConfig {
+  @JsonKey(name: 'register_type')
+  ModbusRegisterType registerType;
+  int address;
+  @JsonKey(name: 'data_type')
+  ModbusDataType dataType;
+  @JsonKey(name: 'server_alias')
+  String? serverAlias;
+  @JsonKey(name: 'poll_group')
+  String? pollGroup;
+
+  ModbusNodeConfig({
+    required this.registerType,
+    required this.address,
+    required this.dataType,
+    this.serverAlias,
+    this.pollGroup,
+  });
+
+  @override
+  String toString() {
+    return 'ModbusNodeConfig(registerType: $registerType, address: $address, dataType: $dataType, serverAlias: $serverAlias)';
+  }
+
+  factory ModbusNodeConfig.fromJson(Map<String, dynamic> json) =>
+      _$ModbusNodeConfigFromJson(json);
+  Map<String, dynamic> toJson() => _$ModbusNodeConfigToJson(this);
+}
+
 @JsonSerializable(explicitToJson: true)
 class StateManConfig {
   List<OpcUAConfig> opcua;
+  @JsonKey(defaultValue: [])
+  List<ModbusConfig> modbus;
 
-  StateManConfig({required this.opcua});
+  StateManConfig({required this.opcua, List<ModbusConfig>? modbus})
+      : modbus = modbus ?? [];
 
   StateManConfig copy() => StateManConfig.fromJson(toJson());
 
   @override
   String toString() {
-    return 'StateManConfig(opcua: ${opcua.toString()})';
+    return 'StateManConfig(opcua: ${opcua.toString()}, modbus: ${modbus.toString()})';
   }
 
   static Future<StateManConfig> fromFile(String path) async {
@@ -154,7 +237,7 @@ class StateManConfig {
   static Future<StateManConfig> fromPrefs(Preferences prefs) async {
     var configJson = await prefs.getString(configKey, secret: true);
     if (configJson == null) {
-      configJson = jsonEncode(StateManConfig(opcua: [OpcUAConfig()]).toJson());
+      configJson = jsonEncode(StateManConfig(opcua: [OpcUAConfig()], modbus: []).toJson());
       await prefs.setString(configKey, configJson,
           secret: true, saveToDb: false);
     }
@@ -206,12 +289,16 @@ class OpcUANodeConfig {
 class KeyMappingEntry {
   @JsonKey(name: 'opcua_node')
   OpcUANodeConfig? opcuaNode;
+  @JsonKey(name: 'modbus_node')
+  ModbusNodeConfig? modbusNode;
   bool? io; // if true, the key is an IO unit
   CollectEntry? collect;
 
-  String? get server => opcuaNode?.serverAlias;
+  String? get server => opcuaNode?.serverAlias ?? modbusNode?.serverAlias;
 
-  KeyMappingEntry({this.opcuaNode, this.collect});
+  bool get isModbus => modbusNode != null;
+
+  KeyMappingEntry({this.opcuaNode, this.modbusNode, this.collect});
 
   factory KeyMappingEntry.fromJson(Map<String, dynamic> json) =>
       _$KeyMappingEntryFromJson(json);
@@ -219,7 +306,7 @@ class KeyMappingEntry {
 
   @override
   String toString() {
-    return 'KeyMappingEntry(opcuaNode: ${opcuaNode?.toString()}, collect: $collect, io: $io)';
+    return 'KeyMappingEntry(opcuaNode: ${opcuaNode?.toString()}, modbusNode: ${modbusNode?.toString()}, collect: $collect, io: $io)';
   }
 }
 
@@ -234,7 +321,7 @@ class KeyMappings {
   }
 
   String? lookupServerAlias(String key) {
-    return nodes[key]?.opcuaNode?.serverAlias;
+    return nodes[key]?.server;
   }
 
   String? lookupKey(NodeId nodeId) {
@@ -244,6 +331,14 @@ class KeyMappings {
       final (entryNodeId, _) = result;
       return entryNodeId == nodeId;
     })?.key;
+  }
+
+  ModbusNodeConfig? lookupModbusNode(String key) {
+    return nodes[key]?.modbusNode;
+  }
+
+  bool isModbusKey(String key) {
+    return nodes[key]?.isModbus ?? false;
   }
 
   Iterable<String> get keys => nodes.keys;
@@ -356,6 +451,7 @@ class StateMan {
   final StateManConfig config;
   KeyMappings keyMappings;
   final List<ClientWrapper> clients;
+  final List<ModbusClientWrapper> modbusClients;
   final Map<String, AutoDisposingStream<DynamicValue>> _subscriptions = {};
   bool _shouldRun = true;
   final Map<String, String> _substitutions = {};
@@ -369,6 +465,7 @@ class StateMan {
     required this.config,
     required this.keyMappings,
     required this.clients,
+    required this.modbusClients,
     required this.alias,
   }) {
     for (final wrapper in clients) {
@@ -530,6 +627,37 @@ class StateMan {
         }
       }
     });
+
+    // Start Modbus clients with their key groups
+    for (final wrapper in modbusClients) {
+      wrapper.start(_buildModbusKeyGroups(wrapper));
+    }
+  }
+
+  /// Build a map of poll group name → list of (keyName, nodeConfig) for a wrapper.
+  Map<String, List<MapEntry<String, ModbusNodeConfig>>> _buildModbusKeyGroups(
+      ModbusClientWrapper wrapper) {
+    final groups = <String, List<MapEntry<String, ModbusNodeConfig>>>{};
+    for (final entry in keyMappings.nodes.entries) {
+      final modbusNode = entry.value.modbusNode;
+      if (modbusNode == null) continue;
+      if (modbusNode.serverAlias != wrapper.config.serverAlias) continue;
+      final groupName =
+          modbusNode.pollGroup ?? wrapper.config.pollGroups.first.name;
+      groups
+          .putIfAbsent(groupName, () => [])
+          .add(MapEntry(entry.key, modbusNode));
+    }
+    return groups;
+  }
+
+  ModbusClientWrapper _getModbusClientWrapper(String key) {
+    final serverAlias = keyMappings.lookupServerAlias(key);
+    return modbusClients.firstWhere(
+      (wrapper) => wrapper.config.serverAlias == serverAlias,
+      orElse: () => throw StateManException(
+          'No Modbus client found for key "$key" (serverAlias: $serverAlias)'),
+    );
   }
 
   void _resendLastValues() {
@@ -599,10 +727,15 @@ class StateMan {
                 ),
           opcuaConfig));
     }
+    final modbusClientList = config.modbus
+        .map((mc) => ModbusClientWrapper(mc, alias: alias))
+        .toList();
+
     final stateMan = StateMan._(
         config: config,
         keyMappings: keyMappings,
         clients: clients,
+        modbusClients: modbusClientList,
         alias: alias);
     return stateMan;
   }
@@ -651,6 +784,10 @@ class StateMan {
   /// Example: read("myKey")
   Future<DynamicValue> read(String key) async {
     key = resolveKey(key);
+    if (keyMappings.isModbusKey(key)) {
+      final wrapper = _getModbusClientWrapper(key);
+      return wrapper.readNode(keyMappings.lookupModbusNode(key)!);
+    }
     try {
       final client = _getClientWrapper(key).client;
       final nodeId = _lookupNodeId(key);
@@ -671,10 +808,30 @@ class StateMan {
   }
 
   Future<Map<String, DynamicValue>> readMany(List<String> keys) async {
-    final parameters = <ClientApi, Map<NodeId, List<AttributeId>>>{};
+    final results = <String, DynamicValue>{};
 
+    // Handle Modbus keys
+    final modbusKeys = <String>[];
+    final opcuaKeys = <String>[];
     for (final keyToResolve in keys) {
       final key = resolveKey(keyToResolve);
+      if (keyMappings.isModbusKey(key)) {
+        modbusKeys.add(key);
+      } else {
+        opcuaKeys.add(key);
+      }
+    }
+
+    for (final key in modbusKeys) {
+      final wrapper = _getModbusClientWrapper(key);
+      results[key] = await wrapper.readNode(keyMappings.lookupModbusNode(key)!);
+    }
+
+    // Handle OPC UA keys with the existing batch read
+    if (opcuaKeys.isEmpty) return results;
+
+    final parameters = <ClientApi, Map<NodeId, List<AttributeId>>>{};
+    for (final key in opcuaKeys) {
       final client = _getClientWrapper(key).client;
       final nodeId = _lookupNodeId(key);
       if (nodeId == null) {
@@ -691,7 +848,6 @@ class StateMan {
       };
     }
 
-    final results = <String, DynamicValue>{};
     for (final pair in parameters.entries) {
       final client = pair.key;
       final parameters = pair.value;
@@ -720,6 +876,10 @@ class StateMan {
   /// Example: write("myKey", DynamicValue(value: 42, typeId: NodeId.int16))
   Future<void> write(String key, DynamicValue value) async {
     key = resolveKey(key);
+    if (keyMappings.isModbusKey(key)) {
+      final wrapper = _getModbusClientWrapper(key);
+      return wrapper.writeNode(keyMappings.lookupModbusNode(key)!, value);
+    }
     try {
       final client = _getClientWrapper(key).client;
       final nodeId = _lookupNodeId(key);
@@ -748,6 +908,10 @@ class StateMan {
   /// Example: subscribe("myIntKey") or subscribe("myStringKey")
   Future<Stream<DynamicValue>> subscribe(String key) async {
     key = resolveKey(key);
+    if (keyMappings.isModbusKey(key)) {
+      final wrapper = _getModbusClientWrapper(key);
+      return wrapper.subscribe(key, keyMappings.lookupModbusNode(key)!);
+    }
     return _monitor(key);
   }
 
@@ -779,6 +943,11 @@ class StateMan {
     }
     _subscriptions.clear();
     _healthCheckTimer?.cancel();
+
+    // Clean up Modbus clients
+    for (final wrapper in modbusClients) {
+      wrapper.dispose();
+    }
 
     _subsMap$.close();
   }

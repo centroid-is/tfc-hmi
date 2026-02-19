@@ -90,6 +90,53 @@ StateManConfig sampleStateManConfig() {
   ]);
 }
 
+/// Creates a sample [StateManConfig] with both OPC UA and Modbus servers.
+StateManConfig sampleMixedStateManConfig() {
+  return StateManConfig(opcua: [
+    OpcUAConfig()
+      ..endpoint = 'opc.tcp://localhost:4840'
+      ..serverAlias = 'main_server',
+  ], modbus: [
+    ModbusConfig(
+      host: '10.50.10.10',
+      port: 502,
+      unitId: 1,
+      serverAlias: 'modbus_plc',
+      pollGroups: [
+        ModbusPollGroup(name: 'default', pollIntervalMs: 1000),
+        ModbusPollGroup(name: 'fast', pollIntervalMs: 100),
+      ],
+    ),
+  ]);
+}
+
+/// Creates sample [KeyMappings] with both OPC UA and Modbus keys.
+KeyMappings sampleMixedKeyMappings() {
+  return KeyMappings(nodes: {
+    'temperature_sensor': KeyMappingEntry(
+      opcuaNode: OpcUANodeConfig(namespace: 2, identifier: 'Temperature')
+        ..serverAlias = 'main_server',
+    ),
+    'motor_speed': KeyMappingEntry(
+      modbusNode: ModbusNodeConfig(
+        registerType: ModbusRegisterType.holdingRegister,
+        address: 100,
+        dataType: ModbusDataType.uint16,
+        serverAlias: 'modbus_plc',
+        pollGroup: 'fast',
+      ),
+    ),
+    'pump_running': KeyMappingEntry(
+      modbusNode: ModbusNodeConfig(
+        registerType: ModbusRegisterType.coil,
+        address: 0,
+        dataType: ModbusDataType.bit,
+        serverAlias: 'modbus_plc',
+      ),
+    ),
+  });
+}
+
 /// Wraps the [KeyRepositoryContent] widget in a testable widget tree
 /// with [ProviderScope] overrides for [preferencesProvider].
 Widget buildTestableKeyRepository({

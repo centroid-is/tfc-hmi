@@ -33,8 +33,16 @@ dependencies:
       url: https://github.com/centroid-is/open62541_dart.git
       ref: isolate-client-browse
 
+  # Modbus
+  modbus_client: ^1.4.4
+  modbus_client_tcp:
+    git:
+      url: https://github.com/centroid-is/modbus_client_tcp.git
+      ref: add-keepalive
+
   # Utilities
   collection: ^1.18.0
+  meta: ^1.12.0
   path: ^1.9.1
   args: ^2.4.2
   basic_utils: ^5.7.0
