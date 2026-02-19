@@ -47,6 +47,7 @@ Future<void> dataAcquisitionIsolateEntry(
     config: smConfig,
     keyMappings: keyMappings,
     useIsolate: false, // Already in isolate, no need for nested isolates
+    staticLinking: false,
     alias: 'data_acq',
   );
 

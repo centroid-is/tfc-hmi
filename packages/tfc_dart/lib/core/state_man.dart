@@ -542,6 +542,7 @@ class StateMan {
     required StateManConfig config,
     required KeyMappings keyMappings,
     bool useIsolate = true,
+    bool staticLinking = true,
     String alias = '',
   }) async {
     // Example directory: /Users/jonb/Library/Containers/is.centroid.sildarvinnsla.skammtalina/Data/Documents/certs
@@ -563,9 +564,17 @@ class StateMan {
         username = opcuaConfig.username;
         password = opcuaConfig.password;
       }
+      final libName = staticLinking
+          ? ''
+          : Platform.isWindows
+              ? 'open62541.dll'
+              : Platform.isMacOS || Platform.isIOS
+                  ? 'libopen62541.dylib'
+                  : 'libopen62541.so'; // Linux, Android
       clients.add(ClientWrapper(
           useIsolate
               ? await ClientIsolate.create(
+                  libraryPath: libName,
                   username: username,
                   password: password,
                   certificate: cert,
@@ -577,6 +586,7 @@ class StateMan {
                           1), // TODO can I reproduce the problem more often
                 )
               : Client(
+                  loadOpen62541Library(staticLinking: staticLinking),
                   username: username,
                   password: password,
                   certificate: cert,
