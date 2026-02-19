@@ -36,11 +36,12 @@ dependencies:
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8
   flutter_launcher_icons: ^0.14.3
+  open62541_libs: ^0.0.5
   open62541:
     # path: ../../open62541_dart
     git:
       url: https://github.com/centroid-is/open62541_dart.git
-      ref: main
+      ref: isolate-client-browse
   tfc:
     path: ../
   flutter_riverpod: ^2.6.1
