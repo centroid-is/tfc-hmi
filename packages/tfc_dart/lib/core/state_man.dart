@@ -482,6 +482,32 @@ class StateMan {
                 .toList();
             logger.i(
                 '[$alias ${wrapper.config.endpoint}] Resubscribing ${keysToResub.length} keys');
+
+            // Phase 1: Cancel ALL old raw subscriptions before creating
+            // any new ones. This queues all DeleteMonitoredItemsRequests
+            // in the native layer synchronously. By doing all cancels
+            // first, we prevent cross-key monId collision: after session
+            // loss the server assigns fresh monIds (1, 2, 3…) that may
+            // collide with OLD monIds captured in other keys' cancel
+            // closures, so a stale delete for key A could destroy key B's
+            // newly created item if creates and deletes are interleaved.
+            for (final key in keysToResub) {
+              final ads = _subscriptions[key];
+              logger.i(
+                  '[$alias] resub $key: exists=${ads != null}, '
+                  'subjectClosed=${ads?._subject.isClosed}, '
+                  'listeners=${ads?._listenerCount}, '
+                  'hasRawSub=${ads?._rawSub != null}');
+              if (ads != null && ads._rawSub != null) {
+                final oldSub = ads._rawSub;
+                ads._rawSub = null;
+                oldSub!.cancel(); // fire-and-forget; queues delete via FFI
+              }
+            }
+
+            // Phase 2: Now create new monitored items. All deletes are
+            // already queued and will be sent before any creates because
+            // runIterate hasn't had a chance to run yet (no await above).
             for (final key in keysToResub) {
               _monitor(key, resub: true);
             }
@@ -861,21 +887,24 @@ class StateMan {
             await client.read(id).timeout(const Duration(seconds: 1));
         final firstValue = idx != null ? readValue[idx] : readValue;
 
-        // Only create monitored items after confirming the node is readable.
-        // The raw stream goes directly to AutoDisposingStream — its _rawSub
-        // cancel properly triggers UA_Client_MonitoredItems_delete_async.
+        final ads = _subscriptions[key]!;
+        final hadPrevious = ads._rawSub != null;
+
+        logger.i(
+            '[$alias] About to subscribe $key: '
+            'hadPrevious=$hadPrevious, '
+            'subjectClosed=${ads._subject.isClosed}, '
+            'listeners=${ads._listenerCount}');
         logger.d(
             '[$alias] Creating monitored items for $key on sub=${wrapper.subscriptionId}');
         var stream = client.monitor(id, wrapper.subscriptionId!);
         if (idx != null) {
           stream = stream.map((value) => value[idx]);
         }
+        ads.subscribe(stream, firstValue);
+        logger.i('[$alias] Subscribed $key (replaced previous: $hadPrevious)');
 
-        final hadPrevious = _subscriptions[key]!._rawSub != null;
-        _subscriptions[key]!.subscribe(stream, firstValue);
-        logger.d('[$alias] Subscribed $key (replaced previous: $hadPrevious)');
-
-        return _subscriptions[key]!.stream;
+        return ads.stream;
       } catch (e) {
         retries++;
         if (retries > 10) {
@@ -892,6 +921,7 @@ class StateMan {
 class AutoDisposingStream<T> {
   final String key;
   final ReplaySubject<T> _subject;
+  final Logger _logger = Logger();
   int _listenerCount = 0;
   Timer? _idleTimer;
   StreamSubscription<T>? _rawSub;
@@ -910,31 +940,61 @@ class AutoDisposingStream<T> {
   Stream<T> get stream => _subject.stream;
 
   void subscribe(Stream<T> raw, T? firstValue) {
+    _logger.d('[$key] subscribe() called: '
+        'subjectClosed=${_subject.isClosed}, '
+        'listeners=$_listenerCount, '
+        'hadRawSub=${_rawSub != null}, '
+        'hasFirstValue=${firstValue != null}');
     _rawSub?.cancel();
     // wire raw → subject
     _rawSub = raw.listen(
       (value) {
+        if (_subject.isClosed) {
+          _logger.e(
+              '[$key] RAW STREAM emitted value but subject is CLOSED — data lost!');
+          return;
+        }
         _lastValue = value;
         _subject.add(value);
       },
-      onError: _subject.addError,
-      onDone: _subject.close,
+      onError: (error, stackTrace) {
+        _logger.e('[$key] raw stream error: $error '
+            '(subjectClosed=${_subject.isClosed})');
+        if (!_subject.isClosed) {
+          _subject.addError(error, stackTrace);
+        }
+      },
+      onDone: () {
+        _logger.w('[$key] raw stream DONE — '
+            'subject will close! listeners=$_listenerCount, '
+            'subjectClosed=${_subject.isClosed}');
+        _subject.close();
+      },
     );
     _lastValue = firstValue;
     if (firstValue != null) {
-      _subject.add(firstValue);
+      if (_subject.isClosed) {
+        _logger.e('[$key] subject is CLOSED, cannot add firstValue!');
+      } else {
+        _subject.add(firstValue);
+        _logger.d('[$key] firstValue pushed to subject');
+      }
     }
   }
 
   void _handleListen() {
     _listenerCount++;
     _idleTimer?.cancel();
+    _logger.d('[$key] listener added (count=$_listenerCount)');
   }
 
   void _handleCancel() {
     _listenerCount--;
+    _logger.d('[$key] listener removed (count=$_listenerCount)');
     if (_listenerCount == 0) {
+      _logger.w('[$key] no listeners left, starting ${idleTimeout.inSeconds}s idle timer');
       _idleTimer = Timer(idleTimeout, () {
+        _logger.w('[$key] idle timer fired — disposing');
         _rawSub?.cancel(); // tear down the OPC-UA monitoredItem
         _onDispose(key); // remove from StateMan._subscriptions
         _subject.close(); // close the replay buffer

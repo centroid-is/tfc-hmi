@@ -165,6 +165,9 @@ class Collector {
     _subscriptions[entry] = subscription.listen(
       (value) {
         _eventCount++;
+        if (_eventCount % 1000 == 1 || _eventCount <= 5) {
+          logger.d('[collector] $name received value #$_eventCount');
+        }
         if (entry.sampleInterval == null) {
           if (skipFirstSample) {
             skipFirstSample = false;
@@ -179,11 +182,12 @@ class Collector {
         }
       },
       onError: (error, stackTrace) {
-        logger.e('Error collecting data for key $name',
+        logger.e('[collector] Error for $name (subscription will continue): $error',
             error: error, stackTrace: stackTrace);
       },
       onDone: () {
-        logger.i('Collection for key $name done');
+        logger.e('[collector] Stream DONE for $name — '
+            'no more data will be collected! sampleTimer active=${sampleTimer?.isActive}');
         // Clean up timer when stream is done
         sampleTimer?.cancel();
       },
