@@ -3,6 +3,7 @@ import 'dart:math' as math;
 
 import 'package:cristalyse/cristalyse.dart' as cs;
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_colorpicker/flutter_colorpicker.dart';
@@ -67,6 +68,8 @@ class GraphAssetConfig extends BaseAsset {
   String? headerText;
   @JsonKey(defaultValue: Aggregation.none)
   Aggregation aggregation;
+  @JsonKey(defaultValue: false)
+  bool tooltip;
 
   GraphAssetConfig({
     this.graphType = GraphType.line,
@@ -78,6 +81,7 @@ class GraphAssetConfig extends BaseAsset {
     this.timeWindowMinutes = const Duration(minutes: 10),
     this.headerText,
     this.aggregation = Aggregation.none,
+    this.tooltip = false,
   })  : primarySeries = primarySeries ?? [],
         secondarySeries = secondarySeries ?? [],
         xAxis = xAxis ?? GraphAxisConfig(unit: 's'),
@@ -95,7 +99,8 @@ class GraphAssetConfig extends BaseAsset {
         xAxis = GraphAxisConfig(unit: 's'),
         yAxis = GraphAxisConfig(unit: ''),
         timeWindowMinutes = const Duration(minutes: 10),
-        aggregation = Aggregation.none;
+        aggregation = Aggregation.none,
+        tooltip = false;
 
   @override
   Widget build(BuildContext context) {
@@ -114,6 +119,7 @@ class GraphAssetConfig extends BaseAsset {
         yAxis: yAxis,
         yAxis2: yAxis2,
         xSpan: timeWindowMinutes,
+        tooltip: tooltip,
       );
 
   Map<String, Color> get colorPalette => Map.fromEntries(
@@ -230,6 +236,14 @@ class GraphContentConfigState extends State<GraphContentConfig> {
                               : 'Min / Max / Last'),
                         ))
                     .toList(),
+              ),
+              const SizedBox(height: 16),
+              CheckboxListTile(
+                title: const Text('Show Tooltip'),
+                value: widget.config.tooltip,
+                onChanged: (value) {
+                  setState(() => widget.config.tooltip = value ?? false);
+                },
               ),
               const SizedBox(height: 16),
               SizeField(
@@ -405,6 +419,7 @@ class GraphContentConfigState extends State<GraphContentConfig> {
                     min: axis.min,
                     max: axis.max,
                     boolean: axis.boolean,
+                    integersOnly: axis.integersOnly,
                   ));
                 },
               ),
@@ -422,10 +437,12 @@ class GraphContentConfigState extends State<GraphContentConfig> {
                 decoration: const InputDecoration(labelText: 'Unit'),
                 onChanged: (value) {
                   onChanged(GraphAxisConfig(
+                    title: axis!.title,
                     unit: value,
-                    min: axis!.min,
+                    min: axis.min,
                     max: axis.max,
                     boolean: axis.boolean,
+                    integersOnly: axis.integersOnly,
                   ));
                 },
               ),
@@ -438,10 +455,12 @@ class GraphContentConfigState extends State<GraphContentConfig> {
                 keyboardType: TextInputType.number,
                 onChanged: (value) {
                   onChanged(GraphAxisConfig(
-                    unit: axis!.unit,
+                    title: axis!.title,
+                    unit: axis.unit,
                     min: double.tryParse(value),
                     max: axis.max,
                     boolean: axis.boolean,
+                    integersOnly: axis.integersOnly,
                   ));
                 },
               ),
@@ -454,10 +473,12 @@ class GraphContentConfigState extends State<GraphContentConfig> {
                 keyboardType: TextInputType.number,
                 onChanged: (value) {
                   onChanged(GraphAxisConfig(
-                    unit: axis!.unit,
+                    title: axis!.title,
+                    unit: axis.unit,
                     min: axis.min,
                     max: double.tryParse(value),
                     boolean: axis.boolean,
+                    integersOnly: axis.integersOnly,
                   ));
                 },
               ),
@@ -474,10 +495,32 @@ class GraphContentConfigState extends State<GraphContentConfig> {
                 value: axis.boolean,
                 onChanged: (value) {
                   onChanged(GraphAxisConfig(
-                      unit: axis!.unit,
+                      title: axis!.title,
+                      unit: axis.unit,
                       min: axis.min,
                       max: axis.max,
-                      boolean: value));
+                      boolean: value,
+                      integersOnly: axis.integersOnly));
+                },
+              ),
+            ],
+          ),
+        if (showBoolean) const SizedBox(height: 8),
+        if (showBoolean)
+          Row(
+            children: [
+              const Text('Integers Only'),
+              const SizedBox(width: 16),
+              Checkbox(
+                value: axis.integersOnly,
+                onChanged: (value) {
+                  onChanged(GraphAxisConfig(
+                      title: axis!.title,
+                      unit: axis.unit,
+                      min: axis.min,
+                      max: axis.max,
+                      boolean: axis.boolean,
+                      integersOnly: value ?? false));
                 },
               ),
             ],
@@ -568,6 +611,7 @@ class _GraphAssetState extends ConsumerState<GraphAsset> {
             setState(() {});
           }
         },
+        tooltipBuilder: _buildTooltip,
         categoryColors: widget.config.colorPalette);
     _graph.theme(_chartTheme);
     _init();
@@ -586,6 +630,7 @@ class _GraphAssetState extends ConsumerState<GraphAsset> {
             setState(() {});
           }
         },
+        tooltipBuilder: _buildTooltip,
         categoryColors: widget.config.colorPalette);
     _graph.theme(ref.read(chartThemeNotifierProvider));
     _stateMan = await ref.read(stateManProvider.future);
@@ -761,6 +806,88 @@ class _GraphAssetState extends ConsumerState<GraphAsset> {
       }
     }
     return result;
+  }
+
+  Widget _buildTooltip(cs.DataPointInfo point) {
+    final x = point.xValue as double;
+    final config = widget.config;
+    final isTimeseries = config.graphType == GraphType.timeseries ||
+        config.graphType == GraphType.barTimeseries;
+    final xLabel = config.xAxis.title ?? (isTimeseries ? 'Time' : 'X');
+    String xStr;
+    if (isTimeseries) {
+      xStr = DateFormat('HH:mm:ss')
+          .format(DateTime.fromMillisecondsSinceEpoch(x.toInt()));
+    } else {
+      final unit = config.xAxis.unit;
+      xStr = x == x.roundToDouble()
+          ? x.round().toString()
+          : x.toStringAsFixed(2);
+      if (unit.isNotEmpty) xStr = '$xStr $unit';
+    }
+
+    // Find nearest point per series
+    final nearest = <String, Map<String, dynamic>>{};
+    final nearestDist = <String, double>{};
+    for (final d in _graph.data) {
+      final s = d['s'] as String? ?? '';
+      final dx = ((d['x'] as double) - x).abs();
+      if (!nearest.containsKey(s) || dx < nearestDist[s]!) {
+        nearest[s] = d;
+        nearestDist[s] = dx;
+      }
+    }
+
+    bool hasApprox = false;
+    final yUnit = config.yAxis.unit;
+    final y2Unit = config.yAxis2?.unit ?? '';
+    final rows = nearest.entries.map((e) {
+      final isY2 = e.value.containsKey('y2');
+      final value = isY2 ? e.value['y2'] : e.value['y'];
+      final unit = isY2 ? y2Unit : yUnit;
+      String valueStr;
+      if (value is num) {
+        valueStr = value == value.roundToDouble()
+            ? value.round().toString()
+            : value.toStringAsFixed(2);
+      } else {
+        valueStr = value?.toString() ?? 'N/A';
+      }
+      if (unit.isNotEmpty) valueStr = '$valueStr $unit';
+      final approx = nearestDist[e.key]! > 0;
+      if (approx) hasApprox = true;
+      return Text(
+        '${e.key}: ${approx ? '~' : ''}$valueStr',
+        style: const TextStyle(color: Colors.white, fontSize: 12),
+      );
+    }).toList();
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          '$xLabel: $xStr',
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 12,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        const Divider(height: 8, color: Colors.white54),
+        ...rows,
+        if (hasApprox) ...[
+          const SizedBox(height: 4),
+          Text(
+            '~ nearest value to $xLabel',
+            style: TextStyle(
+                color: Colors.white.withAlpha(150),
+                fontSize: 10,
+                fontStyle: FontStyle.italic),
+          ),
+        ],
+      ],
+    );
   }
 
   void _addData(List<Map<String, dynamic>> data) {
