@@ -47,6 +47,7 @@ GraphAssetConfig _$GraphAssetConfigFromJson(Map<String, dynamic> json) =>
       aggregation:
           $enumDecodeNullable(_$AggregationEnumMap, json['aggregation']) ??
               Aggregation.none,
+      tooltip: json['tooltip'] as bool? ?? false,
     )
       ..variant = json['asset_name'] as String
       ..coordinates =
@@ -72,6 +73,7 @@ Map<String, dynamic> _$GraphAssetConfigToJson(GraphAssetConfig instance) =>
       'time_window_min': instance.timeWindowMinutes.inMicroseconds,
       'header_text': instance.headerText,
       'aggregation': _$AggregationEnumMap[instance.aggregation]!,
+      'tooltip': instance.tooltip,
     };
 
 const _$GraphTypeEnumMap = {
