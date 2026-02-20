@@ -808,7 +808,7 @@ packages:
     description:
       path: "."
       ref: isolate-client-browse
-      resolved-ref: "33ed12bbc59cab5d32d3f948e0c31f0bbd652056"
+      resolved-ref: d43042d810fb4664f9a8c6e8ce0365de59877197
       url: "https://github.com/centroid-is/open62541_dart.git"
     source: git
     version: "0.0.0-dev.1"
