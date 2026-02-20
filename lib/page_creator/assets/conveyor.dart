@@ -145,6 +145,7 @@ class ConveyorConfig extends BaseAsset {
   bool? simulateBatches;
   bool? bidirectional;
   bool? reverseDirection;
+  bool? showFrequency;
 
   ConveyorConfig(
       {this.key,
@@ -153,7 +154,8 @@ class ConveyorConfig extends BaseAsset {
       this.tripKey,
       this.simulateBatches,
       this.bidirectional,
-      this.reverseDirection});
+      this.reverseDirection,
+      this.showFrequency});
 
   static const previewStr = 'Conveyor Preview';
 
@@ -251,6 +253,17 @@ class _ConveyorConfigContentState extends State<_ConveyorConfigContent> {
             ],
           ),
         ],
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            const Text('Show frequency:'),
+            const SizedBox(width: 8),
+            Checkbox(
+                value: widget.config.showFrequency ?? false,
+                onChanged: (val) =>
+                    setState(() => widget.config.showFrequency = val)),
+          ],
+        ),
         const SizedBox(height: 16),
         SizeField(
           initialValue: widget.config.size,
@@ -528,6 +541,7 @@ class _ConveyorState extends ConsumerState<Conveyor> {
           showExclamation: showExclamation ?? false,
           bidirectional: widget.config.bidirectional ?? false,
           reverseDirection: widget.config.reverseDirection ?? false,
+          showFrequency: widget.config.showFrequency ?? false,
           frequency: frequency,
           batches: _batches,
           angle: widget.config.coordinates.angle ?? 0.0,
@@ -912,6 +926,7 @@ class _ConveyorPainter extends CustomPainter {
   final bool showExclamation;
   final bool bidirectional;
   final bool reverseDirection;
+  final bool showFrequency;
   final double? frequency;
   final double angle;
 
@@ -920,6 +935,7 @@ class _ConveyorPainter extends CustomPainter {
       this.showExclamation = false,
       this.bidirectional = false,
       this.reverseDirection = false,
+      this.showFrequency = false,
       this.frequency,
       required this.batches,
       required this.angle});
@@ -1044,6 +1060,31 @@ class _ConveyorPainter extends CustomPainter {
 
       canvas.restore();
     }
+
+    // Draw frequency number in center
+    if (showFrequency && frequency != null) {
+      canvas.save();
+      canvas.translate(size.width / 2, size.height / 2);
+      canvas.rotate(-angle * pi / 180);
+      final textPainter = TextPainter(
+        text: TextSpan(
+          text: frequency!.toStringAsFixed(1),
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: size.shortestSide * 0.5,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        textAlign: TextAlign.center,
+        textDirection: TextDirection.ltr,
+      );
+      textPainter.layout();
+      textPainter.paint(
+        canvas,
+        Offset(-textPainter.width / 2, -textPainter.height / 2),
+      );
+      canvas.restore();
+    }
   }
 
   @override
@@ -1051,6 +1092,7 @@ class _ConveyorPainter extends CustomPainter {
       oldDelegate.color != color ||
       oldDelegate.showExclamation != showExclamation ||
       oldDelegate.bidirectional != bidirectional ||
+      oldDelegate.showFrequency != showFrequency ||
       oldDelegate.frequency != frequency;
 }
 
