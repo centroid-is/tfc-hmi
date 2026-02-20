@@ -15,6 +15,7 @@ import 'package:tfc_dart/core/boolean_expression.dart';
 import '../../providers/state_man.dart';
 import '../../providers/preferences.dart';
 import '../../widgets/boolean_expression.dart';
+import '../../widgets/opcua_browse.dart';
 
 part 'common.g.dart';
 
@@ -776,6 +777,22 @@ class _KeyMappingEntryDialogState extends ConsumerState<KeyMappingEntryDialog> {
     super.dispose();
   }
 
+  Future<void> _openBrowseDialog(BuildContext context, StateMan stateMan) async {
+    final result = await browseOpcUaNode(
+      context: context,
+      stateMan: stateMan,
+      serverAlias: _selectedServerAlias,
+    );
+    if (result != null) {
+      final nodeId = result.nodeId;
+      setState(() {
+        _namespaceController.text = nodeId.namespace.toString();
+        _identifierController.text =
+            nodeId.isString() ? nodeId.string : nodeId.numeric.toString();
+      });
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return FutureBuilder<StateMan>(
@@ -804,8 +821,18 @@ class _KeyMappingEntryDialogState extends ConsumerState<KeyMappingEntryDialog> {
                   ),
                 ),
                 const SizedBox(height: 16),
-                const Text('OPC UA Node Configuration',
-                    style: TextStyle(fontWeight: FontWeight.bold)),
+                Row(
+                  children: [
+                    const Text('OPC UA Node Configuration',
+                        style: TextStyle(fontWeight: FontWeight.bold)),
+                    const Spacer(),
+                    TextButton.icon(
+                      onPressed: () => _openBrowseDialog(context, stateMan),
+                      icon: const Icon(Icons.account_tree, size: 16),
+                      label: const Text('Browse'),
+                    ),
+                  ],
+                ),
                 DropdownButtonFormField<String>(
                   value: _selectedServerAlias,
                   decoration: const InputDecoration(

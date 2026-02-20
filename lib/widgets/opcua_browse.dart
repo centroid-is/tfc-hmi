@@ -2,8 +2,42 @@ import 'package:flutter/material.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:open62541/open62541.dart'
     show BrowseResultItem, NodeClass, NodeId, ClientApi, DynamicValue;
+import 'package:tfc_dart/core/state_man.dart' show StateMan;
 
 import '../theme.dart' show SolarizedColors;
+
+/// Finds the [ClientApi] for [serverAlias] in [stateMan], opens the OPC UA
+/// browse dialog, and returns the selected [BrowseResultItem] (or null).
+///
+/// Shows a [SnackBar] when no matching client is found.
+Future<BrowseResultItem?> browseOpcUaNode({
+  required BuildContext context,
+  required StateMan stateMan,
+  required String? serverAlias,
+}) async {
+  ClientApi? client;
+  for (final wrapper in stateMan.clients) {
+    if (wrapper.config.serverAlias == serverAlias) {
+      client = wrapper.client;
+      break;
+    }
+  }
+  if (client == null) {
+    if (!context.mounted) return null;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+          content: Text(
+              'No client found for alias "${serverAlias ?? "(none)"}"')),
+    );
+    return null;
+  }
+
+  return showOpcUaBrowseDialog(
+    context: context,
+    client: client,
+    serverAlias: serverAlias ?? stateMan.clients.first.config.endpoint,
+  );
+}
 
 /// A node in the OPC UA browse tree.
 class BrowseTreeNode {

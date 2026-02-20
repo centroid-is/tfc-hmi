@@ -8,8 +8,6 @@ import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as path;
-import 'package:open62541/open62541.dart' show ClientApi;
-
 import '../widgets/base_scaffold.dart';
 import '../widgets/opcua_browse.dart';
 import 'package:tfc_dart/core/state_man.dart';
@@ -876,26 +874,10 @@ class _OpcUaConfigSectionState extends ConsumerState<_OpcUaConfigSection> {
       return;
     }
 
-    // Find the ClientWrapper matching the selected alias (null alias matches null)
-    ClientApi? client;
-    for (final wrapper in stateMan.clients) {
-      if (wrapper.config.serverAlias == _selectedAlias) {
-        client = wrapper.client;
-        break;
-      }
-    }
-    if (client == null) {
-      if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No client found for alias "${_selectedAlias ?? "(none)"}"')),
-      );
-      return;
-    }
-
-    final result = await showOpcUaBrowseDialog(
+    final result = await browseOpcUaNode(
       context: context,
-      client: client!,
-      serverAlias: _selectedAlias ?? stateMan.clients.first.config.endpoint,
+      stateMan: stateMan,
+      serverAlias: _selectedAlias,
     );
 
     if (result != null) {
