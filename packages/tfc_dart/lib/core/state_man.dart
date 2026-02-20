@@ -493,8 +493,7 @@ class StateMan {
             // newly created item if creates and deletes are interleaved.
             for (final key in keysToResub) {
               final ads = _subscriptions[key];
-              logger.i(
-                  '[$alias] resub $key: exists=${ads != null}, '
+              logger.i('[$alias] resub $key: exists=${ads != null}, '
                   'subjectClosed=${ads?._subject.isClosed}, '
                   'listeners=${ads?._listenerCount}, '
                   'hasRawSub=${ads?._rawSub != null}');
@@ -525,35 +524,29 @@ class StateMan {
     // but the local TCP stack hasn't noticed (due to long keepalive defaults).
     _healthCheckTimer = Timer.periodic(const Duration(seconds: 10), (timer) {
       for (final wrapper in clients) {
-        if (wrapper.client is Client) {
-          final clientRef = wrapper.client as Client;
-          final state = clientRef.state;
-          logger.d('[$alias] Health check: channel=${state.channelState.name}, '
-              'session=${state.sessionState.name}, recovery=${state.recoveryStatus}');
-        }
-        // Active probe: if we think we're connected, try reading the server's
-        // current time (ns=0;i=2258). If it times out, the connection is dead.
-        // I would really like to add SO_KEEPALIVE to open62541 .......
-        if (wrapper.connectionStatus == ConnectionStatus.connected) {
-          final serverTimeNode = NodeId.fromNumeric(0, 2258);
-          wrapper.client
-              .readAttribute({
-                serverTimeNode: [AttributeId.UA_ATTRIBUTEID_VALUE]
-              })
-              .timeout(const Duration(seconds: 5))
-              .then((_) {
-                // Read succeeded — connection is alive, nothing to do.
-              })
-              .catchError((e) {
-                logger.e(
-                    '[$alias] Health check read failed for ${wrapper.config.endpoint}: $e — marking disconnected');
-                wrapper.updateConnectionStatus(ClientState(
-                  channelState: SecureChannelState.UA_SECURECHANNELSTATE_CLOSED,
-                  sessionState: SessionState.UA_SESSIONSTATE_CLOSED,
-                  recoveryStatus: 0,
-                ));
-              });
-        }
+        // Only probe if we have an active subscription. This avoids
+        // interfering with the initial connection handshake
+        if (wrapper.subscriptionId == null) continue;
+        logger.d('[$alias ${wrapper.config.endpoint}] Health check: '
+            'connStatus=${wrapper.connectionStatus.name}');
+        final serverTimeNode = NodeId.fromNumeric(0, 2258);
+        wrapper.client
+            .readAttribute({
+              serverTimeNode: [AttributeId.UA_ATTRIBUTEID_VALUE]
+            })
+            .timeout(const Duration(seconds: 5))
+            .then((_) {
+              // Read succeeded — connection is alive, nothing to do.
+            })
+            .catchError((e) {
+              logger.e(
+                  '[$alias] Health check read failed for ${wrapper.config.endpoint}: $e — marking disconnected');
+              wrapper.updateConnectionStatus(ClientState(
+                channelState: SecureChannelState.UA_SECURECHANNELSTATE_CLOSED,
+                sessionState: SessionState.UA_SESSIONSTATE_CLOSED,
+                recoveryStatus: 0,
+              ));
+            });
       }
     });
   }
@@ -890,8 +883,7 @@ class StateMan {
         final ads = _subscriptions[key]!;
         final hadPrevious = ads._rawSub != null;
 
-        logger.i(
-            '[$alias] About to subscribe $key: '
+        logger.i('[$alias] About to subscribe $key: '
             'hadPrevious=$hadPrevious, '
             'subjectClosed=${ads._subject.isClosed}, '
             'listeners=${ads._listenerCount}');
@@ -992,7 +984,8 @@ class AutoDisposingStream<T> {
     _listenerCount--;
     _logger.d('[$key] listener removed (count=$_listenerCount)');
     if (_listenerCount == 0) {
-      _logger.w('[$key] no listeners left, starting ${idleTimeout.inSeconds}s idle timer');
+      _logger.w(
+          '[$key] no listeners left, starting ${idleTimeout.inSeconds}s idle timer');
       _idleTimer = Timer(idleTimeout, () {
         _logger.w('[$key] idle timer fired — disposing');
         _rawSub?.cancel(); // tear down the OPC-UA monitoredItem
