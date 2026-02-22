@@ -856,6 +856,11 @@ class StateMan {
     int retries = 0;
     while (true) {
       try {
+        // Cancel any leftover subscription from a previous failed attempt
+        // so we don't leak monitored items while retrying.
+        _subscriptions[key]?._rawSub?.cancel();
+        _subscriptions[key]?._rawSub = null;
+
         await client.awaitConnect();
         final wrapper = _getClientWrapper(key);
 
@@ -875,11 +880,6 @@ class StateMan {
           continue;
         }
 
-        // Verify node is accessible before creating monitored items.
-        final readValue =
-            await client.read(id).timeout(const Duration(seconds: 1));
-        final firstValue = idx != null ? readValue[idx] : readValue;
-
         final ads = _subscriptions[key]!;
         final hadPrevious = ads._rawSub != null;
 
@@ -893,7 +893,17 @@ class StateMan {
         if (idx != null) {
           stream = stream.map((value) => value[idx]);
         }
-        ads.subscribe(stream, firstValue);
+
+        // Wait for monitor to deliver first value. No asBroadcastStream()
+        // needed — subscribe() holds _rawSub, and cancel propagates
+        // properly to delete monitored items on retry.
+        final firstEmission = Completer<void>();
+        final wrappedStream = stream.map((value) {
+          if (!firstEmission.isCompleted) firstEmission.complete();
+          return value;
+        });
+        ads.subscribe(wrappedStream, null);
+        await firstEmission.future.timeout(const Duration(seconds: 5));
         logger.i('[$alias] Subscribed $key (replaced previous: $hadPrevious)');
 
         return ads.stream;
