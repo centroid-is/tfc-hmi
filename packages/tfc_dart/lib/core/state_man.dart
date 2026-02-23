@@ -536,7 +536,22 @@ class StateMan {
             })
             .timeout(const Duration(seconds: 5))
             .then((_) {
-              // Read succeeded — connection is alive, nothing to do.
+              // Read succeeded — if we previously marked this wrapper as
+              // disconnected (e.g. a health-check timeout), restore the
+              // status. The native stateStream won't emit a new event
+              // because the channel/session never actually changed.
+              if (wrapper.connectionStatus ==
+                  ConnectionStatus.disconnected) {
+                logger.i(
+                    '[$alias ${wrapper.config.endpoint}] Health check read succeeded — restoring connected status');
+                wrapper.updateConnectionStatus(ClientState(
+                  channelState:
+                      SecureChannelState.UA_SECURECHANNELSTATE_OPEN,
+                  sessionState:
+                      SessionState.UA_SESSIONSTATE_ACTIVATED,
+                  recoveryStatus: 0,
+                ));
+              }
             })
             .catchError((e) {
               logger.e(
