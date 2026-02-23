@@ -46,6 +46,10 @@ ConveyorConfig _$ConveyorConfigFromJson(Map<String, dynamic> json) =>
       bidirectional: json['bidirectional'] as bool?,
       reverseDirection: json['reverseDirection'] as bool?,
       showFrequency: json['showFrequency'] as bool?,
+      showAuger: json['showAuger'] as bool?,
+      augerRpmKey: json['augerRpmKey'] as String?,
+      augerEndCaps:
+          $enumDecodeNullable(_$AugerEndCapsEnumMap, json['augerEndCaps']),
     )
       ..variant = json['asset_name'] as String
       ..coordinates =
@@ -69,4 +73,14 @@ Map<String, dynamic> _$ConveyorConfigToJson(ConveyorConfig instance) =>
       'bidirectional': instance.bidirectional,
       'reverseDirection': instance.reverseDirection,
       'showFrequency': instance.showFrequency,
+      'showAuger': instance.showAuger,
+      'augerRpmKey': instance.augerRpmKey,
+      'augerEndCaps': _$AugerEndCapsEnumMap[instance.augerEndCaps],
     };
+
+const _$AugerEndCapsEnumMap = {
+  AugerEndCaps.both: 'both',
+  AugerEndCaps.left: 'left',
+  AugerEndCaps.right: 'right',
+  AugerEndCaps.none: 'none',
+};

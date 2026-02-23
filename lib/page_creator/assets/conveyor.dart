@@ -11,6 +11,7 @@ import 'package:tfc_dart/core/state_man.dart';
 import 'package:rxdart/rxdart.dart';
 import 'package:open62541/open62541.dart' show DynamicValue;
 import '../../widgets/graph.dart';
+import 'auger_conveyor_painter.dart';
 import 'package:tfc_dart/core/database.dart';
 import 'package:tfc_dart/core/collector.dart';
 
@@ -146,6 +147,9 @@ class ConveyorConfig extends BaseAsset {
   bool? bidirectional;
   bool? reverseDirection;
   bool? showFrequency;
+  bool? showAuger;
+  String? augerRpmKey;
+  AugerEndCaps? augerEndCaps;
 
   ConveyorConfig(
       {this.key,
@@ -155,7 +159,10 @@ class ConveyorConfig extends BaseAsset {
       this.simulateBatches,
       this.bidirectional,
       this.reverseDirection,
-      this.showFrequency});
+      this.showFrequency,
+      this.showAuger,
+      this.augerRpmKey,
+      this.augerEndCaps});
 
   static const previewStr = 'Conveyor Preview';
 
@@ -264,6 +271,48 @@ class _ConveyorConfigContentState extends State<_ConveyorConfigContent> {
                     setState(() => widget.config.showFrequency = val)),
           ],
         ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            const Text('Auger conveyor:'),
+            const SizedBox(width: 8),
+            Checkbox(
+                value: widget.config.showAuger ?? false,
+                onChanged: (val) =>
+                    setState(() => widget.config.showAuger = val)),
+          ],
+        ),
+        if (widget.config.showAuger ?? false) ...[
+          const SizedBox(height: 8),
+          KeyField(
+            initialValue: widget.config.augerRpmKey,
+            onChanged: (val) =>
+                setState(() => widget.config.augerRpmKey = val),
+            label: 'Output shaft RPM key',
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              const Text('End caps:'),
+              const SizedBox(width: 8),
+              DropdownButton<AugerEndCaps>(
+                value: widget.config.augerEndCaps ?? AugerEndCaps.both,
+                onChanged: (val) =>
+                    setState(() => widget.config.augerEndCaps = val),
+                items: const [
+                  DropdownMenuItem(
+                      value: AugerEndCaps.both, child: Text('Both')),
+                  DropdownMenuItem(
+                      value: AugerEndCaps.left, child: Text('Left only')),
+                  DropdownMenuItem(
+                      value: AugerEndCaps.right, child: Text('Right only')),
+                  DropdownMenuItem(
+                      value: AugerEndCaps.none, child: Text('None')),
+                ],
+              ),
+            ],
+          ),
+        ],
         const SizedBox(height: 16),
         SizeField(
           initialValue: widget.config.size,
@@ -288,7 +337,8 @@ class Conveyor extends ConsumerStatefulWidget {
   ConsumerState<Conveyor> createState() => _ConveyorState();
 }
 
-class _ConveyorState extends ConsumerState<Conveyor> {
+class _ConveyorState extends ConsumerState<Conveyor>
+    with TickerProviderStateMixin {
   static final _log = Logger(
     printer: PrettyPrinter(
       methodCount: 0,
@@ -301,6 +351,41 @@ class _ConveyorState extends ConsumerState<Conveyor> {
   final Map<String, Batch> _batches = {};
   // periodic timer for batches
   Timer? _simulateBatchesTimer;
+
+  // Auger animation
+  double _augerPhase = 0.0;
+  Timer? _augerAnimationTimer;
+  double _augerRpm = 0.0;
+
+  void _updateAugerAnimation(double rpm) {
+    _augerRpm = rpm;
+    if (rpm != 0 && _augerAnimationTimer == null) {
+      _augerAnimationTimer =
+          Timer.periodic(const Duration(milliseconds: 16), (_) {
+        if (!mounted) {
+          _augerAnimationTimer?.cancel();
+          _augerAnimationTimer = null;
+          return;
+        }
+        // Convert RPM to radians per frame (16ms ~ 60fps)
+        // rpm / 60 = revolutions per second, * 2π = radians/sec, * 0.016 = radians/frame
+        _augerPhase += _augerRpm / 60.0 * 2 * pi * 0.016;
+        if (_augerPhase > 2 * pi) _augerPhase -= 2 * pi;
+        if (_augerPhase < -2 * pi) _augerPhase += 2 * pi;
+        setState(() {});
+      });
+    } else if (rpm == 0 && _augerAnimationTimer != null) {
+      _augerAnimationTimer?.cancel();
+      _augerAnimationTimer = null;
+    }
+  }
+
+  @override
+  void dispose() {
+    _augerAnimationTimer?.cancel();
+    _simulateBatchesTimer?.cancel();
+    super.dispose();
+  }
 
   void _startSimulateBatchesTimer() {
     _simulateBatchesTimer ??=
@@ -436,6 +521,17 @@ class _ConveyorState extends ConsumerState<Conveyor> {
       streamLabels.add('trip');
     }
 
+    if (widget.config.augerRpmKey != null &&
+        widget.config.augerRpmKey!.isNotEmpty) {
+      streams.add(ref.watch(stateManProvider.future).asStream().switchMap(
+            (stateMan) => stateMan
+                .subscribe(widget.config.augerRpmKey!)
+                .asStream()
+                .switchMap((s) => s),
+          ));
+      streamLabels.add('augerRpm');
+    }
+
     // If no streams are configured, show error state
     if (streams.isEmpty) {
       return _buildConveyorVisual(context, Colors.grey, true);
@@ -478,6 +574,15 @@ class _ConveyorState extends ConsumerState<Conveyor> {
           try {
             freq = dynValue['frequency']!.asDouble;
           } catch (_) {}
+        }
+
+        // Update auger animation from RPM data
+        if (dynValue['augerRpm'] != null) {
+          try {
+            _updateAugerAnimation(dynValue['augerRpm']!.asDouble);
+          } catch (_) {
+            _updateAugerAnimation(0);
+          }
         }
 
         if (widget.config.simulateBatches ?? false) {
@@ -532,10 +637,27 @@ class _ConveyorState extends ConsumerState<Conveyor> {
     bool? showExclamation,
     double? frequency,
   ]) {
+    final paintSize = widget.config.size.toSize(MediaQuery.of(context).size);
+
+    if (widget.config.showAuger ?? false) {
+      return LayoutRotatedBox(
+        angle: (widget.config.coordinates.angle ?? 0.0) * pi / 180,
+        child: CustomPaint(
+          size: paintSize,
+          painter: AugerConveyorPainter(
+            stateColor: color,
+            phaseOffset: _augerPhase,
+            showAuger: !(showExclamation ?? false),
+            endCaps: widget.config.augerEndCaps ?? AugerEndCaps.both,
+          ),
+        ),
+      );
+    }
+
     return LayoutRotatedBox(
       angle: (widget.config.coordinates.angle ?? 0.0) * pi / 180,
       child: CustomPaint(
-        size: widget.config.size.toSize(MediaQuery.of(context).size),
+        size: paintSize,
         painter: _ConveyorPainter(
           color: color,
           showExclamation: showExclamation ?? false,
