@@ -15,19 +15,20 @@ enum AugerOpenEnd { left, right }
 /// [phaseOffset] in radians animates the rotation (0→2π = one revolution).
 class AugerConveyorPainter extends CustomPainter {
   final Color stateColor;
-  final double phaseOffset;
+  final ValueNotifier<double> phaseNotifier;
   final bool showAuger;
   final int pitchCount;
   final AugerOpenEnd? openEnd;
 
   AugerConveyorPainter({
     required this.stateColor,
-    this.phaseOffset = 0.0,
+    required this.phaseNotifier,
     this.showAuger = true,
     this.pitchCount = 6,
     this.openEnd = AugerOpenEnd.right,
-    super.repaint,
-  });
+  }) : super(repaint: phaseNotifier);
+
+  double get phaseOffset => phaseNotifier.value;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -398,7 +399,6 @@ class AugerConveyorPainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant AugerConveyorPainter oldDelegate) =>
       oldDelegate.stateColor != stateColor ||
-      oldDelegate.phaseOffset != phaseOffset ||
       oldDelegate.showAuger != showAuger ||
       oldDelegate.pitchCount != pitchCount ||
       oldDelegate.openEnd != openEnd;

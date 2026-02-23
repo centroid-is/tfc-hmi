@@ -27,7 +27,7 @@ Widget buildAugerTestWidget({
             child: CustomPaint(
               painter: AugerConveyorPainter(
                 stateColor: stateColor,
-                phaseOffset: phaseOffset,
+                phaseNotifier: ValueNotifier(phaseOffset),
                 showAuger: showAuger,
                 pitchCount: pitchCount,
                 openEnd: openEnd,
@@ -45,40 +45,30 @@ void main() {
     // ── Unit tests for painter properties ──
 
     test('shouldRepaint returns true when stateColor changes', () {
-      final a = AugerConveyorPainter(stateColor: Colors.green);
-      final b = AugerConveyorPainter(stateColor: Colors.red);
-      expect(a.shouldRepaint(b), isTrue);
-    });
-
-    test('shouldRepaint returns true when phaseOffset changes', () {
-      final a =
-          AugerConveyorPainter(stateColor: Colors.grey, phaseOffset: 0.0);
-      final b =
-          AugerConveyorPainter(stateColor: Colors.grey, phaseOffset: 1.0);
+      final n = ValueNotifier(0.0);
+      final a = AugerConveyorPainter(stateColor: Colors.green, phaseNotifier: n);
+      final b = AugerConveyorPainter(stateColor: Colors.red, phaseNotifier: n);
       expect(a.shouldRepaint(b), isTrue);
     });
 
     test('shouldRepaint returns false when nothing changes', () {
-      final a =
-          AugerConveyorPainter(stateColor: Colors.grey, phaseOffset: 0.5);
-      final b =
-          AugerConveyorPainter(stateColor: Colors.grey, phaseOffset: 0.5);
+      final n = ValueNotifier(0.0);
+      final a = AugerConveyorPainter(stateColor: Colors.grey, phaseNotifier: n);
+      final b = AugerConveyorPainter(stateColor: Colors.grey, phaseNotifier: n);
       expect(a.shouldRepaint(b), isFalse);
     });
 
     test('shouldRepaint returns true when showAuger changes', () {
-      final a =
-          AugerConveyorPainter(stateColor: Colors.grey, showAuger: true);
-      final b =
-          AugerConveyorPainter(stateColor: Colors.grey, showAuger: false);
+      final n = ValueNotifier(0.0);
+      final a = AugerConveyorPainter(stateColor: Colors.grey, phaseNotifier: n, showAuger: true);
+      final b = AugerConveyorPainter(stateColor: Colors.grey, phaseNotifier: n, showAuger: false);
       expect(a.shouldRepaint(b), isTrue);
     });
 
     test('shouldRepaint returns true when openEnd changes', () {
-      final a = AugerConveyorPainter(
-          stateColor: Colors.grey, openEnd: AugerOpenEnd.left);
-      final b = AugerConveyorPainter(
-          stateColor: Colors.grey, openEnd: AugerOpenEnd.right);
+      final n = ValueNotifier(0.0);
+      final a = AugerConveyorPainter(stateColor: Colors.grey, phaseNotifier: n, openEnd: AugerOpenEnd.left);
+      final b = AugerConveyorPainter(stateColor: Colors.grey, phaseNotifier: n, openEnd: AugerOpenEnd.right);
       expect(a.shouldRepaint(b), isTrue);
     });
 

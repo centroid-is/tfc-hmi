@@ -350,8 +350,8 @@ class _ConveyorState extends ConsumerState<Conveyor>
   // periodic timer for batches
   Timer? _simulateBatchesTimer;
 
-  // Auger animation
-  double _augerPhase = 0.0;
+  // Auger animation — ValueNotifier repaints only the CustomPaint, no setState
+  final ValueNotifier<double> _augerPhase = ValueNotifier(0.0);
   Timer? _augerAnimationTimer;
   double _augerRpm = 0.0;
 
@@ -365,12 +365,10 @@ class _ConveyorState extends ConsumerState<Conveyor>
           _augerAnimationTimer = null;
           return;
         }
-        // Convert RPM to radians per frame (16ms ~ 60fps)
-        // rpm / 60 = revolutions per second, * 2π = radians/sec, * 0.016 = radians/frame
-        _augerPhase += _augerRpm / 60.0 * 2 * pi * 0.016;
-        if (_augerPhase > 2 * pi) _augerPhase -= 2 * pi;
-        if (_augerPhase < -2 * pi) _augerPhase += 2 * pi;
-        setState(() {});
+        var phase = _augerPhase.value + _augerRpm / 60.0 * 2 * pi * 0.016;
+        if (phase > 2 * pi) phase -= 2 * pi;
+        if (phase < -2 * pi) phase += 2 * pi;
+        _augerPhase.value = phase;
       });
     } else if (rpm == 0 && _augerAnimationTimer != null) {
       _augerAnimationTimer?.cancel();
@@ -381,6 +379,7 @@ class _ConveyorState extends ConsumerState<Conveyor>
   @override
   void dispose() {
     _augerAnimationTimer?.cancel();
+    _augerPhase.dispose();
     _simulateBatchesTimer?.cancel();
     super.dispose();
   }
@@ -655,7 +654,7 @@ class _ConveyorState extends ConsumerState<Conveyor>
           size: paintSize,
           painter: AugerConveyorPainter(
             stateColor: color,
-            phaseOffset: _augerPhase,
+            phaseNotifier: _augerPhase,
             showAuger: !(showExclamation ?? false),
             openEnd: widget.config.augerOpenEnd,
           ),
