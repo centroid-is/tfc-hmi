@@ -1,3 +1,4 @@
+import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tfc/page_creator/assets/auger_conveyor_painter.dart';
@@ -10,7 +11,7 @@ Widget buildAugerTestWidget({
   double phaseOffset = 0.0,
   bool showAuger = true,
   int pitchCount = 6,
-  AugerEndCaps endCaps = AugerEndCaps.both,
+  AugerOpenEnd? openEnd = AugerOpenEnd.right,
   double width = 600,
   double height = 120,
 }) {
@@ -29,7 +30,7 @@ Widget buildAugerTestWidget({
                 phaseOffset: phaseOffset,
                 showAuger: showAuger,
                 pitchCount: pitchCount,
-                endCaps: endCaps,
+                openEnd: openEnd,
               ),
             ),
           ),
@@ -73,11 +74,11 @@ void main() {
       expect(a.shouldRepaint(b), isTrue);
     });
 
-    test('shouldRepaint returns true when endCaps changes', () {
+    test('shouldRepaint returns true when openEnd changes', () {
       final a = AugerConveyorPainter(
-          stateColor: Colors.grey, endCaps: AugerEndCaps.both);
+          stateColor: Colors.grey, openEnd: AugerOpenEnd.left);
       final b = AugerConveyorPainter(
-          stateColor: Colors.grey, endCaps: AugerEndCaps.none);
+          stateColor: Colors.grey, openEnd: AugerOpenEnd.right);
       expect(a.shouldRepaint(b), isTrue);
     });
 
@@ -126,14 +127,14 @@ void main() {
       }
     });
 
-    testWidgets('renders with all end cap variants', (tester) async {
-      for (final caps in AugerEndCaps.values) {
-        await tester.pumpWidget(buildAugerTestWidget(endCaps: caps));
+    testWidgets('renders with all open end variants', (tester) async {
+      for (final end in [AugerOpenEnd.left, AugerOpenEnd.right, null]) {
+        await tester.pumpWidget(buildAugerTestWidget(openEnd: end));
         expect(find.byKey(_augerKey), findsOneWidget);
       }
     });
 
-    // ── Golden file tests (produce PNGs at test/painter/goldens/) ──
+    // ── Golden file tests ──
 
     testWidgets('golden: default grey stopped auger', (tester) async {
       await tester.pumpWidget(buildAugerTestWidget());
@@ -239,54 +240,59 @@ void main() {
       );
     });
 
-    // ── End cap golden tests ──
+    // ── Open end golden tests ──
 
-    testWidgets('golden: end caps both', (tester) async {
+    testWidgets('golden: open end right', (tester) async {
       await tester.pumpWidget(buildAugerTestWidget(
         stateColor: Colors.green,
         phaseOffset: 0.8,
-        endCaps: AugerEndCaps.both,
+        openEnd: AugerOpenEnd.right,
       ));
       await expectLater(
         find.byKey(_augerKey),
-        matchesGoldenFile('goldens/auger_endcaps_both.png'),
+        matchesGoldenFile('goldens/auger_open_right.png'),
       );
     });
 
-    testWidgets('golden: end cap left only', (tester) async {
+    testWidgets('golden: open end left', (tester) async {
       await tester.pumpWidget(buildAugerTestWidget(
         stateColor: Colors.green,
         phaseOffset: 0.8,
-        endCaps: AugerEndCaps.left,
+        openEnd: AugerOpenEnd.left,
       ));
       await expectLater(
         find.byKey(_augerKey),
-        matchesGoldenFile('goldens/auger_endcaps_left.png'),
+        matchesGoldenFile('goldens/auger_open_left.png'),
       );
     });
 
-    testWidgets('golden: end cap right only', (tester) async {
+    testWidgets('golden: no open end', (tester) async {
       await tester.pumpWidget(buildAugerTestWidget(
         stateColor: Colors.green,
         phaseOffset: 0.8,
-        endCaps: AugerEndCaps.right,
+        openEnd: null,
       ));
       await expectLater(
         find.byKey(_augerKey),
-        matchesGoldenFile('goldens/auger_endcaps_right.png'),
+        matchesGoldenFile('goldens/auger_open_none.png'),
       );
     });
 
-    testWidgets('golden: end caps none', (tester) async {
-      await tester.pumpWidget(buildAugerTestWidget(
-        stateColor: Colors.green,
-        phaseOffset: 0.8,
-        endCaps: AugerEndCaps.none,
-      ));
-      await expectLater(
-        find.byKey(_augerKey),
-        matchesGoldenFile('goldens/auger_endcaps_none.png'),
-      );
-    });
+    // ── Animation frame sequence (for GIF generation) ──
+
+    for (int i = 0; i < 60; i++) {
+      final phase = (i / 60) * 2 * pi;
+      final padded = i.toString().padLeft(3, '0');
+      testWidgets('animation frame $padded', (tester) async {
+        await tester.pumpWidget(buildAugerTestWidget(
+          stateColor: Colors.green,
+          phaseOffset: phase,
+        ));
+        await expectLater(
+          find.byKey(_augerKey),
+          matchesGoldenFile('goldens/frames/auger_frame_$padded.png'),
+        );
+      });
+    }
   });
 }

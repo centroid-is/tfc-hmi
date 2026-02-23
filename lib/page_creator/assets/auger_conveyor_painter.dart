@@ -1,35 +1,31 @@
 import 'dart:math';
 import 'package:flutter/material.dart';
 
-enum AugerEndCaps { both, left, right, none }
+/// Which end of the auger is the viewer-facing opening.
+enum AugerOpenEnd { left, right }
 
-/// A CustomPainter that renders a 3D auger/screw conveyor.
+/// A CustomPainter that renders an auger/screw conveyor in the same
+/// industrial-flat style as the other HMI assets.
 ///
-/// The auger is drawn as a cylindrical tube housing with a central shaft
-/// and helical screw flights rendered as sinusoidal curves with metallic
-/// 3D shading. The [phaseOffset] parameter drives the rotation animation.
+/// Both ends have an elliptical shape. The [openEnd] side draws the
+/// ellipse on top with a shadow inside (looking into the pipe).
+/// The far end's ellipse sits behind the body.
+///
+/// [pitchCount] controls how many screw flights ("shovels") are visible.
+/// [phaseOffset] in radians animates the rotation (0→2π = one revolution).
 class AugerConveyorPainter extends CustomPainter {
-  /// State color for the conveyor (green=auto, blue=clean, etc.)
   final Color stateColor;
-
-  /// Phase offset in radians — animate 0→2π for one full screw revolution.
   final double phaseOffset;
-
-  /// Whether to show the auger screw (false = flat conveyor style).
   final bool showAuger;
-
-  /// Number of visible screw pitches across the conveyor length.
   final int pitchCount;
-
-  /// Which end caps to draw.
-  final AugerEndCaps endCaps;
+  final AugerOpenEnd? openEnd;
 
   AugerConveyorPainter({
     required this.stateColor,
     this.phaseOffset = 0.0,
     this.showAuger = true,
     this.pitchCount = 6,
-    this.endCaps = AugerEndCaps.both,
+    this.openEnd = AugerOpenEnd.right,
     super.repaint,
   });
 
@@ -61,299 +57,342 @@ class AugerConveyorPainter extends CustomPainter {
     final w = size.width;
     final h = size.height;
     final centerY = h / 2;
+    final stroke = (h * 0.02).clamp(1.0, 3.0);
 
-    // Geometry ratios
+    // Geometry
     final tubeRadius = h * 0.45;
-    final flightRadius = tubeRadius * 0.92;
-    final shaftRadius = tubeRadius * 0.22;
-    final endCapWidth = w * 0.04; // elliptical end cap half-width
-    final hasLeft = endCaps == AugerEndCaps.both || endCaps == AugerEndCaps.left;
-    final hasRight = endCaps == AugerEndCaps.both || endCaps == AugerEndCaps.right;
-    final bodyLeft = hasLeft ? endCapWidth : 0.0;
-    final bodyRight = hasRight ? w - endCapWidth : w;
-    final bodyWidth = bodyRight - bodyLeft;
+    final flightRadius = tubeRadius * 0.88;
+    final shaftRadius = tubeRadius * 0.18;
+    final capWidth = h * 0.18;
 
-    // ── 1. Back half of tube (dark steel) ──
-    _paintTubeBack(canvas, bodyLeft, bodyRight, centerY, tubeRadius, endCapWidth);
+    // Body is inset on both sides for elliptical ends
+    final bodyLeft = capWidth;
+    final bodyRight = w - capWidth;
 
-    // ── 2. Back helix flights (dimmed, behind shaft) ──
-    _paintHelixFlights(
+    // Derive shades from the state color
+    final HSLColor hsl = HSLColor.fromColor(stateColor);
+    final darkShade =
+        hsl.withLightness((hsl.lightness * 0.35).clamp(0.0, 1.0)).toColor();
+    final lightShade =
+        hsl.withLightness((hsl.lightness * 0.55 + 0.35).clamp(0.0, 0.95))
+            .toColor();
+
+    // Ellipse rects for each end
+    final leftCapRect = Rect.fromLTRB(bodyLeft - capWidth,
+        centerY - tubeRadius, bodyLeft + capWidth, centerY + tubeRadius);
+    final rightCapRect = Rect.fromLTRB(bodyRight - capWidth,
+        centerY - tubeRadius, bodyRight + capWidth, centerY + tubeRadius);
+
+    // ── 1. End cap ellipses (behind body) ──
+    _paintEndCap(canvas, leftCapRect, stateColor, darkShade);
+    _paintEndCap(canvas, rightCapRect, stateColor, darkShade);
+
+    // ── 2. Body shape (with elliptical arcs at ends) ──
+    final bodyRect =
+        Rect.fromLTRB(bodyLeft, centerY - tubeRadius, bodyRight, centerY + tubeRadius);
+    final bodyPath = Path();
+    bodyPath.moveTo(bodyLeft, centerY - tubeRadius);
+    bodyPath.lineTo(bodyRight, centerY - tubeRadius);
+    bodyPath.arcTo(rightCapRect, -pi / 2, pi, false);
+    bodyPath.lineTo(bodyLeft, centerY + tubeRadius);
+    bodyPath.arcTo(leftCapRect, pi / 2, pi, false);
+    bodyPath.close();
+
+    canvas.drawPath(bodyPath, Paint()..color = stateColor);
+
+    // Subtle cylindrical gradient
+    canvas.drawPath(
+      bodyPath,
+      Paint()
+        ..shader = LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [
+            Colors.white.withValues(alpha: 0.15),
+            Colors.transparent,
+            Colors.black.withValues(alpha: 0.15),
+          ],
+          stops: const [0.0, 0.45, 1.0],
+        ).createShader(bodyRect),
+    );
+
+    // Clip screw internals to body shape
+    canvas.save();
+    canvas.clipPath(bodyPath);
+
+    // ── 3. Back helix ──
+    _paintHelix(
       canvas: canvas,
-      bodyLeft: bodyLeft,
-      bodyWidth: bodyWidth,
+      bodyLeft: 0,
+      bodyWidth: w,
       centerY: centerY,
-      flightRadius: flightRadius,
-      shaftRadius: shaftRadius,
+      outerRadius: flightRadius,
+      innerRadius: shaftRadius,
+      color: darkShade.withValues(alpha: 0.35),
+      strokeWidth: stroke,
       isFront: false,
     );
 
-    // ── 3. Central shaft ──
-    _paintShaft(canvas, bodyLeft, bodyRight, centerY, shaftRadius);
+    // ── 4. Central shaft ──
+    final shaftRect = Rect.fromLTRB(
+        0, centerY - shaftRadius, w, centerY + shaftRadius);
+    canvas.drawRect(
+      shaftRect,
+      Paint()..color = darkShade.withValues(alpha: 0.5),
+    );
+    canvas.drawLine(
+      Offset(0, centerY - shaftRadius * 0.3),
+      Offset(w, centerY - shaftRadius * 0.3),
+      Paint()
+        ..color = Colors.white.withValues(alpha: 0.3)
+        ..strokeWidth = stroke * 0.5,
+    );
+    final shaftEdgePaint = Paint()
+      ..color = darkShade.withValues(alpha: 0.6)
+      ..strokeWidth = stroke * 0.5;
+    canvas.drawLine(Offset(0, centerY - shaftRadius),
+        Offset(w, centerY - shaftRadius), shaftEdgePaint);
+    canvas.drawLine(Offset(0, centerY + shaftRadius),
+        Offset(w, centerY + shaftRadius), shaftEdgePaint);
 
-    // ── 4. Front helix flights (bright, in front of shaft) ──
-    _paintHelixFlights(
+    // ── 5. Front helix ──
+    _paintHelix(
       canvas: canvas,
-      bodyLeft: bodyLeft,
-      bodyWidth: bodyWidth,
+      bodyLeft: 0,
+      bodyWidth: w,
       centerY: centerY,
-      flightRadius: flightRadius,
-      shaftRadius: shaftRadius,
+      outerRadius: flightRadius,
+      innerRadius: shaftRadius,
+      color: darkShade,
+      strokeWidth: stroke * 1.5,
       isFront: true,
     );
 
-    // ── 5. Front half of tube (with state color tint + transparency) ──
-    _paintTubeFront(canvas, bodyLeft, bodyRight, centerY, tubeRadius, endCapWidth, w, h);
+    // ── 6. Front helix filled ribbons ──
+    _paintHelixRibbons(
+      canvas: canvas,
+      bodyLeft: 0,
+      bodyWidth: w,
+      centerY: centerY,
+      outerRadius: flightRadius,
+      innerRadius: shaftRadius,
+      color: lightShade.withValues(alpha: 0.25),
+    );
 
-    // ── 6. End caps ──
-    if (hasLeft) {
-      _paintEndCap(canvas, bodyLeft, centerY, tubeRadius, endCapWidth, isLeft: true);
-    }
-    if (hasRight) {
-      _paintEndCap(canvas, bodyRight, centerY, tubeRadius, endCapWidth, isLeft: false);
-    }
+    canvas.restore();
 
-    // ── 7. Tube outline ──
-    _paintTubeOutline(canvas, bodyLeft, bodyRight, centerY, tubeRadius, endCapWidth);
+    // ── 7. Body outline with elliptical arcs at both ends ──
+    final outlinePaint = Paint()
+      ..color = Colors.black
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2;
+
+    final outlinePath = Path();
+    outlinePath.moveTo(bodyLeft, centerY - tubeRadius);
+    outlinePath.lineTo(bodyRight, centerY - tubeRadius);
+    // Right arc
+    outlinePath.arcTo(rightCapRect, -pi / 2, pi, false);
+    // Bottom line
+    outlinePath.lineTo(bodyLeft, centerY + tubeRadius);
+    // Left arc
+    outlinePath.arcTo(leftCapRect, pi / 2, pi, false);
+
+    canvas.drawPath(outlinePath, outlinePaint);
+
+    // ── 8. Open-end ellipse on top (full border + tiny shadow) ──
+    if (openEnd == AugerOpenEnd.left) {
+      _paintOpenEndCap(canvas, leftCapRect, stateColor, darkShade);
+    } else if (openEnd == AugerOpenEnd.right) {
+      _paintOpenEndCap(canvas, rightCapRect, stateColor, darkShade);
+    }
   }
 
-  void _paintTubeBack(Canvas canvas, double left, double right, double centerY, double radius, double capW) {
-    final backPaint = Paint()
-      ..shader = LinearGradient(
-        begin: Alignment.topCenter,
-        end: Alignment.bottomCenter,
-        colors: [
-          const Color(0xFF505860),
-          const Color(0xFF3A4048),
-          const Color(0xFF505860),
-        ],
-      ).createShader(Rect.fromLTRB(left, centerY - radius, right, centerY + radius));
-
-    final backRect = RRect.fromRectAndRadius(
-      Rect.fromLTRB(left, centerY - radius, right, centerY + radius),
-      Radius.circular(2),
-    );
-    canvas.drawRRect(backRect, backPaint);
-  }
-
-  void _paintShaft(Canvas canvas, double left, double right, double centerY, double shaftRadius) {
-    final shaftGradient = LinearGradient(
-      begin: Alignment.topCenter,
-      end: Alignment.bottomCenter,
-      colors: [
-        const Color(0xFF808890),
-        const Color(0xFFA0A8B0),
-        const Color(0xFF606870),
-        const Color(0xFF404848),
-      ],
-      stops: const [0.0, 0.35, 0.7, 1.0],
-    );
-
-    final shaftRect = Rect.fromLTRB(
-      left, centerY - shaftRadius, right, centerY + shaftRadius,
-    );
-
-    canvas.drawRect(
-      shaftRect,
-      Paint()..shader = shaftGradient.createShader(shaftRect),
-    );
-
-    // Shaft highlight line
-    canvas.drawLine(
-      Offset(left, centerY - shaftRadius * 0.4),
-      Offset(right, centerY - shaftRadius * 0.4),
+  /// Open-end ellipse: full border with a tiny radial shadow inside.
+  void _paintOpenEndCap(
+      Canvas canvas, Rect capRect, Color fill, Color darkShade) {
+    // Fill
+    canvas.drawOval(
+      capRect,
       Paint()
-        ..color = const Color(0x40FFFFFF)
-        ..strokeWidth = 1.0,
+        ..shader = LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [fill, darkShade.withValues(alpha: 0.5)],
+        ).createShader(capRect),
+    );
+    // Tiny shadow inside
+    canvas.drawOval(
+      capRect,
+      Paint()
+        ..shader = RadialGradient(
+          center: Alignment.center,
+          radius: 0.9,
+          colors: [
+            darkShade.withValues(alpha: 0.3),
+            Colors.transparent,
+          ],
+        ).createShader(capRect),
+    );
+    // Border
+    canvas.drawOval(
+      capRect,
+      Paint()
+        ..color = Colors.black
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2,
     );
   }
 
-  void _paintHelixFlights({
+  /// End-cap ellipse: filled with state color gradient, drawn behind body.
+  void _paintEndCap(
+      Canvas canvas, Rect capRect, Color fill, Color darkShade) {
+    canvas.drawOval(
+      capRect,
+      Paint()
+        ..shader = LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [
+            fill,
+            darkShade.withValues(alpha: 0.7),
+          ],
+        ).createShader(capRect),
+    );
+  }
+
+  /// Draws a sinusoidal helix curve (outer edge) as a stroke path.
+  void _paintHelix({
     required Canvas canvas,
     required double bodyLeft,
     required double bodyWidth,
     required double centerY,
-    required double flightRadius,
-    required double shaftRadius,
+    required double outerRadius,
+    required double innerRadius,
+    required Color color,
+    required double strokeWidth,
     required bool isFront,
   }) {
-    final steps = (bodyWidth * 1.5).toInt().clamp(100, 600);
-    final dx = bodyWidth / steps;
+    final pixelStep = 2.0;
+    final totalSteps = (bodyWidth / pixelStep).ceil();
+    if (totalSteps < 2) return;
 
-    for (int pitch = 0; pitch < pitchCount; pitch++) {
-      final pitchWidth = bodyWidth / pitchCount;
-      final pitchStart = pitch * pitchWidth;
+    final path = Path();
+    bool drawing = false;
 
-      // Each pitch draws one "ribbon" face of the helix
-      // We draw half-pitches: 0→π is front-facing, π→2π is back-facing
-      final halfSteps = (pitchWidth / dx).toInt();
-      if (halfSteps < 2) continue;
+    for (int i = 0; i <= totalSteps; i++) {
+      final x = bodyLeft + (i / totalSteps) * bodyWidth;
+      final t = (i / totalSteps) * pitchCount * 2 * pi + phaseOffset;
+      final sinVal = sin(t);
 
-      // Front face: phase 0→π, Back face: phase π→2π
-      final startPhase = isFront ? 0.0 : pi;
-      final endPhase = isFront ? pi : 2 * pi;
+      final visible = isFront ? sinVal >= 0 : sinVal < 0;
 
-      final path = Path();
-      final outerPoints = <Offset>[];
-      final innerPoints = <Offset>[];
-
-      for (int i = 0; i <= halfSteps; i++) {
-        final t = i / halfSteps;
-        final localPhase = startPhase + t * (endPhase - startPhase);
-        final angle = localPhase + phaseOffset;
-        final x = bodyLeft + pitchStart + t * pitchWidth;
-
-        final yOuter = centerY + flightRadius * sin(angle);
-        final yInner = centerY + shaftRadius * sin(angle);
-
-        outerPoints.add(Offset(x, yOuter));
-        innerPoints.add(Offset(x, yInner));
+      if (visible) {
+        final yOuter = centerY + outerRadius * sinVal;
+        if (!drawing) {
+          path.moveTo(x, yOuter);
+          drawing = true;
+        } else {
+          path.lineTo(x, yOuter);
+        }
+      } else {
+        drawing = false;
       }
+    }
 
-      if (outerPoints.length < 2) continue;
+    canvas.drawPath(
+      path,
+      Paint()
+        ..color = color
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = strokeWidth
+        ..strokeCap = StrokeCap.round
+        ..strokeJoin = StrokeJoin.round,
+    );
 
-      // Build the ribbon shape: outer edge forward, inner edge backward
-      path.moveTo(outerPoints.first.dx, outerPoints.first.dy);
-      for (int i = 1; i < outerPoints.length; i++) {
-        path.lineTo(outerPoints[i].dx, outerPoints[i].dy);
+    // Blade edges at zero crossings
+    final bladePaint = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = strokeWidth
+      ..strokeCap = StrokeCap.round;
+
+    for (int p = 0; p <= pitchCount; p++) {
+      for (int edge = 0; edge < 2; edge++) {
+        final targetPhase = edge == 0 ? p * 2 * pi : p * 2 * pi + pi;
+        final x = bodyLeft +
+            ((targetPhase - phaseOffset) / (pitchCount * 2 * pi)) * bodyWidth;
+
+        if (x < bodyLeft || x > bodyLeft + bodyWidth) continue;
+
+        final isFrontEdge = edge == (isFront ? 0 : 1);
+        if (!isFrontEdge) continue;
+
+        canvas.drawLine(
+          Offset(x, centerY - outerRadius),
+          Offset(x, centerY - innerRadius),
+          bladePaint,
+        );
+        canvas.drawLine(
+          Offset(x, centerY + innerRadius),
+          Offset(x, centerY + outerRadius),
+          bladePaint,
+        );
       }
-      for (int i = innerPoints.length - 1; i >= 0; i--) {
-        path.lineTo(innerPoints[i].dx, innerPoints[i].dy);
-      }
-      path.close();
-
-      // Shading: front faces are brighter, back faces are dimmer
-      final baseColor = isFront
-          ? const Color(0xFFA8B0B8)
-          : const Color(0xFF606870);
-      final highlightColor = isFront
-          ? const Color(0xFFD0D8E0)
-          : const Color(0xFF787878);
-
-      // Gradient along the ribbon for curvature shading
-      final ribbonRect = path.getBounds();
-      final ribbonPaint = Paint()
-        ..shader = LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [highlightColor, baseColor, baseColor.withValues(alpha: 0.8)],
-          stops: const [0.0, 0.5, 1.0],
-        ).createShader(ribbonRect);
-
-      canvas.drawPath(path, ribbonPaint);
-
-      // Draw outer edge highlight
-      final edgePath = Path();
-      edgePath.moveTo(outerPoints.first.dx, outerPoints.first.dy);
-      for (int i = 1; i < outerPoints.length; i++) {
-        edgePath.lineTo(outerPoints[i].dx, outerPoints[i].dy);
-      }
-
-      canvas.drawPath(
-        edgePath,
-        Paint()
-          ..color = isFront
-              ? const Color(0xFFE0E8F0)
-              : const Color(0xFF888888)
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = isFront ? 1.5 : 0.8,
-      );
     }
   }
 
-  void _paintTubeFront(Canvas canvas, double left, double right,
-      double centerY, double radius, double capW, double w, double h) {
-    // Semi-transparent tube front with state color tint
-    final tubeRect = Rect.fromLTRB(left, centerY - radius, right, centerY + radius);
+  /// Fills the front-facing ribbon areas between outer and inner curves.
+  void _paintHelixRibbons({
+    required Canvas canvas,
+    required double bodyLeft,
+    required double bodyWidth,
+    required double centerY,
+    required double outerRadius,
+    required double innerRadius,
+    required Color color,
+  }) {
+    final pixelStep = 2.0;
+    final totalSteps = (bodyWidth / pixelStep).ceil();
+    if (totalSteps < 2) return;
 
-    // Glass-like front: state color tinted, translucent
-    final HSLColor hsl = HSLColor.fromColor(stateColor);
-    final tintColor = hsl.withLightness((hsl.lightness * 0.7).clamp(0.0, 1.0)).toColor();
+    final outerPts = <Offset>[];
+    final innerPts = <Offset>[];
+    bool inSegment = false;
 
-    // Top highlight strip
-    canvas.drawRect(
-      Rect.fromLTRB(left, centerY - radius, right, centerY - radius * 0.7),
-      Paint()
-        ..shader = LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [
-            tintColor.withValues(alpha: 0.35),
-            tintColor.withValues(alpha: 0.08),
-          ],
-        ).createShader(tubeRect),
-    );
+    for (int i = 0; i <= totalSteps; i++) {
+      final x = bodyLeft + (i / totalSteps) * bodyWidth;
+      final t = (i / totalSteps) * pitchCount * 2 * pi + phaseOffset;
+      final sinVal = sin(t);
 
-    // Bottom shadow strip
-    canvas.drawRect(
-      Rect.fromLTRB(left, centerY + radius * 0.7, right, centerY + radius),
-      Paint()
-        ..shader = LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [
-            tintColor.withValues(alpha: 0.08),
-            tintColor.withValues(alpha: 0.4),
-          ],
-        ).createShader(tubeRect),
-    );
-
-    // Specular highlight near top
-    canvas.drawLine(
-      Offset(left + capW, centerY - radius * 0.85),
-      Offset(right - capW, centerY - radius * 0.85),
-      Paint()
-        ..color = const Color(0x30FFFFFF)
-        ..strokeWidth = 2.0
-        ..strokeCap = StrokeCap.round,
-    );
+      if (sinVal >= 0) {
+        outerPts.add(Offset(x, centerY + outerRadius * sinVal));
+        innerPts.add(Offset(x, centerY + innerRadius * sinVal));
+        inSegment = true;
+      } else if (inSegment) {
+        _fillRibbon(canvas, outerPts, innerPts, color);
+        outerPts.clear();
+        innerPts.clear();
+        inSegment = false;
+      }
+    }
+    if (inSegment && outerPts.length >= 2) {
+      _fillRibbon(canvas, outerPts, innerPts, color);
+    }
   }
 
-  void _paintEndCap(Canvas canvas, double x, double centerY, double radius,
-      double capW, {required bool isLeft}) {
-    final capRect = Rect.fromLTRB(
-      x - capW, centerY - radius, x + capW, centerY + radius,
-    );
-
-    // Metallic end cap gradient
-    final capGradient = LinearGradient(
-      begin: Alignment.topCenter,
-      end: Alignment.bottomCenter,
-      colors: [
-        const Color(0xFFB0B8C0),
-        const Color(0xFF808890),
-        const Color(0xFF606870),
-      ],
-    );
-
-    canvas.drawOval(capRect, Paint()..shader = capGradient.createShader(capRect));
-    canvas.drawOval(
-      capRect,
-      Paint()
-        ..color = const Color(0xFF404040)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.5,
-    );
-  }
-
-  void _paintTubeOutline(Canvas canvas, double left, double right,
-      double centerY, double radius, double capW) {
-    final outlinePaint = Paint()
-      ..color = const Color(0xFF303030)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.5;
-
-    // Top line
-    canvas.drawLine(
-      Offset(left, centerY - radius),
-      Offset(right, centerY - radius),
-      outlinePaint,
-    );
-    // Bottom line
-    canvas.drawLine(
-      Offset(left, centerY + radius),
-      Offset(right, centerY + radius),
-      outlinePaint,
-    );
+  void _fillRibbon(Canvas canvas, List<Offset> outer, List<Offset> inner,
+      Color color) {
+    if (outer.length < 2) return;
+    final path = Path();
+    path.moveTo(outer.first.dx, outer.first.dy);
+    for (int i = 1; i < outer.length; i++) {
+      path.lineTo(outer[i].dx, outer[i].dy);
+    }
+    for (int i = inner.length - 1; i >= 0; i--) {
+      path.lineTo(inner[i].dx, inner[i].dy);
+    }
+    path.close();
+    canvas.drawPath(path, Paint()..color = color);
   }
 
   @override
@@ -362,5 +401,5 @@ class AugerConveyorPainter extends CustomPainter {
       oldDelegate.phaseOffset != phaseOffset ||
       oldDelegate.showAuger != showAuger ||
       oldDelegate.pitchCount != pitchCount ||
-      oldDelegate.endCaps != endCaps;
+      oldDelegate.openEnd != openEnd;
 }

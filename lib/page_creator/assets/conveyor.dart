@@ -149,7 +149,7 @@ class ConveyorConfig extends BaseAsset {
   bool? showFrequency;
   bool? showAuger;
   String? augerRpmKey;
-  AugerEndCaps? augerEndCaps;
+  AugerOpenEnd? augerOpenEnd;
 
   ConveyorConfig(
       {this.key,
@@ -162,7 +162,7 @@ class ConveyorConfig extends BaseAsset {
       this.showFrequency,
       this.showAuger,
       this.augerRpmKey,
-      this.augerEndCaps});
+      this.augerOpenEnd});
 
   static const previewStr = 'Conveyor Preview';
 
@@ -293,21 +293,19 @@ class _ConveyorConfigContentState extends State<_ConveyorConfigContent> {
           const SizedBox(height: 8),
           Row(
             children: [
-              const Text('End caps:'),
+              const Text('Open end:'),
               const SizedBox(width: 8),
-              DropdownButton<AugerEndCaps>(
-                value: widget.config.augerEndCaps ?? AugerEndCaps.both,
+              DropdownButton<AugerOpenEnd?>(
+                value: widget.config.augerOpenEnd,
                 onChanged: (val) =>
-                    setState(() => widget.config.augerEndCaps = val),
+                    setState(() => widget.config.augerOpenEnd = val),
                 items: const [
                   DropdownMenuItem(
-                      value: AugerEndCaps.both, child: Text('Both')),
+                      value: AugerOpenEnd.right, child: Text('Right')),
                   DropdownMenuItem(
-                      value: AugerEndCaps.left, child: Text('Left only')),
+                      value: AugerOpenEnd.left, child: Text('Left')),
                   DropdownMenuItem(
-                      value: AugerEndCaps.right, child: Text('Right only')),
-                  DropdownMenuItem(
-                      value: AugerEndCaps.none, child: Text('None')),
+                      value: null, child: Text('None')),
                 ],
               ),
             ],
@@ -570,19 +568,30 @@ class _ConveyorState extends ConsumerState<Conveyor>
         );
 
         double? freq;
+        // Try dedicated frequency key first
         if (dynValue['frequency'] != null) {
           try {
             freq = dynValue['frequency']!.asDouble;
           } catch (_) {}
         }
+        // Fall back to p_stat_Frequency inside the main drive value
+        if (freq == null && dynValue['drive'] != null) {
+          try {
+            freq = dynValue['drive']!['p_stat_Frequency'].asDouble;
+          } catch (_) {}
+        }
 
-        // Update auger animation from RPM data
+        // Update auger animation from RPM key, frequency, or default
         if (dynValue['augerRpm'] != null) {
           try {
             _updateAugerAnimation(dynValue['augerRpm']!.asDouble);
           } catch (_) {
             _updateAugerAnimation(0);
           }
+        } else if (freq != null && freq != 0) {
+          _updateAugerAnimation(freq);
+        } else {
+          _updateAugerAnimation(0);
         }
 
         if (widget.config.simulateBatches ?? false) {
@@ -648,7 +657,7 @@ class _ConveyorState extends ConsumerState<Conveyor>
             stateColor: color,
             phaseOffset: _augerPhase,
             showAuger: !(showExclamation ?? false),
-            endCaps: widget.config.augerEndCaps ?? AugerEndCaps.both,
+            openEnd: widget.config.augerOpenEnd,
           ),
         ),
       );
