@@ -241,6 +241,25 @@ class AlarmMan {
     _activeAlarmsController.add(_activeAlarms);
   }
 
+  /// Add an externally-managed alarm (e.g. from AggregatorServer on PLC disconnect).
+  void addExternalAlarm(AlarmActive alarm) {
+    _activeAlarms.add(alarm);
+    _activeAlarmsController.add(_activeAlarms);
+  }
+
+  /// Remove an externally-managed alarm by its uid.
+  void removeExternalAlarm(String uid) {
+    final toRemove = _activeAlarms
+        .where((e) => e.alarm.config.uid == uid)
+        .toList();
+    for (final alarm in toRemove) {
+      _removeActiveAlarm(alarm);
+    }
+    if (toRemove.isNotEmpty) {
+      _activeAlarmsController.add(_activeAlarms);
+    }
+  }
+
   void addAlarm(AlarmConfig alarm) {
     config.alarms.add(alarm);
     _saveConfig();

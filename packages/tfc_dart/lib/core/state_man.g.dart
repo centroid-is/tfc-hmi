@@ -29,11 +29,16 @@ StateManConfig _$StateManConfigFromJson(Map<String, dynamic> json) =>
       opcua: (json['opcua'] as List<dynamic>)
           .map((e) => OpcUAConfig.fromJson(e as Map<String, dynamic>))
           .toList(),
+      aggregator: json['aggregator'] == null
+          ? null
+          : AggregatorConfig.fromJson(
+              json['aggregator'] as Map<String, dynamic>),
     );
 
 Map<String, dynamic> _$StateManConfigToJson(StateManConfig instance) =>
     <String, dynamic>{
       'opcua': instance.opcua.map((e) => e.toJson()).toList(),
+      'aggregator': instance.aggregator?.toJson(),
     };
 
 OpcUANodeConfig _$OpcUANodeConfigFromJson(Map<String, dynamic> json) =>

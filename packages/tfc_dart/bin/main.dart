@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:tfc_dart/core/aggregator_server.dart';
 import 'package:tfc_dart/core/database.dart';
 import 'package:tfc_dart/core/preferences.dart';
 import 'package:tfc_dart/core/state_man.dart';
@@ -36,31 +37,33 @@ void main() async {
 
   final keyMappings = await KeyMappings.fromPrefs(prefs, createDefault: false);
 
-  // Disable SSL for alarm StateMan to test if the issue is specific to
-  // encrypted secure channel renewal
-  final alarmSmConfig = smConfig.copy();
-  // for (final opcuaConfig in alarmSmConfig.opcua) {
-  //   opcuaConfig.sslCert = null;
-  //   opcuaConfig.sslKey = null;
-  //   opcuaConfig.password = null;
-  //   opcuaConfig.username = null;
-  // }
-
-  // Create StateMan for alarm monitoring (with separate certificate)
-  final stateMan = await StateMan.create(
-    config: alarmSmConfig,
+  // SharedStateMan for AlarmMan + AggregatorServer
+  final sharedStateMan = await StateMan.create(
+    config: smConfig,
     keyMappings: keyMappings,
-    useIsolate: false,
-    alias: 'alarmman',
+    useIsolate: true,
+    alias: 'shared',
   );
 
   // Setup alarm monitoring with database persistence
   // ignore: unused_local_variable
   final alarmHandler = await AlarmMan.create(
     prefs,
-    stateMan,
+    sharedStateMan,
     historyToDb: true,
   );
+
+  // Start AggregatorServer if enabled
+  if (smConfig.aggregator?.enabled == true) {
+    final aggregator = AggregatorServer(
+      config: smConfig.aggregator!,
+      sharedStateMan: sharedStateMan,
+    );
+    await aggregator.initialize();
+    unawaited(aggregator.runLoop());
+    logger.i(
+        'Aggregator server started on port ${smConfig.aggregator!.port}');
+  }
 
   logger.i('Spawning ${smConfig.opcua.length} DataAcquisition isolate(s)');
 
