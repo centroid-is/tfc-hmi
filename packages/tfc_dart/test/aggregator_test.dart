@@ -1,0 +1,583 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:math';
+import 'dart:typed_data';
+
+import 'package:open62541/open62541.dart';
+import 'package:test/test.dart';
+import 'package:tfc_dart/core/aggregator_server.dart';
+import 'package:tfc_dart/core/state_man.dart' show OpcUANodeConfig;
+
+void main() {
+  group('AggregatorNodeId', () {
+    test('encode with string identifier produces correct format', () {
+      final upstream = NodeId.fromString(4, 'GVL.temp');
+      final result = AggregatorNodeId.encode('plc1', upstream);
+
+      expect(result.namespace, 1);
+      expect(result.isString(), true);
+      expect(result.string, 'plc1:ns=4;s=GVL.temp');
+    });
+
+    test('encode with numeric identifier produces correct format', () {
+      final upstream = NodeId.fromNumeric(0, 2258);
+      final result = AggregatorNodeId.encode('plc1', upstream);
+
+      expect(result.namespace, 1);
+      expect(result.isString(), true);
+      expect(result.string, 'plc1:ns=0;i=2258');
+    });
+
+    test('encode uses "default" when alias is null', () {
+      final upstream = NodeId.fromString(4, 'GVL.temp');
+      final result = AggregatorNodeId.encode(null, upstream);
+
+      expect(result.string, 'default:ns=4;s=GVL.temp');
+    });
+
+    test('decode round-trip with string identifier', () {
+      final upstream = NodeId.fromString(4, 'GVL.temp');
+      final encoded = AggregatorNodeId.encode('plc1', upstream);
+      final decoded = AggregatorNodeId.decode(encoded);
+
+      expect(decoded, isNotNull);
+      final (alias, nodeId) = decoded!;
+      expect(alias, 'plc1');
+      expect(nodeId.namespace, 4);
+      expect(nodeId.isString(), true);
+      expect(nodeId.string, 'GVL.temp');
+    });
+
+    test('decode round-trip with numeric identifier', () {
+      final upstream = NodeId.fromNumeric(0, 2258);
+      final encoded = AggregatorNodeId.encode('plc1', upstream);
+      final decoded = AggregatorNodeId.decode(encoded);
+
+      expect(decoded, isNotNull);
+      final (alias, nodeId) = decoded!;
+      expect(alias, 'plc1');
+      expect(nodeId.namespace, 0);
+      expect(nodeId.isNumeric(), true);
+      expect(nodeId.numeric, 2258);
+    });
+
+    test('decode round-trip with null alias uses default', () {
+      final upstream = NodeId.fromString(4, 'GVL.temp');
+      final encoded = AggregatorNodeId.encode(null, upstream);
+      final decoded = AggregatorNodeId.decode(encoded);
+
+      expect(decoded, isNotNull);
+      final (alias, nodeId) = decoded!;
+      expect(alias, 'default');
+      expect(nodeId, upstream);
+    });
+
+    test('decode returns null for non-aggregator NodeId (wrong namespace)', () {
+      final nodeId = NodeId.fromString(0, 'plc1:ns=4;s=GVL.temp');
+      expect(AggregatorNodeId.decode(nodeId), isNull);
+    });
+
+    test('decode returns null for numeric NodeId', () {
+      final nodeId = NodeId.fromNumeric(1, 42);
+      expect(AggregatorNodeId.decode(nodeId), isNull);
+    });
+
+    test('decode returns null for missing colon separator', () {
+      final nodeId = NodeId.fromString(1, 'no-colon-here');
+      expect(AggregatorNodeId.decode(nodeId), isNull);
+    });
+
+    test('decode returns null for invalid node id string after colon', () {
+      final nodeId = NodeId.fromString(1, 'plc1:garbage');
+      expect(AggregatorNodeId.decode(nodeId), isNull);
+    });
+
+    test('folderNodeId uses alias as string id in namespace 1', () {
+      final folderId = AggregatorNodeId.folderNodeId('plc1');
+      expect(folderId.namespace, 1);
+      expect(folderId.isString(), true);
+      expect(folderId.string, 'plc1');
+    });
+
+    test('folderNodeId uses "default" when alias is null', () {
+      final folderId = AggregatorNodeId.folderNodeId(null);
+      expect(folderId.string, 'default');
+    });
+
+    test('fromOpcUANodeConfig with string identifier', () {
+      final config = OpcUANodeConfig(namespace: 4, identifier: 'GVL.temp')
+        ..serverAlias = 'plc1';
+      final result = AggregatorNodeId.fromOpcUANodeConfig(config);
+
+      expect(result.namespace, 1);
+      expect(result.string, 'plc1:ns=4;s=GVL.temp');
+    });
+
+    test('fromOpcUANodeConfig with numeric identifier', () {
+      final config = OpcUANodeConfig(namespace: 0, identifier: '2258')
+        ..serverAlias = 'plc1';
+      final result = AggregatorNodeId.fromOpcUANodeConfig(config);
+
+      expect(result.namespace, 1);
+      expect(result.string, 'plc1:ns=0;i=2258');
+    });
+
+    test('fromOpcUANodeConfig with null alias', () {
+      final config = OpcUANodeConfig(namespace: 4, identifier: 'GVL.temp');
+      final result = AggregatorNodeId.fromOpcUANodeConfig(config);
+
+      expect(result.string, 'default:ns=4;s=GVL.temp');
+    });
+
+    test('encode handles identifiers containing colons', () {
+      // Edge case: OPC UA identifiers can contain colons
+      final upstream = NodeId.fromString(4, 'Objects:Folder:Var');
+      final encoded = AggregatorNodeId.encode('plc1', upstream);
+      final decoded = AggregatorNodeId.decode(encoded);
+
+      expect(decoded, isNotNull);
+      final (alias, nodeId) = decoded!;
+      expect(alias, 'plc1');
+      // The decode should use first colon only for alias split
+      // but nodeIdStr = "ns=4;s=Objects:Folder:Var" which is valid
+      expect(nodeId.string, 'Objects:Folder:Var');
+    });
+  });
+
+  group('AggregatorConfig', () {
+    test('default values', () {
+      final config = AggregatorConfig();
+      expect(config.enabled, false);
+      expect(config.port, 4840);
+    });
+
+    test('fromJson with all fields', () {
+      final config = AggregatorConfig.fromJson({
+        'enabled': true,
+        'port': 5840,
+      });
+      expect(config.enabled, true);
+      expect(config.port, 5840);
+    });
+
+    test('fromJson with defaults', () {
+      final config = AggregatorConfig.fromJson({});
+      expect(config.enabled, false);
+      expect(config.port, 4840);
+    });
+
+    test('toJson round-trip', () {
+      final config = AggregatorConfig(enabled: true, port: 5840);
+      final json = config.toJson();
+      final restored = AggregatorConfig.fromJson(json);
+      expect(restored.enabled, true);
+      expect(restored.port, 5840);
+    });
+
+    test('discoveryTtl serializes as seconds', () {
+      final config = AggregatorConfig(
+        discoveryTtl: const Duration(minutes: 15),
+      );
+      final json = config.toJson();
+      expect(json['discoveryTtlSeconds'], 900);
+
+      final restored = AggregatorConfig.fromJson(json);
+      expect(restored.discoveryTtl.inSeconds, 900);
+    });
+
+    test('hasTls is true only when both cert and key are present', () {
+      final certOnly = AggregatorConfig(
+        certificate: Uint8List.fromList([1, 2, 3]),
+      );
+      expect(certOnly.hasTls, false);
+
+      final keyOnly = AggregatorConfig(
+        privateKey: Uint8List.fromList([4, 5, 6]),
+      );
+      expect(keyOnly.hasTls, false);
+
+      final both = AggregatorConfig(
+        certificate: Uint8List.fromList([1, 2, 3]),
+        privateKey: Uint8List.fromList([4, 5, 6]),
+      );
+      expect(both.hasTls, true);
+
+      final neither = AggregatorConfig();
+      expect(neither.hasTls, false);
+    });
+
+    test('hasUsers is true when users list is non-empty', () {
+      final noUsers = AggregatorConfig();
+      expect(noUsers.hasUsers, false);
+
+      final withUsers = AggregatorConfig(users: [
+        AggregatorUser(username: 'admin', password: 'secret'),
+      ]);
+      expect(withUsers.hasUsers, true);
+    });
+
+    test('allowAnonymous defaults to true', () {
+      final config = AggregatorConfig();
+      expect(config.allowAnonymous, true);
+
+      final fromEmpty = AggregatorConfig.fromJson({});
+      expect(fromEmpty.allowAnonymous, true);
+    });
+
+    test('TLS certificate and key round-trip via base64 JSON', () {
+      final cert = Uint8List.fromList(
+          List.generate(256, (i) => i % 256)); // simulated DER bytes
+      final key = Uint8List.fromList(
+          List.generate(128, (i) => (i * 7) % 256));
+
+      final config = AggregatorConfig(
+        enabled: true,
+        certificate: cert,
+        privateKey: key,
+      );
+
+      final json = config.toJson();
+      // Verify base64-encoded strings are in JSON
+      expect(json['certificate'], isA<String>());
+      expect(json['privateKey'], isA<String>());
+      expect(json['certificate'], base64Encode(cert));
+      expect(json['privateKey'], base64Encode(key));
+
+      final restored = AggregatorConfig.fromJson(json);
+      expect(restored.hasTls, true);
+      expect(restored.certificate, cert);
+      expect(restored.privateKey, key);
+    });
+
+    test('toJson omits certificate and privateKey when null', () {
+      final config = AggregatorConfig();
+      final json = config.toJson();
+      expect(json.containsKey('certificate'), false);
+      expect(json.containsKey('privateKey'), false);
+    });
+
+    test('users list round-trip via JSON', () {
+      final config = AggregatorConfig(
+        users: [
+          AggregatorUser(username: 'admin', password: 'secret123'),
+          AggregatorUser(username: 'operator', password: 'op456'),
+        ],
+        allowAnonymous: false,
+      );
+
+      final json = config.toJson();
+      expect(json['users'], isList);
+      expect((json['users'] as List).length, 2);
+      expect(json['allowAnonymous'], false);
+
+      final restored = AggregatorConfig.fromJson(json);
+      expect(restored.users.length, 2);
+      expect(restored.users[0].username, 'admin');
+      expect(restored.users[0].password, 'secret123');
+      expect(restored.users[1].username, 'operator');
+      expect(restored.users[1].password, 'op456');
+      expect(restored.allowAnonymous, false);
+    });
+
+    test('toJson omits users when list is empty', () {
+      final config = AggregatorConfig();
+      final json = config.toJson();
+      expect(json.containsKey('users'), false);
+    });
+
+    test('full config round-trip with all TLS/auth fields', () {
+      final cert = Uint8List.fromList([0x30, 0x82, 0x01, 0x22]);
+      final key = Uint8List.fromList([0x30, 0x82, 0x01, 0x20]);
+
+      final config = AggregatorConfig(
+        enabled: true,
+        port: 4841,
+        discoveryTtl: const Duration(minutes: 60),
+        certificate: cert,
+        privateKey: key,
+        users: [
+          AggregatorUser(username: 'admin', password: 'pass'),
+        ],
+        allowAnonymous: false,
+      );
+
+      final json = config.toJson();
+      final restored = AggregatorConfig.fromJson(json);
+
+      expect(restored.enabled, true);
+      expect(restored.port, 4841);
+      expect(restored.discoveryTtl.inMinutes, 60);
+      expect(restored.hasTls, true);
+      expect(restored.certificate, cert);
+      expect(restored.privateKey, key);
+      expect(restored.hasUsers, true);
+      expect(restored.users.length, 1);
+      expect(restored.users.first.username, 'admin');
+      expect(restored.allowAnonymous, false);
+    });
+  });
+
+  group('AggregatorUser', () {
+    test('fromJson creates user correctly', () {
+      final user = AggregatorUser.fromJson({
+        'username': 'admin',
+        'password': 'secret',
+      });
+      expect(user.username, 'admin');
+      expect(user.password, 'secret');
+    });
+
+    test('toJson produces correct map', () {
+      final user = AggregatorUser(username: 'op', password: 'pass123');
+      final json = user.toJson();
+      expect(json, {'username': 'op', 'password': 'pass123'});
+    });
+
+    test('round-trip preserves values', () {
+      final original = AggregatorUser(username: 'test', password: 'pw');
+      final restored = AggregatorUser.fromJson(original.toJson());
+      expect(restored.username, original.username);
+      expect(restored.password, original.password);
+    });
+  });
+
+  group('AggregatorServer', () {
+    // Real OPC UA environment:
+    // - An "upstream" OPC UA server simulating a PLC
+    // - The AggregatorServer that reads from it via StateMan
+    // - A client connecting to the AggregatorServer to verify the aggregated data
+    //
+    // Since creating a full StateMan requires config/prefs infrastructure,
+    // we test the server in isolation with direct Server+Client.
+
+    late Server upstreamServer;
+    late int upstreamPort;
+    late Server aggregatorServerRaw;
+    late int aggregatorPort;
+    late ClientIsolate aggregatorClient;
+
+    setUp(() async {
+      upstreamPort = 10000 + Random().nextInt(50000);
+      aggregatorPort = upstreamPort + 1;
+
+      // Upstream "PLC" server with test variables (namespace 1 = application ns)
+      upstreamServer = Server(
+          port: upstreamPort, logLevel: LogLevel.UA_LOGLEVEL_ERROR);
+      upstreamServer.addVariableNode(
+        NodeId.fromString(1, 'GVL.temp'),
+        DynamicValue(
+            value: 23.5, typeId: NodeId.double, name: 'GVL.temp'),
+      );
+      upstreamServer.addVariableNode(
+        NodeId.fromNumeric(1, 100),
+        DynamicValue(value: true, typeId: NodeId.boolean, name: 'motor_on'),
+      );
+      upstreamServer.start();
+
+      // Run upstream server loop
+      unawaited(() async {
+        while (upstreamServer.runIterate(waitInterval: false)) {
+          await Future.delayed(const Duration(milliseconds: 1));
+        }
+      }());
+
+      // Aggregator server with folder structure and variables
+      aggregatorServerRaw = Server(
+          port: aggregatorPort, logLevel: LogLevel.UA_LOGLEVEL_ERROR);
+
+      // Create folder per alias (like AggregatorServer._createAliasFolders)
+      final plc1FolderId = AggregatorNodeId.folderNodeId('plc1');
+      aggregatorServerRaw.addObjectNode(plc1FolderId, 'plc1');
+
+      // Add variables under the alias folder
+      final tempNodeId = AggregatorNodeId.encode(
+          'plc1', NodeId.fromString(1, 'GVL.temp'));
+      aggregatorServerRaw.addVariableNode(
+        tempNodeId,
+        DynamicValue(
+            value: 23.5, typeId: NodeId.double, name: 'temperature'),
+        accessLevel: const AccessLevelMask(read: true, write: true),
+        parentNodeId: plc1FolderId,
+      );
+
+      final motorNodeId = AggregatorNodeId.encode(
+          'plc1', NodeId.fromNumeric(1, 100));
+      aggregatorServerRaw.addVariableNode(
+        motorNodeId,
+        DynamicValue(
+            value: true, typeId: NodeId.boolean, name: 'motor_on'),
+        accessLevel: const AccessLevelMask(read: true, write: true),
+        parentNodeId: plc1FolderId,
+      );
+
+      aggregatorServerRaw.start();
+
+      // Run aggregator server loop
+      unawaited(() async {
+        while (aggregatorServerRaw.runIterate(waitInterval: false)) {
+          await Future.delayed(const Duration(milliseconds: 1));
+        }
+      }());
+
+      // Connect a client to the aggregator
+      aggregatorClient = await ClientIsolate.create();
+      unawaited(aggregatorClient.runIterate().catchError((_) {}));
+      unawaited(
+          aggregatorClient.connect('opc.tcp://localhost:$aggregatorPort'));
+      await aggregatorClient.awaitConnect();
+    });
+
+    tearDown(() async {
+      aggregatorServerRaw.shutdown();
+      await aggregatorClient.delete();
+      aggregatorServerRaw.delete();
+      upstreamServer.shutdown();
+      upstreamServer.delete();
+    });
+
+    test('client can read variable from aggregator server', () async {
+      final tempNodeId = AggregatorNodeId.encode(
+          'plc1', NodeId.fromString(1, 'GVL.temp'));
+      final value = await aggregatorClient.read(tempNodeId);
+      expect(value.value, 23.5);
+    });
+
+    test('client can read boolean variable from aggregator server', () async {
+      final motorNodeId = AggregatorNodeId.encode(
+          'plc1', NodeId.fromNumeric(1, 100));
+      final value = await aggregatorClient.read(motorNodeId);
+      expect(value.value, true);
+    });
+
+    test('server write updates value readable by client', () async {
+      final tempNodeId = AggregatorNodeId.encode(
+          'plc1', NodeId.fromString(1, 'GVL.temp'));
+
+      // Write new value to aggregator server
+      await aggregatorServerRaw.write(
+        tempNodeId,
+        DynamicValue(value: 42.0, typeId: NodeId.double),
+      );
+
+      // Small delay for server to process
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      // Client should see updated value
+      final value = await aggregatorClient.read(tempNodeId);
+      expect(value.value, 42.0);
+    });
+
+    test('client can browse ObjectsFolder and see alias folder', () async {
+      final results =
+          await aggregatorClient.browse(NodeId.objectsFolder);
+
+      final names = results.map((r) => r.browseName).toList();
+      expect(names, contains('plc1'));
+    });
+
+    test('client can browse into alias folder and see variables', () async {
+      final plc1FolderId = AggregatorNodeId.folderNodeId('plc1');
+      final results = await aggregatorClient.browse(plc1FolderId);
+
+      final names = results.map((r) => r.browseName).toList();
+      expect(names, contains('temperature'));
+      expect(names, contains('motor_on'));
+    });
+
+    test('client can write to aggregator variable', () async {
+      final tempNodeId = AggregatorNodeId.encode(
+          'plc1', NodeId.fromString(1, 'GVL.temp'));
+
+      // Write from client
+      await aggregatorClient.write(
+        tempNodeId,
+        DynamicValue(value: 99.9, typeId: NodeId.double),
+      );
+
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      // Read back
+      final value = await aggregatorClient.read(tempNodeId);
+      expect(value.value, 99.9);
+    });
+
+    test('aggregator node IDs use namespace 1 with encoded strings',
+        () async {
+      final plc1FolderId = AggregatorNodeId.folderNodeId('plc1');
+      final results = await aggregatorClient.browse(plc1FolderId);
+
+      // Find a variable and check its node ID
+      for (final result in results) {
+        if (result.browseName == 'temperature') {
+          expect(result.nodeId.namespace, 1);
+          expect(result.nodeId.isString(), true);
+          expect(result.nodeId.string, 'plc1:ns=1;s=GVL.temp');
+        }
+      }
+    });
+
+    test('monitorVariable fires on client write', () async {
+      final tempNodeId = AggregatorNodeId.encode(
+          'plc1', NodeId.fromString(1, 'GVL.temp'));
+
+      // Set up monitorVariable to capture writes
+      final writes = <DynamicValue>[];
+      final monitorStream =
+          aggregatorServerRaw.monitorVariable(tempNodeId);
+      final sub = monitorStream.listen((event) {
+        final (type, value) = event;
+        if (type == 'write' && value != null) {
+          writes.add(value);
+        }
+      });
+
+      // Client writes to the aggregator
+      await aggregatorClient.write(
+        tempNodeId,
+        DynamicValue(value: 77.7, typeId: NodeId.double),
+      );
+
+      // Allow server iteration to process the callback
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      expect(writes, isNotEmpty);
+      expect(writes.last.value, 77.7);
+
+      await sub.cancel();
+    });
+
+    test('multiple alias folders with separate variables', () async {
+      // Add a second alias folder
+      final plc2FolderId = AggregatorNodeId.folderNodeId('plc2');
+      aggregatorServerRaw.addObjectNode(plc2FolderId, 'plc2');
+
+      final pressureNodeId = AggregatorNodeId.encode(
+          'plc2', NodeId.fromString(1, 'GVL.pressure'));
+      aggregatorServerRaw.addVariableNode(
+        pressureNodeId,
+        DynamicValue(
+            value: 101.3, typeId: NodeId.double, name: 'pressure'),
+        accessLevel: const AccessLevelMask(read: true, write: true),
+        parentNodeId: plc2FolderId,
+      );
+
+      // Browse ObjectsFolder — should see both alias folders
+      final rootResults =
+          await aggregatorClient.browse(NodeId.objectsFolder);
+      final rootNames = rootResults.map((r) => r.browseName).toList();
+      expect(rootNames, contains('plc1'));
+      expect(rootNames, contains('plc2'));
+
+      // Browse plc2 folder — should see pressure variable
+      final plc2Results = await aggregatorClient.browse(plc2FolderId);
+      final plc2Names = plc2Results.map((r) => r.browseName).toList();
+      expect(plc2Names, contains('pressure'));
+      // plc1 variables should NOT appear under plc2
+      expect(plc2Names, isNot(contains('temperature')));
+
+      // Read value from plc2
+      final value = await aggregatorClient.read(pressureNodeId);
+      expect(value.value, 101.3);
+    });
+  });
+}

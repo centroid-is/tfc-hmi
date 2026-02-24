@@ -17,6 +17,7 @@ import 'package:cryptography_flutter/cryptography_flutter.dart' as crypto_fl;
 
 import '../widgets/base_scaffold.dart';
 import '../widgets/preferences.dart';
+import 'package:tfc_dart/core/aggregator_server.dart' show AggregatorConfig;
 import 'package:tfc_dart/core/state_man.dart';
 import 'package:tfc_dart/core/database.dart';
 import '../providers/state_man.dart';
@@ -617,6 +618,65 @@ class _OpcUAServersSectionState extends ConsumerState<_OpcUAServersSection> {
     setState(() => _config!.opcua.removeAt(index));
   }
 
+  Widget _buildAggregatorSection(StateManConfig config) {
+    final aggregator = config.aggregator ?? AggregatorConfig();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Divider(),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            const FaIcon(FontAwesomeIcons.networkWired, size: 16),
+            const SizedBox(width: 8),
+            Text('Aggregator',
+                style: Theme.of(context).textTheme.titleSmall),
+          ],
+        ),
+        const SizedBox(height: 8),
+        SwitchListTile(
+          title: const Text('Enable Aggregation Mode'),
+          subtitle: const Text(
+              'Connect to a backend aggregator server instead of directly to PLCs'),
+          value: aggregator.enabled,
+          onChanged: (value) {
+            setState(() {
+              _config?.aggregator = AggregatorConfig(
+                enabled: value,
+                port: aggregator.port,
+              );
+            });
+          },
+          dense: true,
+        ),
+        if (aggregator.enabled)
+          Padding(
+            padding: const EdgeInsets.only(left: 16, right: 16, top: 8),
+            child: TextFormField(
+              initialValue: aggregator.port.toString(),
+              decoration: const InputDecoration(
+                labelText: 'Aggregator Port',
+                hintText: '4840',
+                isDense: true,
+              ),
+              keyboardType: TextInputType.number,
+              onChanged: (value) {
+                final port = int.tryParse(value);
+                if (port != null) {
+                  setState(() {
+                    _config?.aggregator = AggregatorConfig(
+                      enabled: aggregator.enabled,
+                      port: port,
+                    );
+                  });
+                }
+              },
+            ),
+          ),
+      ],
+    );
+  }
+
   Widget _buildServerList(StateManConfig config) {
     final stateManAsync = ref.watch(stateManProvider);
     final StateMan? stateMan = stateManAsync.valueOrNull;
@@ -774,8 +834,9 @@ class _OpcUAServersSectionState extends ConsumerState<_OpcUAServersSection> {
                   )
                 : _buildServerList(config),
             const SizedBox(height: 16),
-            // place import and export button in bottom right corner
-            // place save config button in bottom left corner, it should take 60% of the width
+            // Aggregator configuration
+            _buildAggregatorSection(config),
+            const SizedBox(height: 16),
             Row(
               children: [
                 if (config.opcua.isNotEmpty || _hasUnsavedChanges)

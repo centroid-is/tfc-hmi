@@ -10,6 +10,9 @@ import 'package:open62541/open62541.dart';
 import 'package:rxdart/rxdart.dart';
 import 'package:collection/collection.dart';
 
+import 'aggregator_server.dart';
+import 'alarm.dart';
+import 'boolean_expression.dart';
 import 'collector.dart';
 import 'preferences.dart';
 
@@ -126,8 +129,9 @@ class OpcUAConfig {
 @JsonSerializable(explicitToJson: true)
 class StateManConfig {
   List<OpcUAConfig> opcua;
+  AggregatorConfig? aggregator;
 
-  StateManConfig({required this.opcua});
+  StateManConfig({required this.opcua, this.aggregator});
 
   StateManConfig copy() => StateManConfig.fromJson(toJson());
 
@@ -361,8 +365,14 @@ class StateMan {
   final Map<String, String> _substitutions = {};
   final _subsMap$ = BehaviorSubject<Map<String, String>>.seeded(const {});
   String alias;
+  final bool aggregationMode;
 
   Timer? _healthCheckTimer;
+
+  /// Optional AlarmMan for injecting connection-status alarms in aggregation mode.
+  AlarmMan? _alarmMan;
+  Timer? _connStatusTimer;
+  final Map<String, bool> _lastConnStatus = {};
 
   /// Constructor requires the server endpoint.
   StateMan._({
@@ -370,6 +380,7 @@ class StateMan {
     required this.keyMappings,
     required this.clients,
     required this.alias,
+    this.aggregationMode = false,
   }) {
     for (final wrapper in clients) {
       if (wrapper.client is Client) {
@@ -577,61 +588,81 @@ class StateMan {
     required KeyMappings keyMappings,
     bool useIsolate = true,
     String alias = '',
+    bool aggregationMode = false,
   }) async {
-    // Example directory: /Users/jonb/Library/Containers/is.centroid.sildarvinnsla.skammtalina/Data/Documents/certs
     List<ClientWrapper> clients = [];
-    for (final opcuaConfig in config.opcua) {
-      Uint8List? cert;
-      Uint8List? key;
-      MessageSecurityMode securityMode =
-          MessageSecurityMode.UA_MESSAGESECURITYMODE_NONE;
-      if (opcuaConfig.sslCert != null && opcuaConfig.sslKey != null) {
-        cert = opcuaConfig.sslCert!;
-        key = opcuaConfig.sslKey!;
-        securityMode =
-            MessageSecurityMode.UA_MESSAGESECURITYMODE_SIGNANDENCRYPT;
+
+    if (aggregationMode && config.aggregator != null) {
+      // Single client to the aggregator endpoint (no SSL needed for local)
+      final aggregatorEndpoint =
+          'opc.tcp://localhost:${config.aggregator!.port}';
+      final aggregatorOpcConfig = OpcUAConfig()
+        ..endpoint = aggregatorEndpoint
+        ..serverAlias = 'aggregator';
+      final client = await ClientIsolate.create(
+        logLevel: LogLevel.UA_LOGLEVEL_INFO,
+      );
+      clients.add(ClientWrapper(client, aggregatorOpcConfig));
+    } else {
+      for (final opcuaConfig in config.opcua) {
+        Uint8List? cert;
+        Uint8List? key;
+        MessageSecurityMode securityMode =
+            MessageSecurityMode.UA_MESSAGESECURITYMODE_NONE;
+        if (opcuaConfig.sslCert != null && opcuaConfig.sslKey != null) {
+          cert = opcuaConfig.sslCert!;
+          key = opcuaConfig.sslKey!;
+          securityMode =
+              MessageSecurityMode.UA_MESSAGESECURITYMODE_SIGNANDENCRYPT;
+        }
+        String? username;
+        String? password;
+        if (opcuaConfig.username != null && opcuaConfig.password != null) {
+          username = opcuaConfig.username;
+          password = opcuaConfig.password;
+        }
+        clients.add(ClientWrapper(
+            useIsolate
+                ? await ClientIsolate.create(
+                    username: username,
+                    password: password,
+                    certificate: cert,
+                    privateKey: key,
+                    securityMode: securityMode,
+                    logLevel: LogLevel.UA_LOGLEVEL_INFO,
+                    secureChannelLifeTime: Duration(
+                        minutes:
+                            1), // TODO can I reproduce the problem more often
+                  )
+                : Client(
+                    username: username,
+                    password: password,
+                    certificate: cert,
+                    privateKey: key,
+                    securityMode: securityMode,
+                    logLevel: LogLevel.UA_LOGLEVEL_INFO,
+                    secureChannelLifeTime: Duration(
+                        minutes:
+                            1), // TODO can I reproduce the problem more often
+                  ),
+            opcuaConfig));
       }
-      String? username;
-      String? password;
-      if (opcuaConfig.username != null && opcuaConfig.password != null) {
-        username = opcuaConfig.username;
-        password = opcuaConfig.password;
-      }
-      clients.add(ClientWrapper(
-          useIsolate
-              ? await ClientIsolate.create(
-                  username: username,
-                  password: password,
-                  certificate: cert,
-                  privateKey: key,
-                  securityMode: securityMode,
-                  logLevel: LogLevel.UA_LOGLEVEL_INFO,
-                  secureChannelLifeTime: Duration(
-                      minutes:
-                          1), // TODO can I reproduce the problem more often
-                )
-              : Client(
-                  username: username,
-                  password: password,
-                  certificate: cert,
-                  privateKey: key,
-                  securityMode: securityMode,
-                  logLevel: LogLevel.UA_LOGLEVEL_INFO,
-                  secureChannelLifeTime: Duration(
-                      minutes:
-                          1), // TODO can I reproduce the problem more often
-                ),
-          opcuaConfig));
     }
+
     final stateMan = StateMan._(
         config: config,
         keyMappings: keyMappings,
         clients: clients,
-        alias: alias);
+        alias: alias,
+        aggregationMode: aggregationMode);
     return stateMan;
   }
 
   ClientWrapper _getClientWrapper(String key) {
+    if (aggregationMode) {
+      // Single aggregator client
+      return clients.first;
+    }
     // This throws if the key is not found
     // Be mindful that null == null is true
     return clients.firstWhere((wrapper) =>
@@ -805,10 +836,100 @@ class StateMan {
     _healthCheckTimer?.cancel();
 
     _subsMap$.close();
+    _connStatusTimer?.cancel();
+    _lastConnStatus.clear();
+  }
+
+  /// In aggregation mode, periodically poll `$alias/connected` variables on the
+  /// aggregator and inject/remove disconnect alarms into [alarmMan].
+  ///
+  /// Call this after [AlarmMan.create] completes and the aggregator connection
+  /// is established. Each upstream alias from [config.opcua] is monitored.
+  void watchAggregatorConnections(AlarmMan alarmMan) {
+    if (!aggregationMode) return;
+    _alarmMan = alarmMan;
+
+    // Initialize all aliases as connected (optimistic)
+    for (final opcConfig in config.opcua) {
+      final alias = opcConfig.serverAlias ?? AggregatorNodeId.defaultAlias;
+      _lastConnStatus[alias] = true;
+    }
+
+    // Poll every 5 seconds
+    _connStatusTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+      _pollAggregatorConnections(alarmMan);
+    });
+  }
+
+  Future<void> _pollAggregatorConnections(AlarmMan alarmMan) async {
+    if (!_shouldRun || clients.isEmpty) return;
+    final client = clients.first.client;
+
+    for (final opcConfig in config.opcua) {
+      final alias = opcConfig.serverAlias ?? AggregatorNodeId.defaultAlias;
+      final connNodeId = NodeId.fromString(1, '$alias/connected');
+
+      try {
+        final value = await client.read(connNodeId).timeout(
+          const Duration(seconds: 3),
+        );
+        final connected = value.value as bool? ?? false;
+        final wasConnected = _lastConnStatus[alias] ?? true;
+
+        if (connected != wasConnected) {
+          _lastConnStatus[alias] = connected;
+          if (!connected) {
+            _injectDisconnectAlarm(alarmMan, alias);
+          } else {
+            alarmMan.removeExternalAlarm('connection-$alias');
+            logger.i('[$this.alias] Aggregator: "$alias" reconnected, alarm removed');
+          }
+        }
+      } catch (e) {
+        // Read failed — likely aggregator itself is down, don't inject per-alias alarms
+        logger.d('[$this.alias] Failed to read $alias/connected: $e');
+      }
+    }
+  }
+
+  void _injectDisconnectAlarm(AlarmMan alarmMan, String alias) {
+    final uid = 'connection-$alias';
+    final rule = AlarmRule(
+      level: AlarmLevel.error,
+      expression: ExpressionConfig(
+        value: Expression(formula: 'disconnected'),
+      ),
+      acknowledgeRequired: false,
+    );
+
+    final alarmConfig = AlarmConfig(
+      uid: uid,
+      title: '$alias disconnected',
+      description: 'Lost connection to upstream server "$alias"',
+      rules: [rule],
+    );
+
+    alarmMan.addExternalAlarm(AlarmActive(
+      alarm: Alarm(config: alarmConfig),
+      notification: AlarmNotification(
+        uid: uid,
+        active: true,
+        expression: 'disconnected',
+        rule: rule,
+        timestamp: DateTime.now(),
+      ),
+    ));
+    logger.w('[$this.alias] Aggregator: injected disconnect alarm for "$alias"');
   }
 
   (NodeId, int?)? _lookupNodeId(String key) {
-    return keyMappings.lookupNodeId(key);
+    if (!aggregationMode) return keyMappings.lookupNodeId(key);
+    // In aggregation mode, translate to aggregator NodeId
+    final entry = keyMappings.nodes[key];
+    if (entry?.opcuaNode == null) return null;
+    final aggregatorNodeId =
+        AggregatorNodeId.fromOpcUANodeConfig(entry!.opcuaNode!);
+    return (aggregatorNodeId, entry.opcuaNode!.arrayIndex);
   }
 
   @visibleForTesting
