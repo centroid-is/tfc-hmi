@@ -51,7 +51,6 @@ void main() async {
     config: alarmSmConfig,
     keyMappings: keyMappings,
     useIsolate: false,
-    staticLinking: false,
     alias: 'alarmman',
   );
 
