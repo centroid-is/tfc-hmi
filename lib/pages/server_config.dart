@@ -635,8 +635,9 @@ class _OpcUAServersSectionState extends ConsumerState<_OpcUAServersSection> {
     bool? allowAnonymous,
   }) {
     setState(() {
+      final newEnabled = enabled ?? current.enabled;
       _config?.aggregator = AggregatorConfig(
-        enabled: enabled ?? current.enabled,
+        enabled: newEnabled,
         port: port ?? current.port,
         discoveryTtl: current.discoveryTtl,
         certificate: clearTls ? null : (certificate ?? current.certificate),
@@ -644,12 +645,19 @@ class _OpcUAServersSectionState extends ConsumerState<_OpcUAServersSection> {
         users: users ?? current.users,
         allowAnonymous: allowAnonymous ?? current.allowAnonymous,
       );
+      // Clear stale remote servers state when aggregator is disabled
+      if (!newEnabled) {
+        _remoteServers = null;
+        _remoteServersError = null;
+        _remoteServersLoading = false;
+      }
     });
   }
 
   Future<void> _fetchRemoteServers() async {
     final stateMan = ref.read(stateManProvider).valueOrNull;
     if (stateMan == null || stateMan.clients.isEmpty) return;
+    if (!stateMan.aggregationMode) return;
 
     setState(() {
       _remoteServersLoading = true;
@@ -799,7 +807,7 @@ class _OpcUAServersSectionState extends ConsumerState<_OpcUAServersSection> {
 
   Widget _buildRemoteServerTile(Map<String, dynamic> server) {
     final endpoint = server['endpoint'] as String? ?? '';
-    final alias = server['alias'] as String? ?? '';
+    final alias = server['server_alias'] as String? ?? '';
     final hasTls = server['has_tls'] == true;
     final hasCredentials = server['has_credentials'] == true;
 
@@ -865,6 +873,7 @@ class _OpcUAServersSectionState extends ConsumerState<_OpcUAServersSection> {
                         final i = entry.key;
                         final server = entry.value;
                         return Card(
+                          key: ValueKey('server-$i-${server['endpoint']}-${server['server_alias']}'),
                           margin: const EdgeInsets.only(bottom: 8),
                           child: Padding(
                             padding: const EdgeInsets.all(12),
@@ -881,13 +890,13 @@ class _OpcUAServersSectionState extends ConsumerState<_OpcUAServersSection> {
                                 ),
                                 const SizedBox(height: 8),
                                 TextFormField(
-                                  initialValue: server['alias'] as String? ?? '',
+                                  initialValue: server['server_alias'] as String? ?? '',
                                   decoration: const InputDecoration(
                                     labelText: 'Alias',
                                     hintText: 'PLC1',
                                     isDense: true,
                                   ),
-                                  onChanged: (v) => server['alias'] = v,
+                                  onChanged: (v) => server['server_alias'] = v,
                                 ),
                                 const SizedBox(height: 4),
                                 Align(
@@ -910,7 +919,7 @@ class _OpcUAServersSectionState extends ConsumerState<_OpcUAServersSection> {
                           setDialogState(() {
                             editServers.add({
                               'endpoint': '',
-                              'alias': '',
+                              'server_alias': '',
                               'has_tls': false,
                               'has_credentials': false,
                             });
@@ -947,6 +956,7 @@ class _OpcUAServersSectionState extends ConsumerState<_OpcUAServersSection> {
     final aggregator = config.aggregator ?? AggregatorConfig();
     // Extract single user for UI (first user or empty)
     final hasUser = aggregator.users.isNotEmpty;
+    final currentAdmin = hasUser ? aggregator.users.first.admin : false;
     final currentUsername = hasUser ? aggregator.users.first.username : '';
     final currentPassword = hasUser ? aggregator.users.first.password : '';
 
@@ -1111,7 +1121,7 @@ class _OpcUAServersSectionState extends ConsumerState<_OpcUAServersSection> {
                             _updateAggregator(aggregator,
                                 users: value.isEmpty && pw.isEmpty
                                     ? []
-                                    : [AggregatorUser(username: value, password: pw)]);
+                                    : [AggregatorUser(username: value, password: pw, admin: currentAdmin)]);
                           },
                         );
                         final passwordField = TextFormField(
@@ -1129,7 +1139,7 @@ class _OpcUAServersSectionState extends ConsumerState<_OpcUAServersSection> {
                             _updateAggregator(aggregator,
                                 users: un.isEmpty && value.isEmpty
                                     ? []
-                                    : [AggregatorUser(username: un, password: value)]);
+                                    : [AggregatorUser(username: un, password: value, admin: currentAdmin)]);
                           },
                         );
                         if (isNarrow) {

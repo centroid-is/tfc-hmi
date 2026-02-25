@@ -709,7 +709,96 @@ void main() {
   });
 
   // =========================================================================
-  // Group 6: AggregatorUser admin flag
+  // Group 6: setOpcUaClients input validation
+  // =========================================================================
+  group('setOpcUaClients validation', () {
+    test('rejects invalid JSON', () async {
+      final result = await adminClient!.call(
+        NodeId.objectsFolder,
+        setMethodId,
+        [DynamicValue(value: '{broken', typeId: NodeId.uastring)],
+      );
+      expect(result.first.value as String, startsWith('error:'));
+      expect(result.first.value as String, contains('invalid JSON'));
+    });
+
+    test('rejects non-array JSON', () async {
+      final result = await adminClient!.call(
+        NodeId.objectsFolder,
+        setMethodId,
+        [DynamicValue(value: '{"foo": "bar"}', typeId: NodeId.uastring)],
+      );
+      expect(result.first.value as String, startsWith('error:'));
+      expect(result.first.value as String, contains('expected JSON array'));
+    });
+
+    test('rejects empty server list', () async {
+      final result = await adminClient!.call(
+        NodeId.objectsFolder,
+        setMethodId,
+        [DynamicValue(value: '[]', typeId: NodeId.uastring)],
+      );
+      expect(result.first.value as String, startsWith('error:'));
+      expect(result.first.value as String, contains('cannot be empty'));
+    });
+
+    test('rejects entry without endpoint', () async {
+      final payload = jsonEncode([
+        {'server_alias': 'plc1'},
+      ]);
+      final result = await adminClient!.call(
+        NodeId.objectsFolder,
+        setMethodId,
+        [DynamicValue(value: payload, typeId: NodeId.uastring)],
+      );
+      expect(result.first.value as String, startsWith('error:'));
+      expect(result.first.value as String, contains('endpoint'));
+    });
+
+    test('rejects entry with empty endpoint', () async {
+      final payload = jsonEncode([
+        {'endpoint': '', 'server_alias': 'plc1'},
+      ]);
+      final result = await adminClient!.call(
+        NodeId.objectsFolder,
+        setMethodId,
+        [DynamicValue(value: payload, typeId: NodeId.uastring)],
+      );
+      expect(result.first.value as String, startsWith('error:'));
+      expect(result.first.value as String, contains('endpoint'));
+    });
+
+    test('rejects array of non-objects', () async {
+      final result = await adminClient!.call(
+        NodeId.objectsFolder,
+        setMethodId,
+        [DynamicValue(value: '[1, 2, 3]', typeId: NodeId.uastring)],
+      );
+      expect(result.first.value as String, startsWith('error:'));
+      expect(result.first.value as String, contains('not an object'));
+    });
+
+    test('returns ok with count on valid input', () async {
+      final payload = jsonEncode([
+        {
+          'endpoint': 'opc.tcp://localhost:${basePort + 1}',
+          'server_alias': 'plc1',
+          'has_tls': false,
+          'has_credentials': false,
+        },
+      ]);
+      final result = await adminClient!.call(
+        NodeId.objectsFolder,
+        setMethodId,
+        [DynamicValue(value: payload, typeId: NodeId.uastring)],
+      );
+      expect(result.first.value as String, startsWith('ok:'));
+      expect(result.first.value as String, contains('1 server(s)'));
+    });
+  });
+
+  // =========================================================================
+  // Group 7: AggregatorUser admin flag
   // =========================================================================
   group('AggregatorUser', () {
     test('admin flag serialization round-trip', () {
