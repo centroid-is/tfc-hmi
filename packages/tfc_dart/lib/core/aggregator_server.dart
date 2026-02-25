@@ -226,7 +226,7 @@ class AggregatorServer {
   Timer? _ttlCleanupTimer;
 
   /// Subscriptions to upstream connection status changes per alias.
-  final Map<String, StreamSubscription<ConnectionStatus>> _connectionSubs = {};
+  final Map<String, StreamSubscription<(ConnectionStatus, String?)>> _connectionSubs = {};
 
   /// Optional AlarmMan for injecting connection-status alarms.
   AlarmMan? alarmMan;
@@ -327,6 +327,8 @@ class AggregatorServer {
       users: users,
       allowAnonymous: config.allowAnonymous,
       allowNonePolicyPassword: false,
+      securityPolicyNoneDiscoveryOnly: true,
+      maxSessionTimeout: 30000, // 30s — clean up stale/failed sessions quickly
     );
   }
 
@@ -378,7 +380,8 @@ class AggregatorServer {
       final alias = wrapper.config.serverAlias ?? AggregatorNodeId.defaultAlias;
       // Track whether we've seen a disconnect (to avoid alarm on initial connect)
       var wasDisconnected = false;
-      _connectionSubs[alias] = wrapper.connectionStream.listen((status) {
+      _connectionSubs[alias] = wrapper.connectionStream.listen((event) {
+        final (status, _) = event;
         // Update the connected variable on the aggregator
         final connNodeId = _connectedNodeIds[alias];
         if (connNodeId != null) {
