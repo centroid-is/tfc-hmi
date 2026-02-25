@@ -613,29 +613,31 @@ class StateMan {
     List<ClientWrapper> clients = [];
 
     if (aggregationMode && config.aggregator != null) {
-      // Single client to the aggregator endpoint
-      final aggregatorEndpoint =
-          'opc.tcp://localhost:${config.aggregator!.port}';
+      // Use clientConfig from aggregator, or fall back to localhost:<port>
+      final clientCfg = config.aggregator!.clientConfig ??
+          (OpcUAConfig()
+            ..endpoint = 'opc.tcp://localhost:${config.aggregator!.port}');
 
-      // Use first configured user's credentials for the aggregator client
-      String? username;
-      String? password;
-      if (config.aggregator!.users.isNotEmpty) {
-        username = config.aggregator!.users.first.username;
-        password = config.aggregator!.users.first.password;
+      Uint8List? cert;
+      Uint8List? key;
+      MessageSecurityMode securityMode =
+          MessageSecurityMode.UA_MESSAGESECURITYMODE_NONE;
+      if (clientCfg.sslCert != null && clientCfg.sslKey != null) {
+        cert = clientCfg.sslCert!;
+        key = clientCfg.sslKey!;
+        securityMode =
+            MessageSecurityMode.UA_MESSAGESECURITYMODE_SIGNANDENCRYPT;
       }
 
-      final aggregatorOpcConfig = OpcUAConfig()
-        ..endpoint = aggregatorEndpoint
-        ..serverAlias = 'aggregator'
-        ..username = username
-        ..password = password;
       final client = await ClientIsolate.create(
-        username: username,
-        password: password,
+        username: clientCfg.username,
+        password: clientCfg.password,
+        certificate: cert,
+        privateKey: key,
+        securityMode: securityMode,
         logLevel: LogLevel.UA_LOGLEVEL_INFO,
       );
-      clients.add(ClientWrapper(client, aggregatorOpcConfig));
+      clients.add(ClientWrapper(client, clientCfg));
     } else {
       for (final opcuaConfig in config.opcua) {
         Uint8List? cert;
