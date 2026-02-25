@@ -92,16 +92,16 @@ void main() {
       expect(AggregatorNodeId.decode(nodeId), isNull);
     });
 
-    test('folderNodeId uses alias as string id in namespace 1', () {
+    test('folderNodeId uses alias under Servers/Variables/OpcUa in namespace 1', () {
       final folderId = AggregatorNodeId.folderNodeId('plc1');
       expect(folderId.namespace, 1);
       expect(folderId.isString(), true);
-      expect(folderId.string, 'plc1');
+      expect(folderId.string, 'Servers/Variables/OpcUa/plc1');
     });
 
     test('folderNodeId uses "default" when alias is null', () {
       final folderId = AggregatorNodeId.folderNodeId(null);
-      expect(folderId.string, 'default');
+      expect(folderId.string, 'Servers/Variables/OpcUa/default');
     });
 
     test('fromOpcUANodeConfig with string identifier', () {
@@ -385,9 +385,18 @@ void main() {
       aggregatorServerRaw = Server(
           port: aggregatorPort, logLevel: LogLevel.UA_LOGLEVEL_ERROR);
 
-      // Create folder per alias (like AggregatorServer._createAliasFolders)
+      // Create folder hierarchy (like AggregatorServer._createAliasFolders)
+      aggregatorServerRaw.addObjectNode(
+          NodeId.fromString(1, 'Servers'), 'Servers');
+      aggregatorServerRaw.addObjectNode(
+          NodeId.fromString(1, 'Servers/Variables'), 'Variables',
+          parentNodeId: NodeId.fromString(1, 'Servers'));
+      aggregatorServerRaw.addObjectNode(
+          NodeId.fromString(1, 'Servers/Variables/OpcUa'), 'OpcUa',
+          parentNodeId: NodeId.fromString(1, 'Servers/Variables'));
       final plc1FolderId = AggregatorNodeId.folderNodeId('plc1');
-      aggregatorServerRaw.addObjectNode(plc1FolderId, 'plc1');
+      aggregatorServerRaw.addObjectNode(plc1FolderId, 'plc1',
+          parentNodeId: NodeId.fromString(1, 'Servers/Variables/OpcUa'));
 
       // Add variables under the alias folder
       final tempNodeId = AggregatorNodeId.encode(
@@ -467,12 +476,12 @@ void main() {
       expect(value.value, 42.0);
     });
 
-    test('client can browse ObjectsFolder and see alias folder', () async {
+    test('client can browse ObjectsFolder and see Servers folder', () async {
       final results =
           await aggregatorClient.browse(NodeId.objectsFolder);
 
       final names = results.map((r) => r.browseName).toList();
-      expect(names, contains('plc1'));
+      expect(names, contains('Servers'));
     });
 
     test('client can browse into alias folder and see variables', () async {
@@ -597,10 +606,90 @@ void main() {
       await sub.cancel();
     });
 
+    test('deleteNode removes variable from address space', () async {
+      // Create a temporary variable for this test
+      final deleteTestNodeId = AggregatorNodeId.encode(
+          'plc1', NodeId.fromString(1, 'GVL.toDelete'));
+      final plc1FolderId = AggregatorNodeId.folderNodeId('plc1');
+      aggregatorServerRaw.addVariableNode(
+        deleteTestNodeId,
+        DynamicValue(
+            value: 123.0, typeId: NodeId.double, name: 'toDelete'),
+        accessLevel: const AccessLevelMask(read: true, write: true),
+        parentNodeId: plc1FolderId,
+      );
+
+      // Verify it exists — client can read it
+      final valueBefore = await aggregatorClient.read(deleteTestNodeId);
+      expect(valueBefore.value, 123.0);
+
+      // Verify it appears in browse
+      var browseResults = await aggregatorClient.browse(plc1FolderId);
+      var names = browseResults.map((r) => r.browseName).toList();
+      expect(names, contains('toDelete'));
+
+      // Delete the node
+      aggregatorServerRaw.deleteNode(deleteTestNodeId);
+
+      // Allow server iteration to process
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      // Verify it's gone from browse
+      browseResults = await aggregatorClient.browse(plc1FolderId);
+      names = browseResults.map((r) => r.browseName).toList();
+      expect(names, isNot(contains('toDelete')));
+    });
+
+    test('deleteNode then re-add recreates the variable', () async {
+      final plc1FolderId = AggregatorNodeId.folderNodeId('plc1');
+      final recreateNodeId = AggregatorNodeId.encode(
+          'plc1', NodeId.fromString(1, 'GVL.recreate'));
+
+      // Create, verify, delete
+      aggregatorServerRaw.addVariableNode(
+        recreateNodeId,
+        DynamicValue(
+            value: 1.0, typeId: NodeId.double, name: 'recreate'),
+        accessLevel: const AccessLevelMask(read: true, write: true),
+        parentNodeId: plc1FolderId,
+      );
+      var value = await aggregatorClient.read(recreateNodeId);
+      expect(value.value, 1.0);
+
+      aggregatorServerRaw.deleteNode(recreateNodeId);
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      // Verify deleted
+      var browseResults = await aggregatorClient.browse(plc1FolderId);
+      var names = browseResults.map((r) => r.browseName).toList();
+      expect(names, isNot(contains('recreate')));
+
+      // Re-create with new value
+      aggregatorServerRaw.addVariableNode(
+        recreateNodeId,
+        DynamicValue(
+            value: 2.0, typeId: NodeId.double, name: 'recreate'),
+        accessLevel: const AccessLevelMask(read: true, write: true),
+        parentNodeId: plc1FolderId,
+      );
+
+      // Verify it's back with new value
+      value = await aggregatorClient.read(recreateNodeId);
+      expect(value.value, 2.0);
+
+      browseResults = await aggregatorClient.browse(plc1FolderId);
+      names = browseResults.map((r) => r.browseName).toList();
+      expect(names, contains('recreate'));
+
+      // Clean up
+      aggregatorServerRaw.deleteNode(recreateNodeId);
+    });
+
     test('multiple alias folders with separate variables', () async {
-      // Add a second alias folder
+      // Add a second alias folder (parent hierarchy already created in setUpAll)
       final plc2FolderId = AggregatorNodeId.folderNodeId('plc2');
-      aggregatorServerRaw.addObjectNode(plc2FolderId, 'plc2');
+      aggregatorServerRaw.addObjectNode(plc2FolderId, 'plc2',
+          parentNodeId: NodeId.fromString(1, 'Servers/Variables/OpcUa'));
 
       final pressureNodeId = AggregatorNodeId.encode(
           'plc2', NodeId.fromString(1, 'GVL.pressure'));
@@ -612,9 +701,9 @@ void main() {
         parentNodeId: plc2FolderId,
       );
 
-      // Browse ObjectsFolder — should see both alias folders
-      final rootResults =
-          await aggregatorClient.browse(NodeId.objectsFolder);
+      // Browse OpcUa folder — should see both alias folders
+      final opcuaFolder = NodeId.fromString(1, 'Servers/Variables/OpcUa');
+      final rootResults = await aggregatorClient.browse(opcuaFolder);
       final rootNames = rootResults.map((r) => r.browseName).toList();
       expect(rootNames, contains('plc1'));
       expect(rootNames, contains('plc2'));

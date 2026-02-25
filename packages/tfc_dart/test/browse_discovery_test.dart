@@ -392,7 +392,7 @@ void main() {
 
       // Call Discover with the upstream ObjectsFolder NodeId
       final discoverMethodId =
-          NodeId.fromString(1, 'plc1/Discover');
+          NodeId.fromString(1, 'Servers/Variables/OpcUa/plc1/Discover');
       final result = await aggClient.call(
         plc1Folder,
         discoverMethodId,
@@ -406,7 +406,7 @@ void main() {
 
     test('calling Discover with GVL folder discovers GVL children', () async {
       final plc1Folder = AggregatorNodeId.folderNodeId('plc1');
-      final discoverMethodId = NodeId.fromString(1, 'plc1/Discover');
+      final discoverMethodId = NodeId.fromString(1, 'Servers/Variables/OpcUa/plc1/Discover');
 
       // Discover GVL folder contents
       final result = await aggClient.call(
@@ -420,7 +420,7 @@ void main() {
 
     test('discovered variable nodes are browseable after Discover', () async {
       final plc1Folder = AggregatorNodeId.folderNodeId('plc1');
-      final discoverMethodId = NodeId.fromString(1, 'plc1/Discover');
+      final discoverMethodId = NodeId.fromString(1, 'Servers/Variables/OpcUa/plc1/Discover');
 
       // Discover GVL folder contents
       await aggClient.call(
@@ -449,7 +449,7 @@ void main() {
 
     test('discovered variable nodes are readable', () async {
       final plc1Folder = AggregatorNodeId.folderNodeId('plc1');
-      final discoverMethodId = NodeId.fromString(1, 'plc1/Discover');
+      final discoverMethodId = NodeId.fromString(1, 'Servers/Variables/OpcUa/plc1/Discover');
 
       // Discover GVL folder
       await aggClient.call(
@@ -468,7 +468,7 @@ void main() {
 
     test('discovered object nodes (folders) are browseable', () async {
       final plc1Folder = AggregatorNodeId.folderNodeId('plc1');
-      final discoverMethodId = NodeId.fromString(1, 'plc1/Discover');
+      final discoverMethodId = NodeId.fromString(1, 'Servers/Variables/OpcUa/plc1/Discover');
 
       // Discover top-level objects
       await aggClient.call(
@@ -491,7 +491,7 @@ void main() {
 
     test('re-discovering same parent is idempotent', () async {
       final plc1Folder = AggregatorNodeId.folderNodeId('plc1');
-      final discoverMethodId = NodeId.fromString(1, 'plc1/Discover');
+      final discoverMethodId = NodeId.fromString(1, 'Servers/Variables/OpcUa/plc1/Discover');
 
       // Call Discover twice on the same parent
       await aggClient.call(
@@ -520,7 +520,7 @@ void main() {
 
     test('discovery cache entries expire after TTL', () async {
       final plc1Folder = AggregatorNodeId.folderNodeId('plc1');
-      final discoverMethodId = NodeId.fromString(1, 'plc1/Discover');
+      final discoverMethodId = NodeId.fromString(1, 'Servers/Variables/OpcUa/plc1/Discover');
 
       // Discover GVL folder contents
       await aggClient.call(
@@ -565,7 +565,7 @@ void main() {
 
     test('reconnection clears discovered nodes for that alias', () async {
       final plc1Folder = AggregatorNodeId.folderNodeId('plc1');
-      final discoverMethodId = NodeId.fromString(1, 'plc1/Discover');
+      final discoverMethodId = NodeId.fromString(1, 'Servers/Variables/OpcUa/plc1/Discover');
 
       // Discover GVL folder contents
       await aggClient.call(
@@ -602,7 +602,7 @@ void main() {
     test('hierarchical discovery: discover folder then its children',
         () async {
       final plc1Folder = AggregatorNodeId.folderNodeId('plc1');
-      final discoverMethodId = NodeId.fromString(1, 'plc1/Discover');
+      final discoverMethodId = NodeId.fromString(1, 'Servers/Variables/OpcUa/plc1/Discover');
 
       // Step 1: Discover ObjectsFolder → finds GVL and Config folders
       await aggClient.call(

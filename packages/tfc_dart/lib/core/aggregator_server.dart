@@ -129,8 +129,10 @@ class AggregatorNodeId {
   }
 
   /// Build an aggregator folder NodeId for a server alias.
+  /// Points to `Servers/Variables/OpcUa/<alias>`.
   static NodeId folderNodeId(String? alias) {
-    return NodeId.fromString(1, alias ?? defaultAlias);
+    final a = alias ?? defaultAlias;
+    return NodeId.fromString(1, 'Servers/Variables/OpcUa/$a');
   }
 
   /// Parse an aggregator NodeId back into (alias, upstream NodeId).
@@ -302,13 +304,21 @@ class AggregatorServer {
     }
 
     _server = _createServer();
-    await _populateFromKeyMappings();
+
+    // Create folders and methods synchronously so the address space
+    // structure exists immediately, then start the server so it's
+    // reachable even while upstream PLCs may be offline.
+    _createAliasFolders();
     _addGetOpcUaClientsMethod();
     _addSetOpcUaClientsMethod();
     _setupMethodAccessControl();
     _server.start();
     _startTtlCleanup();
     _watchConnections();
+
+    // Populate data nodes in the background — individual failures
+    // are caught and logged, and _repopulateAlias handles reconnection.
+    unawaited(_populateFromKeyMappings());
   }
 
   /// Create the OPC UA server. TLS is always available after initialize().
@@ -367,6 +377,8 @@ class AggregatorServer {
   static const _serversFolder = 'Servers';
   static const _statusFolder = '$_serversFolder/Status';
   static const _opcuaStatusFolder = '$_statusFolder/OpcUa';
+  static const _variablesFolder = '$_serversFolder/Variables';
+  static const _opcuaVariablesFolder = '$_variablesFolder/OpcUa';
 
   /// Create Servers/Status/OpcUa/[alias]/ folder with connected + last_error.
   void _addServerStatistics(String alias) {
@@ -562,16 +574,36 @@ class AggregatorServer {
   }
 
   /// Populate address space from all key mappings.
+  /// Folders are already created by initialize(), so this only adds variables.
   Future<void> _populateFromKeyMappings() async {
-    // Create folder nodes per unique server alias
-    _createAliasFolders();
-
     for (final entry in sharedStateMan.keyMappings.nodes.entries) {
       final key = entry.key;
       final mapping = entry.value;
       if (mapping.opcuaNode == null) continue;
 
       await _createAndSubscribeVariable(key, mapping);
+    }
+  }
+
+  /// Ensure the shared `Servers/`, `Servers/Variables/`, `Servers/Variables/OpcUa/`
+  /// folder hierarchy exists (created once, shared with status folders).
+  void _ensureVariablesFolderHierarchy() {
+    if (!_createdFolders.contains(_serversFolder)) {
+      _server.addObjectNode(
+          NodeId.fromString(1, _serversFolder), 'Servers');
+      _createdFolders.add(_serversFolder);
+    }
+    if (!_createdFolders.contains(_variablesFolder)) {
+      _server.addObjectNode(
+          NodeId.fromString(1, _variablesFolder), 'Variables',
+          parentNodeId: NodeId.fromString(1, _serversFolder));
+      _createdFolders.add(_variablesFolder);
+    }
+    if (!_createdFolders.contains(_opcuaVariablesFolder)) {
+      _server.addObjectNode(
+          NodeId.fromString(1, _opcuaVariablesFolder), 'OpcUa',
+          parentNodeId: NodeId.fromString(1, _variablesFolder));
+      _createdFolders.add(_opcuaVariablesFolder);
     }
   }
 
@@ -583,15 +615,27 @@ class AggregatorServer {
       aliases.add(entry.opcuaNode!.serverAlias ?? AggregatorNodeId.defaultAlias);
     }
 
+    _ensureVariablesFolderHierarchy();
+
     for (final alias in aliases) {
-      final folderId = AggregatorNodeId.folderNodeId(alias);
-      if (_createdFolders.contains(alias)) continue;
-      _server.addObjectNode(folderId, alias);
-      _createdFolders.add(alias);
+      _ensureAliasVariablesFolder(alias);
       _addDiscoverMethod(alias);
       _addServerStatistics(alias);
       _logger.d('Aggregator: created folder "$alias"');
     }
+  }
+
+  /// Ensure the `Servers/Variables/OpcUa/<alias>/` folder exists.
+  void _ensureAliasVariablesFolder(String alias) {
+    final folderKey = '$_opcuaVariablesFolder/$alias';
+    if (_createdFolders.contains(folderKey)) return;
+    _ensureVariablesFolderHierarchy();
+    _server.addObjectNode(
+      AggregatorNodeId.folderNodeId(alias),
+      alias,
+      parentNodeId: NodeId.fromString(1, _opcuaVariablesFolder),
+    );
+    _createdFolders.add(folderKey);
   }
 
   /// Add a Discover method node under the alias folder.
@@ -601,7 +645,7 @@ class AggregatorServer {
   /// nodes in the aggregator's address space.
   void _addDiscoverMethod(String alias) {
     final folderId = AggregatorNodeId.folderNodeId(alias);
-    final methodId = NodeId.fromString(1, '$alias/Discover');
+    final methodId = NodeId.fromString(1, '$_opcuaVariablesFolder/$alias/Discover');
 
     _server.addMethodNode(
       methodId,
@@ -918,8 +962,15 @@ class AggregatorServer {
     if (_createdVariables.contains(nodeKey)) return;
 
     try {
-      // Read initial value from upstream
-      final initialValue = await sharedStateMan.read(key);
+      // Read initial value from upstream (with timeout — if the PLC is
+      // offline, read() blocks on awaitConnect indefinitely).
+      // On timeout the node is skipped; _repopulateAlias creates it
+      // when the upstream PLC reconnects.
+      final initialValue = await sharedStateMan.read(key).timeout(
+        const Duration(seconds: 5),
+        onTimeout: () => throw TimeoutException(
+            'upstream read timed out for "$key"'),
+      );
 
       // Use the key as the browse name for the variable
       initialValue.name = key;
