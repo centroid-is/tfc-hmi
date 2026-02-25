@@ -681,12 +681,17 @@ class _OpcUAServersSectionState extends ConsumerState<_OpcUAServersSection> {
             // In aggregation mode, upstream status comes from polling
             // <alias>/connected on the aggregator, not from direct clients.
             final alias = server.serverAlias ?? AggregatorNodeId.defaultAlias;
-            connStatus = stateMan.upstreamConnectionStatus[alias];
+            final upstreamEntry = stateMan.upstreamConnectionStatus[alias];
+            connStatus = upstreamEntry?.$1;
+            lastError = upstreamEntry?.$2;
             connStream = stateMan.upstreamConnectionStream.map(
-              (map) => (
-                map[alias] ?? ConnectionStatus.disconnected,
-                null as String?,
-              ),
+              (map) {
+                final entry = map[alias];
+                return (
+                  entry?.$1 ?? ConnectionStatus.disconnected,
+                  entry?.$2,
+                );
+              },
             );
           } else {
             final wrapper =
