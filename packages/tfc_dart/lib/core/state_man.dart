@@ -342,23 +342,33 @@ class ClientWrapper {
   final SingleWorker worker = SingleWorker();
 
   ConnectionStatus _connectionStatus = ConnectionStatus.disconnected;
-  final StreamController<ConnectionStatus> _connectionController =
-      StreamController<ConnectionStatus>.broadcast();
+  String? _lastError;
+  final StreamController<(ConnectionStatus, String?)> _connectionController =
+      StreamController<(ConnectionStatus, String?)>.broadcast();
 
   ClientWrapper(this.client, this.config);
 
   /// Current connection status (synchronous, always up-to-date).
   ConnectionStatus get connectionStatus => _connectionStatus;
 
-  /// Stream of connection status changes. Subscribe anytime — read
-  /// [connectionStatus] for the current value.
-  Stream<ConnectionStatus> get connectionStream => _connectionController.stream;
+  /// Last error reason (e.g. "BadUserAccessDenied"), null when connected.
+  String? get lastError => _lastError;
+
+  /// Stream of connection status changes with optional error reason.
+  Stream<(ConnectionStatus, String?)> get connectionStream =>
+      _connectionController.stream;
 
   void updateConnectionStatus(ClientState state) {
     final next = _mapState(state);
-    if (next == _connectionStatus) return;
+    final error = next == ConnectionStatus.connected
+        ? null
+        : _statusCodeName(state.recoveryStatus);
+    final changed = next != _connectionStatus || error != _lastError;
     _connectionStatus = next;
-    _connectionController.add(next);
+    _lastError = error;
+    if (changed) {
+      _connectionController.add((next, error));
+    }
   }
 
   static ConnectionStatus _mapState(ClientState state) {
@@ -369,6 +379,11 @@ class ClientWrapper {
       return ConnectionStatus.connecting;
     }
     return ConnectionStatus.disconnected;
+  }
+
+  static String? _statusCodeName(int code) {
+    if (code == 0) return null; // Good
+    return statusCodeToString(code);
   }
 
   void dispose() {

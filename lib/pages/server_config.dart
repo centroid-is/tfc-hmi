@@ -655,6 +655,7 @@ class _OpcUAServersSectionState extends ConsumerState<_OpcUAServersSection> {
       showAlias: false,
       connectionStatus: wrapper?.connectionStatus,
       connectionStream: wrapper?.connectionStream,
+      lastError: wrapper?.lastError,
       stateManLoading: stateManAsync.isLoading,
     );
   }
@@ -686,6 +687,7 @@ class _OpcUAServersSectionState extends ConsumerState<_OpcUAServersSection> {
           onRemove: () => _removeServer(index),
           connectionStatus: wrapper?.connectionStatus,
           connectionStream: wrapper?.connectionStream,
+          lastError: wrapper?.lastError,
           stateManLoading: stateManAsync.isLoading,
         );
       },
@@ -905,7 +907,8 @@ class _ServerConfigCard extends StatefulWidget {
   final Function(OpcUAConfig) onUpdate;
   final VoidCallback onRemove;
   final ConnectionStatus? connectionStatus;
-  final Stream<ConnectionStatus>? connectionStream;
+  final Stream<(ConnectionStatus, String?)>? connectionStream;
+  final String? lastError;
   final bool stateManLoading;
   final bool showAlias;
 
@@ -915,6 +918,7 @@ class _ServerConfigCard extends StatefulWidget {
     required this.onRemove,
     this.connectionStatus,
     this.connectionStream,
+    this.lastError,
     this.stateManLoading = false,
     this.showAlias = true,
   });
@@ -929,7 +933,8 @@ class _ServerConfigCardState extends State<_ServerConfigCard> {
   late TextEditingController _passwordController;
   late TextEditingController _serverAliasController;
   ConnectionStatus? _connectionStatus;
-  StreamSubscription<ConnectionStatus>? _stateSubscription;
+  String? _lastError;
+  StreamSubscription<(ConnectionStatus, String?)>? _stateSubscription;
 
   @override
   void initState() {
@@ -942,6 +947,7 @@ class _ServerConfigCardState extends State<_ServerConfigCard> {
     _serverAliasController =
         TextEditingController(text: widget.server.serverAlias ?? '');
     _connectionStatus = widget.connectionStatus;
+    _lastError = widget.lastError;
     _listenToState();
   }
 
@@ -951,13 +957,20 @@ class _ServerConfigCardState extends State<_ServerConfigCard> {
     if (oldWidget.connectionStream != widget.connectionStream) {
       _stateSubscription?.cancel();
       _connectionStatus = widget.connectionStatus;
+      _lastError = widget.lastError;
       _listenToState();
     }
   }
 
   void _listenToState() {
-    _stateSubscription = widget.connectionStream?.listen((status) {
-      if (mounted) setState(() => _connectionStatus = status);
+    _stateSubscription = widget.connectionStream?.listen((event) {
+      final (status, error) = event;
+      if (mounted) {
+        setState(() {
+          _connectionStatus = status;
+          _lastError = error;
+        });
+      }
     });
   }
 
@@ -1102,7 +1115,8 @@ class _ServerConfigCardState extends State<_ServerConfigCard> {
     return switch (_connectionStatus!) {
       ConnectionStatus.connected => 'Connected',
       ConnectionStatus.connecting => 'Connecting...',
-      ConnectionStatus.disconnected => 'Disconnected',
+      ConnectionStatus.disconnected =>
+        _lastError != null ? 'Disconnected: $_lastError' : 'Disconnected',
     };
   }
 

@@ -347,7 +347,7 @@ void main() {
       for (final wrapper in directSM.clients) {
         if (wrapper.connectionStatus == ConnectionStatus.connected) continue;
         await wrapper.connectionStream
-            .firstWhere((s) => s == ConnectionStatus.connected)
+            .firstWhere((event) => event.$1 == ConnectionStatus.connected)
             .timeout(const Duration(seconds: 15));
       }
 
