@@ -652,6 +652,7 @@ class _OpcUAServersSectionState extends ConsumerState<_OpcUAServersSection> {
       server: aggregator.clientConfig ?? OpcUAConfig(),
       onUpdate: (updated) => _updateAggregator(aggregator, clientConfig: updated),
       onRemove: () {}, // Cannot remove the aggregator endpoint
+      showAlias: false,
       connectionStatus: wrapper?.connectionStatus,
       connectionStream: wrapper?.connectionStream,
       stateManLoading: stateManAsync.isLoading,
@@ -906,6 +907,7 @@ class _ServerConfigCard extends StatefulWidget {
   final ConnectionStatus? connectionStatus;
   final Stream<ConnectionStatus>? connectionStream;
   final bool stateManLoading;
+  final bool showAlias;
 
   const _ServerConfigCard({
     required this.server,
@@ -914,6 +916,7 @@ class _ServerConfigCard extends StatefulWidget {
     this.connectionStatus,
     this.connectionStream,
     this.stateManLoading = false,
+    this.showAlias = true,
   });
 
   @override
@@ -1195,16 +1198,18 @@ class _ServerConfigCardState extends State<_ServerConfigCard> {
                   ),
                   onChanged: (_) => _updateServer(),
                 ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: _serverAliasController,
-                  decoration: const InputDecoration(
-                    labelText: 'Server Alias (optional)',
-                    hintText: 'My OPC-UA Server',
-                    prefixIcon: FaIcon(FontAwesomeIcons.tag, size: 16),
+                if (widget.showAlias) ...[
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: _serverAliasController,
+                    decoration: const InputDecoration(
+                      labelText: 'Server Alias (optional)',
+                      hintText: 'My OPC-UA Server',
+                      prefixIcon: FaIcon(FontAwesomeIcons.tag, size: 16),
+                    ),
+                    onChanged: (_) => _updateServer(),
                   ),
-                  onChanged: (_) => _updateServer(),
-                ),
+                ],
                 const SizedBox(height: 12),
                 LayoutBuilder(
                   builder: (context, constraints) {

@@ -21,7 +21,7 @@
     "enabled": true,
     "port": 4840,
     "discoveryTtlSeconds": 1800,
-    "allowAnonymous": true,
+    "allowAnonymous": false,
     "users": [
       {
         "username": "hmi",
