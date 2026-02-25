@@ -755,6 +755,128 @@ void main() {
     });
   });
 
+  group('_aliasNodes teardown', () {
+    // Tests the per-alias node cache used by _teardownAlias.
+    // Uses a standalone server (no client needed) to verify that
+    // deleting all nodes for one alias leaves other aliases intact.
+
+    late Server server;
+    late int port;
+
+    setUp(() {
+      port = 10000 + Random().nextInt(50000);
+      server = Server(port: port, logLevel: LogLevel.UA_LOGLEVEL_ERROR);
+
+      // Create folder hierarchy
+      server.addObjectNode(NodeId.fromString(1, 'Servers'), 'Servers');
+      server.addObjectNode(
+          NodeId.fromString(1, 'Servers/Variables'), 'Variables',
+          parentNodeId: NodeId.fromString(1, 'Servers'));
+      server.addObjectNode(
+          NodeId.fromString(1, 'Servers/Variables/OpcUa'), 'OpcUa',
+          parentNodeId: NodeId.fromString(1, 'Servers/Variables'));
+
+      for (final alias in ['plcA', 'plcB']) {
+        server.addObjectNode(
+          AggregatorNodeId.folderNodeId(alias),
+          alias,
+          parentNodeId: NodeId.fromString(1, 'Servers/Variables/OpcUa'),
+        );
+      }
+      server.start();
+    });
+
+    tearDown(() {
+      server.shutdown();
+      server.delete();
+    });
+
+    test('deleting cached nodes for one alias leaves other alias intact', () async {
+      // Simulate what _createAndSubscribeVariable does: add nodes and track in cache
+      final aliasNodes = <String, Set<NodeId>>{};
+
+      // plcA nodes
+      for (final name in ['temp', 'pressure']) {
+        final nodeId = AggregatorNodeId.encode('plcA', NodeId.fromString(4, name));
+        server.addVariableNode(
+          nodeId,
+          DynamicValue(value: 1.0, typeId: NodeId.double, name: name),
+          parentNodeId: AggregatorNodeId.folderNodeId('plcA'),
+        );
+        (aliasNodes['plcA'] ??= {}).add(nodeId);
+      }
+
+      // plcB nodes
+      for (final name in ['speed', 'torque']) {
+        final nodeId = AggregatorNodeId.encode('plcB', NodeId.fromString(4, name));
+        server.addVariableNode(
+          nodeId,
+          DynamicValue(value: 2.0, typeId: NodeId.double, name: name),
+          parentNodeId: AggregatorNodeId.folderNodeId('plcB'),
+        );
+        (aliasNodes['plcB'] ??= {}).add(nodeId);
+      }
+
+      // Teardown plcA — same logic as _teardownAlias should use
+      final toDelete = aliasNodes.remove('plcA')!;
+      var deleted = 0;
+      for (final nodeId in toDelete) {
+        server.deleteNode(nodeId);
+        deleted++;
+      }
+      expect(deleted, 2);
+
+      // plcB nodes should still be readable
+      final speedVal = await server.read(
+          AggregatorNodeId.encode('plcB', NodeId.fromString(4, 'speed')));
+      expect(speedVal.value, 2.0);
+      final torqueVal = await server.read(
+          AggregatorNodeId.encode('plcB', NodeId.fromString(4, 'torque')));
+      expect(torqueVal.value, 2.0);
+
+      // plcA nodes should be gone (read returns null value)
+      final deletedVal = await server.read(
+          AggregatorNodeId.encode('plcA', NodeId.fromString(4, 'temp')));
+      expect(deletedVal.value, isNull);
+    });
+
+    test('teardown of unknown alias is a no-op', () {
+      final aliasNodes = <String, Set<NodeId>>{};
+      final toDelete = aliasNodes.remove('nonexistent');
+      expect(toDelete, isNull);
+    });
+
+    test('re-add after teardown works correctly', () async {
+      final aliasNodes = <String, Set<NodeId>>{};
+
+      // Add a node
+      final nodeId = AggregatorNodeId.encode('plcA', NodeId.fromString(4, 'val'));
+      server.addVariableNode(
+        nodeId,
+        DynamicValue(value: 10.0, typeId: NodeId.double, name: 'val'),
+        parentNodeId: AggregatorNodeId.folderNodeId('plcA'),
+      );
+      (aliasNodes['plcA'] ??= {}).add(nodeId);
+
+      // Teardown
+      for (final id in aliasNodes.remove('plcA')!) {
+        server.deleteNode(id);
+      }
+
+      // Re-add with new value (simulating _repopulateAlias)
+      server.addVariableNode(
+        nodeId,
+        DynamicValue(value: 20.0, typeId: NodeId.double, name: 'val'),
+        parentNodeId: AggregatorNodeId.folderNodeId('plcA'),
+      );
+      (aliasNodes['plcA'] ??= {}).add(nodeId);
+
+      final val = await server.read(nodeId);
+      expect(val.value, 20.0);
+      expect(aliasNodes['plcA']!.length, 1);
+    });
+  });
+
   group('TTL boundary condition', () {
     test('entry at exactly TTL age is expired', () {
       // Create a config with 30-minute TTL and manually inject a discovered node

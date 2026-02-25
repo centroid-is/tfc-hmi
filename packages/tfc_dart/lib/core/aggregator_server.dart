@@ -221,6 +221,9 @@ class AggregatorServer {
   /// Reverse mapping: aggregator node string → key mapping key
   final Map<String, String> _nodeToKeyMap = {};
 
+  /// NodeIds created per alias — used by _teardownAlias to delete all nodes.
+  final Map<String, Set<NodeId>> _aliasNodes = {};
+
   /// Tracks in-flight discovery operations so shutdown can await them.
   final Set<Future<void>> _pendingDiscoveries = {};
 
@@ -517,29 +520,21 @@ class AggregatorServer {
   ///
   /// The alias folder and status nodes (connected / last_error) are kept.
   void _teardownAlias(String alias) {
-    final prefix = '$alias:';
+    final nodes = _aliasNodes.remove(alias);
+    if (nodes == null || nodes.isEmpty) {
+      _logger.i('Aggregator: teardown "$alias" — no nodes cached');
+      return;
+    }
+
     var deleted = 0;
+    for (final nodeId in nodes) {
+      final nodeKey = nodeId.toString();
 
-    // Collect node keys belonging to this alias (mapped + discovered)
-    final nodeKeys = <String>[];
-    for (final key in _createdVariables.toList()) {
-      if (key.startsWith(prefix)) nodeKeys.add(key);
-    }
-    for (final key in _discoveredNodes.keys.toList()) {
-      if (key.contains(prefix)) nodeKeys.add(key);
-    }
-
-    for (final nodeKey in nodeKeys) {
-      // Cancel upstream subscription
       _upstreamSubs[nodeKey]?.cancel();
       _upstreamSubs.remove(nodeKey);
-
-      // Cancel monitor subscription
       _monitorSubs[nodeKey]?.cancel();
       _monitorSubs.remove(nodeKey);
 
-      // Delete from address space
-      final nodeId = NodeId.fromString(1, nodeKey);
       try {
         _server.deleteNode(nodeId);
         deleted++;
@@ -547,7 +542,6 @@ class AggregatorServer {
         _logger.d('Aggregator: deleteNode failed for "$nodeKey": $e');
       }
 
-      // Clear tracking
       _createdVariables.remove(nodeKey);
       _discoveredNodes.remove(nodeKey);
       _valueCache.remove(nodeKey);
@@ -922,6 +916,7 @@ class AggregatorServer {
               parentNodeId: folderId,
             );
             _discoveredNodes[nodeKey] = DateTime.now();
+            (_aliasNodes[alias] ??= {}).add(aggregatorNodeId);
             _logger.d(
                 'Aggregator: discovered object "${item.browseName}" from $alias');
           } else if (item.nodeClass == NodeClass.UA_NODECLASS_VARIABLE) {
@@ -938,6 +933,7 @@ class AggregatorServer {
               accessLevel: const AccessLevelMask(read: true, write: true),
             );
             _discoveredNodes[nodeKey] = DateTime.now();
+            (_aliasNodes[alias] ??= {}).add(aggregatorNodeId);
             _logger.d(
                 'Aggregator: discovered variable "${item.browseName}" from $alias');
           }
@@ -987,6 +983,7 @@ class AggregatorServer {
         parentNodeId: parentNodeId,
       );
       _createdVariables.add(nodeKey);
+      (_aliasNodes[alias] ??= {}).add(aggregatorNodeId);
       _valueCache[nodeKey] = initialValue;
       _nodeToKeyMap[nodeKey] = key;
 
@@ -1086,6 +1083,7 @@ class AggregatorServer {
     _createdFolders.clear();
     _createdVariables.clear();
     _discoveredNodes.clear();
+    _aliasNodes.clear();
     _connectedNodeIds.clear();
     _lastErrorNodeIds.clear();
 
