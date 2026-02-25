@@ -234,6 +234,9 @@ class AggregatorServer {
   /// NodeIds for per-alias connected status variables.
   final Map<String, NodeId> _connectedNodeIds = {};
 
+  /// NodeIds for per-alias last error variables.
+  final Map<String, NodeId> _lastErrorNodeIds = {};
+
   /// File path for persisting config changes (used by setOpcUaClients).
   final String? configFilePath;
 
@@ -361,7 +364,7 @@ class AggregatorServer {
     }
   }
 
-  /// Create a boolean variable node for connection status under an alias folder.
+  /// Create boolean connected + string last_error variable nodes under an alias folder.
   void _addConnectedVariable(String alias, NodeId parentFolderId) {
     final connNodeId = NodeId.fromString(1, '$alias/connected');
     _server.addVariableNode(
@@ -371,6 +374,15 @@ class AggregatorServer {
       accessLevel: const AccessLevelMask(read: true),
     );
     _connectedNodeIds[alias] = connNodeId;
+
+    final errorNodeId = NodeId.fromString(1, '$alias/last_error');
+    _server.addVariableNode(
+      errorNodeId,
+      DynamicValue(value: '', typeId: NodeId.uastring, name: '$alias/last_error'),
+      parentNodeId: parentFolderId,
+      accessLevel: const AccessLevelMask(read: true),
+    );
+    _lastErrorNodeIds[alias] = errorNodeId;
   }
 
   /// Watch upstream connection status, update connected variables,
@@ -381,13 +393,19 @@ class AggregatorServer {
       // Track whether we've seen a disconnect (to avoid alarm on initial connect)
       var wasDisconnected = false;
       _connectionSubs[alias] = wrapper.connectionStream.listen((event) {
-        final (status, _) = event;
+        final (status, error) = event;
         // Update the connected variable on the aggregator
         final connNodeId = _connectedNodeIds[alias];
         if (connNodeId != null) {
           final connected = status == ConnectionStatus.connected;
           _server.write(connNodeId,
               DynamicValue(value: connected, typeId: NodeId.boolean));
+        }
+        // Update the last_error variable
+        final errorNodeId = _lastErrorNodeIds[alias];
+        if (errorNodeId != null) {
+          _server.write(errorNodeId,
+              DynamicValue(value: error ?? '', typeId: NodeId.uastring));
         }
 
         if (status == ConnectionStatus.connected) {
@@ -918,6 +936,7 @@ class AggregatorServer {
     _createdVariables.clear();
     _discoveredNodes.clear();
     _connectedNodeIds.clear();
+    _lastErrorNodeIds.clear();
 
     _server.shutdown();
     _server.delete();

@@ -11,8 +11,6 @@ import 'package:rxdart/rxdart.dart';
 import 'package:collection/collection.dart';
 
 import 'aggregator_server.dart';
-import 'alarm.dart';
-import 'boolean_expression.dart';
 import 'collector.dart';
 import 'preferences.dart';
 
@@ -405,24 +403,21 @@ class StateMan {
 
   Timer? _healthCheckTimer;
 
-  /// Optional AlarmMan for injecting connection-status alarms in aggregation mode.
-  AlarmMan? _alarmMan;
   Timer? _connStatusTimer;
-  final Map<String, bool> _lastConnStatus = {};
 
   /// Upstream connection status per alias (aggregation mode only).
-  /// Updated by [_pollAggregatorConnections].
-  final Map<String, ConnectionStatus> _upstreamConnStatus = {};
-  final StreamController<Map<String, ConnectionStatus>>
+  /// Value is (ConnectionStatus, lastError).
+  final Map<String, (ConnectionStatus, String?)> _upstreamConnStatus = {};
+  final StreamController<Map<String, (ConnectionStatus, String?)>>
       _upstreamConnController =
-      StreamController<Map<String, ConnectionStatus>>.broadcast();
+      StreamController<Map<String, (ConnectionStatus, String?)>>.broadcast();
 
   /// Current upstream connection status per alias (aggregation mode).
-  Map<String, ConnectionStatus> get upstreamConnectionStatus =>
+  Map<String, (ConnectionStatus, String?)> get upstreamConnectionStatus =>
       Map.unmodifiable(_upstreamConnStatus);
 
   /// Stream of upstream connection status changes (aggregation mode).
-  Stream<Map<String, ConnectionStatus>> get upstreamConnectionStream =>
+  Stream<Map<String, (ConnectionStatus, String?)>> get upstreamConnectionStream =>
       _upstreamConnController.stream;
 
   /// Constructor requires the server endpoint.
@@ -721,6 +716,7 @@ class StateMan {
         clients: clients,
         alias: alias,
         aggregationMode: aggregationMode);
+    stateMan._startUpstreamConnectionPolling();
     return stateMan;
   }
 
@@ -903,33 +899,21 @@ class StateMan {
 
     _subsMap$.close();
     _connStatusTimer?.cancel();
-    _lastConnStatus.clear();
     _upstreamConnStatus.clear();
     _upstreamConnController.close();
   }
 
-  /// In aggregation mode, periodically poll `$alias/connected` variables on the
-  /// aggregator and inject/remove disconnect alarms into [alarmMan].
-  ///
-  /// Call this after [AlarmMan.create] completes and the aggregator connection
-  /// is established. Each upstream alias from [config.opcua] is monitored.
-  void watchAggregatorConnections(AlarmMan alarmMan) {
+  /// In aggregation mode, start polling `<alias>/connected` variables on the
+  /// aggregator to track upstream connection status. Results are emitted on
+  /// [upstreamConnectionStream].
+  void _startUpstreamConnectionPolling() {
     if (!aggregationMode) return;
-    _alarmMan = alarmMan;
-
-    // Initialize all aliases as connected (optimistic)
-    for (final opcConfig in config.opcua) {
-      final alias = opcConfig.serverAlias ?? AggregatorNodeId.defaultAlias;
-      _lastConnStatus[alias] = true;
-    }
-
-    // Poll every 5 seconds
     _connStatusTimer = Timer.periodic(const Duration(seconds: 5), (_) {
-      _pollAggregatorConnections(alarmMan);
+      _pollUpstreamConnections();
     });
   }
 
-  Future<void> _pollAggregatorConnections(AlarmMan alarmMan) async {
+  Future<void> _pollUpstreamConnections() async {
     if (!_shouldRun || clients.isEmpty) return;
     final wrapper = clients.first;
     if (wrapper.connectionStatus != ConnectionStatus.connected) return;
@@ -939,32 +923,34 @@ class StateMan {
     for (final opcConfig in config.opcua) {
       final alias = opcConfig.serverAlias ?? AggregatorNodeId.defaultAlias;
       final connNodeId = NodeId.fromString(1, '$alias/connected');
+      final errorNodeId = NodeId.fromString(1, '$alias/last_error');
 
       try {
         final value = await client.read(connNodeId).timeout(
           const Duration(seconds: 3),
         );
         final connected = value.value as bool? ?? false;
-        final wasConnected = _lastConnStatus[alias] ?? true;
-        final status =
-            connected ? ConnectionStatus.connected : ConnectionStatus.disconnected;
+        final status = connected
+            ? ConnectionStatus.connected
+            : ConnectionStatus.disconnected;
 
-        if (_upstreamConnStatus[alias] != status) {
-          _upstreamConnStatus[alias] = status;
+        String? error;
+        if (!connected) {
+          try {
+            final errValue = await client.read(errorNodeId).timeout(
+              const Duration(seconds: 3),
+            );
+            final errStr = errValue.value as String?;
+            if (errStr != null && errStr.isNotEmpty) error = errStr;
+          } catch (_) {}
+        }
+
+        final entry = (status, error);
+        if (_upstreamConnStatus[alias] != entry) {
+          _upstreamConnStatus[alias] = entry;
           changed = true;
         }
-
-        if (connected != wasConnected) {
-          _lastConnStatus[alias] = connected;
-          if (!connected) {
-            _injectDisconnectAlarm(alarmMan, alias);
-          } else {
-            alarmMan.removeExternalAlarm('connection-$alias');
-            logger.i('[${this.alias}] Aggregator: "$alias" reconnected, alarm removed');
-          }
-        }
       } catch (e) {
-        // Read failed — likely aggregator itself is down
         logger.d('[${this.alias}] Failed to read $alias/connected: $e');
       }
     }
@@ -972,36 +958,6 @@ class StateMan {
     if (changed) {
       _upstreamConnController.add(Map.unmodifiable(_upstreamConnStatus));
     }
-  }
-
-  void _injectDisconnectAlarm(AlarmMan alarmMan, String alias) {
-    final uid = 'connection-$alias';
-    final rule = AlarmRule(
-      level: AlarmLevel.error,
-      expression: ExpressionConfig(
-        value: Expression(formula: 'disconnected'),
-      ),
-      acknowledgeRequired: false,
-    );
-
-    final alarmConfig = AlarmConfig(
-      uid: uid,
-      title: '$alias disconnected',
-      description: 'Lost connection to upstream server "$alias"',
-      rules: [rule],
-    );
-
-    alarmMan.addExternalAlarm(AlarmActive(
-      alarm: Alarm(config: alarmConfig),
-      notification: AlarmNotification(
-        uid: uid,
-        active: true,
-        expression: 'disconnected',
-        rule: rule,
-        timestamp: DateTime.now(),
-      ),
-    ));
-    logger.w('[${this.alias}] Aggregator: injected disconnect alarm for "$alias"');
   }
 
   (NodeId, int?)? _lookupNodeId(String key) {
