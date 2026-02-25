@@ -117,6 +117,19 @@ class OpcUAConfig {
   OpcUAConfig();
 
   @override
+  bool operator ==(Object other) =>
+      other is OpcUAConfig &&
+      endpoint == other.endpoint &&
+      username == other.username &&
+      password == other.password &&
+      serverAlias == other.serverAlias &&
+      const ListEquality<int>().equals(sslCert, other.sslCert) &&
+      const ListEquality<int>().equals(sslKey, other.sslKey);
+
+  @override
+  int get hashCode => Object.hash(endpoint, username, password, serverAlias);
+
+  @override
   String toString() {
     return 'OpcUAConfig(endpoint: $endpoint, username: $username, password: $password, sslCert: $sslCert, sslKey: $sslKey)';
   }
@@ -168,6 +181,10 @@ class StateManConfig {
   Future<void> toPrefs(Preferences prefs) async {
     final configJson = jsonEncode(toJson());
     await prefs.setString(configKey, configJson, secret: true, saveToDb: false);
+  }
+
+  Future<void> toFile(String path) async {
+    await File(path).writeAsString(jsonEncode(toJson()));
   }
 
   factory StateManConfig.fromJson(Map<String, dynamic> json) =>
@@ -593,13 +610,26 @@ class StateMan {
     List<ClientWrapper> clients = [];
 
     if (aggregationMode && config.aggregator != null) {
-      // Single client to the aggregator endpoint (no SSL needed for local)
+      // Single client to the aggregator endpoint
       final aggregatorEndpoint =
           'opc.tcp://localhost:${config.aggregator!.port}';
+
+      // Use first configured user's credentials for the aggregator client
+      String? username;
+      String? password;
+      if (config.aggregator!.users.isNotEmpty) {
+        username = config.aggregator!.users.first.username;
+        password = config.aggregator!.users.first.password;
+      }
+
       final aggregatorOpcConfig = OpcUAConfig()
         ..endpoint = aggregatorEndpoint
-        ..serverAlias = 'aggregator';
+        ..serverAlias = 'aggregator'
+        ..username = username
+        ..password = password;
       final client = await ClientIsolate.create(
+        username: username,
+        password: password,
         logLevel: LogLevel.UA_LOGLEVEL_INFO,
       );
       clients.add(ClientWrapper(client, aggregatorOpcConfig));

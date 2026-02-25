@@ -17,8 +17,9 @@ import 'package:cryptography_flutter/cryptography_flutter.dart' as crypto_fl;
 
 import '../widgets/base_scaffold.dart';
 import '../widgets/preferences.dart';
-import 'package:tfc_dart/core/aggregator_server.dart' show AggregatorConfig;
+import 'package:tfc_dart/core/aggregator_server.dart' show AggregatorConfig, AggregatorUser;
 import 'package:tfc_dart/core/state_man.dart';
+import 'package:open62541/open62541.dart' show NodeId, DynamicValue;
 import 'package:tfc_dart/core/database.dart';
 import '../providers/state_man.dart';
 import '../providers/preferences.dart';
@@ -545,6 +546,11 @@ class _OpcUAServersSectionState extends ConsumerState<_OpcUAServersSection> {
   bool _isLoading = false;
   String? _error;
 
+  // Remote servers state (fetched from aggregator via OPC UA)
+  List<Map<String, dynamic>>? _remoteServers;
+  bool _remoteServersLoading = false;
+  String? _remoteServersError;
+
   @override
   void initState() {
     super.initState();
@@ -618,8 +624,332 @@ class _OpcUAServersSectionState extends ConsumerState<_OpcUAServersSection> {
     setState(() => _config!.opcua.removeAt(index));
   }
 
+  /// Helper to update the aggregator config preserving all existing fields.
+  void _updateAggregator(AggregatorConfig current, {
+    bool? enabled,
+    int? port,
+    Uint8List? certificate,
+    Uint8List? privateKey,
+    bool clearTls = false,
+    List<AggregatorUser>? users,
+    bool? allowAnonymous,
+  }) {
+    setState(() {
+      _config?.aggregator = AggregatorConfig(
+        enabled: enabled ?? current.enabled,
+        port: port ?? current.port,
+        discoveryTtl: current.discoveryTtl,
+        certificate: clearTls ? null : (certificate ?? current.certificate),
+        privateKey: clearTls ? null : (privateKey ?? current.privateKey),
+        users: users ?? current.users,
+        allowAnonymous: allowAnonymous ?? current.allowAnonymous,
+      );
+    });
+  }
+
+  Future<void> _fetchRemoteServers() async {
+    final stateMan = ref.read(stateManProvider).valueOrNull;
+    if (stateMan == null || stateMan.clients.isEmpty) return;
+
+    setState(() {
+      _remoteServersLoading = true;
+      _remoteServersError = null;
+    });
+
+    try {
+      final client = stateMan.clients.first.client;
+      final getMethodId = NodeId.fromString(1, 'getOpcUaClients');
+      final result = await client.call(NodeId.objectsFolder, getMethodId, []);
+      if (result.isNotEmpty) {
+        final List<dynamic> parsed = jsonDecode(result.first.value as String);
+        setState(() {
+          _remoteServers = parsed.cast<Map<String, dynamic>>();
+        });
+      }
+    } catch (e) {
+      final msg = e.toString();
+      if (msg.contains('BadNotExecutable')) {
+        setState(() => _remoteServersError = 'Authentication required');
+      } else {
+        setState(() => _remoteServersError = msg);
+      }
+    } finally {
+      if (mounted) setState(() => _remoteServersLoading = false);
+    }
+  }
+
+  Future<void> _saveRemoteServers(List<Map<String, dynamic>> servers) async {
+    final stateMan = ref.read(stateManProvider).valueOrNull;
+    if (stateMan == null || stateMan.clients.isEmpty) return;
+
+    try {
+      final client = stateMan.clients.first.client;
+      final setMethodId = NodeId.fromString(1, 'setOpcUaClients');
+      await client.call(
+        NodeId.objectsFolder,
+        setMethodId,
+        [DynamicValue(value: jsonEncode(servers), typeId: NodeId.uastring)],
+      );
+      await _fetchRemoteServers();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Remote servers updated'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      final msg = e.toString();
+      if (msg.contains('BadNotExecutable')) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text('Admin access required to modify servers'),
+            backgroundColor: Theme.of(context).colorScheme.error,
+          ),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to save: $msg'),
+            backgroundColor: Theme.of(context).colorScheme.error,
+          ),
+        );
+      }
+    }
+  }
+
+  Widget _buildRemoteServersCard() {
+    final stateManAsync = ref.watch(stateManProvider);
+    final isConnected = stateManAsync.valueOrNull?.clients.isNotEmpty == true;
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: Card(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  const FaIcon(FontAwesomeIcons.sitemap, size: 14),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text('Remote Servers',
+                        style: Theme.of(context).textTheme.titleSmall),
+                  ),
+                  if (isConnected)
+                    IconButton(
+                      icon: const FaIcon(FontAwesomeIcons.arrowsRotate, size: 14),
+                      tooltip: 'Refresh',
+                      onPressed: _remoteServersLoading ? null : _fetchRemoteServers,
+                      iconSize: 14,
+                      constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                      padding: EdgeInsets.zero,
+                    ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              if (!isConnected)
+                const Text('Not connected to aggregator',
+                    style: TextStyle(color: Colors.grey))
+              else if (_remoteServersLoading)
+                const Center(child: Padding(
+                  padding: EdgeInsets.all(16),
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ))
+              else if (_remoteServersError != null)
+                Text(_remoteServersError!,
+                    style: TextStyle(color: Theme.of(context).colorScheme.error))
+              else if (_remoteServers == null)
+                Center(
+                  child: TextButton.icon(
+                    onPressed: _fetchRemoteServers,
+                    icon: const FaIcon(FontAwesomeIcons.download, size: 14),
+                    label: const Text('Fetch server list'),
+                  ),
+                )
+              else ...[
+                if (_remoteServers!.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 8),
+                    child: Text('No remote servers configured',
+                        style: TextStyle(color: Colors.grey)),
+                  )
+                else
+                  ...(_remoteServers!.map(_buildRemoteServerTile)),
+                const SizedBox(height: 8),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: OutlinedButton.icon(
+                    onPressed: () => _showEditRemoteServersDialog(),
+                    icon: const FaIcon(FontAwesomeIcons.penToSquare, size: 14),
+                    label: const Text('Edit'),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildRemoteServerTile(Map<String, dynamic> server) {
+    final endpoint = server['endpoint'] as String? ?? '';
+    final alias = server['alias'] as String? ?? '';
+    final hasTls = server['has_tls'] == true;
+    final hasCredentials = server['has_credentials'] == true;
+
+    return ListTile(
+      dense: true,
+      contentPadding: EdgeInsets.zero,
+      leading: const FaIcon(FontAwesomeIcons.server, size: 14),
+      title: Text(alias.isNotEmpty ? alias : endpoint,
+          style: const TextStyle(fontSize: 13)),
+      subtitle: alias.isNotEmpty ? Text(endpoint, style: const TextStyle(fontSize: 11)) : null,
+      trailing: Wrap(
+        spacing: 4,
+        children: [
+          if (hasTls)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: Colors.green.withAlpha(30),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.green.withAlpha(120)),
+              ),
+              child: const Text('TLS',
+                  style: TextStyle(color: Colors.green, fontSize: 10, fontWeight: FontWeight.w600)),
+            ),
+          if (hasCredentials)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: Colors.blue.withAlpha(30),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.blue.withAlpha(120)),
+              ),
+              child: const Text('Auth',
+                  style: TextStyle(color: Colors.blue, fontSize: 10, fontWeight: FontWeight.w600)),
+            ),
+        ],
+      ),
+    );
+  }
+
+  void _showEditRemoteServersDialog() {
+    if (_remoteServers == null) return;
+
+    // Deep copy the current servers for editing
+    final editServers = _remoteServers!
+        .map((s) => Map<String, dynamic>.from(s))
+        .toList();
+
+    showDialog(
+      context: context,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: const Text('Edit Remote Servers'),
+              content: SizedBox(
+                width: 500,
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      ...editServers.asMap().entries.map((entry) {
+                        final i = entry.key;
+                        final server = entry.value;
+                        return Card(
+                          margin: const EdgeInsets.only(bottom: 8),
+                          child: Padding(
+                            padding: const EdgeInsets.all(12),
+                            child: Column(
+                              children: [
+                                TextFormField(
+                                  initialValue: server['endpoint'] as String? ?? '',
+                                  decoration: const InputDecoration(
+                                    labelText: 'Endpoint',
+                                    hintText: 'opc.tcp://host:4840',
+                                    isDense: true,
+                                  ),
+                                  onChanged: (v) => server['endpoint'] = v,
+                                ),
+                                const SizedBox(height: 8),
+                                TextFormField(
+                                  initialValue: server['alias'] as String? ?? '',
+                                  decoration: const InputDecoration(
+                                    labelText: 'Alias',
+                                    hintText: 'PLC1',
+                                    isDense: true,
+                                  ),
+                                  onChanged: (v) => server['alias'] = v,
+                                ),
+                                const SizedBox(height: 4),
+                                Align(
+                                  alignment: Alignment.centerRight,
+                                  child: IconButton(
+                                    icon: const FaIcon(FontAwesomeIcons.trash, size: 14),
+                                    tooltip: 'Remove server',
+                                    onPressed: () {
+                                      setDialogState(() => editServers.removeAt(i));
+                                    },
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        );
+                      }),
+                      TextButton.icon(
+                        onPressed: () {
+                          setDialogState(() {
+                            editServers.add({
+                              'endpoint': '',
+                              'alias': '',
+                              'has_tls': false,
+                              'has_credentials': false,
+                            });
+                          });
+                        },
+                        icon: const FaIcon(FontAwesomeIcons.plus, size: 14),
+                        label: const Text('Add Server'),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(),
+                  child: const Text('Cancel'),
+                ),
+                ElevatedButton(
+                  onPressed: () {
+                    Navigator.of(dialogContext).pop();
+                    _saveRemoteServers(editServers);
+                  },
+                  child: const Text('Save'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
   Widget _buildAggregatorSection(StateManConfig config) {
     final aggregator = config.aggregator ?? AggregatorConfig();
+    // Extract single user for UI (first user or empty)
+    final hasUser = aggregator.users.isNotEmpty;
+    final currentUsername = hasUser ? aggregator.users.first.username : '';
+    final currentPassword = hasUser ? aggregator.users.first.password : '';
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -639,17 +969,10 @@ class _OpcUAServersSectionState extends ConsumerState<_OpcUAServersSection> {
           subtitle: const Text(
               'Connect to a backend aggregator server instead of directly to PLCs'),
           value: aggregator.enabled,
-          onChanged: (value) {
-            setState(() {
-              _config?.aggregator = AggregatorConfig(
-                enabled: value,
-                port: aggregator.port,
-              );
-            });
-          },
+          onChanged: (value) => _updateAggregator(aggregator, enabled: value),
           dense: true,
         ),
-        if (aggregator.enabled)
+        if (aggregator.enabled) ...[
           Padding(
             padding: const EdgeInsets.only(left: 16, right: 16, top: 8),
             child: TextFormField(
@@ -663,17 +986,209 @@ class _OpcUAServersSectionState extends ConsumerState<_OpcUAServersSection> {
               onChanged: (value) {
                 final port = int.tryParse(value);
                 if (port != null) {
-                  setState(() {
-                    _config?.aggregator = AggregatorConfig(
-                      enabled: aggregator.enabled,
-                      port: port,
-                    );
-                  });
+                  _updateAggregator(aggregator, port: port);
                 }
               },
             ),
           ),
+          const SizedBox(height: 16),
+
+          // --- TLS Section ---
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        const FaIcon(FontAwesomeIcons.lock, size: 14),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text('TLS Encryption',
+                              style: Theme.of(context).textTheme.titleSmall),
+                        ),
+                        if (aggregator.hasTls)
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 8, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: Colors.green.withAlpha(30),
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: Colors.green.withAlpha(120)),
+                            ),
+                            child: const Text('Enabled',
+                                style: TextStyle(
+                                    color: Colors.green,
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w600)),
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    if (aggregator.hasTls)
+                      Wrap(
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        spacing: 8,
+                        runSpacing: 4,
+                        children: [
+                          const FaIcon(FontAwesomeIcons.circleCheck,
+                              color: Colors.green, size: 14),
+                          const Text('Certificate and private key configured'),
+                          TextButton.icon(
+                            onPressed: () =>
+                                _updateAggregator(aggregator, clearTls: true),
+                            icon: const FaIcon(FontAwesomeIcons.trash, size: 12),
+                            label: const Text('Remove'),
+                          ),
+                        ],
+                      )
+                    else ...[
+                      const Text('No TLS configured. Generate or import certificates for encrypted connections.'),
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              onPressed: () => _showAggregatorCertGenerator(aggregator),
+                              icon: const FaIcon(FontAwesomeIcons.plus, size: 14),
+                              label: const Text('Generate Certificates'),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+
+          // --- User Auth Section ---
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        const FaIcon(FontAwesomeIcons.userShield, size: 14),
+                        const SizedBox(width: 8),
+                        Text('Authentication',
+                            style: Theme.of(context).textTheme.titleSmall),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    SwitchListTile(
+                      title: const Text('Allow Anonymous Access'),
+                      value: aggregator.allowAnonymous,
+                      onChanged: (value) =>
+                          _updateAggregator(aggregator, allowAnonymous: value),
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                    const SizedBox(height: 8),
+                    LayoutBuilder(
+                      builder: (context, constraints) {
+                        final isNarrow = constraints.maxWidth < 400;
+                        final usernameField = TextFormField(
+                          initialValue: currentUsername,
+                          decoration: const InputDecoration(
+                            labelText: 'Username',
+                            prefixIcon: FaIcon(FontAwesomeIcons.user, size: 14),
+                            isDense: true,
+                          ),
+                          onChanged: (value) {
+                            final pw = aggregator.users.isNotEmpty
+                                ? aggregator.users.first.password
+                                : '';
+                            _updateAggregator(aggregator,
+                                users: value.isEmpty && pw.isEmpty
+                                    ? []
+                                    : [AggregatorUser(username: value, password: pw)]);
+                          },
+                        );
+                        final passwordField = TextFormField(
+                          initialValue: currentPassword,
+                          decoration: const InputDecoration(
+                            labelText: 'Password',
+                            prefixIcon: FaIcon(FontAwesomeIcons.lock, size: 14),
+                            isDense: true,
+                          ),
+                          obscureText: true,
+                          onChanged: (value) {
+                            final un = aggregator.users.isNotEmpty
+                                ? aggregator.users.first.username
+                                : '';
+                            _updateAggregator(aggregator,
+                                users: un.isEmpty && value.isEmpty
+                                    ? []
+                                    : [AggregatorUser(username: un, password: value)]);
+                          },
+                        );
+                        if (isNarrow) {
+                          return Column(children: [
+                            usernameField,
+                            const SizedBox(height: 12),
+                            passwordField,
+                          ]);
+                        }
+                        return Row(children: [
+                          Expanded(child: usernameField),
+                          const SizedBox(width: 12),
+                          Expanded(child: passwordField),
+                        ]);
+                      },
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+          _buildRemoteServersCard(),
+        ],
       ],
+    );
+  }
+
+  void _showAggregatorCertGenerator(AggregatorConfig aggregator) {
+    showDialog(
+      context: context,
+      builder: (context) {
+        final size = MediaQuery.of(context).size;
+        final isSmallScreen = size.width < 600;
+        return AlertDialog(
+          title: const Text('Generate Aggregator Certificates'),
+          content: SizedBox(
+            width: isSmallScreen ? size.width * 0.85 : 600,
+            height: isSmallScreen ? size.height * 0.6 : 600,
+            child: SingleChildScrollView(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(0, 8, 0, 0),
+                child: CertificateGenerator(
+                  onCertificatesGenerated: (cert, key) {
+                    _updateAggregator(aggregator,
+                        certificate: cert, privateKey: key);
+                    Navigator.of(context).pop();
+                  },
+                ),
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text('Close')),
+          ],
+        );
+      },
     );
   }
 

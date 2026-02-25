@@ -26,6 +26,26 @@ class DataAcquisitionIsolateConfig {
   });
 }
 
+/// Handle to a running data acquisition isolate.
+/// Supports stopping the isolate and preventing auto-respawn.
+class IsolateHandle {
+  final String alias;
+  Isolate? _isolate;
+  bool _stopped = false;
+
+  IsolateHandle(this.alias);
+
+  /// Whether this handle has been stopped.
+  bool get isStopped => _stopped;
+
+  /// Stop the isolate and prevent auto-respawn.
+  void stop() {
+    _stopped = true;
+    _isolate?.kill(priority: Isolate.immediate);
+    _isolate = null;
+  }
+}
+
 /// Isolate entry point for running DataAcquisition for a single server.
 @pragma('vm:entry-point')
 Future<void> dataAcquisitionIsolateEntry(
@@ -64,8 +84,10 @@ Future<void> dataAcquisitionIsolateEntry(
 }
 
 /// Spawn a DataAcquisition isolate for a single server.
-/// Automatically respawns the isolate on failure with exponential backoff.
-Future<void> spawnDataAcquisitionIsolate({
+/// Returns an [IsolateHandle] that can be used to stop the isolate.
+/// Automatically respawns the isolate on failure with exponential backoff,
+/// unless [IsolateHandle.stop] has been called.
+Future<IsolateHandle> spawnDataAcquisitionIsolate({
   required OpcUAConfig server,
   required DatabaseConfig dbConfig,
   required KeyMappings keyMappings,
@@ -79,17 +101,21 @@ Future<void> spawnDataAcquisitionIsolate({
   );
 
   final serverName = server.serverAlias ?? server.endpoint;
+  final handle = IsolateHandle(serverName);
   final logger = Logger();
   var restartDelay = const Duration(seconds: 2);
   const maxDelay = Duration(seconds: 30);
 
   Future<void> spawn() async {
+    if (handle._stopped) return;
+
     final errorPort = ReceivePort();
     final exitPort = ReceivePort();
 
     void scheduleRespawn(String reason) {
       errorPort.close();
       exitPort.close();
+      if (handle._stopped) return;
       logger.w(
           'Respawning isolate for $serverName in ${restartDelay.inSeconds}s ($reason)');
       Future.delayed(restartDelay, () {
@@ -107,17 +133,19 @@ Future<void> spawnDataAcquisitionIsolate({
     });
 
     exitPort.listen((_) {
+      if (handle._stopped) return;
       logger.e('Isolate exited unexpectedly for $serverName');
       scheduleRespawn('unexpected exit');
     });
 
     try {
-      await Isolate.spawn(
+      final isolate = await Isolate.spawn(
         dataAcquisitionIsolateEntry,
         config,
         onError: errorPort.sendPort,
         onExit: exitPort.sendPort,
       );
+      handle._isolate = isolate;
       // Reset backoff on successful spawn
       restartDelay = const Duration(seconds: 2);
     } catch (e) {
@@ -127,4 +155,5 @@ Future<void> spawnDataAcquisitionIsolate({
   }
 
   await spawn();
+  return handle;
 }
