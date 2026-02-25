@@ -243,20 +243,24 @@ class AlarmMan {
 
   /// Add an externally-managed alarm (e.g. from AggregatorServer on PLC disconnect).
   void addExternalAlarm(AlarmActive alarm) {
+    // Register config via the normal path so the alarm table row exists
+    // (required for alarm_history FK constraint).
+    if (!alarms.any((a) => a.config.uid == alarm.alarm.config.uid)) {
+      addAlarm(alarm.alarm.config);
+    }
     _activeAlarms.add(alarm);
     _activeAlarmsController.add(_activeAlarms);
   }
 
   /// Remove an externally-managed alarm by its uid.
-  ///
-  /// Unlike regular alarms, external alarms are not persisted to the database
-  /// (they have no corresponding row in the `alarm` table), so we skip the
-  /// history/DB path that [_removeActiveAlarm] would take.
   void removeExternalAlarm(String uid) {
-    final removed =
-        _activeAlarms.where((e) => e.alarm.config.uid == uid).toList();
-    _activeAlarms.removeWhere((e) => e.alarm.config.uid == uid);
-    if (removed.isNotEmpty) {
+    final toRemove = _activeAlarms
+        .where((e) => e.alarm.config.uid == uid)
+        .toList();
+    for (final alarm in toRemove) {
+      _removeActiveAlarm(alarm);
+    }
+    if (toRemove.isNotEmpty) {
       _activeAlarmsController.add(_activeAlarms);
     }
   }
