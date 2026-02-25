@@ -54,6 +54,10 @@ class AggregatorConfig {
   /// Whether to allow anonymous access alongside user auth.
   final bool allowAnonymous;
 
+  /// HMI client connection config for the aggregator server.
+  /// Contains endpoint, username, password, TLS cert/key.
+  final OpcUAConfig? clientConfig;
+
   AggregatorConfig({
     this.enabled = false,
     this.port = 4840,
@@ -62,6 +66,7 @@ class AggregatorConfig {
     this.privateKey,
     this.users = const [],
     this.allowAnonymous = true,
+    this.clientConfig,
   });
 
   /// Whether TLS is configured (both cert and key present).
@@ -88,6 +93,9 @@ class AggregatorConfig {
               .toList() ??
           [],
       allowAnonymous: json['allowAnonymous'] as bool? ?? true,
+      clientConfig: json['client_config'] != null
+          ? OpcUAConfig.fromJson(json['client_config'] as Map<String, dynamic>)
+          : null,
     );
   }
 
@@ -99,6 +107,7 @@ class AggregatorConfig {
         if (privateKey != null) 'privateKey': base64Encode(privateKey!),
         if (users.isNotEmpty) 'users': users.map((u) => u.toJson()).toList(),
         'allowAnonymous': allowAnonymous,
+        if (clientConfig != null) 'client_config': clientConfig!.toJson(),
       };
 }
 
