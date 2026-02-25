@@ -922,8 +922,8 @@ class StateMan {
 
     for (final opcConfig in config.opcua) {
       final alias = opcConfig.serverAlias ?? AggregatorNodeId.defaultAlias;
-      final connNodeId = NodeId.fromString(1, '$alias/connected');
-      final errorNodeId = NodeId.fromString(1, '$alias/last_error');
+      final connNodeId = NodeId.fromString(1, 'Servers/Status/OpcUa/$alias/connected');
+      final errorNodeId = NodeId.fromString(1, 'Servers/Status/OpcUa/$alias/last_error');
 
       try {
         final value = await client.read(connNodeId).timeout(

@@ -59,8 +59,8 @@ void _injectDisconnectAlarm(AlarmMan alarmMan, String alias, String uid, String?
   );
 
   final description = error != null
-      ? 'Lost connection to upstream server "$alias": $error'
-      : 'Lost connection to upstream server "$alias"';
+      ? 'OPC UA Server: "$alias" is disconnected: $error'
+      : 'OPC UA Server: "$alias" is disconnected';
 
   final alarmConfig = AlarmConfig(
     uid: uid,
