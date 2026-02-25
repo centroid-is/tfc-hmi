@@ -392,6 +392,16 @@ class AggregatorServer {
       final alias = wrapper.config.serverAlias ?? AggregatorNodeId.defaultAlias;
       // Track whether we've seen a disconnect (to avoid alarm on initial connect)
       var wasDisconnected = false;
+      // Write current status immediately (stream only emits on changes,
+      // so if client is already connected we'd miss it).
+      final connNodeId = _connectedNodeIds[alias];
+      if (connNodeId != null) {
+        final connected =
+            wrapper.connectionStatus == ConnectionStatus.connected;
+        _server.write(connNodeId,
+            DynamicValue(value: connected, typeId: NodeId.boolean));
+      }
+
       _connectionSubs[alias] = wrapper.connectionStream.listen((event) {
         final (status, error) = event;
         // Update the connected variable on the aggregator
@@ -437,7 +447,7 @@ class AggregatorServer {
     final alarmConfig = AlarmConfig(
       uid: uid,
       title: '$alias disconnected',
-      description: 'Lost connection to upstream server "$alias"',
+      description: 'OPC UA Server: "$alias" is disconnected',
       rules: [rule],
     );
 
