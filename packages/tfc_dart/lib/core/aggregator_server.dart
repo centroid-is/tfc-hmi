@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:basic_utils/basic_utils.dart';
 import 'package:logger/logger.dart';
 import 'package:open62541/open62541.dart';
 
@@ -188,7 +189,7 @@ class AggregatorNodeId {
 /// 3. Call [runLoop] to process server iterations (async, non-blocking)
 /// 4. Call [shutdown] to stop and clean up
 class AggregatorServer {
-  final AggregatorConfig config;
+  AggregatorConfig config;
   final StateMan sharedStateMan;
   final Logger _logger = Logger();
 
@@ -255,7 +256,45 @@ class AggregatorServer {
   int get discoveredNodeCount => _discoveredNodes.length;
 
   /// Initialize the OPC UA server and populate address space from key mappings.
+  /// Auto-generates a TLS certificate if none is configured, and persists it
+  /// to the config file so it survives restarts.
   Future<void> initialize() async {
+    if (!config.hasTls) {
+      _logger.i('Aggregator: no TLS certificate configured, generating self-signed (30 year validity)');
+      final keyPair = CryptoUtils.generateRSAKeyPair(keySize: 2048);
+      final csr = X509Utils.generateRsaCsrPem(
+        {'CN': 'OPC-UA-Aggregator', 'O': 'Centroid', 'OU': 'OPC-UA'},
+        keyPair.privateKey as RSAPrivateKey,
+        keyPair.publicKey as RSAPublicKey,
+      );
+      final certPem = X509Utils.generateSelfSignedCertificate(
+        keyPair.privateKey as RSAPrivateKey,
+        csr,
+        365 * 30,
+      );
+      final keyPem = CryptoUtils.encodeRSAPrivateKeyToPem(
+          keyPair.privateKey as RSAPrivateKey);
+      final certBytes = Uint8List.fromList(utf8.encode(certPem));
+      final keyBytes = Uint8List.fromList(utf8.encode(keyPem));
+
+      config = AggregatorConfig(
+        enabled: config.enabled,
+        port: config.port,
+        discoveryTtl: config.discoveryTtl,
+        certificate: certBytes,
+        privateKey: keyBytes,
+        users: config.users,
+        allowAnonymous: config.allowAnonymous,
+        clientConfig: config.clientConfig,
+      );
+      sharedStateMan.config.aggregator = config;
+
+      if (configFilePath != null) {
+        await sharedStateMan.config.toFile(configFilePath!);
+        _logger.i('Aggregator: persisted generated certificate to $configFilePath');
+      }
+    }
+
     _server = _createServer();
     await _populateFromKeyMappings();
     _addGetOpcUaClientsMethod();
@@ -266,15 +305,13 @@ class AggregatorServer {
     _watchConnections();
   }
 
-  /// Create the OPC UA server with TLS and auth if configured.
+  /// Create the OPC UA server. TLS is always available after initialize().
   Server _createServer() {
     final Map<String, String>? users = config.hasUsers
         ? {for (final u in config.users) u.username: u.password}
         : null;
 
-    if (config.hasTls) {
-      _logger.i('Aggregator: TLS enabled on port ${config.port}');
-    }
+    _logger.i('Aggregator: TLS enabled on port ${config.port}');
     if (config.hasUsers) {
       _logger.i('Aggregator: user auth enabled (${config.users.length} user(s), anonymous=${config.allowAnonymous})');
     }
@@ -286,7 +323,7 @@ class AggregatorServer {
       privateKey: config.privateKey,
       users: users,
       allowAnonymous: config.allowAnonymous,
-      allowNonePolicyPassword: config.hasUsers && !config.hasTls,
+      allowNonePolicyPassword: false,
     );
   }
 
