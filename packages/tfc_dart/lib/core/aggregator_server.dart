@@ -13,19 +13,26 @@ import 'state_man.dart';
 class AggregatorUser {
   final String username;
   final String password;
+  final bool admin;
 
-  AggregatorUser({required this.username, required this.password});
+  AggregatorUser({
+    required this.username,
+    required this.password,
+    this.admin = false,
+  });
 
   factory AggregatorUser.fromJson(Map<String, dynamic> json) {
     return AggregatorUser(
       username: json['username'] as String,
       password: json['password'] as String,
+      admin: json['admin'] as bool? ?? false,
     );
   }
 
   Map<String, dynamic> toJson() => {
         'username': username,
         'password': password,
+        'admin': admin,
       };
 }
 
@@ -214,10 +221,19 @@ class AggregatorServer {
   /// NodeIds for per-alias connected status variables.
   final Map<String, NodeId> _connectedNodeIds = {};
 
+  /// File path for persisting config changes (used by setOpcUaClients).
+  final String? configFilePath;
+
+  /// Callback invoked when setOpcUaClients changes the server list.
+  /// Receives the new list of OpcUAConfig; returns a status string.
+  final Future<String> Function(List<OpcUAConfig> newServers)? onReloadClients;
+
   AggregatorServer({
     required this.config,
     required this.sharedStateMan,
     this.alarmMan,
+    this.configFilePath,
+    this.onReloadClients,
   });
 
   /// For testing: access the underlying server directly.
@@ -233,6 +249,9 @@ class AggregatorServer {
   Future<void> initialize() async {
     _server = _createServer();
     await _populateFromKeyMappings();
+    _addGetOpcUaClientsMethod();
+    _addSetOpcUaClientsMethod();
+    _setupMethodAccessControl();
     _server.start();
     _startTtlCleanup();
     _watchConnections();
@@ -240,26 +259,26 @@ class AggregatorServer {
 
   /// Create the OPC UA server with TLS and auth if configured.
   Server _createServer() {
-    // TODO: Pass certificate, privateKey, users, allowAnonymous to Server
-    // once open62541_dart Server class supports these parameters.
-    // The raw FFI bindings already have UA_ServerConfig_setDefaultWithSecurityPolicies
-    // and UA_AccessControl for user authentication.
-    //
-    // Required open62541_dart Server API additions:
-    //   Server({
-    //     ...,
-    //     Uint8List? certificate,
-    //     Uint8List? privateKey,
-    //     List<(String username, String password)>? users,
-    //     bool allowAnonymous = true,
-    //   })
+    final Map<String, String>? users = config.hasUsers
+        ? {for (final u in config.users) u.username: u.password}
+        : null;
+
     if (config.hasTls) {
-      _logger.i('Aggregator: TLS configured but Server class does not yet support it — falling back to no TLS');
+      _logger.i('Aggregator: TLS enabled on port ${config.port}');
     }
     if (config.hasUsers) {
-      _logger.i('Aggregator: User auth configured but Server class does not yet support it — falling back to anonymous');
+      _logger.i('Aggregator: user auth enabled (${config.users.length} user(s), anonymous=${config.allowAnonymous})');
     }
-    return Server(port: config.port, logLevel: LogLevel.UA_LOGLEVEL_WARNING);
+
+    return Server(
+      port: config.port,
+      logLevel: LogLevel.UA_LOGLEVEL_WARNING,
+      certificate: config.certificate,
+      privateKey: config.privateKey,
+      users: users,
+      allowAnonymous: config.allowAnonymous,
+      allowNonePolicyPassword: config.hasUsers && !config.hasTls,
+    );
   }
 
   /// Start periodic TTL cleanup of discovered nodes.
@@ -451,6 +470,144 @@ class AggregatorServer {
       ],
       parentNodeId: folderId,
     );
+  }
+
+  /// Add getOpcUaClients method node under ObjectsFolder.
+  /// Returns a sanitized JSON list of upstream server configs.
+  void _addGetOpcUaClientsMethod() {
+    final methodId = NodeId.fromString(1, 'getOpcUaClients');
+    _server.addMethodNode(
+      methodId,
+      'getOpcUaClients',
+      callback: (inputs) {
+        final sanitized = sharedStateMan.config.opcua.map((c) => {
+              'endpoint': c.endpoint,
+              'server_alias': c.serverAlias,
+              'has_tls': c.sslCert != null && c.sslKey != null,
+              'has_credentials':
+                  c.username != null && c.username!.isNotEmpty,
+            }).toList();
+        return [
+          DynamicValue(
+            value: jsonEncode(sanitized),
+            typeId: NodeId.uastring,
+          ),
+        ];
+      },
+      outputArguments: [
+        DynamicValue(name: 'servers', typeId: NodeId.uastring),
+      ],
+    );
+  }
+
+  /// Add setOpcUaClients method node under ObjectsFolder.
+  /// Accepts a JSON list of server configs, merges credentials, persists, and reloads.
+  void _addSetOpcUaClientsMethod() {
+    final methodId = NodeId.fromString(1, 'setOpcUaClients');
+    _server.addMethodNode(
+      methodId,
+      'setOpcUaClients',
+      callback: (inputs) {
+        final jsonStr = inputs.first.value as String;
+        final future = _handleSetOpcUaClients(jsonStr);
+        _pendingDiscoveries.add(future);
+        future.whenComplete(() => _pendingDiscoveries.remove(future));
+        return [
+          DynamicValue(value: 'ok', typeId: NodeId.uastring),
+        ];
+      },
+      inputArguments: [
+        DynamicValue(name: 'serversJson', typeId: NodeId.uastring),
+      ],
+      outputArguments: [
+        DynamicValue(name: 'status', typeId: NodeId.uastring),
+      ],
+    );
+  }
+
+  /// Handle the setOpcUaClients method call asynchronously.
+  Future<void> _handleSetOpcUaClients(String jsonStr) async {
+    try {
+      final incoming = (jsonDecode(jsonStr) as List<dynamic>)
+          .cast<Map<String, dynamic>>();
+
+      // Build current config lookup by serverAlias
+      final currentByAlias = <String, OpcUAConfig>{};
+      for (final c in sharedStateMan.config.opcua) {
+        final alias = c.serverAlias ?? c.endpoint;
+        currentByAlias[alias] = c;
+      }
+
+      // Merge credentials: has_credentials/has_tls → keep existing
+      final merged = <OpcUAConfig>[];
+      for (final raw in incoming) {
+        final alias = raw['server_alias'] as String? ?? raw['endpoint'] as String;
+        final existing = currentByAlias[alias];
+        final config = OpcUAConfig()
+          ..endpoint = raw['endpoint'] as String
+          ..serverAlias = raw['server_alias'] as String?;
+
+        // Credential merge
+        if (raw['has_credentials'] == true && existing != null) {
+          config.username = existing.username;
+          config.password = existing.password;
+        } else if (raw.containsKey('username')) {
+          config.username = raw['username'] as String?;
+          config.password = raw['password'] as String?;
+        }
+
+        // TLS merge
+        if (raw['has_tls'] == true && existing != null) {
+          config.sslCert = existing.sslCert;
+          config.sslKey = existing.sslKey;
+        } else if (raw.containsKey('ssl_cert')) {
+          config.sslCert = raw['ssl_cert'] != null
+              ? base64Decode(raw['ssl_cert'] as String)
+              : null;
+          config.sslKey = raw['ssl_key'] != null
+              ? base64Decode(raw['ssl_key'] as String)
+              : null;
+        }
+
+        merged.add(config);
+      }
+
+      // Update in-memory config
+      sharedStateMan.config.opcua = merged;
+
+      // Persist to file
+      if (configFilePath != null) {
+        await sharedStateMan.config.toFile(configFilePath!);
+        _logger.i('Aggregator: persisted config to $configFilePath');
+      }
+
+      // Trigger reload callback
+      if (onReloadClients != null) {
+        final result = await onReloadClients!(merged);
+        _logger.i('Aggregator: reload callback returned: $result');
+      }
+
+      // Create alias folders for any new aliases
+      _createAliasFolders();
+    } catch (e) {
+      _logger.e('Aggregator: setOpcUaClients failed: $e');
+    }
+  }
+
+  /// Configure native OPC UA per-method access control.
+  /// getOpcUaClients: any authenticated user.
+  /// setOpcUaClients: only admin users.
+  void _setupMethodAccessControl() {
+    if (!config.hasUsers) return;
+    final allUsers = config.users.map((u) => u.username).toSet();
+    final adminUsers =
+        config.users.where((u) => u.admin).map((u) => u.username).toSet();
+    final getMethodId = NodeId.fromString(1, 'getOpcUaClients');
+    final setMethodId = NodeId.fromString(1, 'setOpcUaClients');
+    _server.setMethodAccess(getMethodId, allowedUsers: allUsers);
+    _server.setMethodAccess(setMethodId, allowedUsers: adminUsers);
+    _logger.i(
+        'Aggregator: method access control configured (${allUsers.length} user(s), ${adminUsers.length} admin(s))');
   }
 
   /// Find the ClientApi for a given server alias.

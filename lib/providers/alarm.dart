@@ -10,5 +10,12 @@ part 'alarm.g.dart';
 Future<AlarmMan> alarmMan(Ref ref) async {
   final prefs = await ref.watch(preferencesProvider.future);
   final stateMan = await ref.watch(stateManProvider.future);
-  return await AlarmMan.create(prefs, stateMan);
+  final alarmMan = await AlarmMan.create(prefs, stateMan);
+
+  // In aggregation mode, monitor per-alias connection status and inject alarms
+  if (stateMan.aggregationMode) {
+    stateMan.watchAggregatorConnections(alarmMan);
+  }
+
+  return alarmMan;
 }

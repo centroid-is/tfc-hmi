@@ -330,7 +330,7 @@ void main() {
     test('toJson produces correct map', () {
       final user = AggregatorUser(username: 'op', password: 'pass123');
       final json = user.toJson();
-      expect(json, {'username': 'op', 'password': 'pass123'});
+      expect(json, {'username': 'op', 'password': 'pass123', 'admin': false});
     });
 
     test('round-trip preserves values', () {
