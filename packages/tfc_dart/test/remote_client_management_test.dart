@@ -242,8 +242,13 @@ void main() {
         viewerClient!.connect('opc.tcp://localhost:$aggregatorPort'));
     await viewerClient!.awaitConnect();
 
-    // Anonymous client (no credentials, uses SecurityPolicy#None)
-    anonClient = await ClientIsolate.create();
+    // Anonymous client (no credentials, but needs TLS since None is discovery-only)
+    final (anonCert, anonKey) = generateTestCerts();
+    anonClient = await ClientIsolate.create(
+      certificate: anonCert,
+      privateKey: anonKey,
+      securityMode: MessageSecurityMode.UA_MESSAGESECURITYMODE_SIGNANDENCRYPT,
+    );
     unawaited(anonClient!.runIterate().catchError((_) {}));
     unawaited(
         anonClient!.connect('opc.tcp://localhost:$aggregatorPort'));

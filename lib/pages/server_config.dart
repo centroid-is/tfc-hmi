@@ -17,7 +17,8 @@ import 'package:cryptography_flutter/cryptography_flutter.dart' as crypto_fl;
 
 import '../widgets/base_scaffold.dart';
 import '../widgets/preferences.dart';
-import 'package:tfc_dart/core/aggregator_server.dart' show AggregatorConfig;
+import 'package:tfc_dart/core/aggregator_server.dart'
+    show AggregatorConfig, AggregatorNodeId;
 import 'package:tfc_dart/core/state_man.dart';
 import 'package:tfc_dart/core/database.dart';
 import '../providers/state_man.dart';
@@ -663,31 +664,53 @@ class _OpcUAServersSectionState extends ConsumerState<_OpcUAServersSection> {
   Widget _buildServerList(StateManConfig config) {
     final stateManAsync = ref.watch(stateManProvider);
     final StateMan? stateMan = stateManAsync.valueOrNull;
+    final isAggregationMode = stateMan?.aggregationMode ?? false;
 
     return ListView.builder(
       shrinkWrap: true,
       physics: const NeverScrollableScrollPhysics(),
       itemCount: config.opcua.length,
       itemBuilder: (context, index) {
-        ClientWrapper? wrapper;
+        final server = config.opcua[index];
+        ConnectionStatus? connStatus;
+        Stream<(ConnectionStatus, String?)>? connStream;
+        String? lastError;
+
         if (stateMan != null) {
-          final server = config.opcua[index];
-          wrapper = stateMan.clients.cast<ClientWrapper?>().firstWhere(
-                (w) =>
-                    (server.serverAlias != null &&
-                        server.serverAlias!.isNotEmpty &&
-                        w!.config.serverAlias == server.serverAlias) ||
-                    w!.config.endpoint == server.endpoint,
-                orElse: () => null,
-              );
+          if (isAggregationMode) {
+            // In aggregation mode, upstream status comes from polling
+            // <alias>/connected on the aggregator, not from direct clients.
+            final alias = server.serverAlias ?? AggregatorNodeId.defaultAlias;
+            connStatus = stateMan.upstreamConnectionStatus[alias];
+            connStream = stateMan.upstreamConnectionStream.map(
+              (map) => (
+                map[alias] ?? ConnectionStatus.disconnected,
+                null as String?,
+              ),
+            );
+          } else {
+            final wrapper =
+                stateMan.clients.cast<ClientWrapper?>().firstWhere(
+                      (w) =>
+                          (server.serverAlias != null &&
+                              server.serverAlias!.isNotEmpty &&
+                              w!.config.serverAlias == server.serverAlias) ||
+                          w!.config.endpoint == server.endpoint,
+                      orElse: () => null,
+                    );
+            connStatus = wrapper?.connectionStatus;
+            connStream = wrapper?.connectionStream;
+            lastError = wrapper?.lastError;
+          }
         }
+
         return _ServerConfigCard(
-          server: config.opcua[index],
+          server: server,
           onUpdate: (server) => _updateServer(index, server),
           onRemove: () => _removeServer(index),
-          connectionStatus: wrapper?.connectionStatus,
-          connectionStream: wrapper?.connectionStream,
-          lastError: wrapper?.lastError,
+          connectionStatus: connStatus,
+          connectionStream: connStream,
+          lastError: lastError,
           stateManLoading: stateManAsync.isLoading,
         );
       },
