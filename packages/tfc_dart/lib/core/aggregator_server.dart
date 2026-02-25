@@ -298,7 +298,7 @@ class AggregatorServer {
     final now = DateTime.now();
     final expired = <String>[];
     for (final entry in _discoveredNodes.entries) {
-      if (now.difference(entry.value) > (ttlOverride ?? config.discoveryTtl)) {
+      if (now.difference(entry.value) >= (ttlOverride ?? config.discoveryTtl)) {
         expired.add(entry.key);
       }
     }
@@ -500,6 +500,9 @@ class AggregatorServer {
     );
   }
 
+  /// Guards against concurrent setOpcUaClients calls.
+  bool _setOpcUaClientsInProgress = false;
+
   /// Add setOpcUaClients method node under ObjectsFolder.
   /// Accepts a JSON list of server configs, merges credentials, persists, and reloads.
   void _addSetOpcUaClientsMethod() {
@@ -509,11 +512,11 @@ class AggregatorServer {
       'setOpcUaClients',
       callback: (inputs) {
         final jsonStr = inputs.first.value as String;
-        final future = _handleSetOpcUaClients(jsonStr);
-        _pendingDiscoveries.add(future);
-        future.whenComplete(() => _pendingDiscoveries.remove(future));
+
+        // Validate and process synchronously so we can return a real status
+        final result = _handleSetOpcUaClients(jsonStr);
         return [
-          DynamicValue(value: 'ok', typeId: NodeId.uastring),
+          DynamicValue(value: result, typeId: NodeId.uastring),
         ];
       },
       inputArguments: [
@@ -525,12 +528,44 @@ class AggregatorServer {
     );
   }
 
-  /// Handle the setOpcUaClients method call asynchronously.
-  Future<void> _handleSetOpcUaClients(String jsonStr) async {
-    try {
-      final incoming = (jsonDecode(jsonStr) as List<dynamic>)
-          .cast<Map<String, dynamic>>();
+  /// Handle the setOpcUaClients method call synchronously for validation,
+  /// then schedule async persistence/reload.
+  String _handleSetOpcUaClients(String jsonStr) {
+    if (_setOpcUaClientsInProgress) {
+      return 'error: another setOpcUaClients call is in progress';
+    }
 
+    // Validate JSON input
+    final List<dynamic> decoded;
+    try {
+      final parsed = jsonDecode(jsonStr);
+      if (parsed is! List) {
+        return 'error: expected JSON array, got ${parsed.runtimeType}';
+      }
+      decoded = parsed;
+    } catch (e) {
+      return 'error: invalid JSON: $e';
+    }
+
+    // Validate each entry is a map with required fields
+    final incoming = <Map<String, dynamic>>[];
+    for (var i = 0; i < decoded.length; i++) {
+      if (decoded[i] is! Map<String, dynamic>) {
+        return 'error: entry $i is not an object';
+      }
+      final entry = decoded[i] as Map<String, dynamic>;
+      if (entry['endpoint'] is! String || (entry['endpoint'] as String).isEmpty) {
+        return 'error: entry $i missing or empty "endpoint" field';
+      }
+      incoming.add(entry);
+    }
+
+    // Reject empty server list
+    if (incoming.isEmpty) {
+      return 'error: server list cannot be empty';
+    }
+
+    try {
       // Build current config lookup by serverAlias
       final currentByAlias = <String, OpcUAConfig>{};
       for (final c in sharedStateMan.config.opcua) {
@@ -575,22 +610,38 @@ class AggregatorServer {
       // Update in-memory config
       sharedStateMan.config.opcua = merged;
 
-      // Persist to file
+      // Schedule async persistence + reload (guarded against concurrent calls)
+      _setOpcUaClientsInProgress = true;
+      final future = _persistAndReload(merged);
+      _pendingDiscoveries.add(future);
+      future.whenComplete(() {
+        _pendingDiscoveries.remove(future);
+        _setOpcUaClientsInProgress = false;
+      });
+
+      // Create alias folders for any new aliases
+      _createAliasFolders();
+
+      return 'ok: ${merged.length} server(s) configured';
+    } catch (e) {
+      _logger.e('Aggregator: setOpcUaClients failed: $e');
+      return 'error: $e';
+    }
+  }
+
+  /// Persist config to file and trigger reload callback.
+  Future<void> _persistAndReload(List<OpcUAConfig> merged) async {
+    try {
       if (configFilePath != null) {
         await sharedStateMan.config.toFile(configFilePath!);
         _logger.i('Aggregator: persisted config to $configFilePath');
       }
-
-      // Trigger reload callback
       if (onReloadClients != null) {
         final result = await onReloadClients!(merged);
         _logger.i('Aggregator: reload callback returned: $result');
       }
-
-      // Create alias folders for any new aliases
-      _createAliasFolders();
     } catch (e) {
-      _logger.e('Aggregator: setOpcUaClients failed: $e');
+      _logger.e('Aggregator: persist/reload failed: $e');
     }
   }
 
@@ -638,7 +689,10 @@ class AggregatorServer {
     }
 
     try {
-      final results = await client.browse(parentNodeId);
+      final results = await client.browse(parentNodeId).timeout(
+        const Duration(seconds: 10),
+        onTimeout: () => throw TimeoutException('browse timed out for $alias at $parentNodeIdStr'),
+      );
       if (!_running) return;
       final folderId = AggregatorNodeId.folderNodeId(alias);
 
@@ -671,7 +725,10 @@ class AggregatorServer {
             _logger.d(
                 'Aggregator: discovered object "${item.browseName}" from $alias');
           } else if (item.nodeClass == NodeClass.UA_NODECLASS_VARIABLE) {
-            final value = await client.read(upstreamNodeId);
+            final value = await client.read(upstreamNodeId).timeout(
+              const Duration(seconds: 5),
+              onTimeout: () => throw TimeoutException('read timed out for ${item.browseName}'),
+            );
             if (!_running) return;
             value.name = item.browseName;
             _server.addVariableNode(

@@ -127,7 +127,10 @@ class OpcUAConfig {
       const ListEquality<int>().equals(sslKey, other.sslKey);
 
   @override
-  int get hashCode => Object.hash(endpoint, username, password, serverAlias);
+  int get hashCode => Object.hash(
+      endpoint, username, password, serverAlias,
+      sslCert != null ? Object.hashAll(sslCert!) : null,
+      sslKey != null ? Object.hashAll(sslKey!) : null);
 
   @override
   String toString() {
@@ -912,12 +915,12 @@ class StateMan {
             _injectDisconnectAlarm(alarmMan, alias);
           } else {
             alarmMan.removeExternalAlarm('connection-$alias');
-            logger.i('[$this.alias] Aggregator: "$alias" reconnected, alarm removed');
+            logger.i('[${this.alias}] Aggregator: "$alias" reconnected, alarm removed');
           }
         }
       } catch (e) {
         // Read failed — likely aggregator itself is down, don't inject per-alias alarms
-        logger.d('[$this.alias] Failed to read $alias/connected: $e');
+        logger.d('[${this.alias}] Failed to read $alias/connected: $e');
       }
     }
   }
@@ -949,7 +952,7 @@ class StateMan {
         timestamp: DateTime.now(),
       ),
     ));
-    logger.w('[$this.alias] Aggregator: injected disconnect alarm for "$alias"');
+    logger.w('[${this.alias}] Aggregator: injected disconnect alarm for "$alias"');
   }
 
   (NodeId, int?)? _lookupNodeId(String key) {
