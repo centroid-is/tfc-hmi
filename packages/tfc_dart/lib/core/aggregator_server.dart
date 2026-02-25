@@ -449,7 +449,6 @@ class AggregatorServer {
           _invalidateDiscoveredNodes(alias);
           if (wasDisconnected) {
             _removeDisconnectAlarm(alias);
-            _resubscribeUpstream(alias);
           }
         } else if (status == ConnectionStatus.disconnected) {
           wasDisconnected = true;
@@ -490,53 +489,6 @@ class AggregatorServer {
       ),
     ));
     _logger.w('Aggregator: injected disconnect alarm for "$alias"');
-  }
-
-  /// Re-subscribe upstream data streams for [alias] after reconnection.
-  /// Old subscriptions are dead (SecureChannelClosed), so cancel them and
-  /// create fresh ones from StateMan.
-  void _resubscribeUpstream(String alias) {
-    // Find all key-mapping keys belonging to this alias
-    final keysForAlias = <String, String>{}; // nodeKey → stateMan key
-    for (final entry in _nodeToKeyMap.entries) {
-      final nodeKey = entry.key;
-      final key = entry.value;
-      final mapping = sharedStateMan.keyMappings.nodes[key];
-      final keyAlias = mapping?.opcuaNode?.serverAlias ?? AggregatorNodeId.defaultAlias;
-      if (keyAlias == alias) {
-        keysForAlias[nodeKey] = key;
-      }
-    }
-
-    _logger.i('Aggregator: resubscribing ${keysForAlias.length} streams for "$alias"');
-
-    for (final entry in keysForAlias.entries) {
-      final nodeKey = entry.key;
-      final key = entry.value;
-      final aggregatorNodeId =
-          AggregatorNodeId.fromOpcUANodeConfig(sharedStateMan.keyMappings.nodes[key]!.opcuaNode!);
-
-      // Cancel dead subscription
-      _upstreamSubs[nodeKey]?.cancel();
-      _upstreamSubs.remove(nodeKey);
-
-      // Re-subscribe
-      sharedStateMan.subscribe(key).then((stream) {
-        _upstreamSubs[nodeKey] = stream.listen(
-          (value) {
-            _valueCache[nodeKey] = value;
-            _internalWrites.add(nodeKey);
-            _server.write(aggregatorNodeId, value);
-          },
-          onError: (e) {
-            _logger.d('Aggregator: upstream stream error for "$key": $e');
-          },
-        );
-        _logger.d('Aggregator: resubscribed "$key"');
-      }).catchError((e) {
-        _logger.e('Aggregator: failed to resubscribe "$key": $e');
-      });
-    }
   }
 
   /// Remove a disconnect alarm from AlarmMan when reconnected.
