@@ -211,27 +211,38 @@ void main() {
     unawaited(aggregator!.runLoop());
 
     // --- Create 3 clients with different auth levels ---
-    // Admin client
+    // Generate client certificates (needed for encrypted channel since
+    // aggregator uses allowNonePolicyPassword: false)
+    final (clientCert, clientKey) = generateTestCerts();
+
+    // Admin client (TLS required for username/password auth)
     adminClient = await ClientIsolate.create(
       username: 'admin',
       password: 'admin123',
+      certificate: clientCert,
+      privateKey: clientKey,
+      securityMode: MessageSecurityMode.UA_MESSAGESECURITYMODE_SIGNANDENCRYPT,
     );
     unawaited(adminClient!.runIterate().catchError((_) {}));
     unawaited(
         adminClient!.connect('opc.tcp://localhost:$aggregatorPort'));
     await adminClient!.awaitConnect();
 
-    // Viewer client (non-admin authenticated user)
+    // Viewer client (TLS required for username/password auth)
+    final (viewerCert, viewerKey) = generateTestCerts();
     viewerClient = await ClientIsolate.create(
       username: 'viewer',
       password: 'viewer123',
+      certificate: viewerCert,
+      privateKey: viewerKey,
+      securityMode: MessageSecurityMode.UA_MESSAGESECURITYMODE_SIGNANDENCRYPT,
     );
     unawaited(viewerClient!.runIterate().catchError((_) {}));
     unawaited(
         viewerClient!.connect('opc.tcp://localhost:$aggregatorPort'));
     await viewerClient!.awaitConnect();
 
-    // Anonymous client (no credentials)
+    // Anonymous client (no credentials, uses SecurityPolicy#None)
     anonClient = await ClientIsolate.create();
     unawaited(anonClient!.runIterate().catchError((_) {}));
     unawaited(
