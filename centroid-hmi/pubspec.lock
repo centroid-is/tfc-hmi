@@ -823,8 +823,8 @@ packages:
     dependency: "direct main"
     description:
       path: "."
-      ref: main
-      resolved-ref: "53ecb2d7924ea2d3374433112fab9e5293a1aa94"
+      ref: ai-more-server-impl
+      resolved-ref: "994536f2a769771f14dadb4cad711f4e13dfa44d"
       url: "https://github.com/centroid-is/open62541_dart.git"
     source: git
     version: "1.5.0-dev.1"

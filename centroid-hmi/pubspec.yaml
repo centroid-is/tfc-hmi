@@ -40,7 +40,7 @@ dependencies:
     # path: ../../open62541_dart
     git:
       url: https://github.com/centroid-is/open62541_dart.git
-      ref: main
+      ref: ai-more-server-impl
   tfc:
     path: ../
   flutter_riverpod: ^2.6.1
@@ -113,7 +113,7 @@ dependency_overrides:
   open62541:
     git:
       url: https://github.com/centroid-is/open62541_dart.git
-      ref: main
+      ref: ai-more-server-impl
   postgres:
     git:
       url: https://github.com/centroid-is/postgresql-dart.git
