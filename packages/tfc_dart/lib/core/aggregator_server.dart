@@ -892,22 +892,32 @@ class AggregatorServer {
 
       // Subscribe to upstream changes and push to aggregator server
       final stream = await sharedStateMan.subscribe(key);
-      _upstreamSubs[nodeKey] = stream.listen((value) {
-        _valueCache[nodeKey] = value;
-        _internalWrites.add(nodeKey);
-        _server.write(aggregatorNodeId, value);
-      });
+      _upstreamSubs[nodeKey] = stream.listen(
+        (value) {
+          _valueCache[nodeKey] = value;
+          _internalWrites.add(nodeKey);
+          _server.write(aggregatorNodeId, value);
+        },
+        onError: (e) {
+          _logger.d('Aggregator: upstream stream error for "$key": $e');
+        },
+      );
 
       // Monitor for external client writes and forward to upstream PLC.
       // Skip writes that originated from our own upstream subscription.
       _monitorSubs[nodeKey] =
-          _server.monitorVariable(aggregatorNodeId).listen((event) {
-        final (type, value) = event;
-        if (type == 'write' && value != null) {
-          if (_internalWrites.remove(nodeKey)) return;
-          _forwardWrite(aggregatorNodeId, value);
-        }
-      });
+          _server.monitorVariable(aggregatorNodeId).listen(
+        (event) {
+          final (type, value) = event;
+          if (type == 'write' && value != null) {
+            if (_internalWrites.remove(nodeKey)) return;
+            _forwardWrite(aggregatorNodeId, value);
+          }
+        },
+        onError: (e) {
+          _logger.d('Aggregator: monitor error for $aggregatorNodeId: $e');
+        },
+      );
 
       _logger.d('Aggregator: exposed key "$key" as $aggregatorNodeId');
     } catch (e) {
