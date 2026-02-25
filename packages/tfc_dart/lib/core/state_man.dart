@@ -187,7 +187,8 @@ class StateManConfig {
   }
 
   Future<void> toFile(String path) async {
-    await File(path).writeAsString(jsonEncode(toJson()));
+    const encoder = JsonEncoder.withIndent('  ');
+    await File(path).writeAsString(encoder.convert(toJson()));
   }
 
   factory StateManConfig.fromJson(Map<String, dynamic> json) =>

@@ -81,19 +81,19 @@ class AggregatorConfig {
       enabled: json['enabled'] as bool? ?? false,
       port: json['port'] as int? ?? 4840,
       discoveryTtl: Duration(
-        seconds: json['discoveryTtlSeconds'] as int? ?? 1800,
+        seconds: json['discovery_ttl_seconds'] as int? ?? 1800,
       ),
-      certificate: json['certificate'] != null
-          ? base64Decode(json['certificate'] as String)
+      certificate: json['ssl_cert'] != null
+          ? base64Decode(json['ssl_cert'] as String)
           : null,
-      privateKey: json['privateKey'] != null
-          ? base64Decode(json['privateKey'] as String)
+      privateKey: json['ssl_key'] != null
+          ? base64Decode(json['ssl_key'] as String)
           : null,
       users: (json['users'] as List<dynamic>?)
               ?.map((u) => AggregatorUser.fromJson(u as Map<String, dynamic>))
               .toList() ??
           [],
-      allowAnonymous: json['allowAnonymous'] as bool? ?? true,
+      allowAnonymous: json['allow_anonymous'] as bool? ?? true,
       clientConfig: json['client_config'] != null
           ? OpcUAConfig.fromJson(json['client_config'] as Map<String, dynamic>)
           : null,
@@ -103,11 +103,11 @@ class AggregatorConfig {
   Map<String, dynamic> toJson() => {
         'enabled': enabled,
         'port': port,
-        'discoveryTtlSeconds': discoveryTtl.inSeconds,
-        if (certificate != null) 'certificate': base64Encode(certificate!),
-        if (privateKey != null) 'privateKey': base64Encode(privateKey!),
+        'discovery_ttl_seconds': discoveryTtl.inSeconds,
+        if (certificate != null) 'ssl_cert': base64Encode(certificate!),
+        if (privateKey != null) 'ssl_key': base64Encode(privateKey!),
         if (users.isNotEmpty) 'users': users.map((u) => u.toJson()).toList(),
-        'allowAnonymous': allowAnonymous,
+        'allow_anonymous': allowAnonymous,
         if (clientConfig != null) 'client_config': clientConfig!.toJson(),
       };
 }
@@ -205,6 +205,9 @@ class AggregatorServer {
 
   /// Cache of last known values per aggregator node
   final Map<String, DynamicValue> _valueCache = {};
+
+  /// Node keys with pending internal writes (suppress forward to avoid feedback loop)
+  final Set<String> _internalWrites = {};
 
   /// Tracks created folder, variable, and discovered nodes
   final Set<String> _createdFolders = {};
@@ -833,14 +836,17 @@ class AggregatorServer {
       final stream = await sharedStateMan.subscribe(key);
       _upstreamSubs[nodeKey] = stream.listen((value) {
         _valueCache[nodeKey] = value;
+        _internalWrites.add(nodeKey);
         _server.write(aggregatorNodeId, value);
       });
 
-      // Monitor for external client writes and forward to upstream PLC
+      // Monitor for external client writes and forward to upstream PLC.
+      // Skip writes that originated from our own upstream subscription.
       _monitorSubs[nodeKey] =
           _server.monitorVariable(aggregatorNodeId).listen((event) {
         final (type, value) = event;
         if (type == 'write' && value != null) {
+          if (_internalWrites.remove(nodeKey)) return;
           _forwardWrite(aggregatorNodeId, value);
         }
       });
@@ -856,10 +862,12 @@ class AggregatorServer {
     final nodeKey = aggregatorNodeId.toString();
     final key = _nodeToKeyMap[nodeKey];
     if (key != null) {
+      final decoded = AggregatorNodeId.decode(aggregatorNodeId);
+      final alias = decoded?.$1 ?? 'unknown';
       sharedStateMan.write(key, value).then((_) {
-        _logger.d('Aggregator: forwarded write for key "$key"');
+        _logger.d('Aggregator: forwarded write for key "$key" to upstream "$alias"');
       }).catchError((e) {
-        _logger.e('Aggregator: failed to forward write for key "$key": $e');
+        _logger.e('Aggregator: failed to forward write for key "$key" to upstream "$alias": $e');
       });
     } else {
       _logger.w(
@@ -902,6 +910,7 @@ class AggregatorServer {
     _connectionSubs.clear();
     _valueCache.clear();
     _nodeToKeyMap.clear();
+    _internalWrites.clear();
     _createdFolders.clear();
     _createdVariables.clear();
     _discoveredNodes.clear();

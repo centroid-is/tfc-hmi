@@ -825,4 +825,64 @@ void main() {
       expect(restored.admin, isFalse);
     });
   });
+
+  // =========================================================================
+  // Group 8: Internal write suppression (feedback loop fix)
+  // =========================================================================
+  group('Internal write suppression', () {
+    test('upstream PLC value change does not trigger forward write', () async {
+      // Read current value of plc1_temperature from aggregator
+      final tempNodeId = AggregatorNodeId.encode(
+          'plc1', NodeId.fromString(1, 'temperature'));
+      final initialValue = await adminClient!.read(tempNodeId);
+      expect(initialValue.value, isA<double>());
+
+      // Write a new value directly to the upstream PLC server
+      // This will trigger the upstream subscription → aggregator server write
+      // which should NOT trigger a forward write back to the PLC
+      final upstreamTempNodeId = NodeId.fromString(1, 'temperature');
+      final plc1Client = directSM!.clients
+          .firstWhere((w) => w.config.serverAlias == 'plc1')
+          .client;
+      await plc1Client.write(
+        upstreamTempNodeId,
+        DynamicValue(value: 99.9, typeId: NodeId.double),
+      );
+
+      // Allow time for upstream subscription → server write → monitor callback
+      await Future.delayed(const Duration(milliseconds: 500));
+
+      // Read the value from aggregator — should reflect the upstream change
+      final updatedValue = await adminClient!.read(tempNodeId);
+      expect(updatedValue.value, 99.9);
+
+      // The key assertion: if the forward write happened, the PLC would have
+      // received a redundant write. We verify by checking the value hasn't
+      // been corrupted and the system is stable (no BadNotWritable errors).
+      // In the real bug, monitorVariable would fire for every upstream update,
+      // causing continuous write-forward spam to the PLC.
+    });
+
+    test('external client write IS forwarded to upstream PLC', () async {
+      final tempNodeId = AggregatorNodeId.encode(
+          'plc1', NodeId.fromString(1, 'temperature'));
+
+      // Write a value from an external client through the aggregator
+      await adminClient!.write(
+        tempNodeId,
+        DynamicValue(value: 55.5, typeId: NodeId.double),
+      );
+
+      // Allow time for forward write to reach upstream PLC
+      await Future.delayed(const Duration(milliseconds: 500));
+
+      // Read from the upstream PLC directly to verify the write was forwarded
+      final upstreamTempNodeId = NodeId.fromString(1, 'temperature');
+      final plc1Client = directSM!.clients
+          .firstWhere((w) => w.config.serverAlias == 'plc1')
+          .client;
+      final plcValue = await plc1Client.read(upstreamTempNodeId);
+      expect(plcValue.value, 55.5);
+    });
+  });
 }

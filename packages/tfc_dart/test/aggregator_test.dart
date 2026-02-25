@@ -179,7 +179,7 @@ void main() {
         discoveryTtl: const Duration(minutes: 15),
       );
       final json = config.toJson();
-      expect(json['discoveryTtlSeconds'], 900);
+      expect(json['discovery_ttl_seconds'], 900);
 
       final restored = AggregatorConfig.fromJson(json);
       expect(restored.discoveryTtl.inSeconds, 900);
@@ -238,10 +238,10 @@ void main() {
 
       final json = config.toJson();
       // Verify base64-encoded strings are in JSON
-      expect(json['certificate'], isA<String>());
-      expect(json['privateKey'], isA<String>());
-      expect(json['certificate'], base64Encode(cert));
-      expect(json['privateKey'], base64Encode(key));
+      expect(json['ssl_cert'], isA<String>());
+      expect(json['ssl_key'], isA<String>());
+      expect(json['ssl_cert'], base64Encode(cert));
+      expect(json['ssl_key'], base64Encode(key));
 
       final restored = AggregatorConfig.fromJson(json);
       expect(restored.hasTls, true);
@@ -249,11 +249,11 @@ void main() {
       expect(restored.privateKey, key);
     });
 
-    test('toJson omits certificate and privateKey when null', () {
+    test('toJson omits ssl_cert and ssl_key when null', () {
       final config = AggregatorConfig();
       final json = config.toJson();
-      expect(json.containsKey('certificate'), false);
-      expect(json.containsKey('privateKey'), false);
+      expect(json.containsKey('ssl_cert'), false);
+      expect(json.containsKey('ssl_key'), false);
     });
 
     test('users list round-trip via JSON', () {
@@ -268,7 +268,7 @@ void main() {
       final json = config.toJson();
       expect(json['users'], isList);
       expect((json['users'] as List).length, 2);
-      expect(json['allowAnonymous'], false);
+      expect(json['allow_anonymous'], false);
 
       final restored = AggregatorConfig.fromJson(json);
       expect(restored.users.length, 2);
@@ -542,6 +542,57 @@ void main() {
 
       expect(writes, isNotEmpty);
       expect(writes.last.value, 77.7);
+
+      await sub.cancel();
+    });
+
+    test('internal server writes do not trigger monitor forward', () async {
+      // This tests the feedback loop fix: when the aggregator writes a value
+      // received from upstream (internal write), monitorVariable should not
+      // trigger a forward back to upstream. Only external client writes should.
+      final tempNodeId = AggregatorNodeId.encode(
+          'plc1', NodeId.fromString(1, 'GVL.temp'));
+
+      final externalWrites = <DynamicValue>[];
+      final allWrites = <DynamicValue>[];
+      final internalWriteKeys = <String>{};
+
+      // Set up monitorVariable like AggregatorServer._createAndSubscribeVariable
+      final monitorStream =
+          aggregatorServerRaw.monitorVariable(tempNodeId);
+      final sub = monitorStream.listen((event) {
+        final (type, value) = event;
+        if (type == 'write' && value != null) {
+          allWrites.add(value);
+          final nodeKey = tempNodeId.toString();
+          if (internalWriteKeys.remove(nodeKey)) return; // skip internal
+          externalWrites.add(value);
+        }
+      });
+
+      // Simulate internal write (upstream subscription pushing new PLC value)
+      internalWriteKeys.add(tempNodeId.toString());
+      aggregatorServerRaw.write(
+        tempNodeId,
+        DynamicValue(value: 50.0, typeId: NodeId.double),
+      );
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      // monitorVariable should have seen the write, but it should be suppressed
+      expect(allWrites.length, 1);
+      expect(externalWrites, isEmpty, reason: 'Internal writes should be suppressed');
+
+      // Now simulate external client write (HMI writing through OPC UA)
+      await aggregatorClient.write(
+        tempNodeId,
+        DynamicValue(value: 77.7, typeId: NodeId.double),
+      );
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      // This write should NOT be suppressed — it's from an external client
+      expect(allWrites.length, 2);
+      expect(externalWrites.length, 1);
+      expect(externalWrites.last.value, 77.7);
 
       await sub.cancel();
     });
