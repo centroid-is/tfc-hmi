@@ -20,8 +20,8 @@
   "aggregator": {
     "enabled": true,
     "port": 4840,
-    "discoveryTtlSeconds": 1800,
-    "allowAnonymous": false,
+    "discovery_ttl_seconds": 1800,
+    "allow_anonymous": false,
     "users": [
       {
         "username": "hmi",
