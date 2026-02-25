@@ -446,12 +446,13 @@ class AggregatorServer {
         }
 
         if (status == ConnectionStatus.connected) {
-          _invalidateDiscoveredNodes(alias);
           if (wasDisconnected) {
             _removeDisconnectAlarm(alias);
+            _repopulateAlias(alias);
           }
         } else if (status == ConnectionStatus.disconnected) {
           wasDisconnected = true;
+          _teardownAlias(alias);
           _injectDisconnectAlarm(alias);
         }
       });
@@ -498,18 +499,66 @@ class AggregatorServer {
     _logger.i('Aggregator: removed disconnect alarm for "$alias"');
   }
 
-  /// Clear discovered node tracking for a specific alias (e.g. on reconnection).
-  void _invalidateDiscoveredNodes(String alias) {
+  /// Remove all data nodes for [alias] from the address space and cancel
+  /// their subscriptions. Called when the upstream PLC disconnects so that
+  /// HMI widgets see the nodes disappear and go grey.
+  ///
+  /// The alias folder and status nodes (connected / last_error) are kept.
+  void _teardownAlias(String alias) {
     final prefix = '$alias:';
-    final keysToRemove = _discoveredNodes.keys
-        .where((key) => key.contains(prefix))
-        .toList();
-    for (final key in keysToRemove) {
-      _discoveredNodes.remove(key);
+    var deleted = 0;
+
+    // Collect node keys belonging to this alias (mapped + discovered)
+    final nodeKeys = <String>[];
+    for (final key in _createdVariables.toList()) {
+      if (key.startsWith(prefix)) nodeKeys.add(key);
     }
-    if (keysToRemove.isNotEmpty) {
-      _logger.i('Aggregator: reconnection invalidated ${keysToRemove.length} discovered nodes for "$alias"');
+    for (final key in _discoveredNodes.keys.toList()) {
+      if (key.contains(prefix)) nodeKeys.add(key);
     }
+
+    for (final nodeKey in nodeKeys) {
+      // Cancel upstream subscription
+      _upstreamSubs[nodeKey]?.cancel();
+      _upstreamSubs.remove(nodeKey);
+
+      // Cancel monitor subscription
+      _monitorSubs[nodeKey]?.cancel();
+      _monitorSubs.remove(nodeKey);
+
+      // Delete from address space
+      final nodeId = NodeId.fromString(1, nodeKey);
+      try {
+        _server.deleteNode(nodeId);
+        deleted++;
+      } catch (e) {
+        _logger.d('Aggregator: deleteNode failed for "$nodeKey": $e');
+      }
+
+      // Clear tracking
+      _createdVariables.remove(nodeKey);
+      _discoveredNodes.remove(nodeKey);
+      _valueCache.remove(nodeKey);
+      _internalWrites.remove(nodeKey);
+      _nodeToKeyMap.remove(nodeKey);
+    }
+
+    _logger.i('Aggregator: teardown "$alias" — deleted $deleted nodes');
+  }
+
+  /// Re-create data nodes for [alias] after reconnection.
+  Future<void> _repopulateAlias(String alias) async {
+    for (final entry in sharedStateMan.keyMappings.nodes.entries) {
+      final key = entry.key;
+      final mapping = entry.value;
+      if (mapping.opcuaNode == null) continue;
+      final mapAlias =
+          mapping.opcuaNode!.serverAlias ?? AggregatorNodeId.defaultAlias;
+      if (mapAlias != alias) continue;
+
+      await _createAndSubscribeVariable(key, mapping);
+    }
+    _logger.i('Aggregator: repopulated data nodes for "$alias"');
   }
 
   /// Populate address space from all key mappings.

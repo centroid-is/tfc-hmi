@@ -356,7 +356,7 @@ void main() {
     late int aggregatorPort;
     late ClientIsolate aggregatorClient;
 
-    setUp(() async {
+    setUpAll(() async {
       upstreamPort = 10000 + Random().nextInt(50000);
       aggregatorPort = upstreamPort + 1;
 
@@ -427,7 +427,7 @@ void main() {
       await aggregatorClient.awaitConnect();
     });
 
-    tearDown(() async {
+    tearDownAll(() async {
       aggregatorServerRaw.shutdown();
       await aggregatorClient.delete();
       aggregatorServerRaw.delete();
