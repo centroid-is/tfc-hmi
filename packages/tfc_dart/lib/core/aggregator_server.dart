@@ -364,22 +364,49 @@ class AggregatorServer {
     }
   }
 
-  /// Create boolean connected + string last_error variable nodes under an alias folder.
-  void _addConnectedVariable(String alias, NodeId parentFolderId) {
-    final connNodeId = NodeId.fromString(1, '$alias/connected');
+  static const _serversFolder = 'Servers';
+  static const _statusFolder = '$_serversFolder/Status';
+  static const _opcuaStatusFolder = '$_statusFolder/OpcUa';
+
+  /// Create Servers/Status/OpcUa/[alias]/ folder with connected + last_error.
+  void _addServerStatistics(String alias) {
+    // Ensure parent folders exist (only created once)
+    if (!_createdFolders.contains(_serversFolder)) {
+      _server.addObjectNode(
+          NodeId.fromString(1, _serversFolder), 'Servers');
+      _createdFolders.add(_serversFolder);
+    }
+    if (!_createdFolders.contains(_statusFolder)) {
+      _server.addObjectNode(
+          NodeId.fromString(1, _statusFolder), 'Status',
+          parentNodeId: NodeId.fromString(1, _serversFolder));
+      _createdFolders.add(_statusFolder);
+    }
+    if (!_createdFolders.contains(_opcuaStatusFolder)) {
+      _server.addObjectNode(
+          NodeId.fromString(1, _opcuaStatusFolder), 'OpcUa',
+          parentNodeId: NodeId.fromString(1, _statusFolder));
+      _createdFolders.add(_opcuaStatusFolder);
+    }
+
+    final aliasFolder = NodeId.fromString(1, '$_opcuaStatusFolder/$alias');
+    _server.addObjectNode(aliasFolder, alias,
+        parentNodeId: NodeId.fromString(1, _opcuaStatusFolder));
+
+    final connNodeId = NodeId.fromString(1, '$_opcuaStatusFolder/$alias/connected');
     _server.addVariableNode(
       connNodeId,
-      DynamicValue(value: false, typeId: NodeId.boolean, name: '$alias/connected'),
-      parentNodeId: parentFolderId,
+      DynamicValue(value: false, typeId: NodeId.boolean, name: 'connected'),
+      parentNodeId: aliasFolder,
       accessLevel: const AccessLevelMask(read: true),
     );
     _connectedNodeIds[alias] = connNodeId;
 
-    final errorNodeId = NodeId.fromString(1, '$alias/last_error');
+    final errorNodeId = NodeId.fromString(1, '$_opcuaStatusFolder/$alias/last_error');
     _server.addVariableNode(
       errorNodeId,
-      DynamicValue(value: '', typeId: NodeId.uastring, name: '$alias/last_error'),
-      parentNodeId: parentFolderId,
+      DynamicValue(value: '', typeId: NodeId.uastring, name: 'last_error'),
+      parentNodeId: aliasFolder,
       accessLevel: const AccessLevelMask(read: true),
     );
     _lastErrorNodeIds[alias] = errorNodeId;
@@ -513,7 +540,7 @@ class AggregatorServer {
       _server.addObjectNode(folderId, alias);
       _createdFolders.add(alias);
       _addDiscoverMethod(alias);
-      _addConnectedVariable(alias, folderId);
+      _addServerStatistics(alias);
       _logger.d('Aggregator: created folder "$alias"');
     }
   }
