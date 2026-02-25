@@ -948,7 +948,11 @@ class AggregatorServer {
   Future<void> runLoop() async {
     _running = true;
     while (_running) {
-      _server.runIterate(waitInterval: false);
+      try {
+        _server.runIterate(waitInterval: false);
+      } catch (e) {
+        _logger.e('Aggregator: runIterate error: $e');
+      }
       await Future.delayed(const Duration(milliseconds: 10));
     }
   }
