@@ -1131,10 +1131,19 @@ class AutoDisposingStream<T> {
         }
       },
       onDone: () {
-        _logger.w('[$key] raw stream DONE — '
-            'subject will close! listeners=$_listenerCount, '
-            'subjectClosed=${_subject.isClosed}');
-        _subject.close();
+        _logger.w('[$key] raw stream DONE! '
+            'keeping subject open for resub. listeners=$_listenerCount');
+        // Do NOT close the subject. The raw stream ends on transient
+        // events (SecureChannel closed) and session recovery will call
+        // subscribe() again with a fresh raw stream. The subject is only
+        // closed by the idle timer (no listeners) or StateMan.close().
+        //
+        // Push an error so that widgets (StreamBuilder) notice the data
+        // stopped flowing and can show a disconnected / grey state.
+        if (!_subject.isClosed) {
+          _subject.addError(StateError('Stream ended for $key'));
+        }
+        _rawSub = null;
       },
     );
     _lastValue = firstValue;
