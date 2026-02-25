@@ -410,6 +410,21 @@ class StateMan {
   Timer? _connStatusTimer;
   final Map<String, bool> _lastConnStatus = {};
 
+  /// Upstream connection status per alias (aggregation mode only).
+  /// Updated by [_pollAggregatorConnections].
+  final Map<String, ConnectionStatus> _upstreamConnStatus = {};
+  final StreamController<Map<String, ConnectionStatus>>
+      _upstreamConnController =
+      StreamController<Map<String, ConnectionStatus>>.broadcast();
+
+  /// Current upstream connection status per alias (aggregation mode).
+  Map<String, ConnectionStatus> get upstreamConnectionStatus =>
+      Map.unmodifiable(_upstreamConnStatus);
+
+  /// Stream of upstream connection status changes (aggregation mode).
+  Stream<Map<String, ConnectionStatus>> get upstreamConnectionStream =>
+      _upstreamConnController.stream;
+
   /// Constructor requires the server endpoint.
   StateMan._({
     required this.config,
@@ -889,6 +904,8 @@ class StateMan {
     _subsMap$.close();
     _connStatusTimer?.cancel();
     _lastConnStatus.clear();
+    _upstreamConnStatus.clear();
+    _upstreamConnController.close();
   }
 
   /// In aggregation mode, periodically poll `$alias/connected` variables on the
@@ -914,7 +931,10 @@ class StateMan {
 
   Future<void> _pollAggregatorConnections(AlarmMan alarmMan) async {
     if (!_shouldRun || clients.isEmpty) return;
-    final client = clients.first.client;
+    final wrapper = clients.first;
+    if (wrapper.connectionStatus != ConnectionStatus.connected) return;
+    final client = wrapper.client;
+    var changed = false;
 
     for (final opcConfig in config.opcua) {
       final alias = opcConfig.serverAlias ?? AggregatorNodeId.defaultAlias;
@@ -926,6 +946,13 @@ class StateMan {
         );
         final connected = value.value as bool? ?? false;
         final wasConnected = _lastConnStatus[alias] ?? true;
+        final status =
+            connected ? ConnectionStatus.connected : ConnectionStatus.disconnected;
+
+        if (_upstreamConnStatus[alias] != status) {
+          _upstreamConnStatus[alias] = status;
+          changed = true;
+        }
 
         if (connected != wasConnected) {
           _lastConnStatus[alias] = connected;
@@ -937,9 +964,13 @@ class StateMan {
           }
         }
       } catch (e) {
-        // Read failed — likely aggregator itself is down, don't inject per-alias alarms
+        // Read failed — likely aggregator itself is down
         logger.d('[${this.alias}] Failed to read $alias/connected: $e');
       }
+    }
+
+    if (changed) {
+      _upstreamConnController.add(Map.unmodifiable(_upstreamConnStatus));
     }
   }
 
