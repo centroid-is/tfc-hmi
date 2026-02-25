@@ -70,7 +70,7 @@ void main() {
     late ClientIsolate client;
     late int port;
 
-    setUp(() async {
+    setUpAll(() async {
       port = 10000 + Random().nextInt(50000);
       server = Server(port: port, logLevel: LogLevel.UA_LOGLEVEL_ERROR);
       server.start();
@@ -86,7 +86,7 @@ void main() {
       await client.awaitConnect();
     });
 
-    tearDown(() async {
+    tearDownAll(() async {
       server.shutdown();
       await client.delete();
       server.delete();
@@ -301,7 +301,7 @@ void main() {
     late ClientIsolate aggClient;
     var upstreamRunning = true;
 
-    setUp(() async {
+    setUpAll(() async {
       final base = 10000 + Random().nextInt(40000);
       upstreamPort = base;
       aggregatorPort = base + 1;
@@ -366,7 +366,7 @@ void main() {
       await aggClient.awaitConnect();
     });
 
-    tearDown(() async {
+    tearDownAll(() async {
       await aggregator.shutdown();
       await aggClient.delete();
       await directSM.close();
