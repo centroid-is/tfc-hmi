@@ -1,11 +1,10 @@
-import 'dart:async';
-
 import 'package:riverpod/riverpod.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import 'package:tfc_dart/core/alarm.dart';
 import 'package:tfc_dart/core/boolean_expression.dart';
-import 'package:tfc_dart/core/state_man.dart' show StateMan, ConnectionStatus;
+import 'package:tfc_dart/core/aggregator_server.dart' show AggregatorNodeId;
+import 'package:tfc_dart/core/state_man.dart' show StateMan;
 import 'preferences.dart';
 import 'state_man.dart';
 part 'alarm.g.dart';
@@ -16,67 +15,40 @@ Future<AlarmMan> alarmMan(Ref ref) async {
   final stateMan = await ref.watch(stateManProvider.future);
   final alarmMan = await AlarmMan.create(prefs, stateMan);
 
-  // In aggregation mode, react to upstream connection status changes.
+  // In aggregation mode, register expression-based connection alarms
+  // that subscribe to the __agg_<alias>_connected keymapped nodes.
   if (stateMan.aggregationMode) {
-    _watchUpstreamConnections(stateMan, alarmMan, ref);
+    _ensureConnectionAlarms(stateMan, alarmMan);
   }
 
   return alarmMan;
 }
 
-/// Subscribe to [StateMan.upstreamConnectionStream] and inject/remove
-/// disconnect alarms when upstream PLCs connect or disconnect.
-void _watchUpstreamConnections(
-  StateMan stateMan,
-  AlarmMan alarmMan,
-  Ref ref,
-) {
-  StreamSubscription<Map<String, (ConnectionStatus, String?)>>? sub;
-  sub = stateMan.upstreamConnectionStream.listen((statusMap) {
-    for (final entry in statusMap.entries) {
-      final alias = entry.key;
-      final (status, error) = entry.value;
-      final uid = 'connection-$alias';
+/// Register connection alarms for each upstream server alias.
+/// Uses `__agg_<alias>_connected == false` expressions evaluated by the
+/// standard alarm subscription pipeline (no polling needed).
+void _ensureConnectionAlarms(StateMan stateMan, AlarmMan alarmMan) {
+  for (final opcConfig in stateMan.config.opcua) {
+    final alias = opcConfig.serverAlias ?? AggregatorNodeId.defaultAlias;
+    final uid = 'connection-$alias';
+    final key = '__agg_${alias}_connected';
 
-      if (status == ConnectionStatus.disconnected) {
-        _injectDisconnectAlarm(alarmMan, alias, uid, error);
-      } else {
-        alarmMan.removeExternalAlarm(uid);
-      }
-    }
-  });
+    // Skip if already registered
+    if (alarmMan.alarms.any((a) => a.config.uid == uid)) continue;
 
-  ref.onDispose(() => sub?.cancel());
-}
-
-void _injectDisconnectAlarm(AlarmMan alarmMan, String alias, String uid, String? error) {
-  final rule = AlarmRule(
-    level: AlarmLevel.error,
-    expression: ExpressionConfig(
-      value: Expression(formula: 'disconnected'),
-    ),
-    acknowledgeRequired: false,
-  );
-
-  final description = error != null
-      ? 'OPC UA Server: "$alias" is disconnected: $error'
-      : 'OPC UA Server: "$alias" is disconnected';
-
-  final alarmConfig = AlarmConfig(
-    uid: uid,
-    title: '$alias disconnected',
-    description: description,
-    rules: [rule],
-  );
-
-  alarmMan.addExternalAlarm(AlarmActive(
-    alarm: Alarm(config: alarmConfig),
-    notification: AlarmNotification(
+    alarmMan.addAlarm(AlarmConfig(
       uid: uid,
-      active: true,
-      expression: 'disconnected',
-      rule: rule,
-      timestamp: DateTime.now(),
-    ),
-  ));
+      title: '$alias disconnected',
+      description: 'OPC UA Server: "$alias" is disconnected',
+      rules: [
+        AlarmRule(
+          level: AlarmLevel.error,
+          expression: ExpressionConfig(
+            value: Expression(formula: '$key == false'),
+          ),
+          acknowledgeRequired: false,
+        ),
+      ],
+    ));
+  }
 }

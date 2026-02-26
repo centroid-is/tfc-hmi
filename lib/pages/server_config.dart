@@ -609,6 +609,39 @@ class _OpcUAServersSectionState extends ConsumerState<_OpcUAServersSection> {
     }
   }
 
+  /// Subscribe to keymapped `connected` and `last_error` nodes for an upstream
+  /// server and return a combined stream of (ConnectionStatus, String?).
+  Stream<(ConnectionStatus, String?)> _subscribeUpstreamStatus(
+      StateMan stateMan, String connKey, String errorKey) {
+    final controller = StreamController<(ConnectionStatus, String?)>.broadcast();
+    ConnectionStatus status = ConnectionStatus.disconnected;
+    String? lastError;
+
+    stateMan.subscribe(connKey).then((stream) {
+      stream.listen((value) {
+        final connected = value.value as bool? ?? false;
+        status = connected
+            ? ConnectionStatus.connected
+            : ConnectionStatus.disconnected;
+        controller.add((status, lastError));
+      });
+    }).catchError((e) {
+      debugPrint('Failed to subscribe to $connKey: $e');
+    });
+
+    stateMan.subscribe(errorKey).then((stream) {
+      stream.listen((value) {
+        final errStr = value.value as String?;
+        lastError = (errStr != null && errStr.isNotEmpty) ? errStr : null;
+        controller.add((status, lastError));
+      });
+    }).catchError((e) {
+      debugPrint('Failed to subscribe to $errorKey: $e');
+    });
+
+    return controller.stream;
+  }
+
   /// Fetch upstream server list from the aggregator via getOpcUaClients method.
   Future<void> _fetchUpstreamServers() async {
     setState(() {
@@ -903,33 +936,20 @@ class _OpcUAServersSectionState extends ConsumerState<_OpcUAServersSection> {
         itemCount: _remoteServers!.length,
         itemBuilder: (context, index) {
           final remote = _remoteServers![index];
-          ConnectionStatus? connStatus;
           Stream<(ConnectionStatus, String?)>? connStream;
-          String? lastError;
 
           if (stateMan != null) {
             final alias = remote.config.serverAlias ?? AggregatorNodeId.defaultAlias;
-            final upstreamEntry = stateMan.upstreamConnectionStatus[alias];
-            connStatus = upstreamEntry?.$1;
-            lastError = upstreamEntry?.$2;
-            connStream = stateMan.upstreamConnectionStream.map(
-              (map) {
-                final entry = map[alias];
-                return (
-                  entry?.$1 ?? ConnectionStatus.disconnected,
-                  entry?.$2,
-                );
-              },
-            );
+            final connKey = '__agg_${alias}_connected';
+            final errorKey = '__agg_${alias}_last_error';
+            connStream = _subscribeUpstreamStatus(stateMan, connKey, errorKey);
           }
 
           return _ServerConfigCard(
             server: remote.config,
             onUpdate: (server) => _updateServer(index, server),
             onRemove: () => _removeServer(index),
-            connectionStatus: connStatus,
             connectionStream: connStream,
-            lastError: lastError,
             stateManLoading: stateManAsync.isLoading,
             hasExistingCredentials: remote.hasCredentials,
             hasExistingTls: remote.hasTls,
