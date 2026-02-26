@@ -560,7 +560,9 @@ class AggregatorServer {
     final errorNodeId = _lastErrorNodeIds[alias];
     if (errorNodeId != null) {
       _server.write(errorNodeId,
-          DynamicValue(value: errStr, typeId: NodeId.uastring));
+          DynamicValue(
+              value: 'PLC license expired (BadLicenseExpired)',
+              typeId: NodeId.uastring));
     }
     _injectDisconnectAlarm(alias);
   }
