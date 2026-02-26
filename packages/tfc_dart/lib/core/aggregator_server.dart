@@ -208,8 +208,9 @@ class AggregatorServer {
   /// Cache of last known values per aggregator node
   final Map<String, DynamicValue> _valueCache = {};
 
-  /// Node keys with pending internal writes (suppress forward to avoid feedback loop)
-  final Set<String> _internalWrites = {};
+  /// Pending internal write count per node key (suppress forward to avoid feedback loop).
+  /// A counter instead of a Set so rapid upstream bursts don't lose track.
+  final Map<String, int> _internalWrites = {};
 
   /// Tracks created folder, variable, and discovered nodes
   final Set<String> _createdFolders = {};
@@ -269,8 +270,8 @@ class AggregatorServer {
   /// Initialize the OPC UA server and populate address space from key mappings.
   /// Auto-generates a TLS certificate if none is configured, and persists it
   /// to the config file so it survives restarts.
-  Future<void> initialize() async {
-    if (!config.hasTls) {
+  Future<void> initialize({bool skipTls = false}) async {
+    if (!config.hasTls && !skipTls) {
       _logger.i('Aggregator: no TLS certificate configured, generating self-signed (30 year validity)');
       final keyPair = CryptoUtils.generateRSAKeyPair(keySize: 2048);
       final csr = X509Utils.generateRsaCsrPem(
@@ -330,7 +331,11 @@ class AggregatorServer {
         ? {for (final u in config.users) u.username: u.password}
         : null;
 
-    _logger.i('Aggregator: TLS enabled on port ${config.port}');
+    if (config.hasTls) {
+      _logger.i('Aggregator: TLS enabled on port ${config.port}');
+    } else {
+      _logger.i('Aggregator: no TLS on port ${config.port}');
+    }
     if (config.hasUsers) {
       _logger.i('Aggregator: user auth enabled (${config.users.length} user(s), anonymous=${config.allowAnonymous})');
     }
@@ -343,7 +348,7 @@ class AggregatorServer {
       users: users,
       allowAnonymous: config.allowAnonymous,
       allowNonePolicyPassword: false,
-      securityPolicyNoneDiscoveryOnly: true,
+      securityPolicyNoneDiscoveryOnly: config.hasTls,
       maxSessionTimeout: 30000, // 30s — clean up stale/failed sessions quickly
     );
   }
@@ -463,7 +468,9 @@ class AggregatorServer {
         if (status == ConnectionStatus.connected) {
           if (wasDisconnected) {
             _removeDisconnectAlarm(alias);
-            _repopulateAlias(alias);
+            _repopulateAlias(alias).catchError((e) {
+              _logger.e('Aggregator: repopulate "$alias" failed: $e');
+            });
           }
         } else if (status == ConnectionStatus.disconnected) {
           wasDisconnected = true;
@@ -612,10 +619,14 @@ class AggregatorServer {
     _ensureVariablesFolderHierarchy();
 
     for (final alias in aliases) {
+      final folderKey = '$_opcuaVariablesFolder/$alias';
+      final isNew = !_createdFolders.contains(folderKey);
       _ensureAliasVariablesFolder(alias);
-      _addDiscoverMethod(alias);
-      _addServerStatistics(alias);
-      _logger.d('Aggregator: created folder "$alias"');
+      if (isNew) {
+        _addDiscoverMethod(alias);
+        _addServerStatistics(alias);
+        _logger.d('Aggregator: created folder "$alias"');
+      }
     }
   }
 
@@ -801,10 +812,9 @@ class AggregatorServer {
         merged.add(config);
       }
 
-      // Update in-memory config
-      sharedStateMan.config.opcua = merged;
-
-      // Schedule async persistence + reload (guarded against concurrent calls)
+      // Schedule async persistence + reload (guarded against concurrent calls).
+      // Config is updated AFTER the reload callback so the callback can
+      // compare old vs new to decide which servers need restarting.
       _setOpcUaClientsInProgress = true;
       final future = _persistAndReload(merged);
       _pendingDiscoveries.add(future);
@@ -823,7 +833,8 @@ class AggregatorServer {
     }
   }
 
-  /// Persist config to file and trigger reload callback.
+  /// Persist config to file, trigger reload callback, then update in-memory config.
+  /// The config is updated LAST so the reload callback can compare old vs new.
   Future<void> _persistAndReload(List<OpcUAConfig> merged) async {
     try {
       if (configFilePath != null) {
@@ -837,6 +848,8 @@ class AggregatorServer {
     } catch (e) {
       _logger.e('Aggregator: persist/reload failed: $e');
     }
+    // Update in-memory config after reload callback has compared old vs new.
+    sharedStateMan.config.opcua = merged;
   }
 
   /// Configure native OPC UA per-method access control.
@@ -992,7 +1005,7 @@ class AggregatorServer {
       _upstreamSubs[nodeKey] = stream.listen(
         (value) {
           _valueCache[nodeKey] = value;
-          _internalWrites.add(nodeKey);
+          _internalWrites[nodeKey] = (_internalWrites[nodeKey] ?? 0) + 1;
           _server.write(aggregatorNodeId, value);
         },
         onError: (e) {
@@ -1007,7 +1020,11 @@ class AggregatorServer {
         (event) {
           final (type, value) = event;
           if (type == 'write' && value != null) {
-            if (_internalWrites.remove(nodeKey)) return;
+            final count = _internalWrites[nodeKey] ?? 0;
+            if (count > 0) {
+              _internalWrites[nodeKey] = count - 1;
+              return;
+            }
             _forwardWrite(aggregatorNodeId, value);
           }
         },
@@ -1059,9 +1076,11 @@ class AggregatorServer {
     _running = false;
     _ttlCleanupTimer?.cancel();
 
-    // Wait for any in-flight discoveries to finish (they check _running)
+    // Wait for any in-flight discoveries to finish (they check _running).
+    // Copy to list first — futures self-remove via whenComplete.
     if (_pendingDiscoveries.isNotEmpty) {
-      await Future.wait(_pendingDiscoveries).catchError((_) => <void>[]);
+      await Future.wait(_pendingDiscoveries.toList())
+          .catchError((_) => <void>[]);
     }
 
     // Cancel all subscriptions

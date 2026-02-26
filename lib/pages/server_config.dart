@@ -17,6 +17,7 @@ import 'package:cryptography_flutter/cryptography_flutter.dart' as crypto_fl;
 
 import '../widgets/base_scaffold.dart';
 import '../widgets/preferences.dart';
+import 'package:open62541/open62541.dart' show NodeId, DynamicValue;
 import 'package:tfc_dart/core/aggregator_server.dart'
     show AggregatorConfig, AggregatorNodeId;
 import 'package:tfc_dart/core/state_man.dart';
@@ -533,6 +534,22 @@ class RefreshKey extends _$RefreshKey {
   void increment() => state++;
 }
 
+/// Wraps an OpcUAConfig with has_credentials/has_tls flags from the aggregator.
+/// Used in aggregation mode where upstream servers are fetched via getOpcUaClients.
+class RemoteServerInfo {
+  OpcUAConfig config;
+  final bool hasCredentials;
+  final bool hasTls;
+  bool credentialsEdited = false;
+  bool tlsEdited = false;
+
+  RemoteServerInfo({
+    required this.config,
+    this.hasCredentials = false,
+    this.hasTls = false,
+  });
+}
+
 class _OpcUAServersSection extends ConsumerStatefulWidget {
   const _OpcUAServersSection({super.key});
   @override
@@ -545,6 +562,22 @@ class _OpcUAServersSectionState extends ConsumerState<_OpcUAServersSection> {
   StateManConfig? _savedConfig;
   bool _isLoading = false;
   String? _error;
+
+  // Aggregation mode: upstream servers fetched from aggregator via OPC UA
+  List<RemoteServerInfo>? _remoteServers;
+  List<RemoteServerInfo>? _savedRemoteServers;
+  bool _remoteLoading = false;
+  String? _remoteError;
+
+  bool get _isAggregationMode =>
+      _config?.aggregator?.enabled == true;
+
+  bool get _serverListIsEmpty {
+    if (_isAggregationMode) {
+      return _remoteServers == null || _remoteServers!.isEmpty;
+    }
+    return _config?.opcua.isEmpty ?? true;
+  }
 
   @override
   void initState() {
@@ -569,22 +602,117 @@ class _OpcUAServersSectionState extends ConsumerState<_OpcUAServersSection> {
         setState(() => _isLoading = false);
       }
     }
+
+    // In aggregation mode, also fetch upstream servers from the aggregator
+    if (_isAggregationMode) {
+      await _fetchUpstreamServers();
+    }
+  }
+
+  /// Fetch upstream server list from the aggregator via getOpcUaClients method.
+  Future<void> _fetchUpstreamServers() async {
+    setState(() {
+      _remoteLoading = true;
+      _remoteError = null;
+    });
+
+    try {
+      final stateMan = await ref.read(stateManProvider.future);
+      if (!stateMan.aggregationMode || stateMan.clients.isEmpty) {
+        setState(() {
+          _remoteServers = [];
+          _savedRemoteServers = [];
+          _remoteLoading = false;
+        });
+        return;
+      }
+
+      final client = stateMan.clients.first.client;
+      final result = await client.call(
+        NodeId.objectsFolder,
+        NodeId.fromString(1, 'getOpcUaClients'),
+        [],
+      );
+
+      final jsonStr = result.first.value as String;
+      final List<dynamic> decoded = jsonDecode(jsonStr) as List<dynamic>;
+
+      final servers = decoded.map((entry) {
+        final map = entry as Map<String, dynamic>;
+        return RemoteServerInfo(
+          config: OpcUAConfig()
+            ..endpoint = map['endpoint'] as String? ?? ''
+            ..serverAlias = map['server_alias'] as String?,
+          hasCredentials: map['has_credentials'] as bool? ?? false,
+          hasTls: map['has_tls'] as bool? ?? false,
+        );
+      }).toList();
+
+      if (mounted) {
+        setState(() {
+          _remoteServers = servers;
+          _savedRemoteServers = servers.map((s) => RemoteServerInfo(
+            config: OpcUAConfig()
+              ..endpoint = s.config.endpoint
+              ..serverAlias = s.config.serverAlias,
+            hasCredentials: s.hasCredentials,
+            hasTls: s.hasTls,
+          )).toList();
+          _remoteLoading = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _remoteError = e.toString();
+          _remoteLoading = false;
+        });
+      }
+    }
   }
 
   bool get _hasUnsavedChanges {
     if (_config == null || _savedConfig == null) return false;
     final currentJson = jsonEncode(_config!.toJson());
     final savedJson = jsonEncode(_savedConfig!.toJson());
-    return currentJson != savedJson;
+    final localChanged = currentJson != savedJson;
+
+    if (_isAggregationMode) {
+      return localChanged || _hasRemoteChanges;
+    }
+    return localChanged;
+  }
+
+  bool get _hasRemoteChanges {
+    if (_remoteServers == null || _savedRemoteServers == null) return false;
+    if (_remoteServers!.length != _savedRemoteServers!.length) return true;
+    for (var i = 0; i < _remoteServers!.length; i++) {
+      final cur = _remoteServers![i];
+      final saved = _savedRemoteServers![i];
+      if (cur.config.endpoint != saved.config.endpoint ||
+          cur.config.serverAlias != saved.config.serverAlias ||
+          cur.credentialsEdited ||
+          cur.tlsEdited) {
+        return true;
+      }
+    }
+    return false;
   }
 
   Future<void> _saveConfig() async {
     if (_config == null) return;
 
     try {
+      // Always save local config (aggregator endpoint, toggle, etc.)
       _config!.toPrefs(await ref.read(preferencesProvider.future));
       _savedConfig = await StateManConfig.fromPrefs(
           await ref.read(preferencesProvider.future));
+
+      // In aggregation mode, also push upstream servers to aggregator
+      if (_isAggregationMode && _remoteServers != null) {
+        await _saveUpstreamServers();
+      }
+
       ref.invalidate(stateManProvider);
       setState(() {});
 
@@ -607,15 +735,86 @@ class _OpcUAServersSectionState extends ConsumerState<_OpcUAServersSection> {
     }
   }
 
+  /// Push upstream server list to aggregator via setOpcUaClients method.
+  Future<void> _saveUpstreamServers() async {
+    final stateMan = await ref.read(stateManProvider.future);
+    if (!stateMan.aggregationMode || stateMan.clients.isEmpty) return;
+
+    final payload = _remoteServers!.map((s) {
+      final map = <String, dynamic>{
+        'endpoint': s.config.endpoint,
+        'server_alias': s.config.serverAlias,
+      };
+      // Credential handling: if not edited, send flag to preserve existing
+      if (!s.credentialsEdited && s.hasCredentials) {
+        map['has_credentials'] = true;
+      } else if (s.config.username != null && s.config.username!.isNotEmpty) {
+        map['username'] = s.config.username;
+        map['password'] = s.config.password;
+      }
+      // TLS handling: if not edited, send flag to preserve existing
+      if (!s.tlsEdited && s.hasTls) {
+        map['has_tls'] = true;
+      } else if (s.config.sslCert != null) {
+        map['ssl_cert'] = base64Encode(s.config.sslCert!);
+        map['ssl_key'] = s.config.sslKey != null
+            ? base64Encode(s.config.sslKey!)
+            : null;
+      }
+      return map;
+    }).toList();
+
+    final client = stateMan.clients.first.client;
+    final result = await client.call(
+      NodeId.objectsFolder,
+      NodeId.fromString(1, 'setOpcUaClients'),
+      [
+        DynamicValue(
+          value: jsonEncode(payload),
+          typeId: NodeId.uastring,
+        ),
+      ],
+    );
+
+    final status = result.first.value as String;
+    if (!status.startsWith('ok')) {
+      throw Exception('setOpcUaClients failed: $status');
+    }
+
+    // Re-fetch to update flags (has_credentials/has_tls reflect new state)
+    await _fetchUpstreamServers();
+  }
+
   Future<void> _addServer() async {
+    if (_isAggregationMode) {
+      setState(() {
+        _remoteServers ??= [];
+        _remoteServers!.add(RemoteServerInfo(config: OpcUAConfig()));
+      });
+      return;
+    }
     setState(() => _config?.opcua.add(OpcUAConfig()));
   }
 
   Future<void> _updateServer(int index, OpcUAConfig server) async {
+    if (_isAggregationMode && _remoteServers != null) {
+      setState(() => _remoteServers![index].config = server);
+      return;
+    }
     setState(() => _config!.opcua[index] = server);
   }
 
+  void _updateRemoteEditState(int index, {required bool credentialsEdited, required bool tlsEdited}) {
+    if (_remoteServers == null || index >= _remoteServers!.length) return;
+    _remoteServers![index].credentialsEdited = credentialsEdited;
+    _remoteServers![index].tlsEdited = tlsEdited;
+  }
+
   Future<void> _removeServer(int index) async {
+    if (_isAggregationMode && _remoteServers != null) {
+      setState(() => _remoteServers!.removeAt(index));
+      return;
+    }
     setState(() => _config!.opcua.removeAt(index));
   }
 
@@ -624,6 +823,7 @@ class _OpcUAServersSectionState extends ConsumerState<_OpcUAServersSection> {
     bool? enabled,
     OpcUAConfig? clientConfig,
   }) {
+    final wasEnabled = current.enabled;
     setState(() {
       _config?.aggregator = AggregatorConfig(
         enabled: enabled ?? current.enabled,
@@ -636,6 +836,16 @@ class _OpcUAServersSectionState extends ConsumerState<_OpcUAServersSection> {
         clientConfig: clientConfig ?? current.clientConfig,
       );
     });
+    // When toggling aggregation ON, fetch upstream servers
+    if (enabled == true && !wasEnabled) {
+      _fetchUpstreamServers();
+    }
+    // When toggling OFF, clear remote state
+    if (enabled == false && wasEnabled) {
+      _remoteServers = null;
+      _savedRemoteServers = null;
+      _remoteError = null;
+    }
   }
 
   /// Build the aggregator endpoint card using the standard _ServerConfigCard.
@@ -666,21 +876,39 @@ class _OpcUAServersSectionState extends ConsumerState<_OpcUAServersSection> {
     final StateMan? stateMan = stateManAsync.valueOrNull;
     final isAggregationMode = stateMan?.aggregationMode ?? false;
 
-    return ListView.builder(
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      itemCount: config.opcua.length,
-      itemBuilder: (context, index) {
-        final server = config.opcua[index];
-        ConnectionStatus? connStatus;
-        Stream<(ConnectionStatus, String?)>? connStream;
-        String? lastError;
+    // In aggregation mode, use remote servers fetched via getOpcUaClients
+    if (isAggregationMode && _remoteServers != null) {
+      if (_remoteLoading) {
+        return const Center(child: CircularProgressIndicator());
+      }
+      if (_remoteError != null) {
+        return Center(
+          child: Column(
+            children: [
+              Text('Error fetching upstream servers: $_remoteError',
+                  style: TextStyle(color: Theme.of(context).colorScheme.error)),
+              const SizedBox(height: 8),
+              ElevatedButton(
+                onPressed: _fetchUpstreamServers,
+                child: const Text('Retry'),
+              ),
+            ],
+          ),
+        );
+      }
 
-        if (stateMan != null) {
-          if (isAggregationMode) {
-            // In aggregation mode, upstream status comes from polling
-            // <alias>/connected on the aggregator, not from direct clients.
-            final alias = server.serverAlias ?? AggregatorNodeId.defaultAlias;
+      return ListView.builder(
+        shrinkWrap: true,
+        physics: const NeverScrollableScrollPhysics(),
+        itemCount: _remoteServers!.length,
+        itemBuilder: (context, index) {
+          final remote = _remoteServers![index];
+          ConnectionStatus? connStatus;
+          Stream<(ConnectionStatus, String?)>? connStream;
+          String? lastError;
+
+          if (stateMan != null) {
+            final alias = remote.config.serverAlias ?? AggregatorNodeId.defaultAlias;
             final upstreamEntry = stateMan.upstreamConnectionStatus[alias];
             connStatus = upstreamEntry?.$1;
             lastError = upstreamEntry?.$2;
@@ -693,20 +921,49 @@ class _OpcUAServersSectionState extends ConsumerState<_OpcUAServersSection> {
                 );
               },
             );
-          } else {
-            final wrapper =
-                stateMan.clients.cast<ClientWrapper?>().firstWhere(
-                      (w) =>
-                          (server.serverAlias != null &&
-                              server.serverAlias!.isNotEmpty &&
-                              w!.config.serverAlias == server.serverAlias) ||
-                          w!.config.endpoint == server.endpoint,
-                      orElse: () => null,
-                    );
-            connStatus = wrapper?.connectionStatus;
-            connStream = wrapper?.connectionStream;
-            lastError = wrapper?.lastError;
           }
+
+          return _ServerConfigCard(
+            server: remote.config,
+            onUpdate: (server) => _updateServer(index, server),
+            onRemove: () => _removeServer(index),
+            connectionStatus: connStatus,
+            connectionStream: connStream,
+            lastError: lastError,
+            stateManLoading: stateManAsync.isLoading,
+            hasExistingCredentials: remote.hasCredentials,
+            hasExistingTls: remote.hasTls,
+            onEditState: ({credentialsEdited = false, tlsEdited = false}) =>
+                _updateRemoteEditState(index, credentialsEdited: credentialsEdited, tlsEdited: tlsEdited),
+          );
+        },
+      );
+    }
+
+    // Direct mode: use config.opcua from local prefs
+    return ListView.builder(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      itemCount: config.opcua.length,
+      itemBuilder: (context, index) {
+        final server = config.opcua[index];
+        ConnectionStatus? connStatus;
+        Stream<(ConnectionStatus, String?)>? connStream;
+        String? lastError;
+
+        if (stateMan != null) {
+          final wrapper =
+              stateMan.clients.cast<ClientWrapper?>().firstWhere(
+                    (w) =>
+                        (server.serverAlias != null &&
+                            server.serverAlias!.isNotEmpty &&
+                            w!.config.serverAlias == server.serverAlias) ||
+                        w!.config.endpoint == server.endpoint,
+                    orElse: () => null,
+                  );
+          connStatus = wrapper?.connectionStatus;
+          connStream = wrapper?.connectionStream;
+          lastError = wrapper?.lastError;
         }
 
         return _ServerConfigCard(
@@ -872,7 +1129,7 @@ class _OpcUAServersSectionState extends ConsumerState<_OpcUAServersSection> {
             ),
             const SizedBox(height: 16),
             // Server list
-            config.opcua.isEmpty
+            _serverListIsEmpty
                 ? const SizedBox(
                     height: 200,
                     child: _EmptyServersWidget(),
@@ -881,7 +1138,7 @@ class _OpcUAServersSectionState extends ConsumerState<_OpcUAServersSection> {
             const SizedBox(height: 16),
             Row(
               children: [
-                if (config.opcua.isNotEmpty || _hasUnsavedChanges)
+                if (!_serverListIsEmpty || _hasUnsavedChanges)
                   Expanded(
                     child: ElevatedButton.icon(
                       onPressed: _hasUnsavedChanges ? _saveConfig : null,
@@ -940,6 +1197,17 @@ class _ServerConfigCard extends StatefulWidget {
   final bool stateManLoading;
   final bool showAlias;
 
+  /// When true, existing credentials are configured on the remote server.
+  /// Shows a "Credentials configured" indicator; user can type new values to replace.
+  final bool hasExistingCredentials;
+
+  /// When true, existing TLS certs are configured on the remote server.
+  /// Shows a "TLS configured" indicator; user can pick new files to replace.
+  final bool hasExistingTls;
+
+  /// Called when the user edits credentials or TLS, reporting edit state.
+  final void Function({bool credentialsEdited, bool tlsEdited})? onEditState;
+
   const _ServerConfigCard({
     required this.server,
     required this.onUpdate,
@@ -949,6 +1217,9 @@ class _ServerConfigCard extends StatefulWidget {
     this.lastError,
     this.stateManLoading = false,
     this.showAlias = true,
+    this.hasExistingCredentials = false,
+    this.hasExistingTls = false,
+    this.onEditState,
   });
 
   @override
@@ -963,6 +1234,8 @@ class _ServerConfigCardState extends State<_ServerConfigCard> {
   ConnectionStatus? _connectionStatus;
   String? _lastError;
   StreamSubscription<(ConnectionStatus, String?)>? _stateSubscription;
+  bool _credentialsEdited = false;
+  bool _tlsEdited = false;
 
   @override
   void initState() {
@@ -1026,6 +1299,22 @@ class _ServerConfigCardState extends State<_ServerConfigCard> {
       ..sslKey = widget.server.sslKey;
 
     widget.onUpdate(updatedServer);
+  }
+
+  void _onCredentialChanged() {
+    if (!_credentialsEdited) {
+      _credentialsEdited = true;
+      widget.onEditState?.call(credentialsEdited: true, tlsEdited: _tlsEdited);
+    }
+    _updateServer();
+  }
+
+  void _onTlsChanged() {
+    if (!_tlsEdited) {
+      _tlsEdited = true;
+      widget.onEditState?.call(credentialsEdited: _credentialsEdited, tlsEdited: true);
+    }
+    _updateServer();
   }
 
   Future<void> _selectCertificate() async {
@@ -1253,6 +1542,27 @@ class _ServerConfigCardState extends State<_ServerConfigCard> {
                   ),
                 ],
                 const SizedBox(height: 12),
+                if (widget.hasExistingCredentials && !_credentialsEdited)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: Colors.green.withAlpha(20),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.green.withAlpha(80)),
+                    ),
+                    child: Row(
+                      children: [
+                        const FaIcon(FontAwesomeIcons.circleCheck, size: 14, color: Colors.green),
+                        const SizedBox(width: 8),
+                        const Expanded(child: Text('Credentials configured on server')),
+                        TextButton(
+                          onPressed: () => setState(() => _credentialsEdited = true),
+                          child: const Text('Change'),
+                        ),
+                      ],
+                    ),
+                  ),
+                if (!widget.hasExistingCredentials || _credentialsEdited)
                 LayoutBuilder(
                   builder: (context, constraints) {
                     final isNarrow = constraints.maxWidth < 400;
@@ -1266,7 +1576,7 @@ class _ServerConfigCardState extends State<_ServerConfigCard> {
                               prefixIcon:
                                   FaIcon(FontAwesomeIcons.user, size: 16),
                             ),
-                            onChanged: (_) => _updateServer(),
+                            onChanged: (_) => _onCredentialChanged(),
                           ),
                           const SizedBox(height: 12),
                           TextField(
@@ -1277,7 +1587,7 @@ class _ServerConfigCardState extends State<_ServerConfigCard> {
                                   FaIcon(FontAwesomeIcons.lock, size: 16),
                             ),
                             obscureText: true,
-                            onChanged: (_) => _updateServer(),
+                            onChanged: (_) => _onCredentialChanged(),
                           ),
                         ],
                       );
@@ -1292,7 +1602,7 @@ class _ServerConfigCardState extends State<_ServerConfigCard> {
                               prefixIcon:
                                   FaIcon(FontAwesomeIcons.user, size: 16),
                             ),
-                            onChanged: (_) => _updateServer(),
+                            onChanged: (_) => _onCredentialChanged(),
                           ),
                         ),
                         const SizedBox(width: 12),
@@ -1305,7 +1615,7 @@ class _ServerConfigCardState extends State<_ServerConfigCard> {
                                   FaIcon(FontAwesomeIcons.lock, size: 16),
                             ),
                             obscureText: true,
-                            onChanged: (_) => _updateServer(),
+                            onChanged: (_) => _onCredentialChanged(),
                           ),
                         ),
                       ],
@@ -1313,6 +1623,27 @@ class _ServerConfigCardState extends State<_ServerConfigCard> {
                   },
                 ),
                 const SizedBox(height: 16),
+                if (widget.hasExistingTls && !_tlsEdited)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: Colors.green.withAlpha(20),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.green.withAlpha(80)),
+                    ),
+                    child: Row(
+                      children: [
+                        const FaIcon(FontAwesomeIcons.circleCheck, size: 14, color: Colors.green),
+                        const SizedBox(width: 8),
+                        const Expanded(child: Text('TLS certificates configured on server')),
+                        TextButton(
+                          onPressed: () => setState(() => _tlsEdited = true),
+                          child: const Text('Change'),
+                        ),
+                      ],
+                    ),
+                  ),
+                if (!widget.hasExistingTls || _tlsEdited)
                 LayoutBuilder(
                   builder: (context, constraints) {
                     final isNarrow = constraints.maxWidth < 400;
@@ -1350,7 +1681,7 @@ class _ServerConfigCardState extends State<_ServerConfigCard> {
                                         : Text('Certificate in place'),
                                 const SizedBox(height: 8),
                                 ElevatedButton.icon(
-                                  onPressed: _selectCertificate,
+                                  onPressed: () { _selectCertificate(); _onTlsChanged(); },
                                   icon: const FaIcon(
                                       FontAwesomeIcons.folderOpen,
                                       size: 14),
@@ -1376,7 +1707,7 @@ class _ServerConfigCardState extends State<_ServerConfigCard> {
                                         : Text('Private key in place'),
                                 const SizedBox(height: 8),
                                 ElevatedButton.icon(
-                                  onPressed: _selectPrivateKey,
+                                  onPressed: () { _selectPrivateKey(); _onTlsChanged(); },
                                   icon: const FaIcon(
                                       FontAwesomeIcons.folderOpen,
                                       size: 14),
@@ -1388,7 +1719,7 @@ class _ServerConfigCardState extends State<_ServerConfigCard> {
                             SizedBox(
                               width: double.infinity,
                               child: OutlinedButton.icon(
-                                onPressed: _showCertificateGenerator,
+                                onPressed: () { _showCertificateGenerator(); _onTlsChanged(); },
                                 icon: const FaIcon(FontAwesomeIcons.plus,
                                     size: 14),
                                 label: const Text('Generate New Certificates'),
