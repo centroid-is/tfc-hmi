@@ -403,23 +403,6 @@ class StateMan {
 
   Timer? _healthCheckTimer;
 
-  Timer? _connStatusTimer;
-
-  /// Upstream connection status per alias (aggregation mode only).
-  /// Value is (ConnectionStatus, lastError).
-  final Map<String, (ConnectionStatus, String?)> _upstreamConnStatus = {};
-  final StreamController<Map<String, (ConnectionStatus, String?)>>
-      _upstreamConnController =
-      StreamController<Map<String, (ConnectionStatus, String?)>>.broadcast();
-
-  /// Current upstream connection status per alias (aggregation mode).
-  Map<String, (ConnectionStatus, String?)> get upstreamConnectionStatus =>
-      Map.unmodifiable(_upstreamConnStatus);
-
-  /// Stream of upstream connection status changes (aggregation mode).
-  Stream<Map<String, (ConnectionStatus, String?)>> get upstreamConnectionStream =>
-      _upstreamConnController.stream;
-
   /// Constructor requires the server endpoint.
   StateMan._({
     required this.config,
@@ -664,6 +647,25 @@ class StateMan {
         logLevel: LogLevel.UA_LOGLEVEL_INFO,
       );
       clients.add(ClientWrapper(client, clientCfg));
+
+      // Auto-add keymapping entries for upstream connection status nodes.
+      // These are subscribed to via the normal OPC UA subscription mechanism
+      // instead of polling.
+      for (final opcConfig in config.opcua) {
+        final alias = opcConfig.serverAlias ?? AggregatorNodeId.defaultAlias;
+        keyMappings.nodes['__agg_${alias}_connected'] = KeyMappingEntry(
+          opcuaNode: OpcUANodeConfig(
+            namespace: 1,
+            identifier: 'Servers/Status/OpcUa/$alias/connected',
+          )..serverAlias = '__aggregate',
+        );
+        keyMappings.nodes['__agg_${alias}_last_error'] = KeyMappingEntry(
+          opcuaNode: OpcUANodeConfig(
+            namespace: 1,
+            identifier: 'Servers/Status/OpcUa/$alias/last_error',
+          )..serverAlias = '__aggregate',
+        );
+      }
     } else {
       for (final opcuaConfig in config.opcua) {
         Uint8List? cert;
@@ -716,7 +718,6 @@ class StateMan {
         clients: clients,
         alias: alias,
         aggregationMode: aggregationMode);
-    stateMan._startUpstreamConnectionPolling();
     return stateMan;
   }
 
@@ -898,75 +899,6 @@ class StateMan {
     _healthCheckTimer?.cancel();
 
     _subsMap$.close();
-    _connStatusTimer?.cancel();
-    _upstreamConnStatus.clear();
-    _upstreamConnController.close();
-  }
-
-  /// In aggregation mode, start polling `<alias>/connected` variables on the
-  /// aggregator to track upstream connection status. Results are emitted on
-  /// [upstreamConnectionStream].
-  void _startUpstreamConnectionPolling() {
-    if (!aggregationMode) return;
-    _connStatusTimer = Timer.periodic(const Duration(seconds: 5), (_) {
-      _pollUpstreamConnections();
-    });
-  }
-
-  bool _polling = false;
-  Future<void> _pollUpstreamConnections() async {
-    if (_polling || !_shouldRun || clients.isEmpty) return;
-    _polling = true;
-    try {
-      return await _pollUpstreamConnectionsImpl();
-    } finally {
-      _polling = false;
-    }
-  }
-  Future<void> _pollUpstreamConnectionsImpl() async {
-    final wrapper = clients.first;
-    if (wrapper.connectionStatus != ConnectionStatus.connected) return;
-    final client = wrapper.client;
-    var changed = false;
-
-    for (final opcConfig in config.opcua) {
-      final alias = opcConfig.serverAlias ?? AggregatorNodeId.defaultAlias;
-      final connNodeId = NodeId.fromString(1, 'Servers/Status/OpcUa/$alias/connected');
-      final errorNodeId = NodeId.fromString(1, 'Servers/Status/OpcUa/$alias/last_error');
-
-      try {
-        final value = await client.read(connNodeId).timeout(
-          const Duration(seconds: 3),
-        );
-        final connected = value.value as bool? ?? false;
-        final status = connected
-            ? ConnectionStatus.connected
-            : ConnectionStatus.disconnected;
-
-        String? error;
-        if (!connected) {
-          try {
-            final errValue = await client.read(errorNodeId).timeout(
-              const Duration(seconds: 3),
-            );
-            final errStr = errValue.value as String?;
-            if (errStr != null && errStr.isNotEmpty) error = errStr;
-          } catch (_) {}
-        }
-
-        final entry = (status, error);
-        if (_upstreamConnStatus[alias] != entry) {
-          _upstreamConnStatus[alias] = entry;
-          changed = true;
-        }
-      } catch (e) {
-        logger.d('[${this.alias}] Failed to read $alias/connected: $e');
-      }
-    }
-
-    if (changed) {
-      _upstreamConnController.add(Map.unmodifiable(_upstreamConnStatus));
-    }
   }
 
   (NodeId, int?)? _lookupNodeId(String key) {
@@ -974,8 +906,14 @@ class StateMan {
     // In aggregation mode, translate to aggregator NodeId
     final entry = keyMappings.nodes[key];
     if (entry?.opcuaNode == null) return null;
+    // Nodes with serverAlias '__aggregate' are native to the aggregator
+    // server — use the raw NodeId directly without alias encoding.
+    if (entry!.opcuaNode!.serverAlias == '__aggregate') {
+      final (nodeId, _) = entry.opcuaNode!.toNodeId();
+      return (nodeId, entry.opcuaNode!.arrayIndex);
+    }
     final aggregatorNodeId =
-        AggregatorNodeId.fromOpcUANodeConfig(entry!.opcuaNode!);
+        AggregatorNodeId.fromOpcUANodeConfig(entry.opcuaNode!);
     return (aggregatorNodeId, entry.opcuaNode!.arrayIndex);
   }
 

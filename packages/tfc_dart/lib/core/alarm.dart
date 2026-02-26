@@ -273,6 +273,22 @@ class AlarmMan {
     alarms.add(Alarm(config: alarm));
   }
 
+  /// Add an alarm at runtime without persisting to preferences.
+  /// Used for synthetic alarms (e.g. connection status) that are
+  /// regenerated from current config on each startup.
+  void addEphemeralAlarm(AlarmConfig alarm) {
+    alarms.add(Alarm(config: alarm));
+  }
+
+  /// Remove persisted alarms matching [test] and save config.
+  void removeAlarmsWhere(bool Function(AlarmConfig) test) {
+    final removed = config.alarms.where(test).map((a) => a.uid).toSet();
+    if (removed.isEmpty) return;
+    config.alarms.removeWhere(test);
+    _saveConfig();
+    alarms.removeWhere((e) => removed.contains(e.config.uid));
+  }
+
   void removeAlarm(AlarmConfig alarm) {
     config.alarms.removeWhere((e) => e.uid == alarm.uid);
     _saveConfig();

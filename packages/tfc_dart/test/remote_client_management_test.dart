@@ -430,6 +430,7 @@ void main() {
         setMethodId,
         [DynamicValue(value: payload, typeId: NodeId.uastring)],
       );
+      await aggregator!.waitForPending();
 
       // Verify credentials preserved by reading config file
       final configJson =
@@ -461,6 +462,7 @@ void main() {
         setMethodId,
         [DynamicValue(value: payload, typeId: NodeId.uastring)],
       );
+      await aggregator!.waitForPending();
 
       // Verify TLS certs preserved
       final configJson =
@@ -492,6 +494,7 @@ void main() {
         setMethodId,
         [DynamicValue(value: payload, typeId: NodeId.uastring)],
       );
+      await aggregator!.waitForPending();
 
       // Verify new credentials in config file
       final configJson =
@@ -527,6 +530,7 @@ void main() {
         setMethodId,
         [DynamicValue(value: payload, typeId: NodeId.uastring)],
       );
+      await aggregator!.waitForPending();
 
       // Verify new TLS certs in config file
       final configJson =
@@ -563,6 +567,7 @@ void main() {
         setMethodId,
         [DynamicValue(value: payload, typeId: NodeId.uastring)],
       );
+      await aggregator!.waitForPending();
 
       // Verify file exists and contains valid config
       final fileContent = await File(configFilePath).readAsString();
@@ -659,6 +664,7 @@ void main() {
         [DynamicValue(value: payload, typeId: NodeId.uastring)],
       );
       expect(result.first.value, contains('ok'));
+      await aggregator!.waitForPending();
 
       // Verify config file has 3 servers
       final configJson =
@@ -684,6 +690,7 @@ void main() {
         [DynamicValue(value: payload, typeId: NodeId.uastring)],
       );
       expect(result.first.value, contains('ok'));
+      await aggregator!.waitForPending();
 
       // Verify config file has 1 server
       final configJson =
@@ -714,6 +721,7 @@ void main() {
         [DynamicValue(value: payload, typeId: NodeId.uastring)],
       );
       expect(result.first.value, contains('ok'));
+      await aggregator!.waitForPending();
 
       // Verify config file has the changed endpoint
       final configJson =
