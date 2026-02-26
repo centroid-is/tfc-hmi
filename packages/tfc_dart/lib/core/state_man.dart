@@ -514,12 +514,21 @@ class StateMan {
                 '[$alias ${wrapper.config.endpoint}] Session lost, resubscribing (old sub=${wrapper.subscriptionId})');
             sessionLost = false;
             wrapper.subscriptionId = null;
-            // Only resubscribe keys belonging to this wrapper
-            final lostAlias = wrapper.config.serverAlias;
-            final keysToResub = _subscriptions.values
-                .where((e) => keyMappings.lookupServerAlias(e.key) == lostAlias)
-                .map((e) => e.key)
-                .toList();
+            // In aggregation mode there's only one client wrapper so ALL
+            // subscribed keys must be resubscribed.  In direct mode,
+            // only resubscribe keys belonging to the lost wrapper.
+            final List<String> keysToResub;
+            if (aggregationMode) {
+              keysToResub =
+                  _subscriptions.values.map((e) => e.key).toList();
+            } else {
+              final lostAlias = wrapper.config.serverAlias;
+              keysToResub = _subscriptions.values
+                  .where(
+                      (e) => keyMappings.lookupServerAlias(e.key) == lostAlias)
+                  .map((e) => e.key)
+                  .toList();
+            }
             logger.i(
                 '[$alias ${wrapper.config.endpoint}] Resubscribing ${keysToResub.length} keys');
 
