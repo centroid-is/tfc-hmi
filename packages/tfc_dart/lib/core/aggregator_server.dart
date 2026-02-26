@@ -481,6 +481,7 @@ class AggregatorServer {
 
         if (status == ConnectionStatus.connected) {
           if (wasDisconnected) {
+            _fatalErrorAliases.remove(alias);
             _removeDisconnectAlarm(alias);
             _repopulateAlias(alias).catchError((e) {
               _logger.e('Aggregator: repopulate "$alias" failed: $e');
@@ -533,6 +534,35 @@ class AggregatorServer {
     if (alarmMan == null) return;
     alarmMan!.removeExternalAlarm('connection-$alias');
     _logger.i('Aggregator: removed disconnect alarm for "$alias"');
+  }
+
+  /// Tracks aliases that have been marked as having a fatal upstream error
+  /// (e.g. BadLicenseExpired) so we only inject the alarm once.
+  final Set<String> _fatalErrorAliases = {};
+
+  /// Check if an upstream error is fatal (e.g. license expired) and if so,
+  /// mark the alias as disconnected with the error message. This sets the
+  /// connected variable to false and updates last_error so the existing
+  /// alarm infrastructure fires.
+  void _handleUpstreamError(String alias, Object error) {
+    final errStr = error.toString();
+    if (!errStr.contains('BadLicenseExpired')) return;
+    if (_fatalErrorAliases.contains(alias)) return;
+
+    _fatalErrorAliases.add(alias);
+    _logger.e('Aggregator: fatal upstream error for "$alias": $errStr');
+
+    final connNodeId = _connectedNodeIds[alias];
+    if (connNodeId != null) {
+      _server.write(connNodeId,
+          DynamicValue(value: false, typeId: NodeId.boolean));
+    }
+    final errorNodeId = _lastErrorNodeIds[alias];
+    if (errorNodeId != null) {
+      _server.write(errorNodeId,
+          DynamicValue(value: errStr, typeId: NodeId.uastring));
+    }
+    _injectDisconnectAlarm(alias);
   }
 
   /// Remove all data nodes for [alias] from the address space and cancel
@@ -1014,11 +1044,15 @@ class AggregatorServer {
 
         try {
           if (item.nodeClass == NodeClass.UA_NODECLASS_OBJECT) {
-            _server.addObjectNode(
-              aggregatorNodeId,
-              item.browseName,
-              parentNodeId: folderId,
-            );
+            try {
+              _server.addObjectNode(
+                aggregatorNodeId,
+                item.browseName,
+                parentNodeId: folderId,
+              );
+            } catch (_) {
+              // Node may already exist (TTL cleanup only clears tracking)
+            }
             _discoveredNodes[nodeKey] = DateTime.now();
             (_aliasNodes[alias] ??= {}).add(aggregatorNodeId);
             _logger.d(
@@ -1030,12 +1064,16 @@ class AggregatorServer {
             );
             if (!_running) return;
             value.name = item.browseName;
-            _server.addVariableNode(
-              aggregatorNodeId,
-              value,
-              parentNodeId: folderId,
-              accessLevel: const AccessLevelMask(read: true, write: true),
-            );
+            try {
+              _server.addVariableNode(
+                aggregatorNodeId,
+                value,
+                parentNodeId: folderId,
+                accessLevel: const AccessLevelMask(read: true, write: true),
+              );
+            } catch (_) {
+              // Node may already exist (TTL cleanup only clears tracking)
+            }
             _discoveredNodes[nodeKey] = DateTime.now();
             (_aliasNodes[alias] ??= {}).add(aggregatorNodeId);
             _logger.d(
@@ -1101,6 +1139,7 @@ class AggregatorServer {
         },
         onError: (e) {
           _logger.d('Aggregator: upstream stream error for "$key": $e');
+          _handleUpstreamError(alias, e);
         },
       );
 
@@ -1127,6 +1166,9 @@ class AggregatorServer {
       _logger.d('Aggregator: exposed key "$key" as $aggregatorNodeId');
     } catch (e) {
       _logger.w('Failed to create aggregator node for key "$key": $e');
+      final alias =
+          mapping.opcuaNode!.serverAlias ?? AggregatorNodeId.defaultAlias;
+      _handleUpstreamError(alias, e);
     }
   }
 
@@ -1196,6 +1238,7 @@ class AggregatorServer {
     _aliasNodes.clear();
     _connectedNodeIds.clear();
     _lastErrorNodeIds.clear();
+    _fatalErrorAliases.clear();
 
     _server.shutdown();
     _server.delete();
