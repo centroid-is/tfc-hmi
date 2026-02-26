@@ -619,9 +619,17 @@ class AggregatorServer {
   /// Create an object node (folder) and a Discover method for each unique server alias.
   void _createAliasFolders() {
     final aliases = <String>{};
+    // Collect aliases from keymappings
     for (final entry in sharedStateMan.keyMappings.nodes.values) {
       if (entry.opcuaNode == null) continue;
-      aliases.add(entry.opcuaNode!.serverAlias ?? AggregatorNodeId.defaultAlias);
+      final alias = entry.opcuaNode!.serverAlias ?? AggregatorNodeId.defaultAlias;
+      // Skip internal aliases (e.g. '__aggregate' for aggregator-native nodes)
+      if (alias.startsWith('__')) continue;
+      aliases.add(alias);
+    }
+    // Also include all configured upstream PLCs (may not have keymappings yet)
+    for (final opcConfig in sharedStateMan.config.opcua) {
+      aliases.add(opcConfig.serverAlias ?? AggregatorNodeId.defaultAlias);
     }
 
     _ensureVariablesFolderHierarchy();
