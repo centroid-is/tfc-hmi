@@ -913,8 +913,17 @@ class StateMan {
     });
   }
 
+  bool _polling = false;
   Future<void> _pollUpstreamConnections() async {
-    if (!_shouldRun || clients.isEmpty) return;
+    if (_polling || !_shouldRun || clients.isEmpty) return;
+    _polling = true;
+    try {
+      return await _pollUpstreamConnectionsImpl();
+    } finally {
+      _polling = false;
+    }
+  }
+  Future<void> _pollUpstreamConnectionsImpl() async {
     final wrapper = clients.first;
     if (wrapper.connectionStatus != ConnectionStatus.connected) return;
     final client = wrapper.client;

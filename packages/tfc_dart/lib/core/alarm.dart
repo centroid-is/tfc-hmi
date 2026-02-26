@@ -248,6 +248,8 @@ class AlarmMan {
     if (!alarms.any((a) => a.config.uid == alarm.alarm.config.uid)) {
       addAlarm(alarm.alarm.config);
     }
+    _activeAlarms.removeWhere(
+        (a) => a.alarm.config.uid == alarm.alarm.config.uid);
     _activeAlarms.add(alarm);
     _activeAlarmsController.add(_activeAlarms);
   }

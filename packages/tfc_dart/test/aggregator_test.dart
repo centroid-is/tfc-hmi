@@ -606,6 +606,55 @@ void main() {
       await sub.cancel();
     });
 
+    test('burst internal writes do not leak through as external writes', () async {
+      // Bug #4: _internalWrites was a Set, so rapid internal writes would lose
+      // track and incorrectly forward back to upstream (write echo).
+      // Fix: use a counter Map instead of a Set.
+      final tempNodeId = AggregatorNodeId.encode(
+          'plc1', NodeId.fromString(1, 'GVL.temp'));
+
+      final externalWrites = <DynamicValue>[];
+      final allWrites = <DynamicValue>[];
+      final internalWriteCount = <String, int>{};
+
+      final monitorStream =
+          aggregatorServerRaw.monitorVariable(tempNodeId);
+      final sub = monitorStream.listen((event) {
+        final (type, value) = event;
+        if (type == 'write' && value != null) {
+          allWrites.add(value);
+          final nodeKey = tempNodeId.toString();
+          final count = internalWriteCount[nodeKey] ?? 0;
+          if (count > 0) {
+            internalWriteCount[nodeKey] = count - 1;
+            return; // suppress internal
+          }
+          externalWrites.add(value);
+        }
+      });
+
+      // Simulate two rapid internal writes before monitor processes either
+      final nodeKey = tempNodeId.toString();
+      internalWriteCount[nodeKey] = (internalWriteCount[nodeKey] ?? 0) + 1;
+      aggregatorServerRaw.write(
+        tempNodeId,
+        DynamicValue(value: 50.0, typeId: NodeId.double),
+      );
+      internalWriteCount[nodeKey] = (internalWriteCount[nodeKey] ?? 0) + 1;
+      aggregatorServerRaw.write(
+        tempNodeId,
+        DynamicValue(value: 51.0, typeId: NodeId.double),
+      );
+      await Future.delayed(const Duration(milliseconds: 200));
+
+      // Both internal writes should be suppressed
+      expect(allWrites.length, 2);
+      expect(externalWrites, isEmpty,
+          reason: 'Both rapid internal writes should be suppressed');
+
+      await sub.cancel();
+    });
+
     test('deleteNode removes variable from address space', () async {
       // Create a temporary variable for this test
       final deleteTestNodeId = AggregatorNodeId.encode(
