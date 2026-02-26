@@ -27,16 +27,20 @@ Future<AlarmMan> alarmMan(Ref ref) async {
 /// Register connection alarms for each upstream server alias.
 /// Uses `__agg_<alias>_connected == false` expressions evaluated by the
 /// standard alarm subscription pipeline (no polling needed).
+///
+/// These alarms are ephemeral (not persisted) — they're regenerated from the
+/// current config on each startup. Any stale connection alarms left in prefs
+/// by older code are cleaned up here.
 void _ensureConnectionAlarms(StateMan stateMan, AlarmMan alarmMan) {
+  // Remove any stale persisted connection alarms from previous runs
+  alarmMan.removeAlarmsWhere((a) => a.uid.startsWith('connection-'));
+
   for (final opcConfig in stateMan.config.opcua) {
     final alias = opcConfig.serverAlias ?? AggregatorNodeId.defaultAlias;
     final uid = 'connection-$alias';
     final key = '__agg_${alias}_connected';
 
-    // Skip if already registered
-    if (alarmMan.alarms.any((a) => a.config.uid == uid)) continue;
-
-    alarmMan.addAlarm(AlarmConfig(
+    alarmMan.addEphemeralAlarm(AlarmConfig(
       uid: uid,
       title: '$alias disconnected',
       description: 'OPC UA Server: "$alias" is disconnected',

@@ -569,6 +569,9 @@ class _OpcUAServersSectionState extends ConsumerState<_OpcUAServersSection> {
   bool _remoteLoading = false;
   String? _remoteError;
 
+  // Cached upstream connection streams per alias (aggregation mode)
+  final Map<String, Stream<(ConnectionStatus, String?)>> _upstreamStreams = {};
+
   bool get _isAggregationMode =>
       _config?.aggregator?.enabled == true;
 
@@ -613,7 +616,7 @@ class _OpcUAServersSectionState extends ConsumerState<_OpcUAServersSection> {
   /// server and return a combined stream of (ConnectionStatus, String?).
   Stream<(ConnectionStatus, String?)> _subscribeUpstreamStatus(
       StateMan stateMan, String connKey, String errorKey) {
-    final controller = StreamController<(ConnectionStatus, String?)>.broadcast();
+    final controller = StreamController<(ConnectionStatus, String?)>();
     ConnectionStatus status = ConnectionStatus.disconnected;
     String? lastError;
 
@@ -682,6 +685,16 @@ class _OpcUAServersSectionState extends ConsumerState<_OpcUAServersSection> {
       }).toList();
 
       if (mounted) {
+        // Create cached subscription streams for each upstream server
+        _upstreamStreams.clear();
+        for (final server in servers) {
+          final alias = server.config.serverAlias ?? AggregatorNodeId.defaultAlias;
+          _upstreamStreams[alias] = _subscribeUpstreamStatus(
+            stateMan,
+            '__agg_${alias}_connected',
+            '__agg_${alias}_last_error',
+          );
+        }
         setState(() {
           _remoteServers = servers;
           _savedRemoteServers = servers.map((s) => RemoteServerInfo(
@@ -748,6 +761,12 @@ class _OpcUAServersSectionState extends ConsumerState<_OpcUAServersSection> {
 
       ref.invalidate(stateManProvider);
       setState(() {});
+
+      // After save, if aggregation mode is now active, fetch upstream servers
+      // (StateMan is recreated after invalidation, so it will be in agg mode)
+      if (_isAggregationMode) {
+        await _fetchUpstreamServers();
+      }
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -869,10 +888,8 @@ class _OpcUAServersSectionState extends ConsumerState<_OpcUAServersSection> {
         clientConfig: clientConfig ?? current.clientConfig,
       );
     });
-    // When toggling aggregation ON, fetch upstream servers
-    if (enabled == true && !wasEnabled) {
-      _fetchUpstreamServers();
-    }
+    // Don't fetch upstream servers here — StateMan hasn't been
+    // recreated yet. They'll be fetched after save via _saveConfig.
     // When toggling OFF, clear remote state
     if (enabled == false && wasEnabled) {
       _remoteServers = null;
@@ -936,14 +953,8 @@ class _OpcUAServersSectionState extends ConsumerState<_OpcUAServersSection> {
         itemCount: _remoteServers!.length,
         itemBuilder: (context, index) {
           final remote = _remoteServers![index];
-          Stream<(ConnectionStatus, String?)>? connStream;
-
-          if (stateMan != null) {
-            final alias = remote.config.serverAlias ?? AggregatorNodeId.defaultAlias;
-            final connKey = '__agg_${alias}_connected';
-            final errorKey = '__agg_${alias}_last_error';
-            connStream = _subscribeUpstreamStatus(stateMan, connKey, errorKey);
-          }
+          final alias = remote.config.serverAlias ?? AggregatorNodeId.defaultAlias;
+          final connStream = _upstreamStreams[alias];
 
           return _ServerConfigCard(
             server: remote.config,

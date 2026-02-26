@@ -225,8 +225,16 @@ class AggregatorServer {
   /// NodeIds created per alias — used by _teardownAlias to delete all nodes.
   final Map<String, Set<NodeId>> _aliasNodes = {};
 
-  /// Tracks in-flight discovery operations so shutdown can await them.
+  /// Tracks in-flight discovery/persist operations so shutdown can await them.
   final Set<Future<void>> _pendingDiscoveries = {};
+
+  /// Wait for all pending async operations (persist, reload, discovery).
+  Future<void> waitForPending() async {
+    if (_pendingDiscoveries.isNotEmpty) {
+      await Future.wait(_pendingDiscoveries.toList())
+          .catchError((_) => <void>[]);
+    }
+  }
 
   /// Periodic timer for TTL cleanup of discovered nodes.
   Timer? _ttlCleanupTimer;
@@ -834,8 +842,11 @@ class AggregatorServer {
   }
 
   /// Persist config to file, trigger reload callback, then update in-memory config.
-  /// The config is updated LAST so the reload callback can compare old vs new.
   Future<void> _persistAndReload(List<OpcUAConfig> merged) async {
+    // Save old list so the reload callback can compare old vs new.
+    final old = sharedStateMan.config.opcua;
+    // Update in-memory BEFORE writing so toFile() serializes the merged config.
+    sharedStateMan.config.opcua = merged;
     try {
       if (configFilePath != null) {
         await sharedStateMan.config.toFile(configFilePath!);
@@ -847,9 +858,9 @@ class AggregatorServer {
       }
     } catch (e) {
       _logger.e('Aggregator: persist/reload failed: $e');
+      // Restore old config on failure
+      sharedStateMan.config.opcua = old;
     }
-    // Update in-memory config after reload callback has compared old vs new.
-    sharedStateMan.config.opcua = merged;
   }
 
   /// Configure native OPC UA per-method access control.
