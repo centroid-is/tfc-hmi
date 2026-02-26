@@ -627,6 +627,10 @@ class _OpcUAServersSectionState extends ConsumerState<_OpcUAServersSection> {
             ? ConnectionStatus.connected
             : ConnectionStatus.disconnected;
         controller.add((status, lastError));
+      }, onError: (e) {
+        debugPrint('Stream error for $connKey: $e');
+        status = ConnectionStatus.disconnected;
+        controller.add((status, lastError));
       });
     }).catchError((e) {
       debugPrint('Failed to subscribe to $connKey: $e');
@@ -637,6 +641,8 @@ class _OpcUAServersSectionState extends ConsumerState<_OpcUAServersSection> {
         final errStr = value.value as String?;
         lastError = (errStr != null && errStr.isNotEmpty) ? errStr : null;
         controller.add((status, lastError));
+      }, onError: (e) {
+        debugPrint('Stream error for $errorKey: $e');
       });
     }).catchError((e) {
       debugPrint('Failed to subscribe to $errorKey: $e');
@@ -685,10 +691,15 @@ class _OpcUAServersSectionState extends ConsumerState<_OpcUAServersSection> {
       }).toList();
 
       if (mounted) {
+        // Keymappings for __agg_<alias>_connected/last_error are injected by
+        // the backend at startup and persisted to the database.
+        final aliases = servers
+            .map((s) => s.config.serverAlias ?? AggregatorNodeId.defaultAlias)
+            .toList();
+
         // Create cached subscription streams for each upstream server
         _upstreamStreams.clear();
-        for (final server in servers) {
-          final alias = server.config.serverAlias ?? AggregatorNodeId.defaultAlias;
+        for (final alias in aliases) {
           _upstreamStreams[alias] = _subscribeUpstreamStatus(
             stateMan,
             '__agg_${alias}_connected',

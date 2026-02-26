@@ -648,24 +648,6 @@ class StateMan {
       );
       clients.add(ClientWrapper(client, clientCfg));
 
-      // Auto-add keymapping entries for upstream connection status nodes.
-      // These are subscribed to via the normal OPC UA subscription mechanism
-      // instead of polling.
-      for (final opcConfig in config.opcua) {
-        final alias = opcConfig.serverAlias ?? AggregatorNodeId.defaultAlias;
-        keyMappings.nodes['__agg_${alias}_connected'] = KeyMappingEntry(
-          opcuaNode: OpcUANodeConfig(
-            namespace: 1,
-            identifier: 'Servers/Status/OpcUa/$alias/connected',
-          )..serverAlias = '__aggregate',
-        );
-        keyMappings.nodes['__agg_${alias}_last_error'] = KeyMappingEntry(
-          opcuaNode: OpcUANodeConfig(
-            namespace: 1,
-            identifier: 'Servers/Status/OpcUa/$alias/last_error',
-          )..serverAlias = '__aggregate',
-        );
-      }
     } else {
       for (final opcuaConfig in config.opcua) {
         Uint8List? cert;

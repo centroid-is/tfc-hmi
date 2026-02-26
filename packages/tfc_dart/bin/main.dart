@@ -111,6 +111,7 @@ void main() async {
       alarmMan: alarmHandler,
       configFilePath: statemanConfigFilePath,
       onReloadClients: reloadClients,
+      prefs: prefs,
     );
     await aggregator.initialize();
     unawaited(aggregator.runLoop());

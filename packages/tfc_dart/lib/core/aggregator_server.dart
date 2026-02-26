@@ -8,6 +8,7 @@ import 'package:open62541/open62541.dart';
 
 import 'alarm.dart';
 import 'boolean_expression.dart';
+import 'preferences.dart';
 import 'state_man.dart';
 
 /// Credentials for a single user allowed to connect to the aggregator server.
@@ -258,12 +259,16 @@ class AggregatorServer {
   /// Receives the new list of OpcUAConfig; returns a status string.
   final Future<String> Function(List<OpcUAConfig> newServers)? onReloadClients;
 
+  /// Preferences API for persisting keymappings.
+  final PreferencesApi? prefs;
+
   AggregatorServer({
     required this.config,
     required this.sharedStateMan,
     this.alarmMan,
     this.configFilePath,
     this.onReloadClients,
+    this.prefs,
   });
 
   /// For testing: access the underlying server directly.
@@ -321,6 +326,7 @@ class AggregatorServer {
     // structure exists immediately, then start the server so it's
     // reachable even while upstream PLCs may be offline.
     _createAliasFolders();
+    await _syncUpstreamStatusKeys();
     _addGetOpcUaClientsMethod();
     _addSetOpcUaClientsMethod();
     _setupMethodAccessControl();
@@ -646,6 +652,71 @@ class AggregatorServer {
     }
   }
 
+  /// Inject `__agg_<alias>_connected` and `__agg_<alias>_last_error`
+  /// keymapping entries for each upstream PLC and persist to the database.
+  /// Called at init and after setOpcUaClients changes the server list.
+  Future<void> _syncUpstreamStatusKeys() async {
+    if (prefs == null) {
+      _logger.e('Aggregator: cannot sync upstream status keys — prefs is null');
+      return;
+    }
+    // Fetch the latest keymappings from the database to avoid overwriting
+    // entries added by other processes (e.g. the HMI).
+    final freshKeyMappings =
+        await KeyMappings.fromPrefs(prefs!, createDefault: false);
+    // Remove stale __agg_* entries for aliases that no longer exist.
+    freshKeyMappings.nodes
+        .removeWhere((key, _) => key.startsWith('__agg_'));
+    for (final opcConfig in sharedStateMan.config.opcua) {
+      final alias = opcConfig.serverAlias ?? AggregatorNodeId.defaultAlias;
+      freshKeyMappings.nodes['__agg_${alias}_connected'] = KeyMappingEntry(
+        opcuaNode: OpcUANodeConfig(
+          namespace: 1,
+          identifier: 'Servers/Status/OpcUa/$alias/connected',
+        )..serverAlias = '__aggregate',
+      );
+      freshKeyMappings.nodes['__agg_${alias}_last_error'] = KeyMappingEntry(
+        opcuaNode: OpcUANodeConfig(
+          namespace: 1,
+          identifier: 'Servers/Status/OpcUa/$alias/last_error',
+        )..serverAlias = '__aggregate',
+      );
+    }
+    await prefs!.setString(
+        'key_mappings', jsonEncode(freshKeyMappings.toJson()));
+    // Update in-memory keymappings so the backend's own StateMan sees them too.
+    sharedStateMan.keyMappings = freshKeyMappings;
+
+    // Persist connection alarms to the database so the HMI picks them up
+    // as normal alarms. Written directly to prefs (not the backend's
+    // in-memory AlarmMan, which can't evaluate __agg_* keys).
+    final alarmJson = await prefs!.getString('alarm_man_config');
+    final alarmConfig = alarmJson != null
+        ? AlarmManConfig.fromJson(jsonDecode(alarmJson))
+        : AlarmManConfig(alarms: []);
+    alarmConfig.alarms.removeWhere((a) => a.uid.startsWith('connection-'));
+    for (final opcConfig in sharedStateMan.config.opcua) {
+      final alias = opcConfig.serverAlias ?? AggregatorNodeId.defaultAlias;
+      final key = '__agg_${alias}_connected';
+      alarmConfig.alarms.add(AlarmConfig(
+        uid: 'connection-$alias',
+        title: '$alias disconnected',
+        description: 'OPC UA Server: "$alias" is disconnected',
+        rules: [
+          AlarmRule(
+            level: AlarmLevel.error,
+            expression: ExpressionConfig(
+              value: Expression(formula: '$key == false'),
+            ),
+            acknowledgeRequired: false,
+          ),
+        ],
+      ));
+    }
+    await prefs!.setString(
+        'alarm_man_config', jsonEncode(alarmConfig.toJson()));
+  }
+
   /// Ensure the `Servers/Variables/OpcUa/<alias>/` folder exists.
   void _ensureAliasVariablesFolder(String alias) {
     final folderKey = '$_opcuaVariablesFolder/$alias';
@@ -860,6 +931,7 @@ class AggregatorServer {
         await sharedStateMan.config.toFile(configFilePath!);
         _logger.i('Aggregator: persisted config to $configFilePath');
       }
+      await _syncUpstreamStatusKeys();
       if (onReloadClients != null) {
         final result = await onReloadClients!(merged);
         _logger.i('Aggregator: reload callback returned: $result');
