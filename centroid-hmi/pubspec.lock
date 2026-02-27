@@ -824,10 +824,10 @@ packages:
     description:
       path: "."
       ref: ai-more-server-impl
-      resolved-ref: d4c9c5063ad0f6d74934831e9a90b962daa38710
+      resolved-ref: "35e23015fc8912a8a230dcefb761bcf67393a956"
       url: "https://github.com/centroid-is/open62541_dart.git"
     source: git
-    version: "1.5.0-dev.1"
+    version: "1.5.2-0"
   os_detect:
     dependency: transitive
     description:
