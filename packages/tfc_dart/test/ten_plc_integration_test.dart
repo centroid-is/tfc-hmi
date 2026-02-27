@@ -2,12 +2,13 @@
 library;
 
 import 'dart:async';
-import 'dart:math';
 
 import 'package:open62541/open62541.dart';
 import 'package:test/test.dart';
 import 'package:tfc_dart/core/aggregator_server.dart';
 import 'package:tfc_dart/core/state_man.dart';
+
+import 'test_timing.dart';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -108,26 +109,28 @@ final plcDefs = [
 // ---------------------------------------------------------------------------
 
 void main() {
+  enableTestTiming();
   final plcServers = <Server>[];
+  var plcRunning = true;
   StateMan? directSM;
   AggregatorServer? aggregator;
   ClientIsolate? aggClient;
   StateMan? aggModeSM;
   late KeyMappings keyMappings;
-  late int basePort;
-  late int aggregatorPort;
+  late List<int> ports;
 
   // -------------------------------------------------------------------------
   // Setup: 10 PLC servers + direct StateMan + AggregatorServer + clients
   // -------------------------------------------------------------------------
   setUpAll(() async {
-    basePort = 15000 + Random().nextInt(40000);
-    aggregatorPort = basePort + plcDefs.length;
+    // 11 ports: 10 PLCs + 1 aggregator
+    ports = allocatePorts(5, 11);
+    final aggregatorPort = ports[10];
 
     // 1. Spin up 10 OPC UA servers
     for (var i = 0; i < plcDefs.length; i++) {
       final plc = plcDefs[i];
-      final port = basePort + i;
+      final port = ports[i];
       final server =
           Server(port: port, logLevel: LogLevel.UA_LOGLEVEL_ERROR);
 
@@ -140,7 +143,7 @@ void main() {
       }
       server.start();
       unawaited(() async {
-        while (server.runIterate(waitInterval: false)) {
+        while (plcRunning && server.runIterate(waitInterval: false)) {
           await Future.delayed(const Duration(milliseconds: 5));
         }
       }());
@@ -165,7 +168,7 @@ void main() {
     final opcuaConfigs = <OpcUAConfig>[];
     for (var i = 0; i < plcDefs.length; i++) {
       opcuaConfigs.add(OpcUAConfig()
-        ..endpoint = 'opc.tcp://localhost:${basePort + i}'
+        ..endpoint = 'opc.tcp://localhost:${ports[i]}'
         ..serverAlias = plcDefs[i].alias);
     }
     final config = StateManConfig(
@@ -194,8 +197,9 @@ void main() {
       config: config.aggregator!,
       sharedStateMan: directSM!,
     );
-    await aggregator!.initialize();
+    await aggregator!.initialize(skipTls: true);
     unawaited(aggregator!.runLoop());
+    await aggregator!.waitForPending();
 
     // 7. Raw client to aggregator (for browse/read/write tests)
     aggClient = await ClientIsolate.create();
@@ -222,16 +226,19 @@ void main() {
   // -------------------------------------------------------------------------
   // Teardown
   // -------------------------------------------------------------------------
-  tearDownAll(() async {
+  tearDownAll(timed('ten-plc tearDownAll', () async {
     if (aggModeSM != null) await aggModeSM!.close();
     if (aggClient != null) await aggClient!.delete();
     if (aggregator != null) await aggregator!.shutdown();
     if (directSM != null) await directSM!.close();
+    await Future.delayed(const Duration(milliseconds: 50));
+    plcRunning = false;
+    await Future.delayed(const Duration(milliseconds: 20));
     for (final server in plcServers) {
       server.shutdown();
       server.delete();
     }
-  });
+  }));
 
   // =========================================================================
   // 1. Connection tests
@@ -413,8 +420,9 @@ void main() {
   // 5. Aggregator – browse
   // =========================================================================
   group('Aggregator browse', () {
-    test('ObjectsFolder contains all 10 alias folders', () async {
-      final results = await aggClient!.browse(NodeId.objectsFolder);
+    test('OpcUa variables folder contains all 10 alias folders', () async {
+      final opcuaFolder = NodeId.fromString(1, 'Servers/Variables/OpcUa');
+      final results = await aggClient!.browse(opcuaFolder);
       final names = results.map((r) => r.browseName).toSet();
 
       for (final plc in plcDefs) {

@@ -4,7 +4,10 @@ import 'package:open62541/open62541.dart'
     show DynamicValue, NodeId, LocalizedText;
 import 'dart:collection';
 
+import '../test_timing.dart';
+
 void main() {
+  enableTestTiming();
   group('DynamicValueConverter', () {
     late DynamicValueConverter converter;
 

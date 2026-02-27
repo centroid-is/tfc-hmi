@@ -1,10 +1,10 @@
 import 'dart:async';
-import 'dart:math';
-
 import 'package:open62541/open62541.dart';
 import 'package:test/test.dart';
 import 'package:tfc_dart/core/aggregator_server.dart';
 import 'package:tfc_dart/core/state_man.dart';
+
+import 'test_timing.dart';
 
 /// Regression test for: backend crashes with FK violation when PLC reconnects.
 ///
@@ -19,6 +19,7 @@ import 'package:tfc_dart/core/state_man.dart';
 /// This test exercises the disconnect → reconnect flow through AggregatorServer
 /// to verify the alarm inject/remove cycle doesn't throw.
 void main() {
+  enableTestTiming();
   group('Aggregator disconnect/reconnect alarm cycle', () {
     late Server upstreamServer;
     late int upstreamPort;
@@ -27,10 +28,10 @@ void main() {
     late AggregatorServer aggregator;
     var upstreamRunning = true;
 
-    setUpAll(() async {
-      final base = 10000 + Random().nextInt(40000);
-      upstreamPort = base;
-      aggregatorPort = base + 1;
+    setUpAll(timed('alarm setUpAll', () async {
+      final ports = allocatePorts(0, 2);
+      upstreamPort = ports[0];
+      aggregatorPort = ports[1];
       upstreamRunning = true;
 
       upstreamServer =
@@ -85,18 +86,18 @@ void main() {
       // The real FK crash only happens with a PostgreSQL database, which
       // we can't replicate in a unit test. However, this test verifies
       // the disconnect/reconnect flow itself doesn't break.
-      await aggregator.initialize();
+      await aggregator.initialize(skipTls: true);
       unawaited(aggregator.runLoop());
-    });
+    }));
 
-    tearDownAll(() async {
+    tearDownAll(timed('alarm tearDownAll', () async {
       await aggregator.shutdown();
       await directSM.close();
       upstreamRunning = false;
       await Future.delayed(const Duration(milliseconds: 20));
       upstreamServer.shutdown();
       upstreamServer.delete();
-    });
+    }));
 
     test('simulate PLC disconnect then reconnect without crash', () async {
       final wrapper = directSM.clients.first;

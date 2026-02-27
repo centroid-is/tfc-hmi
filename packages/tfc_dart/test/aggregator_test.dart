@@ -1,14 +1,16 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:open62541/open62541.dart';
 import 'package:test/test.dart';
 import 'package:tfc_dart/core/aggregator_server.dart';
-import 'package:tfc_dart/core/state_man.dart' show OpcUAConfig, OpcUANodeConfig;
+import 'package:tfc_dart/core/state_man.dart';
+
+import 'test_timing.dart';
 
 void main() {
+  enableTestTiming();
   group('AggregatorNodeId', () {
     test('encode with string identifier produces correct format', () {
       final upstream = NodeId.fromString(4, 'GVL.temp');
@@ -357,8 +359,9 @@ void main() {
     late ClientIsolate aggregatorClient;
 
     setUpAll(() async {
-      upstreamPort = 10000 + Random().nextInt(50000);
-      aggregatorPort = upstreamPort + 1;
+      final ports = allocatePorts(2, 2);
+      upstreamPort = ports[0];
+      aggregatorPort = ports[1];
 
       // Upstream "PLC" server with test variables (namespace 1 = application ns)
       upstreamServer = Server(
@@ -469,7 +472,7 @@ void main() {
       );
 
       // Small delay for server to process
-      await Future.delayed(const Duration(milliseconds: 50));
+      await Future.delayed(const Duration(milliseconds: 10));
 
       // Client should see updated value
       final value = await aggregatorClient.read(tempNodeId);
@@ -503,7 +506,7 @@ void main() {
         DynamicValue(value: 99.9, typeId: NodeId.double),
       );
 
-      await Future.delayed(const Duration(milliseconds: 50));
+      await Future.delayed(const Duration(milliseconds: 10));
 
       // Read back
       final value = await aggregatorClient.read(tempNodeId);
@@ -547,7 +550,7 @@ void main() {
       );
 
       // Allow server iteration to process the callback
-      await Future.delayed(const Duration(milliseconds: 100));
+      await Future.delayed(const Duration(milliseconds: 20));
 
       expect(writes, isNotEmpty);
       expect(writes.last.value, 77.7);
@@ -585,7 +588,7 @@ void main() {
         tempNodeId,
         DynamicValue(value: 50.0, typeId: NodeId.double),
       );
-      await Future.delayed(const Duration(milliseconds: 100));
+      await Future.delayed(const Duration(milliseconds: 20));
 
       // monitorVariable should have seen the write, but it should be suppressed
       expect(allWrites.length, 1);
@@ -596,7 +599,7 @@ void main() {
         tempNodeId,
         DynamicValue(value: 77.7, typeId: NodeId.double),
       );
-      await Future.delayed(const Duration(milliseconds: 100));
+      await Future.delayed(const Duration(milliseconds: 20));
 
       // This write should NOT be suppressed — it's from an external client
       expect(allWrites.length, 2);
@@ -645,7 +648,7 @@ void main() {
         tempNodeId,
         DynamicValue(value: 51.0, typeId: NodeId.double),
       );
-      await Future.delayed(const Duration(milliseconds: 200));
+      await Future.delayed(const Duration(milliseconds: 30));
 
       // Both internal writes should be suppressed
       expect(allWrites.length, 2);
@@ -681,7 +684,7 @@ void main() {
       aggregatorServerRaw.deleteNode(deleteTestNodeId);
 
       // Allow server iteration to process
-      await Future.delayed(const Duration(milliseconds: 50));
+      await Future.delayed(const Duration(milliseconds: 10));
 
       // Verify it's gone from browse
       browseResults = await aggregatorClient.browse(plc1FolderId);
@@ -706,7 +709,7 @@ void main() {
       expect(value.value, 1.0);
 
       aggregatorServerRaw.deleteNode(recreateNodeId);
-      await Future.delayed(const Duration(milliseconds: 50));
+      await Future.delayed(const Duration(milliseconds: 10));
 
       // Verify deleted
       var browseResults = await aggregatorClient.browse(plc1FolderId);
@@ -812,8 +815,8 @@ void main() {
     late Server server;
     late int port;
 
-    setUp(() {
-      port = 10000 + Random().nextInt(50000);
+    setUpAll(() async {
+      port = allocatePorts(2, 1).first;
       server = Server(port: port, logLevel: LogLevel.UA_LOGLEVEL_ERROR);
 
       // Create folder hierarchy
@@ -835,7 +838,7 @@ void main() {
       server.start();
     });
 
-    tearDown(() {
+    tearDownAll(() {
       server.shutdown();
       server.delete();
     });
@@ -923,6 +926,102 @@ void main() {
       final val = await server.read(nodeId);
       expect(val.value, 20.0);
       expect(aliasNodes['plcA']!.length, 1);
+    });
+  });
+
+  group('Status nodes for aliases without keymappings', () {
+    // Regression: _createAliasFolders only looked at keymapping aliases.
+    // If an upstream PLC had no keymapping entries (e.g. only discovered nodes),
+    // its Servers/Status/OpcUa/<alias>/connected node was never created.
+    late Server upstreamServer;
+    late int upstreamPort;
+    late int aggregatorPort;
+    late StateMan stateMan;
+    late AggregatorServer aggregator;
+    late ClientIsolate aggClient;
+    var running = true;
+
+    setUpAll(timed('status-nodes setUpAll', () async {
+      final ports = allocatePorts(2, 2);
+      upstreamPort = ports[0];
+      aggregatorPort = ports[1];
+
+      upstreamServer =
+          Server(port: upstreamPort, logLevel: LogLevel.UA_LOGLEVEL_ERROR);
+      upstreamServer.addVariableNode(
+        NodeId.fromString(1, 'GVL.temp'),
+        DynamicValue(value: 23.5, typeId: NodeId.double, name: 'temp'),
+      );
+      upstreamServer.start();
+      unawaited(() async {
+        while (running && upstreamServer.runIterate(waitInterval: false)) {
+          await Future.delayed(const Duration(milliseconds: 5));
+        }
+      }());
+
+      // Empty keymappings — no entries for 'plc1' alias
+      final keyMappings = KeyMappings(nodes: {});
+
+      final config = StateManConfig(
+        opcua: [
+          OpcUAConfig()
+            ..endpoint = 'opc.tcp://localhost:$upstreamPort'
+            ..serverAlias = 'plc1',
+        ],
+        aggregator: AggregatorConfig(enabled: true, port: aggregatorPort),
+      );
+
+      stateMan = await StateMan.create(
+        config: config,
+        keyMappings: keyMappings,
+        useIsolate: true,
+        alias: 'test-status-nodes',
+      );
+
+      for (final wrapper in stateMan.clients) {
+        if (wrapper.connectionStatus == ConnectionStatus.connected) continue;
+        await wrapper.connectionStream
+            .firstWhere((event) => event.$1 == ConnectionStatus.connected)
+            .timeout(const Duration(seconds: 15));
+      }
+
+      aggregator = AggregatorServer(
+        config: config.aggregator!,
+        sharedStateMan: stateMan,
+      );
+      await aggregator.initialize(skipTls: true);
+      unawaited(aggregator.runLoop());
+
+      aggClient = await ClientIsolate.create();
+      unawaited(aggClient.runIterate().catchError((_) {}));
+      unawaited(aggClient.connect('opc.tcp://localhost:$aggregatorPort'));
+      await aggClient.awaitConnect();
+    }));
+
+    tearDownAll(timed('status-nodes tearDownAll', () async {
+      await aggregator.shutdown();
+      await aggClient.delete();
+      await stateMan.close();
+      running = false;
+      // Allow StateMan iterate loops to exit after close
+      await Future.delayed(const Duration(milliseconds: 50));
+      upstreamServer.shutdown();
+      upstreamServer.delete();
+    }));
+
+    test('connected node exists for alias with no keymappings', () async {
+      final connNodeId =
+          NodeId.fromString(1, 'Servers/Status/OpcUa/plc1/connected');
+      final value = await aggClient.read(connNodeId);
+      // Node should exist and be readable (boolean)
+      expect(value.value, isA<bool>());
+    });
+
+    test('last_error node exists for alias with no keymappings', () async {
+      final errorNodeId =
+          NodeId.fromString(1, 'Servers/Status/OpcUa/plc1/last_error');
+      final value = await aggClient.read(errorNodeId);
+      expect(value.value, isA<String>());
     });
   });
 

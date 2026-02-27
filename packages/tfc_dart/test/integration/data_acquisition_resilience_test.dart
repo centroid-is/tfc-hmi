@@ -8,6 +8,9 @@
 //
 // Run with: dart test test/integration/data_acquisition_resilience_test.dart
 
+@Tags(['docker'])
+library;
+
 import 'dart:async';
 import 'dart:isolate';
 
@@ -21,23 +24,27 @@ import 'package:tfc_dart/core/state_man.dart';
 import 'docker_compose.dart';
 
 void main() {
+  final testDb = TestDb(
+    composeFile: 'docker-compose.resilience.yml',
+    containerName: 'test-db-resilience',
+    port: 5442,
+  );
+
   group('Data Acquisition Resilience', () {
     setUpAll(() async {
-      // Start TimescaleDB
-      await stopDockerCompose();
-      await startDockerCompose();
-      await waitForDatabaseReady();
+      await testDb.start();
+      await testDb.waitForReady();
     });
 
     tearDownAll(() async {
-      await stopDockerCompose();
+      await testDb.stop();
     });
 
     group('Database retry queue', () {
       late Database database;
 
       setUp(() async {
-        database = await connectToDatabase();
+        database = await testDb.connect();
       });
       tearDown(() async {
         await database.dispose();
@@ -75,7 +82,7 @@ void main() {
         expect(data.length, 1);
 
         // Stop database
-        await stopTimescaleDb();
+        await testDb.stopContainer();
         await Future.delayed(const Duration(seconds: 1));
 
         // Insert values during outage - should be queued
@@ -85,8 +92,8 @@ void main() {
         }
 
         // Restart database
-        await startTimescaleDb();
-        await waitForDatabaseReady();
+        await testDb.startContainer();
+        await testDb.waitForReady();
 
         // Wait for retry queue to flush
         await Future.delayed(const Duration(seconds: 8));
@@ -101,8 +108,8 @@ void main() {
         collector.close();
 
         // Ensure DB is back up for next test
-        await startTimescaleDb();
-        await waitForDatabaseReady();
+        await testDb.startContainer();
+        await testDb.waitForReady();
       }, timeout: Timeout(Duration(seconds: 60)));
 
       test('WHEN queue overflows THEN oldest items are dropped, newest kept',
@@ -131,7 +138,7 @@ void main() {
         await database.flush();
 
         // Stop database
-        await stopTimescaleDb();
+        await testDb.stopContainer();
         await Future.delayed(const Duration(seconds: 1));
 
         // Insert MORE than queue capacity (100)
@@ -142,8 +149,8 @@ void main() {
         }
 
         // Restart database
-        await startTimescaleDb();
-        await waitForDatabaseReady();
+        await testDb.startContainer();
+        await testDb.waitForReady();
 
         // Wait for retry queue to flush
         await Future.delayed(const Duration(seconds: 8));
@@ -171,8 +178,8 @@ void main() {
         collector.close();
 
         // Ensure DB is back up for next test
-        await startTimescaleDb();
-        await waitForDatabaseReady();
+        await testDb.startContainer();
+        await testDb.waitForReady();
       }, timeout: Timeout(Duration(seconds: 60)));
     });
 
@@ -180,7 +187,7 @@ void main() {
       test('WHEN DB is down at startup THEN isolate retries until DB is up',
           () async {
         // Stop DB and wait for all connections to be truly dead
-        await stopTimescaleDb();
+        await testDb.stopContainer();
         await Future.delayed(const Duration(seconds: 3));
 
         final messagePort = ReceivePort();
@@ -199,7 +206,7 @@ void main() {
         await Isolate.spawn(
           _isolateWithDbRetry,
           _IsolateConfig(
-            dbConfigJson: getTestConfig().toJson(),
+            dbConfigJson: testDb.config().toJson(),
             sendPort: messagePort.sendPort,
           ),
           onError: errorPort.sendPort,
@@ -211,8 +218,8 @@ void main() {
         final beforeDbStart = timestamps.length;
 
         // Start DB
-        await startTimescaleDb();
-        await waitForDatabaseReady();
+        await testDb.startContainer();
+        await testDb.waitForReady();
 
         // Wait for isolate to connect
         await Future.delayed(const Duration(seconds: 8));
@@ -233,7 +240,7 @@ void main() {
       late Database database;
 
       setUp(() async {
-        database = await connectToDatabase();
+        database = await testDb.connect();
       });
       tearDown(() async {
         try {
@@ -272,7 +279,7 @@ void main() {
         await database.dispose();
 
         // Reconnect and verify data was flushed
-        final db2 = await connectToDatabase();
+        final db2 = await testDb.connect();
         final data = await _queryTable(db2, tableName);
         expect(data.length, 3, reason: 'dispose() should flush pending data');
 
@@ -282,7 +289,7 @@ void main() {
 
       test('WHEN DB is down THEN registerRetentionPolicy does not throw',
           () async {
-        await stopTimescaleDb();
+        await testDb.stopContainer();
         await Future.delayed(const Duration(seconds: 2));
 
         // This should NOT throw
@@ -293,8 +300,8 @@ void main() {
         );
 
         // Restart DB for next tests
-        await startTimescaleDb();
-        await waitForDatabaseReady();
+        await testDb.startContainer();
+        await testDb.waitForReady();
       }, timeout: Timeout(Duration(seconds: 30)));
 
       test(
@@ -303,7 +310,7 @@ void main() {
         const tableName = 'retention_recovery_test';
 
         // Stop DB
-        await stopTimescaleDb();
+        await testDb.stopContainer();
         await Future.delayed(const Duration(seconds: 2));
 
         // Register retention policy while DB is down (should not throw)
@@ -314,8 +321,8 @@ void main() {
         );
 
         // Start DB
-        await startTimescaleDb();
-        await waitForDatabaseReady();
+        await testDb.startContainer();
+        await testDb.waitForReady();
 
         // Insert data - this should create table WITH the retention policy
         await database.insertTimeseriesData(
@@ -331,8 +338,8 @@ void main() {
     group('Isolate respawn on crash', () {
       test('WHEN isolate crashes THEN it is respawned automatically', () async {
         // Ensure DB is up for this test
-        await startTimescaleDb();
-        await waitForDatabaseReady();
+        await testDb.startContainer();
+        await testDb.waitForReady();
         var spawnCount = 0;
         final spawnPort = ReceivePort();
 
@@ -342,7 +349,7 @@ void main() {
 
         // Spawn with respawn wrapper
         _spawnWithRespawn(
-          dbConfigJson: getTestConfig().toJson(),
+          dbConfigJson: testDb.config().toJson(),
           spawnPort: spawnPort.sendPort,
           shouldCrash: true,
         );

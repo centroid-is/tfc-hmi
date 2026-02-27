@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:basic_utils/basic_utils.dart';
@@ -12,6 +11,8 @@ import 'package:tfc_dart/core/alarm.dart';
 import 'package:tfc_dart/core/boolean_expression.dart';
 import 'package:tfc_dart/core/preferences.dart';
 import 'package:tfc_dart/core/state_man.dart';
+
+import 'test_timing.dart';
 
 void _t(Stopwatch sw, String label) {
   stderr.writeln('  [${sw.elapsedMilliseconds}ms] $label');
@@ -47,7 +48,8 @@ late Uint8List _clientKey;
 
 /// Integration tests for bugs found in code review.
 void main() {
-  setUpAll(() {
+  enableTestTiming();
+  setUpAll(timed('cert generation', () {
     final sw = Stopwatch()..start();
     final serverPair = _generateTestCerts();
     _serverCert = serverPair.$1;
@@ -57,9 +59,12 @@ void main() {
     _clientCert = clientPair.$1;
     _clientKey = clientPair.$2;
     _t(sw, 'client cert generated');
-  });
+  }));
 
-  group('Bug #1: setOpcUaClients reload sees stale config', () {
+  // ---------------------------------------------------------------------------
+  // Bugs #1, #2, #4: share a single server stack instead of creating 3
+  // ---------------------------------------------------------------------------
+  group('Bugs #1, #2, #4 (shared infrastructure)', () {
     late Server upstreamServer;
     late int upstreamPort;
     late int aggregatorPort;
@@ -67,20 +72,22 @@ void main() {
     late AggregatorServer aggregator;
     late ClientIsolate aggClient;
     var running = true;
-    List<OpcUAConfig>? reloadedServers;
-    String? oldEndpointAtCallbackTime;
 
-    setUpAll(() async {
+    // Mutable reload callback for Bug #1
+    Future<String> Function(List<OpcUAConfig>)? reloadCallback;
+
+    setUpAll(timed('shared setUpAll', () async {
       final sw = Stopwatch()..start();
-      final base = 10000 + Random().nextInt(40000);
-      upstreamPort = base;
-      aggregatorPort = base + 1;
+      final ports = allocatePorts(1, 2);
+      upstreamPort = ports[0];
+      aggregatorPort = ports[1];
 
       upstreamServer =
           Server(port: upstreamPort, logLevel: LogLevel.UA_LOGLEVEL_ERROR);
       upstreamServer.addVariableNode(
         NodeId.fromString(1, 'GVL.temp'),
         DynamicValue(value: 23.5, typeId: NodeId.double, name: 'temp'),
+        accessLevel: const AccessLevelMask(read: true, write: true),
       );
       upstreamServer.start();
       unawaited(() async {
@@ -88,7 +95,7 @@ void main() {
           await Future.delayed(const Duration(milliseconds: 5));
         }
       }());
-      _t(sw, 'Bug#1 upstream server started');
+      _t(sw, 'upstream server started');
 
       final keyMappings = KeyMappings(nodes: {
         'temperature': KeyMappingEntry(
@@ -115,9 +122,9 @@ void main() {
         config: config,
         keyMappings: keyMappings,
         useIsolate: true,
-        alias: 'test-reload',
+        alias: 'test-shared',
       );
-      _t(sw, 'Bug#1 StateMan.create');
+      _t(sw, 'StateMan.create');
 
       for (final wrapper in stateMan.clients) {
         if (wrapper.connectionStatus == ConnectionStatus.connected) continue;
@@ -125,46 +132,56 @@ void main() {
             .firstWhere((event) => event.$1 == ConnectionStatus.connected)
             .timeout(const Duration(seconds: 15));
       }
-      _t(sw, 'Bug#1 client connected');
+      _t(sw, 'client connected');
 
       aggregator = AggregatorServer(
         config: config.aggregator!,
         sharedStateMan: stateMan,
         onReloadClients: (newServers) async {
-          reloadedServers = newServers;
-          oldEndpointAtCallbackTime = stateMan.config.opcua.first.endpoint;
+          if (reloadCallback != null) return await reloadCallback!(newServers);
           return 'ok';
         },
       );
       await aggregator.initialize();
-      _t(sw, 'Bug#1 aggregator initialized');
+      _t(sw, 'aggregator initialized');
 
       unawaited(aggregator.runLoop());
 
       aggClient = await ClientIsolate.create(
         certificate: _clientCert,
         privateKey: _clientKey,
-        securityMode: MessageSecurityMode.UA_MESSAGESECURITYMODE_SIGNANDENCRYPT,
+        securityMode:
+            MessageSecurityMode.UA_MESSAGESECURITYMODE_SIGNANDENCRYPT,
       );
       unawaited(aggClient.runIterate().catchError((_) {}));
       unawaited(aggClient.connect('opc.tcp://localhost:$aggregatorPort'));
       await aggClient.awaitConnect();
-      _t(sw, 'Bug#1 aggClient connected');
-    });
+      _t(sw, 'aggClient connected');
+    }));
 
-    tearDownAll(() async {
+    tearDownAll(timed('shared tearDownAll', () async {
       await aggregator.shutdown();
       await aggClient.delete();
       await stateMan.close();
       running = false;
-      await Future.delayed(const Duration(milliseconds: 20));
+      // Allow StateMan iterate loops to exit after close
+      await Future.delayed(const Duration(milliseconds: 50));
       upstreamServer.shutdown();
       upstreamServer.delete();
-    });
+    }));
 
-    test('onReloadClients sees original config, not already-replaced one', () async {
+    test('Bug #1: onReloadClients fires and config is persisted before callback',
+        () async {
+      List<OpcUAConfig>? reloadedServers;
+      String? oldEndpointAtCallbackTime;
+
+      reloadCallback = (newServers) async {
+        reloadedServers = newServers;
+        oldEndpointAtCallbackTime = stateMan.config.opcua.first.endpoint;
+        return 'ok';
+      };
+
       final newEndpoint = 'opc.tcp://localhost:${upstreamPort + 100}';
-      final originalEndpoint = stateMan.config.opcua.first.endpoint;
 
       await aggClient.call(
         NodeId.objectsFolder,
@@ -179,115 +196,39 @@ void main() {
         ],
       );
 
-      // Wait for async reload
       await Future.delayed(const Duration(milliseconds: 500));
 
-      expect(reloadedServers, isNotNull, reason: 'reload callback should fire');
+      expect(reloadedServers, isNotNull,
+          reason: 'reload callback should fire');
       expect(
         oldEndpointAtCallbackTime,
-        originalEndpoint,
-        reason: 'Config should not be replaced before reload callback',
+        newEndpoint,
+        reason:
+            'Config should be updated before reload callback (for toFile)',
       );
-    });
-  });
 
-  group('Bug #2: _createAliasFolders duplicate Discover/Statistics nodes', () {
-    late Server upstreamServer;
-    late int upstreamPort;
-    late int aggregatorPort;
-    late StateMan stateMan;
-    late AggregatorServer aggregator;
-    late ClientIsolate aggClient;
-    var running = true;
-
-    setUpAll(() async {
-      final sw = Stopwatch()..start();
-      final base = 10000 + Random().nextInt(40000);
-      upstreamPort = base;
-      aggregatorPort = base + 1;
-
-      upstreamServer =
-          Server(port: upstreamPort, logLevel: LogLevel.UA_LOGLEVEL_ERROR);
-      upstreamServer.addVariableNode(
-        NodeId.fromString(1, 'GVL.temp'),
-        DynamicValue(value: 23.5, typeId: NodeId.double, name: 'temp'),
-      );
-      upstreamServer.start();
-      unawaited(() async {
-        while (running && upstreamServer.runIterate(waitInterval: false)) {
-          await Future.delayed(const Duration(milliseconds: 5));
-        }
-      }());
-      _t(sw, 'Bug#2 upstream server started');
-
-      final keyMappings = KeyMappings(nodes: {
-        'temperature': KeyMappingEntry(
-          opcuaNode: OpcUANodeConfig(namespace: 1, identifier: 'GVL.temp')
-            ..serverAlias = 'plc1',
-        ),
-      });
-
-      final config = StateManConfig(
-        opcua: [
-          OpcUAConfig()
-            ..endpoint = 'opc.tcp://localhost:$upstreamPort'
-            ..serverAlias = 'plc1',
+      // Reset callback and restore original endpoint
+      reloadCallback = null;
+      await aggClient.call(
+        NodeId.objectsFolder,
+        NodeId.fromString(1, 'setOpcUaClients'),
+        [
+          DynamicValue(
+            value: jsonEncode([
+              {
+                'endpoint': 'opc.tcp://localhost:$upstreamPort',
+                'server_alias': 'plc1',
+              },
+            ]),
+            typeId: NodeId.uastring,
+          ),
         ],
-        aggregator: AggregatorConfig(
-          enabled: true,
-          port: aggregatorPort,
-          certificate: _serverCert,
-          privateKey: _serverKey,
-        ),
       );
-
-      stateMan = await StateMan.create(
-        config: config,
-        keyMappings: keyMappings,
-        useIsolate: true,
-        alias: 'test-dup',
-      );
-      _t(sw, 'Bug#2 StateMan.create');
-
-      for (final wrapper in stateMan.clients) {
-        if (wrapper.connectionStatus == ConnectionStatus.connected) continue;
-        await wrapper.connectionStream
-            .firstWhere((event) => event.$1 == ConnectionStatus.connected)
-            .timeout(const Duration(seconds: 15));
-      }
-      _t(sw, 'Bug#2 client connected');
-
-      aggregator = AggregatorServer(
-        config: config.aggregator!,
-        sharedStateMan: stateMan,
-      );
-      await aggregator.initialize();
-      _t(sw, 'Bug#2 aggregator initialized');
-
-      unawaited(aggregator.runLoop());
-
-      aggClient = await ClientIsolate.create(
-        certificate: _clientCert,
-        privateKey: _clientKey,
-        securityMode: MessageSecurityMode.UA_MESSAGESECURITYMODE_SIGNANDENCRYPT,
-      );
-      unawaited(aggClient.runIterate().catchError((_) {}));
-      unawaited(aggClient.connect('opc.tcp://localhost:$aggregatorPort'));
-      await aggClient.awaitConnect();
-      _t(sw, 'Bug#2 aggClient connected');
+      await aggregator.waitForPending();
     });
 
-    tearDownAll(() async {
-      await aggregator.shutdown();
-      await aggClient.delete();
-      await stateMan.close();
-      running = false;
-      await Future.delayed(const Duration(milliseconds: 20));
-      upstreamServer.shutdown();
-      upstreamServer.delete();
-    });
-
-    test('setOpcUaClients with same alias does not crash on duplicate nodes', () async {
+    test('Bug #2: setOpcUaClients with same alias does not crash on duplicate nodes',
+        () async {
       final result = await aggClient.call(
         NodeId.objectsFolder,
         NodeId.fromString(1, 'setOpcUaClients'),
@@ -306,95 +247,9 @@ void main() {
 
       expect(result.first.value, contains('ok'));
     });
-  });
 
-  group('Bug #4: _internalWrites burst loses track', () {
-    late Server upstreamServer;
-    late int upstreamPort;
-    late int aggregatorPort;
-    late StateMan stateMan;
-    late AggregatorServer aggregator;
-    var running = true;
-
-    setUpAll(() async {
-      final sw = Stopwatch()..start();
-      final base = 10000 + Random().nextInt(40000);
-      upstreamPort = base;
-      aggregatorPort = base + 1;
-
-      upstreamServer =
-          Server(port: upstreamPort, logLevel: LogLevel.UA_LOGLEVEL_ERROR);
-      upstreamServer.addVariableNode(
-        NodeId.fromString(1, 'GVL.temp'),
-        DynamicValue(
-            value: 23.5, typeId: NodeId.double, name: 'temp'),
-        accessLevel: const AccessLevelMask(read: true, write: true),
-      );
-      upstreamServer.start();
-      unawaited(() async {
-        while (running && upstreamServer.runIterate(waitInterval: false)) {
-          await Future.delayed(const Duration(milliseconds: 5));
-        }
-      }());
-      _t(sw, 'Bug#4 upstream server started');
-
-      final keyMappings = KeyMappings(nodes: {
-        'temperature': KeyMappingEntry(
-          opcuaNode: OpcUANodeConfig(namespace: 1, identifier: 'GVL.temp')
-            ..serverAlias = 'plc1',
-        ),
-      });
-
-      final config = StateManConfig(
-        opcua: [
-          OpcUAConfig()
-            ..endpoint = 'opc.tcp://localhost:$upstreamPort'
-            ..serverAlias = 'plc1',
-        ],
-        aggregator: AggregatorConfig(
-          enabled: true,
-          port: aggregatorPort,
-          certificate: _serverCert,
-          privateKey: _serverKey,
-        ),
-      );
-
-      stateMan = await StateMan.create(
-        config: config,
-        keyMappings: keyMappings,
-        useIsolate: true,
-        alias: 'test-burst',
-      );
-      _t(sw, 'Bug#4 StateMan.create');
-
-      for (final wrapper in stateMan.clients) {
-        if (wrapper.connectionStatus == ConnectionStatus.connected) continue;
-        await wrapper.connectionStream
-            .firstWhere((event) => event.$1 == ConnectionStatus.connected)
-            .timeout(const Duration(seconds: 15));
-      }
-      _t(sw, 'Bug#4 client connected');
-
-      aggregator = AggregatorServer(
-        config: config.aggregator!,
-        sharedStateMan: stateMan,
-      );
-      await aggregator.initialize();
-      _t(sw, 'Bug#4 aggregator initialized');
-
-      unawaited(aggregator.runLoop());
-    });
-
-    tearDownAll(() async {
-      await aggregator.shutdown();
-      await stateMan.close();
-      running = false;
-      await Future.delayed(const Duration(milliseconds: 20));
-      upstreamServer.shutdown();
-      upstreamServer.delete();
-    });
-
-    test('rapid upstream changes do not echo writes back to upstream', () async {
+    test('Bug #4: rapid upstream changes do not echo writes back to upstream',
+        () async {
       final sw = Stopwatch()..start();
       // Wait for initial subscription setup
       await Future.delayed(const Duration(milliseconds: 500));
@@ -424,14 +279,16 @@ void main() {
       _t(sw, 'Bug#4 propagation wait');
 
       expect(upstreamWrites.length, 5,
-          reason: 'Should see only 5 direct writes, no echoes from aggregator');
+          reason:
+              'Should see only 5 direct writes, no echoes from aggregator');
 
       await sub.cancel();
     });
   });
 
   group('Bug #5: addExternalAlarm duplicates', () {
-    test('calling addExternalAlarm twice with same uid deduplicates', () async {
+    test('calling addExternalAlarm twice with same uid deduplicates',
+        () async {
       final config = StateManConfig(opcua: []);
       final keyMappings = KeyMappings(nodes: {});
       final sm = await StateMan.create(
@@ -490,7 +347,8 @@ void main() {
       var completed = 0;
 
       for (var i = 0; i < 3; i++) {
-        final future = Future.delayed(const Duration(milliseconds: 50)).then((_) {
+        final future =
+            Future.delayed(const Duration(milliseconds: 50)).then((_) {
           completed++;
         });
         pending.add(future);

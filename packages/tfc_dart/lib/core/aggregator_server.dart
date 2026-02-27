@@ -330,13 +330,18 @@ class AggregatorServer {
     _addGetOpcUaClientsMethod();
     _addSetOpcUaClientsMethod();
     _setupMethodAccessControl();
+    _running = true;
     _server.start();
     _startTtlCleanup();
     _watchConnections();
 
     // Populate data nodes in the background — individual failures
     // are caught and logged, and _repopulateAlias handles reconnection.
-    unawaited(_populateFromKeyMappings());
+    final populateFuture = _populateFromKeyMappings().catchError((e) {
+      _logger.e('Aggregator: populateFromKeyMappings failed: $e');
+    });
+    _pendingDiscoveries.add(populateFuture);
+    populateFuture.whenComplete(() => _pendingDiscoveries.remove(populateFuture));
   }
 
   /// Create the OPC UA server. TLS is always available after initialize().
@@ -483,9 +488,11 @@ class AggregatorServer {
           if (wasDisconnected) {
             _fatalErrorAliases.remove(alias);
             _removeDisconnectAlarm(alias);
-            _repopulateAlias(alias).catchError((e) {
+            final future = _repopulateAlias(alias).catchError((e) {
               _logger.e('Aggregator: repopulate "$alias" failed: $e');
             });
+            _pendingDiscoveries.add(future);
+            future.whenComplete(() => _pendingDiscoveries.remove(future));
           }
         } else if (status == ConnectionStatus.disconnected) {
           wasDisconnected = true;
@@ -565,6 +572,27 @@ class AggregatorServer {
               typeId: NodeId.uastring));
     }
     _injectDisconnectAlarm(alias);
+  }
+
+  /// Called when a successful value arrives on an upstream subscription.
+  /// If the alias was previously marked as having a fatal error, clear
+  /// the error state and remove the alarm — the PLC has recovered.
+  void _clearFatalError(String alias) {
+    if (!_fatalErrorAliases.remove(alias)) return;
+
+    _logger.i('Aggregator: upstream "$alias" recovered, clearing fatal error');
+
+    final connNodeId = _connectedNodeIds[alias];
+    if (connNodeId != null) {
+      _server.write(connNodeId,
+          DynamicValue(value: true, typeId: NodeId.boolean));
+    }
+    final errorNodeId = _lastErrorNodeIds[alias];
+    if (errorNodeId != null) {
+      _server.write(errorNodeId,
+          DynamicValue(value: '', typeId: NodeId.uastring));
+    }
+    _removeDisconnectAlarm(alias);
   }
 
   /// Remove all data nodes for [alias] from the address space and cancel
@@ -1099,7 +1127,7 @@ class AggregatorServer {
     final aggregatorNodeId = AggregatorNodeId.fromOpcUANodeConfig(nodeConfig);
     final nodeKey = aggregatorNodeId.toString();
 
-    if (_createdVariables.contains(nodeKey)) return;
+    if (_createdVariables.contains(nodeKey) || !_running) return;
 
     try {
       // Read initial value from upstream (with timeout — if the PLC is
@@ -1135,9 +1163,13 @@ class AggregatorServer {
       final stream = await sharedStateMan.subscribe(key);
       _upstreamSubs[nodeKey] = stream.listen(
         (value) {
+          _clearFatalError(alias);
           _valueCache[nodeKey] = value;
           _internalWrites[nodeKey] = (_internalWrites[nodeKey] ?? 0) + 1;
-          _server.write(aggregatorNodeId, value);
+          // Node may have been removed by _teardownAlias; ignore write errors
+          _server.write(aggregatorNodeId, value).catchError((e) {
+            _logger.d('Aggregator: write to $aggregatorNodeId failed: $e');
+          });
         },
         onError: (e) {
           _logger.d('Aggregator: upstream stream error for "$key": $e');
@@ -1195,7 +1227,6 @@ class AggregatorServer {
   /// Run the server iteration loop. Call from async context.
   /// Returns when [shutdown] is called.
   Future<void> runLoop() async {
-    _running = true;
     while (_running) {
       try {
         _server.runIterate(waitInterval: false);

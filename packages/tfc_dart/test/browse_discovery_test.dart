@@ -2,12 +2,13 @@
 library;
 
 import 'dart:async';
-import 'dart:math';
 
 import 'package:open62541/open62541.dart';
 import 'package:test/test.dart';
 import 'package:tfc_dart/core/aggregator_server.dart';
 import 'package:tfc_dart/core/state_man.dart';
+
+import 'test_timing.dart';
 
 // ---------------------------------------------------------------------------
 // Test infrastructure helpers
@@ -62,6 +63,7 @@ Server createUpstreamPlc(int port) {
 }
 
 void main() {
+  enableTestTiming();
   // =========================================================================
   // 1. Raw addMethodNode + call API tests (stabilize the in-progress API)
   // =========================================================================
@@ -70,8 +72,8 @@ void main() {
     late ClientIsolate client;
     late int port;
 
-    setUpAll(() async {
-      port = 10000 + Random().nextInt(50000);
+    setUpAll(timed('method API setUpAll', () async {
+      port = allocatePorts(3, 1).first;
       server = Server(port: port, logLevel: LogLevel.UA_LOGLEVEL_ERROR);
       server.start();
       unawaited(() async {
@@ -84,13 +86,13 @@ void main() {
       unawaited(client.runIterate().catchError((_) {}));
       unawaited(client.connect('opc.tcp://localhost:$port'));
       await client.awaitConnect();
-    });
+    }));
 
-    tearDownAll(() async {
+    tearDownAll(timed('method API tearDownAll', () async {
       server.shutdown();
       await client.delete();
       server.delete();
-    });
+    }));
 
     test('method with no arguments and no return', () async {
       var called = false;
@@ -301,10 +303,10 @@ void main() {
     late ClientIsolate aggClient;
     var upstreamRunning = true;
 
-    setUpAll(() async {
-      final base = 10000 + Random().nextInt(40000);
-      upstreamPort = base;
-      aggregatorPort = base + 1;
+    setUpAll(timed('discovery setUpAll', () async {
+      final ports = allocatePorts(3, 2);
+      upstreamPort = ports[0];
+      aggregatorPort = ports[1];
       upstreamRunning = true;
 
       // Upstream PLC with hierarchical address space
@@ -356,17 +358,17 @@ void main() {
         config: config.aggregator!,
         sharedStateMan: directSM,
       );
-      await aggregator.initialize();
+      await aggregator.initialize(skipTls: true);
       unawaited(aggregator.runLoop());
 
-      // Connect client to aggregator
+      // Connect client to aggregator (no TLS since skipTls=true)
       aggClient = await ClientIsolate.create();
       unawaited(aggClient.runIterate().catchError((_) {}));
       unawaited(aggClient.connect('opc.tcp://localhost:$aggregatorPort'));
       await aggClient.awaitConnect();
-    });
+    }));
 
-    tearDownAll(() async {
+    tearDownAll(timed('discovery tearDownAll', () async {
       await aggregator.shutdown();
       await aggClient.delete();
       await directSM.close();
@@ -375,7 +377,7 @@ void main() {
       await Future.delayed(const Duration(milliseconds: 20));
       upstreamServer.shutdown();
       upstreamServer.delete();
-    });
+    }));
 
     test('Discover method node exists under each alias folder', () async {
       final plc1Folder = AggregatorNodeId.folderNodeId('plc1');
@@ -430,7 +432,7 @@ void main() {
       );
 
       // Small delay for server to process
-      await Future.delayed(const Duration(milliseconds: 100));
+      await aggregator.waitForPending();
 
       // Browse the aggregator's plc1 folder — should now contain discovered nodes
       final browseResults = await aggClient.browse(plc1Folder);
@@ -457,7 +459,7 @@ void main() {
         discoverMethodId,
         [DynamicValue(value: 'ns=1;s=GVL', typeId: NodeId.uastring)],
       );
-      await Future.delayed(const Duration(milliseconds: 100));
+      await aggregator.waitForPending();
 
       // Read the discovered pressure node
       final pressureNodeId =
@@ -476,7 +478,7 @@ void main() {
         discoverMethodId,
         [DynamicValue(value: 'ns=0;i=85', typeId: NodeId.uastring)],
       );
-      await Future.delayed(const Duration(milliseconds: 100));
+      await aggregator.waitForPending();
 
       // The GVL and Config folders from upstream should be discoverable
       final browseResults = await aggClient.browse(plc1Folder);
@@ -499,7 +501,7 @@ void main() {
         discoverMethodId,
         [DynamicValue(value: 'ns=1;s=GVL', typeId: NodeId.uastring)],
       );
-      await Future.delayed(const Duration(milliseconds: 100));
+      await aggregator.waitForPending();
 
       // Second call should not fail or create duplicates
       await aggClient.call(
@@ -507,7 +509,7 @@ void main() {
         discoverMethodId,
         [DynamicValue(value: 'ns=1;s=GVL', typeId: NodeId.uastring)],
       );
-      await Future.delayed(const Duration(milliseconds: 100));
+      await aggregator.waitForPending();
 
       // Browse should still work fine
       final results = await aggClient.browse(plc1Folder);
@@ -528,7 +530,7 @@ void main() {
         discoverMethodId,
         [DynamicValue(value: 'ns=1;s=GVL', typeId: NodeId.uastring)],
       );
-      await Future.delayed(const Duration(milliseconds: 100));
+      await aggregator.waitForPending();
 
       // Verify pressure node was discovered
       final pressureNodeId =
@@ -556,7 +558,7 @@ void main() {
         discoverMethodId,
         [DynamicValue(value: 'ns=1;s=GVL', typeId: NodeId.uastring)],
       );
-      await Future.delayed(const Duration(milliseconds: 100));
+      await aggregator.waitForPending();
 
       // Node is still readable (it was re-discovered, values refreshed)
       final val2 = await aggClient.read(pressureNodeId);
@@ -573,12 +575,13 @@ void main() {
         discoverMethodId,
         [DynamicValue(value: 'ns=1;s=GVL', typeId: NodeId.uastring)],
       );
-      await Future.delayed(const Duration(milliseconds: 100));
+      await aggregator.waitForPending();
 
       // Verify discovered nodes exist
       expect(aggregator.discoveredNodeCount, greaterThan(0));
 
       // Simulate reconnection: push disconnected then connected status
+      // Needs longer delays for async connection status propagation through streams
       final wrapper = directSM.clients.first;
       wrapper.updateConnectionStatus(ClientState(
         channelState: SecureChannelState.UA_SECURECHANNELSTATE_CLOSED,
@@ -610,7 +613,7 @@ void main() {
         discoverMethodId,
         [DynamicValue(value: 'ns=0;i=85', typeId: NodeId.uastring)],
       );
-      await Future.delayed(const Duration(milliseconds: 100));
+      await aggregator.waitForPending();
 
       // Step 2: Discover GVL folder contents → finds temperature, pressure, status
       await aggClient.call(
@@ -618,7 +621,7 @@ void main() {
         discoverMethodId,
         [DynamicValue(value: 'ns=1;s=GVL', typeId: NodeId.uastring)],
       );
-      await Future.delayed(const Duration(milliseconds: 100));
+      await aggregator.waitForPending();
 
       // Step 3: Discover Config folder contents → finds setpoint, mode
       await aggClient.call(
@@ -626,7 +629,7 @@ void main() {
         discoverMethodId,
         [DynamicValue(value: 'ns=1;s=Config', typeId: NodeId.uastring)],
       );
-      await Future.delayed(const Duration(milliseconds: 100));
+      await aggregator.waitForPending();
 
       // Verify: plc1 folder should now have all discovered items
       final browseResults = await aggClient.browse(plc1Folder);
