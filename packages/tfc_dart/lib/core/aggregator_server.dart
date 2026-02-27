@@ -217,6 +217,9 @@ class AggregatorServer {
   final Set<String> _createdFolders = {};
   final Set<String> _createdVariables = {};
 
+  /// Custom types registered on the aggregator server (by typeId string).
+  final Set<String> _registeredCustomTypes = {};
+
   /// Discovered nodes with last-accessed timestamp for TTL expiry.
   final Map<String, DateTime> _discoveredNodes = {};
 
@@ -1148,6 +1151,24 @@ class AggregatorServer {
           nodeConfig.serverAlias ?? AggregatorNodeId.defaultAlias;
       final parentNodeId = AggregatorNodeId.folderNodeId(alias);
 
+      // Register custom type on the aggregator server if this is an
+      // extension object (struct) that the aggregator doesn't know about yet.
+      // Both addCustomType (internal type registry for encoding/decoding) and
+      // addDataTypeNode (address space node so clients can read the schema)
+      // are needed.
+      if (initialValue.isObject && initialValue.typeId != null) {
+        final typeKey = initialValue.typeId.toString();
+        if (!_registeredCustomTypes.contains(typeKey)) {
+          _server.addCustomType(initialValue.typeId!, initialValue);
+          _server.addDataTypeNode(
+            initialValue.typeId!,
+            initialValue.name ?? typeKey,
+          );
+          _registeredCustomTypes.add(typeKey);
+          _logger.d('Aggregator: registered custom type $typeKey for key "$key"');
+        }
+      }
+
       _server.addVariableNode(
         aggregatorNodeId,
         initialValue,
@@ -1267,6 +1288,7 @@ class AggregatorServer {
     _internalWrites.clear();
     _createdFolders.clear();
     _createdVariables.clear();
+    _registeredCustomTypes.clear();
     _discoveredNodes.clear();
     _aliasNodes.clear();
     _connectedNodeIds.clear();
