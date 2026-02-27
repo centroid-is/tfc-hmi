@@ -126,7 +126,10 @@ class OpcUAConfig {
 
   @override
   int get hashCode => Object.hash(
-      endpoint, username, password, serverAlias,
+      endpoint,
+      username,
+      password,
+      serverAlias,
       sslCert != null ? Object.hashAll(sslCert!) : null,
       sslKey != null ? Object.hashAll(sslKey!) : null);
 
@@ -512,6 +515,8 @@ class StateMan {
           sessionLost = true;
         }
         if (value.sessionState == SessionState.UA_SESSIONSTATE_ACTIVATED) {
+          logger.w(
+              '[$alias ${wrapper.config.endpoint}] Session ACTIVATED (sessionLost=$sessionLost, subId=${wrapper.subscriptionId}, subs=${_subscriptions.length})');
           if (sessionLost) {
             logger.e(
                 '[$alias ${wrapper.config.endpoint}] Session lost, resubscribing (old sub=${wrapper.subscriptionId})');
@@ -522,8 +527,7 @@ class StateMan {
             // only resubscribe keys belonging to the lost wrapper.
             final List<String> keysToResub;
             if (aggregationMode) {
-              keysToResub =
-                  _subscriptions.values.map((e) => e.key).toList();
+              keysToResub = _subscriptions.values.map((e) => e.key).toList();
             } else {
               final lostAlias = wrapper.config.serverAlias;
               keysToResub = _subscriptions.values
@@ -592,15 +596,12 @@ class StateMan {
               // disconnected (e.g. a health-check timeout), restore the
               // status. The native stateStream won't emit a new event
               // because the channel/session never actually changed.
-              if (wrapper.connectionStatus ==
-                  ConnectionStatus.disconnected) {
+              if (wrapper.connectionStatus == ConnectionStatus.disconnected) {
                 logger.i(
                     '[$alias ${wrapper.config.endpoint}] Health check read succeeded — restoring connected status');
                 wrapper.updateConnectionStatus(ClientState(
-                  channelState:
-                      SecureChannelState.UA_SECURECHANNELSTATE_OPEN,
-                  sessionState:
-                      SessionState.UA_SESSIONSTATE_ACTIVATED,
+                  channelState: SecureChannelState.UA_SECURECHANNELSTATE_OPEN,
+                  sessionState: SessionState.UA_SESSIONSTATE_ACTIVATED,
                   recoveryStatus: 0,
                 ));
               }
@@ -619,7 +620,10 @@ class StateMan {
   }
 
   void _resendLastValues() {
+    logger.w(
+        '[$alias] _resendLastValues() called with ${_subscriptions.length} subscriptions');
     for (final entry in _subscriptions.values) {
+      //logger.w('[$alias] Resending last value for ${entry.key}: ${entry._lastValue?.value}');
       entry.resendLastValue();
     }
   }
@@ -659,7 +663,6 @@ class StateMan {
         logLevel: LogLevel.UA_LOGLEVEL_INFO,
       );
       clients.add(ClientWrapper(client, clientCfg));
-
     } else {
       for (final opcuaConfig in config.opcua) {
         Uint8List? cert;
