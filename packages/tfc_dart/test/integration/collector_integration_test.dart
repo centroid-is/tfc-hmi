@@ -1,3 +1,6 @@
+@Tags(['docker'])
+library;
+
 import 'dart:async';
 import 'dart:collection';
 
@@ -17,14 +20,19 @@ void main() {
     late StateMan stateMan;
     late Database database;
 
+    final testDb = TestDb(
+      composeFile: 'docker-compose.collector.yml',
+      containerName: 'test-db-collector',
+      port: 5441,
+    );
+
     setUpAll(() async {
       stateMan = await StateMan.create(
           config: StateManConfig(opcua: []),
           keyMappings: KeyMappings(nodes: {}));
-      await stopDockerCompose();
-      await startDockerCompose();
-      await waitForDatabaseReady();
-      database = await connectToDatabase();
+      await testDb.start();
+      await testDb.waitForReady();
+      database = await testDb.connect();
     });
 
     setUp(() {
@@ -39,7 +47,7 @@ void main() {
     });
 
     tearDownAll(() async {
-      await stopDockerCompose();
+      await testDb.stop();
     });
 
     Future<List<TimeseriesData<dynamic>>> waitUntilInserted(String tableName,

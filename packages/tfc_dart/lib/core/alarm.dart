@@ -98,7 +98,7 @@ class AlarmConfig {
         key: key,
         title: title,
         description: description,
-        rules: jsonDecode(rules).map((e) => AlarmRule.fromJson(e)).toList());
+        rules: (jsonDecode(rules) as List).map((e) => AlarmRule.fromJson(e as Map<String, dynamic>)).toList());
   }
 
   factory AlarmConfig.fromJson(Map<String, dynamic> json) =>
@@ -270,6 +270,7 @@ class AlarmMan {
   void addAlarm(AlarmConfig alarm) {
     config.alarms.add(alarm);
     _saveConfig();
+    _upsertAlarmToDb(alarm);
     alarms.add(Alarm(config: alarm));
   }
 
@@ -286,12 +287,16 @@ class AlarmMan {
     if (removed.isEmpty) return;
     config.alarms.removeWhere(test);
     _saveConfig();
+    for (final uid in removed) {
+      _deleteAlarmFromDb(uid);
+    }
     alarms.removeWhere((e) => removed.contains(e.config.uid));
   }
 
   void removeAlarm(AlarmConfig alarm) {
     config.alarms.removeWhere((e) => e.uid == alarm.uid);
     _saveConfig();
+    _deleteAlarmFromDb(alarm.uid);
     alarms.removeWhere((e) => e.config.uid == alarm.uid);
   }
 
@@ -299,6 +304,7 @@ class AlarmMan {
     config.alarms.removeWhere((e) => e.uid == alarm.uid);
     config.alarms.add(alarm);
     _saveConfig();
+    _upsertAlarmToDb(alarm);
     alarms.removeWhere((e) => e.config.uid == alarm.uid);
     alarms.add(Alarm(config: alarm));
   }
@@ -335,6 +341,44 @@ class AlarmMan {
   void _saveConfig() async {
     await preferences.setString(
         'alarm_man_config', jsonEncode(config.toJson()));
+  }
+
+  Future<void> _upsertAlarmToDb(AlarmConfig alarm) async {
+    if (preferences.database == null) return;
+    final db = preferences.database!.db;
+    try {
+      await db.customInsert(r'''
+        INSERT INTO alarm (uid, key, title, description, rules)
+        VALUES ($1, $2, $3, $4, $5)
+        ON CONFLICT (uid) DO UPDATE SET
+          key = EXCLUDED.key,
+          title = EXCLUDED.title,
+          description = EXCLUDED.description,
+          rules = EXCLUDED.rules
+      ''', variables: [
+        Variable.withString(alarm.uid),
+        Variable.withString(alarm.key ?? ''),
+        Variable.withString(alarm.title),
+        Variable.withString(alarm.description),
+        Variable.withString(
+            jsonEncode(alarm.rules.map((r) => r.toJson()).toList())),
+      ]);
+    } catch (e) {
+      stderr.writeln('AlarmMan: failed to upsert alarm "${alarm.uid}": $e');
+    }
+  }
+
+  Future<void> _deleteAlarmFromDb(String uid) async {
+    if (preferences.database == null) return;
+    final db = preferences.database!.db;
+    try {
+      await db.customUpdate(
+        r'DELETE FROM alarm WHERE uid = $1',
+        variables: [Variable.withString(uid)],
+      );
+    } catch (e) {
+      stderr.writeln('AlarmMan: failed to delete alarm "$uid" from db: $e');
+    }
   }
 
   void _removeActiveAlarm(AlarmActive alarm) {

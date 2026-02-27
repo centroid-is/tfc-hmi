@@ -13,6 +13,8 @@ import 'package:test/test.dart';
 import 'package:tfc_dart/core/aggregator_server.dart';
 import 'package:tfc_dart/core/state_man.dart';
 
+import 'test_timing.dart';
+
 // ---------------------------------------------------------------------------
 // Test infrastructure helpers
 // ---------------------------------------------------------------------------
@@ -56,14 +58,17 @@ import 'package:tfc_dart/core/state_man.dart';
 // ---------------------------------------------------------------------------
 
 void main() {
+  enableTestTiming();
   // Shared state across all tests
   final plcServers = <Server>[];
+  var plcRunning = true;
   StateMan? directSM;
   AggregatorServer? aggregator;
   ClientIsolate? adminClient;
   ClientIsolate? viewerClient;
   ClientIsolate? anonClient;
   late int basePort;
+  late int plc2Port;
   late int aggregatorPort;
   late String configFilePath;
   late Uint8List plc2Cert;
@@ -76,9 +81,11 @@ void main() {
   // -------------------------------------------------------------------------
   // Setup: 2 upstream PLCs + AggregatorServer with auth + 3 clients
   // -------------------------------------------------------------------------
-  setUpAll(() async {
-    basePort = 15000 + Random().nextInt(40000);
-    aggregatorPort = basePort + 10;
+  setUpAll(timed('main setUpAll', () async {
+    final ports = allocatePorts(4, 3);
+    basePort = ports[0];
+    plc2Port = ports[1];
+    aggregatorPort = ports[2];
 
     // Generate TLS certs for PLC2
     (plc2Cert, plc2Key) = generateTestCerts();
@@ -104,14 +111,14 @@ void main() {
     );
     plc1Server.start();
     unawaited(() async {
-      while (plc1Server.runIterate(waitInterval: false)) {
+      while (plcRunning && plc1Server.runIterate(waitInterval: false)) {
         await Future.delayed(const Duration(milliseconds: 5));
       }
     }());
     plcServers.add(plc1Server);
 
     // --- PLC 2: no credentials, has TLS certs (in config only — actual PLC is plain) ---
-    final plc2Port = basePort + 1;
+    // plc2Port already set from findFreePorts
     final plc2Server =
         Server(port: plc2Port, logLevel: LogLevel.UA_LOGLEVEL_ERROR);
     plc2Server.addVariableNode(
@@ -122,7 +129,7 @@ void main() {
     );
     plc2Server.start();
     unawaited(() async {
-      while (plc2Server.runIterate(waitInterval: false)) {
+      while (plcRunning && plc2Server.runIterate(waitInterval: false)) {
         await Future.delayed(const Duration(milliseconds: 5));
       }
     }());
@@ -211,8 +218,8 @@ void main() {
     unawaited(aggregator!.runLoop());
 
     // --- Create 3 clients with different auth levels ---
-    // Generate client certificates (needed for encrypted channel since
-    // aggregator uses allowNonePolicyPassword: false)
+    // Generate ONE client certificate pair and reuse for all clients.
+    // OPC UA differentiates clients by username/password, not certificate identity.
     final (clientCert, clientKey) = generateTestCerts();
 
     // Admin client (TLS required for username/password auth)
@@ -228,13 +235,12 @@ void main() {
         adminClient!.connect('opc.tcp://localhost:$aggregatorPort'));
     await adminClient!.awaitConnect();
 
-    // Viewer client (TLS required for username/password auth)
-    final (viewerCert, viewerKey) = generateTestCerts();
+    // Viewer client (reuse same cert)
     viewerClient = await ClientIsolate.create(
       username: 'viewer',
       password: 'viewer123',
-      certificate: viewerCert,
-      privateKey: viewerKey,
+      certificate: clientCert,
+      privateKey: clientKey,
       securityMode: MessageSecurityMode.UA_MESSAGESECURITYMODE_SIGNANDENCRYPT,
     );
     unawaited(viewerClient!.runIterate().catchError((_) {}));
@@ -242,28 +248,31 @@ void main() {
         viewerClient!.connect('opc.tcp://localhost:$aggregatorPort'));
     await viewerClient!.awaitConnect();
 
-    // Anonymous client (no credentials, but needs TLS since None is discovery-only)
-    final (anonCert, anonKey) = generateTestCerts();
+    // Anonymous client (reuse same cert, no credentials)
     anonClient = await ClientIsolate.create(
-      certificate: anonCert,
-      privateKey: anonKey,
+      certificate: clientCert,
+      privateKey: clientKey,
       securityMode: MessageSecurityMode.UA_MESSAGESECURITYMODE_SIGNANDENCRYPT,
     );
     unawaited(anonClient!.runIterate().catchError((_) {}));
     unawaited(
         anonClient!.connect('opc.tcp://localhost:$aggregatorPort'));
     await anonClient!.awaitConnect();
-  });
+  }));
 
   // -------------------------------------------------------------------------
   // Teardown
   // -------------------------------------------------------------------------
-  tearDownAll(() async {
+  tearDownAll(timed('main tearDownAll', () async {
+    if (aggregator != null) await aggregator!.shutdown();
     if (anonClient != null) await anonClient!.delete();
     if (viewerClient != null) await viewerClient!.delete();
     if (adminClient != null) await adminClient!.delete();
-    if (aggregator != null) await aggregator!.shutdown();
     if (directSM != null) await directSM!.close();
+    // Allow StateMan iterate loops to exit after close
+    await Future.delayed(const Duration(milliseconds: 50));
+    plcRunning = false;
+    await Future.delayed(const Duration(milliseconds: 20));
     for (final server in plcServers) {
       server.shutdown();
       server.delete();
@@ -273,7 +282,7 @@ void main() {
       final tmpDir = Directory(configFilePath).parent;
       if (await tmpDir.exists()) await tmpDir.delete(recursive: true);
     } catch (_) {}
-  });
+  }));
 
   // =========================================================================
   // Group 1: Native OPC UA access control
@@ -418,7 +427,7 @@ void main() {
           'has_tls': false,
         },
         {
-          'endpoint': 'opc.tcp://localhost:${basePort + 1}',
+          'endpoint': 'opc.tcp://localhost:$plc2Port',
           'server_alias': 'plc2',
           'has_tls': true,
           'has_credentials': false,
@@ -450,7 +459,7 @@ void main() {
           'has_tls': false,
         },
         {
-          'endpoint': 'opc.tcp://localhost:${basePort + 1}',
+          'endpoint': 'opc.tcp://localhost:$plc2Port',
           'server_alias': 'plc2',
           'has_tls': true,
           'has_credentials': false,
@@ -482,7 +491,7 @@ void main() {
           'password': 'newpass',
         },
         {
-          'endpoint': 'opc.tcp://localhost:${basePort + 1}',
+          'endpoint': 'opc.tcp://localhost:$plc2Port',
           'server_alias': 'plc2',
           'has_tls': true,
           'has_credentials': false,
@@ -518,7 +527,7 @@ void main() {
           'has_tls': false,
         },
         {
-          'endpoint': 'opc.tcp://localhost:${basePort + 1}',
+          'endpoint': 'opc.tcp://localhost:$plc2Port',
           'server_alias': 'plc2',
           'ssl_cert': newCertB64,
           'ssl_key': newKeyB64,
@@ -555,7 +564,7 @@ void main() {
           'has_tls': false,
         },
         {
-          'endpoint': 'opc.tcp://localhost:${basePort + 1}',
+          'endpoint': 'opc.tcp://localhost:$plc2Port',
           'server_alias': 'plc2',
           'has_tls': true,
           'has_credentials': false,
@@ -647,7 +656,7 @@ void main() {
           'has_tls': false,
         },
         {
-          'endpoint': 'opc.tcp://localhost:${basePort + 1}',
+          'endpoint': 'opc.tcp://localhost:$plc2Port',
           'server_alias': 'plc2',
           'has_tls': true,
           'has_credentials': false,
@@ -708,7 +717,7 @@ void main() {
           'has_tls': false,
         },
         {
-          'endpoint': 'opc.tcp://localhost:${basePort + 1}',
+          'endpoint': 'opc.tcp://localhost:$plc2Port',
           'server_alias': 'plc2',
           'has_tls': true,
           'has_credentials': false,
@@ -805,7 +814,7 @@ void main() {
     test('returns ok with count on valid input', () async {
       final payload = jsonEncode([
         {
-          'endpoint': 'opc.tcp://localhost:${basePort + 1}',
+          'endpoint': 'opc.tcp://localhost:$plc2Port',
           'server_alias': 'plc1',
           'has_tls': false,
           'has_credentials': false,

@@ -402,6 +402,7 @@ class StateMan {
   final bool aggregationMode;
 
   Timer? _healthCheckTimer;
+  final List<Future<void>> _iterateFutures = [];
 
   /// Constructor requires the server endpoint.
   StateMan._({
@@ -414,7 +415,7 @@ class StateMan {
     for (final wrapper in clients) {
       if (wrapper.client is Client) {
         // spawn a background task to keep the client active
-        () async {
+        _iterateFutures.add(() async {
           final clientref = wrapper.client as Client;
           final stats =
               RunIterateStats("${wrapper.config.endpoint} \"$alias\"");
@@ -437,11 +438,11 @@ class StateMan {
             await Future.delayed(const Duration(milliseconds: 1000));
           }
           logger.e('StateMan background run iterate task exited');
-        }();
+        }());
       }
       if (wrapper.client is ClientIsolate) {
         final clientref = wrapper.client as ClientIsolate;
-        () async {
+        _iterateFutures.add(() async {
           while (_shouldRun) {
             try {
               clientref.connect(wrapper.config.endpoint).onError(
@@ -449,16 +450,18 @@ class StateMan {
                       'Failed to connect to ${wrapper.config.endpoint}: $e'));
               await clientref.runIterate();
             } catch (error) {
+              if (!_shouldRun) break;
               logger.e("run iterate error: $error");
               try {
                 // try to disconnect
                 await clientref.disconnect();
               } catch (_) {}
               // Throttle if often occuring error
+              if (!_shouldRun) break;
               await Future.delayed(const Duration(seconds: 1));
             }
           }
-        }();
+        }());
       }
 
       bool sessionLost = false;
@@ -878,7 +881,14 @@ class StateMan {
           (wrapper.client as Client).disconnect();
         }
       } catch (_) {}
-      wrapper.client.delete();
+      await wrapper.client.delete();
+    }
+    // Wait for iterate loops to exit before disposing
+    await Future.wait(
+      _iterateFutures.map((f) => f.catchError((_) {})),
+    );
+    _iterateFutures.clear();
+    for (final wrapper in clients) {
       wrapper.dispose();
     }
     // Clean up subscriptions

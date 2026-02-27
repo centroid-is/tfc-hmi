@@ -1,3 +1,6 @@
+@Tags(['docker'])
+library;
+
 import 'dart:async';
 import 'dart:isolate';
 
@@ -23,23 +26,28 @@ class TestIsolateConfig {
 }
 
 void main() {
+  final testDb = TestDb(
+    composeFile: 'docker-compose.isolate.yml',
+    containerName: 'test-db-isolate',
+    port: 5443,
+  );
+
   group('DataAcquisition Isolate Integration', () {
     setUpAll(() async {
-      await stopDockerCompose();
-      await startDockerCompose();
-      await waitForDatabaseReady();
+      await testDb.start();
+      await testDb.waitForReady();
     });
 
     tearDownAll(() async {
-      await stopDockerCompose();
+      await testDb.stop();
     });
 
     test('isolate should retry DB connection on startup failure', () async {
       // Stop the database first
-      await stopTimescaleDb();
+      await testDb.stopContainer();
       await Future.delayed(const Duration(seconds: 1));
 
-      final dbConfig = getTestConfig();
+      final dbConfig = testDb.config();
       final serverConfig = OpcUAConfig()..endpoint = 'opc.tcp://localhost:4840';
       final keyMappings = KeyMappings(nodes: {});
 
@@ -82,8 +90,8 @@ void main() {
       await Future.delayed(const Duration(seconds: 5));
 
       // Start the database
-      await startTimescaleDb();
-      await waitForDatabaseReady();
+      await testDb.startContainer();
+      await testDb.waitForReady();
 
       // Wait for isolate to successfully start after DB recovery
       await Future.delayed(const Duration(seconds: 10));
@@ -99,7 +107,7 @@ void main() {
     }, timeout: Timeout(Duration(seconds: 60)));
 
     test('isolate respawn on crash', () async {
-      final dbConfig = getTestConfig();
+      final dbConfig = testDb.config();
       final serverConfig = OpcUAConfig()..endpoint = 'opc.tcp://localhost:4840';
       final keyMappings = KeyMappings(nodes: {});
 

@@ -1,7 +1,10 @@
 import 'package:test/test.dart';
 import 'package:tfc_dart/core/ring_buffer.dart';
 
+import '../test_timing.dart';
+
 void main() {
+  enableTestTiming();
   group('RingBuffer', () {
     test('empty buffer operations', () {
       final buffer = RingBuffer<int>(3);
