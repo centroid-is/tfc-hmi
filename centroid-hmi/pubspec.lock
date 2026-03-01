@@ -170,6 +170,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "8.12.3"
+  change_case:
+    dependency: transitive
+    description:
+      name: change_case
+      sha256: e41ef3df58521194ef8d7649928954805aeb08061917cf658322305e61568003
+      url: "https://pub.dev"
+    source: hosted
+    version: "2.2.0"
   characters:
     dependency: transitive
     description:
@@ -787,6 +795,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "0.17.4"
+  native_toolchain_cmake:
+    dependency: transitive
+    description:
+      name: native_toolchain_cmake
+      sha256: fe40e8483183ced98e851e08a9cd2a547fd412cccab98277aa23f2377e43d66f
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.2.4"
   nm:
     dependency: transitive
     description:
@@ -807,19 +823,11 @@ packages:
     dependency: "direct main"
     description:
       path: "."
-      ref: isolate-client-browse
-      resolved-ref: c965e879f7ec2599958f4c4c95cf249b11bd9f84
+      ref: ai-more-server-impl
+      resolved-ref: "35e23015fc8912a8a230dcefb761bcf67393a956"
       url: "https://github.com/centroid-is/open62541_dart.git"
     source: git
-    version: "0.0.0-dev.1"
-  open62541_libs:
-    dependency: "direct main"
-    description:
-      name: open62541_libs
-      sha256: bea65c749f26f7bc96b21940193a9faeedb742576ba7d6433bf0029b1b6af14a
-      url: "https://pub.dev"
-    source: hosted
-    version: "0.0.5"
+    version: "1.5.2-0"
   os_detect:
     dependency: transitive
     description:

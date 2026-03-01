@@ -1,0 +1,11 @@
+services:
+  timescaledb:
+    image: timescale/timescaledb:latest-pg17
+    container_name: test-db-isolate
+    restart: "no"
+    environment:
+      - POSTGRES_DB=testdb
+      - POSTGRES_USER=testuser
+      - POSTGRES_PASSWORD=testpass
+    ports:
+      - 5443:5432

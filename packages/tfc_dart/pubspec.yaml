@@ -31,7 +31,7 @@ dependencies:
   open62541:
     git:
       url: https://github.com/centroid-is/open62541_dart.git
-      ref: isolate-client-browse
+      ref: ai-more-server-impl
 
   # Utilities
   collection: ^1.18.0

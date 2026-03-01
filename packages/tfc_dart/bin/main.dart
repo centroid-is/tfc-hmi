@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:tfc_dart/core/aggregator_server.dart';
 import 'package:tfc_dart/core/database.dart';
 import 'package:tfc_dart/core/preferences.dart';
 import 'package:tfc_dart/core/state_man.dart';
@@ -36,37 +37,93 @@ void main() async {
 
   final keyMappings = await KeyMappings.fromPrefs(prefs, createDefault: false);
 
-  // Disable SSL for alarm StateMan to test if the issue is specific to
-  // encrypted secure channel renewal
-  final alarmSmConfig = smConfig.copy();
-  // for (final opcuaConfig in alarmSmConfig.opcua) {
-  //   opcuaConfig.sslCert = null;
-  //   opcuaConfig.sslKey = null;
-  //   opcuaConfig.password = null;
-  //   opcuaConfig.username = null;
-  // }
-
-  // Create StateMan for alarm monitoring (with separate certificate)
-  final stateMan = await StateMan.create(
-    config: alarmSmConfig,
+  // SharedStateMan for AlarmMan + AggregatorServer
+  final sharedStateMan = await StateMan.create(
+    config: smConfig,
     keyMappings: keyMappings,
-    useIsolate: false,
-    staticLinking: false,
-    alias: 'alarmman',
+    useIsolate: true,
+    alias: 'shared',
   );
 
   // Setup alarm monitoring with database persistence
-  // ignore: unused_local_variable
   final alarmHandler = await AlarmMan.create(
     prefs,
-    stateMan,
+    sharedStateMan,
     historyToDb: true,
   );
+
+  // Track isolate handles for hot-reload
+  final isolateHandles = <String, IsolateHandle>{};
+
+  // Reload callback: diff old vs new configs, stop/spawn as needed
+  Future<String> reloadClients(List<OpcUAConfig> newServers) async {
+    final newByAlias = <String, OpcUAConfig>{};
+    for (final s in newServers) {
+      newByAlias[s.serverAlias ?? s.endpoint] = s;
+    }
+
+    final oldAliases = isolateHandles.keys.toSet();
+    final newAliases = newByAlias.keys.toSet();
+
+    // Removed: stop isolate
+    for (final alias in oldAliases.difference(newAliases)) {
+      logger.i('Stopping isolate for removed server "$alias"');
+      isolateHandles[alias]?.stop();
+      isolateHandles.remove(alias);
+    }
+
+    // Added or changed: stop old (if exists) and spawn new
+    for (final alias in newAliases) {
+      final newConfig = newByAlias[alias]!;
+      final oldHandle = isolateHandles[alias];
+
+      if (oldHandle != null && oldAliases.contains(alias)) {
+        // Check if config actually changed (need to compare with current)
+        final oldConfig = smConfig.opcua.firstWhere(
+          (c) => (c.serverAlias ?? c.endpoint) == alias,
+          orElse: () => OpcUAConfig(), // fallback means it's new
+        );
+        if (oldConfig == newConfig) continue; // unchanged
+
+        logger.i('Restarting isolate for changed server "$alias"');
+        oldHandle.stop();
+      } else {
+        logger.i('Spawning isolate for new server "$alias"');
+      }
+
+      final filtered = keyMappings.filterByServer(newConfig.serverAlias);
+      final handle = await spawnDataAcquisitionIsolate(
+        server: newConfig,
+        dbConfig: dbConfig,
+        keyMappings: filtered,
+      );
+      isolateHandles[alias] = handle;
+    }
+
+    return 'ok: ${newServers.length} server(s) configured';
+  }
+
+  // Start AggregatorServer if enabled
+  if (smConfig.aggregator?.enabled == true) {
+    final aggregator = AggregatorServer(
+      config: smConfig.aggregator!,
+      sharedStateMan: sharedStateMan,
+      alarmMan: alarmHandler,
+      configFilePath: statemanConfigFilePath,
+      onReloadClients: reloadClients,
+      prefs: prefs,
+    );
+    await aggregator.initialize();
+    unawaited(aggregator.runLoop());
+    logger.i(
+        'Aggregator server started on port ${smConfig.aggregator!.port}');
+  }
 
   logger.i('Spawning ${smConfig.opcua.length} DataAcquisition isolate(s)');
 
   // Spawn one isolate per OPC UA server
   for (final server in smConfig.opcua) {
+    final alias = server.serverAlias ?? server.endpoint;
     final filtered = keyMappings.filterByServer(server.serverAlias);
     final collectedKeys = filtered.nodes.entries
         .where((e) => e.value.collect != null)
@@ -74,11 +131,12 @@ void main() async {
     logger.i(
         'Spawning isolate for server ${server.serverAlias} ${server.endpoint} with ${filtered.nodes.length} keys (${collectedKeys.length} collected):\n${collectedKeys.map((k) => '  - $k').join('\n')}');
 
-    await spawnDataAcquisitionIsolate(
+    final handle = await spawnDataAcquisitionIsolate(
       server: server,
       dbConfig: dbConfig,
       keyMappings: filtered,
     );
+    isolateHandles[alias] = handle;
   }
 
   logger.i('All isolates spawned, main thread waiting...');

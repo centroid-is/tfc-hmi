@@ -10,6 +10,7 @@ import 'package:open62541/open62541.dart';
 import 'package:rxdart/rxdart.dart';
 import 'package:collection/collection.dart';
 
+import 'aggregator_server.dart';
 import 'collector.dart';
 import 'preferences.dart';
 
@@ -114,6 +115,25 @@ class OpcUAConfig {
   OpcUAConfig();
 
   @override
+  bool operator ==(Object other) =>
+      other is OpcUAConfig &&
+      endpoint == other.endpoint &&
+      username == other.username &&
+      password == other.password &&
+      serverAlias == other.serverAlias &&
+      const ListEquality<int>().equals(sslCert, other.sslCert) &&
+      const ListEquality<int>().equals(sslKey, other.sslKey);
+
+  @override
+  int get hashCode => Object.hash(
+      endpoint,
+      username,
+      password,
+      serverAlias,
+      sslCert != null ? Object.hashAll(sslCert!) : null,
+      sslKey != null ? Object.hashAll(sslKey!) : null);
+
+  @override
   String toString() {
     return 'OpcUAConfig(endpoint: $endpoint, username: $username, password: $password, sslCert: $sslCert, sslKey: $sslKey)';
   }
@@ -126,8 +146,9 @@ class OpcUAConfig {
 @JsonSerializable(explicitToJson: true)
 class StateManConfig {
   List<OpcUAConfig> opcua;
+  AggregatorConfig? aggregator;
 
-  StateManConfig({required this.opcua});
+  StateManConfig({required this.opcua, this.aggregator});
 
   StateManConfig copy() => StateManConfig.fromJson(toJson());
 
@@ -164,6 +185,11 @@ class StateManConfig {
   Future<void> toPrefs(Preferences prefs) async {
     final configJson = jsonEncode(toJson());
     await prefs.setString(configKey, configJson, secret: true, saveToDb: false);
+  }
+
+  Future<void> toFile(String path) async {
+    const encoder = JsonEncoder.withIndent('  ');
+    await File(path).writeAsString(encoder.convert(toJson()));
   }
 
   factory StateManConfig.fromJson(Map<String, dynamic> json) =>
@@ -317,23 +343,33 @@ class ClientWrapper {
   final SingleWorker worker = SingleWorker();
 
   ConnectionStatus _connectionStatus = ConnectionStatus.disconnected;
-  final StreamController<ConnectionStatus> _connectionController =
-      StreamController<ConnectionStatus>.broadcast();
+  String? _lastError;
+  final StreamController<(ConnectionStatus, String?)> _connectionController =
+      StreamController<(ConnectionStatus, String?)>.broadcast();
 
   ClientWrapper(this.client, this.config);
 
   /// Current connection status (synchronous, always up-to-date).
   ConnectionStatus get connectionStatus => _connectionStatus;
 
-  /// Stream of connection status changes. Subscribe anytime — read
-  /// [connectionStatus] for the current value.
-  Stream<ConnectionStatus> get connectionStream => _connectionController.stream;
+  /// Last error reason (e.g. "BadUserAccessDenied"), null when connected.
+  String? get lastError => _lastError;
+
+  /// Stream of connection status changes with optional error reason.
+  Stream<(ConnectionStatus, String?)> get connectionStream =>
+      _connectionController.stream;
 
   void updateConnectionStatus(ClientState state) {
     final next = _mapState(state);
-    if (next == _connectionStatus) return;
+    final error = next == ConnectionStatus.connected
+        ? null
+        : _statusCodeName(state.recoveryStatus);
+    final changed = next != _connectionStatus || error != _lastError;
     _connectionStatus = next;
-    _connectionController.add(next);
+    _lastError = error;
+    if (changed) {
+      _connectionController.add((next, error));
+    }
   }
 
   static ConnectionStatus _mapState(ClientState state) {
@@ -344,6 +380,11 @@ class ClientWrapper {
       return ConnectionStatus.connecting;
     }
     return ConnectionStatus.disconnected;
+  }
+
+  static String? _statusCodeName(int code) {
+    if (code == 0) return null; // Good
+    return statusCodeToString(code);
   }
 
   void dispose() {
@@ -361,8 +402,10 @@ class StateMan {
   final Map<String, String> _substitutions = {};
   final _subsMap$ = BehaviorSubject<Map<String, String>>.seeded(const {});
   String alias;
+  final bool aggregationMode;
 
   Timer? _healthCheckTimer;
+  final List<Future<void>> _iterateFutures = [];
 
   /// Constructor requires the server endpoint.
   StateMan._({
@@ -370,11 +413,12 @@ class StateMan {
     required this.keyMappings,
     required this.clients,
     required this.alias,
+    this.aggregationMode = false,
   }) {
     for (final wrapper in clients) {
       if (wrapper.client is Client) {
         // spawn a background task to keep the client active
-        () async {
+        _iterateFutures.add(() async {
           final clientref = wrapper.client as Client;
           final stats =
               RunIterateStats("${wrapper.config.endpoint} \"$alias\"");
@@ -397,11 +441,11 @@ class StateMan {
             await Future.delayed(const Duration(milliseconds: 1000));
           }
           logger.e('StateMan background run iterate task exited');
-        }();
+        }());
       }
       if (wrapper.client is ClientIsolate) {
         final clientref = wrapper.client as ClientIsolate;
-        () async {
+        _iterateFutures.add(() async {
           while (_shouldRun) {
             try {
               clientref.connect(wrapper.config.endpoint).onError(
@@ -409,16 +453,18 @@ class StateMan {
                       'Failed to connect to ${wrapper.config.endpoint}: $e'));
               await clientref.runIterate();
             } catch (error) {
+              if (!_shouldRun) break;
               logger.e("run iterate error: $error");
               try {
                 // try to disconnect
                 await clientref.disconnect();
               } catch (_) {}
               // Throttle if often occuring error
+              if (!_shouldRun) break;
               await Future.delayed(const Duration(seconds: 1));
             }
           }
-        }();
+        }());
       }
 
       bool sessionLost = false;
@@ -469,17 +515,27 @@ class StateMan {
           sessionLost = true;
         }
         if (value.sessionState == SessionState.UA_SESSIONSTATE_ACTIVATED) {
+          logger.w(
+              '[$alias ${wrapper.config.endpoint}] Session ACTIVATED (sessionLost=$sessionLost, subId=${wrapper.subscriptionId}, subs=${_subscriptions.length})');
           if (sessionLost) {
             logger.e(
                 '[$alias ${wrapper.config.endpoint}] Session lost, resubscribing (old sub=${wrapper.subscriptionId})');
             sessionLost = false;
             wrapper.subscriptionId = null;
-            // Only resubscribe keys belonging to this wrapper
-            final lostAlias = wrapper.config.serverAlias;
-            final keysToResub = _subscriptions.values
-                .where((e) => keyMappings.lookupServerAlias(e.key) == lostAlias)
-                .map((e) => e.key)
-                .toList();
+            // In aggregation mode there's only one client wrapper so ALL
+            // subscribed keys must be resubscribed.  In direct mode,
+            // only resubscribe keys belonging to the lost wrapper.
+            final List<String> keysToResub;
+            if (aggregationMode) {
+              keysToResub = _subscriptions.values.map((e) => e.key).toList();
+            } else {
+              final lostAlias = wrapper.config.serverAlias;
+              keysToResub = _subscriptions.values
+                  .where(
+                      (e) => keyMappings.lookupServerAlias(e.key) == lostAlias)
+                  .map((e) => e.key)
+                  .toList();
+            }
             logger.i(
                 '[$alias ${wrapper.config.endpoint}] Resubscribing ${keysToResub.length} keys');
 
@@ -540,15 +596,12 @@ class StateMan {
               // disconnected (e.g. a health-check timeout), restore the
               // status. The native stateStream won't emit a new event
               // because the channel/session never actually changed.
-              if (wrapper.connectionStatus ==
-                  ConnectionStatus.disconnected) {
+              if (wrapper.connectionStatus == ConnectionStatus.disconnected) {
                 logger.i(
                     '[$alias ${wrapper.config.endpoint}] Health check read succeeded — restoring connected status');
                 wrapper.updateConnectionStatus(ClientState(
-                  channelState:
-                      SecureChannelState.UA_SECURECHANNELSTATE_OPEN,
-                  sessionState:
-                      SessionState.UA_SESSIONSTATE_ACTIVATED,
+                  channelState: SecureChannelState.UA_SECURECHANNELSTATE_OPEN,
+                  sessionState: SessionState.UA_SESSIONSTATE_ACTIVATED,
                   recoveryStatus: 0,
                 ));
               }
@@ -567,7 +620,10 @@ class StateMan {
   }
 
   void _resendLastValues() {
+    logger.w(
+        '[$alias] _resendLastValues() called with ${_subscriptions.length} subscriptions');
     for (final entry in _subscriptions.values) {
+      //logger.w('[$alias] Resending last value for ${entry.key}: ${entry._lastValue?.value}');
       entry.resendLastValue();
     }
   }
@@ -576,72 +632,97 @@ class StateMan {
     required StateManConfig config,
     required KeyMappings keyMappings,
     bool useIsolate = true,
-    bool staticLinking = true,
     String alias = '',
+    bool aggregationMode = false,
   }) async {
-    // Example directory: /Users/jonb/Library/Containers/is.centroid.sildarvinnsla.skammtalina/Data/Documents/certs
     List<ClientWrapper> clients = [];
-    for (final opcuaConfig in config.opcua) {
+
+    if (aggregationMode && config.aggregator != null) {
+      // Use clientConfig from aggregator, or fall back to localhost:<port>
+      final clientCfg = config.aggregator!.clientConfig ??
+          (OpcUAConfig()
+            ..endpoint = 'opc.tcp://localhost:${config.aggregator!.port}');
+
       Uint8List? cert;
       Uint8List? key;
       MessageSecurityMode securityMode =
           MessageSecurityMode.UA_MESSAGESECURITYMODE_NONE;
-      if (opcuaConfig.sslCert != null && opcuaConfig.sslKey != null) {
-        cert = opcuaConfig.sslCert!;
-        key = opcuaConfig.sslKey!;
+      if (clientCfg.sslCert != null && clientCfg.sslKey != null) {
+        cert = clientCfg.sslCert!;
+        key = clientCfg.sslKey!;
         securityMode =
             MessageSecurityMode.UA_MESSAGESECURITYMODE_SIGNANDENCRYPT;
       }
-      String? username;
-      String? password;
-      if (opcuaConfig.username != null && opcuaConfig.password != null) {
-        username = opcuaConfig.username;
-        password = opcuaConfig.password;
+
+      final client = await ClientIsolate.create(
+        username: clientCfg.username,
+        password: clientCfg.password,
+        certificate: cert,
+        privateKey: key,
+        securityMode: securityMode,
+        logLevel: LogLevel.UA_LOGLEVEL_INFO,
+      );
+      clients.add(ClientWrapper(client, clientCfg));
+    } else {
+      for (final opcuaConfig in config.opcua) {
+        Uint8List? cert;
+        Uint8List? key;
+        MessageSecurityMode securityMode =
+            MessageSecurityMode.UA_MESSAGESECURITYMODE_NONE;
+        if (opcuaConfig.sslCert != null && opcuaConfig.sslKey != null) {
+          cert = opcuaConfig.sslCert!;
+          key = opcuaConfig.sslKey!;
+          securityMode =
+              MessageSecurityMode.UA_MESSAGESECURITYMODE_SIGNANDENCRYPT;
+        }
+        String? username;
+        String? password;
+        if (opcuaConfig.username != null && opcuaConfig.password != null) {
+          username = opcuaConfig.username;
+          password = opcuaConfig.password;
+        }
+        clients.add(ClientWrapper(
+            useIsolate
+                ? await ClientIsolate.create(
+                    username: username,
+                    password: password,
+                    certificate: cert,
+                    privateKey: key,
+                    securityMode: securityMode,
+                    logLevel: LogLevel.UA_LOGLEVEL_INFO,
+                    secureChannelLifeTime: Duration(
+                        minutes:
+                            1), // TODO can I reproduce the problem more often
+                  )
+                : Client(
+                    username: username,
+                    password: password,
+                    certificate: cert,
+                    privateKey: key,
+                    securityMode: securityMode,
+                    logLevel: LogLevel.UA_LOGLEVEL_INFO,
+                    secureChannelLifeTime: Duration(
+                        minutes:
+                            1), // TODO can I reproduce the problem more often
+                  ),
+            opcuaConfig));
       }
-      final libName = staticLinking
-          ? ''
-          : Platform.isWindows
-              ? 'open62541.dll'
-              : Platform.isMacOS || Platform.isIOS
-                  ? 'libopen62541.dylib'
-                  : 'libopen62541.so'; // Linux, Android
-      clients.add(ClientWrapper(
-          useIsolate
-              ? await ClientIsolate.create(
-                  libraryPath: libName,
-                  username: username,
-                  password: password,
-                  certificate: cert,
-                  privateKey: key,
-                  securityMode: securityMode,
-                  logLevel: LogLevel.UA_LOGLEVEL_INFO,
-                  secureChannelLifeTime: Duration(
-                      minutes:
-                          1), // TODO can I reproduce the problem more often
-                )
-              : Client(
-                  loadOpen62541Library(staticLinking: staticLinking),
-                  username: username,
-                  password: password,
-                  certificate: cert,
-                  privateKey: key,
-                  securityMode: securityMode,
-                  logLevel: LogLevel.UA_LOGLEVEL_INFO,
-                  secureChannelLifeTime: Duration(
-                      minutes:
-                          1), // TODO can I reproduce the problem more often
-                ),
-          opcuaConfig));
     }
+
     final stateMan = StateMan._(
         config: config,
         keyMappings: keyMappings,
         clients: clients,
-        alias: alias);
+        alias: alias,
+        aggregationMode: aggregationMode);
     return stateMan;
   }
 
   ClientWrapper _getClientWrapper(String key) {
+    if (aggregationMode) {
+      // Single aggregator client
+      return clients.first;
+    }
     // This throws if the key is not found
     // Be mindful that null == null is true
     return clients.firstWhere((wrapper) =>
@@ -803,7 +884,14 @@ class StateMan {
           (wrapper.client as Client).disconnect();
         }
       } catch (_) {}
-      wrapper.client.delete();
+      await wrapper.client.delete();
+    }
+    // Wait for iterate loops to exit before disposing
+    await Future.wait(
+      _iterateFutures.map((f) => f.catchError((_) {})),
+    );
+    _iterateFutures.clear();
+    for (final wrapper in clients) {
       wrapper.dispose();
     }
     // Clean up subscriptions
@@ -818,7 +906,19 @@ class StateMan {
   }
 
   (NodeId, int?)? _lookupNodeId(String key) {
-    return keyMappings.lookupNodeId(key);
+    if (!aggregationMode) return keyMappings.lookupNodeId(key);
+    // In aggregation mode, translate to aggregator NodeId
+    final entry = keyMappings.nodes[key];
+    if (entry?.opcuaNode == null) return null;
+    // Nodes with serverAlias '__aggregate' are native to the aggregator
+    // server — use the raw NodeId directly without alias encoding.
+    if (entry!.opcuaNode!.serverAlias == '__aggregate') {
+      final (nodeId, _) = entry.opcuaNode!.toNodeId();
+      return (nodeId, entry.opcuaNode!.arrayIndex);
+    }
+    final aggregatorNodeId =
+        AggregatorNodeId.fromOpcUANodeConfig(entry.opcuaNode!);
+    return (aggregatorNodeId, entry.opcuaNode!.arrayIndex);
   }
 
   @visibleForTesting
@@ -982,10 +1082,19 @@ class AutoDisposingStream<T> {
         }
       },
       onDone: () {
-        _logger.w('[$key] raw stream DONE — '
-            'subject will close! listeners=$_listenerCount, '
-            'subjectClosed=${_subject.isClosed}');
-        _subject.close();
+        _logger.w('[$key] raw stream DONE! '
+            'keeping subject open for resub. listeners=$_listenerCount');
+        // Do NOT close the subject. The raw stream ends on transient
+        // events (SecureChannel closed) and session recovery will call
+        // subscribe() again with a fresh raw stream. The subject is only
+        // closed by the idle timer (no listeners) or StateMan.close().
+        //
+        // Push an error so that widgets (StreamBuilder) notice the data
+        // stopped flowing and can show a disconnected / grey state.
+        if (!_subject.isClosed) {
+          _subject.addError(StateError('Stream ended for $key'));
+        }
+        _rawSub = null;
       },
     );
     _lastValue = firstValue;
@@ -1021,7 +1130,7 @@ class AutoDisposingStream<T> {
   }
 
   void resendLastValue() {
-    if (_lastValue != null) {
+    if (_lastValue != null && !_subject.isClosed) {
       _subject.add(_lastValue!);
     }
   }

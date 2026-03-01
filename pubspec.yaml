@@ -29,7 +29,7 @@ dependencies:
     # path: ../open62541_dart
     git:
       url: https://github.com/centroid-is/open62541_dart.git
-      ref: isolate-client-browse
+      ref: ai-more-server-impl
   postgres: ^3.4.5
   intl: ^0.20.2
   collection: ^1.18.0
