@@ -1130,7 +1130,7 @@ class AutoDisposingStream<T> {
   }
 
   void resendLastValue() {
-    if (_lastValue != null) {
+    if (_lastValue != null && !_subject.isClosed) {
       _subject.add(_lastValue!);
     }
   }
