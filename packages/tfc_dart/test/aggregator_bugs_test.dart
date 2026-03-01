@@ -359,4 +359,222 @@ void main() {
       expect(completed, 3, reason: 'All futures should complete');
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // Bug #9: Extension objects (custom struct types) fail in aggregator
+  // ---------------------------------------------------------------------------
+  group('Bug #9: extension objects through aggregator', () {
+    late Server upstreamServer;
+    late int upstreamPort;
+    late int aggregatorPort;
+    late StateMan stateMan;
+    late AggregatorServer aggregator;
+    late ClientIsolate aggClient;
+    var running = true;
+
+    final myStructTypeId = NodeId.fromString(1, 'MyStruct');
+
+    setUpAll(timed('ext-obj setUpAll', () async {
+      final sw = Stopwatch()..start();
+      final ports = allocatePorts(1, 2);
+      // Use offset to avoid collision with the shared group above
+      upstreamPort = ports[0] + 100;
+      aggregatorPort = ports[1] + 100;
+
+      // Upstream "PLC" server with a custom struct type
+      upstreamServer = Server(
+        port: upstreamPort,
+        logLevel: LogLevel.UA_LOGLEVEL_ERROR,
+      );
+
+      // Define the custom struct schema
+      DynamicValue structSchema = DynamicValue(
+        name: 'MyStruct',
+        typeId: myStructTypeId,
+      );
+      structSchema['temperature'] =
+          DynamicValue(value: 0.0, typeId: NodeId.double);
+      structSchema['pressure'] =
+          DynamicValue(value: 0.0, typeId: NodeId.double);
+      structSchema['running'] =
+          DynamicValue(value: false, typeId: NodeId.boolean);
+
+      // Register the custom type with the upstream server
+      upstreamServer.addCustomType(myStructTypeId, structSchema);
+      upstreamServer.addDataTypeNode(
+        myStructTypeId,
+        'MyStruct',
+        displayName: LocalizedText('My Struct Type', 'en-US'),
+      );
+
+      // Create an instance of the struct with actual values
+      DynamicValue structValue = DynamicValue(
+        name: 'sensor_data',
+        typeId: myStructTypeId,
+      );
+      structValue['temperature'] =
+          DynamicValue(value: 23.5, typeId: NodeId.double);
+      structValue['pressure'] =
+          DynamicValue(value: 101.3, typeId: NodeId.double);
+      structValue['running'] =
+          DynamicValue(value: true, typeId: NodeId.boolean);
+
+      upstreamServer.addVariableNode(
+        NodeId.fromString(1, 'GVL.sensor'),
+        structValue,
+        accessLevel: const AccessLevelMask(read: true, write: true),
+        typeId: myStructTypeId,
+      );
+
+      // Also add a plain scalar variable for comparison
+      upstreamServer.addVariableNode(
+        NodeId.fromString(1, 'GVL.temp'),
+        DynamicValue(value: 42.0, typeId: NodeId.double, name: 'temp'),
+        accessLevel: const AccessLevelMask(read: true, write: true),
+      );
+
+      upstreamServer.start();
+      unawaited(() async {
+        while (running && upstreamServer.runIterate(waitInterval: false)) {
+          await Future.delayed(const Duration(milliseconds: 5));
+        }
+      }());
+      _t(sw, 'upstream server with struct started');
+
+      // Key mappings: one struct variable, one scalar
+      final keyMappings = KeyMappings(nodes: {
+        'sensor_data': KeyMappingEntry(
+          opcuaNode: OpcUANodeConfig(namespace: 1, identifier: 'GVL.sensor')
+            ..serverAlias = 'plc1',
+        ),
+        'temperature': KeyMappingEntry(
+          opcuaNode: OpcUANodeConfig(namespace: 1, identifier: 'GVL.temp')
+            ..serverAlias = 'plc1',
+        ),
+      });
+
+      final config = StateManConfig(
+        opcua: [
+          OpcUAConfig()
+            ..endpoint = 'opc.tcp://localhost:$upstreamPort'
+            ..serverAlias = 'plc1',
+        ],
+        aggregator: AggregatorConfig(enabled: true, port: aggregatorPort),
+      );
+
+      stateMan = await StateMan.create(
+        config: config,
+        keyMappings: keyMappings,
+        useIsolate: true,
+        alias: 'test-ext-obj',
+      );
+      _t(sw, 'StateMan.create');
+
+      // Wait for upstream connection
+      for (final wrapper in stateMan.clients) {
+        if (wrapper.connectionStatus == ConnectionStatus.connected) continue;
+        await wrapper.connectionStream
+            .firstWhere((event) => event.$1 == ConnectionStatus.connected)
+            .timeout(const Duration(seconds: 15));
+      }
+      _t(sw, 'client connected');
+
+      aggregator = AggregatorServer(
+        config: config.aggregator!,
+        sharedStateMan: stateMan,
+      );
+      await aggregator.initialize(skipTls: true);
+      // Wait for populate to complete (including failures)
+      await aggregator.waitForPending();
+      unawaited(aggregator.runLoop());
+      _t(sw, 'aggregator initialized');
+
+      aggClient = await ClientIsolate.create();
+      unawaited(aggClient.runIterate().catchError((_) {}));
+      unawaited(aggClient.connect('opc.tcp://localhost:$aggregatorPort'));
+      await aggClient.awaitConnect();
+      _t(sw, 'aggClient connected');
+    }));
+
+    tearDownAll(timed('ext-obj tearDownAll', () async {
+      await aggregator.shutdown();
+      await aggClient.delete();
+      await stateMan.close();
+      running = false;
+      await Future.delayed(const Duration(milliseconds: 50));
+      upstreamServer.shutdown();
+      upstreamServer.delete();
+    }));
+
+    test('scalar variable is accessible through aggregator', () async {
+      // Scalar types should work fine through the aggregator
+      final tempNodeId = AggregatorNodeId.encode(
+        'plc1',
+        NodeId.fromString(1, 'GVL.temp'),
+      );
+      final value = await aggClient.read(tempNodeId);
+      expect(value.value, 42.0,
+          reason: 'Scalar double should pass through aggregator');
+    });
+
+    test('extension object variable is accessible through aggregator',
+        () async {
+      // This test demonstrates the bug: extension objects from upstream PLCs
+      // fail to be exposed in the aggregator because the aggregator server
+      // doesn't have the custom data type registered.
+      //
+      // The aggregator's addVariableNode calls _findDataType(typeId) which
+      // returns nullptr for custom types, causing it to throw
+      // 'Failed to find data type <typeId>'.
+      final sensorNodeId = AggregatorNodeId.encode(
+        'plc1',
+        NodeId.fromString(1, 'GVL.sensor'),
+      );
+
+      // The struct variable should be browsable under the plc1 alias folder
+      final plc1Folder = AggregatorNodeId.folderNodeId('plc1');
+      final browseResults = await aggClient.browse(plc1Folder);
+      final names = browseResults.map((r) => r.browseName).toList();
+
+      expect(names, contains('sensor_data'),
+          reason:
+              'Extension object variable should appear in aggregator browse results');
+
+      // And it should be readable with correct struct fields
+      final value = await aggClient.read(sensorNodeId);
+      expect(value.isObject, isTrue,
+          reason: 'Extension object should be readable as a struct');
+      expect(value['temperature'].value, 23.5);
+      expect(value['pressure'].value, 101.3);
+      expect(value['running'].value, true);
+    });
+
+    test('extension object updates propagate through aggregator', () async {
+      // Write a new value to the struct on the upstream server
+      DynamicValue newValue = DynamicValue(typeId: myStructTypeId);
+      newValue['temperature'] =
+          DynamicValue(value: 99.9, typeId: NodeId.double);
+      newValue['pressure'] =
+          DynamicValue(value: 200.0, typeId: NodeId.double);
+      newValue['running'] =
+          DynamicValue(value: false, typeId: NodeId.boolean);
+
+      await upstreamServer.write(
+        NodeId.fromString(1, 'GVL.sensor'),
+        newValue,
+      );
+
+      // Wait for subscription to propagate
+      await Future.delayed(const Duration(seconds: 2));
+
+      final sensorNodeId = AggregatorNodeId.encode(
+        'plc1',
+        NodeId.fromString(1, 'GVL.sensor'),
+      );
+      final value = await aggClient.read(sensorNodeId);
+      expect(value.isObject, isTrue);
+      expect(value['temperature'].value, 99.9,
+          reason: 'Updated struct field should propagate through aggregator');
+    });
+  });
 }
