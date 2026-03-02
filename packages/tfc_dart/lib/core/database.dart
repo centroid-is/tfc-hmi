@@ -279,7 +279,9 @@ class Database {
     controller.onCancel = sub.cancel;
   });
 
-  /// Retry a database operation with exponential backoff
+  /// Retry a database operation with exponential backoff.
+  /// Permanent PostgreSQL errors (schema mismatch, syntax errors, etc.) are
+  /// re-thrown immediately without retrying, so they don't block the flush loop.
   Future<T> _withRetry<T>(Future<T> Function() operation,
       {int maxRetries = 5,
       Duration initialDelay = const Duration(seconds: 1)}) async {
@@ -288,6 +290,12 @@ class Database {
       try {
         return await operation();
       } catch (e) {
+        // Don't retry permanent errors — retrying will never help and blocks
+        // the flush loop for all other tables while backoff runs.
+        // When running via AppDatabase.spawn() (isolate mode), Drift wraps
+        // pg.ServerException in DriftRemoteException, so we check by type first
+        // then fall back to parsing the message string for the SQLSTATE code.
+        if (_isPermanentDbError(e)) rethrow;
         if (attempt == maxRetries - 1) rethrow;
         logger.w(
             'Database operation failed (attempt ${attempt + 1}/$maxRetries): $e');
@@ -296,6 +304,30 @@ class Database {
       }
     }
     throw StateError('Unreachable');
+  }
+
+  /// Returns true if [e] is a permanent PostgreSQL error that should not be retried.
+  ///
+  /// In non-isolate mode the exception is [pg.ServerException] and we can read
+  /// [pg.ServerException.code] directly.  In isolate mode (AppDatabase.spawn)
+  /// Drift wraps it in a DriftRemoteException whose [toString] still contains
+  /// the 5-char SQLSTATE code, so we fall back to parsing the message string.
+  ///
+  /// SQLSTATE class 42 = syntax/schema errors (42703 = undefined_column, …)
+  /// SQLSTATE class 23 = integrity constraint violations
+  static bool _isPermanentDbError(Object e) {
+    if (e is pg.ServerException) {
+      final code = e.code ?? '';
+      return code.startsWith('42') || code.startsWith('23');
+    }
+    // DriftRemoteException message format: "Severity.error 42703: …"
+    return RegExp(r'\b(42|23)[0-9A-Z]{3}\b').hasMatch(e.toString());
+  }
+
+  /// Returns true if [e] is specifically a "column does not exist" error (42703).
+  static bool _isMissingColumnError(Object e) {
+    if (e is pg.ServerException) return e.code == '42703';
+    return e.toString().contains('42703');
   }
 
   // Batch write buffering
@@ -397,7 +429,9 @@ class Database {
     }
   }
 
-  /// Ensure table exists and insert rows
+  /// Ensure table exists and insert rows.
+  /// Handles schema evolution: if the OPC UA struct gained new fields since the
+  /// table was created, adds the missing columns via ALTER TABLE and retries.
   Future<void> _ensureTableAndInsert(String tableName, List<_PendingWrite> writes) async {
     // Create table if it was pending
     if (_pendingTableCreation.contains(tableName)) {
@@ -407,7 +441,42 @@ class Database {
       _pendingTableCreation.remove(tableName);
     }
     final rows = writes.map((w) => w.toMap()).toList();
-    await _withRetry(() => db.tableInsertBatch(tableName, rows));
+    try {
+      await _withRetry(() => db.tableInsertBatch(tableName, rows));
+    } catch (e) {
+      if (!_isMissingColumnError(e)) rethrow; // 42703 = undefined_column
+      await _addMissingColumn(tableName, e, rows);
+      // Retry once — any further new columns will be caught next flush cycle
+      await db.tableInsertBatch(tableName, rows);
+    }
+  }
+
+  /// Parses the column name from a PostgreSQL 42703 error and adds it to the table.
+  /// Accepts both [pg.ServerException] (direct mode) and DriftRemoteException
+  /// (isolate mode) — both contain the column name in their string representation.
+  Future<void> _addMissingColumn(
+      String tableName, Object error, List<Map<String, dynamic>> rows) async {
+    final errorStr = error is pg.ServerException ? error.message : error.toString();
+    final match = RegExp(r'column "([^"]+)"').firstMatch(errorStr);
+    if (match == null) {
+      logger.e('Could not parse missing column name from: $errorStr');
+      throw DatabaseException('Schema evolution failed: cannot parse column name from "$errorStr"');
+    }
+    final colName = match.group(1)!;
+    // Find a non-null value for this column across all rows to infer its type
+    dynamic colValue;
+    for (final row in rows) {
+      if (row[colName] != null) {
+        colValue = row[colName];
+        break;
+      }
+    }
+    final colType = _getPostgresType(colValue);
+    final quotedTable = tableName.replaceAll('"', '""');
+    final quotedCol = colName.replaceAll('"', '""');
+    logger.i('Schema evolution: adding column "$colName" ($colType) to "$tableName"');
+    await db.customStatement(
+        'ALTER TABLE "$quotedTable" ADD COLUMN IF NOT EXISTS "$quotedCol" $colType');
   }
 
   /// Get performance statistics
