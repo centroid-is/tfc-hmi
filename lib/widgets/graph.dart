@@ -610,8 +610,8 @@ class ChartThemeNotifier extends _$ChartThemeNotifier {
 
   cs.ChartTheme _createDarkChartTheme() {
     return cs.ChartTheme(
-      backgroundColor: SolarizedColors.base03,
-      plotBackgroundColor: SolarizedColors.base02,
+      backgroundColor: Colors.transparent,
+      plotBackgroundColor: Colors.transparent,
       primaryColor: SolarizedColors.blue,
       borderColor: Colors.transparent,
       gridColor: SolarizedColors.base01.withAlpha(75),
@@ -647,8 +647,8 @@ class ChartThemeNotifier extends _$ChartThemeNotifier {
 
   cs.ChartTheme _createLightChartTheme() {
     return cs.ChartTheme(
-      backgroundColor: SolarizedColors.base3,
-      plotBackgroundColor: SolarizedColors.base2,
+      backgroundColor: Colors.transparent,
+      plotBackgroundColor: Colors.transparent,
       primaryColor: SolarizedColors.green,
       borderColor: Colors.transparent,
       gridColor: SolarizedColors.base00.withAlpha(75),
@@ -669,7 +669,7 @@ class ChartThemeNotifier extends _$ChartThemeNotifier {
         SolarizedColors.yellow,
       ],
       // (Padding could be computed from label sizes if needed)
-      padding: const EdgeInsets.only(left: 80, right: 20, top: 20, bottom: 40),
+      padding: const EdgeInsets.only(left: 20, right: 0, top: 0, bottom: 0),
       axisTextStyle: const TextStyle(
         color: SolarizedColors.base00,
         fontSize: 12,

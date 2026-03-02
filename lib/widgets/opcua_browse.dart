@@ -163,7 +163,8 @@ class OpcUaBrowsePanelState extends State<OpcUaBrowsePanel> {
                 depth: 0,
                 parentNodeId: NodeId.objectsFolder,
               ))
-          .toList();
+          .toList()
+        ..sort((a, b) => a.displayName.compareTo(b.displayName));
       setState(() {
         _roots = roots;
         _rootLoading = false;
@@ -190,7 +191,8 @@ class OpcUaBrowsePanelState extends State<OpcUaBrowsePanel> {
                 depth: parentDepth + 1,
                 parentNodeId: nodeId,
               ))
-          .toList();
+          .toList()
+        ..sort((a, b) => a.displayName.compareTo(b.displayName));
       setState(() {
         _children[nodeId] = nodes;
         _expanded.add(nodeId);
@@ -227,7 +229,8 @@ class OpcUaBrowsePanelState extends State<OpcUaBrowsePanel> {
                   depth: parentDepth + 1,
                   parentNodeId: nodeId,
                 ))
-            .toList();
+            .toList()
+          ..sort((a, b) => a.displayName.compareTo(b.displayName));
       });
     } catch (_) {}
   }

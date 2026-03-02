@@ -66,17 +66,29 @@ class DynamicValueWidget extends StatelessWidget {
           ),
         const SizedBox(height: 8),
         ..._value.asObject.entries.map((entry) {
+          final label = _prettifyLabel(entry.key);
+          final desc = entry.value.description?.value;
+          final title = (desc != null && desc.isNotEmpty)
+              ? '$label ($desc)'
+              : label;
+
+          // Clear description/displayName on child so the leaf widget
+          // doesn't duplicate what we already show in the title.
+          final childValue = DynamicValue.from(entry.value);
+          childValue.description = null;
+          childValue.displayName = null;
+
           return Padding(
             padding: const EdgeInsets.only(left: 16.0),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  _prettifyLabel(entry.key),
+                  title,
                   style: Theme.of(context).textTheme.titleSmall,
                 ),
                 DynamicValueWidget(
-                  value: entry.value,
+                  value: childValue,
                   onSubmitted: onSubmitted != null
                       ? (newValue) {
                           final copy = DynamicValue.from(_value);
@@ -155,21 +167,34 @@ class DynamicValueWidget extends StatelessWidget {
   }
 
   Widget _buildBooleanWidget(BuildContext context) {
-    return Row(
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
       children: [
-        if (_value.displayName != null)
-          Text(
-            _value.displayName!.value,
-            style: Theme.of(context).textTheme.bodyMedium,
-          ),
-        Switch(
-          value: _value.asBool,
-          onChanged: onSubmitted != null
-              ? (newValue) {
-                  onSubmitted!(DynamicValue.from(_value)..value = newValue);
-                }
-              : null,
+        Row(
+          children: [
+            if (_value.displayName != null)
+              Text(
+                _value.displayName!.value,
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
+            Switch(
+              value: _value.asBool,
+              onChanged: onSubmitted != null
+                  ? (newValue) {
+                      onSubmitted!(DynamicValue.from(_value)..value = newValue);
+                    }
+                  : null,
+            ),
+          ],
         ),
+        if (_value.description != null)
+          Text(
+            _value.description!.value,
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+          ),
       ],
     );
   }
@@ -177,18 +202,32 @@ class DynamicValueWidget extends StatelessWidget {
   Widget _buildIntegerWidget(BuildContext context) {
     if (_value.enumFields != null) {
       try {
-        return DropdownButton<int>(
-          key: ValueKey(_value.asInt),
-          value: _value.asInt,
-          items: _value.enumFields!.entries
-              .map((entry) => DropdownMenuItem<int>(
-                  value: entry.key, child: Text(entry.value.displayName.value)))
-              .toList(),
-          onChanged: onSubmitted != null
-              ? (newValue) {
-                  onSubmitted!(DynamicValue.from(_value)..value = newValue);
-                }
-              : null,
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            DropdownButton<int>(
+              key: ValueKey(_value.asInt),
+              value: _value.asInt,
+              items: _value.enumFields!.entries
+                  .map((entry) => DropdownMenuItem<int>(
+                      value: entry.key,
+                      child: Text(entry.value.displayName.value)))
+                  .toList(),
+              onChanged: onSubmitted != null
+                  ? (newValue) {
+                      onSubmitted!(DynamicValue.from(_value)..value = newValue);
+                    }
+                  : null,
+            ),
+            if (_value.description != null)
+              Text(
+                _value.description!.value,
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+              ),
+          ],
         );
       } catch (e) {
         stderr.writeln("Error building enum dropdown: $e");

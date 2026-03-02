@@ -498,7 +498,7 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
                         _cardKeys.putIfAbsent(entry.key, () => GlobalKey());
                       }
                       return _KeyMappingCard(
-                        key: _cardKeys[entry.key],
+                        key: _cardKeys[entry.key] ?? ValueKey(entry.key),
                         keyName: entry.key,
                         entry: entry.value,
                         serverAliases: _serverAliases,
@@ -629,6 +629,17 @@ class _KeyMappingCardState extends State<_KeyMappingCard> {
     _keyNameFocusNode = FocusNode();
     _keyNameFocusNode.addListener(_onKeyNameFocusChange);
     _collectEnabled = widget.entry.collect != null;
+  }
+
+  @override
+  void didUpdateWidget(covariant _KeyMappingCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.keyName != widget.keyName) {
+      _keyNameController.text = widget.keyName;
+    }
+    if ((widget.entry.collect != null) != _collectEnabled) {
+      _collectEnabled = widget.entry.collect != null;
+    }
   }
 
   void _onKeyNameFocusChange() {

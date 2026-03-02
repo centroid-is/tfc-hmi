@@ -628,7 +628,8 @@ class Database {
 
     // final processStart = DateTime.now();
     if (result.isEmpty) {
-      print('📊 queryTimeseriesData: No results found');
+      print('📊 queryTimeseriesData: No results found for $tableName');
+      print('📊 queryTimeseriesData: from=${from?.toUtc().toIso8601String()} to=${to.toUtc().toIso8601String()}');
       return [];
     }
 

@@ -12,6 +12,7 @@ import '../../providers/state_man.dart';
 import 'package:tfc_dart/core/state_man.dart';
 import 'package:tfc/converter/color_converter.dart';
 import 'graph.dart';
+import '../../widgets/graph.dart' show GraphType;
 
 part 'analog_box.g.dart';
 
@@ -562,6 +563,27 @@ class _AnalogBoxDialog extends ConsumerStatefulWidget {
 
 class _AnalogBoxDialogState extends ConsumerState<_AnalogBoxDialog> {
   bool showAdvanced = false;
+  Widget? _cachedGraph;
+
+  Widget _buildGraph() {
+    if (_cachedGraph != null) return _cachedGraph!;
+    final gc = widget.config.graphConfig!;
+    if (gc.primarySeries.isEmpty && widget.config.analogKey.isNotEmpty) {
+      gc.primarySeries = [
+        GraphSeriesConfig(
+          key: widget.config.analogKey,
+          label: widget.config.text ?? 'Value',
+        ),
+      ];
+    }
+    gc.graphType = GraphType.timeseries;
+    _cachedGraph = SizedBox(
+      width: 600,
+      height: 280,
+      child: GraphAsset(gc),
+    );
+    return _cachedGraph!;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -863,13 +885,7 @@ class _AnalogBoxDialogState extends ConsumerState<_AnalogBoxDialog> {
                         ],
                       ),
                       const SizedBox(height: 12),
-                      if (widget.config.graphConfig != null)
-                        SizedBox(
-                            width: 600,
-                            height: 280,
-                            child: GraphAsset(widget.config.graphConfig!))
-                      else
-                        const Center(child: Text('No graph config')),
+                      _buildGraph(),
                     ],
                   ),
                 ),

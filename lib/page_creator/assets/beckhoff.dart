@@ -1981,47 +1981,47 @@ class _BeckhoffEL3054 extends ConsumerWidget {
 // hmi.errors[1].4 := raw_input.MDP5001_300_AI_Standard_Channel_1_Status.Limit_2_Bit1;
 // hmi.errors[1].5 := raw_input.MDP5001_300_AI_Standard_Channel_1_Status.Overrange;
 // hmi.errors[1].6 := raw_input.MDP5001_300_AI_Standard_Channel_1_Status.Underrange;
+    final screenSize = MediaQuery.of(context).size;
     return AlertDialog(
       title: Text(config.nameOrId),
-      content: StreamBuilder<Map<String, DynamicValue>>(
-        stream: _combinedStream(
-          LinkedHashMap.fromEntries([
-            MapEntry("states", config.stateKey),
-            MapEntry("descriptions", config.descriptionsKey),
-          ]),
-          stateMan,
-        ),
-        builder: (context, snapshot) {
-          if (!snapshot.hasData || snapshot.hasError) {
-            return const SizedBox.shrink();
-          }
-          final map = snapshot.data!;
+      content: SizedBox(
+        width: screenSize.width * 0.7,
+        height: screenSize.height * 0.75,
+        child: Column(
+        children: [
+          // Current values (rebuilds on OPC UA changes)
+          StreamBuilder<Map<String, DynamicValue>>(
+            stream: _combinedStream(
+              LinkedHashMap.fromEntries([
+                MapEntry("states", config.stateKey),
+                MapEntry("descriptions", config.descriptionsKey),
+              ]),
+              stateMan,
+            ),
+            builder: (context, snapshot) {
+              if (!snapshot.hasData || snapshot.hasError) {
+                return const SizedBox.shrink();
+              }
+              final map = snapshot.data!;
 
-          // Extract analog values for each input
-          List<double?> analogValues = [];
-          final states = map["states"];
-          if (states != null) {
-            // Assuming states contains an array of analog values
-            if (states.isArray) {
-              analogValues = List.generate(4, (i) {
-                final val = states[i];
-                if (val.isDouble || val.isInteger) {
-                  return val.asDouble;
+              // Extract analog values for each input
+              List<double?> analogValues = [];
+              final states = map["states"];
+              if (states != null) {
+                if (states.isArray) {
+                  analogValues = List.generate(4, (i) {
+                    final val = states[i];
+                    if (val.isDouble || val.isInteger) {
+                      return val.asDouble;
+                    }
+                    return null;
+                  });
+                } else if (states.isInteger) {
+                  analogValues = List.filled(4, null);
                 }
-                return null;
-              });
-            } else if (states.isInteger) {
-              // If it's a single integer, we might need to decode it differently
-              // For now, just show the raw value
-              analogValues = List.filled(4, null);
-            }
-          }
+              }
 
-          return Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              // Current values section
-              Card(
+              return Card(
                 child: Padding(
                   padding: const EdgeInsets.all(16),
                   child: Column(
@@ -2044,15 +2044,13 @@ class _BeckhoffEL3054 extends ConsumerWidget {
                         ],
                       ),
                       const SizedBox(height: 12),
-                      // Replace Wrap with Column for 2x2 grid layout
                       Column(
                         children: [
-                          // First row: I1 and I2
                           Row(
                             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                             children: [
                               SizedBox(
-                                width: 200, // Fixed width for all cards
+                                width: 200,
                                 child: _InputValueCard(
                                   inputNumber: 1,
                                   value: analogValues[0],
@@ -2060,7 +2058,7 @@ class _BeckhoffEL3054 extends ConsumerWidget {
                                 ),
                               ),
                               SizedBox(
-                                width: 200, // Fixed width for all cards
+                                width: 200,
                                 child: _InputValueCard(
                                   inputNumber: 2,
                                   value: analogValues[1],
@@ -2069,13 +2067,12 @@ class _BeckhoffEL3054 extends ConsumerWidget {
                               ),
                             ],
                           ),
-                          const SizedBox(height: 12), // Spacing between rows
-                          // Second row: I3 and I4
+                          const SizedBox(height: 12),
                           Row(
                             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                             children: [
                               SizedBox(
-                                width: 200, // Fixed width for all cards
+                                width: 200,
                                 child: _InputValueCard(
                                   inputNumber: 3,
                                   value: analogValues[2],
@@ -2083,7 +2080,7 @@ class _BeckhoffEL3054 extends ConsumerWidget {
                                 ),
                               ),
                               SizedBox(
-                                width: 200, // Fixed width for all cards
+                                width: 200,
                                 child: _InputValueCard(
                                   inputNumber: 4,
                                   value: analogValues[3],
@@ -2097,59 +2094,61 @@ class _BeckhoffEL3054 extends ConsumerWidget {
                     ],
                   ),
                 ),
-              ),
-              const SizedBox(height: 16),
-              // Graph section
-              if (config.stateKey != null)
-                Card(
-                  child: Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            Icon(Icons.show_chart,
-                                color: Theme.of(context).primaryColor),
-                            const SizedBox(width: 8),
-                            Text(
-                              'Historical Data',
-                              style: Theme.of(context)
-                                  .textTheme
-                                  .titleSmall
-                                  ?.copyWith(
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 12),
-                        SizedBox(
-                          width: 600,
-                          height: 280,
-                          child: GraphAsset(
-                            GraphAssetConfig(
-                              primarySeries: [
-                                GraphSeriesConfig(
-                                  key: config.stateKey!,
-                                  label: 'Analog Input',
+              );
+            },
+          ),
+          const SizedBox(height: 16),
+          // Graph (outside StreamBuilder — has its own data pipeline)
+          if (config.stateKey != null)
+            Expanded(
+              child: Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(Icons.show_chart,
+                              color: Theme.of(context).primaryColor),
+                          const SizedBox(width: 8),
+                          Text(
+                            'Historical Data',
+                            style: Theme.of(context)
+                                .textTheme
+                                .titleSmall
+                                ?.copyWith(
+                                  fontWeight: FontWeight.bold,
                                 ),
-                              ],
-                              yAxis: GraphAxisConfig(
-                                title: 'Value',
-                                unit: 'relative',
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      Expanded(
+                        child: GraphAsset(
+                          GraphAssetConfig(
+                            graphType: GraphType.timeseries,
+                            primarySeries: [
+                              GraphSeriesConfig(
+                                key: config.stateKey!,
+                                label: 'Analog Input',
                               ),
-                              timeWindowMinutes: Duration(minutes: 10),
+                            ],
+                            yAxis: GraphAxisConfig(
+                              title: 'Value',
+                              unit: 'relative',
                             ),
+                            timeWindowMinutes: Duration(minutes: 10),
                           ),
                         ),
-                      ],
-                    ),
+                      ),
+                    ],
                   ),
                 ),
-            ],
-          );
-        },
+              ),
+            ),
+        ],
+      ),
       ),
       actions: [
         TextButton(

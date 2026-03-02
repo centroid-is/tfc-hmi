@@ -4,7 +4,7 @@ import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:rxdart/rxdart.dart';
-import 'package:open62541/open62541.dart' show DynamicValue;
+import 'package:open62541/open62541.dart' show AttributeId, DynamicValue, LocalizedText, NodeId;
 
 import 'common.dart';
 import '../../painter/schneider/atv320.dart';
@@ -217,6 +217,74 @@ class _ATV320ConfigDialog extends StatefulWidget {
 
 class _ATV320ConfigDialogState extends State<_ATV320ConfigDialog> {
   DynamicValue? _pendingConfigValue;
+  /// browseName -> {displayName, description} from OPC UA browse
+  Map<String, ({String? displayName, String? description})>? _fieldMeta;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchFieldDescriptions();
+  }
+
+  Future<void> _fetchFieldDescriptions() async {
+    try {
+      final stateMan = widget.stateMan;
+      final key = stateMan.resolveKey(widget.configKey);
+      final nodeIdResult = stateMan.keyMappings.lookupNodeId(key);
+      if (nodeIdResult == null) return;
+      final (nodeId, _) = nodeIdResult;
+
+      final alias = stateMan.keyMappings.lookupServerAlias(key);
+      final wrapper = stateMan.clients.firstWhere(
+        (w) => w.config.serverAlias == alias,
+      );
+      await wrapper.client.awaitConnect();
+
+      final children = await wrapper.client.browse(nodeId);
+
+      // Batch read descriptions for all children
+      final readParams = <NodeId, List<AttributeId>>{};
+      for (final child in children) {
+        readParams[child.nodeId] = [
+          AttributeId.UA_ATTRIBUTEID_DESCRIPTION,
+          AttributeId.UA_ATTRIBUTEID_DISPLAYNAME,
+        ];
+      }
+      final results = await wrapper.client.readAttribute(readParams);
+
+      final meta = <String, ({String? displayName, String? description})>{};
+      for (final child in children) {
+        final val = results[child.nodeId];
+        meta[child.browseName] = (
+          displayName: val?.displayName?.value,
+          description: val?.description?.value,
+        );
+      }
+
+      if (mounted) {
+        setState(() => _fieldMeta = meta);
+      }
+    } catch (e) {
+      debugPrint('Failed to fetch field descriptions: $e');
+    }
+  }
+
+  /// Apply browsed descriptions onto DynamicValue children
+  DynamicValue _enrichWithDescriptions(DynamicValue value) {
+    if (_fieldMeta == null || !value.isObject) return value;
+    final enriched = DynamicValue.from(value);
+    for (final entry in enriched.asObject.entries) {
+      final meta = _fieldMeta![entry.key];
+      if (meta == null) continue;
+      if (meta.description != null && meta.description!.isNotEmpty) {
+        entry.value.description = LocalizedText(meta.description!, '');
+      }
+      if (meta.displayName != null && meta.displayName!.isNotEmpty) {
+        entry.value.displayName = LocalizedText(meta.displayName!, '');
+      }
+    }
+    return enriched;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -236,7 +304,7 @@ class _ATV320ConfigDialogState extends State<_ATV320ConfigDialog> {
                   child: Text('No configuration data available'));
             }
 
-            final configValue = snapshot.data!;
+            final configValue = _enrichWithDescriptions(snapshot.data!);
             return Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
