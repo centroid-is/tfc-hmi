@@ -503,13 +503,11 @@ void main() {
       await tester.tap(find.text('array_key'));
       await tester.pumpAndSettle();
 
-      // Find array index field
-      final arrayField =
-          find.widgetWithText(TextField, 'Array Index (optional)');
-      expect(arrayField, findsOneWidget);
-
-      await tester.enterText(arrayField, '5');
-      await tester.pumpAndSettle();
+      // The array index field is now an OpcUaArrayIndexField.
+      // Without a live server, it shows an InputDecorator labelled 'Array Index'
+      // with a 'Detect' button to probe the node's array size.
+      expect(find.text('Array Index'), findsOneWidget);
+      expect(find.text('Detect'), findsOneWidget);
     });
 
     testWidgets('can select server alias from dropdown', (tester) async {
