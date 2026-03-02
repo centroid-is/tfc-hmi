@@ -7,6 +7,7 @@ import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:open62541/open62541.dart'
     show
         BrowseResultItem,
+        BrowseResultMask,
         BrowseTreeItem,
         ClientApi,
         ClientState,
@@ -40,7 +41,7 @@ class FakeClientApi implements ClientApi {
     NodeId? referenceTypeId,
     bool includeSubtypes = true,
     int nodeClassMask = 0,
-    int resultMask = 63,
+    BrowseResultMask resultMask = BrowseResultMask.UA_BROWSERESULTMASK_ALL,
   }) async {
     browseCallCount++;
     if (browseDelay > Duration.zero) {
@@ -631,7 +632,7 @@ class _FailingBrowseClient extends FakeClientApi {
     NodeId? referenceTypeId,
     bool includeSubtypes = true,
     int nodeClassMask = 0,
-    int resultMask = 63,
+    BrowseResultMask resultMask = BrowseResultMask.UA_BROWSERESULTMASK_ALL,
   }) async {
     throw Exception('Connection refused');
   }
