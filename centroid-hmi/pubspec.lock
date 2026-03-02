@@ -824,10 +824,10 @@ packages:
     description:
       path: "."
       ref: main
-      resolved-ref: "53ecb2d7924ea2d3374433112fab9e5293a1aa94"
+      resolved-ref: "270a1a86993f8e697418ce8c021c3c919773862a"
       url: "https://github.com/centroid-is/open62541_dart.git"
     source: git
-    version: "1.5.0-dev.1"
+    version: "1.5.2-0"
   os_detect:
     dependency: transitive
     description:
