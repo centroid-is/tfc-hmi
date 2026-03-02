@@ -223,7 +223,7 @@ RoutesLocationBuilder createLocationBuilder(List<MenuItem> extraMenuItems) {
             title: menuItem.label,
             child: Consumer(
               builder: (context, ref, _) {
-                return AssetView(pageName: menuItem.label);
+                return AssetView(pageName: menuItem.path!);
               },
             ),
           );
