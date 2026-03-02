@@ -42,10 +42,10 @@ jobs:
 
     - uses: dart-lang/setup-dart@v1
 
-    # Ensures Docker is installed and configured for Linux containers on all
-    # platforms. No-op on Linux (Docker already present); installs via lima on
-    # macOS and enables Linux containers on Windows.
+    # Docker is pre-installed on Linux runners. On macOS it installs via lima;
+    # on Windows it enables Linux containers.
     - name: Set up Docker
+      if: runner.os != 'Linux'
       uses: docker/setup-docker-action@v3
 
     - name: Get dependencies
