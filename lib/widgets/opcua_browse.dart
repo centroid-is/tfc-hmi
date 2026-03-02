@@ -57,7 +57,8 @@ class BrowseTreeNode {
 
   bool get isExpandable =>
       item.nodeClass == NodeClass.UA_NODECLASS_OBJECT ||
-      item.nodeClass == NodeClass.UA_NODECLASS_VIEW;
+      item.nodeClass == NodeClass.UA_NODECLASS_VIEW ||
+      item.nodeClass == NodeClass.UA_NODECLASS_VARIABLE;
   bool get isVariable => item.nodeClass == NodeClass.UA_NODECLASS_VARIABLE;
 }
 
@@ -252,6 +253,31 @@ class OpcUaBrowsePanelState extends State<OpcUaBrowsePanel> {
           _detailDataType = val.typeId.toString();
         }
         _detailLoading = false;
+
+        // Synthesize children from struct fields when browse returned none.
+        if (val.isObject &&
+            nodeId.isString() &&
+            (!_children.containsKey(nodeId) ||
+                _children[nodeId]!.isEmpty)) {
+          final fields = val.asObject;
+          final depth = _selected?.depth ?? 0;
+          _children[nodeId] = fields.keys.map((fieldName) {
+            return BrowseTreeNode(
+              item: BrowseResultItem(
+                referenceTypeId: NodeId.fromNumeric(0, 0),
+                isForward: true,
+                nodeId: NodeId.fromString(
+                    nodeId.namespace, '${nodeId.string}.$fieldName'),
+                browseName: fieldName,
+                displayName: fieldName,
+                nodeClass: NodeClass.UA_NODECLASS_VARIABLE,
+              ),
+              depth: depth + 1,
+              parentNodeId: nodeId,
+            );
+          }).toList();
+          _expanded.add(nodeId);
+        }
       });
     } catch (e) {
       if (!mounted || _detailLoadedFor != nodeId) return;
@@ -468,6 +494,7 @@ class OpcUaBrowsePanelState extends State<OpcUaBrowsePanel> {
                           itemCount: flatNodes.length,
                           itemBuilder: (context, index) {
                             final node = flatNodes[index];
+                            final kids = _children[node.nodeId];
                             return BrowseNodeTile(
                               node: node,
                               isSelected:
@@ -476,6 +503,8 @@ class OpcUaBrowsePanelState extends State<OpcUaBrowsePanel> {
                                   _expanded.contains(node.nodeId),
                               isLoading:
                                   _loading.contains(node.nodeId),
+                              hasChildren:
+                                  kids != null && kids.isNotEmpty,
                               onTap: () => _onTapNode(node),
                               onDoubleTap: () =>
                                   _onDoubleTapNode(node),
@@ -529,6 +558,7 @@ class BrowseNodeTile extends StatelessWidget {
   final bool isSelected;
   final bool isExpanded;
   final bool isLoading;
+  final bool hasChildren;
   final VoidCallback onTap;
   final VoidCallback onDoubleTap;
   final VoidCallback onToggleExpand;
@@ -539,6 +569,7 @@ class BrowseNodeTile extends StatelessWidget {
     required this.isSelected,
     required this.isExpanded,
     required this.isLoading,
+    required this.hasChildren,
     required this.onTap,
     required this.onDoubleTap,
     required this.onToggleExpand,
@@ -561,7 +592,7 @@ class BrowseNodeTile extends StatelessWidget {
   }
 
   Widget _buildExpandWidget(ColorScheme cs) {
-    if (!node.isExpandable) {
+    if (!node.isExpandable || (node.isVariable && !hasChildren)) {
       return const SizedBox(width: 18);
     }
     if (isLoading) {

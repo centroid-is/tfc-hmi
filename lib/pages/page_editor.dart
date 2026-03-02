@@ -608,7 +608,10 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   }
 
   Widget _buildPageSelector() {
-    final currentPage = _currentPage ?? _temporaryPages.keys.firstOrNull ?? 'Empty';
+    final currentPagePath = _currentPage ?? _temporaryPages.keys.firstOrNull;
+    final displayName = currentPagePath != null
+        ? (_temporaryPages[currentPagePath]?.menuItem.label ?? 'Empty')
+        : 'Empty';
 
     return GestureDetector(
       onTap: _showPageManagerDialog,
@@ -622,7 +625,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(currentPage),
+            Text(displayName),
             const SizedBox(width: 8),
             const Icon(Icons.arrow_drop_down),
           ],
@@ -631,17 +634,15 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     );
   }
 
-  /// Returns page names that are not referenced as children of any OTHER page.
-  /// Handles self-references (e.g. "IOs" entry with menuItem.label "Diagnostics"
-  /// that has child {label: "IOs"}).
+  /// Returns page paths that are not referenced as children of any OTHER page.
   List<String> _getRootPageNames() {
-    final childLabels = <String>{};
+    final childPaths = <String>{};
     for (final entry in _temporaryPages.entries) {
-      PageManager.collectChildLabels(
-          entry.value.menuItem.children, childLabels, entry.key);
+      PageManager.collectChildPaths(
+          entry.value.menuItem.children, childPaths, entry.key);
     }
     final roots = _temporaryPages.keys
-        .where((name) => !childLabels.contains(name))
+        .where((path) => !childPaths.contains(path))
         .toList();
     roots.sort((a, b) {
       final pa = _temporaryPages[a]?.navigationPriority ?? 999;
@@ -730,9 +731,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     final isSelected = _currentPage == pageName;
     final displayName = page.menuItem.label;
     final hasChildren = page.menuItem.children.isNotEmpty;
-    final hasSelfRef =
-        page.menuItem.children.any((c) => c.label == pageName);
-    final isSection = (page.menuItem.path ?? '').isEmpty || hasSelfRef;
+    final isSection = hasChildren;
 
     return Padding(
       key: ValueKey(pageName),
@@ -840,7 +839,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
               },
               children: [
                 for (int i = 0; i < page.menuItem.children.length; i++)
-                  if (page.menuItem.children[i].label == pageName)
+                  if (page.menuItem.children[i].path == pageName)
                     _buildSelfRefChild(
                       page.menuItem.children[i],
                       pageName,
@@ -851,7 +850,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                     )
                   else
                     _buildTreeNode(
-                      page.menuItem.children[i].label,
+                      page.menuItem.children[i].path ?? '',
                       dialogSetState,
                       dialogContext,
                       depth: depth + 1,
@@ -985,9 +984,10 @@ class _PageEditorState extends ConsumerState<PageEditor> {
       );
       // Update navigationPriority on each child page
       for (int i = 0; i < children.length; i++) {
-        final childPage = _temporaryPages[children[i].label];
+        final childPath = children[i].path ?? '';
+        final childPage = _temporaryPages[childPath];
         if (childPage != null) {
-          _temporaryPages[children[i].label] = AssetPage(
+          _temporaryPages[childPath] = AssetPage(
             menuItem: childPage.menuItem,
             assets: childPage.assets,
             mirroringDisabled: childPage.mirroringDisabled,
@@ -1028,14 +1028,13 @@ class _PageEditorState extends ConsumerState<PageEditor> {
             basePath: _buildBasePath(mapKey),
             onSave: (updatedPage) {
               setState(() {
-                final newLabel = updatedPage.menuItem.label;
                 // Update the child MenuItem in the parent's children list
                 final parentPage = _temporaryPages[mapKey]!;
                 final updatedChildren =
                     parentPage.menuItem.children.map((c) {
-                  if (c.label == childItem.label) {
+                  if (c.path == childItem.path) {
                     return MenuItem(
-                      label: newLabel,
+                      label: updatedPage.menuItem.label,
                       path: updatedPage.menuItem.path,
                       icon: updatedPage.menuItem.icon,
                       children: c.children,
@@ -1099,45 +1098,22 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     );
   }
 
-  String _buildBasePath(String? parentName) {
-    if (parentName == null) return '';
-    final segments = <String>[];
-    String? current = parentName;
-    final visited = <String>{};
-    while (current != null && !visited.contains(current)) {
-      visited.add(current);
-      final page = _temporaryPages[current];
-      if (page == null) break;
-      final path = page.menuItem.path ?? '';
-      if (path.isNotEmpty) {
-        segments.insertAll(
-            0, path.split('/').where((s) => s.isNotEmpty).toList());
-        break;
-      }
-      // Section without path — use label as slug
-      segments.insert(0, _slugify(page.menuItem.label));
-      current = _findParentOf(current);
-    }
-    if (segments.isEmpty) return '';
-    return '/${segments.join('/')}';
+  String _buildBasePath(String? parentPath) {
+    if (parentPath == null) return '';
+    final page = _temporaryPages[parentPath];
+    if (page == null) return '';
+    // Since all pages/sections now have paths, just use the parent's path
+    return page.menuItem.path ?? '';
   }
 
-  String? _findParentOf(String childName) {
+  String? _findParentOf(String childPath) {
     for (final entry in _temporaryPages.entries) {
-      if (entry.key != childName &&
-          entry.value.menuItem.children.any((c) => c.label == childName)) {
+      if (entry.key != childPath &&
+          entry.value.menuItem.children.any((c) => c.path == childPath)) {
         return entry.key;
       }
     }
     return null;
-  }
-
-  static String _slugify(String text) {
-    return text
-        .trim()
-        .toLowerCase()
-        .replaceAll(RegExp(r'[^a-z0-9\s]'), '')
-        .replaceAll(RegExp(r'\s+'), '-');
   }
 
   void _addItem({
@@ -1154,8 +1130,18 @@ class _PageEditorState extends ConsumerState<PageEditor> {
           width: 400,
           child: CreatePageWidget(
           isSection: isSection,
-          basePath: isSection ? '' : _buildBasePath(parentName),
+          basePath: _buildBasePath(parentName),
           onSave: (page) {
+            final newPath = page.menuItem.path ?? '';
+            if (_temporaryPages.containsKey(newPath)) {
+              ScaffoldMessenger.of(dialogContext).showSnackBar(
+                SnackBar(
+                  content: Text(
+                      'A page with path "$newPath" already exists. Please choose a different name.'),
+                ),
+              );
+              return;
+            }
             setState(() {
               // Auto-assign priority: put at end of its level
               final int priority;
@@ -1171,7 +1157,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                 mirroringDisabled: page.mirroringDisabled,
                 navigationPriority: priority,
               );
-              _temporaryPages[pageWithPriority.menuItem.label] = pageWithPriority;
+              _temporaryPages[newPath] = pageWithPriority;
               // Add as child of parent if specified
               if (parentName != null) {
                 final parent = _temporaryPages[parentName];
@@ -1193,7 +1179,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                 }
               }
               if (!isSection) {
-                _currentPage = pageWithPriority.menuItem.label;
+                _currentPage = newPath;
               }
               _updateCurrentJson();
             });
@@ -1206,11 +1192,12 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   }
 
   void _editPage(
-    String pageName,
+    String pagePath,
     AssetPage page,
     StateSetter dialogSetState,
     BuildContext dialogContext,
   ) {
+    final isSection = page.menuItem.children.isNotEmpty;
     showDialog(
       context: dialogContext,
       builder: (ctx) => AlertDialog(
@@ -1219,20 +1206,30 @@ class _PageEditorState extends ConsumerState<PageEditor> {
           width: 400,
           child: CreatePageWidget(
             initialPage: page,
-            isSection: (page.menuItem.path ?? '').isEmpty,
-            basePath: _buildBasePath(_findParentOf(pageName)),
+            isSection: isSection,
+            basePath: _buildBasePath(_findParentOf(pagePath)),
             onSave: (updatedPage) {
+              final newPath = updatedPage.menuItem.path ?? '';
+              if (newPath != pagePath &&
+                  _temporaryPages.containsKey(newPath)) {
+                ScaffoldMessenger.of(dialogContext).showSnackBar(
+                  SnackBar(
+                    content: Text(
+                        'A page with path "$newPath" already exists. Please choose a different name.'),
+                  ),
+                );
+                return;
+              }
               setState(() {
-                final newName = updatedPage.menuItem.label;
-                if (newName != pageName) {
-                  _temporaryPages.remove(pageName);
+                if (newPath != pagePath) {
+                  _temporaryPages.remove(pagePath);
                   // Update parent references
-                  _renameChildInParents(pageName, newName);
-                  if (_currentPage == pageName) {
-                    _currentPage = newName;
+                  _updateChildPathInParents(pagePath, newPath, updatedPage.menuItem);
+                  if (_currentPage == pagePath) {
+                    _currentPage = newPath;
                   }
                 }
-                _temporaryPages[newName] = updatedPage;
+                _temporaryPages[newPath] = updatedPage;
                 _updateCurrentJson();
               });
               dialogSetState(() {});
@@ -1243,11 +1240,11 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     );
   }
 
-  void _renameChildInParents(String oldName, String newName) {
+  void _updateChildPathInParents(String oldPath, String newPath, MenuItem newMenuItem) {
     final updates = <String, AssetPage>{};
     for (final entry in _temporaryPages.entries) {
       final page = entry.value;
-      final updated = _renameInChildren(page.menuItem.children, oldName, newName);
+      final updated = _updatePathInChildren(page.menuItem.children, oldPath, newPath, newMenuItem);
       if (updated != null) {
         updates[entry.key] = AssetPage(
           menuItem: MenuItem(
@@ -1265,22 +1262,21 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     _temporaryPages.addAll(updates);
   }
 
-  List<MenuItem>? _renameInChildren(
-      List<MenuItem> children, String oldName, String newName) {
+  List<MenuItem>? _updatePathInChildren(
+      List<MenuItem> children, String oldPath, String newPath, MenuItem newMenuItem) {
     bool changed = false;
     final result = children.map((child) {
       MenuItem updated = child;
-      if (child.label == oldName) {
+      if (child.path == oldPath) {
         changed = true;
-        final newPage = _temporaryPages[newName];
         updated = MenuItem(
-          label: newName,
-          path: newPage?.menuItem.path ?? child.path,
-          icon: newPage?.menuItem.icon ?? child.icon,
+          label: newMenuItem.label,
+          path: newPath,
+          icon: newMenuItem.icon,
           children: child.children,
         );
       }
-      final subUpdated = _renameInChildren(updated.children, oldName, newName);
+      final subUpdated = _updatePathInChildren(updated.children, oldPath, newPath, newMenuItem);
       if (subUpdated != null) {
         changed = true;
         updated = MenuItem(
@@ -1296,15 +1292,16 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   }
 
   void _deletePage(
-    String pageName,
+    String pagePath,
     StateSetter dialogSetState,
     BuildContext dialogContext,
   ) {
+    final displayName = _temporaryPages[pagePath]?.menuItem.label ?? pagePath;
     showDialog(
       context: dialogContext,
       builder: (ctx) => AlertDialog(
         title: const Text('Delete'),
-        content: Text('Delete "$pageName"?'),
+        content: Text('Delete "$displayName"?'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
@@ -1314,10 +1311,10 @@ class _PageEditorState extends ConsumerState<PageEditor> {
             style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
             onPressed: () {
               setState(() {
-                _temporaryPages.remove(pageName);
+                _temporaryPages.remove(pagePath);
                 // Remove from parent children lists
-                _removeChildFromParents(pageName);
-                if (_currentPage == pageName) {
+                _removeChildFromParents(pagePath);
+                if (_currentPage == pagePath) {
                   _currentPage = _temporaryPages.keys.firstOrNull;
                 }
                 _updateCurrentJson();
@@ -1332,11 +1329,11 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     );
   }
 
-  void _removeChildFromParents(String name) {
+  void _removeChildFromParents(String path) {
     final updates = <String, AssetPage>{};
     for (final entry in _temporaryPages.entries) {
       final page = entry.value;
-      final updated = _removeFromChildren(page.menuItem.children, name);
+      final updated = _removeFromChildren(page.menuItem.children, path);
       if (updated != null) {
         updates[entry.key] = AssetPage(
           menuItem: MenuItem(
@@ -1354,15 +1351,15 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     _temporaryPages.addAll(updates);
   }
 
-  List<MenuItem>? _removeFromChildren(List<MenuItem> children, String name) {
+  List<MenuItem>? _removeFromChildren(List<MenuItem> children, String path) {
     bool changed = false;
     final result = <MenuItem>[];
     for (final child in children) {
-      if (child.label == name) {
+      if (child.path == path) {
         changed = true;
         continue;
       }
-      final subUpdated = _removeFromChildren(child.children, name);
+      final subUpdated = _removeFromChildren(child.children, path);
       if (subUpdated != null) {
         changed = true;
         result.add(MenuItem(

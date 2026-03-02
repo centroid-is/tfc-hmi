@@ -516,6 +516,51 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('TempSensor'), findsOneWidget);
     });
+
+    testWidgets(
+        'struct variable synthesizes children from DynamicValue fields',
+        (tester) async {
+      final structVar =
+          _variable('hmi', ns: 4, id: 'GVL.roe_2.hmi');
+      final structValue = DynamicValue()
+        ..value = {
+          'descriptions': DynamicValue()..value = 'desc',
+          'min_values': DynamicValue()..value = 0.0,
+          'max_values': DynamicValue()..value = 100.0,
+        };
+
+      final client = FakeClientApi(
+        browseResults: {
+          NodeId.objectsFolder: [structVar],
+          // Browse of the variable returns empty — server doesn't
+          // expose struct fields as child nodes.
+        },
+        readResults: {
+          structVar.nodeId: structValue,
+        },
+      );
+
+      await _showPanel(tester, client);
+
+      // Tap to select the struct variable — it auto-expands
+      await tester.tap(find.text('hmi'));
+      await tester.pump(kDoubleTapTimeout);
+      await tester.pumpAndSettle();
+
+      // Sub-fields should be visible immediately (auto-expanded)
+      expect(find.text('descriptions'), findsOneWidget);
+      expect(find.text('min_values'), findsOneWidget);
+      expect(find.text('max_values'), findsOneWidget);
+
+      // Sub-fields should be selectable
+      await tester.tap(find.text('min_values'));
+      await tester.pump(kDoubleTapTimeout);
+      await tester.pumpAndSettle();
+
+      final selectButton = tester
+          .widget<TextButton>(find.widgetWithText(TextButton, 'Select'));
+      expect(selectButton.onPressed, isNotNull);
+    });
   });
 
   group('BrowseTreeNode', () {
@@ -536,7 +581,7 @@ void main() {
         parentNodeId: NodeId.objectsFolder,
       );
       expect(node.isVariable, true);
-      expect(node.isExpandable, false);
+      expect(node.isExpandable, true);
     });
 
     test('method nodes are neither expandable nor variable', () {

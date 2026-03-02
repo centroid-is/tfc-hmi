@@ -56,7 +56,7 @@ class PageManager {
   Future<void> load() async {
     String? jsonString = await prefs.getString(storageKey);
     final defaultPages = {
-      'Home': AssetPage(
+      '/': AssetPage(
         menuItem: const MenuItem(label: 'Home', path: '/', icon: Icons.home),
         assets: [],
         mirroringDisabled: false,
@@ -213,7 +213,9 @@ class PageManager {
   }
 
   String toJson() {
-    return jsonEncode(pages.map((name, page) => MapEntry(name, page.toJson())));
+    // Key by path (the unique identifier)
+    return jsonEncode(
+        pages.map((path, page) => MapEntry(path, page.toJson())));
   }
 
   void fromJson(String jsonString) {
@@ -241,29 +243,30 @@ class PageManager {
   /// Returns fully resolved root menu items with children looked up
   /// from the flat map so nested sections have their actual children.
   List<MenuItem> getRootMenuItems() {
-    final childLabels = <String>{};
+    final childPaths = <String>{};
     for (final entry in pages.entries) {
-      collectChildLabels(entry.value.menuItem.children, childLabels, entry.key);
+      collectChildPaths(entry.value.menuItem.children, childPaths, entry.key);
     }
-    final rootNames = pages.keys
-        .where((name) => !childLabels.contains(name))
+    final rootPaths = pages.keys
+        .where((path) => !childPaths.contains(path))
         .toList();
-    rootNames.sort((a, b) =>
+    rootPaths.sort((a, b) =>
         (pages[a]?.navigationPriority ?? 0)
             .compareTo(pages[b]?.navigationPriority ?? 0));
-    return rootNames.map((name) => _resolveMenuItem(name)).toList();
+    return rootPaths.map((path) => _resolveMenuItem(path)).toList();
   }
 
   /// Recursively resolves a page's MenuItem by looking up each child
   /// from the flat map to get its current children list.
-  MenuItem _resolveMenuItem(String pageName) {
-    final page = pages[pageName]!;
+  MenuItem _resolveMenuItem(String pagePath) {
+    final page = pages[pagePath]!;
     final resolvedChildren = page.menuItem.children.map((child) {
+      final childPath = child.path ?? '';
       // Don't recurse into self-references
-      if (child.label == pageName) return child;
+      if (childPath == pagePath) return child;
       // Resolve from the flat map if the child exists there
-      if (pages.containsKey(child.label)) {
-        return _resolveMenuItem(child.label);
+      if (pages.containsKey(childPath)) {
+        return _resolveMenuItem(childPath);
       }
       return child;
     }).toList();
@@ -275,22 +278,55 @@ class PageManager {
     );
   }
 
-  static void collectChildLabels(
-      List<MenuItem> items, Set<String> labels, String excludeKey) {
+  static void collectChildPaths(
+      List<MenuItem> items, Set<String> paths, String excludeKey) {
     for (final item in items) {
-      if (item.label != excludeKey) {
-        labels.add(item.label);
+      final itemPath = item.path ?? '';
+      if (itemPath.isNotEmpty && itemPath != excludeKey) {
+        paths.add(itemPath);
       }
-      collectChildLabels(item.children, labels, excludeKey);
+      collectChildPaths(item.children, paths, excludeKey);
     }
+  }
+
+  /// Generates a slug path from a label, used for migrating old data.
+  static String _slugify(String text) {
+    return text
+        .trim()
+        .toLowerCase()
+        .replaceAll(RegExp(r'[^a-z0-9\s]'), '')
+        .replaceAll(RegExp(r'\s+'), '-');
   }
 
   static Map<String, AssetPage> _fromJson(String jsonString) {
     final json = jsonDecode(jsonString) as Map<String, dynamic>;
-    return json.map((name, pageJson) => MapEntry(
-          name,
-          AssetPage.fromJson(pageJson as Map<String, dynamic>),
-        ));
+    final result = <String, AssetPage>{};
+    for (final entry in json.entries) {
+      final page = AssetPage.fromJson(entry.value as Map<String, dynamic>);
+      final path = page.menuItem.path;
+      // Use the path from menu_item as the key.
+      // For backward compat: if path is empty (old sections), generate one.
+      final key = (path != null && path.isNotEmpty)
+          ? path
+          : '/${_slugify(entry.key)}';
+      // If the page had an empty path, update the menuItem with the generated path
+      if (path == null || path.isEmpty) {
+        result[key] = AssetPage(
+          menuItem: MenuItem(
+            label: page.menuItem.label,
+            path: key,
+            icon: page.menuItem.icon,
+            children: page.menuItem.children,
+          ),
+          assets: page.assets,
+          mirroringDisabled: page.mirroringDisabled,
+          navigationPriority: page.navigationPriority,
+        );
+      } else {
+        result[key] = page;
+      }
+    }
+    return result;
   }
 }
 
@@ -328,7 +364,6 @@ class _CreatePageWidgetState extends State<CreatePageWidget> {
   }
 
   String _buildPath(String label) {
-    if (widget.isSection) return '';
     final slug = label.toLowerCase()
         .replaceAll(RegExp(r'[^a-z0-9\s]'), '')
         .replaceAll(RegExp(r'\s+'), '-');
