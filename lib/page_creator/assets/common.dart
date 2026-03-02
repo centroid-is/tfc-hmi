@@ -8,8 +8,8 @@ import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import 'package:open62541/open62541.dart' show NodeId, DynamicValue;
 import 'package:tfc_dart/core/state_man.dart';
+import '../../widgets/opcua_array_index_field.dart';
 import 'package:tfc_dart/core/collector.dart';
 import 'package:tfc_dart/core/database.dart';
 import 'package:tfc_dart/core/boolean_expression.dart';
@@ -719,17 +719,12 @@ class _KeyMappingEntryDialogState extends ConsumerState<KeyMappingEntryDialog> {
   ExpressionConfig? _sampleExpression;
   bool _useSampleExpression = false;
 
-  // Array index state
-  int? _arraySize;          // null = unknown; >0 = detected/provided size
-  int? _selectedArrayIndex; // used when dropdown is active
-  bool _isProbing = false;
-  String? _probeError;
+  int? _selectedArrayIndex;
+  final _arrayIndexFieldKey = GlobalKey<OpcUaArrayIndexFieldState>();
 
   @override
   void initState() {
     super.initState();
-
-    _arraySize = widget.arraySize;
 
     if (widget.initialKeyMappingEntry != null) {
       final entry = widget.initialKeyMappingEntry!;
@@ -786,129 +781,6 @@ class _KeyMappingEntryDialogState extends ConsumerState<KeyMappingEntryDialog> {
     super.dispose();
   }
 
-  /// Reads the currently-configured node from the server and, if it is a
-  /// fixed-size array, updates [_arraySize] and shows a dropdown.
-  Future<void> _probeArraySize(StateMan stateMan) async {
-    final ns = int.tryParse(_namespaceController.text);
-    final id = _identifierController.text.trim();
-    if (ns == null || id.isEmpty) return;
-
-    setState(() {
-      _isProbing = true;
-      _probeError = null;
-    });
-
-    try {
-      ClientWrapper? wrapper;
-      for (final w in stateMan.clients) {
-        if (w.config.serverAlias == _selectedServerAlias) {
-          wrapper = w;
-          break;
-        }
-      }
-      wrapper ??= stateMan.clients.firstOrNull;
-      if (wrapper == null) throw Exception('No OPC UA client available');
-
-      final nodeId = int.tryParse(id) != null
-          ? NodeId.fromNumeric(ns, int.parse(id))
-          : NodeId.fromString(ns, id);
-
-      final DynamicValue value = await wrapper.client
-          .read(nodeId)
-          .timeout(const Duration(seconds: 5));
-
-      if (!mounted) return;
-      if (value.isArray) {
-        final size = value.asArray.length;
-        setState(() {
-          _isProbing = false;
-          _arraySize = size;
-          // Preserve a valid existing selection
-          if (_selectedArrayIndex != null &&
-              _selectedArrayIndex! >= 0 &&
-              _selectedArrayIndex! < size) {
-            // keep it
-          } else {
-            _selectedArrayIndex = null;
-          }
-        });
-      } else {
-        setState(() {
-          _isProbing = false;
-          _arraySize = null;
-          _probeError = 'Node is not an array';
-        });
-      }
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _isProbing = false;
-        _probeError = 'Probe failed: $e';
-      });
-    }
-  }
-
-  Widget _buildArrayIndexField(StateMan stateMan) {
-    if (_arraySize != null && _arraySize! > 0) {
-      // Known size → show dropdown (OPC UA arrays are 0-based)
-      return Row(
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: [
-          Expanded(
-            child: DropdownButtonFormField<int?>(
-              value: _selectedArrayIndex,
-              decoration: InputDecoration(
-                labelText: 'Array Index (0-based, size: $_arraySize)',
-              ),
-              items: [
-                const DropdownMenuItem<int?>(
-                    value: null, child: Text('None (whole array)')),
-                ...List.generate(
-                  _arraySize!,
-                  (i) => DropdownMenuItem<int?>(value: i, child: Text('$i')),
-                ),
-              ],
-              onChanged: (v) => setState(() => _selectedArrayIndex = v),
-            ),
-          ),
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            tooltip: 'Re-probe',
-            onPressed: _isProbing ? null : () => _probeArraySize(stateMan),
-          ),
-        ],
-      );
-    }
-
-    // Unknown size → show probe button
-    return Row(
-      children: [
-        Expanded(
-          child: InputDecorator(
-            decoration: InputDecoration(
-              labelText: 'Array Index',
-              errorText: _probeError,
-            ),
-            child: const Text('—  tap Detect to read from server',
-                style: TextStyle(color: Colors.grey)),
-          ),
-        ),
-        const SizedBox(width: 4),
-        _isProbing
-            ? const SizedBox(
-                width: 24,
-                height: 24,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              )
-            : TextButton.icon(
-                onPressed: () => _probeArraySize(stateMan),
-                icon: const Icon(Icons.search, size: 16),
-                label: const Text('Detect'),
-              ),
-      ],
-    );
-  }
-
   Future<void> _openBrowseDialog(BuildContext context, StateMan stateMan) async {
     final result = await browseOpcUaNode(
       context: context,
@@ -921,11 +793,10 @@ class _KeyMappingEntryDialogState extends ConsumerState<KeyMappingEntryDialog> {
         _namespaceController.text = nodeId.namespace.toString();
         _identifierController.text =
             nodeId.isString() ? nodeId.string : nodeId.numeric.toString();
-        _arraySize = null;  // reset until probe completes
-        _probeError = null;
       });
-      // Auto-detect array size after browsing to a node
-      _probeArraySize(stateMan);
+      // Auto-detect array size after the widget rebuilds with the new node.
+      WidgetsBinding.instance.addPostFrameCallback(
+          (_) => _arrayIndexFieldKey.currentState?.probe());
     }
   }
 
@@ -1006,7 +877,15 @@ class _KeyMappingEntryDialogState extends ConsumerState<KeyMappingEntryDialog> {
                   ),
                 ),
                 const SizedBox(height: 16),
-                _buildArrayIndexField(stateMan),
+                OpcUaArrayIndexField(
+                  key: _arrayIndexFieldKey,
+                  namespace: int.tryParse(_namespaceController.text) ?? 0,
+                  identifier: _identifierController.text,
+                  serverAlias: _selectedServerAlias,
+                  initialArraySize: widget.arraySize,
+                  value: _selectedArrayIndex,
+                  onChanged: (v) => setState(() => _selectedArrayIndex = v),
+                ),
                 const SizedBox(height: 16),
                 Row(
                   children: [

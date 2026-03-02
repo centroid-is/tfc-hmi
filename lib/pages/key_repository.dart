@@ -11,6 +11,7 @@ import 'package:path/path.dart' as path;
 import '../widgets/base_scaffold.dart';
 import '../widgets/opcua_browse.dart';
 import 'package:tfc_dart/core/state_man.dart';
+import '../widgets/opcua_array_index_field.dart';
 import 'package:tfc_dart/core/collector.dart';
 import 'package:tfc_dart/core/database.dart';
 import '../widgets/fuzzy_search_bar.dart';
@@ -634,7 +635,8 @@ class _KeyMappingCardState extends State<_KeyMappingCard> {
   @override
   void didUpdateWidget(covariant _KeyMappingCard oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.keyName != widget.keyName) {
+    if (oldWidget.keyName != widget.keyName &&
+        _keyNameController.text != widget.keyName) {
       _keyNameController.text = widget.keyName;
     }
     if ((widget.entry.collect != null) != _collectEnabled) {
@@ -837,8 +839,8 @@ class _OpcUaConfigSection extends ConsumerStatefulWidget {
 class _OpcUaConfigSectionState extends ConsumerState<_OpcUaConfigSection> {
   late TextEditingController _namespaceController;
   late TextEditingController _identifierController;
-  late TextEditingController _arrayIndexController;
   String? _selectedAlias;
+  int? _selectedArrayIndex;
 
   @override
   void initState() {
@@ -847,16 +849,14 @@ class _OpcUaConfigSectionState extends ConsumerState<_OpcUaConfigSection> {
         TextEditingController(text: widget.config.namespace.toString());
     _identifierController =
         TextEditingController(text: widget.config.identifier);
-    _arrayIndexController =
-        TextEditingController(text: widget.config.arrayIndex?.toString() ?? '');
     _selectedAlias = widget.config.serverAlias;
+    _selectedArrayIndex = widget.config.arrayIndex;
   }
 
   @override
   void dispose() {
     _namespaceController.dispose();
     _identifierController.dispose();
-    _arrayIndexController.dispose();
     super.dispose();
   }
 
@@ -865,9 +865,7 @@ class _OpcUaConfigSectionState extends ConsumerState<_OpcUaConfigSection> {
       namespace: int.tryParse(_namespaceController.text) ?? 0,
       identifier: _identifierController.text,
     )
-      ..arrayIndex = _arrayIndexController.text.isNotEmpty
-          ? int.tryParse(_arrayIndexController.text)
-          : null
+      ..arrayIndex = _selectedArrayIndex
       ..serverAlias = (_selectedAlias != null && _selectedAlias!.isNotEmpty)
           ? _selectedAlias
           : null;
@@ -1002,14 +1000,15 @@ class _OpcUaConfigSectionState extends ConsumerState<_OpcUaConfigSection> {
               },
             ),
             const SizedBox(height: 12),
-            // Array Index field (NEW - not in current UI)
-            TextField(
-              controller: _arrayIndexController,
-              decoration: const InputDecoration(
-                labelText: 'Array Index (optional)',
-              ),
-              keyboardType: TextInputType.number,
-              onChanged: (_) => _notifyChanged(),
+            OpcUaArrayIndexField(
+              namespace: int.tryParse(_namespaceController.text) ?? 0,
+              identifier: _identifierController.text,
+              serverAlias: _selectedAlias,
+              value: _selectedArrayIndex,
+              onChanged: (v) {
+                setState(() => _selectedArrayIndex = v);
+                _notifyChanged();
+              },
             ),
           ],
         ),
