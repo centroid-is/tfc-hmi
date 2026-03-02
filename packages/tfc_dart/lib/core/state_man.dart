@@ -403,6 +403,7 @@ class StateMan {
   final _subsMap$ = BehaviorSubject<Map<String, String>>.seeded(const {});
   String alias;
   final bool aggregationMode;
+  final Duration idleTimeout;
 
   Timer? _healthCheckTimer;
   final List<Future<void>> _iterateFutures = [];
@@ -414,6 +415,7 @@ class StateMan {
     required this.clients,
     required this.alias,
     this.aggregationMode = false,
+    this.idleTimeout = const Duration(minutes: 10),
   }) {
     for (final wrapper in clients) {
       if (wrapper.client is Client) {
@@ -634,6 +636,7 @@ class StateMan {
     bool useIsolate = true,
     String alias = '',
     bool aggregationMode = false,
+    Duration idleTimeout = const Duration(minutes: 10),
   }) async {
     List<ClientWrapper> clients = [];
 
@@ -714,7 +717,8 @@ class StateMan {
         keyMappings: keyMappings,
         clients: clients,
         alias: alias,
-        aggregationMode: aggregationMode);
+        aggregationMode: aggregationMode,
+        idleTimeout: idleTimeout);
     return stateMan;
   }
 
@@ -930,7 +934,7 @@ class StateMan {
     _subscriptions[key] = AutoDisposingStream(key, (key) {
       _subscriptions.remove(key);
       logger.d('Unsubscribed from $key');
-    });
+    }, idleTimeout: idleTimeout);
     _subscriptions[key]!.subscribe(subscription, firstValue);
   }
 
@@ -949,7 +953,7 @@ class StateMan {
       _subscriptions[key] = AutoDisposingStream(key, (key) {
         _subscriptions.remove(key);
         logger.d('Unsubscribed from $key');
-      });
+      }, idleTimeout: idleTimeout);
     }
 
     late ClientApi client;
