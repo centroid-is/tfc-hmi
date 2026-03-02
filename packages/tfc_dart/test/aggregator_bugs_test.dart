@@ -1,0 +1,580 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+import 'dart:typed_data';
+
+import 'package:basic_utils/basic_utils.dart';
+import 'package:open62541/open62541.dart';
+import 'package:test/test.dart';
+import 'package:tfc_dart/core/aggregator_server.dart';
+import 'package:tfc_dart/core/alarm.dart';
+import 'package:tfc_dart/core/boolean_expression.dart';
+import 'package:tfc_dart/core/preferences.dart';
+import 'package:tfc_dart/core/state_man.dart';
+
+import 'test_timing.dart';
+
+void _t(Stopwatch sw, String label) {
+  stderr.writeln('  [${sw.elapsedMilliseconds}ms] $label');
+}
+
+(Uint8List, Uint8List) _generateTestCerts() {
+  final keyPair = CryptoUtils.generateRSAKeyPair(keySize: 2048);
+  final csr = X509Utils.generateRsaCsrPem(
+    {'CN': 'TestClient', 'O': 'Test', 'OU': 'OPC-UA'},
+    keyPair.privateKey as RSAPrivateKey,
+    keyPair.publicKey as RSAPublicKey,
+    san: ['localhost', '127.0.0.1'],
+  );
+  final certPem = X509Utils.generateSelfSignedCertificate(
+    keyPair.privateKey as RSAPrivateKey,
+    csr,
+    365,
+    sans: ['localhost', '127.0.0.1'],
+  );
+  final keyPem = CryptoUtils.encodeRSAPrivateKeyToPem(
+      keyPair.privateKey as RSAPrivateKey);
+  return (
+    Uint8List.fromList(utf8.encode(certPem)),
+    Uint8List.fromList(utf8.encode(keyPem)),
+  );
+}
+
+/// Pre-generated certs shared across all test groups.
+late Uint8List _serverCert;
+late Uint8List _serverKey;
+late Uint8List _clientCert;
+late Uint8List _clientKey;
+
+/// Integration tests for bugs found in code review.
+void main() {
+  enableTestTiming();
+  setUpAll(timed('cert generation', () {
+    final sw = Stopwatch()..start();
+    final serverPair = _generateTestCerts();
+    _serverCert = serverPair.$1;
+    _serverKey = serverPair.$2;
+    _t(sw, 'server cert generated');
+    final clientPair = _generateTestCerts();
+    _clientCert = clientPair.$1;
+    _clientKey = clientPair.$2;
+    _t(sw, 'client cert generated');
+  }));
+
+  // ---------------------------------------------------------------------------
+  // Bugs #1, #2, #4: share a single server stack instead of creating 3
+  // ---------------------------------------------------------------------------
+  group('Bugs #1, #2, #4 (shared infrastructure)', () {
+    late Server upstreamServer;
+    late int upstreamPort;
+    late int aggregatorPort;
+    late StateMan stateMan;
+    late AggregatorServer aggregator;
+    late ClientIsolate aggClient;
+    var running = true;
+
+    // Mutable reload callback for Bug #1
+    Future<String> Function(List<OpcUAConfig>)? reloadCallback;
+
+    setUpAll(timed('shared setUpAll', () async {
+      final sw = Stopwatch()..start();
+      final ports = allocatePorts(1, 2);
+      upstreamPort = ports[0];
+      aggregatorPort = ports[1];
+
+      upstreamServer =
+          Server(port: upstreamPort, logLevel: LogLevel.UA_LOGLEVEL_ERROR);
+      upstreamServer.addVariableNode(
+        NodeId.fromString(1, 'GVL.temp'),
+        DynamicValue(value: 23.5, typeId: NodeId.double, name: 'temp'),
+        accessLevel: const AccessLevelMask(read: true, write: true),
+      );
+      upstreamServer.start();
+      unawaited(() async {
+        while (running && upstreamServer.runIterate(waitInterval: false)) {
+          await Future.delayed(const Duration(milliseconds: 5));
+        }
+      }());
+      _t(sw, 'upstream server started');
+
+      final keyMappings = KeyMappings(nodes: {
+        'temperature': KeyMappingEntry(
+          opcuaNode: OpcUANodeConfig(namespace: 1, identifier: 'GVL.temp')
+            ..serverAlias = 'plc1',
+        ),
+      });
+
+      final config = StateManConfig(
+        opcua: [
+          OpcUAConfig()
+            ..endpoint = 'opc.tcp://localhost:$upstreamPort'
+            ..serverAlias = 'plc1',
+        ],
+        aggregator: AggregatorConfig(
+          enabled: true,
+          port: aggregatorPort,
+          certificate: _serverCert,
+          privateKey: _serverKey,
+        ),
+      );
+
+      stateMan = await StateMan.create(
+        config: config,
+        keyMappings: keyMappings,
+        useIsolate: true,
+        alias: 'test-shared',
+      );
+      _t(sw, 'StateMan.create');
+
+      for (final wrapper in stateMan.clients) {
+        if (wrapper.connectionStatus == ConnectionStatus.connected) continue;
+        await wrapper.connectionStream
+            .firstWhere((event) => event.$1 == ConnectionStatus.connected)
+            .timeout(const Duration(seconds: 15));
+      }
+      _t(sw, 'client connected');
+
+      aggregator = AggregatorServer(
+        config: config.aggregator!,
+        sharedStateMan: stateMan,
+        onReloadClients: (newServers) async {
+          if (reloadCallback != null) return await reloadCallback!(newServers);
+          return 'ok';
+        },
+      );
+      await aggregator.initialize();
+      _t(sw, 'aggregator initialized');
+
+      unawaited(aggregator.runLoop());
+
+      aggClient = await ClientIsolate.create(
+        certificate: _clientCert,
+        privateKey: _clientKey,
+        securityMode:
+            MessageSecurityMode.UA_MESSAGESECURITYMODE_SIGNANDENCRYPT,
+      );
+      unawaited(aggClient.runIterate().catchError((_) {}));
+      unawaited(aggClient.connect('opc.tcp://localhost:$aggregatorPort'));
+      await aggClient.awaitConnect();
+      _t(sw, 'aggClient connected');
+    }));
+
+    tearDownAll(timed('shared tearDownAll', () async {
+      await aggregator.shutdown();
+      await aggClient.delete();
+      await stateMan.close();
+      running = false;
+      // Allow StateMan iterate loops to exit after close
+      await Future.delayed(const Duration(milliseconds: 50));
+      upstreamServer.shutdown();
+      upstreamServer.delete();
+    }));
+
+    test('Bug #1: onReloadClients fires and config is persisted before callback',
+        () async {
+      List<OpcUAConfig>? reloadedServers;
+      String? oldEndpointAtCallbackTime;
+
+      reloadCallback = (newServers) async {
+        reloadedServers = newServers;
+        oldEndpointAtCallbackTime = stateMan.config.opcua.first.endpoint;
+        return 'ok';
+      };
+
+      final newEndpoint = 'opc.tcp://localhost:${upstreamPort + 100}';
+
+      await aggClient.call(
+        NodeId.objectsFolder,
+        NodeId.fromString(1, 'setOpcUaClients'),
+        [
+          DynamicValue(
+            value: jsonEncode([
+              {'endpoint': newEndpoint, 'server_alias': 'plc1'},
+            ]),
+            typeId: NodeId.uastring,
+          ),
+        ],
+      );
+
+      await Future.delayed(const Duration(milliseconds: 500));
+
+      expect(reloadedServers, isNotNull,
+          reason: 'reload callback should fire');
+      expect(
+        oldEndpointAtCallbackTime,
+        newEndpoint,
+        reason:
+            'Config should be updated before reload callback (for toFile)',
+      );
+
+      // Reset callback and restore original endpoint
+      reloadCallback = null;
+      await aggClient.call(
+        NodeId.objectsFolder,
+        NodeId.fromString(1, 'setOpcUaClients'),
+        [
+          DynamicValue(
+            value: jsonEncode([
+              {
+                'endpoint': 'opc.tcp://localhost:$upstreamPort',
+                'server_alias': 'plc1',
+              },
+            ]),
+            typeId: NodeId.uastring,
+          ),
+        ],
+      );
+      await aggregator.waitForPending();
+    });
+
+    test('Bug #2: setOpcUaClients with same alias does not crash on duplicate nodes',
+        () async {
+      final result = await aggClient.call(
+        NodeId.objectsFolder,
+        NodeId.fromString(1, 'setOpcUaClients'),
+        [
+          DynamicValue(
+            value: jsonEncode([
+              {
+                'endpoint': 'opc.tcp://localhost:$upstreamPort',
+                'server_alias': 'plc1',
+              },
+            ]),
+            typeId: NodeId.uastring,
+          ),
+        ],
+      );
+
+      expect(result.first.value, contains('ok'));
+    });
+
+    test('Bug #4: rapid upstream changes do not echo writes back to upstream',
+        () async {
+      final sw = Stopwatch()..start();
+      // Wait for initial subscription setup
+      await Future.delayed(const Duration(milliseconds: 500));
+      _t(sw, 'Bug#4 subscription wait');
+
+      // Monitor the upstream server for writes
+      final upstreamWrites = <DynamicValue>[];
+      final sub = upstreamServer
+          .monitorVariable(NodeId.fromString(1, 'GVL.temp'))
+          .listen((event) {
+        final (type, value) = event;
+        if (type == 'write' && value != null) {
+          upstreamWrites.add(value);
+        }
+      });
+
+      // Simulate rapid upstream PLC changes
+      for (var i = 0; i < 5; i++) {
+        upstreamServer.write(
+          NodeId.fromString(1, 'GVL.temp'),
+          DynamicValue(value: 100.0 + i, typeId: NodeId.double),
+        );
+      }
+
+      // Wait for propagation
+      await Future.delayed(const Duration(seconds: 2));
+      _t(sw, 'Bug#4 propagation wait');
+
+      expect(upstreamWrites.length, 5,
+          reason:
+              'Should see only 5 direct writes, no echoes from aggregator');
+
+      await sub.cancel();
+    });
+  });
+
+  group('Bug #5: addExternalAlarm duplicates', () {
+    test('calling addExternalAlarm twice with same uid deduplicates',
+        () async {
+      final config = StateManConfig(opcua: []);
+      final keyMappings = KeyMappings(nodes: {});
+      final sm = await StateMan.create(
+        config: config,
+        keyMappings: keyMappings,
+        useIsolate: false,
+        alias: 'test-dedup',
+      );
+
+      final prefs = await Preferences.create(db: null);
+      final alarmMan = await AlarmMan.create(prefs, sm);
+
+      final rule = AlarmRule(
+        level: AlarmLevel.error,
+        expression: ExpressionConfig(
+          value: Expression(formula: 'disconnected'),
+        ),
+        acknowledgeRequired: false,
+      );
+
+      final alarmConfig = AlarmConfig(
+        uid: 'connection-plc1',
+        title: 'plc1 disconnected',
+        description: 'PLC1 is disconnected',
+        rules: [rule],
+      );
+
+      for (var i = 0; i < 2; i++) {
+        alarmMan.addExternalAlarm(AlarmActive(
+          alarm: Alarm(config: alarmConfig),
+          notification: AlarmNotification(
+            uid: 'connection-plc1',
+            active: true,
+            expression: 'disconnected',
+            rule: rule,
+            timestamp: DateTime.now(),
+          ),
+        ));
+      }
+
+      final alarms = await alarmMan.activeAlarms().first;
+      final matching = alarms
+          .where((a) => a.alarm.config.uid == 'connection-plc1')
+          .toList();
+
+      expect(matching.length, 1,
+          reason: 'Should dedup by uid, not accumulate duplicates');
+
+      await sm.close();
+    });
+  });
+
+  group('Bug #8: _pendingDiscoveries concurrent modification', () {
+    test('shutdown copies pendingDiscoveries before awaiting', () async {
+      final pending = <Future<void>>{};
+      var completed = 0;
+
+      for (var i = 0; i < 3; i++) {
+        final future =
+            Future.delayed(const Duration(milliseconds: 50)).then((_) {
+          completed++;
+        });
+        pending.add(future);
+        future.whenComplete(() => pending.remove(future));
+      }
+
+      await Future.wait(pending.toList()).catchError((_) => <void>[]);
+      expect(completed, 3, reason: 'All futures should complete');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Bug #9: Extension objects (custom struct types) fail in aggregator
+  // ---------------------------------------------------------------------------
+  group('Bug #9: extension objects through aggregator', () {
+    late Server upstreamServer;
+    late int upstreamPort;
+    late int aggregatorPort;
+    late StateMan stateMan;
+    late AggregatorServer aggregator;
+    late ClientIsolate aggClient;
+    var running = true;
+
+    final myStructTypeId = NodeId.fromString(1, 'MyStruct');
+
+    setUpAll(timed('ext-obj setUpAll', () async {
+      final sw = Stopwatch()..start();
+      final ports = allocatePorts(1, 2);
+      // Use offset to avoid collision with the shared group above
+      upstreamPort = ports[0] + 100;
+      aggregatorPort = ports[1] + 100;
+
+      // Upstream "PLC" server with a custom struct type
+      upstreamServer = Server(
+        port: upstreamPort,
+        logLevel: LogLevel.UA_LOGLEVEL_ERROR,
+      );
+
+      // Define the custom struct schema
+      DynamicValue structSchema = DynamicValue(
+        name: 'MyStruct',
+        typeId: myStructTypeId,
+      );
+      structSchema['temperature'] =
+          DynamicValue(value: 0.0, typeId: NodeId.double);
+      structSchema['pressure'] =
+          DynamicValue(value: 0.0, typeId: NodeId.double);
+      structSchema['running'] =
+          DynamicValue(value: false, typeId: NodeId.boolean);
+
+      // Register the custom type with the upstream server
+      upstreamServer.addCustomType(myStructTypeId, structSchema);
+      upstreamServer.addDataTypeNode(
+        myStructTypeId,
+        'MyStruct',
+        displayName: LocalizedText('My Struct Type', 'en-US'),
+      );
+
+      // Create an instance of the struct with actual values
+      DynamicValue structValue = DynamicValue(
+        name: 'sensor_data',
+        typeId: myStructTypeId,
+      );
+      structValue['temperature'] =
+          DynamicValue(value: 23.5, typeId: NodeId.double);
+      structValue['pressure'] =
+          DynamicValue(value: 101.3, typeId: NodeId.double);
+      structValue['running'] =
+          DynamicValue(value: true, typeId: NodeId.boolean);
+
+      upstreamServer.addVariableNode(
+        NodeId.fromString(1, 'GVL.sensor'),
+        structValue,
+        accessLevel: const AccessLevelMask(read: true, write: true),
+        typeId: myStructTypeId,
+      );
+
+      // Also add a plain scalar variable for comparison
+      upstreamServer.addVariableNode(
+        NodeId.fromString(1, 'GVL.temp'),
+        DynamicValue(value: 42.0, typeId: NodeId.double, name: 'temp'),
+        accessLevel: const AccessLevelMask(read: true, write: true),
+      );
+
+      upstreamServer.start();
+      unawaited(() async {
+        while (running && upstreamServer.runIterate(waitInterval: false)) {
+          await Future.delayed(const Duration(milliseconds: 5));
+        }
+      }());
+      _t(sw, 'upstream server with struct started');
+
+      // Key mappings: one struct variable, one scalar
+      final keyMappings = KeyMappings(nodes: {
+        'sensor_data': KeyMappingEntry(
+          opcuaNode: OpcUANodeConfig(namespace: 1, identifier: 'GVL.sensor')
+            ..serverAlias = 'plc1',
+        ),
+        'temperature': KeyMappingEntry(
+          opcuaNode: OpcUANodeConfig(namespace: 1, identifier: 'GVL.temp')
+            ..serverAlias = 'plc1',
+        ),
+      });
+
+      final config = StateManConfig(
+        opcua: [
+          OpcUAConfig()
+            ..endpoint = 'opc.tcp://localhost:$upstreamPort'
+            ..serverAlias = 'plc1',
+        ],
+        aggregator: AggregatorConfig(enabled: true, port: aggregatorPort),
+      );
+
+      stateMan = await StateMan.create(
+        config: config,
+        keyMappings: keyMappings,
+        useIsolate: true,
+        alias: 'test-ext-obj',
+      );
+      _t(sw, 'StateMan.create');
+
+      // Wait for upstream connection
+      for (final wrapper in stateMan.clients) {
+        if (wrapper.connectionStatus == ConnectionStatus.connected) continue;
+        await wrapper.connectionStream
+            .firstWhere((event) => event.$1 == ConnectionStatus.connected)
+            .timeout(const Duration(seconds: 15));
+      }
+      _t(sw, 'client connected');
+
+      aggregator = AggregatorServer(
+        config: config.aggregator!,
+        sharedStateMan: stateMan,
+      );
+      await aggregator.initialize(skipTls: true);
+      // Wait for populate to complete (including failures)
+      await aggregator.waitForPending();
+      unawaited(aggregator.runLoop());
+      _t(sw, 'aggregator initialized');
+
+      aggClient = await ClientIsolate.create();
+      unawaited(aggClient.runIterate().catchError((_) {}));
+      unawaited(aggClient.connect('opc.tcp://localhost:$aggregatorPort'));
+      await aggClient.awaitConnect();
+      _t(sw, 'aggClient connected');
+    }));
+
+    tearDownAll(timed('ext-obj tearDownAll', () async {
+      await aggregator.shutdown();
+      await aggClient.delete();
+      await stateMan.close();
+      running = false;
+      await Future.delayed(const Duration(milliseconds: 50));
+      upstreamServer.shutdown();
+      upstreamServer.delete();
+    }));
+
+    test('scalar variable is accessible through aggregator', () async {
+      // Scalar types should work fine through the aggregator
+      final tempNodeId = AggregatorNodeId.encode(
+        'plc1',
+        NodeId.fromString(1, 'GVL.temp'),
+      );
+      final value = await aggClient.read(tempNodeId);
+      expect(value.value, 42.0,
+          reason: 'Scalar double should pass through aggregator');
+    });
+
+    test('extension object variable is accessible through aggregator',
+        () async {
+      // This test demonstrates the bug: extension objects from upstream PLCs
+      // fail to be exposed in the aggregator because the aggregator server
+      // doesn't have the custom data type registered.
+      //
+      // The aggregator's addVariableNode calls _findDataType(typeId) which
+      // returns nullptr for custom types, causing it to throw
+      // 'Failed to find data type <typeId>'.
+      final sensorNodeId = AggregatorNodeId.encode(
+        'plc1',
+        NodeId.fromString(1, 'GVL.sensor'),
+      );
+
+      // The struct variable should be browsable under the plc1 alias folder
+      final plc1Folder = AggregatorNodeId.folderNodeId('plc1');
+      final browseResults = await aggClient.browse(plc1Folder);
+      final names = browseResults.map((r) => r.browseName).toList();
+
+      expect(names, contains('sensor_data'),
+          reason:
+              'Extension object variable should appear in aggregator browse results');
+
+      // And it should be readable with correct struct fields
+      final value = await aggClient.read(sensorNodeId);
+      expect(value.isObject, isTrue,
+          reason: 'Extension object should be readable as a struct');
+      expect(value['temperature'].value, 23.5);
+      expect(value['pressure'].value, 101.3);
+      expect(value['running'].value, true);
+    });
+
+    test('extension object updates propagate through aggregator', () async {
+      // Write a new value to the struct on the upstream server
+      DynamicValue newValue = DynamicValue(typeId: myStructTypeId);
+      newValue['temperature'] =
+          DynamicValue(value: 99.9, typeId: NodeId.double);
+      newValue['pressure'] =
+          DynamicValue(value: 200.0, typeId: NodeId.double);
+      newValue['running'] =
+          DynamicValue(value: false, typeId: NodeId.boolean);
+
+      await upstreamServer.write(
+        NodeId.fromString(1, 'GVL.sensor'),
+        newValue,
+      );
+
+      // Wait for subscription to propagate
+      await Future.delayed(const Duration(seconds: 2));
+
+      final sensorNodeId = AggregatorNodeId.encode(
+        'plc1',
+        NodeId.fromString(1, 'GVL.sensor'),
+      );
+      final value = await aggClient.read(sensorNodeId);
+      expect(value.isObject, isTrue);
+      expect(value['temperature'].value, 99.9,
+          reason: 'Updated struct field should propagate through aggregator');
+    });
+  });
+}

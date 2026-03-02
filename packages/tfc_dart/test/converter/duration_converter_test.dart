@@ -1,7 +1,10 @@
 import 'package:test/test.dart';
 import 'package:tfc_dart/converter/duration_converter.dart';
 
+import '../test_timing.dart';
+
 void main() {
+  enableTestTiming();
   group('DurationMicrosecondsConverter', () {
     const converter = DurationMicrosecondsConverter();
 

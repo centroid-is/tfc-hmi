@@ -1,3 +1,6 @@
+@Tags(['docker'])
+library;
+
 import 'dart:async';
 import 'dart:convert';
 
@@ -18,11 +21,16 @@ void main() {
     const testTableName = 'test_timeseries';
     const testTableName2 = 'test_timeseries_2';
 
+    final testDb = TestDb(
+      composeFile: 'docker-compose.database.yml',
+      containerName: 'test-db-database',
+      port: 5440,
+    );
+
     setUpAll(() async {
-      await stopDockerCompose();
-      await startDockerCompose();
-      await waitForDatabaseReady(); // More reliable than a fixed delay
-      database = await connectToDatabase();
+      await testDb.start();
+      await testDb.waitForReady();
+      database = await testDb.connect();
       // Verify connection
       expect(await database.db.isOpen, true);
     });
@@ -50,7 +58,7 @@ void main() {
 
     tearDownAll(() async {
       await database.close();
-      await stopDockerCompose();
+      await testDb.stop();
     });
 
     group('Connection Tests', () {

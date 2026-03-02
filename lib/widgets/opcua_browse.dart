@@ -9,6 +9,7 @@ import '../theme.dart' show SolarizedColors;
 /// Finds the [ClientApi] for [serverAlias] in [stateMan], opens the OPC UA
 /// browse dialog, and returns the selected [BrowseResultItem] (or null).
 ///
+/// In aggregation mode, uses the single aggregator client regardless of alias.
 /// Shows a [SnackBar] when no matching client is found.
 Future<BrowseResultItem?> browseOpcUaNode({
   required BuildContext context,
@@ -16,10 +17,15 @@ Future<BrowseResultItem?> browseOpcUaNode({
   required String? serverAlias,
 }) async {
   ClientApi? client;
-  for (final wrapper in stateMan.clients) {
-    if (wrapper.config.serverAlias == serverAlias) {
-      client = wrapper.client;
-      break;
+  if (stateMan.aggregationMode) {
+    // Single aggregator client
+    client = stateMan.clients.first.client;
+  } else {
+    for (final wrapper in stateMan.clients) {
+      if (wrapper.config.serverAlias == serverAlias) {
+        client = wrapper.client;
+        break;
+      }
     }
   }
   if (client == null) {

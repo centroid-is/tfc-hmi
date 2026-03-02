@@ -1,3 +1,6 @@
-# Run test files sequentially so integration tests that share
-# Docker Compose services don't race each other.
-concurrency: 1
+# Docker-tagged integration tests share Docker Compose services and
+# should be run sequentially:
+#   dart test test/integration/ --concurrency=1
+# All other tests use random ports and can run in parallel (default).
+tags:
+  docker: ~

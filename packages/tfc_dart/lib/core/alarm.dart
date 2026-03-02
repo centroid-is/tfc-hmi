@@ -98,7 +98,7 @@ class AlarmConfig {
         key: key,
         title: title,
         description: description,
-        rules: jsonDecode(rules).map((e) => AlarmRule.fromJson(e)).toList());
+        rules: (jsonDecode(rules) as List).map((e) => AlarmRule.fromJson(e as Map<String, dynamic>)).toList());
   }
 
   factory AlarmConfig.fromJson(Map<String, dynamic> json) =>
@@ -241,15 +241,62 @@ class AlarmMan {
     _activeAlarmsController.add(_activeAlarms);
   }
 
+  /// Add an externally-managed alarm (e.g. from AggregatorServer on PLC disconnect).
+  void addExternalAlarm(AlarmActive alarm) {
+    // Register config via the normal path so the alarm table row exists
+    // (required for alarm_history FK constraint).
+    if (!alarms.any((a) => a.config.uid == alarm.alarm.config.uid)) {
+      addAlarm(alarm.alarm.config);
+    }
+    _activeAlarms.removeWhere(
+        (a) => a.alarm.config.uid == alarm.alarm.config.uid);
+    _activeAlarms.add(alarm);
+    _activeAlarmsController.add(_activeAlarms);
+  }
+
+  /// Remove an externally-managed alarm by its uid.
+  void removeExternalAlarm(String uid) {
+    final toRemove = _activeAlarms
+        .where((e) => e.alarm.config.uid == uid)
+        .toList();
+    for (final alarm in toRemove) {
+      _removeActiveAlarm(alarm);
+    }
+    if (toRemove.isNotEmpty) {
+      _activeAlarmsController.add(_activeAlarms);
+    }
+  }
+
   void addAlarm(AlarmConfig alarm) {
     config.alarms.add(alarm);
     _saveConfig();
+    _upsertAlarmToDb(alarm);
     alarms.add(Alarm(config: alarm));
+  }
+
+  /// Add an alarm at runtime without persisting to preferences.
+  /// Used for synthetic alarms (e.g. connection status) that are
+  /// regenerated from current config on each startup.
+  void addEphemeralAlarm(AlarmConfig alarm) {
+    alarms.add(Alarm(config: alarm));
+  }
+
+  /// Remove persisted alarms matching [test] and save config.
+  void removeAlarmsWhere(bool Function(AlarmConfig) test) {
+    final removed = config.alarms.where(test).map((a) => a.uid).toSet();
+    if (removed.isEmpty) return;
+    config.alarms.removeWhere(test);
+    _saveConfig();
+    for (final uid in removed) {
+      _deleteAlarmFromDb(uid);
+    }
+    alarms.removeWhere((e) => removed.contains(e.config.uid));
   }
 
   void removeAlarm(AlarmConfig alarm) {
     config.alarms.removeWhere((e) => e.uid == alarm.uid);
     _saveConfig();
+    _deleteAlarmFromDb(alarm.uid);
     alarms.removeWhere((e) => e.config.uid == alarm.uid);
   }
 
@@ -257,6 +304,7 @@ class AlarmMan {
     config.alarms.removeWhere((e) => e.uid == alarm.uid);
     config.alarms.add(alarm);
     _saveConfig();
+    _upsertAlarmToDb(alarm);
     alarms.removeWhere((e) => e.config.uid == alarm.uid);
     alarms.add(Alarm(config: alarm));
   }
@@ -295,6 +343,44 @@ class AlarmMan {
         'alarm_man_config', jsonEncode(config.toJson()));
   }
 
+  Future<void> _upsertAlarmToDb(AlarmConfig alarm) async {
+    if (preferences.database == null) return;
+    final db = preferences.database!.db;
+    try {
+      await db.customInsert(r'''
+        INSERT INTO alarm (uid, key, title, description, rules)
+        VALUES ($1, $2, $3, $4, $5)
+        ON CONFLICT (uid) DO UPDATE SET
+          key = EXCLUDED.key,
+          title = EXCLUDED.title,
+          description = EXCLUDED.description,
+          rules = EXCLUDED.rules
+      ''', variables: [
+        Variable.withString(alarm.uid),
+        Variable.withString(alarm.key ?? ''),
+        Variable.withString(alarm.title),
+        Variable.withString(alarm.description),
+        Variable.withString(
+            jsonEncode(alarm.rules.map((r) => r.toJson()).toList())),
+      ]);
+    } catch (e) {
+      stderr.writeln('AlarmMan: failed to upsert alarm "${alarm.uid}": $e');
+    }
+  }
+
+  Future<void> _deleteAlarmFromDb(String uid) async {
+    if (preferences.database == null) return;
+    final db = preferences.database!.db;
+    try {
+      await db.customUpdate(
+        r'DELETE FROM alarm WHERE uid = $1',
+        variables: [Variable.withString(uid)],
+      );
+    } catch (e) {
+      stderr.writeln('AlarmMan: failed to delete alarm "$uid" from db: $e');
+    }
+  }
+
   void _removeActiveAlarm(AlarmActive alarm) {
     alarm.notification.active = false;
     alarm.deactivated = DateTime.now();
@@ -307,44 +393,31 @@ class AlarmMan {
   }
 
   Future<void> _addToDb(AlarmActive alarm) async {
-    // todo this should work but timestamp does not propagate correctly through drift
-    // see the casting below
-    // await db.into(db.alarmHistory).insert(AlarmHistoryCompanion.insert(
-    //   alarmUid: alarm.alarm.config.uid,
-    //   alarmTitle: alarm.alarm.config.title,
-    //   alarmDescription: alarm.alarm.config.description,
-    //   alarmLevel: alarm.notification.rule.level.name,
-    //   expression: alarm.notification.expression != null
-    //       ? Value(alarm.notification.expression!)
-    //       : const Value.absent(),
-    //   active: alarm.notification.active,
-    //   pendingAck: alarm.pendingAck,
-    //   createdAt: alarm.notification.timestamp,
-    //   deactivatedAt: alarm.deactivated != null
-    //       ? Value(alarm.deactivated!)
-    //       : const Value.absent(),
-    // ));
-
     if (preferences.database == null) return;
     final db = preferences.database!.db;
 
-    // Use custom SQL with proper timestamp casting for PostgreSQL
-    await db.customInsert(r'''
-      INSERT INTO alarm_history (
-        alarm_uid, alarm_title, alarm_description, alarm_level, 
-        expression, active, pending_ack, created_at, deactivated_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::timestamp, $9::timestamp)
-    ''', variables: [
-      Variable.withString(alarm.alarm.config.uid),
-      Variable.withString(alarm.alarm.config.title),
-      Variable.withString(alarm.alarm.config.description),
-      Variable.withString(alarm.notification.rule.level.name),
-      Variable.withString(alarm.notification.expression ?? ''),
-      Variable.withBool(alarm.notification.active),
-      Variable.withBool(alarm.pendingAck),
-      Variable.withString(alarm.notification.timestamp.toIso8601String()),
-      Variable.withString(alarm.deactivated?.toIso8601String() ?? ''),
-    ]);
+    try {
+      // Use custom SQL with proper timestamp casting for PostgreSQL
+      await db.customInsert(r'''
+        INSERT INTO alarm_history (
+          alarm_uid, alarm_title, alarm_description, alarm_level,
+          expression, active, pending_ack, created_at, deactivated_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::timestamp, $9::timestamp)
+      ''', variables: [
+        Variable.withString(alarm.alarm.config.uid),
+        Variable.withString(alarm.alarm.config.title),
+        Variable.withString(alarm.alarm.config.description),
+        Variable.withString(alarm.notification.rule.level.name),
+        Variable.withString(alarm.notification.expression ?? ''),
+        Variable.withBool(alarm.notification.active),
+        Variable.withBool(alarm.pendingAck),
+        Variable.withString(alarm.notification.timestamp.toIso8601String()),
+        Variable.withString(alarm.deactivated?.toIso8601String() ?? ''),
+      ]);
+    } catch (e) {
+      stderr.writeln('AlarmMan: failed to persist alarm history '
+          '"${alarm.alarm.config.uid}": $e');
+    }
   }
 
   Future<List<AlarmActive>> getRecentAlarms({int limit = 1000}) async {

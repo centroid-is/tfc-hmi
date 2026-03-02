@@ -3,7 +3,10 @@ import 'package:tfc_dart/core/alarm.dart';
 import 'package:tfc_dart/core/boolean_expression.dart';
 import 'package:open62541/open62541.dart' show DynamicValue;
 
+import '../test_timing.dart';
+
 void main() {
+  enableTestTiming();
   group('Alarm expression', () {
     test('Alarm expression simple AND', () {
       final expression = Expression(formula: 'A AND B');

@@ -50,8 +50,12 @@ Future<StateMan> stateMan(Ref ref) async {
   );
 
   try {
-    final stateMan =
-        await StateMan.create(config: config, keyMappings: keyMappings);
+    final aggregationMode = config.aggregator?.enabled == true;
+    final stateMan = await StateMan.create(
+      config: config,
+      keyMappings: keyMappings,
+      aggregationMode: aggregationMode,
+    );
 
     // Initialize collector
     ref.read(collectorProvider.future);

@@ -10,5 +10,5 @@ part 'alarm.g.dart';
 Future<AlarmMan> alarmMan(Ref ref) async {
   final prefs = await ref.watch(preferencesProvider.future);
   final stateMan = await ref.watch(stateManProvider.future);
-  return await AlarmMan.create(prefs, stateMan);
+  return AlarmMan.create(prefs, stateMan);
 }
