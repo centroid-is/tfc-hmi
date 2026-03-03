@@ -138,7 +138,7 @@ Future<void> stopTimescaleDb() async {
             Platform.environment['PGBIN'] != null
                 ? '${Platform.environment['PGBIN']}\\pg_ctl.exe'
                 : 'pg_ctl',
-            ['stop', '-D', Platform.environment['PGDATA'] ?? ''],
+            ['stop', '-D', Platform.environment['PGDATA'] ?? '', '-m', 'fast'],
           )
         : await Process.run('brew', [
             'services',
