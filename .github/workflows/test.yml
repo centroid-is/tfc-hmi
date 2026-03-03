@@ -94,6 +94,7 @@ jobs:
         # Initialize a fresh cluster in a writable directory
         $pgdata = Join-Path $env:RUNNER_TEMP "pgdata"
         echo "PGDATA=$pgdata" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+        echo "PGBIN=$env:PGBIN" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
         & "$env:PGBIN\initdb.exe" -U postgres -A trust --encoding=UTF8 -D $pgdata
         & "$env:PGBIN\pg_ctl.exe" start -D $pgdata -o "-cshared_preload_libraries=timescaledb" -l "$pgdata\server.log"

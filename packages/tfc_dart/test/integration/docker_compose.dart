@@ -133,20 +133,23 @@ Future<Database> connectToDatabase() async {
 /// When TIMESCALEDB_EXTERNAL=1, stops the native PostgreSQL service.
 Future<void> stopTimescaleDb() async {
   if (_useExternalDb) {
-    final result = Platform.isWindows
-        ? await Process.run(
-            Platform.environment['PGBIN'] != null
-                ? '${Platform.environment['PGBIN']}\\pg_ctl.exe'
-                : 'pg_ctl',
-            ['stop', '-D', Platform.environment['PGDATA'] ?? '', '-m', 'fast'],
-          )
-        : await Process.run('brew', [
-            'services',
-            'stop',
-            Platform.environment['PG_SERVICE_NAME'] ?? 'postgresql@17',
-          ]);
-    if (result.exitCode != 0) {
-      throw Exception('Failed to stop native PostgreSQL: ${result.stderr}');
+    if (Platform.isWindows) {
+      // On Windows, pg_ctl stop is unreliable when active connection pools
+      // keep reconnecting. Use taskkill to forcefully kill all postgres
+      // processes — equivalent to pulling the plug, which is what we want
+      // for simulating a DB outage.
+      await Process.run('taskkill', ['/F', '/IM', 'postgres.exe']);
+      // Small delay to let the OS release the port
+      await Future.delayed(const Duration(seconds: 1));
+    } else {
+      final result = await Process.run('brew', [
+        'services',
+        'stop',
+        Platform.environment['PG_SERVICE_NAME'] ?? 'postgresql@17',
+      ]);
+      if (result.exitCode != 0) {
+        throw Exception('Failed to stop native PostgreSQL: ${result.stderr}');
+      }
     }
     print('Native PostgreSQL stopped');
     return;
@@ -165,26 +168,32 @@ Future<void> stopTimescaleDb() async {
 /// When TIMESCALEDB_EXTERNAL=1, starts the native PostgreSQL service.
 Future<void> startTimescaleDb() async {
   if (_useExternalDb) {
-    final result = Platform.isWindows
-        ? await Process.run(
-            Platform.environment['PGBIN'] != null
-                ? '${Platform.environment['PGBIN']}\\pg_ctl.exe'
-                : 'pg_ctl',
-            [
-              'start',
-              '-D',
-              Platform.environment['PGDATA'] ?? '',
-              '-o',
-              '-cshared_preload_libraries=timescaledb',
-            ],
-          )
-        : await Process.run('brew', [
-            'services',
-            'start',
-            Platform.environment['PG_SERVICE_NAME'] ?? 'postgresql@17',
-          ]);
-    if (result.exitCode != 0) {
-      throw Exception('Failed to start native PostgreSQL: ${result.stderr}');
+    if (Platform.isWindows) {
+      final pgdata = Platform.environment['PGDATA'] ?? '';
+      // pg_ctl start detects and cleans up stale PID files from taskkill.
+      final result = await Process.run('pg_ctl', [
+        'start',
+        '-D',
+        pgdata,
+        '-o',
+        '-cshared_preload_libraries=timescaledb',
+        '-l',
+        '$pgdata\\server.log',
+      ]);
+      if (result.exitCode != 0) {
+        throw Exception(
+            'Failed to start native PostgreSQL: ${result.stderr}');
+      }
+    } else {
+      final result = await Process.run('brew', [
+        'services',
+        'start',
+        Platform.environment['PG_SERVICE_NAME'] ?? 'postgresql@17',
+      ]);
+      if (result.exitCode != 0) {
+        throw Exception(
+            'Failed to start native PostgreSQL: ${result.stderr}');
+      }
     }
     await waitForDatabaseReady();
     print('Native PostgreSQL started');
