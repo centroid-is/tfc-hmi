@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:postgres/postgres.dart';
@@ -11,6 +12,119 @@ const databaseName = 'testdb';
 /// Set TIMESCALEDB_EXTERNAL=1 in the environment to enable this mode.
 bool get _useExternalDb =>
     Platform.environment['TIMESCALEDB_EXTERNAL'] == '1';
+
+// ---------------------------------------------------------------------------
+// TCP proxy – sits between tests and PostgreSQL.
+// To simulate DB outage: stop the proxy.
+// To simulate recovery: restart the proxy.
+// PostgreSQL stays running the entire time – no platform-specific stop/start.
+// ---------------------------------------------------------------------------
+
+const _proxyPort = 15432;
+const _realPgPort = 5432;
+final _dbProxy = DbProxy(listenPort: _proxyPort, targetPort: _realPgPort);
+
+class DbProxy {
+  final int listenPort;
+  final int targetPort;
+  ServerSocket? _server;
+  final List<_DbProxyPair> _connections = [];
+
+  bool get isRunning => _server != null;
+
+  DbProxy({required this.listenPort, required this.targetPort});
+
+  Future<void> start() async {
+    if (_server != null) return; // already running
+    _server =
+        await ServerSocket.bind(InternetAddress.loopbackIPv4, listenPort);
+    _server!.listen(_handleConnection);
+    print('[db-proxy] listening on $listenPort → $targetPort');
+  }
+
+  void _handleConnection(Socket clientSocket) async {
+    try {
+      final serverSocket = await Socket.connect(
+        InternetAddress.loopbackIPv4,
+        targetPort,
+        timeout: const Duration(seconds: 5),
+      );
+      final pair = _DbProxyPair(clientSocket, serverSocket);
+      _connections.add(pair);
+      pair.start(() => _connections.remove(pair));
+    } catch (e) {
+      try {
+        clientSocket.destroy();
+      } catch (_) {}
+    }
+  }
+
+  Future<void> stop() async {
+    final server = _server;
+    _server = null;
+    await server?.close();
+    for (final conn in List.of(_connections)) {
+      conn.close();
+    }
+    _connections.clear();
+    print('[db-proxy] stopped');
+  }
+}
+
+class _DbProxyPair {
+  final Socket client;
+  final Socket server;
+  StreamSubscription? _clientSub;
+  StreamSubscription? _serverSub;
+  bool _closed = false;
+
+  _DbProxyPair(this.client, this.server);
+
+  void start(void Function() onClose) {
+    client.done.catchError((_) {});
+    server.done.catchError((_) {});
+    _clientSub = client.listen(
+      (data) {
+        try {
+          server.add(data);
+        } catch (_) {}
+      },
+      onDone: () => _doClose(onClose),
+      onError: (_) => _doClose(onClose),
+    );
+    _serverSub = server.listen(
+      (data) {
+        try {
+          client.add(data);
+        } catch (_) {}
+      },
+      onDone: () => _doClose(onClose),
+      onError: (_) => _doClose(onClose),
+    );
+  }
+
+  void _doClose(void Function() onClose) {
+    close();
+    onClose();
+  }
+
+  void close() {
+    if (_closed) return;
+    _closed = true;
+    _clientSub?.cancel();
+    _serverSub?.cancel();
+    try {
+      client.destroy();
+    } catch (_) {}
+    try {
+      server.destroy();
+    } catch (_) {}
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Docker Compose / external DB lifecycle (used once in setUpAll / tearDownAll)
+// ---------------------------------------------------------------------------
 
 /// Starts Docker Compose services (no-op when TIMESCALEDB_EXTERNAL=1).
 Future<void> startDockerCompose() async {
@@ -44,6 +158,9 @@ Future<void> startDockerCompose() async {
 
 /// Stops Docker Compose services (no-op when TIMESCALEDB_EXTERNAL=1).
 Future<void> stopDockerCompose() async {
+  // Also stop the proxy so the next test run starts clean.
+  await _dbProxy.stop();
+
   if (_useExternalDb) {
     print('TIMESCALEDB_EXTERNAL=1: skipping Docker Compose teardown');
     return;
@@ -72,11 +189,15 @@ Future<void> stopDockerCompose() async {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Test helpers
+// ---------------------------------------------------------------------------
+
 DatabaseConfig getTestConfig() {
   return DatabaseConfig(
     postgres: Endpoint(
       host: 'localhost',
-      port: 5432,
+      port: _proxyPort,
       database: 'testdb',
       username: 'testuser',
       password: 'testpass',
@@ -99,8 +220,11 @@ Future<Connection> getTestConnection() async {
   return testDb;
 }
 
-/// Waits for the database to be ready by attempting connections
+/// Waits for the database to be ready by attempting connections through the
+/// proxy.  Ensures the proxy is started first.
 Future<void> waitForDatabaseReady() async {
+  await _dbProxy.start();
+
   const maxAttempts = 30;
   const delay = Duration(seconds: 1);
 
@@ -129,89 +253,18 @@ Future<Database> connectToDatabase() async {
   return db;
 }
 
-/// Stops just the timescaledb container (simulates DB outage).
-/// When TIMESCALEDB_EXTERNAL=1, stops the native PostgreSQL service.
+// ---------------------------------------------------------------------------
+// Simulated DB outage / recovery (used by resilience tests)
+// ---------------------------------------------------------------------------
+
+/// Simulates a DB outage by stopping the TCP proxy.
+/// All existing connections are closed; new connections are refused.
 Future<void> stopTimescaleDb() async {
-  if (_useExternalDb) {
-    if (Platform.isWindows) {
-      final pgdata = Platform.environment['PGDATA'] ?? '';
-      // Flush dirty pages so recovery after immediate stop is minimal.
-      await Process.run('psql', ['-U', 'postgres', '-c', 'CHECKPOINT']);
-      // -m immediate kills all backends without waiting for connections.
-      // -m fast hangs because the Dart pool reconnects faster than PG
-      // can drain clients.
-      final result = await Process.run('pg_ctl', [
-        'stop', '-D', pgdata, '-m', 'immediate',
-      ]);
-      if (result.exitCode != 0) {
-        // Fallback: forcefully kill all postgres processes
-        await Process.run('taskkill', ['/F', '/IM', 'postgres.exe']);
-        await Future.delayed(const Duration(seconds: 1));
-      }
-    } else {
-      final result = await Process.run('brew', [
-        'services',
-        'stop',
-        Platform.environment['PG_SERVICE_NAME'] ?? 'postgresql@17',
-      ]);
-      if (result.exitCode != 0) {
-        throw Exception('Failed to stop native PostgreSQL: ${result.stderr}');
-      }
-    }
-    print('Native PostgreSQL stopped');
-    return;
-  }
-  final result = await Process.run(
-    'docker',
-    ['stop', 'test-db'],
-  );
-  if (result.exitCode != 0) {
-    throw Exception('Failed to stop timescaledb: ${result.stderr}');
-  }
-  print('TimescaleDB stopped');
+  await _dbProxy.stop();
 }
 
-/// Starts just the timescaledb container (simulates DB recovery).
-/// When TIMESCALEDB_EXTERNAL=1, starts the native PostgreSQL service.
+/// Simulates DB recovery by restarting the TCP proxy.
 Future<void> startTimescaleDb() async {
-  if (_useExternalDb) {
-    if (Platform.isWindows) {
-      final pgdata = Platform.environment['PGDATA'] ?? '';
-      // After -m immediate stop, PID file may be stale; pg_ctl handles it.
-      final result = await Process.run('pg_ctl', [
-        'start',
-        '-D',
-        pgdata,
-        '-o',
-        '-cshared_preload_libraries=timescaledb',
-        '-l',
-        '$pgdata\\server.log',
-      ]);
-      if (result.exitCode != 0) {
-        throw Exception(
-            'Failed to start native PostgreSQL: ${result.stderr}');
-      }
-    } else {
-      final result = await Process.run('brew', [
-        'services',
-        'start',
-        Platform.environment['PG_SERVICE_NAME'] ?? 'postgresql@17',
-      ]);
-      if (result.exitCode != 0) {
-        throw Exception(
-            'Failed to start native PostgreSQL: ${result.stderr}');
-      }
-    }
-    await waitForDatabaseReady();
-    print('Native PostgreSQL started');
-    return;
-  }
-  final result = await Process.run(
-    'docker',
-    ['start', 'test-db'],
-  );
-  if (result.exitCode != 0) {
-    throw Exception('Failed to start timescaledb: ${result.stderr}');
-  }
-  print('TimescaleDB started');
+  await _dbProxy.start();
+  await waitForDatabaseReady();
 }
