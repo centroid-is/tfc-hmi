@@ -134,13 +134,22 @@ Future<Database> connectToDatabase() async {
 Future<void> stopTimescaleDb() async {
   if (_useExternalDb) {
     if (Platform.isWindows) {
-      // On Windows, pg_ctl stop is unreliable when active connection pools
-      // keep reconnecting. Use taskkill to forcefully kill all postgres
-      // processes — equivalent to pulling the plug, which is what we want
-      // for simulating a DB outage.
-      await Process.run('taskkill', ['/F', '/IM', 'postgres.exe']);
-      // Small delay to let the OS release the port
-      await Future.delayed(const Duration(seconds: 1));
+      final pgdata = Platform.environment['PGDATA'] ?? '';
+      // Terminate all active backends so pg_ctl stop -m fast doesn't hang
+      // waiting for connections that keep reconnecting.
+      await Process.run('psql', [
+        '-U', 'postgres', '-d', 'testdb', '-c',
+        "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+            "WHERE datname = 'testdb' AND pid <> pg_backend_pid();",
+      ]);
+      final result = await Process.run('pg_ctl', [
+        'stop', '-D', pgdata, '-m', 'fast',
+      ]);
+      if (result.exitCode != 0) {
+        // Fallback: forcefully kill all postgres processes
+        await Process.run('taskkill', ['/F', '/IM', 'postgres.exe']);
+        await Future.delayed(const Duration(seconds: 1));
+      }
     } else {
       final result = await Process.run('brew', [
         'services',
