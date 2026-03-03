@@ -135,15 +135,13 @@ Future<void> stopTimescaleDb() async {
   if (_useExternalDb) {
     if (Platform.isWindows) {
       final pgdata = Platform.environment['PGDATA'] ?? '';
-      // Terminate all active backends so pg_ctl stop -m fast doesn't hang
-      // waiting for connections that keep reconnecting.
-      await Process.run('psql', [
-        '-U', 'postgres', '-d', 'testdb', '-c',
-        "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
-            "WHERE datname = 'testdb' AND pid <> pg_backend_pid();",
-      ]);
+      // Flush dirty pages so recovery after immediate stop is minimal.
+      await Process.run('psql', ['-U', 'postgres', '-c', 'CHECKPOINT']);
+      // -m immediate kills all backends without waiting for connections.
+      // -m fast hangs because the Dart pool reconnects faster than PG
+      // can drain clients.
       final result = await Process.run('pg_ctl', [
-        'stop', '-D', pgdata, '-m', 'fast',
+        'stop', '-D', pgdata, '-m', 'immediate',
       ]);
       if (result.exitCode != 0) {
         // Fallback: forcefully kill all postgres processes
@@ -179,7 +177,7 @@ Future<void> startTimescaleDb() async {
   if (_useExternalDb) {
     if (Platform.isWindows) {
       final pgdata = Platform.environment['PGDATA'] ?? '';
-      // pg_ctl start detects and cleans up stale PID files from taskkill.
+      // After -m immediate stop, PID file may be stale; pg_ctl handles it.
       final result = await Process.run('pg_ctl', [
         'start',
         '-D',
