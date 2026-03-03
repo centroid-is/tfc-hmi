@@ -417,7 +417,7 @@ class Database {
       _totalWriteTime.start();
 
       try {
-        await _ensureTableAndInsert(tableName, writes);
+        await _ensureTableAndInsert(tableName, writes, maxRetries: 1);
       } catch (e) {
         _totalWriteTime.stop();
         logger.w('Batch flush failed for $tableName, queuing ${writes.length} items for retry: $e');
@@ -432,7 +432,12 @@ class Database {
   /// Ensure table exists and insert rows.
   /// Handles schema evolution: if the OPC UA struct gained new fields since the
   /// table was created, adds the missing columns via ALTER TABLE and retries.
-  Future<void> _ensureTableAndInsert(String tableName, List<_PendingWrite> writes) async {
+  ///
+  /// [maxRetries] controls how many times transient errors are retried.
+  /// Use a low value (0–1) in flush paths that already have higher-level retry
+  /// (via [_queueForRetry]) to avoid blocking the data pipeline for tens of
+  /// seconds during a sustained DB outage.
+  Future<void> _ensureTableAndInsert(String tableName, List<_PendingWrite> writes, {int maxRetries = 5}) async {
     // Create table if it was pending
     if (_pendingTableCreation.contains(tableName)) {
       if (!await db.tableExists(tableName)) {
@@ -442,7 +447,7 @@ class Database {
     }
     final rows = writes.map((w) => w.toMap()).toList();
     try {
-      await _withRetry(() => db.tableInsertBatch(tableName, rows));
+      await _withRetry(() => db.tableInsertBatch(tableName, rows), maxRetries: maxRetries);
     } catch (e) {
       if (!_isMissingColumnError(e)) rethrow; // 42703 = undefined_column
       await _addMissingColumn(tableName, e, rows);
@@ -539,7 +544,7 @@ class Database {
           _writeCount++;
           _totalWriteTime.start();
 
-          await _ensureTableAndInsert(tableName, writes);
+          await _ensureTableAndInsert(tableName, writes, maxRetries: 1);
 
           _totalWriteTime.stop();
         } catch (e) {

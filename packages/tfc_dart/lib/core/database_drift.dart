@@ -241,6 +241,7 @@ class AppDatabase extends _$AppDatabase {
             sslMode: config.sslMode,
             keepAliveInterval: const Duration(seconds: 5),
             keepAliveCount: 3,
+            queryTimeout: const Duration(seconds: 5),
           ));
 
       _startPoolHealthMonitor(pool, healthPort.sendPort);
@@ -279,6 +280,7 @@ class AppDatabase extends _$AppDatabase {
               sslMode: config.sslMode,
               keepAliveInterval: const Duration(seconds: 5),
               keepAliveCount: 3,
+              queryTimeout: const Duration(seconds: 5),
             ));
 
         // Health monitor: holds one pool connection and awaits its closed
