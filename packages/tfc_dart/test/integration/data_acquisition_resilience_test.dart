@@ -107,21 +107,32 @@ void main() {
 
       test('WHEN queue overflows THEN oldest items are dropped, newest kept',
           () async {
-        // Use the Database directly (not via Collector) so each insert is
-        // awaited and auto-flushes complete before the next insert.  This
-        // makes the test deterministic across platforms.
+        // Exercise the full production path: Collector → DynamicValue →
+        // stream listener → unawaited insertTimeseriesData → auto-flush →
+        // retry queue overflow.  With maxRetries: 1 on auto-flush, failed
+        // flushes complete instantly (one attempt, no backoff delay).
         const tableName = 'resilience_test_2';
-
-        // Register a retention policy so the table will be created on first insert
-        await database.registerRetentionPolicy(
-          tableName,
-          const RetentionPolicy(
-              dropAfter: Duration(days: 30), scheduleInterval: null),
+        final stateMan = await StateMan.create(
+          config: StateManConfig(opcua: []),
+          keyMappings: KeyMappings(nodes: {}),
+        );
+        final collector = Collector(
+          config: CollectorConfig(collect: true),
+          stateMan: stateMan,
+          database: database,
         );
 
-        // Create table while DB is up
-        await database.insertTimeseriesData(
-            tableName, DateTime.now().toUtc(), 'init');
+        final streamController = StreamController<DynamicValue>();
+        final entry = CollectEntry(key: tableName, name: tableName);
+
+        // collectEntryImpl registers a retention policy and sets up stream
+        // listener that fires unawaited inserts into the Database.
+        await collector.collectEntryImpl(entry, streamController.stream,
+            skipFirstSample: false);
+
+        // Insert one value while DB is up (creates table)
+        streamController.add(DynamicValue(value: 'init'));
+        await Future.delayed(const Duration(milliseconds: 200));
         await database.flush();
 
         var data = await _queryTable(database, tableName);
@@ -132,18 +143,17 @@ void main() {
         await Future.delayed(const Duration(seconds: 2));
 
         // Insert MORE than queue capacity (100).
-        // Auto-flushes fire at every 50 items but fail (proxy is down),
-        // sending items to the retry queue.  The per-insert overflow check
-        // caps buffer + retry at 100, dropping the oldest items.
+        // The Collector's stream listener fires unawaited insertTimeseriesData
+        // calls.  Auto-flushes at 50 items fail fast (maxRetries: 1) and
+        // queue items for retry.  The overflow cap in _queueForRetry keeps
+        // only the newest 100 items.
         const totalItems = 120;
-        final baseTime = DateTime.now().toUtc();
         for (var i = 0; i < totalItems; i++) {
-          await database.insertTimeseriesData(
-            tableName,
-            baseTime.add(Duration(seconds: i)),
-            'item_$i',
-          );
+          streamController.add(DynamicValue(value: 'item_$i'));
         }
+
+        // Wait for unawaited inserts and failed auto-flushes to settle
+        await Future.delayed(const Duration(seconds: 2));
 
         // Force-flush remaining buffer while DB is still down
         await database.flush();
@@ -172,6 +182,10 @@ void main() {
           expect(values.contains('item_$i'), isTrue,
               reason: 'item_$i should be in database');
         }
+
+        // Cleanup
+        streamController.close();
+        collector.close();
 
         // Ensure DB is back up for next test
         await startTimescaleDb();
