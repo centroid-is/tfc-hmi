@@ -239,6 +239,7 @@ class AppDatabase extends _$AppDatabase {
           settings: pg.PoolSettings(
             maxConnectionCount: 20,
             sslMode: config.sslMode,
+            connectTimeout: const Duration(seconds: 5),
             keepAliveInterval: const Duration(seconds: 5),
             keepAliveCount: 3,
             queryTimeout: const Duration(seconds: 30),
@@ -278,6 +279,7 @@ class AppDatabase extends _$AppDatabase {
             settings: pg.PoolSettings(
               maxConnectionCount: 20,
               sslMode: config.sslMode,
+              connectTimeout: const Duration(seconds: 5),
               keepAliveInterval: const Duration(seconds: 5),
               keepAliveCount: 3,
               queryTimeout: const Duration(seconds: 30),
