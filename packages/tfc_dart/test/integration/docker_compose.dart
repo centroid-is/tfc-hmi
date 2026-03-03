@@ -130,12 +130,21 @@ Future<Database> connectToDatabase() async {
 }
 
 /// Stops just the timescaledb container (simulates DB outage).
-/// When TIMESCALEDB_EXTERNAL=1, stops the native Homebrew PostgreSQL service.
+/// When TIMESCALEDB_EXTERNAL=1, stops the native PostgreSQL service.
 Future<void> stopTimescaleDb() async {
   if (_useExternalDb) {
-    final serviceName =
-        Platform.environment['PG_SERVICE_NAME'] ?? 'postgresql@17';
-    final result = await Process.run('brew', ['services', 'stop', serviceName]);
+    final result = Platform.isWindows
+        ? await Process.run(
+            Platform.environment['PGBIN'] != null
+                ? '${Platform.environment['PGBIN']}\\pg_ctl.exe'
+                : 'pg_ctl',
+            ['stop', '-D', Platform.environment['PGDATA'] ?? ''],
+          )
+        : await Process.run('brew', [
+            'services',
+            'stop',
+            Platform.environment['PG_SERVICE_NAME'] ?? 'postgresql@17',
+          ]);
     if (result.exitCode != 0) {
       throw Exception('Failed to stop native PostgreSQL: ${result.stderr}');
     }
@@ -153,17 +162,30 @@ Future<void> stopTimescaleDb() async {
 }
 
 /// Starts just the timescaledb container (simulates DB recovery).
-/// When TIMESCALEDB_EXTERNAL=1, starts the native Homebrew PostgreSQL service.
+/// When TIMESCALEDB_EXTERNAL=1, starts the native PostgreSQL service.
 Future<void> startTimescaleDb() async {
   if (_useExternalDb) {
-    final serviceName =
-        Platform.environment['PG_SERVICE_NAME'] ?? 'postgresql@17';
-    final result =
-        await Process.run('brew', ['services', 'start', serviceName]);
+    final result = Platform.isWindows
+        ? await Process.run(
+            Platform.environment['PGBIN'] != null
+                ? '${Platform.environment['PGBIN']}\\pg_ctl.exe'
+                : 'pg_ctl',
+            [
+              'start',
+              '-D',
+              Platform.environment['PGDATA'] ?? '',
+              '-o',
+              '-cshared_preload_libraries=timescaledb',
+            ],
+          )
+        : await Process.run('brew', [
+            'services',
+            'start',
+            Platform.environment['PG_SERVICE_NAME'] ?? 'postgresql@17',
+          ]);
     if (result.exitCode != 0) {
       throw Exception('Failed to start native PostgreSQL: ${result.stderr}');
     }
-    // Wait for PostgreSQL to become ready after restart
     await waitForDatabaseReady();
     print('Native PostgreSQL started');
     return;

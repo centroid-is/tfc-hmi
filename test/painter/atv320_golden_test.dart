@@ -1,9 +1,11 @@
+import 'dart:io' show Platform;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tfc/painter/schneider/atv320.dart';
 
 void main() {
-  group('ATV320 7-segment golden tests', () {
+  group('ATV320 7-segment golden tests', skip: !Platform.isMacOS ? 'Golden tests only run on macOS' : null, () {
     Widget buildDisplay(String displayText, {String topLabel = ''}) {
       return MaterialApp(
         home: Scaffold(
