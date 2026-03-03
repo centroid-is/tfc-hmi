@@ -34,7 +34,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        include:
+          - os: ubuntu-latest
+          - os: windows-latest
+          - os: macos-latest
+            timescaledb_external: "1"
+            pg_service_name: postgresql@17
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -42,11 +47,28 @@ jobs:
 
     - uses: dart-lang/setup-dart@v1
 
-    # Docker is pre-installed on Linux runners. On macOS it installs via lima;
-    # on Windows it enables Linux containers.
-    - name: Set up Docker
-      if: runner.os != 'Linux'
-      uses: docker/setup-docker-action@v3
+    # Docker Desktop is pre-installed on Windows runners but defaults to
+    # Windows containers; switch to Linux containers for TimescaleDB.
+    - name: Switch Docker to Linux containers (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        & "$env:ProgramFiles\Docker\Docker\DockerCli.exe" -SwitchLinuxEngine
+        Start-Sleep -s 15
+        docker info
+
+    # macOS arm64 runners can't run Docker, so install TimescaleDB natively.
+    - name: Install TimescaleDB natively (macOS)
+      if: runner.os == 'macOS'
+      run: |
+        brew install timescale/tap/timescaledb
+        timescaledb-tune --quiet --yes
+        brew services start postgresql@17
+        sleep 5
+        createdb testdb
+        psql -d testdb -c "CREATE ROLE testuser WITH SUPERUSER LOGIN PASSWORD 'testpass';"
+        psql -d testdb -c "GRANT ALL ON DATABASE testdb TO testuser;"
+        psql -d testdb -c "CREATE EXTENSION IF NOT EXISTS timescaledb CASCADE;"
 
     - name: Get dependencies
       working-directory: packages/tfc_dart
@@ -54,6 +76,9 @@ jobs:
 
     - name: Run tfc_dart tests
       working-directory: packages/tfc_dart
+      env:
+        TIMESCALEDB_EXTERNAL: ${{ matrix.timescaledb_external }}
+        PG_SERVICE_NAME: ${{ matrix.pg_service_name }}
       run: dart test
 
     - name: Upload test results

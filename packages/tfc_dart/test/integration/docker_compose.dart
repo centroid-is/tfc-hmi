@@ -7,8 +7,17 @@ import 'package:tfc_dart/core/database_drift.dart';
 final dockerComposePath = '${Directory.current.path}/test/integration';
 const databaseName = 'testdb';
 
-/// Starts Docker Compose services
+/// True when a native (non-Docker) TimescaleDB is provided externally.
+/// Set TIMESCALEDB_EXTERNAL=1 in the environment to enable this mode.
+bool get _useExternalDb =>
+    Platform.environment['TIMESCALEDB_EXTERNAL'] == '1';
+
+/// Starts Docker Compose services (no-op when TIMESCALEDB_EXTERNAL=1).
 Future<void> startDockerCompose() async {
+  if (_useExternalDb) {
+    print('TIMESCALEDB_EXTERNAL=1: skipping Docker Compose startup');
+    return;
+  }
   try {
     final result = await Process.run(
       'docker',
@@ -33,8 +42,12 @@ Future<void> startDockerCompose() async {
   }
 }
 
-/// Stops Docker Compose services
+/// Stops Docker Compose services (no-op when TIMESCALEDB_EXTERNAL=1).
 Future<void> stopDockerCompose() async {
+  if (_useExternalDb) {
+    print('TIMESCALEDB_EXTERNAL=1: skipping Docker Compose teardown');
+    return;
+  }
   try {
     final result = await Process.run(
       'docker',
@@ -116,8 +129,19 @@ Future<Database> connectToDatabase() async {
   return db;
 }
 
-/// Stops just the timescaledb container (simulates DB outage)
+/// Stops just the timescaledb container (simulates DB outage).
+/// When TIMESCALEDB_EXTERNAL=1, stops the native Homebrew PostgreSQL service.
 Future<void> stopTimescaleDb() async {
+  if (_useExternalDb) {
+    final serviceName =
+        Platform.environment['PG_SERVICE_NAME'] ?? 'postgresql@17';
+    final result = await Process.run('brew', ['services', 'stop', serviceName]);
+    if (result.exitCode != 0) {
+      throw Exception('Failed to stop native PostgreSQL: ${result.stderr}');
+    }
+    print('Native PostgreSQL stopped');
+    return;
+  }
   final result = await Process.run(
     'docker',
     ['stop', 'test-db'],
@@ -128,8 +152,22 @@ Future<void> stopTimescaleDb() async {
   print('TimescaleDB stopped');
 }
 
-/// Starts just the timescaledb container (simulates DB recovery)
+/// Starts just the timescaledb container (simulates DB recovery).
+/// When TIMESCALEDB_EXTERNAL=1, starts the native Homebrew PostgreSQL service.
 Future<void> startTimescaleDb() async {
+  if (_useExternalDb) {
+    final serviceName =
+        Platform.environment['PG_SERVICE_NAME'] ?? 'postgresql@17';
+    final result =
+        await Process.run('brew', ['services', 'start', serviceName]);
+    if (result.exitCode != 0) {
+      throw Exception('Failed to start native PostgreSQL: ${result.stderr}');
+    }
+    // Wait for PostgreSQL to become ready after restart
+    await waitForDatabaseReady();
+    print('Native PostgreSQL started');
+    return;
+  }
   final result = await Process.run(
     'docker',
     ['start', 'test-db'],

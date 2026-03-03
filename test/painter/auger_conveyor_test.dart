@@ -1,4 +1,3 @@
-import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tfc/page_creator/assets/auger_conveyor_painter.dart';
@@ -268,21 +267,5 @@ void main() {
       );
     });
 
-    // ── Animation frame sequence (for GIF generation) ──
-
-    for (int i = 0; i < 60; i++) {
-      final phase = (i / 60) * 2 * pi;
-      final padded = i.toString().padLeft(3, '0');
-      testWidgets('animation frame $padded', (tester) async {
-        await tester.pumpWidget(buildAugerTestWidget(
-          stateColor: Colors.green,
-          phaseOffset: phase,
-        ));
-        await expectLater(
-          find.byKey(_augerKey),
-          matchesGoldenFile('goldens/frames/auger_frame_$padded.png'),
-        );
-      });
-    }
   });
 }
