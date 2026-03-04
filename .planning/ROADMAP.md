@@ -19,7 +19,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 5: M2400 Field Catalog** - Field enums, type-specific parsing, status enums, LUA records (completed 2026-03-04)
 - [x] **Phase 6: DynamicValue Conversion** - M2400 parsed records to DynamicValue objects (completed 2026-03-04)
 - [x] **Phase 7: state_man Integration** - M2400ClientWrapper, subscribe, named keys, connection status (completed 2026-03-04)
-- [ ] **Phase 8: Connection Resilience** - Proxy-based flaky connection testing and health metrics
+- [x] **Phase 8: Connection Resilience** - Proxy-based flaky connection testing and health metrics (completed 2026-03-04)
 - [ ] **Phase 9: Configuration & Multi-device** - Server config, key mapping CRUD, multi-device, collector
 - [ ] **Phase 10: UI** - Server config page, key repository picker, REC/FLD option lists
 
@@ -142,8 +142,8 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] 08-01-PLAN.md — ConnectionHealthMetrics class, TcpProxy test utility, proxy-based MSocket resilience tests
-- [ ] 08-02-PLAN.md — End-to-end M2400 pipeline resilience tests (StubServer -> Proxy -> MSocket -> FrameParser)
+- [x] 08-01-PLAN.md — ConnectionHealthMetrics class, TcpProxy test utility, proxy-based MSocket resilience tests
+- [x] 08-02-PLAN.md — End-to-end M2400 pipeline resilience tests (StubServer -> Proxy -> MSocket -> FrameParser)
 
 ### Phase 9: Configuration & Multi-device
 **Goal**: M2400 devices are fully configurable, support multiple simultaneous connections, and integrate with data collection
@@ -191,6 +191,6 @@ Note: Phases 1 and 2 can be parallelized (no dependency between them).
 | 5. M2400 Field Catalog | 2/2 | Complete    | 2026-03-04 |
 | 6. DynamicValue Conversion | 1/1 | Complete    | 2026-03-04 |
 | 7. state_man Integration | 2/2 | Complete    | 2026-03-04 |
-| 8. Connection Resilience | 0/2 | Not started | - |
+| 8. Connection Resilience | 2/2 | Complete    | 2026-03-04 |
 | 9. Configuration & Multi-device | 0/2 | Not started | - |
 | 10. UI | 0/2 | Not started | - |

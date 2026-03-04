@@ -11,7 +11,7 @@
 - [x] **TCP-02**: msocket configures SO_KEEPALIVE with low timeouts for disconnect detection
 - [x] **TCP-03**: msocket auto-reconnects with exponential backoff on disconnect
 - [x] **TCP-04**: msocket exposes connection status stream (connected/connecting/disconnected)
-- [ ] **TCP-05**: msocket connection resilience verified via proxy.dart (cable pull, switch reboot simulation)
+- [x] **TCP-05**: msocket connection resilience verified via proxy.dart (cable pull, switch reboot simulation)
 
 ### M2400 Protocol
 
@@ -39,7 +39,7 @@
 - [x] **SM-04**: Connection status integrated into state_man status reporting
 - [ ] **SM-05**: Multi-device support -- N simultaneous M2400 connections with independent configs
 - [ ] **SM-06**: Collector integration -- weight events auto-stored to timeseries database
-- [ ] **SM-07**: Connection health metrics -- uptime, reconnect count, records/second per device
+- [x] **SM-07**: Connection health metrics -- uptime, reconnect count, records/second per device
 
 ### Configuration
 
@@ -86,7 +86,7 @@
 | TCP-02 | Phase 2 | Complete |
 | TCP-03 | Phase 2 | Complete |
 | TCP-04 | Phase 2 | Complete |
-| TCP-05 | Phase 8 | Pending |
+| TCP-05 | Phase 8 | Complete |
 | M24-01 | Phase 3 | Complete |
 | M24-02 | Phase 3 | Complete |
 | M24-03 | Phase 3 | Complete |
@@ -105,7 +105,7 @@
 | SM-04 | Phase 7 | Complete |
 | SM-05 | Phase 9 | Pending |
 | SM-06 | Phase 9 | Pending |
-| SM-07 | Phase 8 | Pending |
+| SM-07 | Phase 8 | Complete |
 | CFG-01 | Phase 9 | Pending |
 | CFG-02 | Phase 9 | Pending |
 | CFG-03 | Phase 9 | Pending |

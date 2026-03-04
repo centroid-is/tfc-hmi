@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: in_progress
-stopped_at: Phase 7 Plan 02 complete
-last_updated: "2026-03-04T14:44:00.000Z"
-last_activity: 2026-03-04 -- Completed 07-02 (StateMan DeviceClient integration + end-to-end tests)
+stopped_at: Phase 8 Plan 02 complete
+last_updated: "2026-03-04T14:54:00.000Z"
+last_activity: 2026-03-04 -- Completed 08-02 (Pipeline resilience tests, 224 total tests)
 progress:
   total_phases: 10
-  completed_phases: 7
+  completed_phases: 8
   total_plans: 18
-  completed_plans: 12
-  percent: 67
+  completed_plans: 14
+  percent: 78
 ---
 
 # Project State
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-04)
 
 **Core value:** Reliable, real-time acquisition of device data into state_man -- if the device pushes a record, the system captures it and makes it available as a DynamicValue stream.
-**Current focus:** Phase 7 complete - state_man Integration. Phase 8 next (Connection Resilience).
+**Current focus:** Phase 8 complete - Connection Resilience. Phase 9 next (Configuration & Multi-Device).
 
 ## Current Position
 
-Phase: 7 of 10 (state_man Integration) -- COMPLETE
+Phase: 8 of 10 (Connection Resilience) -- COMPLETE
 Plan: 2 of 2 in current phase -- COMPLETE
-Status: Phase 7 Complete, Phase 8 Next
-Last activity: 2026-03-04 -- Completed 07-02 (StateMan DeviceClient integration + 11 end-to-end tests)
+Status: Phase 8 Complete, Phase 9 Next
+Last activity: 2026-03-04 -- Completed 08-02 (Pipeline resilience tests, 23 new tests, 224 total)
 
-Progress: [███████---] 67%
+Progress: [████████--] 78%
 
 ## Performance Metrics
 
@@ -62,6 +62,8 @@ Progress: [███████---] 67%
 | Phase 06 P01 | -- | 1 task | 3 files |
 | Phase 07 P01 | 4min | 1 task | 3 files |
 | Phase 07 P02 | 6min | 2 tasks | 3 files |
+| Phase 08 P01 | 3min | 2 tasks | 5 files |
+| Phase 08 P02 | 3min | 1 task | 1 file |
 
 ## Accumulated Context
 
@@ -109,6 +111,12 @@ Recent decisions affecting current work:
 - [Phase 07]: jbtm does NOT depend on tfc_dart -- adapter wrapping M2400ClientWrapper as DeviceClient lives at app layer
 - [Phase 07]: StateMan.subscribe() checks DeviceClient.canSubscribe() first, falls through to OPC UA _monitor()
 - [Phase 07]: Phase 7 complete -- DeviceClient interface, StateMan routing, 17 new tests (6 routing + 11 integration), 207 total
+- [Phase 08]: TcpProxy copied verbatim from tfc_dart/test/proxy.dart (self-contained, no cross-package dependency)
+- [Phase 08]: ConnectionHealthMetrics tracks first connect via boolean flag; only subsequent connects count as reconnections
+- [Phase 08]: Rolling 1-second window for recordsPerSecond (List<DateTime> with pruning on access)
+- [Phase 08]: Cable pull simulation uses proxy shutdown + restart on captured fixed port
+- [Phase 08]: Pipeline resilience tests verify through M2400ClientWrapper.subscribe() (real integration path)
+- [Phase 08]: Phase 8 complete -- ConnectionHealthMetrics, TcpProxy, 23 new resilience tests, 224 total
 
 ### Pending Todos
 
@@ -122,6 +130,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-04T14:44:00.000Z
-Stopped at: Phase 7 Plan 02 complete
-Resume file: .planning/phases/07-state-man-integration/07-02-SUMMARY.md
+Last session: 2026-03-04T14:54:00.000Z
+Stopped at: Phase 8 Plan 02 complete
+Resume file: .planning/phases/08-connection-resilience/08-02-SUMMARY.md
