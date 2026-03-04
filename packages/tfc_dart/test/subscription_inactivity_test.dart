@@ -8,7 +8,6 @@
 // C) SecureChannelClosed fires on monitor streams when the TCP connection
 //    is killed.
 import 'dart:async';
-import 'dart:io';
 import 'dart:math';
 
 import 'package:open62541/open62541.dart';
@@ -54,7 +53,13 @@ void main() {
     final proxy = TcpProxy(targetPort: serverPort);
     await proxy.start();
 
-    final client = Client(logLevel: LogLevel.UA_LOGLEVEL_WARNING);
+    // Long secure channel lifetime + no connectivity check so the client
+    // doesn't kill the channel while responses are buffered.
+    final client = Client(
+      logLevel: LogLevel.UA_LOGLEVEL_WARNING,
+      secureChannelLifeTime: Duration(minutes: 10),
+      connectivityCheckInterval: Duration.zero,
+    );
     final clientTimer = Timer.periodic(Duration(milliseconds: 10), (_) {
       client.runIterate(Duration(milliseconds: 10));
     });
@@ -89,34 +94,49 @@ void main() {
         onError: (error) => errors.add(error),
       );
 
-      // Confirm subscription works
-      await Future.delayed(Duration(milliseconds: 500));
-      expect(values, isNotEmpty, reason: 'Should have received initial value');
+      // Wait for initial value (event-driven with timeout for slow CI)
+      await Future.doWhile(() async {
+        if (values.isNotEmpty) return false;
+        await Future.delayed(Duration(milliseconds: 50));
+        return true;
+      }).timeout(Duration(seconds: 10),
+          onTimeout: () => fail('Never received initial value'));
 
       server.write(intNodeId, DynamicValue(value: 42, typeId: NodeId.int32));
-      await Future.delayed(Duration(milliseconds: 300));
+
+      // Wait for the write to arrive
+      final preWriteCount = values.length;
+      await Future.doWhile(() async {
+        if (values.length > preWriteCount) return false;
+        await Future.delayed(Duration(milliseconds: 50));
+        return true;
+      }).timeout(Duration(seconds: 5),
+          onTimeout: () => fail('Write value never arrived'));
+
       final preBlockCount = values.length;
 
-      // Buffer server→client responses for 3 seconds.
+      // Buffer server→client responses for 2 seconds.
       // Client→server traffic still flows, keeping the subscription alive
       // on the server side. The client just doesn't see responses.
       proxy.bufferServerToClient = true;
-      await Future.delayed(Duration(seconds: 3));
+      await Future.delayed(Duration(seconds: 2));
       proxy.bufferServerToClient = false;
       proxy.flush();
 
-      // Give time for flushed publish responses to arrive
-      await Future.delayed(Duration(seconds: 3));
+      // Write a sentinel value — if subscription survived, we'll see it.
+      server.write(
+          intNodeId, DynamicValue(value: 999, typeId: NodeId.int32));
 
-      // Write new values — subscription should still be alive
-      for (int i = 100; i < 103; i++) {
-        server.write(intNodeId, DynamicValue(value: i, typeId: NodeId.int32));
-        await Future.delayed(Duration(milliseconds: 200));
-      }
-      await Future.delayed(Duration(seconds: 1));
+      // Wait for sentinel (event-driven — returns early on fast machines)
+      await Future.doWhile(() async {
+        if (values.contains(999)) return false;
+        await Future.delayed(Duration(milliseconds: 50));
+        return true;
+      }).timeout(Duration(seconds: 15),
+          onTimeout: () =>
+              fail('Sentinel value 999 never arrived — subscription died'));
 
-      final finalCount = values.length;
-      expect(finalCount, greaterThan(preBlockCount),
+      expect(values.length, greaterThan(preBlockCount),
           reason: 'Subscription survived buffered traffic delay');
 
       await sub.cancel();
@@ -126,11 +146,7 @@ void main() {
       await client.delete();
       await proxy.shutdown();
     }
-  },
-      timeout: Timeout(Duration(seconds: 60)),
-      skip: Platform.isWindows
-          ? 'Proxy buffering breaks secure channel on Windows'
-          : null);
+  }, timeout: Timeout(Duration(seconds: 60)));
 
   // --- Test B: direct connection, pause runIterate to expire subscription ---
   test(
