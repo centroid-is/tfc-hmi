@@ -8,7 +8,7 @@ final _logger = Logger();
 
 /// Known M2400 record types with their numeric protocol IDs.
 enum M2400RecordType {
-  recWgt(103),
+  recBatch(103),
   recIntro(5),
   recStat(14),
   recLua(87),

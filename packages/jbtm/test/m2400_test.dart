@@ -267,8 +267,8 @@ void main() {
   // M24-03: Record Type Discrimination
   // ---------------------------------------------------------------------------
   group('record type discrimination', () {
-    test('REC_WGT=103 maps to M2400RecordType.recWgt', () {
-      expect(M2400RecordType.fromId(103), equals(M2400RecordType.recWgt));
+    test('REC_WGT=103 maps to M2400RecordType.recBatch', () {
+      expect(M2400RecordType.fromId(103), equals(M2400RecordType.recBatch));
     });
 
     test('REC_INTRO=5 maps to M2400RecordType.recIntro', () {
@@ -295,7 +295,7 @@ void main() {
       final record = parseM2400Frame(bytes);
 
       expect(record, isNotNull);
-      expect(record!.type, equals(M2400RecordType.recWgt));
+      expect(record!.type, equals(M2400RecordType.recBatch));
     });
 
     test('missing ( prefix still parses record type from first token', () {
@@ -421,7 +421,7 @@ void main() {
       await Future.delayed(const Duration(milliseconds: 50));
 
       // Send a complete STX-framed weight record
-      final frame = frameRecord(M2400RecordType.recWgt.id, {
+      final frame = frameRecord(M2400RecordType.recBatch.id, {
         '100': 'gross_weight',
         '101': '42.5',
       });
@@ -430,7 +430,7 @@ void main() {
       await gotOne.future.timeout(const Duration(seconds: 5));
 
       expect(records, hasLength(1));
-      expect(records[0].type, equals(M2400RecordType.recWgt));
+      expect(records[0].type, equals(M2400RecordType.recBatch));
       expect(records[0].fields['100'], equals('gross_weight'));
       expect(records[0].fields['101'], equals('42.5'));
     });
@@ -459,7 +459,7 @@ void main() {
       await Future.delayed(const Duration(milliseconds: 50));
 
       // Send 3 records in rapid succession (simulates device burst)
-      server.sendToAll(frameRecord(M2400RecordType.recWgt.id, {
+      server.sendToAll(frameRecord(M2400RecordType.recBatch.id, {
         '100': 'value_a',
       }));
       server.sendToAll(frameRecord(M2400RecordType.recStat.id, {
@@ -472,7 +472,7 @@ void main() {
       await gotThree.future.timeout(const Duration(seconds: 5));
 
       expect(records, hasLength(3));
-      expect(records[0].type, equals(M2400RecordType.recWgt));
+      expect(records[0].type, equals(M2400RecordType.recBatch));
       expect(records[0].fields['100'], equals('value_a'));
       expect(records[1].type, equals(M2400RecordType.recStat));
       expect(records[1].fields['200'], equals('value_b'));

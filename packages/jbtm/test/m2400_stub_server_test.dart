@@ -168,7 +168,7 @@ void main() {
           .listen((r) {
         records.add(r);
         // Skip the auto-INTRO, wait for weight
-        if (r.type == M2400RecordType.recWgt && !gotWeight.isCompleted) {
+        if (r.type == M2400RecordType.recBatch && !gotWeight.isCompleted) {
           gotWeight.complete();
         }
       });
@@ -180,8 +180,8 @@ void main() {
       stub.pushWeightRecord(weight: '55.0', unit: 'lb', status: '2');
       await gotWeight.future.timeout(const Duration(seconds: 5));
 
-      final wgt = records.lastWhere((r) => r.type == M2400RecordType.recWgt);
-      expect(wgt.type, equals(M2400RecordType.recWgt));
+      final wgt = records.lastWhere((r) => r.type == M2400RecordType.recBatch);
+      expect(wgt.type, equals(M2400RecordType.recBatch));
       // Weight fields should contain weight/unit/status
       expect(wgt.fields.values, contains('55.0'));
       expect(wgt.fields.values, contains('lb'));
@@ -294,7 +294,7 @@ void main() {
           .where((r) => r != null)
           .cast<M2400Record>()
           .listen((r) {
-        if (r.type == M2400RecordType.recWgt && !gotCustom.isCompleted) {
+        if (r.type == M2400RecordType.recBatch && !gotCustom.isCompleted) {
           gotCustom.complete(r);
         }
       });
@@ -303,7 +303,7 @@ void main() {
       await stub.waitForClient();
       await Future.delayed(const Duration(milliseconds: 100));
 
-      stub.pushRecord(M2400RecordType.recWgt.id, {
+      stub.pushRecord(M2400RecordType.recBatch.id, {
         'custom': 'data',
       });
       final rec =
@@ -362,7 +362,7 @@ void main() {
   group('buildM2400Frame', () {
     test('produces bytes parseable by M2400FrameParser + parseM2400Frame',
         () async {
-      final frameBytes = buildM2400Frame(M2400RecordType.recWgt.id, {
+      final frameBytes = buildM2400Frame(M2400RecordType.recBatch.id, {
         '100': 'test_weight',
       });
 
@@ -381,7 +381,7 @@ void main() {
       expect(frames, hasLength(1));
       final record = parseM2400Frame(frames[0]);
       expect(record, isNotNull);
-      expect(record!.type, equals(M2400RecordType.recWgt));
+      expect(record!.type, equals(M2400RecordType.recBatch));
       expect(record.fields['100'], equals('test_weight'));
     });
   });
@@ -547,7 +547,7 @@ void main() {
 
       // Should have 1 INTRO + 5 weight records
       final weightRecords =
-          records.where((r) => r.type == M2400RecordType.recWgt).toList();
+          records.where((r) => r.type == M2400RecordType.recBatch).toList();
       expect(weightRecords.length, equals(5));
 
       socket.dispose();
@@ -565,7 +565,7 @@ void main() {
           .where((r) => r != null)
           .cast<M2400Record>()
           .listen((r) {
-        if (r.type == M2400RecordType.recWgt) {
+        if (r.type == M2400RecordType.recBatch) {
           records.add(r);
           if (records.length >= 3 && !gotThree.isCompleted) {
             gotThree.complete();
@@ -579,7 +579,7 @@ void main() {
 
       stub.startPeriodicPush(
           const Duration(milliseconds: 100),
-          () => (recordType: M2400RecordType.recWgt.id, fields: makeWeightFields()));
+          () => (recordType: M2400RecordType.recBatch.id, fields: makeWeightFields()));
       await gotThree.future.timeout(const Duration(seconds: 5));
       stub.stopPeriodicPush();
 
@@ -599,7 +599,7 @@ void main() {
       // Start and immediately stop
       stub.startPeriodicPush(
           const Duration(milliseconds: 50),
-          () => (recordType: M2400RecordType.recWgt.id, fields: makeWeightFields()));
+          () => (recordType: M2400RecordType.recBatch.id, fields: makeWeightFields()));
       stub.stopPeriodicPush();
 
       final countBefore = stub.sentRecords.length;
@@ -642,7 +642,7 @@ void main() {
 
       stub.startPeriodicPush(
           const Duration(milliseconds: 50),
-          () => (recordType: M2400RecordType.recWgt.id, fields: makeWeightFields()));
+          () => (recordType: M2400RecordType.recBatch.id, fields: makeWeightFields()));
       await stub.shutdown();
 
       final countAfterShutdown = stub.sentRecords.length;

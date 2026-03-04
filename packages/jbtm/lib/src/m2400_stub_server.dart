@@ -118,7 +118,7 @@ class M2400StubServer {
     String status = '1',
     String? devId,
   }) {
-    _send(M2400RecordType.recWgt.id,
+    _send(M2400RecordType.recBatch.id,
         makeWeightFields(weight: weight, unit: unit, status: status, devId: devId));
   }
 
@@ -191,7 +191,7 @@ class M2400StubServer {
   void pushBurst(int count,
       {({int recordType, Map<String, String> fields}) Function(int index)? recordBuilder}) {
     final builder = recordBuilder ??
-        (i) => (recordType: M2400RecordType.recWgt.id, fields: makeWeightFields(weight: '${i + 1}.000'));
+        (i) => (recordType: M2400RecordType.recBatch.id, fields: makeWeightFields(weight: '${i + 1}.000'));
     for (var i = 0; i < count; i++) {
       final rec = builder(i);
       _send(rec.recordType, rec.fields);
