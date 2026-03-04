@@ -1,0 +1,62 @@
+import 'dart:async';
+import 'dart:io';
+
+/// A reusable test TCP server for unit testing socket-based classes.
+///
+/// Binds to loopback on an OS-assigned port. Tracks connected clients,
+/// allows sending data to all clients, and supports programmatic disconnect
+/// to simulate device reboots.
+class TestTcpServer {
+  late ServerSocket _server;
+  final List<Socket> _clients = [];
+  Completer<void>? _clientCompleter;
+
+  /// Starts the server. Returns the OS-assigned port number.
+  Future<int> start() async {
+    _server =
+        await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+    _server.listen((socket) {
+      _clients.add(socket);
+      socket.done.then((_) => _clients.remove(socket));
+      _clientCompleter?.complete();
+      _clientCompleter = null;
+    });
+    return _server.port;
+  }
+
+  /// The port the server is listening on.
+  int get port => _server.port;
+
+  /// Number of currently connected clients.
+  int get clientCount => _clients.length;
+
+  /// Send raw bytes to all connected clients.
+  void sendToAll(List<int> data) {
+    for (final client in _clients) {
+      client.add(data);
+    }
+  }
+
+  /// Wait for the next client connection.
+  ///
+  /// Completes immediately if a client connects, or waits until one does.
+  Future<void> waitForClient() {
+    if (_clients.isNotEmpty) return Future.value();
+    _clientCompleter ??= Completer<void>();
+    return _clientCompleter!.future;
+  }
+
+  /// Disconnect all clients (simulates device reboot).
+  void disconnectAll() {
+    for (final client in List.of(_clients)) {
+      client.destroy();
+    }
+    _clients.clear();
+  }
+
+  /// Fully shut down the server.
+  Future<void> shutdown() async {
+    disconnectAll();
+    await _server.close();
+  }
+}
