@@ -63,5 +63,18 @@ void main(List<String> args) async {
   stdout.writeln('  Listen:   0.0.0.0:$listenPort');
   stdout.writeln('Press Ctrl+C to stop.\n');
 
+  proxy.onClientCountChanged = (count) {
+    stdout.writeln('[CLIENTS] $count connected');
+  };
+
   await proxy.start();
+
+  proxy.upstreamStatus.listen((status) {
+    final label = switch (status) {
+      ConnectionStatus.connecting => 'CONNECTING',
+      ConnectionStatus.connected => 'CONNECTED',
+      ConnectionStatus.disconnected => 'DISCONNECTED',
+    };
+    stdout.writeln('[UPSTREAM] $label  ($upstreamHost:$upstreamPort)');
+  });
 }

@@ -75,8 +75,12 @@ class M2400Proxy {
     _upstream = null;
   }
 
+  /// Optional callback when a downstream client connects or disconnects.
+  void Function(int clientCount)? onClientCountChanged;
+
   void _onClientConnect(Socket client) {
     _clients.add(client);
+    onClientCountChanged?.call(_clients.length);
 
     // Prevent unhandled async errors on the IOSink done future.
     client.done.catchError((_) {});
@@ -84,8 +88,14 @@ class M2400Proxy {
     // Drain reads and detect disconnect via onDone/onError.
     client.listen(
       (_) {},
-      onError: (_) => _clients.remove(client),
-      onDone: () => _clients.remove(client),
+      onError: (_) {
+        _clients.remove(client);
+        onClientCountChanged?.call(_clients.length);
+      },
+      onDone: () {
+        _clients.remove(client);
+        onClientCountChanged?.call(_clients.length);
+      },
     );
   }
 
