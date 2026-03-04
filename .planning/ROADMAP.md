@@ -53,8 +53,8 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] 02-01: TBD
-- [ ] 02-02: TBD
+- [ ] 02-01-PLAN.md — Package scaffolding, TestTcpServer helper, MSocket core (connect, data, status, keepalive)
+- [ ] 02-02-PLAN.md — Auto-reconnect with exponential backoff, dispose lifecycle, edge-case tests
 
 ### Phase 3: M2400 Framing
 **Goal**: Raw TCP byte streams are reliably parsed into complete, structured M2400 records

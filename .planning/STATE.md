@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: completed
-stopped_at: Completed 01-02-PLAN.md (Phase 01 complete)
-last_updated: "2026-03-04T11:07:31.591Z"
-last_activity: 2026-03-04 -- Completed 01-02 (DynamicValue call site updates)
+status: executing
+stopped_at: Completed 02-01-PLAN.md
+last_updated: "2026-03-04T12:01:18Z"
+last_activity: 2026-03-04 -- Completed 02-01 (MSocket TCP layer)
 progress:
   total_phases: 10
   completed_phases: 1
-  total_plans: 2
-  completed_plans: 2
-  percent: 100
+  total_plans: 4
+  completed_plans: 3
+  percent: 75
 ---
 
 # Project State
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-04)
 
 **Core value:** Reliable, real-time acquisition of device data into state_man -- if the device pushes a record, the system captures it and makes it available as a DynamicValue stream.
-**Current focus:** Phase 1 - DynamicValue Extraction
+**Current focus:** Phase 2 - msocket TCP Layer
 
 ## Current Position
 
-Phase: 1 of 10 (DynamicValue Extraction) -- COMPLETE
-Plan: 2 of 2 in current phase
-Status: Phase Complete
-Last activity: 2026-03-04 -- Completed 01-02 (DynamicValue call site updates)
+Phase: 2 of 10 (msocket TCP Layer)
+Plan: 1 of 2 in current phase
+Status: Executing
+Last activity: 2026-03-04 -- Completed 02-01 (MSocket TCP layer)
 
-Progress: [██████████] 100%
+Progress: [███████░░░] 75%
 
 ## Performance Metrics
 
@@ -52,6 +52,7 @@ Progress: [██████████] 100%
 *Updated after each plan completion*
 | Phase 01 P01 | 3min | 2 tasks | 3 files |
 | Phase 01 P02 | 7min | 2 tasks | 4 files |
+| Phase 02 P01 | 14min | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -67,6 +68,9 @@ Recent decisions affecting current work:
 - [Phase 01]: autoDeduceType made private static on serializer (only used internally by serialize)
 - [Phase 01]: common.dart uses barrel import for OpcUaDynamicValueSerializer (no separate import needed)
 - [Phase 01]: Phase 1 complete -- DynamicValue is fully protocol-agnostic, make-dynamicvalue-more-generic branch ready for merge
+- [Phase 02]: Used Completer instead of asFuture() for socket done tracking (asFuture leaks SocketExceptions to test zones)
+- [Phase 02]: BehaviorSubject for status stream replay (consistent with tfc_dart patterns)
+- [Phase 02]: Used RawSocketOption.levelSocket/levelTcp constants from dart:io (not hardcoded integers)
 
 ### Pending Todos
 
@@ -76,10 +80,10 @@ None yet.
 
 - ~~Phase 1: make-dynamicvalue-more-generic branch status in open62541_dart is unknown~~ RESOLVED: Branch has 4 clean commits, all tests pass
 - Phase 5: Decimal handling strategy (Decimal package vs string preservation) needs decision before parser implementation
-- Phase 2: Platform-specific SO_KEEPALIVE constants (macOS vs Linux) need verification on deployment target
+- ~~Phase 2: Platform-specific SO_KEEPALIVE constants (macOS vs Linux) need verification on deployment target~~ RESOLVED: Constants verified from macOS system headers and centroid-is/postgresql-dart reference implementation. All tests pass on macOS.
 
 ## Session Continuity
 
-Last session: 2026-03-04T10:51:40Z
-Stopped at: Completed 01-02-PLAN.md (Phase 01 complete)
-Resume file: None
+Last session: 2026-03-04T12:01:18Z
+Stopped at: Completed 02-01-PLAN.md
+Resume file: .planning/phases/02-msocket-tcp-layer/02-01-SUMMARY.md
