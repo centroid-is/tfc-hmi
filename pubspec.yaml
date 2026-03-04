@@ -56,6 +56,8 @@ dependencies:
       ref: dev
   tfc_dart:
     path: packages/tfc_dart
+  jbtm:
+    path: packages/jbtm
 dev_dependencies:
   build_runner: ^2.4.15
   json_serializable: ^6.9.4
