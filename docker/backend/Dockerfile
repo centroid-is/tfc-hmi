@@ -10,16 +10,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /app
+# Mirror the packages/ layout so path deps resolve (tfc_dart → ../jbtm)
+WORKDIR /app/packages/tfc_dart
 
-# Copy pubspec.yaml only (not lock file to avoid local path issues)
+# Copy both pubspecs so path dependency resolves during pub get
 COPY packages/tfc_dart/pubspec.yaml ./
+COPY packages/jbtm/pubspec.yaml ../jbtm/
 
 # Get dependencies fresh
 RUN dart pub get
 
 # Copy source code
 COPY packages/tfc_dart/ .
+COPY packages/jbtm/ ../jbtm/
 
 # Build executables (dart build cli triggers build hooks for native assets)
 RUN dart build cli -t bin/main.dart -o build/main && \
@@ -56,10 +59,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 # Copy compiled backend bundle (executable + bundled native libraries)
-COPY --from=dart-builder /app/build/main/bundle/ /app/
+COPY --from=dart-builder /app/packages/tfc_dart/build/main/bundle/ /app/
 
 # Copy generate_certs tool
-COPY --from=dart-builder /app/build/generate_certs/bundle/bin/generate_certs /usr/local/bin/
+COPY --from=dart-builder /app/packages/tfc_dart/build/generate_certs/bundle/bin/generate_certs /usr/local/bin/
 
 # Copy M2400 proxy
 COPY --from=jbtm-builder /app/build/m2400_proxy/bundle/bin/m2400_proxy /usr/local/bin/
