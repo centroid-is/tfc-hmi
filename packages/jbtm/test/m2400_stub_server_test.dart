@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:jbtm/jbtm.dart';
+import 'package:jbtm/src/m2400_field_parser.dart';
+import 'package:jbtm/src/m2400_fields.dart';
 import 'package:test/test.dart';
 
 void main() {
@@ -177,15 +179,15 @@ void main() {
       await stub.waitForClient();
       await Future.delayed(const Duration(milliseconds: 100));
 
-      stub.pushWeightRecord(weight: '55.0', unit: 'lb', status: '2');
+      stub.pushWeightRecord(weight: '55.0', unit: 'lb', siWeight: '55.0lb');
       await gotWeight.future.timeout(const Duration(seconds: 5));
 
       final wgt = records.lastWhere((r) => r.type == M2400RecordType.recBatch);
       expect(wgt.type, equals(M2400RecordType.recBatch));
-      // Weight fields should contain weight/unit/status
-      expect(wgt.fields.values, contains('55.0'));
-      expect(wgt.fields.values, contains('lb'));
-      expect(wgt.fields.values, contains('2'));
+      // Weight fields use real M2400Field IDs
+      expect(wgt.fields['${M2400Field.weight.id}'], equals('55.0'));
+      expect(wgt.fields['${M2400Field.unit.id}'], equals('lb'));
+      expect(wgt.fields['${M2400Field.siWeight.id}'], equals('55.0lb'));
 
       socket.dispose();
     });
@@ -210,11 +212,13 @@ void main() {
       await stub.waitForClient();
       await Future.delayed(const Duration(milliseconds: 100));
 
-      stub.pushStatRecord(status: '3');
+      stub.pushStatRecord(weight: '15.0', unit: 'lb');
       final stat =
           await gotStat.future.timeout(const Duration(seconds: 5));
 
       expect(stat.type, equals(M2400RecordType.recStat));
+      expect(stat.fields['${M2400Field.weight.id}'], equals('15.0'));
+      expect(stat.fields['${M2400Field.unit.id}'], equals('lb'));
 
       socket.dispose();
     });
@@ -650,6 +654,82 @@ void main() {
 
       expect(stub.sentRecords.length, equals(countAfterShutdown),
           reason: 'No records should be added after shutdown');
+
+      socket.dispose();
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Round-trip with parseTypedRecord
+  // ---------------------------------------------------------------------------
+  group('round-trip with parseTypedRecord', () {
+    test('WGT record round-trips to correctly typed M2400ParsedRecord',
+        () async {
+      final port = await stub.start();
+      final socket = MSocket('localhost', port);
+      final gotWeight = Completer<M2400Record>();
+
+      socket.dataStream
+          .transform(M2400FrameParser())
+          .map(parseM2400Frame)
+          .where((r) => r != null)
+          .cast<M2400Record>()
+          .listen((r) {
+        if (r.type == M2400RecordType.recBatch && !gotWeight.isCompleted) {
+          gotWeight.complete(r);
+        }
+      });
+
+      socket.connect();
+      await stub.waitForClient();
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      stub.pushWeightRecord(weight: '12.500');
+      final raw =
+          await gotWeight.future.timeout(const Duration(seconds: 5));
+
+      final parsed = parseTypedRecord(raw);
+
+      expect(parsed.type, equals(M2400RecordType.recBatch));
+      expect(parsed.weight, equals(12.5));
+      expect(parsed.unitString, equals('kg'));
+      expect(parsed.siWeight, equals('11.00kg'));
+      expect(parsed.unknownFields, isEmpty,
+          reason: 'All fields should be in the M2400Field enum');
+
+      socket.dispose();
+    });
+
+    test('STAT record round-trips to correctly typed M2400ParsedRecord',
+        () async {
+      final port = await stub.start();
+      final socket = MSocket('localhost', port);
+      final gotStat = Completer<M2400Record>();
+
+      socket.dataStream
+          .transform(M2400FrameParser())
+          .map(parseM2400Frame)
+          .where((r) => r != null)
+          .cast<M2400Record>()
+          .listen((r) {
+        if (r.type == M2400RecordType.recStat && !gotStat.isCompleted) {
+          gotStat.complete(r);
+        }
+      });
+
+      socket.connect();
+      await stub.waitForClient();
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      stub.pushStatRecord();
+      final raw =
+          await gotStat.future.timeout(const Duration(seconds: 5));
+
+      final parsed = parseTypedRecord(raw);
+
+      expect(parsed.type, equals(M2400RecordType.recStat));
+      expect(parsed.weight, equals(12.37));
+      expect(parsed.unitString, equals('kg'));
 
       socket.dispose();
     });

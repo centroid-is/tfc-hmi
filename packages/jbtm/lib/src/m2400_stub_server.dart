@@ -3,14 +3,8 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:jbtm/src/m2400.dart';
+import 'package:jbtm/src/m2400_fields.dart';
 import 'package:jbtm/src/test_tcp_server.dart';
-
-// Field ID constants for stub factories (internal).
-const String _kWeight = '100';
-const String _kStatus = '101';
-const String _kDevId = '102';
-const String _kFirmware = '103';
-const String _kUnit = '104';
 
 /// Build a complete STX-framed M2400 record from a record type and field pairs.
 ///
@@ -36,36 +30,56 @@ class SentRecord {
   const SentRecord({required this.recordType, required this.fields});
 }
 
-/// Create weight record fields with sensible defaults.
+/// Create weight record fields with all 10 observed WGT fields using real
+/// M2400Field IDs as the single source of truth.
 Map<String, String> makeWeightFields({
   String weight = '12.500',
   String unit = 'kg',
-  String status = '1',
-  String? devId,
+  String siWeight = '11.00kg',
+  String field6 = '47',
+  String field11 = '0',
+  String field59 = '0.38',
+  String field78 = '12.3',
+  String field79 = '1.3',
+  String field80 = '0',
+  String field81 = 'auto',
 }) {
   return {
-    _kWeight: weight,
-    _kUnit: unit,
-    _kStatus: status,
-    if (devId != null) _kDevId: devId,
+    '${M2400Field.weight.id}': weight,
+    '${M2400Field.unit.id}': unit,
+    '${M2400Field.siWeight.id}': siWeight,
+    '${M2400Field.field6.id}': field6,
+    '${M2400Field.field11.id}': field11,
+    '${M2400Field.field59.id}': field59,
+    '${M2400Field.field78.id}': field78,
+    '${M2400Field.field79.id}': field79,
+    '${M2400Field.field80.id}': field80,
+    '${M2400Field.field81.id}': field81,
   };
 }
 
 /// Create intro record fields with sensible defaults.
+///
+/// INTRO record field IDs are not yet confirmed from device data, so
+/// these use string keys directly (not M2400Field enum).
 Map<String, String> makeIntroFields({
   String devId = '1',
   String firmware = 'V1.0',
 }) {
   return {
-    _kDevId: devId,
-    _kFirmware: firmware,
+    'devId': devId,
+    'firmware': firmware,
   };
 }
 
-/// Create stat record fields with sensible defaults.
-Map<String, String> makeStatFields({String status = '1'}) {
+/// Create stat record fields using real M2400Field IDs.
+Map<String, String> makeStatFields({
+  String weight = '12.37',
+  String unit = 'kg',
+}) {
   return {
-    _kStatus: status,
+    '${M2400Field.weight.id}': weight,
+    '${M2400Field.unit.id}': unit,
   };
 }
 
@@ -115,16 +129,31 @@ class M2400StubServer {
   void pushWeightRecord({
     String weight = '12.500',
     String unit = 'kg',
-    String status = '1',
-    String? devId,
+    String siWeight = '11.00kg',
+    String field6 = '47',
+    String field11 = '0',
+    String field59 = '0.38',
+    String field78 = '12.3',
+    String field79 = '1.3',
+    String field80 = '0',
+    String field81 = 'auto',
   }) {
     _send(M2400RecordType.recBatch.id,
-        makeWeightFields(weight: weight, unit: unit, status: status, devId: devId));
+        makeWeightFields(
+          weight: weight, unit: unit, siWeight: siWeight,
+          field6: field6, field11: field11, field59: field59,
+          field78: field78, field79: field79, field80: field80,
+          field81: field81,
+        ));
   }
 
   /// Push a stat record to all connected clients.
-  void pushStatRecord({String status = '1'}) {
-    _send(M2400RecordType.recStat.id, makeStatFields(status: status));
+  void pushStatRecord({
+    String weight = '12.37',
+    String unit = 'kg',
+  }) {
+    _send(M2400RecordType.recStat.id,
+        makeStatFields(weight: weight, unit: unit));
   }
 
   /// Push an intro record to all connected clients.
