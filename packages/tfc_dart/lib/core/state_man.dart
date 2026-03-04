@@ -10,6 +10,8 @@ import 'package:open62541/open62541.dart';
 import 'package:rxdart/rxdart.dart';
 import 'package:collection/collection.dart';
 
+import 'package:jbtm/jbtm.dart' show M2400RecordType, M2400Field;
+
 import 'collector.dart';
 import 'preferences.dart';
 
@@ -124,16 +126,54 @@ class OpcUAConfig {
 }
 
 @JsonSerializable(explicitToJson: true)
+class M2400Config {
+  String host;
+  int port;
+  @JsonKey(name: 'server_alias')
+  String? serverAlias;
+
+  M2400Config({this.host = '', this.port = 52211});
+
+  factory M2400Config.fromJson(Map<String, dynamic> json) =>
+      _$M2400ConfigFromJson(json);
+  Map<String, dynamic> toJson() => _$M2400ConfigToJson(this);
+
+  @override
+  String toString() => 'M2400Config(host: $host, port: $port, alias: $serverAlias)';
+}
+
+@JsonSerializable(explicitToJson: true)
+class M2400NodeConfig {
+  @JsonKey(name: 'record_type')
+  M2400RecordType recordType;
+  M2400Field? field;
+  @JsonKey(name: 'server_alias')
+  String? serverAlias;
+
+  M2400NodeConfig({required this.recordType, this.field, this.serverAlias});
+
+  factory M2400NodeConfig.fromJson(Map<String, dynamic> json) =>
+      _$M2400NodeConfigFromJson(json);
+  Map<String, dynamic> toJson() => _$M2400NodeConfigToJson(this);
+
+  @override
+  String toString() =>
+      'M2400NodeConfig(recordType: $recordType, field: $field, alias: $serverAlias)';
+}
+
+@JsonSerializable(explicitToJson: true)
 class StateManConfig {
   List<OpcUAConfig> opcua;
+  @JsonKey(defaultValue: [])
+  List<M2400Config> jbtm;
 
-  StateManConfig({required this.opcua});
+  StateManConfig({required this.opcua, this.jbtm = const []});
 
   StateManConfig copy() => StateManConfig.fromJson(toJson());
 
   @override
   String toString() {
-    return 'StateManConfig(opcua: ${opcua.toString()})';
+    return 'StateManConfig(opcua: ${opcua.toString()}, jbtm: ${jbtm.toString()})';
   }
 
   static Future<StateManConfig> fromFile(String path) async {
@@ -206,12 +246,14 @@ class OpcUANodeConfig {
 class KeyMappingEntry {
   @JsonKey(name: 'opcua_node')
   OpcUANodeConfig? opcuaNode;
+  @JsonKey(name: 'm2400_node')
+  M2400NodeConfig? m2400Node;
   bool? io; // if true, the key is an IO unit
   CollectEntry? collect;
 
-  String? get server => opcuaNode?.serverAlias;
+  String? get server => opcuaNode?.serverAlias ?? m2400Node?.serverAlias;
 
-  KeyMappingEntry({this.opcuaNode, this.collect});
+  KeyMappingEntry({this.opcuaNode, this.m2400Node, this.collect});
 
   factory KeyMappingEntry.fromJson(Map<String, dynamic> json) =>
       _$KeyMappingEntryFromJson(json);
@@ -234,7 +276,8 @@ class KeyMappings {
   }
 
   String? lookupServerAlias(String key) {
-    return nodes[key]?.opcuaNode?.serverAlias;
+    final entry = nodes[key];
+    return entry?.opcuaNode?.serverAlias ?? entry?.m2400Node?.serverAlias;
   }
 
   String? lookupKey(NodeId nodeId) {
