@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: in-progress
-stopped_at: Completed 04-01-PLAN.md
-last_updated: "2026-03-04T13:26:25Z"
-last_activity: 2026-03-04 -- Completed 04-01 (M2400 stub server)
+status: completed
+stopped_at: Phase 5 complete
+last_updated: "2026-03-04T14:15:00.000Z"
+last_activity: 2026-03-04 -- Completed 05-02 (M2400 field catalog)
 progress:
   total_phases: 10
-  completed_phases: 3
-  total_plans: 7
-  completed_plans: 7
+  completed_phases: 5
+  total_plans: 9
+  completed_plans: 9
   percent: 100
 ---
 
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-04)
 
 **Core value:** Reliable, real-time acquisition of device data into state_man -- if the device pushes a record, the system captures it and makes it available as a DynamicValue stream.
-**Current focus:** Phase 4 in progress - M2400 Stub Server. Plan 01 complete.
+**Current focus:** Phase 5 complete - M2400 Field Catalog. Ready for Phase 6 (DynamicValue Conversion).
 
 ## Current Position
 
-Phase: 4 of 10 (M2400 Stub Server) -- IN PROGRESS
-Plan: 1 of 1 in current phase -- COMPLETE
+Phase: 5 of 10 (M2400 Field Catalog) -- COMPLETE
+Plan: 2 of 2 in current phase -- COMPLETE
 Status: Phase Complete
-Last activity: 2026-03-04 -- Completed 04-01 (M2400 stub server)
+Last activity: 2026-03-04 -- Completed 05-02 (M2400 field catalog barrel exports and stub alignment)
 
 Progress: [██████████] 100%
 
@@ -57,6 +57,8 @@ Progress: [██████████] 100%
 | Phase 03 P01 | 4min | 2 tasks | 3 files |
 | Phase 03 P02 | 3min | 1 task | 1 file |
 | Phase 04 P01 | 7min | 1 task | 7 files |
+| Phase 05 P01 | 5min | 2 tasks | 4 files |
+| Phase 05 P02 | 3min | 1 task | 3 files |
 
 ## Accumulated Context
 
@@ -87,6 +89,13 @@ Recent decisions affecting current work:
 - [Phase 04]: utf8.encode used instead of .codeUnits in buildM2400Frame for non-ASCII correctness
 - [Phase 04]: M2400StubServer uses composition (wraps TestTcpServer) not inheritance
 - [Phase 04]: Phase 4 complete -- M2400StubServer with 22 tests, TDD infrastructure ready for phases 5-8
+- [Phase 05]: Weight values parsed to double directly (no Decimal package) -- resolves STATE.md blocker
+- [Phase 05]: Field 77 (SI Weight) classified as FieldType.string -- display-ready, no suffix stripping
+- [Phase 05]: Unknown field IDs logged at debug level (not warning) for discovery without production noise
+- [Phase 05]: Enum value 'id' renamed to 'recordId' to avoid shadowing M2400Field.id getter
+- [Phase 05]: Stub server factories import M2400Field enum directly as single source of truth for field IDs
+- [Phase 05]: INTRO record field IDs kept as string keys (not confirmed from device data)
+- [Phase 05]: Phase 5 complete -- 54 M2400Field values, typed parsing, 160 tests (67 new)
 
 ### Pending Todos
 
@@ -95,11 +104,11 @@ None yet.
 ### Blockers/Concerns
 
 - ~~Phase 1: make-dynamicvalue-more-generic branch status in open62541_dart is unknown~~ RESOLVED: Branch has 4 clean commits, all tests pass
-- Phase 5: Decimal handling strategy (Decimal package vs string preservation) needs decision before parser implementation
+- ~~Phase 5: Decimal handling strategy (Decimal package vs string preservation) needs decision before parser implementation~~ RESOLVED: Using double directly -- DynamicValue uses double, M2400 values have 2-3 decimal places max, no arithmetic in jbtm
 - ~~Phase 2: Platform-specific SO_KEEPALIVE constants (macOS vs Linux) need verification on deployment target~~ RESOLVED: Constants verified from macOS system headers and centroid-is/postgresql-dart reference implementation. All tests pass on macOS.
 
 ## Session Continuity
 
-Last session: 2026-03-04T13:26:25Z
-Stopped at: Completed 04-01-PLAN.md
-Resume file: .planning/phases/04-m2400-stub-server/04-01-SUMMARY.md
+Last session: 2026-03-04T14:15:00.000Z
+Stopped at: Phase 5 complete
+Resume file: .planning/phases/05-m2400-field-catalog/05-02-SUMMARY.md

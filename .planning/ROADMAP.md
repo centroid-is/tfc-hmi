@@ -16,7 +16,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [ ] **Phase 2: msocket TCP Layer** - Reusable TCP socket with keepalive, reconnect, and status
 - [x] **Phase 3: M2400 Framing** - STX/ETX frame parser and tab-separated record extraction (completed 2026-03-04)
 - [x] **Phase 4: M2400 Stub Server** - Programmable test server for TDD of all downstream work (completed 2026-03-04)
-- [ ] **Phase 5: M2400 Field Catalog** - Field enums, type-specific parsing, status enums, LUA records
+- [x] **Phase 5: M2400 Field Catalog** - Field enums, type-specific parsing, status enums, LUA records (completed 2026-03-04)
 - [ ] **Phase 6: DynamicValue Conversion** - M2400 parsed records to DynamicValue objects
 - [ ] **Phase 7: state_man Integration** - M2400ClientWrapper, subscribe, named keys, connection status
 - [ ] **Phase 8: Connection Resilience** - Proxy-based flaky connection testing and health metrics
@@ -98,8 +98,8 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] 05-01: TBD
-- [ ] 05-02: TBD
+- [x] 05-01-PLAN.md — M2400Field/FieldType/WeigherStatus enums, parseTypedRecord, M2400ParsedRecord, field parsing tests (TDD)
+- [x] 05-02-PLAN.md — Stub server factory alignment to real field IDs, barrel exports, round-trip integration tests
 
 ### Phase 6: DynamicValue Conversion
 **Goal**: Parsed M2400 records are representable as DynamicValue objects for state_man consumption
@@ -188,8 +188,8 @@ Note: Phases 1 and 2 can be parallelized (no dependency between them).
 | 1. DynamicValue Extraction | 1/2 | In Progress|  |
 | 2. msocket TCP Layer | 0/2 | Not started | - |
 | 3. M2400 Framing | 0/2 | Complete    | 2026-03-04 |
-| 4. M2400 Stub Server | 1/1 | Complete | 2026-03-04 |
-| 5. M2400 Field Catalog | 0/2 | Not started | - |
+| 4. M2400 Stub Server | 1/1 | Complete    | 2026-03-04 |
+| 5. M2400 Field Catalog | 2/2 | Complete    | 2026-03-04 |
 | 6. DynamicValue Conversion | 0/1 | Not started | - |
 | 7. state_man Integration | 0/2 | Not started | - |
 | 8. Connection Resilience | 0/2 | Not started | - |
