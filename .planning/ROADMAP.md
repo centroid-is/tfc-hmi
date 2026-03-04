@@ -12,7 +12,7 @@ This roadmap delivers industrial device data acquisition from M2400 weighing/gra
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 1: DynamicValue Extraction** - Decouple binarize/serialize from OPC UA in open62541_dart
+- [x] **Phase 1: DynamicValue Extraction** - Decouple binarize/serialize from OPC UA in open62541_dart
 - [ ] **Phase 2: msocket TCP Layer** - Reusable TCP socket with keepalive, reconnect, and status
 - [ ] **Phase 3: M2400 Framing** - STX/ETX frame parser and tab-separated record extraction
 - [ ] **Phase 4: M2400 Stub Server** - Programmable test server for TDD of all downstream work
@@ -37,8 +37,8 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Plans**: 2 plans
 
 Plans:
-- [ ] 01-01-PLAN.md — Create OpcUaDynamicValueSerializer and strip DynamicValue of PayloadType
-- [ ] 01-02-PLAN.md — Update call sites, tests, and verify no regression
+- [x] 01-01-PLAN.md — Create OpcUaDynamicValueSerializer and strip DynamicValue of PayloadType
+- [x] 01-02-PLAN.md — Update call sites, tests, and verify no regression
 
 ### Phase 2: msocket TCP Layer
 **Goal**: A reusable, protocol-agnostic TCP socket that reliably connects, detects disconnects quickly, and auto-reconnects
