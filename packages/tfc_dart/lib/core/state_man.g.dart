@@ -25,12 +25,14 @@ Map<String, dynamic> _$OpcUAConfigToJson(OpcUAConfig instance) =>
     };
 
 M2400Config _$M2400ConfigFromJson(Map<String, dynamic> json) => M2400Config(
+      type: json['type'] as String? ?? 'm2400',
       host: json['host'] as String? ?? '',
       port: (json['port'] as num?)?.toInt() ?? 52211,
     )..serverAlias = json['server_alias'] as String?;
 
 Map<String, dynamic> _$M2400ConfigToJson(M2400Config instance) =>
     <String, dynamic>{
+      'type': instance.type,
       'host': instance.host,
       'port': instance.port,
       'server_alias': instance.serverAlias,

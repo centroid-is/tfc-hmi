@@ -130,19 +130,21 @@ class OpcUAConfig {
 
 @JsonSerializable(explicitToJson: true)
 class M2400Config {
+  @JsonKey(defaultValue: 'm2400')
+  String type;
   String host;
   int port;
   @JsonKey(name: 'server_alias')
   String? serverAlias;
 
-  M2400Config({this.host = '', this.port = 52211});
+  M2400Config({this.type = 'm2400', this.host = '', this.port = 52211});
 
   factory M2400Config.fromJson(Map<String, dynamic> json) =>
       _$M2400ConfigFromJson(json);
   Map<String, dynamic> toJson() => _$M2400ConfigToJson(this);
 
   @override
-  String toString() => 'M2400Config(host: $host, port: $port, alias: $serverAlias)';
+  String toString() => 'M2400Config(type: $type, host: $host, port: $port, alias: $serverAlias)';
 }
 
 @JsonSerializable(explicitToJson: true)
