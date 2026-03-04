@@ -26,6 +26,9 @@ class MockDeviceClient implements DeviceClient {
   }
 
   @override
+  DynamicValue? read(String key) => null;
+
+  @override
   ConnectionStatus get connectionStatus => _status;
 
   @override
