@@ -138,22 +138,28 @@ void main() {
         var data = await _queryTable(database, tableName);
         expect(data.length, 1);
 
-        // Stop database — keep it down for the entire insert phase
+        // Stop database — keep it down for the entire insert phase.
+        // Wait long enough for the pool to detect all dead connections
+        // (TCP keepalive: 5s idle + 3 probes × 5s = 20s worst case,
+        // but RST from proxy close is typically detected much sooner).
+        // This prevents the pool from bridging the outage by holding
+        // pending queries until the proxy restarts.
         await stopTimescaleDb();
-        await Future.delayed(const Duration(seconds: 2));
+        await Future.delayed(const Duration(seconds: 12));
 
         // Insert MORE than queue capacity (100).
         // The Collector's stream listener fires unawaited insertTimeseriesData
-        // calls.  Auto-flushes at 50 items fail fast (maxRetries: 1) and
-        // queue items for retry.  The overflow cap in _queueForRetry keeps
-        // only the newest 100 items.
+        // calls.  Auto-flushes at 50 items try the pool, get ECONNREFUSED
+        // (proxy is down, no live connections), fail fast, and queue items
+        // for retry.  The overflow cap in _queueForRetry keeps only the
+        // newest 100 items.
         const totalItems = 120;
         for (var i = 0; i < totalItems; i++) {
           streamController.add(DynamicValue(value: 'item_$i'));
         }
 
-        // Wait for unawaited inserts and failed auto-flushes to settle
-        await Future.delayed(const Duration(seconds: 2));
+        // Wait for auto-flushes to fail (connectTimeout: 5s + margin)
+        await Future.delayed(const Duration(seconds: 8));
 
         // Force-flush remaining buffer while DB is still down
         await database.flush();

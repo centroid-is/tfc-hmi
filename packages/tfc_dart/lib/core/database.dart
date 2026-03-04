@@ -561,15 +561,19 @@ class Database {
   /// Flush all pending writes immediately (useful for tests)
   Future<void> flush() => _flushAllBatches();
 
-  /// Queue failed writes for later retry (drops oldest if queue full)
+  /// Queue failed writes for later retry (drops oldest if queue full).
+  ///
+  /// When multiple concurrent flushes fail, the order they call this method is
+  /// non-deterministic. To always drop the globally oldest data regardless of
+  /// call order, items are sorted by timestamp before trimming.
   void _queueForRetry(String tableName, List<_PendingWrite> writes) {
     final queue = _retryQueue.putIfAbsent(tableName, () => []);
-    for (final write in writes) {
-      if (queue.length >= _maxRetryQueueSize) {
-        final dropped = queue.removeAt(0);
-        logger.w('Retry queue full for $tableName, dropping oldest from ${dropped.time}');
-      }
-      queue.add(write);
+    queue.addAll(writes);
+    if (queue.length > _maxRetryQueueSize) {
+      queue.sort((a, b) => a.time.compareTo(b.time));
+      final overflow = queue.length - _maxRetryQueueSize;
+      logger.w('Retry queue overflow for $tableName, dropping $overflow oldest items');
+      queue.removeRange(0, overflow);
     }
     _scheduleRetryFlush();
   }
@@ -595,13 +599,7 @@ class Database {
         } catch (e) {
           // Still failing — re-queue (drops oldest if full)
           logger.w('Retry flush failed for $tableName, re-queuing ${writes.length} items');
-          final queue = _retryQueue.putIfAbsent(tableName, () => []);
-          for (final write in writes) {
-            if (queue.length >= _maxRetryQueueSize) {
-              queue.removeAt(0);
-            }
-            queue.add(write);
-          }
+          _queueForRetry(tableName, writes);
         }
       }
 
