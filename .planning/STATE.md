@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: in-progress
-stopped_at: Completed 03-01-PLAN.md
-last_updated: "2026-03-04T12:47:57Z"
-last_activity: 2026-03-04 -- Completed 03-01 (M2400 frame parser and record parser)
+status: completed
+stopped_at: Completed 03-02-PLAN.md
+last_updated: "2026-03-04T12:55:21.558Z"
+last_activity: 2026-03-04 -- Completed 03-02 (M2400 integration tests)
 progress:
   total_phases: 10
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 6
-  completed_plans: 5
-  percent: 83
+  completed_plans: 6
+  percent: 100
 ---
 
 # Project State
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-04)
 
 **Core value:** Reliable, real-time acquisition of device data into state_man -- if the device pushes a record, the system captures it and makes it available as a DynamicValue stream.
-**Current focus:** Phase 3 in progress - M2400 Framing
+**Current focus:** Phase 3 complete - M2400 Framing. Ready for Phase 4.
 
 ## Current Position
 
-Phase: 3 of 10 (M2400 Framing)
-Plan: 1 of 2 in current phase -- COMPLETE
-Status: In Progress
-Last activity: 2026-03-04 -- Completed 03-01 (M2400 frame parser and record parser)
+Phase: 3 of 10 (M2400 Framing) -- COMPLETE
+Plan: 2 of 2 in current phase -- COMPLETE
+Status: Phase Complete
+Last activity: 2026-03-04 -- Completed 03-02 (M2400 integration tests)
 
-Progress: [████████░░] 83%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
@@ -55,6 +55,7 @@ Progress: [████████░░] 83%
 | Phase 02 P01 | 14min | 2 tasks | 7 files |
 | Phase 02 P02 | 3min | 1 task | 2 files |
 | Phase 03 P01 | 4min | 2 tasks | 3 files |
+| Phase 03 P02 | 3min | 1 task | 1 file |
 
 ## Accumulated Context
 
@@ -78,6 +79,8 @@ Recent decisions affecting current work:
 - [Phase 03]: Silent discard for inter-frame garbage bytes (no logging to avoid log flood)
 - [Phase 03]: 64KB max frame size (65536 bytes) for oversized frame protection
 - [Phase 03]: StreamTransformer pattern for frame parser, pure function for record parser
+- [Phase 03]: Completer-based test sync for broadcast stream pipelines (stream.first creates cold subscription that misses events)
+- [Phase 03]: Phase 3 complete -- M2400 framing validated end-to-end with 51 tests (unit + integration)
 
 ### Pending Todos
 
@@ -91,6 +94,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-04T12:47:57Z
-Stopped at: Completed 03-01-PLAN.md
-Resume file: .planning/phases/03-m2400-framing/03-02-PLAN.md
+Last session: 2026-03-04T12:55:21.556Z
+Stopped at: Completed 03-02-PLAN.md
+Resume file: None
