@@ -7,7 +7,7 @@ import 'dart:io';
 /// allows sending data to all clients, and supports programmatic disconnect
 /// to simulate device reboots.
 class TestTcpServer {
-  late ServerSocket _server;
+  ServerSocket? _server;
   final List<Socket> _clients = [];
   Completer<void>? _clientCompleter;
 
@@ -15,7 +15,7 @@ class TestTcpServer {
   Future<int> start() async {
     _server =
         await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
-    _server.listen((socket) {
+    _server!.listen((socket) {
       _clients.add(socket);
       // Catch errors on the IOSink done future to prevent unhandled
       // async errors when the client destroys the connection (RST).
@@ -25,11 +25,11 @@ class TestTcpServer {
       _clientCompleter?.complete();
       _clientCompleter = null;
     });
-    return _server.port;
+    return _server!.port;
   }
 
   /// The port the server is listening on.
-  int get port => _server.port;
+  int get port => _server!.port;
 
   /// Number of currently connected clients.
   int get clientCount => _clients.length;
@@ -62,9 +62,9 @@ class TestTcpServer {
     _clients.clear();
   }
 
-  /// Fully shut down the server.
+  /// Fully shut down the server. Safe to call even if [start] was never called.
   Future<void> shutdown() async {
     disconnectAll();
-    await _server.close();
+    await _server?.close();
   }
 }

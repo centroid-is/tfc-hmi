@@ -289,4 +289,319 @@ void main() {
       expect(events, isEmpty);
     });
   });
+
+  group('reconnect', () {
+    test('auto-reconnects after server disconnect', () async {
+      final port = await server.start();
+      final socket = MSocket('localhost', port);
+
+      socket.connect();
+      await socket.statusStream
+          .firstWhere((s) => s == ConnectionStatus.connected);
+      await server.waitForClient();
+
+      // Server disconnects all clients
+      server.disconnectAll();
+
+      // Wait for disconnected
+      await socket.statusStream
+          .firstWhere((s) => s == ConnectionStatus.disconnected);
+
+      // Wait for auto-reconnect (backoff is 500ms, so 3s timeout is generous)
+      await socket.statusStream
+          .firstWhere((s) => s == ConnectionStatus.connected)
+          .timeout(const Duration(seconds: 3));
+
+      // Server should have a new client
+      await server.waitForClient();
+      expect(server.clientCount, equals(1));
+
+      socket.dispose();
+    });
+
+    test('data stream continues after reconnect', () async {
+      final port = await server.start();
+      final socket = MSocket('localhost', port);
+
+      // Capture stream reference before connect
+      final stream = socket.dataStream;
+
+      socket.connect();
+      await socket.statusStream
+          .firstWhere((s) => s == ConnectionStatus.connected);
+      await server.waitForClient();
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      // Send data before disconnect
+      server.sendToAll([1, 2, 3]);
+      final data1 = await stream.first;
+      expect(data1, equals([1, 2, 3]));
+
+      // Disconnect and wait for reconnect
+      server.disconnectAll();
+      await socket.statusStream
+          .firstWhere((s) => s == ConnectionStatus.disconnected);
+      await socket.statusStream
+          .firstWhere((s) => s == ConnectionStatus.connected)
+          .timeout(const Duration(seconds: 3));
+      await server.waitForClient();
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      // Send data after reconnect -- same stream reference
+      server.sendToAll([4, 5, 6]);
+      final data2 = await stream.first;
+      expect(data2, equals([4, 5, 6]));
+
+      socket.dispose();
+    });
+
+    test('status transitions through full reconnect cycle', () async {
+      final port = await server.start();
+      final socket = MSocket('localhost', port);
+
+      final statuses = <ConnectionStatus>[];
+      socket.statusStream.listen(statuses.add);
+
+      socket.connect();
+      await socket.statusStream
+          .firstWhere((s) => s == ConnectionStatus.connected);
+      await server.waitForClient();
+
+      // Disconnect
+      server.disconnectAll();
+
+      // Wait for reconnect
+      await socket.statusStream
+          .where((s) => s == ConnectionStatus.connected)
+          .skip(1) // Skip the first connected we already got
+          .first
+          .timeout(const Duration(seconds: 3));
+
+      // Verify full cycle: disconnected (seed), connecting, connected,
+      // disconnected, connecting, connected
+      expect(statuses, containsAllInOrder([
+        ConnectionStatus.disconnected, // initial seed
+        ConnectionStatus.connecting,
+        ConnectionStatus.connected,
+        ConnectionStatus.disconnected, // after server disconnect
+        ConnectionStatus.connecting,   // reconnect attempt
+        ConnectionStatus.connected,    // reconnected
+      ]));
+
+      socket.dispose();
+    });
+
+    test('backoff resets after successful reconnect', () async {
+      final port = await server.start();
+      final socket = MSocket('localhost', port);
+
+      socket.connect();
+      await socket.statusStream
+          .firstWhere((s) => s == ConnectionStatus.connected);
+      await server.waitForClient();
+
+      // First disconnect + reconnect
+      server.disconnectAll();
+      await socket.statusStream
+          .firstWhere((s) => s == ConnectionStatus.disconnected);
+      final sw1 = Stopwatch()..start();
+      await socket.statusStream
+          .firstWhere((s) => s == ConnectionStatus.connected)
+          .timeout(const Duration(seconds: 3));
+      sw1.stop();
+      await server.waitForClient();
+
+      // Second disconnect + reconnect -- should also be ~500ms (not 1s)
+      server.disconnectAll();
+      await socket.statusStream
+          .firstWhere((s) => s == ConnectionStatus.disconnected);
+      final sw2 = Stopwatch()..start();
+      await socket.statusStream
+          .firstWhere((s) => s == ConnectionStatus.connected)
+          .timeout(const Duration(seconds: 3));
+      sw2.stop();
+
+      // Both reconnects should be approximately 500ms (backoff reset)
+      // Use generous tolerance for CI stability
+      expect(sw2.elapsedMilliseconds, lessThan(1000),
+          reason: 'Second reconnect should be ~500ms (reset backoff), '
+              'not 1s+ (doubled backoff). Got ${sw2.elapsedMilliseconds}ms');
+
+      socket.dispose();
+    });
+
+    test('dispose during backoff cancels reconnect', () async {
+      final port = await server.start();
+      final socket = MSocket('localhost', port);
+
+      socket.connect();
+      await socket.statusStream
+          .firstWhere((s) => s == ConnectionStatus.connected);
+      await server.waitForClient();
+
+      // Shut down server so reconnect will fail
+      await server.shutdown();
+
+      // Wait for disconnected
+      await socket.statusStream
+          .firstWhere((s) => s == ConnectionStatus.disconnected);
+
+      // Small delay -- MSocket is now in backoff wait
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      // Collect status events after dispose
+      final postDisposeStatuses = <ConnectionStatus>[];
+      socket.statusStream.listen(
+        postDisposeStatuses.add,
+        onError: (_) {},
+        onDone: () {},
+      );
+
+      socket.dispose();
+
+      // Wait to see if any further events arrive
+      await Future.delayed(const Duration(seconds: 2));
+
+      // After dispose, no connecting/connected events should appear
+      // (the done event from stream close is ok, but no state transitions)
+      final reconnectAttempts = postDisposeStatuses
+          .where((s) => s == ConnectionStatus.connecting ||
+                        s == ConnectionStatus.connected)
+          .length;
+      expect(reconnectAttempts, equals(0),
+          reason: 'No reconnect attempts should occur after dispose');
+    });
+
+    test('dispose during active connection stops loop', () async {
+      final port = await server.start();
+      final socket = MSocket('localhost', port);
+
+      socket.connect();
+      await socket.statusStream
+          .firstWhere((s) => s == ConnectionStatus.connected);
+
+      // Collect events
+      final postDisposeStatuses = <ConnectionStatus>[];
+      final sub = socket.statusStream.listen(postDisposeStatuses.add);
+
+      socket.dispose();
+      await Future.delayed(const Duration(milliseconds: 500));
+
+      // No connecting event should appear after dispose
+      final connectingAfterDispose = postDisposeStatuses
+          .where((s) => s == ConnectionStatus.connecting)
+          .length;
+      expect(connectingAfterDispose, equals(0),
+          reason: 'No reconnect should be attempted after dispose');
+
+      await sub.cancel();
+    });
+
+    test('connect to unreachable host retries with backoff', () async {
+      // Use a port where no server is listening
+      final socket = MSocket('localhost', 59999);
+
+      final statuses = <ConnectionStatus>[];
+      socket.statusStream.listen(statuses.add);
+
+      socket.connect();
+
+      // Wait for at least 2 retry cycles
+      await Future.delayed(const Duration(seconds: 3));
+
+      // Should see connecting, disconnected pattern repeated
+      final connectingCount =
+          statuses.where((s) => s == ConnectionStatus.connecting).length;
+      final disconnectedCount =
+          statuses.where((s) => s == ConnectionStatus.disconnected).length;
+
+      expect(connectingCount, greaterThanOrEqualTo(2),
+          reason: 'Should have at least 2 connecting events (retries)');
+      // disconnected count: 1 seed + at least 2 failures = at least 3
+      expect(disconnectedCount, greaterThanOrEqualTo(3),
+          reason: 'Should have at least 3 disconnected events '
+              '(1 seed + 2 failures)');
+
+      socket.dispose();
+    });
+  });
+
+  group('backoff timing', () {
+    test('initial backoff is approximately 500ms', () async {
+      final port = await server.start();
+      final socket = MSocket('localhost', port);
+
+      socket.connect();
+      await socket.statusStream
+          .firstWhere((s) => s == ConnectionStatus.connected);
+      await server.waitForClient();
+
+      // Shut down server so reconnect attempt fails, then times the gap
+      await server.shutdown();
+
+      // Wait for disconnected
+      await socket.statusStream
+          .firstWhere((s) => s == ConnectionStatus.disconnected);
+      final sw = Stopwatch()..start();
+
+      // Wait for the next connecting event (after backoff delay)
+      await socket.statusStream
+          .firstWhere((s) => s == ConnectionStatus.connecting)
+          .timeout(const Duration(seconds: 3));
+      sw.stop();
+
+      // Initial backoff should be ~500ms (tolerance: 300ms-900ms for CI)
+      expect(sw.elapsedMilliseconds, greaterThanOrEqualTo(300),
+          reason: 'Backoff should be at least 300ms');
+      expect(sw.elapsedMilliseconds, lessThanOrEqualTo(900),
+          reason: 'Initial backoff should not exceed 900ms');
+
+      socket.dispose();
+    });
+
+    test('backoff caps at 5 seconds', () async {
+      // Connect to unreachable port to trigger repeated failures
+      final socket = MSocket('localhost', 59998);
+
+      final connectingTimestamps = <int>[];
+      socket.statusStream.listen((s) {
+        if (s == ConnectionStatus.connecting) {
+          connectingTimestamps.add(DateTime.now().millisecondsSinceEpoch);
+        }
+      });
+
+      socket.connect();
+
+      // Wait long enough for at least 5 cycles:
+      // 500 + 1000 + 2000 + 4000 + 5000 = 12500ms, plus connect timeouts
+      // With 3s connect timeout per attempt, we need much more time.
+      // Actually, connect to localhost should fail fast (connection refused).
+      // So: 500 + 1000 + 2000 + 4000 + 5000 ~= 12.5s + fast fails
+      await Future.delayed(const Duration(seconds: 16));
+
+      socket.dispose();
+
+      // Need at least 6 timestamps (initial + 5 retries) to check capping
+      expect(connectingTimestamps.length, greaterThanOrEqualTo(6),
+          reason: 'Need at least 6 connecting events to verify cap. '
+              'Got ${connectingTimestamps.length}');
+
+      // Check deltas between connecting events
+      final deltas = <int>[];
+      for (var i = 1; i < connectingTimestamps.length; i++) {
+        deltas.add(connectingTimestamps[i] - connectingTimestamps[i - 1]);
+      }
+
+      // Expected approximate deltas: 500, 1000, 2000, 4000, 5000, 5000...
+      // Use generous tolerance (0.5x to 2.0x) for CI stability.
+      // The last few deltas should be capped at ~5000ms (not growing beyond)
+      if (deltas.length >= 5) {
+        // The 5th+ deltas should be close to 5s (capped), not 8s or 16s
+        for (var i = 4; i < deltas.length; i++) {
+          expect(deltas[i], lessThanOrEqualTo(8000),
+              reason: 'Delta[$i]=${deltas[i]}ms should be capped at ~5s');
+        }
+      }
+    });
+  });
 }
