@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: completed
-stopped_at: Phase 5 complete
-last_updated: "2026-03-04T14:15:00.000Z"
-last_activity: 2026-03-04 -- Completed 05-02 (M2400 field catalog)
+status: in_progress
+stopped_at: Phase 7 Plan 01 complete
+last_updated: "2026-03-04T14:34:00.000Z"
+last_activity: 2026-03-04 -- Completed 07-01 (M2400ClientWrapper)
 progress:
   total_phases: 10
-  completed_phases: 5
-  total_plans: 9
-  completed_plans: 9
-  percent: 100
+  completed_phases: 6
+  total_plans: 18
+  completed_plans: 11
+  percent: 61
 ---
 
 # Project State
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-04)
 
 **Core value:** Reliable, real-time acquisition of device data into state_man -- if the device pushes a record, the system captures it and makes it available as a DynamicValue stream.
-**Current focus:** Phase 5 complete - M2400 Field Catalog. Ready for Phase 6 (DynamicValue Conversion).
+**Current focus:** Phase 7 in progress - state_man Integration. Plan 01 complete (M2400ClientWrapper), Plan 02 next (provider integration).
 
 ## Current Position
 
-Phase: 5 of 10 (M2400 Field Catalog) -- COMPLETE
-Plan: 2 of 2 in current phase -- COMPLETE
-Status: Phase Complete
-Last activity: 2026-03-04 -- Completed 05-02 (M2400 field catalog barrel exports and stub alignment)
+Phase: 7 of 10 (state_man Integration) -- IN PROGRESS
+Plan: 1 of 2 in current phase -- COMPLETE
+Status: Plan 01 Complete, Plan 02 Next
+Last activity: 2026-03-04 -- Completed 07-01 (M2400ClientWrapper with pipeline, stream routing, subscribe API)
 
-Progress: [██████████] 100%
+Progress: [██████----] 61%
 
 ## Performance Metrics
 
@@ -59,6 +59,8 @@ Progress: [██████████] 100%
 | Phase 04 P01 | 7min | 1 task | 7 files |
 | Phase 05 P01 | 5min | 2 tasks | 4 files |
 | Phase 05 P02 | 3min | 1 task | 3 files |
+| Phase 06 P01 | -- | 1 task | 3 files |
+| Phase 07 P01 | 4min | 1 task | 3 files |
 
 ## Accumulated Context
 
@@ -96,6 +98,12 @@ Recent decisions affecting current work:
 - [Phase 05]: Stub server factories import M2400Field enum directly as single source of truth for field IDs
 - [Phase 05]: INTRO record field IDs kept as string keys (not confirmed from device data)
 - [Phase 05]: Phase 5 complete -- 54 M2400Field values, typed parsing, 160 tests (67 new)
+- [Phase 06]: convertRecordToDynamicValue maps M2400ParsedRecord to DynamicValue object tree with typed children and enum metadata
+- [Phase 06]: Phase 6 complete -- DynamicValue conversion with 13 tests, pipeline round-trip verified
+- [Phase 07]: Wrapper-owned BehaviorSubject for status (not delegating to MSocket) to survive connect/disconnect cycles
+- [Phase 07]: Route by DynamicValue.name (set to M2400RecordType.name by converter) rather than carrying record type separately
+- [Phase 07]: STAT/INTRO use BehaviorSubject (replay last); BATCH/LUA use broadcast StreamController (event-only)
+- [Phase 07]: Dot-notation uses DynamicValue[] operator to traverse child hierarchy
 
 ### Pending Todos
 
@@ -109,6 +117,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-04T14:15:00.000Z
-Stopped at: Phase 5 complete
-Resume file: .planning/phases/05-m2400-field-catalog/05-02-SUMMARY.md
+Last session: 2026-03-04T14:34:00.000Z
+Stopped at: Phase 7 Plan 01 complete
+Resume file: .planning/phases/07-state-man-integration/07-01-SUMMARY.md

@@ -17,7 +17,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 3: M2400 Framing** - STX/ETX frame parser and tab-separated record extraction (completed 2026-03-04)
 - [x] **Phase 4: M2400 Stub Server** - Programmable test server for TDD of all downstream work (completed 2026-03-04)
 - [x] **Phase 5: M2400 Field Catalog** - Field enums, type-specific parsing, status enums, LUA records (completed 2026-03-04)
-- [ ] **Phase 6: DynamicValue Conversion** - M2400 parsed records to DynamicValue objects
+- [x] **Phase 6: DynamicValue Conversion** - M2400 parsed records to DynamicValue objects (completed 2026-03-04)
 - [ ] **Phase 7: state_man Integration** - M2400ClientWrapper, subscribe, named keys, connection status
 - [ ] **Phase 8: Connection Resilience** - Proxy-based flaky connection testing and health metrics
 - [ ] **Phase 9: Configuration & Multi-device** - Server config, key mapping CRUD, multi-device, collector
@@ -112,7 +112,7 @@ Plans:
 **Plans**: 1 plan
 
 Plans:
-- [ ] 06-01-PLAN.md — convertRecordToDynamicValue function with TDD, barrel export, pipeline round-trip tests
+- [x] 06-01-PLAN.md — convertRecordToDynamicValue function with TDD, barrel export, pipeline round-trip tests
 
 ### Phase 7: state_man Integration
 **Goal**: Device data flows through state_man as subscribable DynamicValue streams using named keys
@@ -127,7 +127,7 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] 07-01-PLAN.md — M2400ClientWrapper with pipeline, stream routing, subscribe API, and dot-notation field access
+- [x] 07-01-PLAN.md — M2400ClientWrapper with pipeline, stream routing, subscribe API, and dot-notation field access
 - [ ] 07-02-PLAN.md — StateMan integration wiring, connection status mapping, end-to-end tests with M2400StubServer
 
 ### Phase 8: Connection Resilience
@@ -189,8 +189,8 @@ Note: Phases 1 and 2 can be parallelized (no dependency between them).
 | 3. M2400 Framing | 0/2 | Complete    | 2026-03-04 |
 | 4. M2400 Stub Server | 1/1 | Complete    | 2026-03-04 |
 | 5. M2400 Field Catalog | 2/2 | Complete    | 2026-03-04 |
-| 6. DynamicValue Conversion | 0/1 | Not started | - |
-| 7. state_man Integration | 0/2 | Not started | - |
+| 6. DynamicValue Conversion | 1/1 | Complete    | 2026-03-04 |
+| 7. state_man Integration | 1/2 | In Progress | - |
 | 8. Connection Resilience | 0/2 | Not started | - |
 | 9. Configuration & Multi-device | 0/2 | Not started | - |
 | 10. UI | 0/2 | Not started | - |
