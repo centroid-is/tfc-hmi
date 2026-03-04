@@ -258,6 +258,10 @@ DatabaseConfig getTestConfig() {
     ),
     sslMode: SslMode.disable,
     debug: true,
+    // Short pool timeouts so queries fail fast when proxy is down.
+    // Prevents pool queries from bridging simulated outages.
+    connectTimeout: const Duration(seconds: 2),
+    queryTimeout: const Duration(seconds: 5),
   );
 }
 

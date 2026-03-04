@@ -139,37 +139,39 @@ void main() {
         expect(data.length, 1);
 
         // Stop database — keep it down for the entire insert phase.
-        // Wait long enough for the pool to detect all dead connections
-        // (TCP keepalive: 5s idle + 3 probes × 5s = 20s worst case,
-        // but RST from proxy close is typically detected much sooner).
-        // This prevents the pool from bridging the outage by holding
-        // pending queries until the proxy restarts.
         await stopTimescaleDb();
-        await Future.delayed(const Duration(seconds: 12));
+        await Future.delayed(const Duration(seconds: 5));
 
         // Insert MORE than queue capacity (100).
         // The Collector's stream listener fires unawaited insertTimeseriesData
-        // calls.  Auto-flushes at 50 items try the pool, get ECONNREFUSED
-        // (proxy is down, no live connections), fail fast, and queue items
-        // for retry.  The overflow cap in _queueForRetry keeps only the
-        // newest 100 items.
+        // calls.  Auto-flushes at 50 items try the pool, fail within
+        // queryTimeout (5s), and queue items for retry.  The overflow cap
+        // in _queueForRetry keeps only the newest 100 items.
         const totalItems = 120;
         for (var i = 0; i < totalItems; i++) {
           streamController.add(DynamicValue(value: 'item_$i'));
         }
 
-        // Wait for auto-flushes to fail (connectTimeout: 5s + margin)
-        await Future.delayed(const Duration(seconds: 8));
+        // Wait for ALL pool queries to fail and complete the retry cycle:
+        //   - Auto/periodic flushes fail within queryTimeout (5s)
+        //   - Items enter retry queue, retry scheduled after 5s delay
+        //   - Retry flush fires, fails within queryTimeout (5s)
+        //   - Items re-queued, next retry scheduled after 5s delay
+        // Total: queryTimeout + retryDelay + queryTimeout + margin = 16s
+        // During the next 5s retry delay window, no pool queries are active
+        // so it's safe to restart the proxy.
+        await Future.delayed(const Duration(seconds: 16));
 
-        // Force-flush remaining buffer while DB is still down
+        // Flush any remaining buffer while DB is still down
         await database.flush();
 
-        // NOW restart database — all items are safely in the retry queue
+        // NOW restart database — all items are safely in the retry queue,
+        // no pool queries are in-flight to bridge the restart.
         await startTimescaleDb();
         await waitForDatabaseReady();
 
-        // Wait for retry queue to flush (5 s timer + margin)
-        await Future.delayed(const Duration(seconds: 8));
+        // Wait for retry queue to flush (5 s retry delay + queryTimeout)
+        await Future.delayed(const Duration(seconds: 12));
         await database.flush();
 
         // Verify: 1 init + 100 newest items = 101

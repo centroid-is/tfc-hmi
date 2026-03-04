@@ -81,7 +81,21 @@ class DatabaseConfig {
   pg.SslMode? sslMode;
   bool debug = false;
 
-  DatabaseConfig({this.postgres, this.sslMode, this.debug = false});
+  /// Pool connect timeout (not serialized to JSON).
+  @json.JsonKey(includeFromJson: false, includeToJson: false)
+  Duration connectTimeout;
+
+  /// Pool query timeout (not serialized to JSON).
+  @json.JsonKey(includeFromJson: false, includeToJson: false)
+  Duration queryTimeout;
+
+  DatabaseConfig({
+    this.postgres,
+    this.sslMode,
+    this.debug = false,
+    this.connectTimeout = const Duration(seconds: 5),
+    this.queryTimeout = const Duration(seconds: 30),
+  });
 
   factory DatabaseConfig.fromJson(Map<String, dynamic> json) =>
       _$DatabaseConfigFromJson(json);
@@ -594,7 +608,7 @@ class Database {
         if (writes.isEmpty) continue;
 
         try {
-          await _ensureTableAndInsert(tableName, writes);
+          await _ensureTableAndInsert(tableName, writes, maxRetries: 1);
           logger.i('Retry flush succeeded for $tableName: ${writes.length} items');
         } catch (e) {
           // Still failing — re-queue (drops oldest if full)

@@ -239,10 +239,10 @@ class AppDatabase extends _$AppDatabase {
           settings: pg.PoolSettings(
             maxConnectionCount: 20,
             sslMode: config.sslMode,
-            connectTimeout: const Duration(seconds: 5),
+            connectTimeout: config.connectTimeout,
             keepAliveInterval: const Duration(seconds: 5),
             keepAliveCount: 3,
-            queryTimeout: const Duration(seconds: 30),
+            queryTimeout: config.queryTimeout,
           ));
 
       _startPoolHealthMonitor(pool, healthPort.sendPort);
@@ -279,10 +279,10 @@ class AppDatabase extends _$AppDatabase {
             settings: pg.PoolSettings(
               maxConnectionCount: 20,
               sslMode: config.sslMode,
-              connectTimeout: const Duration(seconds: 5),
+              connectTimeout: config.connectTimeout,
               keepAliveInterval: const Duration(seconds: 5),
               keepAliveCount: 3,
-              queryTimeout: const Duration(seconds: 30),
+              queryTimeout: config.queryTimeout,
             ));
 
         // Health monitor: holds one pool connection and awaits its closed
