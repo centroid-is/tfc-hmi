@@ -34,7 +34,7 @@
 ### state_man Integration
 
 - [x] **SM-01**: M2400ClientWrapper follows ClientWrapper pattern (connect, disconnect, status stream)
-- [ ] **SM-02**: state_man subscribe returns Stream<DynamicValue> for M2400 keys
+- [x] **SM-02**: state_man subscribe returns Stream<DynamicValue> for M2400 keys
 - [x] **SM-03**: Named key addressing -- WGT for full record DynamicValue, WGT.WEIGHT for individual field
 - [x] **SM-04**: Connection status integrated into state_man status reporting
 - [ ] **SM-05**: Multi-device support -- N simultaneous M2400 connections with independent configs
@@ -100,7 +100,7 @@
 | DV-01 | Phase 1 | Complete |
 | DV-02 | Phase 6 | Complete |
 | SM-01 | Phase 7 | Complete |
-| SM-02 | Phase 7 | Pending |
+| SM-02 | Phase 7 | Complete |
 | SM-03 | Phase 7 | Complete |
 | SM-04 | Phase 7 | Complete |
 | SM-05 | Phase 9 | Pending |

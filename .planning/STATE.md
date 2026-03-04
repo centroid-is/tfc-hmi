@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: in_progress
-stopped_at: Phase 7 Plan 01 complete
-last_updated: "2026-03-04T14:34:00.000Z"
-last_activity: 2026-03-04 -- Completed 07-01 (M2400ClientWrapper)
+stopped_at: Phase 7 Plan 02 complete
+last_updated: "2026-03-04T14:44:00.000Z"
+last_activity: 2026-03-04 -- Completed 07-02 (StateMan DeviceClient integration + end-to-end tests)
 progress:
   total_phases: 10
-  completed_phases: 6
+  completed_phases: 7
   total_plans: 18
-  completed_plans: 11
-  percent: 61
+  completed_plans: 12
+  percent: 67
 ---
 
 # Project State
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-04)
 
 **Core value:** Reliable, real-time acquisition of device data into state_man -- if the device pushes a record, the system captures it and makes it available as a DynamicValue stream.
-**Current focus:** Phase 7 in progress - state_man Integration. Plan 01 complete (M2400ClientWrapper), Plan 02 next (provider integration).
+**Current focus:** Phase 7 complete - state_man Integration. Phase 8 next (Connection Resilience).
 
 ## Current Position
 
-Phase: 7 of 10 (state_man Integration) -- IN PROGRESS
-Plan: 1 of 2 in current phase -- COMPLETE
-Status: Plan 01 Complete, Plan 02 Next
-Last activity: 2026-03-04 -- Completed 07-01 (M2400ClientWrapper with pipeline, stream routing, subscribe API)
+Phase: 7 of 10 (state_man Integration) -- COMPLETE
+Plan: 2 of 2 in current phase -- COMPLETE
+Status: Phase 7 Complete, Phase 8 Next
+Last activity: 2026-03-04 -- Completed 07-02 (StateMan DeviceClient integration + 11 end-to-end tests)
 
-Progress: [██████----] 61%
+Progress: [███████---] 67%
 
 ## Performance Metrics
 
@@ -61,6 +61,7 @@ Progress: [██████----] 61%
 | Phase 05 P02 | 3min | 1 task | 3 files |
 | Phase 06 P01 | -- | 1 task | 3 files |
 | Phase 07 P01 | 4min | 1 task | 3 files |
+| Phase 07 P02 | 6min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -104,6 +105,10 @@ Recent decisions affecting current work:
 - [Phase 07]: Route by DynamicValue.name (set to M2400RecordType.name by converter) rather than carrying record type separately
 - [Phase 07]: STAT/INTRO use BehaviorSubject (replay last); BATCH/LUA use broadcast StreamController (event-only)
 - [Phase 07]: Dot-notation uses DynamicValue[] operator to traverse child hierarchy
+- [Phase 07]: DeviceClient interface in tfc_dart (not jbtm depending on tfc_dart) to avoid wrong-direction dependency
+- [Phase 07]: jbtm does NOT depend on tfc_dart -- adapter wrapping M2400ClientWrapper as DeviceClient lives at app layer
+- [Phase 07]: StateMan.subscribe() checks DeviceClient.canSubscribe() first, falls through to OPC UA _monitor()
+- [Phase 07]: Phase 7 complete -- DeviceClient interface, StateMan routing, 17 new tests (6 routing + 11 integration), 207 total
 
 ### Pending Todos
 
@@ -117,6 +122,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-04T14:34:00.000Z
-Stopped at: Phase 7 Plan 01 complete
-Resume file: .planning/phases/07-state-man-integration/07-01-SUMMARY.md
+Last session: 2026-03-04T14:44:00.000Z
+Stopped at: Phase 7 Plan 02 complete
+Resume file: .planning/phases/07-state-man-integration/07-02-SUMMARY.md
