@@ -13,6 +13,34 @@ const databaseName = 'testdb';
 bool get _useExternalDb =>
     Platform.environment['TIMESCALEDB_EXTERNAL'] == '1';
 
+/// Simulates a database outage by stopping the TCP proxy.
+/// Verifies the proxy port is no longer accepting connections.
+Future<void> stopTimescaleDb() async {
+  await _dbProxy.stop();
+  // Verify the proxy is actually down — attempt to connect.
+  try {
+    final sock = await Socket.connect(
+      InternetAddress.loopbackIPv4,
+      _proxyPort,
+      timeout: const Duration(seconds: 1),
+    );
+    // Proxy is still accepting connections — this is a bug.
+    sock.destroy();
+    stderr.writeln(
+        '[stopTimescaleDb] WARNING: port $_proxyPort still accepting '
+        'connections after stop()! Retrying stop...');
+    await _dbProxy.stop();
+  } on SocketException {
+    // Expected: connection refused = proxy is down.
+  }
+}
+
+/// Simulates database recovery by restarting the TCP proxy.
+Future<void> startTimescaleDb() async {
+  await _dbProxy.start();
+  await waitForDatabaseReady();
+}
+
 // ---------------------------------------------------------------------------
 // TCP proxy – sits between tests and PostgreSQL.
 // To simulate DB outage: stop the proxy.
@@ -282,15 +310,3 @@ Future<Database> connectToDatabase() async {
 // ---------------------------------------------------------------------------
 // Simulated DB outage / recovery (used by resilience tests)
 // ---------------------------------------------------------------------------
-
-/// Simulates a DB outage by stopping the TCP proxy.
-/// All existing connections are closed; new connections are refused.
-Future<void> stopTimescaleDb() async {
-  await _dbProxy.stop();
-}
-
-/// Simulates DB recovery by restarting the TCP proxy.
-Future<void> startTimescaleDb() async {
-  await _dbProxy.start();
-  await waitForDatabaseReady();
-}
