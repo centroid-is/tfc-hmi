@@ -208,4 +208,46 @@ void main() {
       expect(dv['unit'].asString, 'lb');
     });
   });
+
+  group('pipeline round-trip', () {
+    test('raw wire -> parseTypedRecord -> convertRecordToDynamicValue', () {
+      final raw = M2400Record(
+        type: M2400RecordType.recBatch,
+        fields: {
+          '1': '12.50',
+          '2': 'kg',
+          '77': '11.00kg',
+          '6': '7',
+          '11': '3',
+        },
+      );
+
+      final parsed = parseTypedRecord(raw);
+      final dv = convertRecordToDynamicValue(parsed);
+
+      expect(dv.name, 'recBatch');
+      expect(dv['weight'].asDouble, 12.5);
+      expect(dv['unit'].asString, 'kg');
+      expect(dv['siWeight'].asString, '11.00kg');
+      expect(dv['field6'].asInt, 7);
+      expect(dv['field11'].asInt, 3);
+      expect(dv.isObject, true);
+    });
+
+    test('unknown fields survive full pipeline', () {
+      final raw = M2400Record(
+        type: M2400RecordType.recBatch,
+        fields: {
+          '1': '5.0',
+          '999': 'mystery',
+        },
+      );
+
+      final parsed = parseTypedRecord(raw);
+      final dv = convertRecordToDynamicValue(parsed);
+
+      expect(dv['weight'].asDouble, 5.0);
+      expect(dv['999'].asString, 'mystery');
+    });
+  });
 }

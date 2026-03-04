@@ -2,6 +2,7 @@ export 'src/m2400.dart';
 export 'src/m2400_field_parser.dart';
 export 'src/m2400_fields.dart';
 export 'src/m2400_proxy.dart';
+export 'src/m2400_dynamic_value.dart';
 export 'src/m2400_stub_server.dart';
 export 'src/msocket.dart';
 export 'src/test_tcp_server.dart';
