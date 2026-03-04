@@ -68,8 +68,8 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] 03-01: TBD
-- [ ] 03-02: TBD
+- [ ] 03-01-PLAN.md — M2400FrameParser StreamTransformer, M2400Record/RecordType types, parseM2400Frame function (TDD)
+- [ ] 03-02-PLAN.md — Barrel export, end-to-end integration tests with TestTcpServer + MSocket pipeline
 
 ### Phase 4: M2400 Stub Server
 **Goal**: A programmable test server that speaks M2400 protocol, enabling TDD for all downstream integration work

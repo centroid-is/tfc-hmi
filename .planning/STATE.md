@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: executing
-stopped_at: Completed 02-02-PLAN.md
-last_updated: "2026-03-04T12:07:57Z"
-last_activity: 2026-03-04 -- Completed 02-02 (MSocket auto-reconnect tests)
+status: in-progress
+stopped_at: Completed 03-01-PLAN.md
+last_updated: "2026-03-04T12:47:57Z"
+last_activity: 2026-03-04 -- Completed 03-01 (M2400 frame parser and record parser)
 progress:
   total_phases: 10
   completed_phases: 2
-  total_plans: 4
-  completed_plans: 4
-  percent: 100
+  total_plans: 6
+  completed_plans: 5
+  percent: 83
 ---
 
 # Project State
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-04)
 
 **Core value:** Reliable, real-time acquisition of device data into state_man -- if the device pushes a record, the system captures it and makes it available as a DynamicValue stream.
-**Current focus:** Phase 2 complete - msocket TCP Layer
+**Current focus:** Phase 3 in progress - M2400 Framing
 
 ## Current Position
 
-Phase: 2 of 10 (msocket TCP Layer) -- COMPLETE
-Plan: 2 of 2 in current phase
-Status: Phase Complete
-Last activity: 2026-03-04 -- Completed 02-02 (MSocket auto-reconnect tests)
+Phase: 3 of 10 (M2400 Framing)
+Plan: 1 of 2 in current phase -- COMPLETE
+Status: In Progress
+Last activity: 2026-03-04 -- Completed 03-01 (M2400 frame parser and record parser)
 
-Progress: [██████████] 100%
+Progress: [████████░░] 83%
 
 ## Performance Metrics
 
@@ -54,6 +54,7 @@ Progress: [██████████] 100%
 | Phase 01 P02 | 7min | 2 tasks | 4 files |
 | Phase 02 P01 | 14min | 2 tasks | 7 files |
 | Phase 02 P02 | 3min | 1 task | 2 files |
+| Phase 03 P01 | 4min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -73,6 +74,10 @@ Recent decisions affecting current work:
 - [Phase 02]: BehaviorSubject for status stream replay (consistent with tfc_dart patterns)
 - [Phase 02]: Used RawSocketOption.levelSocket/levelTcp constants from dart:io (not hardcoded integers)
 - [Phase 02]: Plan 01 implementation already contained full reconnect logic; Plan 02 focused on comprehensive test coverage (9 reconnect tests)
+- [Phase 03]: recordTypeFieldKey defined as 'REC' top-level constant -- needs validation against protocol docs/device captures
+- [Phase 03]: Silent discard for inter-frame garbage bytes (no logging to avoid log flood)
+- [Phase 03]: 64KB max frame size (65536 bytes) for oversized frame protection
+- [Phase 03]: StreamTransformer pattern for frame parser, pure function for record parser
 
 ### Pending Todos
 
@@ -86,6 +91,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-04T12:07:57Z
-Stopped at: Completed 02-02-PLAN.md
-Resume file: .planning/phases/02-msocket-tcp-layer/02-02-SUMMARY.md
+Last session: 2026-03-04T12:47:57Z
+Stopped at: Completed 03-01-PLAN.md
+Resume file: .planning/phases/03-m2400-framing/03-02-PLAN.md

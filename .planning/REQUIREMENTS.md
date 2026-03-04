@@ -15,16 +15,16 @@
 
 ### M2400 Protocol
 
-- [ ] **M24-01**: Parser handles STX/ETX frame delimiting from TCP byte stream (partial reads, split frames)
-- [ ] **M24-02**: Parser extracts tab-separated key-value pairs from framed records
-- [ ] **M24-03**: Record type discrimination via enum (REC_WGT=3, REC_LUA=87, REC_INTRO=5, REC_STAT=14)
+- [x] **M24-01**: Parser handles STX/ETX frame delimiting from TCP byte stream (partial reads, split frames)
+- [x] **M24-02**: Parser extracts tab-separated key-value pairs from framed records
+- [x] **M24-03**: Record type discrimination via enum (REC_WGT=3, REC_LUA=87, REC_INTRO=5, REC_STAT=14)
 - [ ] **M24-04**: Field enums cover full catalog (FLD_WEIGHT, FLD_STATUS, FLD_DEVID, FLD_UNIT, FLD_SIWEIGHT, FLD_OUTPUT, FLD_MATERIAL, FLD_WQUALITY, FLD_WCOUNT, FLD_LENGTH, FLD_BATCHID, FLD_PIECES, FLD_MSGID, FLD_REGCMD, FLD_KEY, FLD_DEVTYPE, FLD_DEVPROG, FLD_EXID, FLD_POSITION, FLD_ERRTEXT, FLD_BUTTONID, FLD_IDFAMILY, FLD_TARE, FLD_BARCODE, FLD_SADDLES, FLD_NOMINAL, FLD_TARGET, FLD_FGIVEAWAY, FLD_VGIVEAWAY, FLD_TARETYPE, FLD_SERIAL_NUMBER, FLD_STDDEVA, FLD_RESULT_CODE, FLD_DATE, FLD_TIME, FLD_TIME_MS, FLD_SCALE_RANGE, FLD_WEIGHING_STATUS, FLD_PROGRAMID, FLD_PROGRAMNAME, FLD_MINWEIGHT, FLD_MAXWEIGHT, FLD_ALIBI, FLD_DIVISION, FLD_ID, FLD_REJECT_REASON, FLD_ORIGIN_LABEL, FLD_TARE_DEVICE, FLD_TARE_ALIBI, FLD_PACK_ID, FLD_CHECKSUM, FLD_ALIBI_TEXT, FLD_BELT_USAGE, FLD_EVENT_NO, FLD_DELTATIME, FLD_DELTAWEIGHT, FLD_THROUGHPUT)
 - [ ] **M24-05**: Type-specific value parsing per field (Decimal for weights, int for IDs, percentage for belt usage, date/time parsing)
 - [ ] **M24-06**: Weigher status enum (WST_BAD=0, WST_R1=1, WST_R2=2, WST_BAD_DENY=10, WST_BAD_STDDEV=11, WST_BAD_ALIBI=12, WST_BAD_UNEXPECT=13, WST_BAD_UNDER=14, WST_BAD_OVER=15)
 - [ ] **M24-07**: LUA record support (REC_LUA=87) with dynamic/unknown fields
 - [ ] **M24-08**: Device timestamp extraction from FLD_DATE/FLD_TIME/FLD_TIME_MS when present
 - [ ] **M24-09**: Stub server speaks M2400 protocol with programmable record sequences for TDD
-- [ ] **M24-10**: Unknown fields logged as warnings, do not crash parser
+- [x] **M24-10**: Unknown fields logged as warnings, do not crash parser
 
 ### DynamicValue Integration
 
@@ -87,16 +87,16 @@
 | TCP-03 | Phase 2 | Complete |
 | TCP-04 | Phase 2 | Complete |
 | TCP-05 | Phase 8 | Pending |
-| M24-01 | Phase 3 | Pending |
-| M24-02 | Phase 3 | Pending |
-| M24-03 | Phase 3 | Pending |
+| M24-01 | Phase 3 | Complete |
+| M24-02 | Phase 3 | Complete |
+| M24-03 | Phase 3 | Complete |
 | M24-04 | Phase 5 | Pending |
 | M24-05 | Phase 5 | Pending |
 | M24-06 | Phase 5 | Pending |
 | M24-07 | Phase 5 | Pending |
 | M24-08 | Phase 5 | Pending |
 | M24-09 | Phase 4 | Pending |
-| M24-10 | Phase 3 | Pending |
+| M24-10 | Phase 3 | Complete |
 | DV-01 | Phase 1 | Complete |
 | DV-02 | Phase 6 | Pending |
 | SM-01 | Phase 7 | Pending |
