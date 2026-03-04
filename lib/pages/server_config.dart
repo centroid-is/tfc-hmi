@@ -515,6 +515,10 @@ class ServerConfigPage extends ConsumerWidget {
 
             // OPC-UA Servers Section
             _OpcUAServersSection(key: ValueKey('opcua_$refreshKey')),
+            const SizedBox(height: 16),
+
+            // JBTM M2400 Servers Section
+            _JbtmServersSection(key: ValueKey('jbtm_$refreshKey')),
             const ImportExportCard(),
           ],
         ),
@@ -821,6 +825,458 @@ class _EmptyServersWidget extends StatelessWidget {
           const SizedBox(height: 8),
           const Text('Add your first OPC-UA server to get started',
               style: TextStyle(color: Colors.grey)),
+        ],
+      ),
+    );
+  }
+}
+
+// ===================== JBTM M2400 Servers Section =====================
+
+class _JbtmServersSection extends ConsumerStatefulWidget {
+  const _JbtmServersSection({super.key});
+  @override
+  ConsumerState<_JbtmServersSection> createState() =>
+      _JbtmServersSectionState();
+}
+
+class _JbtmServersSectionState extends ConsumerState<_JbtmServersSection> {
+  StateManConfig? _config;
+  StateManConfig? _savedConfig;
+  bool _isLoading = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadConfig();
+  }
+
+  Future<void> _loadConfig() async {
+    setState(() {
+      _isLoading = true;
+      _error = null;
+    });
+
+    try {
+      _config = await StateManConfig.fromPrefs(
+          await ref.read(preferencesProvider.future));
+      _savedConfig = _config?.copy();
+    } catch (e) {
+      _error = e.toString();
+    } finally {
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
+    }
+  }
+
+  bool get _hasUnsavedChanges {
+    if (_config == null || _savedConfig == null) return false;
+    final currentJson = jsonEncode(_config!.toJson());
+    final savedJson = jsonEncode(_savedConfig!.toJson());
+    return currentJson != savedJson;
+  }
+
+  Future<void> _saveConfig() async {
+    if (_config == null) return;
+
+    try {
+      _config!.toPrefs(await ref.read(preferencesProvider.future));
+      _savedConfig = await StateManConfig.fromPrefs(
+          await ref.read(preferencesProvider.future));
+      ref.invalidate(stateManProvider);
+      setState(() {});
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content: Text('JBTM configuration saved successfully!'),
+              backgroundColor: Colors.green),
+        );
+      }
+    } catch (e) {
+      if (!context.mounted) return;
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+              content: Text('Failed to save JBTM configuration: $e'),
+              backgroundColor: Theme.of(context).colorScheme.error),
+        );
+      }
+    }
+  }
+
+  void _addServer() {
+    setState(() => _config?.jbtm.add(M2400Config(host: 'localhost', port: 52211)));
+  }
+
+  void _updateServer(int index, M2400Config server) {
+    setState(() => _config!.jbtm[index] = server);
+  }
+
+  void _removeServer(int index) {
+    setState(() => _config!.jbtm.removeAt(index));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_isLoading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    if (_error != null) {
+      return Card(
+        child: Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              FaIcon(FontAwesomeIcons.triangleExclamation,
+                  size: 64, color: Theme.of(context).colorScheme.error),
+              const SizedBox(height: 16),
+              Text('Error loading JBTM configuration: $_error'),
+              const SizedBox(height: 16),
+              ElevatedButton(
+                  onPressed: _loadConfig, child: const Text('Retry')),
+            ],
+          ),
+        ),
+      );
+    }
+
+    final config = _config ?? StateManConfig(opcua: []);
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final isNarrow = constraints.maxWidth < 500;
+                if (isNarrow) {
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Row(
+                        children: [
+                          const FaIcon(FontAwesomeIcons.scaleBalanced, size: 20),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text('JBTM M2400 Servers',
+                                style: Theme.of(context).textTheme.titleMedium),
+                          ),
+                          if (_hasUnsavedChanges) ...[
+                            const SizedBox(width: 4),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                  color: Colors.orange,
+                                  borderRadius: BorderRadius.circular(12)),
+                              child: const Text('Unsaved',
+                                  style: TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.bold)),
+                            ),
+                          ],
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      ElevatedButton.icon(
+                        onPressed: _addServer,
+                        icon: const FaIcon(FontAwesomeIcons.plus, size: 16),
+                        label: const Text('Add Server'),
+                      ),
+                    ],
+                  );
+                }
+                return Row(
+                  children: [
+                    const FaIcon(FontAwesomeIcons.scaleBalanced, size: 20),
+                    const SizedBox(width: 8),
+                    Text('JBTM M2400 Servers',
+                        style: Theme.of(context).textTheme.titleMedium),
+                    if (_hasUnsavedChanges) ...[
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 4),
+                        decoration: BoxDecoration(
+                            color: Colors.orange,
+                            borderRadius: BorderRadius.circular(12)),
+                        child: const Text('Unsaved Changes',
+                            style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 12,
+                                fontWeight: FontWeight.bold)),
+                      ),
+                    ],
+                    const Spacer(),
+                    const SizedBox(width: 8),
+                    ElevatedButton.icon(
+                      onPressed: _addServer,
+                      icon: const FaIcon(FontAwesomeIcons.plus, size: 16),
+                      label: const Text('Add Server'),
+                    ),
+                  ],
+                );
+              },
+            ),
+            const SizedBox(height: 16),
+            config.jbtm.isEmpty
+                ? const SizedBox(
+                    height: 200,
+                    child: _EmptyJbtmServersWidget(),
+                  )
+                : ListView.builder(
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    itemCount: config.jbtm.length,
+                    itemBuilder: (context, index) {
+                      return _JbtmServerConfigCard(
+                        server: config.jbtm[index],
+                        onUpdate: (server) => _updateServer(index, server),
+                        onRemove: () => _removeServer(index),
+                      );
+                    },
+                  ),
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                if (config.jbtm.isNotEmpty || _hasUnsavedChanges)
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      onPressed: _hasUnsavedChanges ? _saveConfig : null,
+                      icon: FaIcon(FontAwesomeIcons.floppyDisk,
+                          size: 16,
+                          color: _hasUnsavedChanges ? null : Colors.grey),
+                      label: Text(_hasUnsavedChanges
+                          ? 'Save Configuration'
+                          : 'All Changes Saved'),
+                      style: ElevatedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 16),
+                          backgroundColor:
+                              _hasUnsavedChanges ? null : Colors.grey),
+                    ),
+                  ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _EmptyJbtmServersWidget extends StatelessWidget {
+  const _EmptyJbtmServersWidget();
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const FaIcon(FontAwesomeIcons.scaleBalanced, size: 64, color: Colors.grey),
+          const SizedBox(height: 16),
+          Text('No JBTM servers configured',
+              style: Theme.of(context)
+                  .textTheme
+                  .titleLarge
+                  ?.copyWith(color: Colors.grey)),
+          const SizedBox(height: 8),
+          const Text('Add your first JBTM M2400 server to get started',
+              style: TextStyle(color: Colors.grey)),
+        ],
+      ),
+    );
+  }
+}
+
+// ===================== JBTM Server Config Card =====================
+
+class _JbtmServerConfigCard extends StatefulWidget {
+  final M2400Config server;
+  final Function(M2400Config) onUpdate;
+  final VoidCallback onRemove;
+
+  const _JbtmServerConfigCard({
+    required this.server,
+    required this.onUpdate,
+    required this.onRemove,
+  });
+
+  @override
+  State<_JbtmServerConfigCard> createState() => _JbtmServerConfigCardState();
+}
+
+class _JbtmServerConfigCardState extends State<_JbtmServerConfigCard> {
+  late TextEditingController _hostController;
+  late TextEditingController _portController;
+  late TextEditingController _aliasController;
+
+  @override
+  void initState() {
+    super.initState();
+    _hostController = TextEditingController(text: widget.server.host);
+    _portController = TextEditingController(text: widget.server.port.toString());
+    _aliasController =
+        TextEditingController(text: widget.server.serverAlias ?? '');
+  }
+
+  @override
+  void dispose() {
+    _hostController.dispose();
+    _portController.dispose();
+    _aliasController.dispose();
+    super.dispose();
+  }
+
+  void _updateServer() {
+    final updated = M2400Config(
+      host: _hostController.text,
+      port: int.tryParse(_portController.text) ?? 52211,
+    )..serverAlias =
+        _aliasController.text.isEmpty ? null : _aliasController.text;
+    widget.onUpdate(updated);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      margin: const EdgeInsets.only(bottom: 16),
+      child: ExpansionTile(
+        leading: const FaIcon(FontAwesomeIcons.scaleBalanced, size: 20),
+        title: Text(
+          widget.server.serverAlias ?? '${widget.server.host}:${widget.server.port}',
+          style: const TextStyle(fontWeight: FontWeight.bold),
+          overflow: TextOverflow.ellipsis,
+          maxLines: 1,
+        ),
+        subtitle: Text(
+          '${widget.server.host}:${widget.server.port}',
+          style: TextStyle(color: Colors.grey[600]),
+          overflow: TextOverflow.ellipsis,
+          maxLines: 1,
+        ),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            IconButton(
+              icon: const FaIcon(FontAwesomeIcons.trash, size: 16),
+              onPressed: () {
+                showDialog(
+                  context: context,
+                  builder: (context) => AlertDialog(
+                    title: const Text('Remove Server'),
+                    content: const Text(
+                        'Are you sure you want to remove this JBTM server?'),
+                    actions: [
+                      TextButton(
+                          onPressed: () => Navigator.pop(context),
+                          child: const Text('Cancel')),
+                      TextButton(
+                          onPressed: () {
+                            Navigator.pop(context);
+                            widget.onRemove();
+                          },
+                          child: const Text('Remove')),
+                    ],
+                  ),
+                );
+              },
+            ),
+            const SizedBox(width: 8),
+            const FaIcon(FontAwesomeIcons.chevronDown, size: 16),
+          ],
+        ),
+        onExpansionChanged: (expanded) => setState(() {}),
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(16.0),
+            child: Column(
+              children: [
+                LayoutBuilder(
+                  builder: (context, constraints) {
+                    final isNarrow = constraints.maxWidth < 400;
+                    if (isNarrow) {
+                      return Column(
+                        children: [
+                          TextField(
+                            controller: _hostController,
+                            decoration: const InputDecoration(
+                              labelText: 'Host',
+                              hintText: 'localhost',
+                              prefixIcon:
+                                  FaIcon(FontAwesomeIcons.server, size: 16),
+                            ),
+                            onChanged: (_) => _updateServer(),
+                          ),
+                          const SizedBox(height: 12),
+                          TextField(
+                            controller: _portController,
+                            decoration: const InputDecoration(
+                              labelText: 'Port',
+                              hintText: '52211',
+                              prefixIcon:
+                                  FaIcon(FontAwesomeIcons.hashtag, size: 16),
+                            ),
+                            keyboardType: TextInputType.number,
+                            onChanged: (_) => _updateServer(),
+                          ),
+                        ],
+                      );
+                    }
+                    return Row(
+                      children: [
+                        Expanded(
+                          flex: 3,
+                          child: TextField(
+                            controller: _hostController,
+                            decoration: const InputDecoration(
+                              labelText: 'Host',
+                              hintText: 'localhost',
+                              prefixIcon:
+                                  FaIcon(FontAwesomeIcons.server, size: 16),
+                            ),
+                            onChanged: (_) => _updateServer(),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          flex: 1,
+                          child: TextField(
+                            controller: _portController,
+                            decoration: const InputDecoration(
+                              labelText: 'Port',
+                              hintText: '52211',
+                              prefixIcon:
+                                  FaIcon(FontAwesomeIcons.hashtag, size: 16),
+                            ),
+                            keyboardType: TextInputType.number,
+                            onChanged: (_) => _updateServer(),
+                          ),
+                        ),
+                      ],
+                    );
+                  },
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _aliasController,
+                  decoration: const InputDecoration(
+                    labelText: 'Server Alias (optional)',
+                    hintText: 'My M2400 Scale',
+                    prefixIcon: FaIcon(FontAwesomeIcons.tag, size: 16),
+                  ),
+                  onChanged: (_) => _updateServer(),
+                ),
+              ],
+            ),
+          ),
         ],
       ),
     );
