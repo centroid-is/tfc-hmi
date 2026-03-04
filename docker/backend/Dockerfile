@@ -35,7 +35,7 @@ COPY packages/jbtm/pubspec.yaml ./
 RUN dart pub get
 COPY packages/jbtm/ .
 
-RUN dart compile exe bin/m2400_proxy.dart -o build/m2400_proxy
+RUN dart build cli -t bin/m2400_proxy.dart -o build/m2400_proxy
 
 
 # Stage 3: Runtime image
@@ -54,7 +54,7 @@ COPY --from=dart-builder /app/build/main/bundle/ /app/
 COPY --from=dart-builder /app/build/generate_certs/bundle/bin/generate_certs /usr/local/bin/
 
 # Copy M2400 proxy
-COPY --from=jbtm-builder /app/build/m2400_proxy /usr/local/bin/
+COPY --from=jbtm-builder /app/build/m2400_proxy/bundle/bin/m2400_proxy /usr/local/bin/
 
 # Create non-root user
 RUN useradd -m -s /bin/bash appuser
