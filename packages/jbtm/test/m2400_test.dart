@@ -193,24 +193,25 @@ void main() {
   });
 
   // ---------------------------------------------------------------------------
-  // M24-02: Record Parser (tab-separated key-value extraction)
+  // M24-02: Record Parser (tab-separated field extraction)
   // ---------------------------------------------------------------------------
   group('parseM2400Frame', () {
-    test('extracts tab-separated key-value pairs into Map', () {
-      // "1\tvalue1\t2\tvalue2"
+    test('extracts record type and field pairs from real protocol format', () {
+      // Real format: (14\t1\t12.37\t2\tkg
       final bytes = Uint8List.fromList(
-          '1\tvalue1\t2\tvalue2'.codeUnits);
+          '(14\t1\t12.37\t2\tkg'.codeUnits);
 
       final record = parseM2400Frame(bytes);
 
       expect(record, isNotNull);
-      expect(record!.fields['1'], equals('value1'));
-      expect(record.fields['2'], equals('value2'));
+      expect(record!.type, equals(M2400RecordType.recStat));
+      expect(record.fields['1'], equals('12.37'));
+      expect(record.fields['2'], equals('kg'));
     });
 
     test('strips trailing CRLF before parsing', () {
       final bytes = Uint8List.fromList(
-          '1\tvalue1\t2\tvalue2\r\n'.codeUnits);
+          '(14\t1\tvalue1\t2\tvalue2\r\n'.codeUnits);
 
       final record = parseM2400Frame(bytes);
 
@@ -234,7 +235,7 @@ void main() {
 
     test('single element with no tabs returns record with empty fields and unknown type',
         () {
-      final bytes = Uint8List.fromList('justonevalue'.codeUnits);
+      final bytes = Uint8List.fromList('(999'.codeUnits);
 
       final record = parseM2400Frame(bytes);
 
@@ -244,10 +245,11 @@ void main() {
     });
 
     test('decodes with allowMalformed for non-UTF8 bytes', () {
-      // Include a 0xFF byte which is invalid UTF-8
+      // (14\t<invalid_field_id>\t<invalid_val>\t2\tval
       final bytes = Uint8List.fromList([
-        0x31, 0x09, // "1\t"
-        0xFF, 0x09, // invalid UTF-8 + tab
+        0x28, 0x31, 0x34, 0x09, // "(14\t"
+        0xFF, 0x09, // invalid UTF-8 field id + tab
+        0x78, 0x09, // "x" (value for invalid field id) + tab
         0x32, 0x09, // "2\t"
         0x76, 0x61, 0x6C, // "val"
       ]);
@@ -255,7 +257,8 @@ void main() {
       final record = parseM2400Frame(bytes);
 
       expect(record, isNotNull);
-      expect(record!.fields.containsKey('2'), isTrue);
+      expect(record!.type, equals(M2400RecordType.recStat));
+      expect(record.fields.containsKey('2'), isTrue);
       expect(record.fields['2'], equals('val'));
     });
   });
@@ -264,8 +267,8 @@ void main() {
   // M24-03: Record Type Discrimination
   // ---------------------------------------------------------------------------
   group('record type discrimination', () {
-    test('REC_WGT=3 maps to M2400RecordType.recWgt', () {
-      expect(M2400RecordType.fromId(3), equals(M2400RecordType.recWgt));
+    test('REC_WGT=103 maps to M2400RecordType.recWgt', () {
+      expect(M2400RecordType.fromId(103), equals(M2400RecordType.recWgt));
     });
 
     test('REC_INTRO=5 maps to M2400RecordType.recIntro', () {
@@ -284,10 +287,10 @@ void main() {
       expect(M2400RecordType.fromId(999), equals(M2400RecordType.unknown));
     });
 
-    test('record type extracted from key-value pairs in frame', () {
-      // Build a frame with the record type field
+    test('record type extracted from ( prefix in frame', () {
+      // Real format: (103\t100\tsome_data
       final bytes = Uint8List.fromList(
-          '$recordTypeFieldKey\t3\t100\tsome_data'.codeUnits);
+          '(103\t100\tsome_data'.codeUnits);
 
       final record = parseM2400Frame(bytes);
 
@@ -295,15 +298,15 @@ void main() {
       expect(record!.type, equals(M2400RecordType.recWgt));
     });
 
-    test('missing record type field maps to unknown', () {
-      // Frame with no record type field key
+    test('missing ( prefix still parses record type from first token', () {
+      // Frame without ( prefix — first token treated as record type
       final bytes = Uint8List.fromList(
-          '100\tsome_data\t200\tmore_data'.codeUnits);
+          '14\t100\tsome_data\t200\tmore_data'.codeUnits);
 
       final record = parseM2400Frame(bytes);
 
       expect(record, isNotNull);
-      expect(record!.type, equals(M2400RecordType.unknown));
+      expect(record!.type, equals(M2400RecordType.recStat));
     });
   });
 
@@ -313,9 +316,9 @@ void main() {
   group('unknown fields and edge cases', () {
     test('all fields from frame are included in record regardless of known status',
         () {
+      // (14\t999\tunknown_val\t888\tanother_val
       final bytes = Uint8List.fromList(
-          '$recordTypeFieldKey\t14\t999\tunknown_val\t888\tanother_val'
-              .codeUnits);
+          '(14\t999\tunknown_val\t888\tanother_val'.codeUnits);
 
       final record = parseM2400Frame(bytes);
 
@@ -327,7 +330,7 @@ void main() {
 
     test('unknown field keys do not cause exceptions', () {
       final bytes = Uint8List.fromList(
-          'ZZZZZ\tval1\tXXXXX\tval2'.codeUnits);
+          '(14\tZZZZZ\tval1\tXXXXX\tval2'.codeUnits);
 
       // Should not throw
       final record = parseM2400Frame(bytes);
@@ -337,10 +340,10 @@ void main() {
       expect(record.fields['XXXXX'], equals('val2'));
     });
 
-    test('odd number of tab-separated elements does not crash', () {
-      // 5 elements: "a", "b", "c", "d", "e" -- "e" is unpaired
+    test('odd number of field elements does not crash', () {
+      // (14\ta\tb\tc\td\te -- "e" is unpaired
       final bytes = Uint8List.fromList(
-          'a\tb\tc\td\te'.codeUnits);
+          '(14\ta\tb\tc\td\te'.codeUnits);
 
       // Should not throw
       final record = parseM2400Frame(bytes);
@@ -354,7 +357,7 @@ void main() {
 
     test('non-numeric record type value maps to unknown', () {
       final bytes = Uint8List.fromList(
-          '$recordTypeFieldKey\tnot_a_number\t100\tdata'.codeUnits);
+          '(not_a_number\t100\tdata'.codeUnits);
 
       final record = parseM2400Frame(bytes);
 
@@ -364,7 +367,7 @@ void main() {
 
     test('record type ID not matching known types maps to unknown', () {
       final bytes = Uint8List.fromList(
-          '$recordTypeFieldKey\t999\t100\tdata'.codeUnits);
+          '(999\t100\tdata'.codeUnits);
 
       final record = parseM2400Frame(bytes);
 
@@ -391,12 +394,9 @@ void main() {
       await server.shutdown();
     });
 
-    /// Build a complete STX-framed record from tab-separated key-value pairs.
-    List<int> frameRecord(Map<String, String> fields) {
-      final content = fields.entries
-          .expand((e) => [e.key, e.value])
-          .join('\t');
-      return [0x02, ...content.codeUnits, 0x03];
+    /// Build a complete STX-framed record in real M2400 format.
+    List<int> frameRecord(int recordType, Map<String, String> fields) {
+      return buildM2400Frame(recordType, fields);
     }
 
     test('end-to-end: server sends framed record, client receives M2400Record',
@@ -421,8 +421,7 @@ void main() {
       await Future.delayed(const Duration(milliseconds: 50));
 
       // Send a complete STX-framed weight record
-      final frame = frameRecord({
-        recordTypeFieldKey: '3', // recWgt
+      final frame = frameRecord(M2400RecordType.recWgt.id, {
         '100': 'gross_weight',
         '101': '42.5',
       });
@@ -432,7 +431,6 @@ void main() {
 
       expect(records, hasLength(1));
       expect(records[0].type, equals(M2400RecordType.recWgt));
-      expect(records[0].fields[recordTypeFieldKey], equals('3'));
       expect(records[0].fields['100'], equals('gross_weight'));
       expect(records[0].fields['101'], equals('42.5'));
     });
@@ -461,16 +459,13 @@ void main() {
       await Future.delayed(const Duration(milliseconds: 50));
 
       // Send 3 records in rapid succession (simulates device burst)
-      server.sendToAll(frameRecord({
-        recordTypeFieldKey: '3', // recWgt
+      server.sendToAll(frameRecord(M2400RecordType.recWgt.id, {
         '100': 'value_a',
       }));
-      server.sendToAll(frameRecord({
-        recordTypeFieldKey: '14', // recStat
+      server.sendToAll(frameRecord(M2400RecordType.recStat.id, {
         '200': 'value_b',
       }));
-      server.sendToAll(frameRecord({
-        recordTypeFieldKey: '87', // recLua
+      server.sendToAll(frameRecord(M2400RecordType.recLua.id, {
         '300': 'value_c',
       }));
 
@@ -506,8 +501,7 @@ void main() {
       await Future.delayed(const Duration(milliseconds: 50));
 
       // Build a full frame, then split it
-      final fullFrame = frameRecord({
-        recordTypeFieldKey: '5', // recIntro
+      final fullFrame = frameRecord(M2400RecordType.recIntro.id, {
         '400': 'split_data',
         '401': 'second_field',
       });

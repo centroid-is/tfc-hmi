@@ -6,19 +6,9 @@ import 'package:logger/logger.dart';
 
 final _logger = Logger();
 
-/// Record type field key in the M2400 protocol.
-///
-/// This is the key in the tab-separated key-value stream that identifies
-/// the record type. The value paired with this key is a numeric record type ID.
-///
-/// NOTE: This key must match the actual M2400 protocol. If records show as
-/// "unknown" type, check this constant against protocol documentation or
-/// device captures.
-const String recordTypeFieldKey = 'REC';
-
 /// Known M2400 record types with their numeric protocol IDs.
 enum M2400RecordType {
-  recWgt(3),
+  recWgt(103),
   recIntro(5),
   recStat(14),
   recLua(87),
@@ -126,9 +116,14 @@ class M2400FrameParser implements StreamTransformer<Uint8List, Uint8List> {
 
 /// Parse frame content (bytes between STX and ETX) into a structured record.
 ///
-/// Takes the raw bytes from inside a frame (excluding STX/ETX delimiters),
-/// decodes as UTF-8, splits by tab into consecutive key-value pairs, and
-/// extracts the record type from the [recordTypeFieldKey] field.
+/// Real M2400 frame content format:
+/// ```
+/// (REC_TYPE\tFLD_ID\tVALUE\tFLD_ID\tVALUE...\r\n
+/// ```
+///
+/// The first token is `(REC_TYPE` — a `(` prefix followed immediately by a
+/// numeric record type ID. Field ID / value pairs follow as tab-separated
+/// elements starting at index 1.
 ///
 /// Returns null if [frameBytes] is empty or contains only whitespace.
 M2400Record? parseM2400Frame(Uint8List frameBytes) {
@@ -140,36 +135,36 @@ M2400Record? parseM2400Frame(Uint8List frameBytes) {
   final parts = content.split('\t');
   final fields = <String, String>{};
 
-  // Pair consecutive elements as key-value
-  for (var i = 0; i + 1 < parts.length; i += 2) {
-    fields[parts[i]] = parts[i + 1];
+  // First token is (REC_TYPE — strip the ( prefix and parse the record type
+  String firstToken = parts[0];
+  if (firstToken.startsWith('(')) {
+    firstToken = firstToken.substring(1);
   }
 
-  // Log warning for odd number of elements (unpaired trailing element)
-  if (parts.length > 1 && parts.length.isOdd) {
-    _logger.w(
-        'Odd number of tab-separated elements; trailing "${parts.last}" unpaired');
-  }
-
-  // Determine record type
-  final recordTypeValue = fields[recordTypeFieldKey];
+  // Determine record type from the first token
   M2400RecordType type;
-  if (recordTypeValue != null) {
-    final id = int.tryParse(recordTypeValue);
-    if (id != null) {
-      type = M2400RecordType.fromId(id);
-      if (type == M2400RecordType.unknown) {
-        _logger.w('Unknown record type ID: $id');
-      }
-    } else {
-      type = M2400RecordType.unknown;
-      _logger.w('Non-numeric record type value: $recordTypeValue');
+  final recTypeId = int.tryParse(firstToken);
+  if (recTypeId != null) {
+    type = M2400RecordType.fromId(recTypeId);
+    if (type == M2400RecordType.unknown) {
+      _logger.w('Unknown record type ID: $recTypeId');
     }
   } else {
     type = M2400RecordType.unknown;
-    if (parts.length > 1) {
-      _logger.w('No record type field found in frame');
+    if (firstToken.isNotEmpty) {
+      _logger.w('Non-numeric record type value: $firstToken');
     }
+  }
+
+  // Key-value pairs start at index 1 (after the record type token)
+  for (var i = 1; i + 1 < parts.length; i += 2) {
+    fields[parts[i]] = parts[i + 1];
+  }
+
+  // Log warning for even total count (odd number of field tokens = unpaired trailing element)
+  if (parts.length > 1 && parts.length.isEven) {
+    _logger.w(
+        'Odd number of field elements; trailing "${parts.last}" unpaired');
   }
 
   return M2400Record(type: type, fields: fields);

@@ -181,8 +181,7 @@ void main() {
       await gotWeight.future.timeout(const Duration(seconds: 5));
 
       final wgt = records.lastWhere((r) => r.type == M2400RecordType.recWgt);
-      expect(wgt.fields[recordTypeFieldKey],
-          equals('${M2400RecordType.recWgt.id}'));
+      expect(wgt.type, equals(M2400RecordType.recWgt));
       // Weight fields should contain weight/unit/status
       expect(wgt.fields.values, contains('55.0'));
       expect(wgt.fields.values, contains('lb'));
@@ -216,8 +215,6 @@ void main() {
           await gotStat.future.timeout(const Duration(seconds: 5));
 
       expect(stat.type, equals(M2400RecordType.recStat));
-      expect(stat.fields[recordTypeFieldKey],
-          equals('${M2400RecordType.recStat.id}'));
 
       socket.dispose();
     });
@@ -286,7 +283,7 @@ void main() {
       socket.dispose();
     });
 
-    test('pushRecord sends arbitrary record from Map fields', () async {
+    test('pushRecord sends arbitrary record from recordType + fields', () async {
       final port = await stub.start();
       final socket = MSocket('localhost', port);
       final gotCustom = Completer<M2400Record>();
@@ -306,8 +303,7 @@ void main() {
       await stub.waitForClient();
       await Future.delayed(const Duration(milliseconds: 100));
 
-      stub.pushRecord({
-        recordTypeFieldKey: '${M2400RecordType.recWgt.id}',
+      stub.pushRecord(M2400RecordType.recWgt.id, {
         'custom': 'data',
       });
       final rec =
@@ -338,8 +334,8 @@ void main() {
       expect(stub.sentRecords.length, equals(3));
 
       // First should be INTRO
-      expect(stub.sentRecords[0][recordTypeFieldKey],
-          equals('${M2400RecordType.recIntro.id}'));
+      expect(stub.sentRecords[0].recordType,
+          equals(M2400RecordType.recIntro.id));
 
       socket.dispose();
     });
@@ -366,11 +362,9 @@ void main() {
   group('buildM2400Frame', () {
     test('produces bytes parseable by M2400FrameParser + parseM2400Frame',
         () async {
-      final fields = {
-        recordTypeFieldKey: '${M2400RecordType.recWgt.id}',
+      final frameBytes = buildM2400Frame(M2400RecordType.recWgt.id, {
         '100': 'test_weight',
-      };
-      final frameBytes = buildM2400Frame(fields);
+      });
 
       // Feed through the parser pipeline
       final controller = StreamController<Uint8List>();
@@ -454,7 +448,7 @@ void main() {
       socket.dispose();
     });
 
-    test('sendUnknownRecordType sends frame with unrecognized REC value',
+    test('sendUnknownRecordType sends frame with unrecognized record type',
         () async {
       final port = await stub.start();
       final socket = MSocket('localhost', port);
@@ -467,7 +461,6 @@ void main() {
           .cast<M2400Record>()
           .listen((r) {
         if (r.type == M2400RecordType.unknown &&
-            r.fields[recordTypeFieldKey] != null &&
             !gotUnknown.isCompleted) {
           gotUnknown.complete(r);
         }
@@ -482,12 +475,13 @@ void main() {
           await gotUnknown.future.timeout(const Duration(seconds: 5));
 
       expect(record.type, equals(M2400RecordType.unknown));
-      expect(record.fields[recordTypeFieldKey], equals('777'));
+      // The fields should still be present
+      expect(record.fields['data'], equals('test'));
 
       socket.dispose();
     });
 
-    test('sendRecordWithoutType sends frame missing REC field', () async {
+    test('sendRecordWithoutType sends frame missing ( prefix', () async {
       final port = await stub.start();
       final socket = MSocket('localhost', port);
       final records = <M2400Record>[];
@@ -512,10 +506,10 @@ void main() {
       stub.sendRecordWithoutType();
       await gotTwo.future.timeout(const Duration(seconds: 5));
 
-      // Second record (after auto-INTRO) should have no REC field
+      // Second record (after auto-INTRO) should have unknown type
+      // because "someKey" is not a valid numeric record type
       final noType = records[1];
       expect(noType.type, equals(M2400RecordType.unknown));
-      expect(noType.fields.containsKey(recordTypeFieldKey), isFalse);
 
       socket.dispose();
     });
@@ -584,7 +578,8 @@ void main() {
       await Future.delayed(const Duration(milliseconds: 100));
 
       stub.startPeriodicPush(
-          const Duration(milliseconds: 100), () => makeWeightFields());
+          const Duration(milliseconds: 100),
+          () => (recordType: M2400RecordType.recWgt.id, fields: makeWeightFields()));
       await gotThree.future.timeout(const Duration(seconds: 5));
       stub.stopPeriodicPush();
 
@@ -603,7 +598,8 @@ void main() {
 
       // Start and immediately stop
       stub.startPeriodicPush(
-          const Duration(milliseconds: 50), () => makeWeightFields());
+          const Duration(milliseconds: 50),
+          () => (recordType: M2400RecordType.recWgt.id, fields: makeWeightFields()));
       stub.stopPeriodicPush();
 
       final countBefore = stub.sentRecords.length;
@@ -645,7 +641,8 @@ void main() {
       await Future.delayed(const Duration(milliseconds: 100));
 
       stub.startPeriodicPush(
-          const Duration(milliseconds: 50), () => makeWeightFields());
+          const Duration(milliseconds: 50),
+          () => (recordType: M2400RecordType.recWgt.id, fields: makeWeightFields()));
       await stub.shutdown();
 
       final countAfterShutdown = stub.sentRecords.length;

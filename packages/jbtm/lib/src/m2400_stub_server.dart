@@ -12,15 +12,28 @@ const String _kDevId = '102';
 const String _kFirmware = '103';
 const String _kUnit = '104';
 
-/// Build a complete STX-framed M2400 record from tab-separated key-value pairs.
+/// Build a complete STX-framed M2400 record from a record type and field pairs.
 ///
-/// Returns `[STX, ...utf8(key1\tval1\tkey2\tval2...), ETX]`.
+/// Produces the real M2400 wire format:
+/// `[STX, ...utf8("(REC_TYPE\tFLD_ID\tVALUE\tFLD_ID\tVALUE..."), ETX]`
+///
 /// Uses [utf8.encode] (not [String.codeUnits]) for correctness with non-ASCII.
-List<int> buildM2400Frame(Map<String, String> fields) {
-  final content = fields.entries
-      .expand((e) => [e.key, e.value])
-      .join('\t');
+List<int> buildM2400Frame(int recordType, Map<String, String> fields) {
+  final parts = <String>['($recordType'];
+  for (final entry in fields.entries) {
+    parts.add(entry.key);
+    parts.add(entry.value);
+  }
+  final content = parts.join('\t');
   return [0x02, ...utf8.encode(content), 0x03];
+}
+
+/// A sent record entry tracking record type and fields for history.
+class SentRecord {
+  final int recordType;
+  final Map<String, String> fields;
+
+  const SentRecord({required this.recordType, required this.fields});
 }
 
 /// Create weight record fields with sensible defaults.
@@ -31,7 +44,6 @@ Map<String, String> makeWeightFields({
   String? devId,
 }) {
   return {
-    recordTypeFieldKey: '${M2400RecordType.recWgt.id}',
     _kWeight: weight,
     _kUnit: unit,
     _kStatus: status,
@@ -45,7 +57,6 @@ Map<String, String> makeIntroFields({
   String firmware = 'V1.0',
 }) {
   return {
-    recordTypeFieldKey: '${M2400RecordType.recIntro.id}',
     _kDevId: devId,
     _kFirmware: firmware,
   };
@@ -54,7 +65,6 @@ Map<String, String> makeIntroFields({
 /// Create stat record fields with sensible defaults.
 Map<String, String> makeStatFields({String status = '1'}) {
   return {
-    recordTypeFieldKey: '${M2400RecordType.recStat.id}',
     _kStatus: status,
   };
 }
@@ -62,7 +72,6 @@ Map<String, String> makeStatFields({String status = '1'}) {
 /// Create LUA record fields with optional extra key-value pairs.
 Map<String, String> makeLuaFields({Map<String, String> extra = const {}}) {
   return {
-    recordTypeFieldKey: '${M2400RecordType.recLua.id}',
     ...extra,
   };
 }
@@ -78,8 +87,8 @@ Map<String, String> makeLuaFields({Map<String, String> extra = const {}}) {
 class M2400StubServer {
   TestTcpServer? _server;
 
-  /// History of all sent records (field maps), including auto-INTRO.
-  final List<Map<String, String>> sentRecords = [];
+  /// History of all sent records, including auto-INTRO.
+  final List<SentRecord> sentRecords = [];
 
   Timer? _periodicTimer;
 
@@ -99,7 +108,7 @@ class M2400StubServer {
   /// Sends INTRO record directly to the connecting socket (not broadcast).
   void _onClientConnect(Socket client) {
     final fields = makeIntroFields();
-    _sendToSocket(client, fields);
+    _sendToSocket(client, M2400RecordType.recIntro.id, fields);
   }
 
   /// Push a weight record to all connected clients.
@@ -109,28 +118,29 @@ class M2400StubServer {
     String status = '1',
     String? devId,
   }) {
-    _send(makeWeightFields(
-        weight: weight, unit: unit, status: status, devId: devId));
+    _send(M2400RecordType.recWgt.id,
+        makeWeightFields(weight: weight, unit: unit, status: status, devId: devId));
   }
 
   /// Push a stat record to all connected clients.
   void pushStatRecord({String status = '1'}) {
-    _send(makeStatFields(status: status));
+    _send(M2400RecordType.recStat.id, makeStatFields(status: status));
   }
 
   /// Push an intro record to all connected clients.
   void pushIntroRecord({String devId = '1', String firmware = 'V1.0'}) {
-    _send(makeIntroFields(devId: devId, firmware: firmware));
+    _send(M2400RecordType.recIntro.id,
+        makeIntroFields(devId: devId, firmware: firmware));
   }
 
   /// Push a LUA record to all connected clients.
   void pushLuaRecord({Map<String, String> extra = const {}}) {
-    _send(makeLuaFields(extra: extra));
+    _send(M2400RecordType.recLua.id, makeLuaFields(extra: extra));
   }
 
-  /// Push an arbitrary record (from a field map) to all connected clients.
-  void pushRecord(Map<String, String> fields) {
-    _send(fields);
+  /// Push an arbitrary record to all connected clients.
+  void pushRecord(int recordType, Map<String, String> fields) {
+    _send(recordType, fields);
   }
 
   /// Send raw bytes directly to all clients without M2400 framing.
@@ -146,22 +156,26 @@ class M2400StubServer {
 
   /// Send a valid frame with an unrecognized record type ID.
   void sendUnknownRecordType({int typeId = 999}) {
-    final fields = {recordTypeFieldKey: '$typeId', 'data': 'test'};
-    _server!.sendToAll(buildM2400Frame(fields));
+    _server!.sendToAll(buildM2400Frame(typeId, {'data': 'test'}));
   }
 
-  /// Send a valid frame with fields but no REC key.
+  /// Send a valid frame with fields but no proper record type prefix.
+  ///
+  /// Produces a frame whose content lacks the `(` prefix, so the parser
+  /// will not find a valid record type.
   void sendRecordWithoutType() {
-    final fields = {'someKey': 'someVal', 'anotherKey': 'anotherVal'};
-    _server!.sendToAll(buildM2400Frame(fields));
+    // Build raw frame content without the ( prefix — just key-value pairs
+    final content = 'someKey\tsomeVal\tanotherKey\tanotherVal';
+    _server!.sendToAll([0x02, ...utf8.encode(content), 0x03]);
   }
 
   /// Start pushing records at a fixed interval.
   void startPeriodicPush(
-      Duration interval, Map<String, String> Function() recordBuilder) {
+      Duration interval, ({int recordType, Map<String, String> fields}) Function() recordBuilder) {
     _periodicTimer?.cancel();
     _periodicTimer = Timer.periodic(interval, (_) {
-      _send(recordBuilder());
+      final rec = recordBuilder();
+      _send(rec.recordType, rec.fields);
     });
   }
 
@@ -175,11 +189,12 @@ class M2400StubServer {
   ///
   /// Default builder creates weight records with incrementing weights.
   void pushBurst(int count,
-      {Map<String, String> Function(int index)? recordBuilder}) {
-    final builder =
-        recordBuilder ?? (i) => makeWeightFields(weight: '${i + 1}.000');
+      {({int recordType, Map<String, String> fields}) Function(int index)? recordBuilder}) {
+    final builder = recordBuilder ??
+        (i) => (recordType: M2400RecordType.recWgt.id, fields: makeWeightFields(weight: '${i + 1}.000'));
     for (var i = 0; i < count; i++) {
-      _send(builder(i));
+      final rec = builder(i);
+      _send(rec.recordType, rec.fields);
     }
   }
 
@@ -201,17 +216,17 @@ class M2400StubServer {
     await _server?.shutdown();
   }
 
-  /// Send fields to all connected clients and record in history.
-  void _send(Map<String, String> fields) {
-    sentRecords.add(fields);
-    _server!.sendToAll(buildM2400Frame(fields));
+  /// Send a record to all connected clients and record in history.
+  void _send(int recordType, Map<String, String> fields) {
+    sentRecords.add(SentRecord(recordType: recordType, fields: fields));
+    _server!.sendToAll(buildM2400Frame(recordType, fields));
   }
 
-  /// Send fields to a specific socket and record in history.
-  void _sendToSocket(Socket client, Map<String, String> fields) {
-    sentRecords.add(fields);
+  /// Send a record to a specific socket and record in history.
+  void _sendToSocket(Socket client, int recordType, Map<String, String> fields) {
+    sentRecords.add(SentRecord(recordType: recordType, fields: fields));
     try {
-      client.add(buildM2400Frame(fields));
+      client.add(buildM2400Frame(recordType, fields));
     } catch (_) {
       // Client may already be destroyed
     }
