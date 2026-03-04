@@ -315,6 +315,7 @@ class ClientWrapper {
   final OpcUAConfig config;
   int? subscriptionId;
   final SingleWorker worker = SingleWorker();
+  StreamSubscription? _heartbeatSub;
 
   ConnectionStatus _connectionStatus = ConnectionStatus.disconnected;
   final StreamController<ConnectionStatus> _connectionController =
@@ -346,7 +347,41 @@ class ClientWrapper {
     return ConnectionStatus.disconnected;
   }
 
+  void startHeartbeat(int subscriptionId) {
+    _heartbeatSub?.cancel();
+    final serverTimeNode = NodeId.fromNumeric(0, 2258);
+    _heartbeatSub = client.monitoredItems(
+      {serverTimeNode: [AttributeId.UA_ATTRIBUTEID_VALUE]},
+      subscriptionId,
+    ).listen(
+      (_) {
+        if (_connectionStatus == ConnectionStatus.disconnected) {
+          updateConnectionStatus(ClientState(
+            channelState: SecureChannelState.UA_SECURECHANNELSTATE_OPEN,
+            sessionState: SessionState.UA_SESSIONSTATE_ACTIVATED,
+            recoveryStatus: 0,
+          ));
+        }
+      },
+      onError: (error) {
+        if (error is Inactivity || error is SubscriptionDeleted) {
+          updateConnectionStatus(ClientState(
+            channelState: SecureChannelState.UA_SECURECHANNELSTATE_CLOSED,
+            sessionState: SessionState.UA_SESSIONSTATE_CLOSED,
+            recoveryStatus: 0,
+          ));
+        }
+      },
+    );
+  }
+
+  void stopHeartbeat() {
+    _heartbeatSub?.cancel();
+    _heartbeatSub = null;
+  }
+
   void dispose() {
+    stopHeartbeat();
     _connectionController.close();
   }
 }
@@ -361,8 +396,6 @@ class StateMan {
   final Map<String, String> _substitutions = {};
   final _subsMap$ = BehaviorSubject<Map<String, String>>.seeded(const {});
   String alias;
-
-  Timer? _healthCheckTimer;
 
   /// Constructor requires the server endpoint.
   StateMan._({
@@ -474,6 +507,7 @@ class StateMan {
                 '[$alias ${wrapper.config.endpoint}] Session lost, resubscribing (old sub=${wrapper.subscriptionId})');
             sessionLost = false;
             wrapper.subscriptionId = null;
+            wrapper.stopHeartbeat();
             // Only resubscribe keys belonging to this wrapper
             final lostAlias = wrapper.config.serverAlias;
             final keysToResub = _subscriptions.values
@@ -519,51 +553,6 @@ class StateMan {
       });
     }
 
-    // Periodic health check - actively probe each connected server.
-    // This detects half-open TCP connections where the remote has disappeared
-    // but the local TCP stack hasn't noticed (due to long keepalive defaults).
-    _healthCheckTimer = Timer.periodic(const Duration(seconds: 10), (timer) {
-      for (final wrapper in clients) {
-        // Only probe if we have an active subscription. This avoids
-        // interfering with the initial connection handshake
-        if (wrapper.subscriptionId == null) continue;
-        logger.d('[$alias ${wrapper.config.endpoint}] Health check: '
-            'connStatus=${wrapper.connectionStatus.name}');
-        final serverTimeNode = NodeId.fromNumeric(0, 2258);
-        wrapper.client
-            .readAttribute({
-              serverTimeNode: [AttributeId.UA_ATTRIBUTEID_VALUE]
-            })
-            .timeout(const Duration(seconds: 5))
-            .then((_) {
-              // Read succeeded — if we previously marked this wrapper as
-              // disconnected (e.g. a health-check timeout), restore the
-              // status. The native stateStream won't emit a new event
-              // because the channel/session never actually changed.
-              if (wrapper.connectionStatus ==
-                  ConnectionStatus.disconnected) {
-                logger.i(
-                    '[$alias ${wrapper.config.endpoint}] Health check read succeeded — restoring connected status');
-                wrapper.updateConnectionStatus(ClientState(
-                  channelState:
-                      SecureChannelState.UA_SECURECHANNELSTATE_OPEN,
-                  sessionState:
-                      SessionState.UA_SESSIONSTATE_ACTIVATED,
-                  recoveryStatus: 0,
-                ));
-              }
-            })
-            .catchError((e) {
-              logger.e(
-                  '[$alias] Health check read failed for ${wrapper.config.endpoint}: $e — marking disconnected');
-              wrapper.updateConnectionStatus(ClientState(
-                channelState: SecureChannelState.UA_SECURECHANNELSTATE_CLOSED,
-                sessionState: SessionState.UA_SESSIONSTATE_CLOSED,
-                recoveryStatus: 0,
-              ));
-            });
-      }
-    });
   }
 
   void _resendLastValues() {
@@ -802,7 +791,6 @@ class StateMan {
       entry._subject.close();
     }
     _subscriptions.clear();
-    _healthCheckTimer?.cancel();
 
     _subsMap$.close();
   }
@@ -875,6 +863,7 @@ class StateMan {
             wrapper.subscriptionId = await client.subscriptionCreate();
             logger.i(
                 '[$alias ${wrapper.config.endpoint}] Created subscription ${wrapper.subscriptionId}');
+            wrapper.startHeartbeat(wrapper.subscriptionId!);
           } catch (e) {
             logger.e('Failed to create subscription: $e');
           } finally {
