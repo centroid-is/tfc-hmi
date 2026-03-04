@@ -1,4 +1,5 @@
 export 'src/m2400.dart';
+export 'src/m2400_client_wrapper.dart';
 export 'src/m2400_field_parser.dart';
 export 'src/m2400_fields.dart';
 export 'src/m2400_proxy.dart';
