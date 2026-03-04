@@ -43,12 +43,29 @@ class DbProxy {
   }
 
   void _handleConnection(Socket clientSocket) async {
+    // Reject connections if proxy is stopping/stopped.
+    if (_server == null) {
+      try {
+        clientSocket.destroy();
+      } catch (_) {}
+      return;
+    }
     try {
       final serverSocket = await Socket.connect(
         InternetAddress.loopbackIPv4,
         targetPort,
         timeout: const Duration(seconds: 5),
       );
+      // Re-check after await: stop() may have been called during connect.
+      if (_server == null) {
+        try {
+          clientSocket.destroy();
+        } catch (_) {}
+        try {
+          serverSocket.destroy();
+        } catch (_) {}
+        return;
+      }
       final pair = _DbProxyPair(clientSocket, serverSocket);
       _connections.add(pair);
       pair.start(() => _connections.remove(pair));
@@ -63,6 +80,15 @@ class DbProxy {
     final server = _server;
     _server = null;
     await server?.close();
+    // Close all connection pairs established before stop.
+    for (final conn in List.of(_connections)) {
+      conn.close();
+    }
+    _connections.clear();
+    // Yield to let any in-flight _handleConnection callbacks see
+    // _server == null and reject their connections.
+    await Future.delayed(const Duration(milliseconds: 100));
+    // Clean up any pairs that slipped through the race window.
     for (final conn in List.of(_connections)) {
       conn.close();
     }
