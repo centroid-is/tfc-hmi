@@ -4,6 +4,8 @@ import 'dart:typed_data';
 import 'package:jbtm/jbtm.dart';
 import 'package:test/test.dart';
 
+import 'test_tcp_server.dart';
+
 void main() {
   // ---------------------------------------------------------------------------
   // M24-01: Frame Parser (STX/ETX delimiting)
@@ -370,6 +372,163 @@ void main() {
 
       expect(record, isNotNull);
       expect(record!.type, equals(M2400RecordType.unknown));
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Integration: TestTcpServer + MSocket + M2400FrameParser + parseM2400Frame
+  // ---------------------------------------------------------------------------
+  group('integration', () {
+    late TestTcpServer server;
+    late MSocket socket;
+
+    setUp(() async {
+      server = TestTcpServer();
+      final port = await server.start();
+      socket = MSocket('localhost', port);
+    });
+
+    tearDown(() async {
+      socket.dispose();
+      await server.shutdown();
+    });
+
+    /// Build a complete STX-framed record from tab-separated key-value pairs.
+    List<int> frameRecord(Map<String, String> fields) {
+      final content = fields.entries
+          .expand((e) => [e.key, e.value])
+          .join('\t');
+      return [0x02, ...content.codeUnits, 0x03];
+    }
+
+    test('end-to-end: server sends framed record, client receives M2400Record',
+        () async {
+      final records = <M2400Record>[];
+      final gotOne = Completer<void>();
+
+      socket.dataStream
+          .transform(M2400FrameParser())
+          .map(parseM2400Frame)
+          .where((r) => r != null)
+          .cast<M2400Record>()
+          .listen((record) {
+        records.add(record);
+        if (!gotOne.isCompleted) gotOne.complete();
+      });
+
+      socket.connect();
+      await socket.statusStream
+          .firstWhere((s) => s == ConnectionStatus.connected);
+      await server.waitForClient();
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      // Send a complete STX-framed weight record
+      final frame = frameRecord({
+        recordTypeFieldKey: '3', // recWgt
+        '100': 'gross_weight',
+        '101': '42.5',
+      });
+      server.sendToAll(frame);
+
+      await gotOne.future.timeout(const Duration(seconds: 5));
+
+      expect(records, hasLength(1));
+      expect(records[0].type, equals(M2400RecordType.recWgt));
+      expect(records[0].fields[recordTypeFieldKey], equals('3'));
+      expect(records[0].fields['100'], equals('gross_weight'));
+      expect(records[0].fields['101'], equals('42.5'));
+    });
+
+    test('end-to-end: server sends multiple records in rapid succession',
+        () async {
+      final records = <M2400Record>[];
+      final gotThree = Completer<void>();
+
+      socket.dataStream
+          .transform(M2400FrameParser())
+          .map(parseM2400Frame)
+          .where((r) => r != null)
+          .cast<M2400Record>()
+          .listen((record) {
+        records.add(record);
+        if (records.length == 3 && !gotThree.isCompleted) {
+          gotThree.complete();
+        }
+      });
+
+      socket.connect();
+      await socket.statusStream
+          .firstWhere((s) => s == ConnectionStatus.connected);
+      await server.waitForClient();
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      // Send 3 records in rapid succession (simulates device burst)
+      server.sendToAll(frameRecord({
+        recordTypeFieldKey: '3', // recWgt
+        '100': 'value_a',
+      }));
+      server.sendToAll(frameRecord({
+        recordTypeFieldKey: '14', // recStat
+        '200': 'value_b',
+      }));
+      server.sendToAll(frameRecord({
+        recordTypeFieldKey: '87', // recLua
+        '300': 'value_c',
+      }));
+
+      await gotThree.future.timeout(const Duration(seconds: 5));
+
+      expect(records, hasLength(3));
+      expect(records[0].type, equals(M2400RecordType.recWgt));
+      expect(records[0].fields['100'], equals('value_a'));
+      expect(records[1].type, equals(M2400RecordType.recStat));
+      expect(records[1].fields['200'], equals('value_b'));
+      expect(records[2].type, equals(M2400RecordType.recLua));
+      expect(records[2].fields['300'], equals('value_c'));
+    });
+
+    test('end-to-end: server sends record split across two writes', () async {
+      final records = <M2400Record>[];
+      final gotOne = Completer<void>();
+
+      socket.dataStream
+          .transform(M2400FrameParser())
+          .map(parseM2400Frame)
+          .where((r) => r != null)
+          .cast<M2400Record>()
+          .listen((record) {
+        records.add(record);
+        if (!gotOne.isCompleted) gotOne.complete();
+      });
+
+      socket.connect();
+      await socket.statusStream
+          .firstWhere((s) => s == ConnectionStatus.connected);
+      await server.waitForClient();
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      // Build a full frame, then split it
+      final fullFrame = frameRecord({
+        recordTypeFieldKey: '5', // recIntro
+        '400': 'split_data',
+        '401': 'second_field',
+      });
+      final midpoint = fullFrame.length ~/ 2;
+      final firstHalf = fullFrame.sublist(0, midpoint);
+      final secondHalf = fullFrame.sublist(midpoint);
+
+      // Send first half (includes STX + partial content)
+      server.sendToAll(firstHalf);
+      await Future.delayed(const Duration(milliseconds: 50));
+      // Send second half (rest of content + ETX)
+      server.sendToAll(secondHalf);
+
+      await gotOne.future.timeout(const Duration(seconds: 5));
+
+      expect(records, hasLength(1));
+      expect(records[0].type, equals(M2400RecordType.recIntro));
+      expect(records[0].fields['400'], equals('split_data'));
+      expect(records[0].fields['401'], equals('second_field'));
     });
   });
 }
