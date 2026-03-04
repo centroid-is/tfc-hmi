@@ -894,7 +894,7 @@ class StateMan {
             'No cached value for key: "$key" — not found yet');
       }
       if (m2400.statusFilter != null) {
-        if (value['status'].asInteger != m2400.statusFilter) {
+        if (value['status'].asInt != m2400.statusFilter) {
           throw StateManException(
               'No cached value for key: "$key" — status not found yet');
         }
@@ -1014,7 +1014,7 @@ class StateMan {
       Stream<DynamicValue> stream = m2400.dc.subscribe(m2400.subscribeKey);
       if (m2400.statusFilter != null) {
         stream = stream.where(
-            (dv) => dv['status'].asInteger == m2400.statusFilter);
+            (dv) => dv['status'].asInt == m2400.statusFilter);
       }
       if (m2400.fieldName != null) {
         stream = stream.map((dv) => dv[m2400.fieldName!]);
