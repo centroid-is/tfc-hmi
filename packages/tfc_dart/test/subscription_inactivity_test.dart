@@ -8,6 +8,7 @@
 // C) SecureChannelClosed fires on monitor streams when the TCP connection
 //    is killed.
 import 'dart:async';
+import 'dart:io';
 import 'dart:math';
 
 import 'package:open62541/open62541.dart';
@@ -125,7 +126,11 @@ void main() {
       await client.delete();
       await proxy.shutdown();
     }
-  }, timeout: Timeout(Duration(seconds: 60)));
+  },
+      timeout: Timeout(Duration(seconds: 60)),
+      skip: Platform.isWindows
+          ? 'Proxy buffering breaks secure channel on Windows'
+          : null);
 
   // --- Test B: direct connection, pause runIterate to expire subscription ---
   test(
