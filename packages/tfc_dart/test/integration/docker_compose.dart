@@ -13,26 +13,13 @@ const databaseName = 'testdb';
 bool get _useExternalDb =>
     Platform.environment['TIMESCALEDB_EXTERNAL'] == '1';
 
-/// Simulates a database outage by stopping the TCP proxy.
-/// Verifies the proxy port is no longer accepting connections.
+/// Simulates a database outage by switching the TCP proxy to reject mode.
+/// The proxy keeps listening but immediately destroys incoming connections,
+/// giving an instant connection-reset on all platforms (including Windows,
+/// where closing the socket causes a slow connect-timeout instead of
+/// ECONNREFUSED).
 Future<void> stopTimescaleDb() async {
   await _dbProxy.stop();
-  // Verify the proxy is actually down — attempt to connect.
-  try {
-    final sock = await Socket.connect(
-      InternetAddress.loopbackIPv4,
-      _proxyPort,
-      timeout: const Duration(seconds: 1),
-    );
-    // Proxy is still accepting connections — this is a bug.
-    sock.destroy();
-    stderr.writeln(
-        '[stopTimescaleDb] WARNING: port $_proxyPort still accepting '
-        'connections after stop()! Retrying stop...');
-    await _dbProxy.stop();
-  } on SocketException {
-    // Expected: connection refused = proxy is down.
-  }
 }
 
 /// Simulates database recovery by restarting the TCP proxy.
@@ -58,12 +45,22 @@ class DbProxy {
   ServerSocket? _server;
   final List<_DbProxyPair> _connections = [];
 
-  bool get isRunning => _server != null;
+  /// When true, the proxy accepts TCP connections but immediately destroys
+  /// them.  This gives an instant connection-reset on every platform
+  /// (unlike closing the ServerSocket, which causes a slow connect-timeout
+  /// on Windows instead of ECONNREFUSED).
+  bool _rejecting = false;
+
+  bool get isRunning => _server != null && !_rejecting;
 
   DbProxy({required this.listenPort, required this.targetPort});
 
   Future<void> start() async {
-    if (_server != null) return; // already running
+    _rejecting = false;
+    if (_server != null) {
+      print('[db-proxy] forwarding on $listenPort → $targetPort');
+      return; // server socket already bound, just clear reject flag
+    }
     _server =
         await ServerSocket.bind(InternetAddress.loopbackIPv4, listenPort);
     _server!.listen(_handleConnection);
@@ -71,8 +68,9 @@ class DbProxy {
   }
 
   void _handleConnection(Socket clientSocket) async {
-    // Reject connections if proxy is stopping/stopped.
-    if (_server == null) {
+    // Reject mode: accept the TCP handshake, then immediately destroy.
+    // The client sees an instant RST on all platforms.
+    if (_rejecting) {
       try {
         clientSocket.destroy();
       } catch (_) {}
@@ -85,7 +83,7 @@ class DbProxy {
         timeout: const Duration(seconds: 5),
       );
       // Re-check after await: stop() may have been called during connect.
-      if (_server == null) {
+      if (_rejecting) {
         try {
           clientSocket.destroy();
         } catch (_) {}
@@ -105,23 +103,34 @@ class DbProxy {
   }
 
   Future<void> stop() async {
-    final server = _server;
-    _server = null;
-    await server?.close();
-    // Close all connection pairs established before stop.
+    _rejecting = true;
+    // Close all existing forwarding connections immediately.
     for (final conn in List.of(_connections)) {
       conn.close();
     }
     _connections.clear();
     // Yield to let any in-flight _handleConnection callbacks see
-    // _server == null and reject their connections.
+    // _rejecting == true and destroy their connections.
     await Future.delayed(const Duration(milliseconds: 100));
     // Clean up any pairs that slipped through the race window.
     for (final conn in List.of(_connections)) {
       conn.close();
     }
     _connections.clear();
-    print('[db-proxy] stopped');
+    print('[db-proxy] rejecting connections');
+  }
+
+  /// Fully shuts down the proxy (used in tearDownAll).
+  Future<void> shutdown() async {
+    _rejecting = true;
+    final server = _server;
+    _server = null;
+    await server?.close();
+    for (final conn in List.of(_connections)) {
+      conn.close();
+    }
+    _connections.clear();
+    print('[db-proxy] shut down');
   }
 }
 
@@ -212,8 +221,8 @@ Future<void> startDockerCompose() async {
 
 /// Stops Docker Compose services (no-op when TIMESCALEDB_EXTERNAL=1).
 Future<void> stopDockerCompose() async {
-  // Also stop the proxy so the next test run starts clean.
-  await _dbProxy.stop();
+  // Fully shut down the proxy so the next test run starts clean.
+  await _dbProxy.shutdown();
 
   if (_useExternalDb) {
     print('TIMESCALEDB_EXTERNAL=1: skipping Docker Compose teardown');
