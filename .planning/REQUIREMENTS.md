@@ -23,7 +23,7 @@
 - [ ] **M24-06**: Weigher status enum (WST_BAD=0, WST_R1=1, WST_R2=2, WST_BAD_DENY=10, WST_BAD_STDDEV=11, WST_BAD_ALIBI=12, WST_BAD_UNEXPECT=13, WST_BAD_UNDER=14, WST_BAD_OVER=15)
 - [ ] **M24-07**: LUA record support (REC_LUA=87) with dynamic/unknown fields
 - [ ] **M24-08**: Device timestamp extraction from FLD_DATE/FLD_TIME/FLD_TIME_MS when present
-- [ ] **M24-09**: Stub server speaks M2400 protocol with programmable record sequences for TDD
+- [x] **M24-09**: Stub server speaks M2400 protocol with programmable record sequences for TDD
 - [x] **M24-10**: Unknown fields logged as warnings, do not crash parser
 
 ### DynamicValue Integration
@@ -95,7 +95,7 @@
 | M24-06 | Phase 5 | Pending |
 | M24-07 | Phase 5 | Pending |
 | M24-08 | Phase 5 | Pending |
-| M24-09 | Phase 4 | Pending |
+| M24-09 | Phase 4 | Complete |
 | M24-10 | Phase 3 | Complete |
 | DV-01 | Phase 1 | Complete |
 | DV-02 | Phase 6 | Pending |

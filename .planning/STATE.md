@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: completed
-stopped_at: Completed 03-02-PLAN.md
-last_updated: "2026-03-04T12:55:21.558Z"
-last_activity: 2026-03-04 -- Completed 03-02 (M2400 integration tests)
+status: in-progress
+stopped_at: Completed 04-01-PLAN.md
+last_updated: "2026-03-04T13:26:25Z"
+last_activity: 2026-03-04 -- Completed 04-01 (M2400 stub server)
 progress:
   total_phases: 10
   completed_phases: 3
-  total_plans: 6
-  completed_plans: 6
+  total_plans: 7
+  completed_plans: 7
   percent: 100
 ---
 
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-04)
 
 **Core value:** Reliable, real-time acquisition of device data into state_man -- if the device pushes a record, the system captures it and makes it available as a DynamicValue stream.
-**Current focus:** Phase 3 complete - M2400 Framing. Ready for Phase 4.
+**Current focus:** Phase 4 in progress - M2400 Stub Server. Plan 01 complete.
 
 ## Current Position
 
-Phase: 3 of 10 (M2400 Framing) -- COMPLETE
-Plan: 2 of 2 in current phase -- COMPLETE
+Phase: 4 of 10 (M2400 Stub Server) -- IN PROGRESS
+Plan: 1 of 1 in current phase -- COMPLETE
 Status: Phase Complete
-Last activity: 2026-03-04 -- Completed 03-02 (M2400 integration tests)
+Last activity: 2026-03-04 -- Completed 04-01 (M2400 stub server)
 
 Progress: [██████████] 100%
 
@@ -56,6 +56,7 @@ Progress: [██████████] 100%
 | Phase 02 P02 | 3min | 1 task | 2 files |
 | Phase 03 P01 | 4min | 2 tasks | 3 files |
 | Phase 03 P02 | 3min | 1 task | 1 file |
+| Phase 04 P01 | 7min | 1 task | 7 files |
 
 ## Accumulated Context
 
@@ -81,6 +82,11 @@ Recent decisions affecting current work:
 - [Phase 03]: StreamTransformer pattern for frame parser, pure function for record parser
 - [Phase 03]: Completer-based test sync for broadcast stream pipelines (stream.first creates cold subscription that misses events)
 - [Phase 03]: Phase 3 complete -- M2400 framing validated end-to-end with 51 tests (unit + integration)
+- [Phase 04]: TestTcpServer moved from test/ to lib/src/ for importability by external packages
+- [Phase 04]: onConnect callback on TestTcpServer enables per-client INTRO writes without broadcast
+- [Phase 04]: utf8.encode used instead of .codeUnits in buildM2400Frame for non-ASCII correctness
+- [Phase 04]: M2400StubServer uses composition (wraps TestTcpServer) not inheritance
+- [Phase 04]: Phase 4 complete -- M2400StubServer with 22 tests, TDD infrastructure ready for phases 5-8
 
 ### Pending Todos
 
@@ -94,6 +100,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-04T12:55:21.556Z
-Stopped at: Completed 03-02-PLAN.md
-Resume file: None
+Last session: 2026-03-04T13:26:25Z
+Stopped at: Completed 04-01-PLAN.md
+Resume file: .planning/phases/04-m2400-stub-server/04-01-SUMMARY.md
