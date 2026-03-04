@@ -1268,7 +1268,7 @@ class _M2400ConfigSectionState extends State<_M2400ConfigSection> {
                               color: Colors.green.withAlpha(30),
                               borderRadius: BorderRadius.circular(4),
                             ),
-                            child: Text('EXP',
+                            child: Text('COMMON',
                                 style: TextStyle(
                                     fontSize: 9,
                                     color: Colors.green[700],
