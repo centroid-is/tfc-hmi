@@ -956,13 +956,6 @@ class AutoDisposingStream<T> {
       onError: (error, stackTrace) {
         _logger.e('[$key] raw stream error: $error '
             '(subjectClosed=${_subject.isClosed})');
-        // Inactivity is transient (subscription may recover) — don't
-        // push to widget streams where it causes "sticky error" display.
-        // SubscriptionDeleted and SecureChannelClosed are definitive
-        // losses — let those through so widgets show a connection error.
-        if (error is Inactivity) {
-          return;
-        }
         if (!_subject.isClosed) {
           _subject.addError(error, stackTrace);
         }
