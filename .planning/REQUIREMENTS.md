@@ -9,7 +9,7 @@
 
 - [x] **TCP-01**: msocket provides TCP connection with configurable host and port
 - [x] **TCP-02**: msocket configures SO_KEEPALIVE with low timeouts for disconnect detection
-- [ ] **TCP-03**: msocket auto-reconnects with exponential backoff on disconnect
+- [x] **TCP-03**: msocket auto-reconnects with exponential backoff on disconnect
 - [x] **TCP-04**: msocket exposes connection status stream (connected/connecting/disconnected)
 - [ ] **TCP-05**: msocket connection resilience verified via proxy.dart (cable pull, switch reboot simulation)
 
@@ -84,7 +84,7 @@
 |-------------|-------|--------|
 | TCP-01 | Phase 2 | Complete |
 | TCP-02 | Phase 2 | Complete |
-| TCP-03 | Phase 2 | Pending |
+| TCP-03 | Phase 2 | Complete |
 | TCP-04 | Phase 2 | Complete |
 | TCP-05 | Phase 8 | Pending |
 | M24-01 | Phase 3 | Pending |
