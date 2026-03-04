@@ -1,8 +1,14 @@
 import 'dart:async';
 
 import 'package:test/test.dart';
-import 'package:open62541/open62541.dart' show Client, DynamicValue, LogLevel;
+import 'package:open62541/open62541.dart' show ClientApi, DynamicValue;
 import 'package:tfc_dart/core/state_man.dart';
+
+/// Minimal fake ClientApi that doesn't load native code.
+class FakeClientApi implements ClientApi {
+  @override
+  dynamic noSuchMethod(Invocation invocation) => null;
+}
 
 void main() {
   group('AutoDisposingStream', () {
@@ -637,7 +643,7 @@ void main() {
         ads.subscribe(raw.stream, DynamicValue(value: 'initial'));
 
         final wrapper = ClientWrapper(
-          Client(logLevel: LogLevel.UA_LOGLEVEL_ERROR),
+          FakeClientApi(),
           OpcUAConfig(),
           resendOnRecovery: true,
         );
@@ -671,7 +677,7 @@ void main() {
         ads.subscribe(raw.stream, DynamicValue(value: 'initial'));
 
         final wrapper = ClientWrapper(
-          Client(logLevel: LogLevel.UA_LOGLEVEL_ERROR),
+          FakeClientApi(),
           OpcUAConfig(),
           resendOnRecovery: false,
         );
@@ -704,7 +710,7 @@ void main() {
         ads.subscribe(raw.stream, DynamicValue(value: 'initial'));
 
         final wrapper = ClientWrapper(
-          Client(logLevel: LogLevel.UA_LOGLEVEL_ERROR),
+          FakeClientApi(),
           OpcUAConfig(),
           resendOnRecovery: true,
         );
