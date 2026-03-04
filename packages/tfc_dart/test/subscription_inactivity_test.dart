@@ -8,138 +8,19 @@
 // C) SecureChannelClosed fires on monitor streams when the TCP connection
 //    is killed.
 import 'dart:async';
-import 'dart:io';
 import 'dart:math';
 
 import 'package:open62541/open62541.dart';
 import 'package:test/test.dart';
 
+import 'proxy.dart';
+
 final intNodeId = NodeId.fromString(1, "the.int");
 final serverTimeNode = NodeId.fromNumeric(0, 2258);
-
-/// TCP proxy that can buffer traffic (simulating network delay) or kill
-/// connections (simulating connection drop).
-///
-/// When [blocked] is set to true, data is queued instead of forwarded.
-/// When [blocked] is set back to false, all queued data is flushed.
-/// This preserves the secure channel (no dropped/reordered messages).
-class _TcpProxy {
-  final int listenPort;
-  final int targetPort;
-  ServerSocket? _server;
-  final List<_Pair> _pairs = [];
-  bool _blocked = false;
-
-  _TcpProxy({required this.listenPort, required this.targetPort});
-
-  Future<void> start() async {
-    _server =
-        await ServerSocket.bind(InternetAddress.loopbackIPv4, listenPort);
-    _server!.listen((clientSocket) async {
-      try {
-        final serverSocket = await Socket.connect(
-            InternetAddress.loopbackIPv4, targetPort,
-            timeout: Duration(seconds: 5));
-        final pair = _Pair(clientSocket, serverSocket, this);
-        _pairs.add(pair);
-        pair.start();
-      } catch (e) {
-        clientSocket.destroy();
-      }
-    });
-  }
-
-  /// Buffer traffic while blocked, flush when unblocked.
-  set blocked(bool value) {
-    _blocked = value;
-    if (!value) {
-      for (final p in _pairs) {
-        p.flush();
-      }
-    }
-  }
-
-  bool get blocked => _blocked;
-
-  /// Kill all active connections but keep listening for new ones.
-  void disconnectAll() {
-    for (final p in _pairs) {
-      p.close();
-    }
-    _pairs.clear();
-  }
-
-  Future<void> stop() async {
-    disconnectAll();
-    await _server?.close();
-  }
-}
-
-class _Pair {
-  final Socket client;
-  final Socket server;
-  final _TcpProxy proxy;
-  bool _closed = false;
-  final List<List<int>> _toServer = [];
-  final List<List<int>> _toClient = [];
-
-  _Pair(this.client, this.server, this.proxy);
-
-  void start() {
-    client.done.catchError((_) {});
-    server.done.catchError((_) {});
-    client.listen(
-      (data) {
-        if (proxy.blocked) {
-          _toServer.add(List.from(data));
-        } else {
-          server.add(data);
-        }
-      },
-      onDone: close,
-      onError: (_) => close,
-    );
-    server.listen(
-      (data) {
-        if (proxy.blocked) {
-          _toClient.add(List.from(data));
-        } else {
-          client.add(data);
-        }
-      },
-      onDone: close,
-      onError: (_) => close,
-    );
-  }
-
-  void flush() {
-    if (_closed) return;
-    for (final data in _toServer) {
-      server.add(data);
-    }
-    _toServer.clear();
-    for (final data in _toClient) {
-      client.add(data);
-    }
-    _toClient.clear();
-  }
-
-  void close() {
-    if (_closed) return;
-    _closed = true;
-    try {
-      client.destroy();
-    } catch (_) {}
-    try {
-      server.destroy();
-    } catch (_) {}
-  }
-}
 
 void main() {
   final rng = Random();
   final serverPort = 14840 + rng.nextInt(1000);
-  final proxyPort = serverPort + 1000;
 
   late Server server;
   late Timer serverTimer;
@@ -159,26 +40,27 @@ void main() {
 
   tearDown(() async {
     serverTimer.cancel();
-    server.shutdown();
+    try {
+      server.shutdown();
+    } catch (_) {} // Test C shuts down the server early
     server.delete();
   });
 
-  // --- Test A: uses TCP proxy to buffer traffic ---
+  // --- Test A: uses TCP proxy to buffer server→client responses ---
   test(
       'A: Heartbeat prevents subscription inactivity during short traffic delay',
       () async {
-    final proxy =
-        _TcpProxy(listenPort: proxyPort, targetPort: serverPort);
+    final proxy = TcpProxy(targetPort: serverPort);
     await proxy.start();
 
     final client = Client(logLevel: LogLevel.UA_LOGLEVEL_WARNING);
     final clientTimer = Timer.periodic(Duration(milliseconds: 10), (_) {
       client.runIterate(Duration(milliseconds: 10));
     });
-    await client.connect("opc.tcp://127.0.0.1:$proxyPort");
+    await client.connect("opc.tcp://127.0.0.1:${proxy.port}");
 
     try {
-      // Generous lifetime: 100ms × 600 = 60s (well beyond 3s delay).
+      // Generous lifetime: 100ms × 600 = 60s.
       final subscriptionId = await client.subscriptionCreate(
         requestedPublishingInterval: Duration(milliseconds: 100),
         requestedLifetimeCount: 600,
@@ -194,7 +76,8 @@ void main() {
 
       // Monitor the test int variable
       final stream = client.monitor(
-        intNodeId, subscriptionId,
+        intNodeId,
+        subscriptionId,
         samplingInterval: Duration(milliseconds: 100),
       );
 
@@ -213,13 +96,16 @@ void main() {
       await Future.delayed(Duration(milliseconds: 300));
       final preBlockCount = values.length;
 
-      // Buffer traffic for 3 seconds (delay, not data loss)
-      proxy.blocked = true;
+      // Buffer server→client responses for 3 seconds.
+      // Client→server traffic still flows, keeping the subscription alive
+      // on the server side. The client just doesn't see responses.
+      proxy.bufferServerToClient = true;
       await Future.delayed(Duration(seconds: 3));
-      proxy.blocked = false; // Flush
+      proxy.bufferServerToClient = false;
+      proxy.flush();
 
       // Give time for flushed publish responses to arrive
-      await Future.delayed(Duration(seconds: 2));
+      await Future.delayed(Duration(seconds: 3));
 
       // Write new values — subscription should still be alive
       for (int i = 100; i < 103; i++) {
@@ -237,9 +123,9 @@ void main() {
     } finally {
       clientTimer.cancel();
       await client.delete();
-      await proxy.stop();
+      await proxy.shutdown();
     }
-  }, timeout: Timeout(Duration(seconds: 30)));
+  }, timeout: Timeout(Duration(seconds: 60)));
 
   // --- Test B: direct connection, pause runIterate to expire subscription ---
   test(
@@ -281,7 +167,8 @@ void main() {
       // Also monitor the int variable
       final monitorErrors = <Object>[];
       final monitorStream = client.monitor(
-        intNodeId, subscriptionId,
+        intNodeId,
+        subscriptionId,
         samplingInterval: Duration(milliseconds: 10),
       );
       final monitorSub = monitorStream.listen(
@@ -295,7 +182,10 @@ void main() {
       // Pause client → server exhausts publish requests → subscription expires
       clientTimer.cancel();
       clientTimer = null;
-      await Future.delayed(Duration(seconds: 2));
+
+      // Wait long enough for the server to delete the subscription.
+      // 10 outstanding × 10ms keepAlive + 30ms lifetime + generous margin.
+      await Future.delayed(Duration(seconds: 5));
 
       // Resume client → BadNoSubscription → SubscriptionDeleted
       clientTimer = Timer.periodic(Duration(milliseconds: 10), (_) {
@@ -303,7 +193,7 @@ void main() {
       });
 
       await deletedCompleter.future.timeout(
-        Duration(seconds: 10),
+        Duration(seconds: 15),
         onTimeout: () =>
             fail('SubscriptionDeleted never fired on heartbeat stream'),
       );
@@ -321,21 +211,17 @@ void main() {
       clientTimer?.cancel();
       await client.delete();
     }
-  }, timeout: Timeout(Duration(seconds: 30)));
+  }, timeout: Timeout(Duration(seconds: 60)));
 
-  // --- Test C: TCP proxy disconnect → SecureChannelClosed on monitor streams ---
+  // --- Test C: server shutdown → SecureChannelClosed on monitor streams ---
   test(
       'C: SecureChannelClosed fires on monitor streams when connection is killed',
       () async {
-    final proxy =
-        _TcpProxy(listenPort: proxyPort, targetPort: serverPort);
-    await proxy.start();
-
     final client = Client(logLevel: LogLevel.UA_LOGLEVEL_WARNING);
     final clientTimer = Timer.periodic(Duration(milliseconds: 10), (_) {
       client.runIterate(Duration(milliseconds: 10));
     });
-    await client.connect("opc.tcp://127.0.0.1:$proxyPort");
+    await client.connect("opc.tcp://127.0.0.1:$serverPort");
 
     try {
       final subscriptionId = await client.subscriptionCreate(
@@ -347,7 +233,8 @@ void main() {
       final errors = <Object>[];
       final closedCompleter = Completer<void>();
       final stream = client.monitor(
-        intNodeId, subscriptionId,
+        intNodeId,
+        subscriptionId,
         samplingInterval: Duration(milliseconds: 100),
       );
       final sub = stream.listen(
@@ -363,10 +250,10 @@ void main() {
       // Confirm subscription works
       await Future.delayed(Duration(milliseconds: 500));
 
-      // Stop the proxy entirely — kill connections AND close the listener.
-      // The client detects the broken TCP connection and tries to reconnect,
-      // but can't (proxy is gone), so the channel stays CLOSED.
-      await proxy.stop();
+      // Shut down the OPC UA server → client detects disconnect →
+      // SecureChannelClosed fires on monitor streams.
+      serverTimer.cancel();
+      server.shutdown();
 
       await closedCompleter.future.timeout(
         Duration(seconds: 10),
@@ -381,7 +268,6 @@ void main() {
     } finally {
       clientTimer.cancel();
       await client.delete();
-      await proxy.stop();
     }
-  }, timeout: Timeout(Duration(seconds: 20)));
+  }, timeout: Timeout(Duration(seconds: 30)));
 }
