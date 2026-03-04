@@ -108,6 +108,8 @@ class _Pair {
   final Socket client;
   final Socket server;
   final TcpProxy proxy;
+  StreamSubscription? _clientSub;
+  StreamSubscription? _serverSub;
   bool _closed = false;
   final List<List<int>> _serverBuffer = [];
 
@@ -116,7 +118,7 @@ class _Pair {
   void start(void Function() onClose) {
     client.done.catchError((_) {});
     server.done.catchError((_) {});
-    client.listen(
+    _clientSub = client.listen(
       (data) {
         // Client→server always forwarded
         try {
@@ -126,7 +128,7 @@ class _Pair {
       onDone: () => _doClose(onClose),
       onError: (_) => _doClose(onClose),
     );
-    server.listen(
+    _serverSub = server.listen(
       (data) {
         if (proxy.bufferServerToClient) {
           _serverBuffer.add(List.from(data));
@@ -160,6 +162,8 @@ class _Pair {
   void close() {
     if (_closed) return;
     _closed = true;
+    _clientSub?.cancel();
+    _serverSub?.cancel();
     try {
       client.destroy();
     } catch (_) {}
