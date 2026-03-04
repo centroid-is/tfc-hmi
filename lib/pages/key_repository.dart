@@ -1259,29 +1259,7 @@ class _M2400ConfigSectionState extends State<_M2400ConfigSection> {
                 ..._getExpectedFields(_selectedRecordType).map((field) =>
                     DropdownMenuItem(
                       value: field,
-                      child: Row(
-                        children: [
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 4, vertical: 1),
-                            decoration: BoxDecoration(
-                              color: Colors.green.withAlpha(30),
-                              borderRadius: BorderRadius.circular(4),
-                            ),
-                            child: Text('COMMON',
-                                style: TextStyle(
-                                    fontSize: 9,
-                                    color: Colors.green[700],
-                                    fontWeight: FontWeight.bold)),
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                                '${field.displayName} (${field.id})',
-                                overflow: TextOverflow.ellipsis),
-                          ),
-                        ],
-                      ),
+                      child: Text('${field.displayName} (${field.id})'),
                     )),
                 // Other fields
                 ..._getOtherFields(_selectedRecordType).map((field) =>
