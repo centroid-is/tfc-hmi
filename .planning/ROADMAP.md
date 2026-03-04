@@ -109,10 +109,10 @@ Plans:
   1. A full M2400 parsed record converts to a DynamicValue containing all fields as a structured object
   2. Individual typed field values (Decimal weight, int ID, DateTime timestamp) convert to appropriate DynamicValue representations
   3. Conversion round-trips correctly: M2400 record -> DynamicValue -> field access produces original typed values
-**Plans**: 2 plans
+**Plans**: 1 plan
 
 Plans:
-- [ ] 06-01: TBD
+- [ ] 06-01-PLAN.md — convertRecordToDynamicValue function with TDD, barrel export, pipeline round-trip tests
 
 ### Phase 7: state_man Integration
 **Goal**: Device data flows through state_man as subscribable DynamicValue streams using named keys
@@ -127,8 +127,8 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] 07-01: TBD
-- [ ] 07-02: TBD
+- [ ] 07-01-PLAN.md — M2400ClientWrapper with pipeline, stream routing, subscribe API, and dot-notation field access
+- [ ] 07-02-PLAN.md — StateMan integration wiring, connection status mapping, end-to-end tests with M2400StubServer
 
 ### Phase 8: Connection Resilience
 **Goal**: Connection reliability is proven under adverse network conditions with observable health metrics
@@ -142,8 +142,8 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] 08-01: TBD
-- [ ] 08-02: TBD
+- [ ] 08-01-PLAN.md — ConnectionHealthMetrics class, TcpProxy test utility, proxy-based MSocket resilience tests
+- [ ] 08-02-PLAN.md — End-to-end M2400 pipeline resilience tests (StubServer -> Proxy -> MSocket -> FrameParser)
 
 ### Phase 9: Configuration & Multi-device
 **Goal**: M2400 devices are fully configurable, support multiple simultaneous connections, and integrate with data collection
@@ -158,9 +158,8 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] 09-01: TBD
-- [ ] 09-02: TBD
-- [ ] 09-03: TBD
+- [ ] 09-01-PLAN.md — M2400Config, M2400NodeConfig, extend StateManConfig and KeyMappingEntry with JBTM support
+- [ ] 09-02-PLAN.md — Multi-device M2400ClientWrapper lifecycle in StateMan, Collector integration for BATCH records
 
 ### Phase 10: UI
 **Goal**: Users can configure M2400 device connections and key mappings through the application interface
@@ -174,8 +173,8 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] 10-01: TBD
-- [ ] 10-02: TBD
+- [ ] 10-01-PLAN.md — JBTM servers section on server config page (add/edit/remove M2400 devices)
+- [ ] 10-02-PLAN.md — M2400 device type distinction in key repository, REC/FLD dropdown selection
 
 ## Progress
 
@@ -193,5 +192,5 @@ Note: Phases 1 and 2 can be parallelized (no dependency between them).
 | 6. DynamicValue Conversion | 0/1 | Not started | - |
 | 7. state_man Integration | 0/2 | Not started | - |
 | 8. Connection Resilience | 0/2 | Not started | - |
-| 9. Configuration & Multi-device | 0/3 | Not started | - |
+| 9. Configuration & Multi-device | 0/2 | Not started | - |
 | 10. UI | 0/2 | Not started | - |
