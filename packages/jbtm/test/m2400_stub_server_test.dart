@@ -399,11 +399,15 @@ void main() {
     test('sendRawGarbage sends raw bytes without framing', () async {
       final port = await stub.start();
       final socket = MSocket('localhost', port);
-      final gotData = Completer<Uint8List>();
+      final allData = <Uint8List>[];
+      final gotTwo = Completer<void>();
 
-      // Listen on raw data stream (not parsed)
+      // Listen on raw data stream (not parsed) -- first chunk is auto-INTRO
       socket.dataStream.listen((data) {
-        if (!gotData.isCompleted) gotData.complete(data);
+        allData.add(data);
+        if (allData.length >= 2 && !gotTwo.isCompleted) {
+          gotTwo.complete();
+        }
       });
 
       socket.connect();
@@ -411,10 +415,10 @@ void main() {
       await Future.delayed(const Duration(milliseconds: 100));
 
       stub.sendRawGarbage([0xFF, 0xFE, 0xFD]);
-      final data =
-          await gotData.future.timeout(const Duration(seconds: 5));
+      await gotTwo.future.timeout(const Duration(seconds: 5));
 
-      expect(data, equals([0xFF, 0xFE, 0xFD]));
+      // Second chunk should be the raw garbage bytes
+      expect(allData[1], equals([0xFF, 0xFE, 0xFD]));
 
       socket.dispose();
     });
