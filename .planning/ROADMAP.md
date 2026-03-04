@@ -20,7 +20,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 6: DynamicValue Conversion** - M2400 parsed records to DynamicValue objects (completed 2026-03-04)
 - [x] **Phase 7: state_man Integration** - M2400ClientWrapper, subscribe, named keys, connection status (completed 2026-03-04)
 - [x] **Phase 8: Connection Resilience** - Proxy-based flaky connection testing and health metrics (completed 2026-03-04)
-- [ ] **Phase 9: Configuration & Multi-device** - Server config, key mapping CRUD, multi-device, collector
+- [x] **Phase 9: Configuration & Multi-device** - Server config, key mapping CRUD, multi-device, collector (completed 2026-03-04)
 - [ ] **Phase 10: UI** - Server config page, key repository picker, REC/FLD option lists
 
 ## Phase Details
@@ -158,8 +158,8 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] 09-01-PLAN.md — M2400Config, M2400NodeConfig, extend StateManConfig and KeyMappingEntry with JBTM support
-- [ ] 09-02-PLAN.md — Multi-device M2400ClientWrapper lifecycle in StateMan, Collector integration for BATCH records
+- [x] 09-01-PLAN.md — M2400Config, M2400NodeConfig, extend StateManConfig and KeyMappingEntry with JBTM support
+- [x] 09-02-PLAN.md — Multi-device M2400ClientWrapper lifecycle in StateMan, Collector integration for BATCH records
 
 ### Phase 10: UI
 **Goal**: Users can configure M2400 device connections and key mappings through the application interface
@@ -192,5 +192,5 @@ Note: Phases 1 and 2 can be parallelized (no dependency between them).
 | 6. DynamicValue Conversion | 1/1 | Complete    | 2026-03-04 |
 | 7. state_man Integration | 2/2 | Complete    | 2026-03-04 |
 | 8. Connection Resilience | 2/2 | Complete    | 2026-03-04 |
-| 9. Configuration & Multi-device | 0/2 | Not started | - |
+| 9. Configuration & Multi-device | 2/2 | Complete    | 2026-03-04 |
 | 10. UI | 0/2 | Not started | - |

@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: in_progress
-stopped_at: Phase 8 Plan 02 complete
-last_updated: "2026-03-04T14:54:00.000Z"
-last_activity: 2026-03-04 -- Completed 08-02 (Pipeline resilience tests, 224 total tests)
+stopped_at: Phase 9 Plan 02 complete
+last_updated: "2026-03-04T15:02:00.000Z"
+last_activity: 2026-03-04 -- Completed 09-02 (Multi-device M2400 lifecycle, 194 total tfc_dart tests)
 progress:
   total_phases: 10
-  completed_phases: 8
+  completed_phases: 9
   total_plans: 18
-  completed_plans: 14
-  percent: 78
+  completed_plans: 16
+  percent: 89
 ---
 
 # Project State
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-04)
 
 **Core value:** Reliable, real-time acquisition of device data into state_man -- if the device pushes a record, the system captures it and makes it available as a DynamicValue stream.
-**Current focus:** Phase 8 complete - Connection Resilience. Phase 9 next (Configuration & Multi-Device).
+**Current focus:** Phase 9 complete - Configuration & Multi-Device. Phase 10 next (UI).
 
 ## Current Position
 
-Phase: 8 of 10 (Connection Resilience) -- COMPLETE
+Phase: 9 of 10 (Configuration & Multi-device) -- COMPLETE
 Plan: 2 of 2 in current phase -- COMPLETE
-Status: Phase 8 Complete, Phase 9 Next
-Last activity: 2026-03-04 -- Completed 08-02 (Pipeline resilience tests, 23 new tests, 224 total)
+Status: Phase 9 Complete, Phase 10 Next
+Last activity: 2026-03-04 -- Completed 09-02 (Multi-device M2400 lifecycle, 36 new tests, 194 total tfc_dart)
 
-Progress: [████████--] 78%
+Progress: [█████████-] 89%
 
 ## Performance Metrics
 
@@ -64,6 +64,8 @@ Progress: [████████--] 78%
 | Phase 07 P02 | 6min | 2 tasks | 3 files |
 | Phase 08 P01 | 3min | 2 tasks | 5 files |
 | Phase 08 P02 | 3min | 1 task | 1 file |
+| Phase 09 P01 | 4min | 2 tasks | 4 files |
+| Phase 09 P02 | 5min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -117,6 +119,14 @@ Recent decisions affecting current work:
 - [Phase 08]: Cable pull simulation uses proxy shutdown + restart on captured fixed port
 - [Phase 08]: Pipeline resilience tests verify through M2400ClientWrapper.subscribe() (real integration path)
 - [Phase 08]: Phase 8 complete -- ConnectionHealthMetrics, TcpProxy, 23 new resilience tests, 224 total
+- [Phase 09]: tfc_dart depends on jbtm (path dependency) for M2400RecordType/M2400Field enums in config models
+- [Phase 09]: M2400NodeConfig uses enum name serialization for record_type/field (json_serializable default)
+- [Phase 09]: @JsonKey(defaultValue: []) on StateManConfig.jbtm ensures backwards compatibility
+- [Phase 09]: M2400DeviceClientAdapter in tfc_dart bridges M2400ClientWrapper to DeviceClient (correct dependency direction)
+- [Phase 09]: ConnectionStatus mapped between jbtm and state_man enums via switch (separate enum definitions)
+- [Phase 09]: createM2400DeviceClients is top-level factory function for flexibility
+- [Phase 09]: Collector integration works without any Collector code changes (existing pattern handles M2400 keys)
+- [Phase 09]: Phase 9 complete -- Config models + multi-device adapter, 36 new tests, 194 total tfc_dart tests
 
 ### Pending Todos
 
@@ -130,6 +140,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-04T14:54:00.000Z
-Stopped at: Phase 8 Plan 02 complete
-Resume file: .planning/phases/08-connection-resilience/08-02-SUMMARY.md
+Last session: 2026-03-04T15:02:00.000Z
+Stopped at: Phase 9 Plan 02 complete
+Resume file: .planning/phases/09-configuration-multi-device/09-02-SUMMARY.md

@@ -37,15 +37,15 @@
 - [x] **SM-02**: state_man subscribe returns Stream<DynamicValue> for M2400 keys
 - [x] **SM-03**: Named key addressing -- WGT for full record DynamicValue, WGT.WEIGHT for individual field
 - [x] **SM-04**: Connection status integrated into state_man status reporting
-- [ ] **SM-05**: Multi-device support -- N simultaneous M2400 connections with independent configs
-- [ ] **SM-06**: Collector integration -- weight events auto-stored to timeseries database
+- [x] **SM-05**: Multi-device support -- N simultaneous M2400 connections with independent configs
+- [x] **SM-06**: Collector integration -- weight events auto-stored to timeseries database
 - [x] **SM-07**: Connection health metrics -- uptime, reconnect count, records/second per device
 
 ### Configuration
 
-- [ ] **CFG-01**: Server config with host, port (52211/52212), and alias -- JSON-serializable
-- [ ] **CFG-02**: JBTM server config section separate from OPC UA section in StateManConfig
-- [ ] **CFG-03**: Key mapping CRUD -- create, read, update, delete key mappings for M2400 devices
+- [x] **CFG-01**: Server config with host, port (52211/52212), and alias -- JSON-serializable
+- [x] **CFG-02**: JBTM server config section separate from OPC UA section in StateManConfig
+- [x] **CFG-03**: Key mapping CRUD -- create, read, update, delete key mappings for M2400 devices
 
 ### UI
 
@@ -103,12 +103,12 @@
 | SM-02 | Phase 7 | Complete |
 | SM-03 | Phase 7 | Complete |
 | SM-04 | Phase 7 | Complete |
-| SM-05 | Phase 9 | Pending |
-| SM-06 | Phase 9 | Pending |
+| SM-05 | Phase 9 | Complete |
+| SM-06 | Phase 9 | Complete |
 | SM-07 | Phase 8 | Complete |
-| CFG-01 | Phase 9 | Pending |
-| CFG-02 | Phase 9 | Pending |
-| CFG-03 | Phase 9 | Pending |
+| CFG-01 | Phase 9 | Complete |
+| CFG-02 | Phase 9 | Complete |
+| CFG-03 | Phase 9 | Complete |
 | UI-01 | Phase 10 | Pending |
 | UI-02 | Phase 10 | Pending |
 | UI-03 | Phase 10 | Pending |
