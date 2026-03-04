@@ -386,11 +386,46 @@ class ClientWrapper {
   }
 }
 
+/// Protocol-agnostic device client interface.
+///
+/// Abstracts the subscribe/status pattern shared by different device protocols
+/// (OPC UA via [ClientWrapper], M2400 via M2400ClientWrapper, etc.).
+///
+/// Implementations define [subscribableKeys] and [canSubscribe] to declare
+/// which keys they handle. [StateMan.subscribe] checks device clients first,
+/// falling through to OPC UA if no device client claims the key.
+abstract class DeviceClient {
+  /// The set of top-level keys this device client can handle.
+  Set<String> get subscribableKeys;
+
+  /// Whether this client can handle a subscribe request for [key].
+  ///
+  /// Should return true for both top-level keys (e.g., 'BATCH') and
+  /// dot-notation keys (e.g., 'BATCH.weight') if the root is subscribable.
+  bool canSubscribe(String key);
+
+  /// Subscribe to a DynamicValue stream by key.
+  Stream<DynamicValue> subscribe(String key);
+
+  /// Current connection status (synchronous).
+  ConnectionStatus get connectionStatus;
+
+  /// Stream of connection status changes.
+  Stream<ConnectionStatus> get connectionStream;
+
+  /// Start connecting to the device.
+  void connect();
+
+  /// Dispose resources.
+  void dispose();
+}
+
 class StateMan {
   final logger = Logger();
   final StateManConfig config;
   KeyMappings keyMappings;
   final List<ClientWrapper> clients;
+  final List<DeviceClient> deviceClients;
   final Map<String, AutoDisposingStream<DynamicValue>> _subscriptions = {};
   bool _shouldRun = true;
   final Map<String, String> _substitutions = {};
@@ -403,6 +438,7 @@ class StateMan {
     required this.keyMappings,
     required this.clients,
     required this.alias,
+    this.deviceClients = const [],
   }) {
     for (final wrapper in clients) {
       if (wrapper.client is Client) {
@@ -566,6 +602,7 @@ class StateMan {
     required KeyMappings keyMappings,
     bool useIsolate = true,
     String alias = '',
+    List<DeviceClient> deviceClients = const [],
   }) async {
     // Example directory: /Users/jonb/Library/Containers/is.centroid.sildarvinnsla.skammtalina/Data/Documents/certs
     List<ClientWrapper> clients = [];
@@ -616,7 +653,14 @@ class StateMan {
         config: config,
         keyMappings: keyMappings,
         clients: clients,
-        alias: alias);
+        alias: alias,
+        deviceClients: deviceClients);
+
+    // Connect device clients
+    for (final dc in deviceClients) {
+      dc.connect();
+    }
+
     return stateMan;
   }
 
@@ -758,9 +802,22 @@ class StateMan {
 
   /// Subscribe to data changes on a specific node with type safety.
   /// Returns a Stream that can be cancelled to stop the subscription.
-  /// Example: subscribe("myIntKey") or subscribe("myStringKey")
+  ///
+  /// Routes to [DeviceClient] instances first (e.g., M2400), falling through
+  /// to OPC UA [_monitor] if no device client claims the key.
+  ///
+  /// Example: subscribe("myIntKey") or subscribe("BATCH.weight")
   Future<Stream<DynamicValue>> subscribe(String key) async {
     key = resolveKey(key);
+
+    // Check device clients first (M2400, etc.)
+    for (final dc in deviceClients) {
+      if (dc.canSubscribe(key)) {
+        return dc.subscribe(key);
+      }
+    }
+
+    // Fall through to OPC UA
     return _monitor(key);
   }
 
@@ -774,6 +831,12 @@ class StateMan {
   Future<void> close() async {
     _shouldRun = false;
     logger.d('Closing connection');
+
+    // Dispose device clients (M2400, etc.)
+    for (final dc in deviceClients) {
+      dc.dispose();
+    }
+
     for (final wrapper in clients) {
       try {
         if (wrapper.client is ClientIsolate) {
