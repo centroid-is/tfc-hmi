@@ -15,7 +15,9 @@ import '../widgets/opcua_array_index_field.dart';
 import 'package:tfc_dart/core/collector.dart';
 import 'package:tfc_dart/core/database.dart';
 import '../widgets/fuzzy_search_bar.dart';
-import 'package:jbtm/jbtm.dart' show M2400RecordType, M2400Field, expectedFields;
+import 'package:jbtm/src/m2400.dart' show M2400RecordType;
+import 'package:jbtm/src/m2400_fields.dart'
+    show M2400Field, WeigherStatus, expectedFields;
 import '../providers/preferences.dart';
 import '../providers/state_man.dart';
 import '../providers/database.dart';
@@ -1133,6 +1135,7 @@ class _M2400ConfigSectionState extends State<_M2400ConfigSection> {
   String? _selectedAlias;
   M2400RecordType? _selectedRecordType;
   M2400Field? _selectedField;
+  int? _selectedStatusFilter;
 
   @override
   void initState() {
@@ -1140,6 +1143,7 @@ class _M2400ConfigSectionState extends State<_M2400ConfigSection> {
     _selectedAlias = widget.config.serverAlias;
     _selectedRecordType = widget.config.recordType;
     _selectedField = widget.config.field;
+    _selectedStatusFilter = widget.config.statusFilter;
   }
 
   void _notifyChanged() {
@@ -1149,6 +1153,7 @@ class _M2400ConfigSectionState extends State<_M2400ConfigSection> {
       serverAlias: (_selectedAlias != null && _selectedAlias!.isNotEmpty)
           ? _selectedAlias
           : null,
+      statusFilter: _selectedStatusFilter,
     );
     widget.onChanged(config);
   }
@@ -1229,6 +1234,10 @@ class _M2400ConfigSectionState extends State<_M2400ConfigSection> {
                       _selectedField = null;
                     }
                   }
+                  // Clear status filter when switching away from BATCH
+                  if (value != M2400RecordType.recBatch) {
+                    _selectedStatusFilter = null;
+                  }
                 });
                 _notifyChanged();
               },
@@ -1286,6 +1295,32 @@ class _M2400ConfigSectionState extends State<_M2400ConfigSection> {
                 _notifyChanged();
               },
             ),
+            // Status filter dropdown (BATCH only)
+            if (_selectedRecordType == M2400RecordType.recBatch) ...[
+              const SizedBox(height: 12),
+              DropdownButtonFormField<int?>(
+                value: _selectedStatusFilter,
+                decoration: const InputDecoration(
+                  labelText: 'Status Filter (optional)',
+                  prefixIcon: FaIcon(FontAwesomeIcons.filter, size: 16),
+                ),
+                isExpanded: true,
+                items: [
+                  const DropdownMenuItem<int?>(
+                      value: null, child: Text('(No filter -- all records)')),
+                  ...WeigherStatus.values
+                      .where((s) => s != WeigherStatus.unknown)
+                      .map((s) => DropdownMenuItem<int?>(
+                            value: s.code,
+                            child: Text('${s.displayName} (${s.code})'),
+                          )),
+                ],
+                onChanged: (value) {
+                  setState(() => _selectedStatusFilter = value);
+                  _notifyChanged();
+                },
+              ),
+            ],
           ],
         ),
       ),

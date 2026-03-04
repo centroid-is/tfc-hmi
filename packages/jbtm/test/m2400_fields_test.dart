@@ -16,52 +16,38 @@ void main() {
         expect(M2400Field.fromId(2), equals(M2400Field.unit));
       });
 
-      test('fromId(77) returns siWeight', () {
-        expect(M2400Field.fromId(77), equals(M2400Field.siWeight));
+      test('fromId(3) returns siWeight', () {
+        expect(M2400Field.fromId(3), equals(M2400Field.siWeight));
       });
     });
 
-    group('fromId - device-observed provisional fields', () {
-      test('fromId(6) returns a provisional field', () {
-        final field = M2400Field.fromId(6);
-        expect(field, isNotNull);
-        expect(field!.id, equals(6));
+    group('fromId - confirmed fields by ID', () {
+      test('fromId(6) returns material', () {
+        expect(M2400Field.fromId(6), equals(M2400Field.material));
       });
 
-      test('fromId(11) returns a provisional field', () {
-        final field = M2400Field.fromId(11);
-        expect(field, isNotNull);
-        expect(field!.id, equals(11));
+      test('fromId(11) returns status', () {
+        expect(M2400Field.fromId(11), equals(M2400Field.status));
       });
 
-      test('fromId(59) returns a provisional field', () {
-        final field = M2400Field.fromId(59);
-        expect(field, isNotNull);
-        expect(field!.id, equals(59));
+      test('fromId(59) returns tare', () {
+        expect(M2400Field.fromId(59), equals(M2400Field.tare));
       });
 
-      test('fromId(78) returns a provisional field', () {
-        final field = M2400Field.fromId(78);
-        expect(field, isNotNull);
-        expect(field!.id, equals(78));
+      test('fromId(78) returns target', () {
+        expect(M2400Field.fromId(78), equals(M2400Field.target));
       });
 
-      test('fromId(79) returns a provisional field', () {
-        final field = M2400Field.fromId(79);
-        expect(field, isNotNull);
-        expect(field!.id, equals(79));
+      test('fromId(79) returns fGiveaway', () {
+        expect(M2400Field.fromId(79), equals(M2400Field.fGiveaway));
       });
 
-      test('fromId(80) returns a provisional field', () {
-        final field = M2400Field.fromId(80);
-        expect(field, isNotNull);
-        expect(field!.id, equals(80));
+      test('fromId(80) returns vGiveaway', () {
+        expect(M2400Field.fromId(80), equals(M2400Field.vGiveaway));
       });
 
-      test('fromId(81) returns a provisional field', () {
-        final field = M2400Field.fromId(81);
-        expect(field, isNotNull);
-        expect(field!.id, equals(81));
+      test('fromId(81) returns tareType', () {
+        expect(M2400Field.fromId(81), equals(M2400Field.tareType));
       });
     });
 
@@ -104,11 +90,9 @@ void main() {
         expect(M2400Field.values, contains(M2400Field.siWeight));
       });
 
-      test('spot-check unconfirmed fields exist (id == 0)', () {
-        // These are requirement-defined fields without confirmed IDs
-        expect(M2400Field.values.where((f) => f.id == 0).length,
-            greaterThanOrEqualTo(30),
-            reason: 'Should have many unconfirmed fields with placeholder ID 0');
+      test('all fields have real IDs (no placeholders)', () {
+        expect(M2400Field.values.where((f) => f.id == 0).length, equals(0),
+            reason: 'All fields should have confirmed protocol IDs');
       });
     });
   });
@@ -196,18 +180,18 @@ void main() {
           containsAll([M2400Field.weight, M2400Field.unit]));
     });
 
-    test('contains recBatch with all 10 observed fields', () {
+    test('contains recBatch with expected fields', () {
       final batchFields = expectedFields[M2400RecordType.recBatch]!;
       expect(batchFields, contains(M2400Field.weight));
       expect(batchFields, contains(M2400Field.unit));
       expect(batchFields, contains(M2400Field.siWeight));
-      expect(batchFields, contains(M2400Field.fromId(6)));
-      expect(batchFields, contains(M2400Field.fromId(11)));
-      expect(batchFields, contains(M2400Field.fromId(59)));
-      expect(batchFields, contains(M2400Field.fromId(78)));
-      expect(batchFields, contains(M2400Field.fromId(79)));
-      expect(batchFields, contains(M2400Field.fromId(80)));
-      expect(batchFields, contains(M2400Field.fromId(81)));
+      expect(batchFields, contains(M2400Field.material));
+      expect(batchFields, contains(M2400Field.status));
+      expect(batchFields, contains(M2400Field.tare));
+      expect(batchFields, contains(M2400Field.target));
+      expect(batchFields, contains(M2400Field.fGiveaway));
+      expect(batchFields, contains(M2400Field.vGiveaway));
+      expect(batchFields, contains(M2400Field.tareType));
     });
   });
 }

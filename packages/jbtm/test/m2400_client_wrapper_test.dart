@@ -270,6 +270,64 @@ void main() {
   });
 
   // ---------------------------------------------------------------------------
+  // Connection error propagation
+  // ---------------------------------------------------------------------------
+  group('connection error propagation', () {
+    test('subscribe stream emits error when server goes down', () async {
+      wrapper.connect();
+      await wrapper.statusStream
+          .firstWhere((s) => s == ConnectionStatus.connected)
+          .timeout(const Duration(seconds: 5));
+      await server.waitForClient();
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      // Subscribe and get at least one value
+      final values = <DynamicValue>[];
+      Object? streamError;
+      wrapper.subscribe('STAT').listen(
+        values.add,
+        onError: (e) => streamError = e,
+      );
+
+      server.pushStatRecord(weight: '1.23');
+      await Future.delayed(const Duration(milliseconds: 200));
+      expect(values, isNotEmpty);
+      expect(values.last['weight'].asDouble, 1.23);
+
+      // Kill the server — subscribers should see an error
+      await server.shutdown();
+      await Future.delayed(const Duration(milliseconds: 500));
+
+      expect(streamError, isNotNull);
+    });
+
+    test('BATCH (event-only) stream also receives disconnect error', () async {
+      wrapper.connect();
+      await wrapper.statusStream
+          .firstWhere((s) => s == ConnectionStatus.connected)
+          .timeout(const Duration(seconds: 5));
+      await server.waitForClient();
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      Object? streamError;
+      wrapper.subscribe('BATCH').listen(
+        (_) {},
+        onError: (e) => streamError = e,
+      );
+
+      // Get at least one value to confirm subscription works
+      server.pushWeightRecord(weight: '1.00');
+      await Future.delayed(const Duration(milliseconds: 200));
+
+      // Kill the server
+      await server.shutdown();
+      await Future.delayed(const Duration(milliseconds: 500));
+
+      expect(streamError, isNotNull);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
   // Error handling
   // ---------------------------------------------------------------------------
   group('error handling', () {

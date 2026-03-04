@@ -117,9 +117,15 @@ class M2400ClientWrapper {
       },
     );
 
-    // Pipe MSocket's status into the wrapper-owned status subject
+    // Pipe MSocket's status into the wrapper-owned status subject.
+    // When transitioning from connected → disconnected, push an error
+    // to all record streams so subscribers know the connection is lost.
     _statusSubscription = _socket!.statusStream.listen((s) {
+      final wasConnected = _status.value == ConnectionStatus.connected;
       if (!_status.isClosed) _status.add(s);
+      if (wasConnected && s == ConnectionStatus.disconnected) {
+        _broadcastDisconnectError();
+      }
     });
 
     _socket!.connect();
@@ -140,6 +146,41 @@ class M2400ClientWrapper {
     _introSubject.close();
     _luaController.close();
     _status.close();
+  }
+
+  /// Return the last cached value for a key, or null if unavailable.
+  ///
+  /// STAT and INTRO are stateful (BehaviorSubject) — returns [valueOrNull].
+  /// BATCH and LUA are event-only — always returns null.
+  DynamicValue? lastValue(String key) {
+    final parts = key.split('.');
+    final recordKey = parts[0];
+    final fieldPath = parts.length > 1 ? parts.sublist(1) : <String>[];
+
+    if (!_validKeys.contains(recordKey)) return null;
+
+    DynamicValue? base;
+    switch (recordKey) {
+      case statKey:
+        base = _statSubject.valueOrNull;
+        break;
+      case introKey:
+        base = _introSubject.valueOrNull;
+        break;
+      default:
+        // BATCH and LUA are event-only, no cached value
+        return null;
+    }
+
+    if (base == null) return null;
+    if (fieldPath.isEmpty) return base;
+
+    // Dot-notation: drill into child fields
+    DynamicValue current = base;
+    for (final field in fieldPath) {
+      current = current[field];
+    }
+    return current;
   }
 
   /// Subscribe to a DynamicValue stream by key.
@@ -214,6 +255,16 @@ class M2400ClientWrapper {
         break;
       // Unknown record types are silently dropped
     }
+  }
+
+  /// Push an error to all record streams when the connection drops.
+  /// Subscribers see the error but the streams stay open for reconnection.
+  void _broadcastDisconnectError() {
+    final error = StateError('M2400 connection lost to $host:$port');
+    if (!_batchController.isClosed) _batchController.addError(error);
+    if (!_statSubject.isClosed) _statSubject.addError(error);
+    if (!_introSubject.isClosed) _introSubject.addError(error);
+    if (!_luaController.isClosed) _luaController.addError(error);
   }
 
   /// Clean up socket and pipeline subscription without closing controllers.

@@ -10,8 +10,10 @@ import 'package:open62541/open62541.dart';
 import 'package:rxdart/rxdart.dart';
 import 'package:collection/collection.dart';
 
-import 'package:jbtm/jbtm.dart' show M2400RecordType, M2400Field, M2400ClientWrapper;
-import 'package:jbtm/jbtm.dart' as jbtm show ConnectionStatus;
+import 'package:jbtm/src/m2400.dart' show M2400RecordType;
+import 'package:jbtm/src/m2400_fields.dart' show M2400Field;
+import 'package:jbtm/src/m2400_client_wrapper.dart' show M2400ClientWrapper;
+import 'package:jbtm/src/msocket.dart' as jbtm show ConnectionStatus;
 
 import 'collector.dart';
 import 'preferences.dart';
@@ -151,7 +153,17 @@ class M2400NodeConfig {
   @JsonKey(name: 'server_alias')
   String? serverAlias;
 
-  M2400NodeConfig({required this.recordType, this.field, this.serverAlias});
+  /// Optional WeigherStatus code filter (BATCH only).
+  /// When set, only BATCH records whose status field matches this code are emitted.
+  @JsonKey(name: 'status_filter')
+  int? statusFilter;
+
+  M2400NodeConfig({
+    required this.recordType,
+    this.field,
+    this.serverAlias,
+    this.statusFilter,
+  });
 
   factory M2400NodeConfig.fromJson(Map<String, dynamic> json) =>
       _$M2400NodeConfigFromJson(json);
@@ -159,7 +171,7 @@ class M2400NodeConfig {
 
   @override
   String toString() =>
-      'M2400NodeConfig(recordType: $recordType, field: $field, alias: $serverAlias)';
+      'M2400NodeConfig(recordType: $recordType, field: $field, alias: $serverAlias, statusFilter: $statusFilter)';
 }
 
 @JsonSerializable(explicitToJson: true)
@@ -451,6 +463,9 @@ abstract class DeviceClient {
   /// Subscribe to a DynamicValue stream by key.
   Stream<DynamicValue> subscribe(String key);
 
+  /// Read the last known value for [key], or null if unavailable.
+  DynamicValue? read(String key);
+
   /// Current connection status (synchronous).
   ConnectionStatus get connectionStatus;
 
@@ -488,6 +503,9 @@ class M2400DeviceClientAdapter implements DeviceClient {
 
   @override
   Stream<DynamicValue> subscribe(String key) => wrapper.subscribe(key);
+
+  @override
+  DynamicValue? read(String key) => wrapper.lastValue(key);
 
   @override
   ConnectionStatus get connectionStatus =>
@@ -813,9 +831,81 @@ class StateMan {
     return resolvedKey;
   }
 
+  /// Translate a user-facing key to M2400 subscribe info via key mappings.
+  ///
+  /// Returns resolved subscribe key, device client, optional status filter,
+  /// and optional field name for post-filter extraction. Null if not M2400.
+  ({String subscribeKey, DeviceClient dc, int? statusFilter, String? fieldName})?
+      _resolveM2400Key(String key) {
+    final entry = keyMappings.nodes[key];
+    if (entry?.m2400Node == null) return null;
+    final node = entry!.m2400Node!;
+
+    String? recordKey;
+    switch (node.recordType) {
+      case M2400RecordType.recBatch:
+        recordKey = 'BATCH';
+        break;
+      case M2400RecordType.recStat:
+        recordKey = 'STAT';
+        break;
+      case M2400RecordType.recIntro:
+        recordKey = 'INTRO';
+        break;
+      case M2400RecordType.recLua:
+        recordKey = 'LUA';
+        break;
+      default:
+        return null;
+    }
+
+    // When statusFilter is set, subscribe to the full record so we can
+    // check the status field before extracting the target field.
+    final hasFilter = node.statusFilter != null;
+    final fieldName = node.field?.name;
+    final subscribeKey = (!hasFilter && fieldName != null)
+        ? '$recordKey.$fieldName'
+        : recordKey;
+
+    final alias = node.serverAlias;
+    for (final dc in deviceClients) {
+      if (dc is M2400DeviceClientAdapter && dc.serverAlias == alias) {
+        return (
+          subscribeKey: subscribeKey,
+          dc: dc,
+          statusFilter: node.statusFilter,
+          fieldName: hasFilter ? fieldName : null,
+        );
+      }
+    }
+    return null;
+  }
+
   /// Example: read("myKey")
   Future<DynamicValue> read(String key) async {
     key = resolveKey(key);
+
+    // Check M2400 key mappings first
+    final m2400 = _resolveM2400Key(key);
+    if (m2400 != null) {
+      var value = m2400.dc.read(m2400.subscribeKey);
+      if (value == null) {
+        throw StateManException(
+            'No cached value for key: "$key" — not found yet');
+      }
+      if (m2400.statusFilter != null) {
+        if (value['status'].asInteger != m2400.statusFilter) {
+          throw StateManException(
+              'No cached value for key: "$key" — status not found yet');
+        }
+      }
+      if (m2400.fieldName != null) {
+        value = value[m2400.fieldName!];
+      }
+      return value;
+    }
+
+    // Fall through to OPC UA
     try {
       final client = _getClientWrapper(key).client;
       final nodeId = _lookupNodeId(key);
@@ -918,11 +1008,18 @@ class StateMan {
   Future<Stream<DynamicValue>> subscribe(String key) async {
     key = resolveKey(key);
 
-    // Check device clients first (M2400, etc.)
-    for (final dc in deviceClients) {
-      if (dc.canSubscribe(key)) {
-        return dc.subscribe(key);
+    // Check M2400 key mappings first
+    final m2400 = _resolveM2400Key(key);
+    if (m2400 != null) {
+      Stream<DynamicValue> stream = m2400.dc.subscribe(m2400.subscribeKey);
+      if (m2400.statusFilter != null) {
+        stream = stream.where(
+            (dv) => dv['status'].asInteger == m2400.statusFilter);
       }
+      if (m2400.fieldName != null) {
+        stream = stream.map((dv) => dv[m2400.fieldName!]);
+      }
+      return stream;
     }
 
     // Fall through to OPC UA

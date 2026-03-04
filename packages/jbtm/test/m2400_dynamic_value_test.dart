@@ -16,7 +16,7 @@ void main() {
           M2400Field.siWeight: '11.00kg',
         },
         unknownFields: {},
-        rawFields: {'1': '12.50', '2': 'kg', '77': '11.00kg'},
+        rawFields: {'1': '12.50', '2': 'kg', '3': '11.00kg'},
         receivedAt: DateTime.utc(2026, 3, 4, 12, 0, 0),
       );
 
@@ -44,9 +44,9 @@ void main() {
       final record = M2400ParsedRecord(
         type: M2400RecordType.recBatch,
         typedFields: {
-          M2400Field.field6: 7,
-          M2400Field.field11: 3,
-          M2400Field.field80: 42,
+          M2400Field.material: 7,
+          M2400Field.status: 3,
+          M2400Field.vGiveaway: 42,
         },
         unknownFields: {},
         rawFields: {'6': '7', '11': '3', '80': '42'},
@@ -54,9 +54,9 @@ void main() {
       );
 
       final dv = convertRecordToDynamicValue(record);
-      expect(dv['field6'].asInt, 7);
-      expect(dv['field11'].asInt, 3);
-      expect(dv['field80'].asInt, 42);
+      expect(dv['material'].asInt, 7);
+      expect(dv['status'].asInt, 3);
+      expect(dv['vGiveaway'].asInt, 42);
     });
 
     test('unknown fields included as string children keyed by numeric ID', () {
@@ -185,14 +185,14 @@ void main() {
     test('round-trip: int in -> asInt out matches', () {
       final record = M2400ParsedRecord(
         type: M2400RecordType.recBatch,
-        typedFields: {M2400Field.field6: 42},
+        typedFields: {M2400Field.material: 42},
         unknownFields: {},
         rawFields: {},
         receivedAt: DateTime.utc(2026, 3, 4),
       );
 
       final dv = convertRecordToDynamicValue(record);
-      expect(dv['field6'].asInt, 42);
+      expect(dv['material'].asInt, 42);
     });
 
     test('round-trip: String in -> asString out matches', () {
@@ -216,7 +216,7 @@ void main() {
         fields: {
           '1': '12.50',
           '2': 'kg',
-          '77': '11.00kg',
+          '3': '11.00kg',
           '6': '7',
           '11': '3',
         },
@@ -229,8 +229,8 @@ void main() {
       expect(dv['weight'].asDouble, 12.5);
       expect(dv['unit'].asString, 'kg');
       expect(dv['siWeight'].asString, '11.00kg');
-      expect(dv['field6'].asInt, 7);
-      expect(dv['field11'].asInt, 3);
+      expect(dv['material'].asInt, 7);
+      expect(dv['status'].asInt, 3);
       expect(dv.isObject, true);
     });
 

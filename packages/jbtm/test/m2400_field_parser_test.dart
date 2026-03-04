@@ -62,7 +62,7 @@ void main() {
         fields: {
           '1': '12.52',
           '2': 'kg',
-          '77': '11.00kg',
+          '3': '11.00kg',
           '6': '47',
           '11': '0',
           '59': '0.38',
@@ -88,16 +88,16 @@ void main() {
       expect(parsed.siWeight, equals('11.00kg'));
     });
 
-    test('field6 is int 47', () {
-      expect(parsed.getField<int>(M2400Field.field6), equals(47));
+    test('material is String 47', () {
+      expect(parsed.getField<String>(M2400Field.material), equals('47'));
     });
 
-    test('field59 is double 0.38', () {
-      expect(parsed.getField<double>(M2400Field.field59), equals(0.38));
+    test('tare is double 0.38', () {
+      expect(parsed.getField<double>(M2400Field.tare), equals(0.38));
     });
 
-    test('field81 is String auto', () {
-      expect(parsed.getField<String>(M2400Field.field81), equals('auto'));
+    test('tareType is String auto', () {
+      expect(parsed.getField<String>(M2400Field.tareType), equals('auto'));
     });
 
     test('type is recBatch', () {
@@ -107,7 +107,7 @@ void main() {
     test('rawFields preserved as original map', () {
       expect(parsed.rawFields['1'], equals('12.52'));
       expect(parsed.rawFields['2'], equals('kg'));
-      expect(parsed.rawFields['77'], equals('11.00kg'));
+      expect(parsed.rawFields['3'], equals('11.00kg'));
     });
 
     test('unknownFields is empty (all fields are in enum)', () {
@@ -193,7 +193,7 @@ void main() {
     test('siWeight returns typed String', () {
       final raw = M2400Record(
         type: M2400RecordType.recBatch,
-        fields: {'77': '22.50kg'},
+        fields: {'3': '22.50kg'},
       );
       final parsed = parseTypedRecord(raw);
       expect(parsed.siWeight, equals('22.50kg'));

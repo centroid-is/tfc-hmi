@@ -209,9 +209,12 @@ void main() {
     test('data resumes after disconnect and reconnect', () async {
       // Get first record to confirm pipeline works
       final first = Completer<DynamicValue>();
-      wrapper.subscribe('BATCH').listen((dv) {
-        if (!first.isCompleted) first.complete(dv);
-      });
+      wrapper.subscribe('BATCH').listen(
+        (dv) {
+          if (!first.isCompleted) first.complete(dv);
+        },
+        onError: (_) {}, // Disconnect errors expected
+      );
 
       stub.pushWeightRecord(weight: '10.0');
       await first.future.timeout(const Duration(seconds: 5));
@@ -237,9 +240,12 @@ void main() {
 
       // Push another record -- should flow through the re-established pipeline
       final second = Completer<DynamicValue>();
-      wrapper.subscribe('BATCH').listen((dv) {
-        if (!second.isCompleted) second.complete(dv);
-      });
+      wrapper.subscribe('BATCH').listen(
+        (dv) {
+          if (!second.isCompleted) second.complete(dv);
+        },
+        onError: (_) {}, // Disconnect errors expected
+      );
 
       stub.pushWeightRecord(weight: '20.0');
       final dv = await second.future.timeout(const Duration(seconds: 10));

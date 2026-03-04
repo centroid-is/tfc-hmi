@@ -41,6 +41,7 @@ M2400NodeConfig _$M2400NodeConfigFromJson(Map<String, dynamic> json) =>
       recordType: $enumDecode(_$M2400RecordTypeEnumMap, json['record_type']),
       field: $enumDecodeNullable(_$M2400FieldEnumMap, json['field']),
       serverAlias: json['server_alias'] as String?,
+      statusFilter: (json['status_filter'] as num?)?.toInt(),
     );
 
 Map<String, dynamic> _$M2400NodeConfigToJson(M2400NodeConfig instance) =>
@@ -48,13 +49,15 @@ Map<String, dynamic> _$M2400NodeConfigToJson(M2400NodeConfig instance) =>
       'record_type': _$M2400RecordTypeEnumMap[instance.recordType]!,
       'field': _$M2400FieldEnumMap[instance.field],
       'server_alias': instance.serverAlias,
+      'status_filter': instance.statusFilter,
     };
 
 const _$M2400RecordTypeEnumMap = {
-  M2400RecordType.recBatch: 'recBatch',
+  M2400RecordType.recWgt: 'recWgt',
   M2400RecordType.recIntro: 'recIntro',
   M2400RecordType.recStat: 'recStat',
   M2400RecordType.recLua: 'recLua',
+  M2400RecordType.recBatch: 'recBatch',
   M2400RecordType.unknown: 'unknown',
 };
 
@@ -62,25 +65,18 @@ const _$M2400FieldEnumMap = {
   M2400Field.weight: 'weight',
   M2400Field.unit: 'unit',
   M2400Field.siWeight: 'siWeight',
-  M2400Field.field6: 'field6',
-  M2400Field.field11: 'field11',
-  M2400Field.field59: 'field59',
-  M2400Field.field78: 'field78',
-  M2400Field.field79: 'field79',
-  M2400Field.field80: 'field80',
-  M2400Field.field81: 'field81',
-  M2400Field.status: 'status',
-  M2400Field.devId: 'devId',
   M2400Field.output: 'output',
   M2400Field.material: 'material',
   M2400Field.wQuality: 'wQuality',
   M2400Field.wCount: 'wCount',
   M2400Field.length: 'length',
   M2400Field.batchId: 'batchId',
+  M2400Field.status: 'status',
   M2400Field.pieces: 'pieces',
   M2400Field.msgId: 'msgId',
   M2400Field.regCmd: 'regCmd',
   M2400Field.key: 'key',
+  M2400Field.devId: 'devId',
   M2400Field.devType: 'devType',
   M2400Field.devProg: 'devProg',
   M2400Field.exId: 'exId',
@@ -118,11 +114,6 @@ const _$M2400FieldEnumMap = {
   M2400Field.packId: 'packId',
   M2400Field.checksum: 'checksum',
   M2400Field.alibiText: 'alibiText',
-  M2400Field.beltUsage: 'beltUsage',
-  M2400Field.eventNo: 'eventNo',
-  M2400Field.deltaTime: 'deltaTime',
-  M2400Field.deltaWeight: 'deltaWeight',
-  M2400Field.throughput: 'throughput',
 };
 
 StateManConfig _$StateManConfigFromJson(Map<String, dynamic> json) =>

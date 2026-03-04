@@ -73,9 +73,14 @@ class M2400ParsedRecord {
 Object? parseFieldValue(String rawValue, FieldType type, {int? fieldId}) {
   switch (type) {
     case FieldType.decimal:
-      final parsed = double.tryParse(rawValue);
+      var parsed = double.tryParse(rawValue);
       if (parsed == null) {
-        _logger.w('Failed to parse decimal field $fieldId: "$rawValue"');
+        // Strip trailing unit suffix (e.g. "11.00kg" -> "11.00")
+        final stripped = rawValue.replaceFirst(RegExp(r'[a-zA-Z%°]+$'), '');
+        parsed = double.tryParse(stripped);
+        if (parsed == null) {
+          _logger.w('Failed to parse decimal field $fieldId: "$rawValue"');
+        }
       }
       return parsed;
     case FieldType.integer:

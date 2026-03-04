@@ -911,6 +911,43 @@ class _JbtmServersSectionState extends ConsumerState<_JbtmServersSection> {
     setState(() => _config?.jbtm.add(M2400Config(host: 'localhost', port: 52211)));
   }
 
+  Widget _buildJbtmServerList(StateManConfig config) {
+    final stateManAsync = ref.watch(stateManProvider);
+    final StateMan? stateMan = stateManAsync.valueOrNull;
+
+    return ListView.builder(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      itemCount: config.jbtm.length,
+      itemBuilder: (context, index) {
+        M2400DeviceClientAdapter? adapter;
+        if (stateMan != null) {
+          final server = config.jbtm[index];
+          adapter = stateMan.deviceClients
+              .whereType<M2400DeviceClientAdapter>()
+              .cast<M2400DeviceClientAdapter?>()
+              .firstWhere(
+                (dc) =>
+                    (server.serverAlias != null &&
+                        server.serverAlias!.isNotEmpty &&
+                        dc!.serverAlias == server.serverAlias) ||
+                    (dc!.wrapper.host == server.host &&
+                        dc.wrapper.port == server.port),
+                orElse: () => null,
+              );
+        }
+        return _JbtmServerConfigCard(
+          server: config.jbtm[index],
+          onUpdate: (server) => _updateServer(index, server),
+          onRemove: () => _removeServer(index),
+          connectionStatus: adapter?.connectionStatus,
+          connectionStream: adapter?.connectionStream,
+          stateManLoading: stateManAsync.isLoading,
+        );
+      },
+    );
+  }
+
   void _updateServer(int index, M2400Config server) {
     setState(() => _config!.jbtm[index] = server);
   }
@@ -1032,18 +1069,7 @@ class _JbtmServersSectionState extends ConsumerState<_JbtmServersSection> {
                     height: 200,
                     child: _EmptyJbtmServersWidget(),
                   )
-                : ListView.builder(
-                    shrinkWrap: true,
-                    physics: const NeverScrollableScrollPhysics(),
-                    itemCount: config.jbtm.length,
-                    itemBuilder: (context, index) {
-                      return _JbtmServerConfigCard(
-                        server: config.jbtm[index],
-                        onUpdate: (server) => _updateServer(index, server),
-                        onRemove: () => _removeServer(index),
-                      );
-                    },
-                  ),
+                : _buildJbtmServerList(config),
             const SizedBox(height: 16),
             Row(
               children: [
@@ -1102,11 +1128,17 @@ class _JbtmServerConfigCard extends StatefulWidget {
   final M2400Config server;
   final Function(M2400Config) onUpdate;
   final VoidCallback onRemove;
+  final ConnectionStatus? connectionStatus;
+  final Stream<ConnectionStatus>? connectionStream;
+  final bool stateManLoading;
 
   const _JbtmServerConfigCard({
     required this.server,
     required this.onUpdate,
     required this.onRemove,
+    this.connectionStatus,
+    this.connectionStream,
+    this.stateManLoading = false,
   });
 
   @override
@@ -1117,6 +1149,8 @@ class _JbtmServerConfigCardState extends State<_JbtmServerConfigCard> {
   late TextEditingController _hostController;
   late TextEditingController _portController;
   late TextEditingController _aliasController;
+  ConnectionStatus? _connectionStatus;
+  StreamSubscription<ConnectionStatus>? _statusSub;
 
   @override
   void initState() {
@@ -1125,14 +1159,73 @@ class _JbtmServerConfigCardState extends State<_JbtmServerConfigCard> {
     _portController = TextEditingController(text: widget.server.port.toString());
     _aliasController =
         TextEditingController(text: widget.server.serverAlias ?? '');
+    _connectionStatus = widget.connectionStatus;
+    _subscribeToStatus();
+  }
+
+  @override
+  void didUpdateWidget(covariant _JbtmServerConfigCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.connectionStream != oldWidget.connectionStream) {
+      _connectionStatus = widget.connectionStatus;
+      _subscribeToStatus();
+    }
+  }
+
+  void _subscribeToStatus() {
+    _statusSub?.cancel();
+    _statusSub = widget.connectionStream?.listen((status) {
+      if (mounted) setState(() => _connectionStatus = status);
+    });
   }
 
   @override
   void dispose() {
+    _statusSub?.cancel();
     _hostController.dispose();
     _portController.dispose();
     _aliasController.dispose();
     super.dispose();
+  }
+
+  Color _connectionStatusColor() {
+    if (_connectionStatus == null) {
+      return widget.stateManLoading ? Colors.orange : Colors.grey;
+    }
+    return switch (_connectionStatus!) {
+      ConnectionStatus.connected => Colors.green,
+      ConnectionStatus.connecting => Colors.orange,
+      ConnectionStatus.disconnected => Colors.red,
+    };
+  }
+
+  String _connectionStatusLabel() {
+    if (_connectionStatus == null) {
+      return widget.stateManLoading ? 'Loading...' : 'Not active';
+    }
+    return switch (_connectionStatus!) {
+      ConnectionStatus.connected => 'Connected',
+      ConnectionStatus.connecting => 'Connecting...',
+      ConnectionStatus.disconnected => 'Disconnected',
+    };
+  }
+
+  Widget _buildStatusChip() {
+    final color = _connectionStatusColor();
+    final label = _connectionStatusLabel();
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withAlpha(30),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withAlpha(120)),
+      ),
+      child: Text(
+        label,
+        style:
+            TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w600),
+      ),
+    );
   }
 
   void _updateServer() {
@@ -1165,6 +1258,8 @@ class _JbtmServerConfigCardState extends State<_JbtmServerConfigCard> {
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
+            _buildStatusChip(),
+            const SizedBox(width: 8),
             IconButton(
               icon: const FaIcon(FontAwesomeIcons.trash, size: 16),
               onPressed: () {

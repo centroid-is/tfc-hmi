@@ -53,9 +53,10 @@ void main() {
 
     wrapper = M2400ClientWrapper('localhost', proxyPort);
     batchRecords = [];
-    batchSub = wrapper.subscribe('BATCH').listen((dv) {
-      batchRecords.add(dv);
-    });
+    batchSub = wrapper.subscribe('BATCH').listen(
+      (dv) => batchRecords.add(dv),
+      onError: (_) {}, // Disconnect errors are expected in resilience tests
+    );
 
     wrapper.connect();
     await wrapper.statusStream
