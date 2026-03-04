@@ -47,6 +47,13 @@ class OpcUaArrayIndexFieldState extends ConsumerState<OpcUaArrayIndexField> {
   void initState() {
     super.initState();
     _arraySize = widget.initialArraySize;
+    // Auto-probe when we have a selected index but no known array size,
+    // so the dropdown is shown immediately instead of "tap Detect".
+    if (widget.value != null && _arraySize == null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) probe();
+      });
+    }
   }
 
   @override

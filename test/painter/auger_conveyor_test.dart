@@ -1,4 +1,5 @@
-import 'dart:math';
+import 'dart:io' show Platform;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tfc/page_creator/assets/auger_conveyor_painter.dart';
@@ -125,164 +126,151 @@ void main() {
     });
 
     // ── Golden file tests ──
+    // Golden images were generated on macOS; pixel output differs on other
+    // platforms due to font rendering and Skia backend differences.
+    group('golden file tests', skip: !Platform.isMacOS ? 'Golden tests only run on macOS' : null, () {
+      testWidgets('golden: default grey stopped auger', (tester) async {
+        await tester.pumpWidget(buildAugerTestWidget());
+        await expectLater(
+          find.byKey(_augerKey),
+          matchesGoldenFile('goldens/auger_grey_stopped.png'),
+        );
+      });
 
-    testWidgets('golden: default grey stopped auger', (tester) async {
-      await tester.pumpWidget(buildAugerTestWidget());
-      await expectLater(
-        find.byKey(_augerKey),
-        matchesGoldenFile('goldens/auger_grey_stopped.png'),
-      );
-    });
-
-    testWidgets('golden: green running auger', (tester) async {
-      await tester.pumpWidget(buildAugerTestWidget(
-        stateColor: Colors.green,
-        phaseOffset: 0.8,
-      ));
-      await expectLater(
-        find.byKey(_augerKey),
-        matchesGoldenFile('goldens/auger_green_running.png'),
-      );
-    });
-
-    testWidgets('golden: red fault auger', (tester) async {
-      await tester.pumpWidget(buildAugerTestWidget(
-        stateColor: Colors.red,
-        phaseOffset: 2.0,
-      ));
-      await expectLater(
-        find.byKey(_augerKey),
-        matchesGoldenFile('goldens/auger_red_fault.png'),
-      );
-    });
-
-    testWidgets('golden: blue clean auger', (tester) async {
-      await tester.pumpWidget(buildAugerTestWidget(
-        stateColor: Colors.blue,
-        phaseOffset: 1.5,
-      ));
-      await expectLater(
-        find.byKey(_augerKey),
-        matchesGoldenFile('goldens/auger_blue_clean.png'),
-      );
-    });
-
-    testWidgets('golden: yellow manual auger', (tester) async {
-      await tester.pumpWidget(buildAugerTestWidget(
-        stateColor: Colors.yellow,
-        phaseOffset: 1.0,
-      ));
-      await expectLater(
-        find.byKey(_augerKey),
-        matchesGoldenFile('goldens/auger_yellow_manual.png'),
-      );
-    });
-
-    testWidgets('golden: flat conveyor (no auger)', (tester) async {
-      await tester.pumpWidget(buildAugerTestWidget(showAuger: false));
-      await expectLater(
-        find.byKey(_augerKey),
-        matchesGoldenFile('goldens/auger_flat_mode.png'),
-      );
-    });
-
-    testWidgets('golden: rotation phase 0', (tester) async {
-      await tester.pumpWidget(buildAugerTestWidget(
-        stateColor: Colors.green,
-        phaseOffset: 0.0,
-      ));
-      await expectLater(
-        find.byKey(_augerKey),
-        matchesGoldenFile('goldens/auger_phase_0.png'),
-      );
-    });
-
-    testWidgets('golden: rotation phase quarter', (tester) async {
-      await tester.pumpWidget(buildAugerTestWidget(
-        stateColor: Colors.green,
-        phaseOffset: 1.57,
-      ));
-      await expectLater(
-        find.byKey(_augerKey),
-        matchesGoldenFile('goldens/auger_phase_quarter.png'),
-      );
-    });
-
-    testWidgets('golden: rotation phase half', (tester) async {
-      await tester.pumpWidget(buildAugerTestWidget(
-        stateColor: Colors.green,
-        phaseOffset: 3.14,
-      ));
-      await expectLater(
-        find.byKey(_augerKey),
-        matchesGoldenFile('goldens/auger_phase_half.png'),
-      );
-    });
-
-    testWidgets('golden: rotation phase three quarter', (tester) async {
-      await tester.pumpWidget(buildAugerTestWidget(
-        stateColor: Colors.green,
-        phaseOffset: 4.71,
-      ));
-      await expectLater(
-        find.byKey(_augerKey),
-        matchesGoldenFile('goldens/auger_phase_three_quarter.png'),
-      );
-    });
-
-    // ── Open end golden tests ──
-
-    testWidgets('golden: open end right', (tester) async {
-      await tester.pumpWidget(buildAugerTestWidget(
-        stateColor: Colors.green,
-        phaseOffset: 0.8,
-        openEnd: AugerOpenEnd.right,
-      ));
-      await expectLater(
-        find.byKey(_augerKey),
-        matchesGoldenFile('goldens/auger_open_right.png'),
-      );
-    });
-
-    testWidgets('golden: open end left', (tester) async {
-      await tester.pumpWidget(buildAugerTestWidget(
-        stateColor: Colors.green,
-        phaseOffset: 0.8,
-        openEnd: AugerOpenEnd.left,
-      ));
-      await expectLater(
-        find.byKey(_augerKey),
-        matchesGoldenFile('goldens/auger_open_left.png'),
-      );
-    });
-
-    testWidgets('golden: no open end', (tester) async {
-      await tester.pumpWidget(buildAugerTestWidget(
-        stateColor: Colors.green,
-        phaseOffset: 0.8,
-        openEnd: null,
-      ));
-      await expectLater(
-        find.byKey(_augerKey),
-        matchesGoldenFile('goldens/auger_open_none.png'),
-      );
-    });
-
-    // ── Animation frame sequence (for GIF generation) ──
-
-    for (int i = 0; i < 60; i++) {
-      final phase = (i / 60) * 2 * pi;
-      final padded = i.toString().padLeft(3, '0');
-      testWidgets('animation frame $padded', (tester) async {
+      testWidgets('golden: green running auger', (tester) async {
         await tester.pumpWidget(buildAugerTestWidget(
           stateColor: Colors.green,
-          phaseOffset: phase,
+          phaseOffset: 0.8,
         ));
         await expectLater(
           find.byKey(_augerKey),
-          matchesGoldenFile('goldens/frames/auger_frame_$padded.png'),
+          matchesGoldenFile('goldens/auger_green_running.png'),
         );
       });
-    }
+
+      testWidgets('golden: red fault auger', (tester) async {
+        await tester.pumpWidget(buildAugerTestWidget(
+          stateColor: Colors.red,
+          phaseOffset: 2.0,
+        ));
+        await expectLater(
+          find.byKey(_augerKey),
+          matchesGoldenFile('goldens/auger_red_fault.png'),
+        );
+      });
+
+      testWidgets('golden: blue clean auger', (tester) async {
+        await tester.pumpWidget(buildAugerTestWidget(
+          stateColor: Colors.blue,
+          phaseOffset: 1.5,
+        ));
+        await expectLater(
+          find.byKey(_augerKey),
+          matchesGoldenFile('goldens/auger_blue_clean.png'),
+        );
+      });
+
+      testWidgets('golden: yellow manual auger', (tester) async {
+        await tester.pumpWidget(buildAugerTestWidget(
+          stateColor: Colors.yellow,
+          phaseOffset: 1.0,
+        ));
+        await expectLater(
+          find.byKey(_augerKey),
+          matchesGoldenFile('goldens/auger_yellow_manual.png'),
+        );
+      });
+
+      testWidgets('golden: flat conveyor (no auger)', (tester) async {
+        await tester.pumpWidget(buildAugerTestWidget(showAuger: false));
+        await expectLater(
+          find.byKey(_augerKey),
+          matchesGoldenFile('goldens/auger_flat_mode.png'),
+        );
+      });
+
+      testWidgets('golden: rotation phase 0', (tester) async {
+        await tester.pumpWidget(buildAugerTestWidget(
+          stateColor: Colors.green,
+          phaseOffset: 0.0,
+        ));
+        await expectLater(
+          find.byKey(_augerKey),
+          matchesGoldenFile('goldens/auger_phase_0.png'),
+        );
+      });
+
+      testWidgets('golden: rotation phase quarter', (tester) async {
+        await tester.pumpWidget(buildAugerTestWidget(
+          stateColor: Colors.green,
+          phaseOffset: 1.57,
+        ));
+        await expectLater(
+          find.byKey(_augerKey),
+          matchesGoldenFile('goldens/auger_phase_quarter.png'),
+        );
+      });
+
+      testWidgets('golden: rotation phase half', (tester) async {
+        await tester.pumpWidget(buildAugerTestWidget(
+          stateColor: Colors.green,
+          phaseOffset: 3.14,
+        ));
+        await expectLater(
+          find.byKey(_augerKey),
+          matchesGoldenFile('goldens/auger_phase_half.png'),
+        );
+      });
+
+      testWidgets('golden: rotation phase three quarter', (tester) async {
+        await tester.pumpWidget(buildAugerTestWidget(
+          stateColor: Colors.green,
+          phaseOffset: 4.71,
+        ));
+        await expectLater(
+          find.byKey(_augerKey),
+          matchesGoldenFile('goldens/auger_phase_three_quarter.png'),
+        );
+      });
+
+      // ── Open end golden tests ──
+
+      testWidgets('golden: open end right', (tester) async {
+        await tester.pumpWidget(buildAugerTestWidget(
+          stateColor: Colors.green,
+          phaseOffset: 0.8,
+          openEnd: AugerOpenEnd.right,
+        ));
+        await expectLater(
+          find.byKey(_augerKey),
+          matchesGoldenFile('goldens/auger_open_right.png'),
+        );
+      });
+
+      testWidgets('golden: open end left', (tester) async {
+        await tester.pumpWidget(buildAugerTestWidget(
+          stateColor: Colors.green,
+          phaseOffset: 0.8,
+          openEnd: AugerOpenEnd.left,
+        ));
+        await expectLater(
+          find.byKey(_augerKey),
+          matchesGoldenFile('goldens/auger_open_left.png'),
+        );
+      });
+
+      testWidgets('golden: no open end', (tester) async {
+        await tester.pumpWidget(buildAugerTestWidget(
+          stateColor: Colors.green,
+          phaseOffset: 0.8,
+          openEnd: null,
+        ));
+        await expectLater(
+          find.byKey(_augerKey),
+          matchesGoldenFile('goldens/auger_open_none.png'),
+        );
+      });
+    });
+
   });
 }

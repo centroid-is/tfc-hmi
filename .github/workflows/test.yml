@@ -6,43 +6,117 @@ on:
   pull_request:
     branches: [ main, develop ]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  test:
-    runs-on: ubuntu-latest
-
+  flutter-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+    - uses: actions/checkout@v4
 
-    - name: Setup Flutter
-      uses: subosito/flutter-action@v2
+    - uses: subosito/flutter-action@v2
       with:
         channel: stable
 
     - name: Get dependencies
       run: flutter pub get
-      
-    # - name: Verify formatting
-    #   run: dart format --output=none --set-exit-if-changed .
-      
-    # - name: Analyze project source
-    #   run: flutter analyze
-    
-    - name: Run pages tests
-      run: flutter test test/pages/
 
-    - name: Run tfc_dart package tests
+    - name: Run pages tests
+      run: flutter test test/
+
+  tfc-dart-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+          - os: macos-latest
+            timescaledb_external: "1"
+          - os: windows-latest
+            timescaledb_external: "1"
+    runs-on: ${{ matrix.os }}
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: dart-lang/setup-dart@v1
+
+    # macOS arm64 runners can't run Docker (no nested virtualization).
+    # Install TimescaleDB natively via Homebrew.
+    - name: Install TimescaleDB natively (macOS)
+      if: runner.os == 'macOS'
       run: |
-        cd packages/tfc_dart
-        dart pub get
-        dart test
-            
+        export PATH="/opt/homebrew/opt/postgresql@17/bin:$PATH"
+        echo "/opt/homebrew/opt/postgresql@17/bin" >> $GITHUB_PATH
+
+        brew install timescale/tap/timescaledb
+
+        # Move TimescaleDB extension files into PostgreSQL directories
+        /opt/homebrew/bin/timescaledb_move.sh
+
+        # Configure shared_preload_libraries manually
+        # (skip timescaledb-tune - it ships as x86-only and fails on arm64)
+        echo "shared_preload_libraries = 'timescaledb'" >> /opt/homebrew/var/postgresql@17/postgresql.conf
+
+        brew services start postgresql@17
+        sleep 5
+        pg_isready
+
+        createdb testdb
+        psql -d testdb -c "CREATE ROLE testuser WITH SUPERUSER LOGIN PASSWORD 'testpass';"
+        psql -d testdb -c "GRANT ALL ON DATABASE testdb TO testuser;"
+        psql -d testdb -c "CREATE EXTENSION IF NOT EXISTS timescaledb CASCADE;"
+
+    # Windows runners have Docker CE (Windows containers only, no Linux support).
+    # PostgreSQL 17 is pre-installed but stopped. Install TimescaleDB from release.
+    - name: Install TimescaleDB natively (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      env:
+        PGBIN: C:\Program Files\PostgreSQL\17\bin
+      run: |
+        # Add PostgreSQL to PATH for this and subsequent steps
+        echo "$env:PGBIN" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+        # Download and install TimescaleDB extension
+        Invoke-WebRequest -Uri "https://github.com/timescale/timescaledb/releases/download/2.25.2/timescaledb-postgresql-17-windows-amd64.zip" -OutFile timescaledb.zip
+        tar -xf timescaledb.zip
+        cd timescaledb
+        .\setup.exe -yes-tune -pgconfig "$env:PGBIN\pg_config.exe"
+
+        # Initialize a fresh cluster in a writable directory
+        $pgdata = Join-Path $env:RUNNER_TEMP "pgdata"
+        & "$env:PGBIN\initdb.exe" -U postgres -A trust --encoding=UTF8 -D $pgdata
+        & "$env:PGBIN\pg_ctl.exe" start -D $pgdata -o "-cshared_preload_libraries=timescaledb" -l "$pgdata\server.log"
+        & "$env:PGBIN\pg_isready.exe" -U postgres --timeout=30
+
+        # Create test database and user
+        & "$env:PGBIN\psql.exe" -U postgres -c "CREATE ROLE testuser WITH SUPERUSER LOGIN PASSWORD 'testpass';"
+        & "$env:PGBIN\createdb.exe" -U postgres -O testuser testdb
+        & "$env:PGBIN\psql.exe" -U postgres -d testdb -c "CREATE EXTENSION IF NOT EXISTS timescaledb CASCADE;"
+
+    - name: Get dependencies
+      working-directory: packages/tfc_dart
+      run: dart pub get
+
+    - name: Run tfc_dart tests
+      working-directory: packages/tfc_dart
+      env:
+        TIMESCALEDB_EXTERNAL: ${{ matrix.timescaledb_external }}
+      run: dart test
+
     - name: Upload test results
       uses: actions/upload-artifact@v4
       if: always()
       with:
-        name: test-results
+        name: test-results-${{ matrix.os }}
         path: |
-          coverage/
-          test-results/
+          packages/tfc_dart/coverage/
+          packages/tfc_dart/test-results/
         retention-days: 30

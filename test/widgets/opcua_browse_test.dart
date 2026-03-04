@@ -6,11 +6,14 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:open62541/open62541.dart'
     show
+        AttributeId,
         BrowseResultItem,
+        BrowseResultMask,
         BrowseTreeItem,
         ClientApi,
         ClientState,
         DynamicValue,
+        MonitoringMode,
         NodeClass,
         NodeId;
 
@@ -40,7 +43,7 @@ class FakeClientApi implements ClientApi {
     NodeId? referenceTypeId,
     bool includeSubtypes = true,
     int nodeClassMask = 0,
-    int resultMask = 63,
+    BrowseResultMask resultMask = BrowseResultMask.UA_BROWSERESULTMASK_ALL,
   }) async {
     browseCallCount++;
     if (browseDelay > Duration.zero) {
@@ -80,7 +83,17 @@ class FakeClientApi implements ClientApi {
   Stream<DynamicValue> monitor(
     NodeId nodeId,
     int subscriptionId, {
-    dynamic monitoringMode,
+    MonitoringMode monitoringMode = MonitoringMode.UA_MONITORINGMODE_REPORTING,
+    Duration samplingInterval = const Duration(milliseconds: 100),
+    bool discardOldest = true,
+    int queueSize = 1,
+  }) =>
+      const Stream.empty();
+  @override
+  Stream<Map<NodeId, DynamicValue>> monitoredItems(
+    Map<NodeId, List<AttributeId>> nodes,
+    int subscriptionId, {
+    MonitoringMode monitoringMode = MonitoringMode.UA_MONITORINGMODE_REPORTING,
     Duration samplingInterval = const Duration(milliseconds: 100),
     bool discardOldest = true,
     int queueSize = 1,
@@ -631,7 +644,7 @@ class _FailingBrowseClient extends FakeClientApi {
     NodeId? referenceTypeId,
     bool includeSubtypes = true,
     int nodeClassMask = 0,
-    int resultMask = 63,
+    BrowseResultMask resultMask = BrowseResultMask.UA_BROWSERESULTMASK_ALL,
   }) async {
     throw Exception('Connection refused');
   }

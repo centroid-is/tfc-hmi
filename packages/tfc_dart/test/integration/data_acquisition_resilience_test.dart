@@ -107,7 +107,10 @@ void main() {
 
       test('WHEN queue overflows THEN oldest items are dropped, newest kept',
           () async {
-        // Arrange
+        // Exercise the full production path: Collector → DynamicValue →
+        // stream listener → unawaited insertTimeseriesData → auto-flush →
+        // retry queue overflow.  With maxRetries: 1 on auto-flush, failed
+        // flushes complete instantly (one attempt, no backoff delay).
         const tableName = 'resilience_test_2';
         final stateMan = await StateMan.create(
           config: StateManConfig(opcua: []),
@@ -122,38 +125,60 @@ void main() {
         final streamController = StreamController<DynamicValue>();
         final entry = CollectEntry(key: tableName, name: tableName);
 
+        // collectEntryImpl registers a retention policy and sets up stream
+        // listener that fires unawaited inserts into the Database.
         await collector.collectEntryImpl(entry, streamController.stream,
             skipFirstSample: false);
 
-        // Create table while DB is up
+        // Insert one value while DB is up (creates table)
         streamController.add(DynamicValue(value: 'init'));
         await Future.delayed(const Duration(milliseconds: 200));
         await database.flush();
 
-        // Stop database
-        await stopTimescaleDb();
-        await Future.delayed(const Duration(seconds: 1));
+        var data = await _queryTable(database, tableName);
+        expect(data.length, 1);
 
-        // Insert MORE than queue capacity (100)
+        // Stop database — keep it down for the entire insert phase.
+        await stopTimescaleDb();
+        await Future.delayed(const Duration(seconds: 5));
+
+        // Insert MORE than queue capacity (100).
+        // The Collector's stream listener fires unawaited insertTimeseriesData
+        // calls.  Auto-flushes at 50 items try the pool, fail within
+        // queryTimeout (5s), and queue items for retry.  The overflow cap
+        // in _queueForRetry keeps only the newest 100 items.
         const totalItems = 120;
         for (var i = 0; i < totalItems; i++) {
           streamController.add(DynamicValue(value: 'item_$i'));
-          await Future.delayed(const Duration(milliseconds: 10));
         }
 
-        // Restart database
+        // Wait for ALL pool queries to fail and complete the retry cycle:
+        //   - Auto/periodic flushes fail within queryTimeout (5s)
+        //   - Items enter retry queue, retry scheduled after 5s delay
+        //   - Retry flush fires, fails within queryTimeout (5s)
+        //   - Items re-queued, next retry scheduled after 5s delay
+        // Total: queryTimeout + retryDelay + queryTimeout + margin = 16s
+        // During the next 5s retry delay window, no pool queries are active
+        // so it's safe to restart the proxy.
+        await Future.delayed(const Duration(seconds: 16));
+
+        // Flush any remaining buffer while DB is still down
+        await database.flush();
+
+        // NOW restart database — all items are safely in the retry queue,
+        // no pool queries are in-flight to bridge the restart.
         await startTimescaleDb();
         await waitForDatabaseReady();
 
-        // Wait for retry queue to flush
-        await Future.delayed(const Duration(seconds: 8));
+        // Wait for retry queue to flush (5 s retry delay + queryTimeout)
+        await Future.delayed(const Duration(seconds: 12));
         await database.flush();
 
-        // Verify: init + 100 newest items (oldest 20 dropped)
-        final data = await _queryTable(database, tableName);
+        // Verify: 1 init + 100 newest items = 101
+        data = await _queryTable(database, tableName);
         expect(data.length, 101);
 
-        // Verify oldest were dropped (item_0 to item_19 should NOT be present)
+        // Verify oldest were dropped (item_0 to item_19)
         final values = data.map((d) => d.value as String).toSet();
         for (var i = 0; i < 20; i++) {
           expect(values.contains('item_$i'), isFalse,
@@ -161,7 +186,7 @@ void main() {
         }
 
         // Verify newest are present (item_20 to item_119)
-        for (var i = 20; i < 120; i++) {
+        for (var i = 20; i < totalItems; i++) {
           expect(values.contains('item_$i'), isTrue,
               reason: 'item_$i should be in database');
         }
@@ -173,7 +198,7 @@ void main() {
         // Ensure DB is back up for next test
         await startTimescaleDb();
         await waitForDatabaseReady();
-      }, timeout: Timeout(Duration(seconds: 60)));
+      }, timeout: Timeout(Duration(seconds: 90)));
     });
 
     group('Isolate startup retry', () {

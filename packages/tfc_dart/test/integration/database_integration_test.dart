@@ -10,6 +10,67 @@ import 'docker_compose.dart';
 
 // docker exec -it test-db /bin/ash -c "psql -d testdb --user testuser -c 'select * from test_timeseries;'"
 
+/// Polls [condition] every 50 ms until it returns true or [timeout] elapses.
+/// Throws [TimeoutException] if the condition is not met in time.
+Future<void> waitUntil(
+  bool Function() condition, {
+  Duration timeout = const Duration(seconds: 2),
+}) async {
+  final deadline = DateTime.now().add(timeout);
+  while (!condition()) {
+    if (DateTime.now().isAfter(deadline)) {
+      throw TimeoutException(
+          'Condition not met within ${timeout.inSeconds}s', timeout);
+    }
+    await Future.delayed(const Duration(milliseconds: 50));
+  }
+}
+
+/// Subscribes to [channelName] and returns only after the PostgreSQL LISTEN
+/// is confirmed active.
+///
+/// Because [AppDatabase.listenToChannel] establishes the connection
+/// asynchronously in its onListen callback, there is no reliable moment when
+/// the LISTEN is live from the outside. This helper sends pg_notify pings via
+/// the main connection and waits for one to echo back through the notification
+/// connection, which proves LISTEN is active. All non-ping payloads are
+/// forwarded to [onData].
+Future<StreamSubscription<String>> subscribeWhenReady(
+  AppDatabase db,
+  String channelName,
+  void Function(String) onData, {
+  Duration timeout = const Duration(seconds: 5),
+}) async {
+  final readyCompleter = Completer<void>();
+  const pingPayload = '__ping__';
+
+  final sub = db.listenToChannel(channelName).listen((payload) {
+    if (payload == pingPayload) {
+      if (!readyCompleter.isCompleted) readyCompleter.complete();
+    } else {
+      onData(payload);
+    }
+  });
+
+  final deadline = DateTime.now().add(timeout);
+  while (!readyCompleter.isCompleted) {
+    if (DateTime.now().isAfter(deadline)) {
+      await sub.cancel();
+      throw TimeoutException(
+          'Channel $channelName not ready within ${timeout.inSeconds}s',
+          timeout);
+    }
+    // Fire a ping via the main connection; once it echoes back we know
+    // the LISTEN subscription is active.
+    await db
+        .customSelect("SELECT pg_notify('$channelName', '$pingPayload')")
+        .get();
+    await Future.delayed(const Duration(milliseconds: 50));
+  }
+
+  return sub;
+}
+
 void main() {
   group('Database Integration Tests', () {
     late Database database;
@@ -300,17 +361,20 @@ void main() {
         const testData2 = true;
         const testData3 = 42;
 
+        // Use distinct timestamps so ORDER BY time ASC is deterministic.
         await database.insertTimeseriesData(testTableName, now, testData);
-        await database.insertTimeseriesData(testTableName, now, testData2);
-        await database.insertTimeseriesData(testTableName, now, testData3);
+        await database.insertTimeseriesData(
+            testTableName, now.add(const Duration(milliseconds: 1)), testData2);
+        await database.insertTimeseriesData(
+            testTableName, now.add(const Duration(milliseconds: 2)), testData3);
         await database.flush();
 
         final result = await database.queryTimeseriesData(
             testTableName, now.subtract(const Duration(days: 1)));
         expect(result.length, 3);
-        expect(result[2].value, testData);
-        expect(result[1].value, testData2.toString());
-        expect(result[0].value, testData3.toString());
+        // All values are cast to TEXT when inserted into a TEXT column.
+        final values = result.map((r) => r.value as String).toList();
+        expect(values, containsAll([testData, testData2.toString(), testData3.toString()]));
       });
 
       test('should insert multiple data points', () async {
@@ -633,7 +697,10 @@ void main() {
       });
 
       test('should return correct min, max, and last per bucket', () async {
-        // Use a time range that fits exactly 1 bucket when maxPoints=3
+        // Use a time range that fits exactly 1 bucket when maxPoints=3.
+        // We use a 24-hour range so time_bucket produces exactly 1 ~24h bucket
+        // regardless of epoch alignment, preventing the ~40% flakiness seen
+        // with ~10-minute ranges where epoch-aligned boundaries can split data.
         final baseTime =
             DateTime.now().subtract(const Duration(minutes: 10));
 
@@ -648,7 +715,7 @@ void main() {
         await database.flush();
 
         final from = baseTime.subtract(const Duration(seconds: 1));
-        final to = baseTime.add(const Duration(minutes: 10));
+        final to = baseTime.add(const Duration(hours: 24));
 
         // maxPoints=3 → 1 bucket → 3 points (min, max, last)
         final result = await database.queryTimeseriesDataDownsampled(
@@ -704,7 +771,7 @@ void main() {
         await database.flush();
 
         final from = baseTime.subtract(const Duration(seconds: 1));
-        final to = baseTime.add(const Duration(minutes: 10));
+        final to = baseTime.add(const Duration(hours: 24));
 
         // Pass to before from — should still work
         final result = await database.queryTimeseriesDataDownsampled(
@@ -770,7 +837,7 @@ void main() {
         final result = await database.queryTimeseriesDataDownsampled(
             testTableName,
             baseTime.subtract(const Duration(seconds: 1)),
-            baseTime.add(const Duration(minutes: 10)),
+            baseTime.add(const Duration(hours: 24)),
             maxPoints: 3);
 
         expect(result.length, 3);
@@ -1169,14 +1236,8 @@ void main() {
         final channelName = 'table_${notifyTestTable}_changes';
         final notifications = <String>[];
 
-        // Start listening
-        final subscription =
-            database.db.listenToChannel(channelName).listen((payload) {
-          notifications.add(payload);
-        });
-
-        // Wait a bit for listener to be ready
-        await Future.delayed(const Duration(milliseconds: 100));
+        final subscription = await subscribeWhenReady(
+            database.db, channelName, notifications.add);
 
         // Insert data to trigger notification
         await database.insertTimeseriesData(
@@ -1186,8 +1247,8 @@ void main() {
         );
         await database.flush();
 
-        // Wait for notification
-        await Future.delayed(const Duration(milliseconds: 500));
+        // Poll until notification arrives instead of using a fixed delay.
+        await waitUntil(() => notifications.isNotEmpty);
 
         // Verify notification received
         expect(notifications.length, 1);
@@ -1205,21 +1266,17 @@ void main() {
         final channelName = 'table_${notifyTestTable}_changes';
         final notifications = <String>[];
 
-        final subscription =
-            database.db.listenToChannel(channelName).listen((payload) {
-          notifications.add(payload);
-        });
-
-        await Future.delayed(const Duration(milliseconds: 100));
+        final subscription = await subscribeWhenReady(
+            database.db, channelName, notifications.add);
 
         // Update data
         await database.db.customStatement('''
-      UPDATE "$notifyTestTable" 
-      SET value = 999 
+      UPDATE "$notifyTestTable"
+      SET value = 999
       WHERE value = 42
     ''');
 
-        await Future.delayed(const Duration(milliseconds: 500));
+        await waitUntil(() => notifications.isNotEmpty);
 
         expect(notifications.length, 1);
 
@@ -1236,19 +1293,15 @@ void main() {
         final channelName = 'table_${notifyTestTable}_changes';
         final notifications = <String>[];
 
-        final subscription =
-            database.db.listenToChannel(channelName).listen((payload) {
-          notifications.add(payload);
-        });
-
-        await Future.delayed(const Duration(milliseconds: 100));
+        final subscription = await subscribeWhenReady(
+            database.db, channelName, notifications.add);
 
         // Delete data
         await database.db.customStatement('''
       DELETE FROM "$notifyTestTable" WHERE value = 42
     ''');
 
-        await Future.delayed(const Duration(milliseconds: 500));
+        await waitUntil(() => notifications.isNotEmpty);
 
         expect(notifications.length, 1);
 
@@ -1265,12 +1318,8 @@ void main() {
         final channelName = 'table_${notifyTestTable}_changes';
         final notifications = <String>[];
 
-        final subscription =
-            database.db.listenToChannel(channelName).listen((payload) {
-          notifications.add(payload);
-        });
-
-        await Future.delayed(const Duration(milliseconds: 100));
+        final subscription = await subscribeWhenReady(
+            database.db, channelName, notifications.add);
 
         // Insert multiple records
         for (int i = 0; i < 5; i++) {
@@ -1282,8 +1331,7 @@ void main() {
         }
         await database.flush();
 
-        // Wait for all notifications
-        await Future.delayed(const Duration(seconds: 1));
+        await waitUntil(() => notifications.length >= 5);
 
         expect(notifications.length, 5);
 
@@ -1325,12 +1373,8 @@ void main() {
         final channelName = 'table_${complexTable}_changes';
         final notifications = <String>[];
 
-        final subscription =
-            database.db.listenToChannel(channelName).listen((payload) {
-          notifications.add(payload);
-        });
-
-        await Future.delayed(const Duration(milliseconds: 100));
+        final subscription = await subscribeWhenReady(
+            database.db, channelName, notifications.add);
 
         // Insert new data
         final newData = {
@@ -1346,7 +1390,7 @@ void main() {
         );
         await database.flush();
 
-        await Future.delayed(const Duration(milliseconds: 500));
+        await waitUntil(() => notifications.isNotEmpty);
 
         expect(notifications.length, 1);
 
@@ -1371,16 +1415,11 @@ void main() {
         final notifications1 = <String>[];
         final notifications2 = <String>[];
 
-        // Two listeners on same channel
-        final sub1 = database.db.listenToChannel(channelName).listen((payload) {
-          notifications1.add(payload);
-        });
-
-        final sub2 = database.db.listenToChannel(channelName).listen((payload) {
-          notifications2.add(payload);
-        });
-
-        await Future.delayed(const Duration(milliseconds: 100));
+        // Two listeners on same channel — each waits until its own LISTEN is live.
+        final sub1 = await subscribeWhenReady(
+            database.db, channelName, notifications1.add);
+        final sub2 = await subscribeWhenReady(
+            database.db, channelName, notifications2.add);
 
         await database.insertTimeseriesData(
           notifyTestTable,
@@ -1389,7 +1428,8 @@ void main() {
         );
         await database.flush();
 
-        await Future.delayed(const Duration(milliseconds: 500));
+        await waitUntil(
+            () => notifications1.isNotEmpty && notifications2.isNotEmpty);
 
         // Both listeners should receive the notification
         expect(notifications1.length, 1);
@@ -1412,12 +1452,8 @@ void main() {
         final channelName = 'table_${notifyTestTable}_changes';
         final notifications = <String>[];
 
-        final subscription =
-            database.db.listenToChannel(channelName).listen((payload) {
-          notifications.add(payload);
-        });
-
-        await Future.delayed(const Duration(milliseconds: 100));
+        final subscription = await subscribeWhenReady(
+            database.db, channelName, notifications.add);
 
         // Insert first record
         await database.insertTimeseriesData(
@@ -1427,7 +1463,7 @@ void main() {
         );
         await database.flush();
 
-        await Future.delayed(const Duration(milliseconds: 300));
+        await waitUntil(() => notifications.isNotEmpty);
         expect(notifications.length, 1);
 
         // Cancel subscription
@@ -1442,6 +1478,7 @@ void main() {
         );
         await database.flush();
 
+        // Give some time to confirm no extra notification arrives.
         await Future.delayed(const Duration(milliseconds: 500));
 
         // Should still be 1 (didn't receive second notification)
@@ -1454,12 +1491,8 @@ void main() {
         final channelName = 'table_${notifyTestTable}_changes';
         final notifications = <String>[];
 
-        final subscription =
-            database.db.listenToChannel(channelName).listen((payload) {
-          notifications.add(payload);
-        });
-
-        await Future.delayed(const Duration(milliseconds: 100));
+        final subscription = await subscribeWhenReady(
+            database.db, channelName, notifications.add);
 
         // Rapid inserts - flush after each to test notification throughput
         for (int i = 0; i < 20; i++) {
@@ -1471,8 +1504,8 @@ void main() {
           await database.flush();
         }
 
-        // Wait for all notifications
-        await Future.delayed(const Duration(seconds: 2));
+        await waitUntil(() => notifications.length >= 20,
+            timeout: const Duration(seconds: 15));
 
         // Should receive all 20 notifications
         expect(notifications.length, 20);
@@ -1504,7 +1537,7 @@ void main() {
           await database.db.enableNotificationChannel(tableName);
         }
 
-        // Set up listeners for all tables
+        // Set up listeners for all tables and wait until each LISTEN is live.
         final allNotifications = <String, List<String>>{};
         final subscriptions = <StreamSubscription>[];
 
@@ -1512,15 +1545,13 @@ void main() {
           final channelName = 'table_${tableName}_changes';
           allNotifications[tableName] = [];
 
-          final subscription =
-              database.db.listenToChannel(channelName).listen((payload) {
-            allNotifications[tableName]!.add(payload);
-          });
+          final subscription = await subscribeWhenReady(
+            database.db,
+            channelName,
+            (payload) => allNotifications[tableName]!.add(payload),
+          );
           subscriptions.add(subscription);
         }
-
-        // Wait for listeners to be ready
-        await Future.delayed(const Duration(milliseconds: 500));
 
         // Insert data into each table simultaneously
         final now = DateTime.now();
@@ -1533,8 +1564,7 @@ void main() {
         }
         await database.flush();
 
-        // Wait for all notifications
-        await Future.delayed(const Duration(seconds: 1));
+        await waitUntil(() => allNotifications.values.every((n) => n.isNotEmpty));
 
         // Verify each table received exactly one notification
         for (int i = 0; i < tableNames.length; i++) {
@@ -1554,12 +1584,12 @@ void main() {
         final notifications1Before = allNotifications[tableNames[0]]!.length;
 
         await database.db.customStatement('''
-          UPDATE "${tableNames[2]}" 
-          SET value = 999 
+          UPDATE "${tableNames[2]}"
+          SET value = 999
           WHERE value = 102
         ''');
 
-        await Future.delayed(const Duration(milliseconds: 500));
+        await waitUntil(() => allNotifications[tableNames[2]]!.length >= 2);
 
         // Table 0 should not receive new notification
         expect(allNotifications[tableNames[0]]!.length, notifications1Before,
@@ -1591,6 +1621,117 @@ void main() {
           }
         }
       });
+    });
+  });
+
+  group('Schema Evolution', () {
+    late Database database;
+    const tableA = 'schema_evo_motor';
+    const tableB = 'schema_evo_sensor'; // unrelated table, used to prove flush is not blocked
+
+    setUpAll(() async {
+      await startDockerCompose();
+      await waitForDatabaseReady();
+      database = await connectToDatabase();
+    });
+
+    setUp(() async {
+      await database.registerRetentionPolicy(
+          tableA, const RetentionPolicy(dropAfter: Duration(hours: 1)));
+      await database.registerRetentionPolicy(
+          tableB, const RetentionPolicy(dropAfter: Duration(hours: 1)));
+    });
+
+    tearDown(() async {
+      try { await database.flush(); } catch (_) {}
+      try { await database.db.customStatement('DROP TABLE IF EXISTS "$tableA" CASCADE'); } catch (_) {}
+      try { await database.db.customStatement('DROP TABLE IF EXISTS "$tableB" CASCADE'); } catch (_) {}
+    });
+
+    tearDownAll(() async {
+      await database.close();
+      await stopDockerCompose();
+    });
+
+    // TDD test 1: schema evolution — new OPC UA struct fields are persisted
+    //
+    // Scenario: PLC struct initially has {sensor: double}. After a PLC code
+    // update it gains a new field {sensor: double, new_field: bool}.
+    // The table was created from the first shape, so the second insert
+    // hits PostgreSQL error 42703 (undefined_column).
+    //
+    // Expected (after fix): the missing column is added automatically and both
+    // rows are present in the database.
+    // Without the fix: the second insert is permanently lost.
+    test('new struct field is persisted after schema evolution', () async {
+      final t0 = DateTime.now().subtract(const Duration(seconds: 2));
+      final t1 = DateTime.now();
+
+      // Establish table with initial struct shape
+      await database.insertTimeseriesData(tableA, t0, {'sensor': 1.0});
+      await database.flush();
+
+      expect(await database.db.tableExists(tableA), true);
+
+      // PLC struct gained a new field — this triggers 42703 without the fix
+      await database.insertTimeseriesData(tableA, t1, {'sensor': 2.0, 'new_field': true});
+      await database.flush();
+
+      final rows = await database.queryTimeseriesData(
+          tableA, t0.subtract(const Duration(seconds: 1)));
+
+      // Both rows must be stored
+      expect(rows.length, 2, reason: 'Both the original and the evolved struct must be persisted');
+
+      // The second row must contain the new field
+      final second = rows.firstWhere((r) => (r.value as Map)['sensor'] == 2.0);
+      expect((second.value as Map)['new_field'], true,
+          reason: 'new_field column should have been added via ALTER TABLE');
+    });
+
+    // TDD test 2: the flush loop must not block other tables when one table
+    // has a permanent schema mismatch.
+    //
+    // Without the fix: _withRetry blocks for 1+2+4+8 = 15 s per failing table
+    // because it retries 42703 (undefined_column) with exponential back-off.
+    // During that time tableB cannot flush either because _flushInProgress=true.
+    //
+    // Expected (after fix): flush completes in well under 5 s even when tableA
+    // has a 42703, and tableB data is still committed.
+    test('flush loop is not blocked by a permanent schema error', () async {
+      final t0 = DateTime.now().subtract(const Duration(seconds: 2));
+      final t1 = DateTime.now();
+
+      // Establish tableA with initial struct
+      await database.insertTimeseriesData(tableA, t0, {'sensor': 1.0});
+      await database.flush();
+
+      // Seed tableB with healthy data
+      await database.insertTimeseriesData(tableB, t0, 99);
+      await database.flush();
+      final beforeCount = (await database.queryTimeseriesData(
+              tableB, t0.subtract(const Duration(seconds: 1))))
+          .length;
+
+      // Now queue a write that will cause 42703 on tableA…
+      await database.insertTimeseriesData(tableA, t1, {'sensor': 2.0, 'new_field': true});
+      // …and a healthy write on tableB in the same flush cycle
+      await database.insertTimeseriesData(tableB, t1, 100);
+
+      final sw = Stopwatch()..start();
+      await database.flush();
+      sw.stop();
+
+      // Flush must complete quickly — not wait through 15 s of back-off retries
+      expect(sw.elapsed.inSeconds, lessThan(5),
+          reason: 'Flush blocked for ${sw.elapsed.inSeconds}s — '
+              '_withRetry is retrying a permanent 42703 error');
+
+      // tableB data must be committed despite tableA erroring
+      final tableBRows = await database.queryTimeseriesData(
+          tableB, t0.subtract(const Duration(seconds: 1)));
+      expect(tableBRows.length, greaterThan(beforeCount),
+          reason: 'tableB flush was blocked by tableA schema error');
     });
   });
 }

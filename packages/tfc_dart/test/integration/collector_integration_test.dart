@@ -10,6 +10,20 @@ import 'package:tfc_dart/core/boolean_expression.dart';
 
 import 'docker_compose.dart';
 
+/// Polls [condition] every 50 ms until it returns true or [timeout] elapses.
+Future<void> waitUntil(
+  bool Function() condition, {
+  Duration timeout = const Duration(seconds: 2),
+}) async {
+  final deadline = DateTime.now().add(timeout);
+  while (!condition()) {
+    if (DateTime.now().isAfter(deadline)) {
+      throw TimeoutException('Condition not met within ${timeout.inSeconds}s', timeout);
+    }
+    await Future.delayed(const Duration(milliseconds: 50));
+  }
+}
+
 void main() {
   group('Collector Integration', () {
     late Collector collector;
@@ -43,7 +57,7 @@ void main() {
     });
 
     Future<List<TimeseriesData<dynamic>>> waitUntilInserted(String tableName,
-        {DateTime? sinceTime}) async {
+        {DateTime? sinceTime, int minCount = 1}) async {
       List<TimeseriesData<dynamic>> insertedData = [];
       sinceTime ??= DateTime.now().subtract(const Duration(days: 1));
       for (var i = 0; i < 20; i++) {
@@ -54,7 +68,7 @@ void main() {
         try {
           insertedData =
               await database.queryTimeseriesData(tableName, sinceTime);
-          if (insertedData.isNotEmpty) {
+          if (insertedData.length >= minCount) {
             break;
           }
         } catch (e) {
@@ -137,9 +151,6 @@ void main() {
       // Add an error to the stream
       streamController.addError(testError);
 
-      // Wait for async processing
-      await Future.delayed(const Duration(milliseconds: 100));
-
       final insertedData = await waitUntilInserted(testName);
       expect(insertedData.length, 1);
 
@@ -163,9 +174,6 @@ void main() {
 
       // Complete the stream
       streamController.close();
-
-      // Wait for async processing
-      await Future.delayed(const Duration(milliseconds: 100));
 
       // Verify no data was inserted since no values were added
       final insertedData = await waitUntilInserted(testName);
@@ -194,9 +202,6 @@ void main() {
       await collector.collectEntryImpl(entry, streamController.stream,
           skipFirstSample: false);
       streamController.add(complexValue);
-
-      // Wait for async processing
-      await Future.delayed(const Duration(milliseconds: 100));
 
       // Assert - verify complex object was inserted correctly
       final insertedData = await waitUntilInserted(testName);
@@ -363,11 +368,11 @@ void main() {
         }
       });
 
-      // wait for database query
-      await Future.delayed(const Duration(milliseconds: 100));
+      // Wait for initial DB query to complete and emit historical data
+      await waitUntil(() => count >= 1);
 
       streamController.add(DynamicValue(value: 'realtime1'));
-      await Future.delayed(const Duration(milliseconds: 100));
+      await waitUntil(() => count >= 2);
 
       expect(count, 2);
       // Clean up
@@ -468,18 +473,19 @@ void main() {
           expect(data[3].value, 'update3');
         }
       });
-      // wait for database query
-      await Future.delayed(const Duration(milliseconds: 100));
+
+      // Wait for initial DB query to complete and emit historical data
+      await waitUntil(() => count >= 1);
 
       // Add multiple real-time updates
       streamController.add(DynamicValue(value: 'update1'));
-      await Future.delayed(const Duration(milliseconds: 100));
+      await waitUntil(() => count >= 2);
 
       streamController.add(DynamicValue(value: 'update2'));
-      await Future.delayed(const Duration(milliseconds: 100));
+      await waitUntil(() => count >= 3);
 
       streamController.add(DynamicValue(value: 'update3'));
-      await Future.delayed(const Duration(milliseconds: 100));
+      await waitUntil(() => count >= 4);
 
       expect(count, 4);
 
@@ -535,8 +541,8 @@ void main() {
         }
       });
 
-      // wait for database query
-      await Future.delayed(const Duration(milliseconds: 100));
+      // Wait for initial DB query to complete and emit historical data
+      await waitUntil(() => count >= 1);
 
       // Add complex real-time data
       final complexRealtimeData = DynamicValue.fromMap(
@@ -547,7 +553,7 @@ void main() {
         }),
       );
       streamController.add(complexRealtimeData);
-      await Future.delayed(const Duration(milliseconds: 100));
+      await waitUntil(() => count >= 2);
 
       expect(count, 2);
       // Clean up
@@ -596,8 +602,8 @@ void main() {
         }
       });
 
-      // wait for database query
-      await Future.delayed(const Duration(milliseconds: 100));
+      // Wait for initial DB query to complete and emit historical data
+      await waitUntil(() => count >= 1);
 
       // Add real-time array data
       final realtimeArrayData = DynamicValue.fromList([
@@ -607,7 +613,7 @@ void main() {
         DynamicValue(value: 8.4),
       ]);
       streamController.add(realtimeArrayData);
-      await Future.delayed(const Duration(milliseconds: 100));
+      await waitUntil(() => count >= 2);
 
       expect(count, 2);
       // Clean up
@@ -740,7 +746,7 @@ void main() {
       await database.flush();
 
       insertedData =
-          await waitUntilInserted(testName).timeout(const Duration(seconds: 5));
+          await waitUntilInserted(testName, minCount: 2).timeout(const Duration(seconds: 5));
       expect(insertedData.length, 2,
           reason:
               'Data should be collected when system is running and the data is above 20');

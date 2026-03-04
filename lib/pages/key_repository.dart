@@ -872,6 +872,12 @@ class _OpcUaConfigSectionState extends ConsumerState<_OpcUaConfigSection> {
     widget.onChanged(config);
   }
 
+  /// Called when namespace or identifier changes — clears the stale array index.
+  void _onNodeIdentityChanged() {
+    _selectedArrayIndex = null;
+    _notifyChanged();
+  }
+
   Future<void> _openBrowseDialog(BuildContext context) async {
     final stateManAsync = ref.read(stateManProvider);
     final stateMan = stateManAsync.valueOrNull;
@@ -959,7 +965,7 @@ class _OpcUaConfigSectionState extends ConsumerState<_OpcUaConfigSection> {
                           labelText: 'Namespace',
                         ),
                         keyboardType: TextInputType.number,
-                        onChanged: (_) => _notifyChanged(),
+                        onChanged: (_) => _onNodeIdentityChanged(),
                       ),
                       const SizedBox(height: 12),
                       TextField(
@@ -967,7 +973,7 @@ class _OpcUaConfigSectionState extends ConsumerState<_OpcUaConfigSection> {
                         decoration: const InputDecoration(
                           labelText: 'Identifier',
                         ),
-                        onChanged: (_) => _notifyChanged(),
+                        onChanged: (_) => _onNodeIdentityChanged(),
                       ),
                     ],
                   );
@@ -982,7 +988,7 @@ class _OpcUaConfigSectionState extends ConsumerState<_OpcUaConfigSection> {
                           labelText: 'Namespace',
                         ),
                         keyboardType: TextInputType.number,
-                        onChanged: (_) => _notifyChanged(),
+                        onChanged: (_) => _onNodeIdentityChanged(),
                       ),
                     ),
                     const SizedBox(width: 12),
@@ -992,7 +998,7 @@ class _OpcUaConfigSectionState extends ConsumerState<_OpcUaConfigSection> {
                         decoration: const InputDecoration(
                           labelText: 'Identifier',
                         ),
-                        onChanged: (_) => _notifyChanged(),
+                        onChanged: (_) => _onNodeIdentityChanged(),
                       ),
                     ),
                   ],
