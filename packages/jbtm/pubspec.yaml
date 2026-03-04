@@ -9,6 +9,10 @@ environment:
 dependencies:
   rxdart: ^0.28.0
   logger: ^2.4.0
+  open62541:
+    git:
+      url: https://github.com/centroid-is/open62541_dart.git
+      ref: make-dynamicvalue-more-generic
 
 dev_dependencies:
   test: ^1.25.0
