@@ -1,15 +1,20 @@
 import 'dart:async';
 import 'dart:io';
 
-/// A reusable test TCP server for unit testing socket-based classes.
+/// A reusable TCP test server for unit testing socket-based classes.
 ///
 /// Binds to loopback on an OS-assigned port. Tracks connected clients,
 /// allows sending data to all clients, and supports programmatic disconnect
 /// to simulate device reboots.
 class TestTcpServer {
+  /// Optional callback invoked when a new client connects.
+  final void Function(Socket client)? onConnect;
+
   ServerSocket? _server;
   final List<Socket> _clients = [];
   Completer<void>? _clientCompleter;
+
+  TestTcpServer({this.onConnect});
 
   /// Starts the server. Returns the OS-assigned port number.
   Future<int> start() async {
@@ -22,6 +27,7 @@ class TestTcpServer {
       socket.done.catchError((_) {}).whenComplete(() {
         _clients.remove(socket);
       });
+      onConnect?.call(socket);
       _clientCompleter?.complete();
       _clientCompleter = null;
     });
