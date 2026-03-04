@@ -150,8 +150,9 @@ void main() {
       );
 
       final dv = convertRecordToDynamicValue(record);
-      // Accessing a non-existent key returns a DynamicValue with null value
-      expect(dv['deviceTimestamp'].value, isNull);
+      // DynamicValue [] throws on missing key, so check the map directly
+      final map = dv.value as Map<String, DynamicValue>;
+      expect(map.containsKey('deviceTimestamp'), isFalse);
     });
 
     test('receivedAt stored as ISO 8601 string child', () {
