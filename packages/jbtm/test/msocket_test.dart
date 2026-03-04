@@ -168,19 +168,37 @@ void main() {
       final port = await server.start();
       final socket = MSocket('localhost', port);
 
+      // Collect all statuses before disconnect happens
+      final statuses = <ConnectionStatus>[];
+      final sawDisconnected = Completer<void>();
+      var seenConnected = false;
+      socket.statusStream.listen((s) {
+        statuses.add(s);
+        // After seeing connected, look for disconnected
+        if (s == ConnectionStatus.connected) seenConnected = true;
+        if (seenConnected && s == ConnectionStatus.disconnected) {
+          if (!sawDisconnected.isCompleted) sawDisconnected.complete();
+        }
+      });
+
       socket.connect();
       await socket.statusStream
           .firstWhere((s) => s == ConnectionStatus.connected);
 
+      // Wait for the server to register the client before disconnecting
+      await server.waitForClient();
+
       // Server disconnects all clients
       server.disconnectAll();
 
-      // Wait for disconnected status
-      await socket.statusStream
-          .firstWhere((s) => s == ConnectionStatus.disconnected)
-          .timeout(const Duration(seconds: 5));
+      // Wait for disconnected status to be observed
+      await sawDisconnected.future.timeout(const Duration(seconds: 5));
 
-      expect(socket.status, equals(ConnectionStatus.disconnected));
+      // Verify disconnected was emitted after connected
+      final connectedIdx = statuses.indexOf(ConnectionStatus.connected);
+      final disconnectedIdx =
+          statuses.lastIndexOf(ConnectionStatus.disconnected);
+      expect(disconnectedIdx, greaterThan(connectedIdx));
 
       socket.dispose();
     });
@@ -254,13 +272,18 @@ void main() {
 
       await Future.delayed(const Duration(milliseconds: 50));
 
-      socket.dispose();
-
-      // After dispose, subscribe and send data -- no events should arrive
+      // Subscribe BEFORE dispose to catch any lingering events
       final events = <Uint8List>[];
       socket.dataStream.listen(events.add);
 
-      server.sendToAll([99, 98, 97]);
+      socket.dispose();
+
+      // Try sending data from server (may throw since client socket is destroyed)
+      try {
+        server.sendToAll([99, 98, 97]);
+      } catch (_) {
+        // Expected -- server-side socket may already be destroyed
+      }
       await Future.delayed(const Duration(milliseconds: 200));
 
       expect(events, isEmpty);

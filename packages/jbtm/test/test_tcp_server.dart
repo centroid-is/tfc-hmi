@@ -17,7 +17,11 @@ class TestTcpServer {
         await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
     _server.listen((socket) {
       _clients.add(socket);
-      socket.done.then((_) => _clients.remove(socket));
+      // Catch errors on the IOSink done future to prevent unhandled
+      // async errors when the client destroys the connection (RST).
+      socket.done.catchError((_) {}).whenComplete(() {
+        _clients.remove(socket);
+      });
       _clientCompleter?.complete();
       _clientCompleter = null;
     });
@@ -32,8 +36,12 @@ class TestTcpServer {
 
   /// Send raw bytes to all connected clients.
   void sendToAll(List<int> data) {
-    for (final client in _clients) {
-      client.add(data);
+    for (final client in List.of(_clients)) {
+      try {
+        client.add(data);
+      } catch (_) {
+        // Client may already be destroyed
+      }
     }
   }
 
