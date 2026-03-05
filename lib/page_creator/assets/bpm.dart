@@ -306,9 +306,12 @@ class _BpmWidgetState extends ConsumerState<BpmWidget> {
   late int _activeInterval;
   StreamSubscription<Map<String, String>>? _subsSub;
   Timer? _pollTimer;
-  List<DateTime> _cachedTimestamps = [];
+  Set<DateTime> _cachedTimestamps = {};
   int? _count;
   DateTime? _lastFetchEnd;
+  bool _disposed = false;
+
+  bool get _alive => !_disposed && mounted;
 
   @override
   void initState() {
@@ -323,19 +326,20 @@ class _BpmWidgetState extends ConsumerState<BpmWidget> {
     if (varName == null) return;
 
     ref.read(stateManProvider.future).then((sm) {
+      if (!_alive) return;
       final cur = sm.getSubstitution(varName);
       if (cur != null) {
         final v = int.tryParse(cur);
         if (v != null && v > 0 && v != _activeInterval) {
           _activeInterval = v;
-          _updateCount(); // instant — no DB hit
+          _updateCount();
         }
       }
       _subsSub = sm.substitutionsChanged.listen((subs) {
         final v = int.tryParse(subs[varName] ?? '');
-        if (v != null && v > 0 && v != _activeInterval && mounted) {
+        if (v != null && v > 0 && v != _activeInterval && _alive) {
           _activeInterval = v;
-          _updateCount(); // instant — no DB hit
+          _updateCount();
         }
       });
     });
@@ -348,15 +352,16 @@ class _BpmWidgetState extends ConsumerState<BpmWidget> {
 
   Future<void> _initPolling() async {
     final db = await ref.read(databaseProvider.future);
-    if (db == null || !mounted) return;
-    // Initial: fetch entire window
+    if (db == null || !_alive) return;
     final since = DateTime.now().subtract(Duration(minutes: _maxMinutes));
+    _lastFetchEnd = since;
     try {
       final rows = await db.queryTimeseriesData(widget.config.key, since,
           orderBy: 'time ASC');
-      if (!mounted) return;
-      _cachedTimestamps = rows.map((r) => r.time).toList();
+      if (!_alive) return;
+      _cachedTimestamps = rows.map((r) => r.time).toSet();
     } catch (_) {}
+    if (!_alive) return;
     _lastFetchEnd = DateTime.now();
     _updateCount();
     _schedulePoll(db);
@@ -364,40 +369,43 @@ class _BpmWidgetState extends ConsumerState<BpmWidget> {
 
   void _schedulePoll(Database db) {
     _pollTimer?.cancel();
+    if (!_alive) return;
     _pollTimer = Timer(widget.config.pollInterval, () => _pollNewData(db));
   }
 
-  /// Poll: only fetch new data since last fetch, prune old.
   Future<void> _pollNewData(Database db) async {
-    if (!mounted || _lastFetchEnd == null) return;
+    if (!_alive || _lastFetchEnd == null) return;
+    final fetchFrom = _lastFetchEnd!;
+    _lastFetchEnd = DateTime.now();
     try {
       final rows = await db.queryTimeseriesData(
-          widget.config.key, _lastFetchEnd!,
+          widget.config.key, fetchFrom,
           orderBy: 'time ASC');
-      if (!mounted) return;
-      _lastFetchEnd = DateTime.now();
+      if (!_alive) return;
       if (rows.isNotEmpty) {
         _cachedTimestamps.addAll(rows.map((r) => r.time));
       }
-      // Prune timestamps older than the widest interval
       final cutoff = DateTime.now().subtract(Duration(minutes: _maxMinutes));
       _cachedTimestamps.removeWhere((t) => t.isBefore(cutoff));
       _updateCount();
     } catch (_) {}
+    if (!_alive) return;
     _schedulePoll(db);
   }
 
-  /// Recount from cached timestamps — no DB call.
   void _updateCount() {
+    if (!_alive) return;
     final since = DateTime.now().subtract(Duration(minutes: _activeInterval));
     final count = _cachedTimestamps.where((t) => t.isAfter(since)).length;
-    if (mounted) setState(() => _count = count);
+    setState(() => _count = count);
   }
 
   @override
   void dispose() {
+    _disposed = true;
     _subsSub?.cancel();
     _pollTimer?.cancel();
+    _cachedTimestamps.clear();
     super.dispose();
   }
 

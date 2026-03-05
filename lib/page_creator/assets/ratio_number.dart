@@ -360,11 +360,14 @@ class _RatioNumberWidgetState extends ConsumerState<RatioNumberWidget> {
   late Duration _activeSinceMinutes;
   StreamSubscription<Map<String, String>>? _subsSub;
   Timer? _pollTimer;
-  List<DateTime> _cachedTs1 = [];
-  List<DateTime> _cachedTs2 = [];
+  Set<DateTime> _cachedTs1 = {};
+  Set<DateTime> _cachedTs2 = {};
   int? _count1;
   int? _count2;
   DateTime? _lastFetchEnd;
+  bool _disposed = false;
+
+  bool get _alive => !_disposed && mounted;
 
   @override
   void initState() {
@@ -379,6 +382,7 @@ class _RatioNumberWidgetState extends ConsumerState<RatioNumberWidget> {
     if (varName == null) return;
 
     ref.read(stateManProvider.future).then((sm) {
+      if (!_alive) return;
       final cur = sm.getSubstitution(varName);
       if (cur != null) {
         final v = int.tryParse(cur);
@@ -389,7 +393,7 @@ class _RatioNumberWidgetState extends ConsumerState<RatioNumberWidget> {
       }
       _subsSub = sm.substitutionsChanged.listen((subs) {
         final v = int.tryParse(subs[varName] ?? '');
-        if (v != null && v > 0 && mounted) {
+        if (v != null && v > 0 && _alive) {
           final d = Duration(minutes: v);
           if (d != _activeSinceMinutes) {
             _activeSinceMinutes = d;
@@ -416,16 +420,16 @@ class _RatioNumberWidgetState extends ConsumerState<RatioNumberWidget> {
 
   Future<void> _initPolling() async {
     final db = await ref.read(databaseProvider.future);
-    if (db == null || !mounted) return;
-    // Initial: fetch entire window
+    if (db == null || !_alive) return;
     final since = DateTime.now().subtract(Duration(minutes: _maxMinutes));
+    _lastFetchEnd = since;
     final results = await Future.wait([
       _safeQuery(db, widget.config.key1, since),
       _safeQuery(db, widget.config.key2, since),
     ]);
-    if (!mounted) return;
-    _cachedTs1 = results[0].map((r) => r.time).toList();
-    _cachedTs2 = results[1].map((r) => r.time).toList();
+    if (!_alive) return;
+    _cachedTs1 = results[0].map((r) => r.time).toSet();
+    _cachedTs2 = results[1].map((r) => r.time).toSet();
     _lastFetchEnd = DateTime.now();
     _updateCounts();
     _schedulePoll(db);
@@ -433,23 +437,21 @@ class _RatioNumberWidgetState extends ConsumerState<RatioNumberWidget> {
 
   void _schedulePoll(Database db) {
     _pollTimer?.cancel();
+    if (!_alive) return;
     _pollTimer = Timer(widget.config.pollInterval, () => _pollNewData(db));
   }
 
   Future<void> _pollNewData(Database db) async {
-    if (!mounted || _lastFetchEnd == null) return;
-    final results = await Future.wait([
-      _safeQuery(db, widget.config.key1, _lastFetchEnd!),
-      _safeQuery(db, widget.config.key2, _lastFetchEnd!),
-    ]);
-    if (!mounted) return;
+    if (!_alive || _lastFetchEnd == null) return;
+    final fetchFrom = _lastFetchEnd!;
     _lastFetchEnd = DateTime.now();
-    if (results[0].isNotEmpty) {
-      _cachedTs1.addAll(results[0].map((r) => r.time));
-    }
-    if (results[1].isNotEmpty) {
-      _cachedTs2.addAll(results[1].map((r) => r.time));
-    }
+    final results = await Future.wait([
+      _safeQuery(db, widget.config.key1, fetchFrom),
+      _safeQuery(db, widget.config.key2, fetchFrom),
+    ]);
+    if (!_alive) return;
+    _cachedTs1.addAll(results[0].map((r) => r.time));
+    _cachedTs2.addAll(results[1].map((r) => r.time));
     final cutoff = DateTime.now().subtract(Duration(minutes: _maxMinutes));
     _cachedTs1.removeWhere((t) => t.isBefore(cutoff));
     _cachedTs2.removeWhere((t) => t.isBefore(cutoff));
@@ -458,16 +460,20 @@ class _RatioNumberWidgetState extends ConsumerState<RatioNumberWidget> {
   }
 
   void _updateCounts() {
+    if (!_alive) return;
     final since = DateTime.now().subtract(_activeSinceMinutes);
     final c1 = _cachedTs1.where((t) => t.isAfter(since)).length;
     final c2 = _cachedTs2.where((t) => t.isAfter(since)).length;
-    if (mounted) setState(() { _count1 = c1; _count2 = c2; });
+    setState(() { _count1 = c1; _count2 = c2; });
   }
 
   @override
   void dispose() {
+    _disposed = true;
     _subsSub?.cancel();
     _pollTimer?.cancel();
+    _cachedTs1.clear();
+    _cachedTs2.clear();
     super.dispose();
   }
 
