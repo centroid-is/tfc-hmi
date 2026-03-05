@@ -50,8 +50,11 @@ Future<StateMan> stateMan(Ref ref) async {
   );
 
   try {
-    final stateMan =
-        await StateMan.create(config: config, keyMappings: keyMappings);
+    final deviceClients = createM2400DeviceClients(config.jbtm);
+    final stateMan = await StateMan.create(
+        config: config,
+        keyMappings: keyMappings,
+        deviceClients: deviceClients);
 
     // Initialize collector
     ref.read(collectorProvider.future);

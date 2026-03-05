@@ -10,6 +10,11 @@ import 'package:open62541/open62541.dart';
 import 'package:rxdart/rxdart.dart';
 import 'package:collection/collection.dart';
 
+import 'package:jbtm/src/m2400.dart' show M2400RecordType;
+import 'package:jbtm/src/m2400_fields.dart' show M2400Field;
+import 'package:jbtm/src/m2400_client_wrapper.dart' show M2400ClientWrapper;
+import 'package:jbtm/src/msocket.dart' as jbtm show ConnectionStatus;
+
 import 'collector.dart';
 import 'preferences.dart';
 
@@ -124,16 +129,66 @@ class OpcUAConfig {
 }
 
 @JsonSerializable(explicitToJson: true)
+class M2400Config {
+  @JsonKey(defaultValue: 'm2400')
+  String type;
+  String host;
+  int port;
+  @JsonKey(name: 'server_alias')
+  String? serverAlias;
+
+  M2400Config({this.type = 'm2400', this.host = '', this.port = 52211});
+
+  factory M2400Config.fromJson(Map<String, dynamic> json) =>
+      _$M2400ConfigFromJson(json);
+  Map<String, dynamic> toJson() => _$M2400ConfigToJson(this);
+
+  @override
+  String toString() => 'M2400Config(type: $type, host: $host, port: $port, alias: $serverAlias)';
+}
+
+@JsonSerializable(explicitToJson: true)
+class M2400NodeConfig {
+  @JsonKey(name: 'record_type')
+  M2400RecordType recordType;
+  M2400Field? field;
+  @JsonKey(name: 'server_alias')
+  String? serverAlias;
+
+  /// Optional WeigherStatus code filter (BATCH only).
+  /// When set, only BATCH records whose status field matches this code are emitted.
+  @JsonKey(name: 'status_filter')
+  int? statusFilter;
+
+  M2400NodeConfig({
+    required this.recordType,
+    this.field,
+    this.serverAlias,
+    this.statusFilter,
+  });
+
+  factory M2400NodeConfig.fromJson(Map<String, dynamic> json) =>
+      _$M2400NodeConfigFromJson(json);
+  Map<String, dynamic> toJson() => _$M2400NodeConfigToJson(this);
+
+  @override
+  String toString() =>
+      'M2400NodeConfig(recordType: $recordType, field: $field, alias: $serverAlias, statusFilter: $statusFilter)';
+}
+
+@JsonSerializable(explicitToJson: true)
 class StateManConfig {
   List<OpcUAConfig> opcua;
+  @JsonKey(defaultValue: [])
+  List<M2400Config> jbtm;
 
-  StateManConfig({required this.opcua});
+  StateManConfig({required this.opcua, this.jbtm = const []});
 
   StateManConfig copy() => StateManConfig.fromJson(toJson());
 
   @override
   String toString() {
-    return 'StateManConfig(opcua: ${opcua.toString()})';
+    return 'StateManConfig(opcua: ${opcua.toString()}, jbtm: ${jbtm.toString()})';
   }
 
   static Future<StateManConfig> fromFile(String path) async {
@@ -206,12 +261,14 @@ class OpcUANodeConfig {
 class KeyMappingEntry {
   @JsonKey(name: 'opcua_node')
   OpcUANodeConfig? opcuaNode;
+  @JsonKey(name: 'm2400_node')
+  M2400NodeConfig? m2400Node;
   bool? io; // if true, the key is an IO unit
   CollectEntry? collect;
 
-  String? get server => opcuaNode?.serverAlias;
+  String? get server => opcuaNode?.serverAlias ?? m2400Node?.serverAlias;
 
-  KeyMappingEntry({this.opcuaNode, this.collect});
+  KeyMappingEntry({this.opcuaNode, this.m2400Node, this.collect});
 
   factory KeyMappingEntry.fromJson(Map<String, dynamic> json) =>
       _$KeyMappingEntryFromJson(json);
@@ -234,7 +291,8 @@ class KeyMappings {
   }
 
   String? lookupServerAlias(String key) {
-    return nodes[key]?.opcuaNode?.serverAlias;
+    final entry = nodes[key];
+    return entry?.opcuaNode?.serverAlias ?? entry?.m2400Node?.serverAlias;
   }
 
   String? lookupKey(NodeId nodeId) {
@@ -386,11 +444,116 @@ class ClientWrapper {
   }
 }
 
+/// Protocol-agnostic device client interface.
+///
+/// Abstracts the subscribe/status pattern shared by different device protocols
+/// (OPC UA via [ClientWrapper], M2400 via M2400ClientWrapper, etc.).
+///
+/// Implementations define [subscribableKeys] and [canSubscribe] to declare
+/// which keys they handle. [StateMan.subscribe] checks device clients first,
+/// falling through to OPC UA if no device client claims the key.
+abstract class DeviceClient {
+  /// The set of top-level keys this device client can handle.
+  Set<String> get subscribableKeys;
+
+  /// Whether this client can handle a subscribe request for [key].
+  ///
+  /// Should return true for both top-level keys (e.g., 'BATCH') and
+  /// dot-notation keys (e.g., 'BATCH.weight') if the root is subscribable.
+  bool canSubscribe(String key);
+
+  /// Subscribe to a DynamicValue stream by key.
+  Stream<DynamicValue> subscribe(String key);
+
+  /// Read the last known value for [key], or null if unavailable.
+  DynamicValue? read(String key);
+
+  /// Current connection status (synchronous).
+  ConnectionStatus get connectionStatus;
+
+  /// Stream of connection status changes.
+  Stream<ConnectionStatus> get connectionStream;
+
+  /// Start connecting to the device.
+  void connect();
+
+  /// Dispose resources.
+  void dispose();
+}
+
+/// Adapter that wraps [M2400ClientWrapper] from the jbtm package as a
+/// [DeviceClient] for use in [StateMan].
+///
+/// Maps jbtm's [jbtm.ConnectionStatus] to state_man's [ConnectionStatus] and
+/// delegates subscribe/connect/dispose to the underlying wrapper.
+class M2400DeviceClientAdapter implements DeviceClient {
+  /// The underlying M2400ClientWrapper from jbtm.
+  final M2400ClientWrapper wrapper;
+
+  /// The server alias for this device (from M2400Config).
+  final String? serverAlias;
+
+  static const _validKeys = {'BATCH', 'STAT', 'INTRO', 'LUA'};
+
+  M2400DeviceClientAdapter(this.wrapper, {this.serverAlias});
+
+  @override
+  Set<String> get subscribableKeys => _validKeys;
+
+  @override
+  bool canSubscribe(String key) => _validKeys.contains(key.split('.').first);
+
+  @override
+  Stream<DynamicValue> subscribe(String key) => wrapper.subscribe(key);
+
+  @override
+  DynamicValue? read(String key) => wrapper.lastValue(key);
+
+  @override
+  ConnectionStatus get connectionStatus =>
+      _mapStatus(wrapper.status);
+
+  @override
+  Stream<ConnectionStatus> get connectionStream =>
+      wrapper.statusStream.map(_mapStatus);
+
+  @override
+  void connect() => wrapper.connect();
+
+  @override
+  void dispose() => wrapper.dispose();
+
+  /// Map jbtm's ConnectionStatus to state_man's ConnectionStatus.
+  static ConnectionStatus _mapStatus(jbtm.ConnectionStatus s) {
+    switch (s) {
+      case jbtm.ConnectionStatus.connected:
+        return ConnectionStatus.connected;
+      case jbtm.ConnectionStatus.connecting:
+        return ConnectionStatus.connecting;
+      case jbtm.ConnectionStatus.disconnected:
+        return ConnectionStatus.disconnected;
+    }
+  }
+}
+
+/// Create [DeviceClient] instances for each [M2400Config] in the list.
+///
+/// Each M2400Config produces one [M2400DeviceClientAdapter] wrapping an
+/// [M2400ClientWrapper]. The caller is responsible for calling [connect()]
+/// and [dispose()] on the returned clients.
+List<DeviceClient> createM2400DeviceClients(List<M2400Config> configs) {
+  return configs.map((config) {
+    final wrapper = M2400ClientWrapper(config.host, config.port);
+    return M2400DeviceClientAdapter(wrapper, serverAlias: config.serverAlias);
+  }).toList();
+}
+
 class StateMan {
   final logger = Logger();
   final StateManConfig config;
   KeyMappings keyMappings;
   final List<ClientWrapper> clients;
+  final List<DeviceClient> deviceClients;
   final Map<String, AutoDisposingStream<DynamicValue>> _subscriptions = {};
   bool _shouldRun = true;
   final Map<String, String> _substitutions = {};
@@ -403,6 +566,7 @@ class StateMan {
     required this.keyMappings,
     required this.clients,
     required this.alias,
+    this.deviceClients = const [],
   }) {
     for (final wrapper in clients) {
       if (wrapper.client is Client) {
@@ -566,6 +730,7 @@ class StateMan {
     required KeyMappings keyMappings,
     bool useIsolate = true,
     String alias = '',
+    List<DeviceClient> deviceClients = const [],
   }) async {
     // Example directory: /Users/jonb/Library/Containers/is.centroid.sildarvinnsla.skammtalina/Data/Documents/certs
     List<ClientWrapper> clients = [];
@@ -616,7 +781,14 @@ class StateMan {
         config: config,
         keyMappings: keyMappings,
         clients: clients,
-        alias: alias);
+        alias: alias,
+        deviceClients: deviceClients);
+
+    // Connect device clients
+    for (final dc in deviceClients) {
+      dc.connect();
+    }
+
     return stateMan;
   }
 
@@ -661,9 +833,81 @@ class StateMan {
     return resolvedKey;
   }
 
+  /// Translate a user-facing key to M2400 subscribe info via key mappings.
+  ///
+  /// Returns resolved subscribe key, device client, optional status filter,
+  /// and optional field name for post-filter extraction. Null if not M2400.
+  ({String subscribeKey, DeviceClient dc, int? statusFilter, String? fieldName})?
+      _resolveM2400Key(String key) {
+    final entry = keyMappings.nodes[key];
+    if (entry?.m2400Node == null) return null;
+    final node = entry!.m2400Node!;
+
+    String? recordKey;
+    switch (node.recordType) {
+      case M2400RecordType.recBatch:
+        recordKey = 'BATCH';
+        break;
+      case M2400RecordType.recStat:
+        recordKey = 'STAT';
+        break;
+      case M2400RecordType.recIntro:
+        recordKey = 'INTRO';
+        break;
+      case M2400RecordType.recLua:
+        recordKey = 'LUA';
+        break;
+      default:
+        return null;
+    }
+
+    // When statusFilter is set, subscribe to the full record so we can
+    // check the status field before extracting the target field.
+    final hasFilter = node.statusFilter != null;
+    final fieldName = node.field?.name;
+    final subscribeKey = (!hasFilter && fieldName != null)
+        ? '$recordKey.$fieldName'
+        : recordKey;
+
+    final alias = node.serverAlias;
+    for (final dc in deviceClients) {
+      if (dc is M2400DeviceClientAdapter && dc.serverAlias == alias) {
+        return (
+          subscribeKey: subscribeKey,
+          dc: dc,
+          statusFilter: node.statusFilter,
+          fieldName: hasFilter ? fieldName : null,
+        );
+      }
+    }
+    return null;
+  }
+
   /// Example: read("myKey")
   Future<DynamicValue> read(String key) async {
     key = resolveKey(key);
+
+    // Check M2400 key mappings first
+    final m2400 = _resolveM2400Key(key);
+    if (m2400 != null) {
+      var value = m2400.dc.read(m2400.subscribeKey);
+      if (value == null) {
+        throw StateManException(
+            'No cached value for key: "$key" — not found yet');
+      }
+      if (m2400.statusFilter != null) {
+        if (value['status'].asInt != m2400.statusFilter) {
+          throw StateManException(
+              'No cached value for key: "$key" — status not found yet');
+        }
+      }
+      if (m2400.fieldName != null) {
+        value = value[m2400.fieldName!];
+      }
+      return value;
+    }
+
+    // Fall through to OPC UA
     try {
       final client = _getClientWrapper(key).client;
       final nodeId = _lookupNodeId(key);
@@ -758,9 +1002,29 @@ class StateMan {
 
   /// Subscribe to data changes on a specific node with type safety.
   /// Returns a Stream that can be cancelled to stop the subscription.
-  /// Example: subscribe("myIntKey") or subscribe("myStringKey")
+  ///
+  /// Routes to [DeviceClient] instances first (e.g., M2400), falling through
+  /// to OPC UA [_monitor] if no device client claims the key.
+  ///
+  /// Example: subscribe("myIntKey") or subscribe("BATCH.weight")
   Future<Stream<DynamicValue>> subscribe(String key) async {
     key = resolveKey(key);
+
+    // Check M2400 key mappings first
+    final m2400 = _resolveM2400Key(key);
+    if (m2400 != null) {
+      Stream<DynamicValue> stream = m2400.dc.subscribe(m2400.subscribeKey);
+      if (m2400.statusFilter != null) {
+        stream = stream.where(
+            (dv) => dv['status'].asInt == m2400.statusFilter);
+      }
+      if (m2400.fieldName != null) {
+        stream = stream.map((dv) => dv[m2400.fieldName!]);
+      }
+      return stream;
+    }
+
+    // Fall through to OPC UA
     return _monitor(key);
   }
 
@@ -774,6 +1038,12 @@ class StateMan {
   Future<void> close() async {
     _shouldRun = false;
     logger.d('Closing connection');
+
+    // Dispose device clients (M2400, etc.)
+    for (final dc in deviceClients) {
+      dc.dispose();
+    }
+
     for (final wrapper in clients) {
       try {
         if (wrapper.client is ClientIsolate) {

@@ -69,7 +69,7 @@ const _$GraphTypeEnumMap = {
 // **************************************************************************
 
 String _$chartThemeNotifierHash() =>
-    r'62b1352e93f1aea589eefdb712f37d30c6895607';
+    r'f3d4a2ce9794a58d245dca516a0656d8a589977d';
 
 /// -------------------- Chart theme (Riverpod) --------------------
 ///

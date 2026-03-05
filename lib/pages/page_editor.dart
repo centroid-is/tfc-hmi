@@ -11,6 +11,7 @@ import 'page_view.dart';
 import '../widgets/zoomable_canvas.dart';
 import '../page_creator/page.dart';
 import '../models/menu_item.dart';
+import '../providers/current_page_assets.dart';
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/services.dart';
@@ -75,6 +76,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     final pageManager = await ref.read(pageManagerProvider.future);
     pageManager.pages = PageManager.copyPages(_temporaryPages);
     await pageManager.save();
+    if (!mounted) return;
     setState(() {
       _updateCurrentJson();
       _savedJson = _currentJson;
@@ -527,6 +529,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   }
 
   void _showConfigDialog(Asset asset) {
+    ref.read(currentPageAssetsProvider.notifier).state = assets;
     showDialog(
       context: context,
       builder: (context) => Dialog(

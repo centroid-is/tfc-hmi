@@ -62,7 +62,8 @@ void main() async {
     historyToDb: true,
   );
 
-  logger.i('Spawning ${smConfig.opcua.length} DataAcquisition isolate(s)');
+  logger.i('Spawning ${smConfig.opcua.length} OPC UA + '
+      '${smConfig.jbtm.isEmpty ? 0 : 1} M2400 DataAcquisition isolate(s)');
 
   // Spawn one isolate per OPC UA server
   for (final server in smConfig.opcua) {
@@ -77,6 +78,26 @@ void main() async {
       server: server,
       dbConfig: dbConfig,
       keyMappings: filtered,
+    );
+  }
+
+  // Spawn one isolate for all M2400 servers
+  if (smConfig.jbtm.isNotEmpty) {
+    // Collect key mappings for all M2400 servers
+    final m2400KeyMappings = KeyMappings(nodes: Map.fromEntries(
+      keyMappings.nodes.entries.where((e) => e.value.m2400Node != null),
+    ));
+    final collectedKeys = m2400KeyMappings.nodes.entries
+        .where((e) => e.value.collect != null)
+        .map((e) => e.key);
+    final aliases = smConfig.jbtm.map((s) => s.serverAlias ?? s.host).join(', ');
+    logger.i(
+        'Spawning M2400 isolate for [$aliases] with ${m2400KeyMappings.nodes.length} keys (${collectedKeys.length} collected):\n${collectedKeys.map((k) => '  - $k').join('\n')}');
+
+    await spawnM2400DataAcquisitionIsolate(
+      servers: smConfig.jbtm,
+      dbConfig: dbConfig,
+      keyMappings: m2400KeyMappings,
     );
   }
 

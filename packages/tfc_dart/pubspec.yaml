@@ -33,6 +33,10 @@ dependencies:
       url: https://github.com/centroid-is/open62541_dart.git
       ref: main
 
+  # JBTM (M2400 device protocol types)
+  jbtm:
+    path: ../jbtm
+
   # Utilities
   collection: ^1.18.0
   path: ^1.9.1

@@ -58,12 +58,7 @@ class OptionVariableConfig extends BaseAsset {
     this.defaultValue,
     this.showSearch = true,
     this.customLabel,
-  }) {
-    // Set default value if provided and no selection made
-    if (selectedValue == null && defaultValue != null) {
-      selectedValue = defaultValue;
-    }
-  }
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -162,7 +157,9 @@ class _OptionVariableWidgetState extends ConsumerState<OptionVariableWidget> {
     }
 
     _queryParam = getQueryParam(context, widget.config.variableName);
-    _selectedValue = _queryParam ?? widget.config.selectedValue;
+    _selectedValue = _queryParam ??
+        widget.config.selectedValue ??
+        widget.config.defaultValue;
 
     _initializeVariable();
   }
@@ -542,6 +539,32 @@ class _ConfigContent extends ConsumerWidget {
           ),
           onChanged: (value) {
             config.customLabel = value;
+          },
+        ),
+
+        const SizedBox(height: 20),
+
+        // Default option
+        DropdownButtonFormField<String?>(
+          value: config.options.any((o) => o.value == config.defaultValue)
+              ? config.defaultValue
+              : null,
+          decoration: const InputDecoration(
+            labelText: 'Default Option',
+            helperText: 'Option selected on first load (before user picks)',
+          ),
+          items: [
+            const DropdownMenuItem<String?>(
+              value: null,
+              child: Text('None'),
+            ),
+            ...config.options.map((o) => DropdownMenuItem<String?>(
+                  value: o.value,
+                  child: Text(o.label),
+                )),
+          ],
+          onChanged: (value) {
+            config.defaultValue = value;
           },
         ),
 

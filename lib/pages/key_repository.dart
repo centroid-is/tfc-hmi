@@ -15,6 +15,9 @@ import '../widgets/opcua_array_index_field.dart';
 import 'package:tfc_dart/core/collector.dart';
 import 'package:tfc_dart/core/database.dart';
 import '../widgets/fuzzy_search_bar.dart';
+import 'package:jbtm/src/m2400.dart' show M2400RecordType;
+import 'package:jbtm/src/m2400_fields.dart'
+    show M2400Field, WeigherStatus, expectedFields;
 import '../providers/preferences.dart';
 import '../providers/state_man.dart';
 import '../providers/database.dart';
@@ -331,13 +334,21 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
     return fuzzyFilter(entries, _searchQuery, [
       (e) => e.key,
       (e) => e.value.opcuaNode?.identifier ?? '',
-      (e) => e.value.opcuaNode?.serverAlias ?? '',
+      (e) => e.value.opcuaNode?.serverAlias ?? e.value.m2400Node?.serverAlias ?? '',
     ]);
   }
 
   List<String> get _serverAliases {
     if (_stateManConfig == null) return [];
     return _stateManConfig!.opcua
+        .where((c) => c.serverAlias != null && c.serverAlias!.isNotEmpty)
+        .map((c) => c.serverAlias!)
+        .toList();
+  }
+
+  List<String> get _jbtmServerAliases {
+    if (_stateManConfig == null) return [];
+    return _stateManConfig!.jbtm
         .where((c) => c.serverAlias != null && c.serverAlias!.isNotEmpty)
         .map((c) => c.serverAlias!)
         .toList();
@@ -503,6 +514,7 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
                         keyName: entry.key,
                         entry: entry.value,
                         serverAliases: _serverAliases,
+                        jbtmServerAliases: _jbtmServerAliases,
                         onUpdate: (updated) => _updateEntry(entry.key, updated),
                         onRename: (newName) => _renameKey(entry.key, newName),
                         onCopy: () => _duplicateKey(entry.key),
@@ -594,6 +606,7 @@ class _KeyMappingCard extends StatefulWidget {
   final String keyName;
   final KeyMappingEntry entry;
   final List<String> serverAliases;
+  final List<String> jbtmServerAliases;
   final Function(KeyMappingEntry) onUpdate;
   final Function(String) onRename;
   final VoidCallback onCopy;
@@ -606,6 +619,7 @@ class _KeyMappingCard extends StatefulWidget {
     required this.keyName,
     required this.entry,
     required this.serverAliases,
+    required this.jbtmServerAliases,
     required this.onUpdate,
     required this.onRename,
     required this.onCopy,
@@ -664,9 +678,22 @@ class _KeyMappingCardState extends State<_KeyMappingCard> {
     super.dispose();
   }
 
+  bool get _isM2400 => widget.entry.m2400Node != null;
+
   String _buildSubtitle() {
+    if (_isM2400) {
+      final node = widget.entry.m2400Node!;
+      var subtitle = 'REC=${node.recordType.name}(${node.recordType.id})';
+      if (node.field != null) {
+        subtitle += '; FLD=${node.field!.displayName}(${node.field!.id})';
+      }
+      if (node.serverAlias != null && node.serverAlias!.isNotEmpty) {
+        subtitle += ' @ ${node.serverAlias}';
+      }
+      return subtitle;
+    }
     final node = widget.entry.opcuaNode;
-    if (node == null) return 'No OPC UA config';
+    if (node == null) return 'No config';
     var subtitle = 'ns=${node.namespace}; id=${node.identifier}';
     if (node.serverAlias != null && node.serverAlias!.isNotEmpty) {
       subtitle += ' @ ${node.serverAlias}';
@@ -685,10 +712,35 @@ class _KeyMappingCardState extends State<_KeyMappingCard> {
     widget.onUpdate(updatedEntry);
   }
 
+  void _updateM2400Config(M2400NodeConfig config) {
+    final updatedEntry = KeyMappingEntry(
+      m2400Node: config,
+      collect: widget.entry.collect,
+    );
+    widget.onUpdate(updatedEntry);
+  }
+
+  void _switchToM2400() {
+    final updatedEntry = KeyMappingEntry(
+      m2400Node: M2400NodeConfig(recordType: M2400RecordType.recBatch),
+      collect: widget.entry.collect,
+    );
+    widget.onUpdate(updatedEntry);
+  }
+
+  void _switchToOpcUa() {
+    final updatedEntry = KeyMappingEntry(
+      opcuaNode: OpcUANodeConfig(namespace: 0, identifier: ''),
+      collect: widget.entry.collect,
+    );
+    widget.onUpdate(updatedEntry);
+  }
+
   void _toggleCollect(bool enabled) {
     setState(() => _collectEnabled = enabled);
     final updatedEntry = KeyMappingEntry(
       opcuaNode: widget.entry.opcuaNode,
+      m2400Node: widget.entry.m2400Node,
       collect: enabled
           ? CollectEntry(
               key: widget.keyName,
@@ -703,6 +755,7 @@ class _KeyMappingCardState extends State<_KeyMappingCard> {
   void _updateCollectEntry(CollectEntry collect) {
     final updatedEntry = KeyMappingEntry(
       opcuaNode: widget.entry.opcuaNode,
+      m2400Node: widget.entry.m2400Node,
       collect: collect,
     );
     widget.onUpdate(updatedEntry);
@@ -793,14 +846,52 @@ class _KeyMappingCardState extends State<_KeyMappingCard> {
                   onChanged: (value) => _submitKeyName(value),
                   onSubmitted: (value) => _submitKeyName(value),
                 ),
-                const SizedBox(height: 16),
-                // OPC UA Config Section
-                _OpcUaConfigSection(
-                  config: widget.entry.opcuaNode ??
-                      OpcUANodeConfig(namespace: 0, identifier: ''),
-                  serverAliases: widget.serverAliases,
-                  onChanged: _updateOpcUaConfig,
-                ),
+                const SizedBox(height: 12),
+                // Device type selector
+                if (widget.jbtmServerAliases.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 4.0),
+                    child: Row(
+                      children: [
+                        const FaIcon(FontAwesomeIcons.plug, size: 14),
+                        const SizedBox(width: 8),
+                        Text('Device Type',
+                            style: Theme.of(context).textTheme.bodySmall),
+                        const SizedBox(width: 12),
+                        ChoiceChip(
+                          label: const Text('OPC UA'),
+                          selected: !_isM2400,
+                          onSelected: (selected) {
+                            if (selected && _isM2400) _switchToOpcUa();
+                          },
+                        ),
+                        const SizedBox(width: 8),
+                        ChoiceChip(
+                          label: const Text('M2400'),
+                          selected: _isM2400,
+                          onSelected: (selected) {
+                            if (selected && !_isM2400) _switchToM2400();
+                          },
+                        ),
+                      ],
+                    ),
+                  ),
+                const SizedBox(height: 4),
+                // Protocol-specific config section
+                if (_isM2400)
+                  _M2400ConfigSection(
+                    config: widget.entry.m2400Node ??
+                        M2400NodeConfig(recordType: M2400RecordType.recBatch),
+                    jbtmServerAliases: widget.jbtmServerAliases,
+                    onChanged: _updateM2400Config,
+                  )
+                else
+                  _OpcUaConfigSection(
+                    config: widget.entry.opcuaNode ??
+                        OpcUANodeConfig(namespace: 0, identifier: ''),
+                    serverAliases: widget.serverAliases,
+                    onChanged: _updateOpcUaConfig,
+                  ),
                 const SizedBox(height: 16),
                 // Collection Config Section
                 _CollectionConfigSection(
@@ -1016,6 +1107,198 @@ class _OpcUaConfigSectionState extends ConsumerState<_OpcUaConfigSection> {
                 _notifyChanged();
               },
             ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ===================== M2400 Config Section =====================
+
+class _M2400ConfigSection extends StatefulWidget {
+  final M2400NodeConfig config;
+  final List<String> jbtmServerAliases;
+  final Function(M2400NodeConfig) onChanged;
+
+  const _M2400ConfigSection({
+    required this.config,
+    required this.jbtmServerAliases,
+    required this.onChanged,
+  });
+
+  @override
+  State<_M2400ConfigSection> createState() => _M2400ConfigSectionState();
+}
+
+class _M2400ConfigSectionState extends State<_M2400ConfigSection> {
+  String? _selectedAlias;
+  M2400RecordType? _selectedRecordType;
+  M2400Field? _selectedField;
+  int? _selectedStatusFilter;
+
+  @override
+  void initState() {
+    super.initState();
+    _selectedAlias = widget.config.serverAlias;
+    _selectedRecordType = widget.config.recordType;
+    _selectedField = widget.config.field;
+    _selectedStatusFilter = widget.config.statusFilter;
+  }
+
+  void _notifyChanged() {
+    final config = M2400NodeConfig(
+      recordType: _selectedRecordType ?? M2400RecordType.recBatch,
+      field: _selectedField,
+      serverAlias: (_selectedAlias != null && _selectedAlias!.isNotEmpty)
+          ? _selectedAlias
+          : null,
+      statusFilter: _selectedStatusFilter,
+    );
+    widget.onChanged(config);
+  }
+
+  List<M2400Field> _getExpectedFields(M2400RecordType? recType) {
+    if (recType == null) return [];
+    final expected = expectedFields[recType];
+    if (expected != null) return expected.toList();
+    return [];
+  }
+
+  List<M2400Field> _getOtherFields(M2400RecordType? recType) {
+    if (recType == null) return M2400Field.values.toList();
+    final expected = expectedFields[recType];
+    if (expected == null) return M2400Field.values.toList();
+    return M2400Field.values.where((f) => !expected.contains(f)).toList();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(12.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const FaIcon(FontAwesomeIcons.scaleBalanced, size: 16),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text('M2400 Key Configuration',
+                      style: Theme.of(context).textTheme.titleSmall),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            // Server alias dropdown (JBTM servers only)
+            DropdownButtonFormField<String>(
+              value: _selectedAlias,
+              decoration: const InputDecoration(
+                labelText: 'M2400 Server',
+                prefixIcon: FaIcon(FontAwesomeIcons.scaleBalanced, size: 16),
+              ),
+              items: [
+                const DropdownMenuItem<String>(
+                    value: null, child: Text('(none)')),
+                ...widget.jbtmServerAliases.map((alias) =>
+                    DropdownMenuItem(value: alias, child: Text(alias))),
+              ],
+              onChanged: (value) {
+                setState(() => _selectedAlias = value);
+                _notifyChanged();
+              },
+            ),
+            const SizedBox(height: 12),
+            // REC type dropdown (REQUIRED)
+            DropdownButtonFormField<M2400RecordType>(
+              value: _selectedRecordType,
+              decoration: const InputDecoration(
+                labelText: 'Record Type (REC)',
+                prefixIcon: FaIcon(FontAwesomeIcons.layerGroup, size: 16),
+              ),
+              items: M2400RecordType.values
+                  .where((t) => t != M2400RecordType.unknown)
+                  .map((recType) => DropdownMenuItem(
+                        value: recType,
+                        child: Text('${recType.name} (${recType.id})'),
+                      ))
+                  .toList(),
+              onChanged: (value) {
+                setState(() {
+                  _selectedRecordType = value;
+                  // Reset field if it's not in the expected set for the new REC type
+                  if (_selectedField != null && value != null) {
+                    final expected = expectedFields[value];
+                    if (expected != null && !expected.contains(_selectedField)) {
+                      _selectedField = null;
+                    }
+                  }
+                  // Clear status filter when switching away from BATCH
+                  if (value != M2400RecordType.recBatch) {
+                    _selectedStatusFilter = null;
+                  }
+                });
+                _notifyChanged();
+              },
+            ),
+            const SizedBox(height: 12),
+            // FLD dropdown (OPTIONAL -- null means subscribe to full record)
+            DropdownButtonFormField<M2400Field?>(
+              value: _selectedField,
+              decoration: const InputDecoration(
+                labelText: 'Field (FLD) -- optional',
+                prefixIcon: FaIcon(FontAwesomeIcons.hashtag, size: 16),
+              ),
+              isExpanded: true,
+              items: [
+                const DropdownMenuItem<M2400Field?>(
+                    value: null,
+                    child: Text('(Full record -- all fields)')),
+                // Expected fields for this REC type (shown first)
+                ..._getExpectedFields(_selectedRecordType).map((field) =>
+                    DropdownMenuItem(
+                      value: field,
+                      child: Text('${field.displayName} (${field.id})'),
+                    )),
+                // Other fields
+                ..._getOtherFields(_selectedRecordType).map((field) =>
+                    DropdownMenuItem(
+                      value: field,
+                      child: Text('${field.displayName} (${field.id})'),
+                    )),
+              ],
+              onChanged: (value) {
+                setState(() => _selectedField = value);
+                _notifyChanged();
+              },
+            ),
+            // Status filter dropdown (BATCH only)
+            if (_selectedRecordType == M2400RecordType.recBatch) ...[
+              const SizedBox(height: 12),
+              DropdownButtonFormField<int?>(
+                value: _selectedStatusFilter,
+                decoration: const InputDecoration(
+                  labelText: 'Status Filter (optional)',
+                  prefixIcon: FaIcon(FontAwesomeIcons.filter, size: 16),
+                ),
+                isExpanded: true,
+                items: [
+                  const DropdownMenuItem<int?>(
+                      value: null, child: Text('(No filter -- all records)')),
+                  ...WeigherStatus.values
+                      .where((s) => s != WeigherStatus.unknown)
+                      .map((s) => DropdownMenuItem<int?>(
+                            value: s.code,
+                            child: Text('${s.displayName} (${s.code})'),
+                          )),
+                ],
+                onChanged: (value) {
+                  setState(() => _selectedStatusFilter = value);
+                  _notifyChanged();
+                },
+              ),
+            ],
           ],
         ),
       ),

@@ -31,6 +31,8 @@ RatioNumberConfig _$RatioNumberConfigFromJson(Map<String, dynamic> json) =>
               ?.map((e) => (e as num).toInt())
               .toList() ??
           [1, 5, 10, 60, 240],
+      intervalVariable: json['interval_variable'] as String?,
+      decimalPlaces: (json['decimal_places'] as num?)?.toInt() ?? 1,
     )
       ..variant = json['asset_name'] as String
       ..coordinates =
@@ -59,6 +61,8 @@ Map<String, dynamic> _$RatioNumberConfigToJson(RatioNumberConfig instance) =>
       'integers_only': instance.integersOnly,
       'bars_interactive': instance.barsInteractive,
       'interval_presets': instance.intervalPresets,
+      'interval_variable': instance.intervalVariable,
+      'decimal_places': instance.decimalPlaces,
     };
 
 const _$TextPosEnumMap = {
