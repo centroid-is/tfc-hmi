@@ -1,7 +1,8 @@
 import 'dart:async';
 
 import 'package:test/test.dart';
-import 'package:open62541/open62541.dart' show ClientApi, DynamicValue;
+import 'package:open62541/open62541.dart'
+    show ClientApi, DynamicValue, Inactivity, SecureChannelClosed, SubscriptionDeleted;
 import 'package:tfc_dart/core/state_man.dart';
 
 /// Minimal fake ClientApi that doesn't load native code.
@@ -734,6 +735,79 @@ void main() {
         await sub.cancel();
         await raw.close();
         wrapper.dispose();
+      });
+    });
+
+    group('sessionLost — wrapper owns session loss state', () {
+      test('sessionLost starts false', () {
+        final wrapper = ClientWrapper(FakeClientApi(), OpcUAConfig());
+        expect(wrapper.sessionLost, isFalse);
+        wrapper.dispose();
+      });
+
+      test('fatal heartbeat error sets sessionLost', () {
+        final wrapper = ClientWrapper(FakeClientApi(), OpcUAConfig());
+        wrapper.subscriptionId = 42;
+
+        // Simulate heartbeat receiving SecureChannelClosed
+        wrapper.simulateFatalHeartbeatError();
+
+        expect(wrapper.sessionLost, isTrue);
+        // subscriptionId preserved for stateStream guard
+        expect(wrapper.subscriptionId, 42);
+
+        wrapper.dispose();
+      });
+
+      test('stateStream fallback: CREATE_REQUESTED + subscriptionId sets sessionLost', () {
+        final wrapper = ClientWrapper(FakeClientApi(), OpcUAConfig());
+        wrapper.subscriptionId = 42;
+
+        // Heartbeat didn't catch it — stateStream guard acts as fallback
+        // (this is tested via markSessionLost which is what stateStream calls)
+        wrapper.markSessionLost();
+
+        expect(wrapper.sessionLost, isTrue);
+        wrapper.dispose();
+      });
+
+      test('sessionLost is false when no subscription existed', () {
+        final wrapper = ClientWrapper(FakeClientApi(), OpcUAConfig());
+        // No subscriptionId set — nothing to lose
+        expect(wrapper.sessionLost, isFalse);
+        wrapper.dispose();
+      });
+
+      test('stopHeartbeat does NOT set sessionLost', () {
+        final wrapper = ClientWrapper(FakeClientApi(), OpcUAConfig());
+        wrapper.subscriptionId = 42;
+
+        // Manual stopHeartbeat (e.g. from dispose) should not trigger session loss
+        wrapper.stopHeartbeat();
+
+        expect(wrapper.sessionLost, isFalse);
+        expect(wrapper.subscriptionId, 42);
+        wrapper.dispose();
+      });
+
+      test('Inactivity does NOT set sessionLost', () {
+        final wrapper = ClientWrapper(FakeClientApi(), OpcUAConfig());
+        wrapper.subscriptionId = 42;
+
+        wrapper.simulateInactivity();
+
+        expect(wrapper.sessionLost, isFalse);
+        wrapper.dispose();
+      });
+
+      test('isSubscriptionDead recognises fatal errors', () {
+        expect(ClientWrapper.isSubscriptionDead(SubscriptionDeleted(1)), isTrue);
+        expect(ClientWrapper.isSubscriptionDead(SecureChannelClosed()), isTrue);
+        expect(ClientWrapper.isSubscriptionDead(Inactivity()), isFalse);
+        expect(ClientWrapper.isSubscriptionDead('SubscriptionDeleted'), isTrue);
+        expect(ClientWrapper.isSubscriptionDead('SecureChannelClosed'), isTrue);
+        expect(ClientWrapper.isSubscriptionDead('Inactivity'), isFalse);
+        expect(ClientWrapper.isSubscriptionDead(Exception('random')), isFalse);
       });
     });
   });

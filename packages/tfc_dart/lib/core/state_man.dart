@@ -377,6 +377,7 @@ class ClientWrapper {
   int _heartbeatGeneration = 0;
   DateTime? _lastHeartbeatTick;
   bool _inactive = false;
+  bool sessionLost = false;
   bool resendOnRecovery;
   final Set<AutoDisposingStream> streams = {};
   final Logger _logger = Logger();
@@ -469,13 +470,8 @@ class ClientWrapper {
         }
         if (isSubscriptionDead(error)) {
           _logger.e('[${config.endpoint}] Heartbeat lost (sub=$subId): $error');
-          subscriptionId = null;
+          sessionLost = true;
           stopHeartbeat();
-          updateConnectionStatus(ClientState(
-            channelState: SecureChannelState.UA_SECURECHANNELSTATE_CLOSED,
-            sessionState: SessionState.UA_SESSIONSTATE_CLOSED,
-            recoveryStatus: 0,
-          ));
         }
       },
     );
@@ -495,9 +491,20 @@ class ClientWrapper {
     }
   }
 
+  /// Mark session as lost — called by stateStream as fallback when
+  /// heartbeat didn't catch it (e.g. session drops before heartbeat started).
+  void markSessionLost() => sessionLost = true;
+
   /// Simulate inactivity for testing.
   @visibleForTesting
   void simulateInactivity() => _inactive = true;
+
+  /// Simulate a fatal heartbeat error (SubscriptionDeleted/SecureChannelClosed).
+  @visibleForTesting
+  void simulateFatalHeartbeatError() {
+    sessionLost = true;
+    stopHeartbeat();
+  }
 
   /// Simulate heartbeat tick for testing (triggers recovery if inactive).
   @visibleForTesting
@@ -687,7 +694,6 @@ class StateMan {
         }();
       }
 
-      bool sessionLost = false;
       SecureChannelState? lastChannelState;
       DateTime? channelOpenedAt;
       final channelLifetimeSec = 60; // 1 minute as configured
@@ -726,18 +732,19 @@ class StateMan {
               'renewal window: ${channelLifetimeSec * 0.75}s-${channelLifetimeSec}s)');
           channelOpenedAt = null;
         }
-        // Only treat as session loss if this wrapper actually had a subscription
+        // Fallback: treat as session loss if wrapper had a subscription
+        // (heartbeat may have already set sessionLost via fatal error)
         if (value.sessionState ==
                 SessionState.UA_SESSIONSTATE_CREATE_REQUESTED &&
             wrapper.subscriptionId != null) {
           logger.e('[$alias ${wrapper.config.endpoint}] Session lost!');
-          sessionLost = true;
+          wrapper.markSessionLost();
         }
         if (value.sessionState == SessionState.UA_SESSIONSTATE_ACTIVATED) {
-          if (sessionLost) {
+          if (wrapper.sessionLost) {
             logger.e(
                 '[$alias ${wrapper.config.endpoint}] Session lost, resubscribing (old sub=${wrapper.subscriptionId})');
-            sessionLost = false;
+            wrapper.sessionLost = false;
             wrapper.subscriptionId = null;
             wrapper.stopHeartbeat();
             // Only resubscribe keys belonging to this wrapper
@@ -1189,7 +1196,8 @@ class StateMan {
     final (id, idx) = nodeId;
 
     int retries = 0;
-    while (true) {
+    while (_shouldRun) {
+      final wrapper = _getClientWrapper(key);
       try {
         // Cancel any leftover subscription from a previous failed attempt
         // so we don't leak monitored items while retrying.
@@ -1197,7 +1205,6 @@ class StateMan {
         _subscriptions[key]?._rawSub = null;
 
         await client.awaitConnect();
-        final wrapper = _getClientWrapper(key);
 
         if (wrapper.subscriptionId == null &&
             await wrapper.worker.doTheWork()) {
@@ -1245,14 +1252,18 @@ class StateMan {
         return ads.stream;
       } catch (e) {
         retries++;
-        if (retries > 10) {
-          logger.w('Failed to get initial value for $key: $e');
+        if (retries > 3 && wrapper.subscriptionId != null) {
+          logger.w('[$alias] $retries consecutive failures for $key on '
+              'sub=${wrapper.subscriptionId}, forcing subscription recreation: $e');
+          wrapper.subscriptionId = null;
+          wrapper.stopHeartbeat();
           retries = 0;
         }
         await Future.delayed(const Duration(seconds: 1));
         continue;
       }
     }
+    throw StateManException('StateMan closed while monitoring "$key"');
   }
 }
 
