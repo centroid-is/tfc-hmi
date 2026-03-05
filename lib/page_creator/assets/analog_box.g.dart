@@ -14,6 +14,7 @@ AnalogBoxConfig _$AnalogBoxConfigFromJson(Map<String, dynamic> json) =>
       setpoint1Key: json['setpoint1_key'] as String?,
       setpoint1HysteresisKey: json['setpoint1_hysteresis_key'] as String?,
       setpoint2Key: json['setpoint2_key'] as String?,
+      errorKey: json['error_key'] as String?,
       minValue: (json['min_value'] as num?)?.toDouble() ?? 0,
       maxValue: (json['max_value'] as num?)?.toDouble() ?? 100,
       units: json['units'] as String?,
@@ -41,6 +42,7 @@ AnalogBoxConfig _$AnalogBoxConfigFromJson(Map<String, dynamic> json) =>
           ? const Color(0x44FF0000)
           : const ColorConverter()
               .fromJson(json['hyst_color'] as Map<String, dynamic>),
+      enableDialog: json['enable_dialog'] as bool? ?? true,
       graphConfig: json['graph_config'] == null
           ? null
           : GraphAssetConfig.fromJson(
@@ -66,6 +68,7 @@ Map<String, dynamic> _$AnalogBoxConfigToJson(AnalogBoxConfig instance) =>
       'setpoint1_key': instance.setpoint1Key,
       'setpoint1_hysteresis_key': instance.setpoint1HysteresisKey,
       'setpoint2_key': instance.setpoint2Key,
+      'error_key': instance.errorKey,
       'min_value': instance.minValue,
       'max_value': instance.maxValue,
       'units': instance.units,
@@ -78,6 +81,7 @@ Map<String, dynamic> _$AnalogBoxConfigToJson(AnalogBoxConfig instance) =>
       'sp1_color': const ColorConverter().toJson(instance.setpoint1Color),
       'sp2_color': const ColorConverter().toJson(instance.setpoint2Color),
       'hyst_color': const ColorConverter().toJson(instance.hysteresisColor),
+      'enable_dialog': instance.enableDialog,
       'graph_config': instance.graphConfig?.toJson(),
     };
 

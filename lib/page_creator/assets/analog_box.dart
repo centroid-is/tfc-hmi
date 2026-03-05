@@ -42,6 +42,10 @@ class AnalogBoxConfig extends BaseAsset {
   @JsonKey(name: 'setpoint2_key')
   String? setpoint2Key;
 
+  /// Error indicator
+  @JsonKey(name: 'error_key')
+  String? errorKey;
+
   /// Min/max scaling
   @JsonKey(name: 'min_value')
   double minValue;
@@ -76,6 +80,10 @@ class AnalogBoxConfig extends BaseAsset {
   @ColorConverter()
   Color hysteresisColor;
 
+  /// Whether tapping opens the detail dialog
+  @JsonKey(name: 'enable_dialog')
+  bool enableDialog;
+
   /// Dialog: include mini-graph
   @JsonKey(name: 'graph_config')
   GraphAssetConfig? graphConfig;
@@ -87,6 +95,7 @@ class AnalogBoxConfig extends BaseAsset {
     this.setpoint1Key,
     this.setpoint1HysteresisKey,
     this.setpoint2Key,
+    this.errorKey,
     this.minValue = 0,
     this.maxValue = 100,
     this.units,
@@ -99,6 +108,7 @@ class AnalogBoxConfig extends BaseAsset {
     this.setpoint1Color = Colors.red,
     this.setpoint2Color = Colors.orange,
     this.hysteresisColor = const Color(0x44FF0000),
+    this.enableDialog = true,
     this.graphConfig,
   });
 
@@ -116,6 +126,8 @@ class AnalogBoxConfig extends BaseAsset {
         setpoint1Color = Colors.red,
         setpoint2Color = Colors.orange,
         hysteresisColor = const Color(0x44FF0000),
+        errorKey = null,
+        enableDialog = true,
         graphConfig = GraphAssetConfig.preview();
 
   factory AnalogBoxConfig.fromJson(Map<String, dynamic> json) =>
@@ -199,6 +211,13 @@ class _AnalogBoxConfigEditorState extends State<_AnalogBoxConfigEditor> {
                   onChanged: (v) =>
                       setState(() => widget.config.setpoint2Key = v),
                   label: 'Setpoint 2 key (optional)',
+                ),
+                const SizedBox(height: 8),
+                KeyField(
+                  initialValue: widget.config.errorKey,
+                  onChanged: (v) =>
+                      setState(() => widget.config.errorKey = v),
+                  label: 'Error key (optional, red border when true / non-zero)',
                 ),
                 const SizedBox(height: 16),
                 Row(
@@ -310,6 +329,12 @@ class _AnalogBoxConfigEditorState extends State<_AnalogBoxConfigEditor> {
                 ),
                 const SizedBox(height: 12),
                 SwitchListTile(
+                  title: const Text('Enable tap dialog'),
+                  value: widget.config.enableDialog,
+                  onChanged: (v) =>
+                      setState(() => widget.config.enableDialog = v),
+                ),
+                SwitchListTile(
                   title: const Text('Include Graph in dialog'),
                   value: showGraph,
                   onChanged: (v) => setState(() {
@@ -360,7 +385,9 @@ class AnalogBox extends ConsumerWidget {
         width: size.width,
         height: size.height,
         child: GestureDetector(
-          onTap: () => _showConfigDialog(context, ref),
+          onTap: config.enableDialog
+              ? () => _showConfigDialog(context, ref)
+              : null,
           child: CustomPaint(
             painter: _AnalogBoxPainter(
               percent: .62,
@@ -403,6 +430,7 @@ class AnalogBox extends ConsumerWidget {
     addKey(config.setpoint1Key, 'sp1');
     addKey(config.setpoint1HysteresisKey, 'hyst');
     addKey(config.setpoint2Key, 'sp2');
+    addKey(config.errorKey, 'error');
 
     if (streams.isEmpty) {
       // nothing configured
@@ -438,6 +466,11 @@ class AnalogBox extends ConsumerWidget {
       }
       return map;
     }).distinct((prev, curr) {
+      // Check error state change
+      final prevError = prev['error']?.asBool ?? false;
+      final currError = curr['error']?.asBool ?? false;
+      if (prevError != currError) return false;
+
       // Only consider the analog value for change detection
       final prevAnalog = prev['analog'];
       final currAnalog = curr['analog'];
@@ -473,6 +506,7 @@ class AnalogBox extends ConsumerWidget {
         double? sp1;
         double? hyst;
         double? sp2;
+        bool showError = false;
         // double? dynamicMin;
         // double? dynamicMax;
 
@@ -490,6 +524,7 @@ class AnalogBox extends ConsumerWidget {
           if (m['sp2'] case final v?) {
             if (v.isDouble || v.isInteger) sp2 = v.asDouble;
           }
+          showError = m['error']?.asBool ?? false;
           // if (m['min'] case final v?) {
           //   if (v.isDouble || v.isInteger) dynamicMin = v.asDouble;
           // }
@@ -509,7 +544,9 @@ class AnalogBox extends ConsumerWidget {
         );
 
         return GestureDetector(
-          onTap: () => _showConfigDialog(context, ref),
+          onTap: config.enableDialog
+              ? () => _showConfigDialog(context, ref)
+              : null,
           child: SizedBox(
             width: size.width,
             height: size.height,
@@ -530,6 +567,7 @@ class AnalogBox extends ConsumerWidget {
                 reverseFill: config.reverseFill,
                 borderRadiusPct: config.borderRadiusPct,
                 labelAngleDeg: config.coordinates.angle ?? 0,
+                showError: showError,
               ),
             ),
           ),
@@ -603,6 +641,7 @@ class _AnalogBoxDialogState extends ConsumerState<_AnalogBoxDialog> {
     final analog$ = streamFor(widget.config.analogKey);
     final min$ = streamFor(widget.config.analogSensorRangeMinKey);
     final max$ = streamFor(widget.config.analogSensorRangeMaxKey);
+    final error$ = streamFor(widget.config.errorKey);
 
     Future<void> writeValue(String key, double val) async {
       final sm = await ref.read(stateManProvider.future);
@@ -655,6 +694,39 @@ class _AnalogBoxDialogState extends ConsumerState<_AnalogBoxDialog> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // Error banner
+            if (error$ != null)
+              StreamBuilder<DynamicValue>(
+                stream: error$,
+                builder: (ctx, snap) {
+                  final active = snap.data?.asBool ?? false;
+                  if (!active) return const SizedBox.shrink();
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: Card(
+                      color: Colors.red.shade50,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 16, vertical: 12),
+                        child: Row(
+                          children: [
+                            Icon(Icons.error, color: Colors.red),
+                            const SizedBox(width: 12),
+                            Text(
+                              'Sensor Error',
+                              style: TextStyle(
+                                color: Colors.red.shade900,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
+
             // Current value row with advanced toggle
             if (analog$ != null)
               StreamBuilder<DynamicValue>(
@@ -927,6 +999,7 @@ class _AnalogBoxPainter extends CustomPainter {
   final bool reverseFill;
   final double borderRadiusPct;
   final double labelAngleDeg;
+  final bool showError;
 
   _AnalogBoxPainter({
     required this.percent,
@@ -944,6 +1017,7 @@ class _AnalogBoxPainter extends CustomPainter {
     required this.reverseFill,
     required this.borderRadiusPct,
     required this.labelAngleDeg,
+    this.showError = false,
   });
 
   @override
@@ -993,8 +1067,8 @@ class _AnalogBoxPainter extends CustomPainter {
     // Border
     final border = Paint()
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 2
-      ..color = Colors.black;
+      ..strokeWidth = showError ? 3 : 2
+      ..color = showError ? Colors.red : Colors.black;
     canvas.drawRRect(rrect, border);
   }
 
@@ -1073,7 +1147,8 @@ class _AnalogBoxPainter extends CustomPainter {
         vertical != old.vertical ||
         reverseFill != old.reverseFill ||
         borderRadiusPct != old.borderRadiusPct ||
-        labelAngleDeg != old.labelAngleDeg;
+        labelAngleDeg != old.labelAngleDeg ||
+        showError != old.showError;
   }
 }
 
