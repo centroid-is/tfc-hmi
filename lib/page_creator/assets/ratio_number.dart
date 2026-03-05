@@ -6,9 +6,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'common.dart';
 import 'option_variable.dart';
+import 'helper/timeseries_notify_mixin.dart';
 import '../../providers/current_page_assets.dart';
 import '../../providers/database.dart';
-import '../../providers/state_man.dart';
 import '../../widgets/graph.dart';
 import 'package:tfc/converter/color_converter.dart';
 import 'package:tfc_dart/converter/duration_converter.dart';
@@ -51,6 +51,8 @@ class RatioNumberConfig extends BaseAsset {
   List<int> intervalPresets;
   @JsonKey(name: 'interval_variable')
   String? intervalVariable;
+  @JsonKey(name: 'decimal_places', defaultValue: 1)
+  int decimalPlaces;
 
   RatioNumberConfig({
     required this.key1,
@@ -67,6 +69,7 @@ class RatioNumberConfig extends BaseAsset {
     this.barsInteractive = false,
     this.intervalPresets = const [1, 5, 10, 60, 240],
     this.intervalVariable,
+    this.decimalPlaces = 1,
   });
 
   RatioNumberConfig.preview()
@@ -82,7 +85,8 @@ class RatioNumberConfig extends BaseAsset {
         integersOnly = false,
         barsInteractive = false,
         intervalPresets = const [1, 5, 10, 60, 240],
-        intervalVariable = null;
+        intervalVariable = null,
+        decimalPlaces = 1;
 
   factory RatioNumberConfig.fromJson(Map<String, dynamic> json) =>
       _$RatioNumberConfigFromJson(json);
@@ -274,6 +278,21 @@ class _RatioNumberConfigEditorState
             },
           ),
           const SizedBox(height: 16),
+          TextFormField(
+            initialValue: widget.config.decimalPlaces.toString(),
+            decoration: const InputDecoration(
+              labelText: 'Decimal Places',
+              helperText: 'Number of digits after the decimal point',
+            ),
+            keyboardType: TextInputType.number,
+            onChanged: (value) {
+              final dp = int.tryParse(value);
+              if (dp != null && dp >= 0 && dp <= 5) {
+                setState(() => widget.config.decimalPlaces = dp);
+              }
+            },
+          ),
+          const SizedBox(height: 16),
           SwitchListTile(
             title: const Text('Clock-Aligned Bars'),
             subtitle: const Text(
@@ -356,152 +375,69 @@ class RatioNumberWidget extends ConsumerStatefulWidget {
   ConsumerState<RatioNumberWidget> createState() => _RatioNumberWidgetState();
 }
 
-class _RatioNumberWidgetState extends ConsumerState<RatioNumberWidget> {
+class _RatioNumberWidgetState extends ConsumerState<RatioNumberWidget>
+    with TimeseriesNotifyMixin<RatioNumberWidget> {
   late Duration _activeSinceMinutes;
-  StreamSubscription<Map<String, String>>? _subsSub;
-  Timer? _pollTimer;
-  Set<DateTime> _cachedTs1 = {};
-  Set<DateTime> _cachedTs2 = {};
   int? _count1;
   int? _count2;
-  DateTime? _lastFetchEnd;
-  bool _disposed = false;
-  bool _visible = true;
-  Database? _db;
 
-  bool get _alive => !_disposed && mounted && _visible;
+  // ── TimeseriesNotifyMixin overrides ─────────────────────────────────
+
+  @override
+  List<String> get tsKeys => [widget.config.key1, widget.config.key2];
+
+  @override
+  String? get tsIntervalVariable => widget.config.intervalVariable;
+
+  @override
+  int get tsMaxWindowMinutes => [
+        _activeSinceMinutes.inMinutes,
+        ...widget.config.intervalPresets,
+      ].reduce(math.max);
+
+  @override
+  void tsOnIntervalChanged(int minutes) {
+    final d = Duration(minutes: minutes);
+    if (d != _activeSinceMinutes) {
+      _activeSinceMinutes = d;
+      tsUpdateDisplay();
+    }
+  }
+
+  @override
+  void tsUpdateDisplay() {
+    if (!mounted) return;
+    final since = DateTime.now().subtract(_activeSinceMinutes);
+    final c1 = tsCache.countSince(widget.config.key1, since);
+    final c2 = tsCache.countSince(widget.config.key2, since);
+    setState(() { _count1 = c1; _count2 = c2; });
+  }
+
+  // ── Lifecycle ───────────────────────────────────────────────────────
 
   @override
   void initState() {
     super.initState();
     _activeSinceMinutes = widget.config.sinceMinutes;
-    _watchIntervalVariable();
-    _initPolling();
+    tsInit();
   }
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    final ticking = TickerMode.of(context);
-    if (ticking && !_visible) {
-      _visible = true;
-      if (_db != null) _schedulePoll(_db!);
-    } else if (!ticking && _visible) {
-      _visible = false;
-      _pollTimer?.cancel();
-      _pollTimer = null;
-    }
-  }
-
-  void _watchIntervalVariable() {
-    final varName = widget.config.intervalVariable;
-    if (varName == null) return;
-
-    ref.read(stateManProvider.future).then((sm) {
-      if (!_alive) return;
-      final cur = sm.getSubstitution(varName);
-      if (cur != null) {
-        final v = int.tryParse(cur);
-        if (v != null && v > 0) {
-          _activeSinceMinutes = Duration(minutes: v);
-          _updateCounts();
-        }
-      }
-      _subsSub = sm.substitutionsChanged.listen((subs) {
-        final v = int.tryParse(subs[varName] ?? '');
-        if (v != null && v > 0 && _alive) {
-          final d = Duration(minutes: v);
-          if (d != _activeSinceMinutes) {
-            _activeSinceMinutes = d;
-            _updateCounts();
-          }
-        }
-      });
-    });
-  }
-
-  int get _maxMinutes => [
-        _activeSinceMinutes.inMinutes,
-        ...widget.config.intervalPresets,
-      ].reduce(math.max);
-
-  Future<List<TimeseriesData<dynamic>>> _safeQuery(
-      Database db, String key, DateTime since) async {
-    try {
-      return await db.queryTimeseriesData(key, since, orderBy: 'time ASC');
-    } catch (_) {
-      return [];
-    }
-  }
-
-  Future<void> _initPolling() async {
-    _db = await ref.read(databaseProvider.future);
-    if (_db == null || !_alive) return;
-    final since = DateTime.now().subtract(Duration(minutes: _maxMinutes));
-    _lastFetchEnd = since;
-    final results = await Future.wait([
-      _safeQuery(_db!, widget.config.key1, since),
-      _safeQuery(_db!, widget.config.key2, since),
-    ]);
-    if (!_alive) return;
-    _cachedTs1 = results[0].map((r) => r.time).toSet();
-    _cachedTs2 = results[1].map((r) => r.time).toSet();
-    _lastFetchEnd = DateTime.now();
-    _updateCounts();
-    _schedulePoll(_db!);
-  }
-
-  void _schedulePoll(Database db, [Duration? delay]) {
-    _pollTimer?.cancel();
-    if (!_alive) return;
-    final wait = delay ?? widget.config.pollInterval;
-    _pollTimer = Timer(wait, () => _pollNewData(db));
-  }
-
-  Future<void> _pollNewData(Database db) async {
-    if (!_alive || _lastFetchEnd == null) return;
-    final fetchFrom = _lastFetchEnd!;
-    _lastFetchEnd = DateTime.now();
-    final sw = Stopwatch()..start();
-    final results = await Future.wait([
-      _safeQuery(db, widget.config.key1, fetchFrom),
-      _safeQuery(db, widget.config.key2, fetchFrom),
-    ]);
-    if (!_alive) return;
-    _cachedTs1.addAll(results[0].map((r) => r.time));
-    _cachedTs2.addAll(results[1].map((r) => r.time));
-    final cutoff = DateTime.now().subtract(Duration(minutes: _maxMinutes));
-    _cachedTs1.removeWhere((t) => t.isBefore(cutoff));
-    _cachedTs2.removeWhere((t) => t.isBefore(cutoff));
-    _updateCounts();
-    sw.stop();
-    // Back off: never poll faster than the query takes
-    final backoff = sw.elapsed > widget.config.pollInterval ? sw.elapsed : null;
-    _schedulePoll(db, backoff);
-  }
-
-  void _updateCounts() {
-    if (!_alive) return;
-    final since = DateTime.now().subtract(_activeSinceMinutes);
-    final c1 = _cachedTs1.where((t) => t.isAfter(since)).length;
-    final c2 = _cachedTs2.where((t) => t.isAfter(since)).length;
-    setState(() { _count1 = c1; _count2 = c2; });
+    tsDidChangeDependencies();
   }
 
   @override
   void dispose() {
-    _disposed = true;
-    _subsSub?.cancel();
-    _pollTimer?.cancel();
-    _cachedTs1.clear();
-    _cachedTs2.clear();
+    tsDispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     if (widget.config.key1 == "key1" && widget.config.key2 == "key2") {
-      return _buildDisplay(context, "75.0%",
+      return _buildDisplay(context, "${(75.0).toStringAsFixed(widget.config.decimalPlaces)}%",
           activeSinceMinutes: _activeSinceMinutes);
     }
 
@@ -509,7 +445,7 @@ class _RatioNumberWidgetState extends ConsumerState<RatioNumberWidget> {
     if (_count1 != null && _count2 != null) {
       final total = _count1! + _count2!;
       if (total > 0) {
-        displayValue = "${(_count1! / total * 100).toStringAsFixed(1)}%";
+        displayValue = "${(_count1! / total * 100).toStringAsFixed(widget.config.decimalPlaces)}%";
       } else {
         displayValue = "0.0%";
       }
@@ -1094,7 +1030,7 @@ class RatioBarChart extends ConsumerWidget {
         final v1 = match1.isNotEmpty ? (match1.first['y'] as double).round() : 0;
         final v2 = match2.isNotEmpty ? (match2.first['y'] as double).round() : 0;
         final total = v1 + v2;
-        final pct = total > 0 ? (v1 / total * 100).toStringAsFixed(1) : '0.0';
+        final pct = total > 0 ? (v1 / total * 100).toStringAsFixed(config.decimalPlaces) : (0.0).toStringAsFixed(config.decimalPlaces);
         return Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,

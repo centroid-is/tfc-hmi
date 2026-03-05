@@ -7,9 +7,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'common.dart';
 import 'option_variable.dart';
+import 'helper/timeseries_notify_mixin.dart';
 import '../../providers/current_page_assets.dart';
 import '../../providers/database.dart';
-import '../../providers/state_man.dart';
 import '../../widgets/graph.dart';
 import 'package:tfc/converter/color_converter.dart';
 import 'package:tfc_dart/core/database.dart';
@@ -302,131 +302,59 @@ class BpmWidget extends ConsumerStatefulWidget {
   ConsumerState<BpmWidget> createState() => _BpmWidgetState();
 }
 
-class _BpmWidgetState extends ConsumerState<BpmWidget> {
+class _BpmWidgetState extends ConsumerState<BpmWidget>
+    with TimeseriesNotifyMixin<BpmWidget> {
   late int _activeInterval;
-  StreamSubscription<Map<String, String>>? _subsSub;
-  Timer? _pollTimer;
-  Set<DateTime> _cachedTimestamps = {};
   int? _count;
-  DateTime? _lastFetchEnd;
-  bool _disposed = false;
-  bool _visible = true;
-  Database? _db;
 
-  bool get _alive => !_disposed && mounted && _visible;
+  // ── TimeseriesNotifyMixin overrides ─────────────────────────────────
+
+  @override
+  List<String> get tsKeys => [widget.config.key];
+
+  @override
+  String? get tsIntervalVariable => widget.config.intervalVariable;
+
+  @override
+  int get tsMaxWindowMinutes => [
+        _activeInterval,
+        ...widget.config.intervalPresets,
+      ].reduce(math.max);
+
+  @override
+  void tsOnIntervalChanged(int minutes) {
+    if (minutes != _activeInterval) {
+      _activeInterval = minutes;
+      tsUpdateDisplay();
+    }
+  }
+
+  @override
+  void tsUpdateDisplay() {
+    if (!mounted) return;
+    final since = DateTime.now().subtract(Duration(minutes: _activeInterval));
+    final count = tsCache.countSince(widget.config.key, since);
+    setState(() => _count = count);
+  }
+
+  // ── Lifecycle ───────────────────────────────────────────────────────
 
   @override
   void initState() {
     super.initState();
     _activeInterval = widget.config.defaultInterval;
-    _watchIntervalVariable();
-    _initPolling();
+    tsInit();
   }
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    final ticking = TickerMode.of(context);
-    if (ticking && !_visible) {
-      _visible = true;
-      if (_db != null) _schedulePoll(_db!);
-    } else if (!ticking && _visible) {
-      _visible = false;
-      _pollTimer?.cancel();
-      _pollTimer = null;
-    }
-  }
-
-  void _watchIntervalVariable() {
-    final varName = widget.config.intervalVariable;
-    if (varName == null) return;
-
-    ref.read(stateManProvider.future).then((sm) {
-      if (!_alive) return;
-      final cur = sm.getSubstitution(varName);
-      if (cur != null) {
-        final v = int.tryParse(cur);
-        if (v != null && v > 0 && v != _activeInterval) {
-          _activeInterval = v;
-          _updateCount();
-        }
-      }
-      _subsSub = sm.substitutionsChanged.listen((subs) {
-        final v = int.tryParse(subs[varName] ?? '');
-        if (v != null && v > 0 && v != _activeInterval && _alive) {
-          _activeInterval = v;
-          _updateCount();
-        }
-      });
-    });
-  }
-
-  int get _maxMinutes => [
-        _activeInterval,
-        ...widget.config.intervalPresets,
-      ].reduce(math.max);
-
-  Future<void> _initPolling() async {
-    _db = await ref.read(databaseProvider.future);
-    if (_db == null || !_alive) return;
-    final since = DateTime.now().subtract(Duration(minutes: _maxMinutes));
-    _lastFetchEnd = since;
-    try {
-      final rows = await _db!.queryTimeseriesData(widget.config.key, since,
-          orderBy: 'time ASC');
-      if (!_alive) return;
-      _cachedTimestamps = rows.map((r) => r.time).toSet();
-    } catch (_) {}
-    if (!_alive) return;
-    _lastFetchEnd = DateTime.now();
-    _updateCount();
-    _schedulePoll(_db!);
-  }
-
-  void _schedulePoll(Database db, [Duration? delay]) {
-    _pollTimer?.cancel();
-    if (!_alive) return;
-    final wait = delay ?? widget.config.pollInterval;
-    _pollTimer = Timer(wait, () => _pollNewData(db));
-  }
-
-  Future<void> _pollNewData(Database db) async {
-    if (!_alive || _lastFetchEnd == null) return;
-    final fetchFrom = _lastFetchEnd!;
-    _lastFetchEnd = DateTime.now();
-    final sw = Stopwatch()..start();
-    try {
-      final rows = await db.queryTimeseriesData(
-          widget.config.key, fetchFrom,
-          orderBy: 'time ASC');
-      if (!_alive) return;
-      if (rows.isNotEmpty) {
-        _cachedTimestamps.addAll(rows.map((r) => r.time));
-      }
-      final cutoff = DateTime.now().subtract(Duration(minutes: _maxMinutes));
-      _cachedTimestamps.removeWhere((t) => t.isBefore(cutoff));
-      _updateCount();
-    } catch (_) {}
-    sw.stop();
-    if (!_alive) return;
-    // Back off: never poll faster than the query takes
-    final backoff = sw.elapsed > widget.config.pollInterval ? sw.elapsed : null;
-    _schedulePoll(db, backoff);
-  }
-
-  void _updateCount() {
-    if (!_alive) return;
-    final since = DateTime.now().subtract(Duration(minutes: _activeInterval));
-    final count = _cachedTimestamps.where((t) => t.isAfter(since)).length;
-    setState(() => _count = count);
+    tsDidChangeDependencies();
   }
 
   @override
   void dispose() {
-    _disposed = true;
-    _subsSub?.cancel();
-    _pollTimer?.cancel();
-    _cachedTimestamps.clear();
+    tsDispose();
     super.dispose();
   }
 
