@@ -366,8 +366,10 @@ class _RatioNumberWidgetState extends ConsumerState<RatioNumberWidget> {
   int? _count2;
   DateTime? _lastFetchEnd;
   bool _disposed = false;
+  bool _visible = true;
+  Database? _db;
 
-  bool get _alive => !_disposed && mounted;
+  bool get _alive => !_disposed && mounted && _visible;
 
   @override
   void initState() {
@@ -375,6 +377,20 @@ class _RatioNumberWidgetState extends ConsumerState<RatioNumberWidget> {
     _activeSinceMinutes = widget.config.sinceMinutes;
     _watchIntervalVariable();
     _initPolling();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final ticking = TickerMode.of(context);
+    if (ticking && !_visible) {
+      _visible = true;
+      if (_db != null) _schedulePoll(_db!);
+    } else if (!ticking && _visible) {
+      _visible = false;
+      _pollTimer?.cancel();
+      _pollTimer = null;
+    }
   }
 
   void _watchIntervalVariable() {
@@ -419,20 +435,20 @@ class _RatioNumberWidgetState extends ConsumerState<RatioNumberWidget> {
   }
 
   Future<void> _initPolling() async {
-    final db = await ref.read(databaseProvider.future);
-    if (db == null || !_alive) return;
+    _db = await ref.read(databaseProvider.future);
+    if (_db == null || !_alive) return;
     final since = DateTime.now().subtract(Duration(minutes: _maxMinutes));
     _lastFetchEnd = since;
     final results = await Future.wait([
-      _safeQuery(db, widget.config.key1, since),
-      _safeQuery(db, widget.config.key2, since),
+      _safeQuery(_db!, widget.config.key1, since),
+      _safeQuery(_db!, widget.config.key2, since),
     ]);
     if (!_alive) return;
     _cachedTs1 = results[0].map((r) => r.time).toSet();
     _cachedTs2 = results[1].map((r) => r.time).toSet();
     _lastFetchEnd = DateTime.now();
     _updateCounts();
-    _schedulePoll(db);
+    _schedulePoll(_db!);
   }
 
   void _schedulePoll(Database db) {

@@ -310,8 +310,10 @@ class _BpmWidgetState extends ConsumerState<BpmWidget> {
   int? _count;
   DateTime? _lastFetchEnd;
   bool _disposed = false;
+  bool _visible = true;
+  Database? _db;
 
-  bool get _alive => !_disposed && mounted;
+  bool get _alive => !_disposed && mounted && _visible;
 
   @override
   void initState() {
@@ -319,6 +321,20 @@ class _BpmWidgetState extends ConsumerState<BpmWidget> {
     _activeInterval = widget.config.defaultInterval;
     _watchIntervalVariable();
     _initPolling();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final ticking = TickerMode.of(context);
+    if (ticking && !_visible) {
+      _visible = true;
+      if (_db != null) _schedulePoll(_db!);
+    } else if (!ticking && _visible) {
+      _visible = false;
+      _pollTimer?.cancel();
+      _pollTimer = null;
+    }
   }
 
   void _watchIntervalVariable() {
@@ -351,12 +367,12 @@ class _BpmWidgetState extends ConsumerState<BpmWidget> {
       ].reduce(math.max);
 
   Future<void> _initPolling() async {
-    final db = await ref.read(databaseProvider.future);
-    if (db == null || !_alive) return;
+    _db = await ref.read(databaseProvider.future);
+    if (_db == null || !_alive) return;
     final since = DateTime.now().subtract(Duration(minutes: _maxMinutes));
     _lastFetchEnd = since;
     try {
-      final rows = await db.queryTimeseriesData(widget.config.key, since,
+      final rows = await _db!.queryTimeseriesData(widget.config.key, since,
           orderBy: 'time ASC');
       if (!_alive) return;
       _cachedTimestamps = rows.map((r) => r.time).toSet();
@@ -364,7 +380,7 @@ class _BpmWidgetState extends ConsumerState<BpmWidget> {
     if (!_alive) return;
     _lastFetchEnd = DateTime.now();
     _updateCount();
-    _schedulePoll(db);
+    _schedulePoll(_db!);
   }
 
   void _schedulePoll(Database db) {
