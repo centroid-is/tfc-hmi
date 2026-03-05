@@ -374,12 +374,36 @@ class ClientWrapper {
   int? subscriptionId;
   final SingleWorker worker = SingleWorker();
   StreamSubscription? _heartbeatSub;
+  int _heartbeatGeneration = 0;
+  DateTime? _lastHeartbeatTick;
+  bool _inactive = false;
+  bool sessionLost = false;
+  bool resendOnRecovery;
+  final Set<AutoDisposingStream> streams = {};
+  final Logger _logger = Logger();
+
+  /// Check if the subscription is dead and needs to be recreated.
+  /// Only SubscriptionDeleted (server killed it) and SecureChannelClosed
+  /// (connection lost) are fatal — Inactivity is transient and recovers
+  /// on its own when the connection stabilises.
+  /// Handles both direct type checks AND string representations — the
+  /// isolate handler converts errors to strings via error.toString().
+  static bool isSubscriptionDead(Object error) {
+    if (error is SubscriptionDeleted || error is SecureChannelClosed) {
+      return true;
+    }
+    if (error is String) {
+      return error.contains('SubscriptionDeleted') ||
+          error.contains('SecureChannelClosed');
+    }
+    return false;
+  }
 
   ConnectionStatus _connectionStatus = ConnectionStatus.disconnected;
   final StreamController<ConnectionStatus> _connectionController =
       StreamController<ConnectionStatus>.broadcast();
 
-  ClientWrapper(this.client, this.config);
+  ClientWrapper(this.client, this.config, {this.resendOnRecovery = true});
 
   /// Current connection status (synchronous, always up-to-date).
   ConnectionStatus get connectionStatus => _connectionStatus;
@@ -405,14 +429,25 @@ class ClientWrapper {
     return ConnectionStatus.disconnected;
   }
 
-  void startHeartbeat(int subscriptionId) {
+  void startHeartbeat(int subId) {
     _heartbeatSub?.cancel();
     final serverTimeNode = NodeId.fromNumeric(0, 2258);
+    // Generation counter: isolate stream cancel() is async and stale
+    // callbacks can fire after stopHeartbeat(). Each callback checks
+    // its captured generation against the current one.
+    final gen = ++_heartbeatGeneration;
+    _logger.i('[${config.endpoint}] Starting heartbeat on sub=$subId');
     _heartbeatSub = client.monitoredItems(
       {serverTimeNode: [AttributeId.UA_ATTRIBUTEID_VALUE]},
-      subscriptionId,
+      subId,
     ).listen(
       (_) {
+        if (gen != _heartbeatGeneration) return;
+        _lastHeartbeatTick = DateTime.now();
+        if (_inactive) {
+          _logger.i('[${config.endpoint}] Heartbeat recovered (sub=$subId)');
+          _handleRecovery();
+        }
         if (_connectionStatus == ConnectionStatus.disconnected) {
           updateConnectionStatus(ClientState(
             channelState: SecureChannelState.UA_SECURECHANNELSTATE_OPEN,
@@ -422,12 +457,21 @@ class ClientWrapper {
         }
       },
       onError: (error) {
-        if (error is Inactivity || error is SubscriptionDeleted) {
-          updateConnectionStatus(ClientState(
-            channelState: SecureChannelState.UA_SECURECHANNELSTATE_CLOSED,
-            sessionState: SessionState.UA_SESSIONSTATE_CLOSED,
-            recoveryStatus: 0,
-          ));
+        if (gen != _heartbeatGeneration) return;
+        final now = DateTime.now();
+        final sinceTick = _lastHeartbeatTick != null
+            ? now.difference(_lastHeartbeatTick!).inMilliseconds
+            : -1;
+        _logger.w('[${config.endpoint}] Heartbeat error (sub=$subId, '
+            '${now.toUtc().toIso8601String()}, ${sinceTick}ms since last tick): $error');
+        if (error is Inactivity || error.toString().contains('Inactivity')) {
+          _inactive = true;
+          return;
+        }
+        if (isSubscriptionDead(error)) {
+          _logger.e('[${config.endpoint}] Heartbeat lost (sub=$subId): $error');
+          sessionLost = true;
+          stopHeartbeat();
         }
       },
     );
@@ -436,6 +480,38 @@ class ClientWrapper {
   void stopHeartbeat() {
     _heartbeatSub?.cancel();
     _heartbeatSub = null;
+  }
+
+  void _handleRecovery() {
+    _inactive = false;
+    if (resendOnRecovery) {
+      for (final s in streams) {
+        s.resendLastValue();
+      }
+    }
+  }
+
+  /// Mark session as lost — called by stateStream as fallback when
+  /// heartbeat didn't catch it (e.g. session drops before heartbeat started).
+  void markSessionLost() => sessionLost = true;
+
+  /// Simulate inactivity for testing.
+  @visibleForTesting
+  void simulateInactivity() => _inactive = true;
+
+  /// Simulate a fatal heartbeat error (SubscriptionDeleted/SecureChannelClosed).
+  @visibleForTesting
+  void simulateFatalHeartbeatError() {
+    sessionLost = true;
+    stopHeartbeat();
+  }
+
+  /// Simulate heartbeat tick for testing (triggers recovery if inactive).
+  @visibleForTesting
+  void simulateHeartbeatTick() {
+    if (_inactive) {
+      _handleRecovery();
+    }
   }
 
   void dispose() {
@@ -618,7 +694,6 @@ class StateMan {
         }();
       }
 
-      bool sessionLost = false;
       SecureChannelState? lastChannelState;
       DateTime? channelOpenedAt;
       final channelLifetimeSec = 60; // 1 minute as configured
@@ -627,7 +702,7 @@ class StateMan {
         wrapper.updateConnectionStatus(value);
         final now = DateTime.now();
 
-        // Log ALL SecureChannel state transitions with timestamps
+        // Log SecureChannel state transitions with timestamps
         if (value.channelState != lastChannelState) {
           final timeSinceOpen = channelOpenedAt != null
               ? now.difference(channelOpenedAt!).inSeconds
@@ -637,7 +712,6 @@ class StateMan {
               '(session: ${value.sessionState.name}, recovery: ${value.recoveryStatus}) '
               '[uptime: ${timeSinceOpen}s]');
 
-          // Track when channel opens
           if (value.channelState ==
               SecureChannelState.UA_SECURECHANNELSTATE_OPEN) {
             channelOpenedAt = now;
@@ -658,18 +732,19 @@ class StateMan {
               'renewal window: ${channelLifetimeSec * 0.75}s-${channelLifetimeSec}s)');
           channelOpenedAt = null;
         }
-        // Only treat as session loss if this wrapper actually had a subscription
+        // Fallback: treat as session loss if wrapper had a subscription
+        // (heartbeat may have already set sessionLost via fatal error)
         if (value.sessionState ==
                 SessionState.UA_SESSIONSTATE_CREATE_REQUESTED &&
             wrapper.subscriptionId != null) {
           logger.e('[$alias ${wrapper.config.endpoint}] Session lost!');
-          sessionLost = true;
+          wrapper.markSessionLost();
         }
         if (value.sessionState == SessionState.UA_SESSIONSTATE_ACTIVATED) {
-          if (sessionLost) {
+          if (wrapper.sessionLost) {
             logger.e(
                 '[$alias ${wrapper.config.endpoint}] Session lost, resubscribing (old sub=${wrapper.subscriptionId})');
-            sessionLost = false;
+            wrapper.sessionLost = false;
             wrapper.subscriptionId = null;
             wrapper.stopHeartbeat();
             // Only resubscribe keys belonging to this wrapper
@@ -691,9 +766,7 @@ class StateMan {
             // newly created item if creates and deletes are interleaved.
             for (final key in keysToResub) {
               final ads = _subscriptions[key];
-              logger.i('[$alias] resub $key: exists=${ads != null}, '
-                  'subjectClosed=${ads?._subject.isClosed}, '
-                  'listeners=${ads?._listenerCount}, '
+              logger.d('[$alias] resub $key: exists=${ads != null}, '
                   'hasRawSub=${ads?._rawSub != null}');
               if (ads != null && ads._rawSub != null) {
                 final oldSub = ads._rawSub;
@@ -708,8 +781,6 @@ class StateMan {
             for (final key in keysToResub) {
               _monitor(key, resub: true);
             }
-          } else {
-            _resendLastValues();
           }
         }
       }).onError((e, s) {
@@ -719,11 +790,7 @@ class StateMan {
 
   }
 
-  void _resendLastValues() {
-    for (final entry in _subscriptions.values) {
-      entry.resendLastValue();
-    }
-  }
+
 
   static Future<StateMan> create({
     required StateManConfig config,
@@ -731,6 +798,7 @@ class StateMan {
     bool useIsolate = true,
     String alias = '',
     List<DeviceClient> deviceClients = const [],
+    bool resendOnRecovery = true,
   }) async {
     // Example directory: /Users/jonb/Library/Containers/is.centroid.sildarvinnsla.skammtalina/Data/Documents/certs
     List<ClientWrapper> clients = [];
@@ -751,8 +819,7 @@ class StateMan {
         username = opcuaConfig.username;
         password = opcuaConfig.password;
       }
-      clients.add(ClientWrapper(
-          useIsolate
+      clients.add(ClientWrapper(useIsolate
               ? await ClientIsolate.create(
                   username: username,
                   password: password,
@@ -775,7 +842,9 @@ class StateMan {
                       minutes:
                           1), // TODO can I reproduce the problem more often
                 ),
-          opcuaConfig));
+          opcuaConfig,
+          resendOnRecovery: resendOnRecovery,
+      ));
     }
     final stateMan = StateMan._(
         config: config,
@@ -1094,10 +1163,20 @@ class StateMan {
     // Register entry synchronously before any await so concurrent
     // callers for the same key hit the early return above.
     if (!_subscriptions.containsKey(key)) {
-      _subscriptions[key] = AutoDisposingStream(key, (key) {
+      final ads = AutoDisposingStream<DynamicValue>(key, (key) {
         _subscriptions.remove(key);
+        // Remove from wrapper's stream set on disposal
+        for (final w in clients) {
+          w.streams.remove(_subscriptions[key]);
+        }
         logger.d('Unsubscribed from $key');
       });
+      _subscriptions[key] = ads;
+      try {
+        _getClientWrapper(key).streams.add(ads);
+      } catch (_) {
+        // No wrapper for this key (e.g. addSubscription path)
+      }
     }
 
     late ClientApi client;
@@ -1117,7 +1196,8 @@ class StateMan {
     final (id, idx) = nodeId;
 
     int retries = 0;
-    while (true) {
+    while (_shouldRun) {
+      final wrapper = _getClientWrapper(key);
       try {
         // Cancel any leftover subscription from a previous failed attempt
         // so we don't leak monitored items while retrying.
@@ -1125,12 +1205,15 @@ class StateMan {
         _subscriptions[key]?._rawSub = null;
 
         await client.awaitConnect();
-        final wrapper = _getClientWrapper(key);
 
         if (wrapper.subscriptionId == null &&
             await wrapper.worker.doTheWork()) {
           try {
-            wrapper.subscriptionId = await client.subscriptionCreate();
+            // keepAliveCount=30 → inactivity after (100ms×30)+5s ≈ 8s.
+            // Tolerates intermittent packet loss on unstable connections.
+            wrapper.subscriptionId = await client.subscriptionCreate(
+              requestedMaxKeepAliveCount: 30,
+            );
             logger.i(
                 '[$alias ${wrapper.config.endpoint}] Created subscription ${wrapper.subscriptionId}');
             wrapper.startHeartbeat(wrapper.subscriptionId!);
@@ -1147,12 +1230,8 @@ class StateMan {
         final ads = _subscriptions[key]!;
         final hadPrevious = ads._rawSub != null;
 
-        logger.i('[$alias] About to subscribe $key: '
-            'hadPrevious=$hadPrevious, '
-            'subjectClosed=${ads._subject.isClosed}, '
-            'listeners=${ads._listenerCount}');
-        logger.d(
-            '[$alias] Creating monitored items for $key on sub=${wrapper.subscriptionId}');
+        logger.d('[$alias] Creating monitored items for $key on sub=${wrapper.subscriptionId}');
+
         var stream = client.monitor(id, wrapper.subscriptionId!);
         if (idx != null) {
           stream = stream.map((value) => value[idx]);
@@ -1181,6 +1260,7 @@ class StateMan {
         continue;
       }
     }
+    throw StateManException('StateMan closed while monitoring "$key"');
   }
 }
 
@@ -1224,8 +1304,7 @@ class AutoDisposingStream<T> {
         _subject.add(value);
       },
       onError: (error, stackTrace) {
-        _logger.e('[$key] raw stream error: $error '
-            '(subjectClosed=${_subject.isClosed})');
+        _logger.e('[$key] raw stream error: $error');
         if (!_subject.isClosed) {
           _subject.addError(error, stackTrace);
         }

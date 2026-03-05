@@ -1,16 +1,21 @@
-// TDD tests for the subscription heartbeat monitor.
+// TODO: These tests belong in the open62541_dart bindings package, not here.
+// They test raw OPC UA subscription/monitor behaviour (Inactivity,
+// SubscriptionDeleted, SecureChannelClosed) using a real Server + Client.
+// Move to open62541_dart when possible.
 //
-// These tests verify that:
-// A) A heartbeat monitor (ServerStatus.CurrentTime) on the subscription
-//    prevents false inactivity during short traffic delays.
-// B) SubscriptionDeleted fires on monitor streams when the server deletes
-//    the subscription (due to lifetime expiry).
-// C) SecureChannelClosed fires on monitor streams when the TCP connection
-//    is killed.
+// Tests A-C verify raw open62541 behaviour:
+// A) Heartbeat monitor prevents subscription inactivity during short traffic delays.
+// B) SubscriptionDeleted fires on monitor streams when server deletes the subscription.
+// C) SecureChannelClosed fires on monitor streams when TCP connection is killed.
+//
+// Tests D-E verify StateMan integration:
+// D) ClientWrapper.startHeartbeat sets sessionLost when the subscription dies.
+// E) AutoDisposingStream propagates all errors to widget streams.
 import 'dart:async';
 import 'dart:math';
 
 import 'package:open62541/open62541.dart';
+import 'package:tfc_dart/core/state_man.dart';
 import 'package:test/test.dart';
 
 import 'proxy.dart';
@@ -75,7 +80,9 @@ void main() {
 
       // Heartbeat monitor (ServerStatus.CurrentTime VALUE-only)
       final heartbeatStream = client.monitoredItems(
-        {serverTimeNode: [AttributeId.UA_ATTRIBUTEID_VALUE]},
+        {
+          serverTimeNode: [AttributeId.UA_ATTRIBUTEID_VALUE]
+        },
         subscriptionId,
       );
       final heartbeatSub = heartbeatStream.listen((_) {});
@@ -124,8 +131,7 @@ void main() {
       proxy.flush();
 
       // Write a sentinel value — if subscription survived, we'll see it.
-      server.write(
-          intNodeId, DynamicValue(value: 999, typeId: NodeId.int32));
+      server.write(intNodeId, DynamicValue(value: 999, typeId: NodeId.int32));
 
       // Wait for sentinel (event-driven — returns early on fast machines)
       await Future.doWhile(() async {
@@ -172,7 +178,9 @@ void main() {
       final heartbeatErrors = <Object>[];
       final deletedCompleter = Completer<void>();
       final heartbeatStream = client.monitoredItems(
-        {serverTimeNode: [AttributeId.UA_ATTRIBUTEID_VALUE]},
+        {
+          serverTimeNode: [AttributeId.UA_ATTRIBUTEID_VALUE]
+        },
         subscriptionId,
       );
       final heartbeatSub = heartbeatStream.listen(
@@ -245,11 +253,22 @@ void main() {
     await client.connect("opc.tcp://127.0.0.1:$serverPort");
 
     try {
-      final subscriptionId = await client.subscriptionCreate(
-        requestedPublishingInterval: Duration(milliseconds: 100),
-        requestedLifetimeCount: 600,
-        requestedMaxKeepAliveCount: 10,
-      );
+      // Retry subscription creation — on Windows CI the previous test's
+      // server socket may linger briefly, causing BadSessionClosed.
+      late int subscriptionId;
+      for (var attempt = 0; attempt < 5; attempt++) {
+        try {
+          subscriptionId = await client.subscriptionCreate(
+            requestedPublishingInterval: Duration(milliseconds: 100),
+            requestedLifetimeCount: 600,
+            requestedMaxKeepAliveCount: 10,
+          );
+          break;
+        } catch (e) {
+          if (attempt == 4) rethrow;
+          await Future.delayed(Duration(seconds: 1));
+        }
+      }
 
       final errors = <Object>[];
       final closedCompleter = Completer<void>();
@@ -291,4 +310,109 @@ void main() {
       await client.delete();
     }
   }, timeout: Timeout(Duration(seconds: 30)));
+
+  // --- Test D: ClientWrapper.startHeartbeat sets sessionLost on death ---
+  test('D: Heartbeat sets sessionLost when subscription expires',
+      () async {
+    final client = Client(logLevel: LogLevel.UA_LOGLEVEL_WARNING);
+    Timer? clientTimer = Timer.periodic(Duration(milliseconds: 10), (_) {
+      client.runIterate(Duration(milliseconds: 10));
+    });
+    await client.connect("opc.tcp://127.0.0.1:$serverPort");
+
+    try {
+      // Very short-lived subscription (same as test B)
+      final subId = await client.subscriptionCreate(
+        requestedPublishingInterval: Duration(milliseconds: 10),
+        requestedLifetimeCount: 3,
+        requestedMaxKeepAliveCount: 1,
+      );
+
+      // Wire up ClientWrapper with the real client and start heartbeat
+      final config = OpcUAConfig()
+        ..endpoint = "opc.tcp://127.0.0.1:$serverPort";
+      final wrapper = ClientWrapper(client, config);
+      wrapper.subscriptionId = subId;
+      wrapper.startHeartbeat(subId);
+
+      // Confirm heartbeat is running
+      await Future.delayed(Duration(milliseconds: 500));
+      expect(wrapper.subscriptionId, equals(subId));
+
+      // Pause client → server exhausts publish requests → subscription expires
+      clientTimer.cancel();
+      clientTimer = null;
+      await Future.delayed(Duration(seconds: 5));
+
+      // Resume client → Inactivity/SubscriptionDeleted → heartbeat should
+      // clear subscriptionId
+      clientTimer = Timer.periodic(Duration(milliseconds: 10), (_) {
+        client.runIterate(Duration(milliseconds: 10));
+      });
+
+      // Wait for sessionLost to be set by heartbeat
+      await Future.doWhile(() async {
+        if (wrapper.sessionLost) return false;
+        await Future.delayed(Duration(milliseconds: 50));
+        return true;
+      }).timeout(Duration(seconds: 15),
+          onTimeout: () => fail(
+              'sessionLost was never set — heartbeat did not detect subscription death'));
+
+      expect(wrapper.sessionLost, isTrue,
+          reason:
+              'Heartbeat should set sessionLost on SubscriptionDeleted/SecureChannelClosed');
+
+      wrapper.dispose();
+    } finally {
+      clientTimer?.cancel();
+      await client.delete();
+    }
+  }, timeout: Timeout(Duration(seconds: 60)));
+
+  // --- Test E: AutoDisposingStream propagates all errors to widget streams ---
+  test(
+      'E: AutoDisposingStream propagates all errors including Inactivity/SubscriptionDeleted',
+      () async {
+    final widgetErrors = <Object>[];
+
+    final ads = AutoDisposingStream<int>('test.key', (_) {},
+        idleTimeout: Duration(minutes: 10));
+
+    // Add a widget listener to capture what the widget stream sees
+    final widgetSub = ads.stream.listen(
+      (_) {},
+      onError: (error) => widgetErrors.add(error),
+    );
+
+    // Create a raw stream that emits values then errors
+    final rawController = StreamController<int>();
+    ads.subscribe(rawController.stream, null);
+
+    // Emit a normal value — should reach widget
+    rawController.add(42);
+    await Future.delayed(Duration(milliseconds: 50));
+    expect(widgetErrors, isEmpty, reason: 'No errors yet');
+
+    // Emit Inactivity — should reach widget stream
+    rawController.addError(Inactivity());
+    await Future.delayed(Duration(milliseconds: 50));
+
+    // Emit SubscriptionDeleted — should reach widget stream
+    rawController.addError(SubscriptionDeleted(1));
+    await Future.delayed(Duration(milliseconds: 50));
+
+    // Emit a regular error — should reach widget stream
+    rawController.addError(Exception('real error'));
+    await Future.delayed(Duration(milliseconds: 50));
+
+    expect(widgetErrors, hasLength(3),
+        reason: 'All errors should propagate to widget stream');
+    expect(widgetErrors[0], isA<Inactivity>());
+    expect(widgetErrors[1], isA<SubscriptionDeleted>());
+    expect(widgetErrors[2], isA<Exception>());
+
+    await widgetSub.cancel();
+    await rawController.close();
+  });
 }
