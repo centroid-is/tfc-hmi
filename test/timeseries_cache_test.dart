@@ -360,10 +360,9 @@ void main() {
       }
       expect(cache.countSince(key, t0.subtract(const Duration(minutes: 5))), 20);
 
-      // --- Only prune runs (no NOTIFY, no re-fetch) ---
+      // --- Only countSince with a sliding window (no NOTIFY, no re-fetch) ---
 
       // 2 min later: 8 events aged out of 5-min window (120s / 15s)
-      cache.prune(60);
       expect(cache.countSince(
         key,
         t0.add(const Duration(minutes: 2)).subtract(const Duration(minutes: 5)),
@@ -399,8 +398,6 @@ void main() {
       for (var i = 0; i < 12; i++) {
         cache.addTimestamp(key, t3.subtract(Duration(seconds: i * 15)));
       }
-      cache.prune(60);
-
       final count = cache.countSince(
         key,
         t3.subtract(const Duration(minutes: 5)),
