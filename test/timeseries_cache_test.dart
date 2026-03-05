@@ -148,8 +148,8 @@ void main() {
     });
 
     test('addAll on uninitialized key auto-creates it', () {
-      final times = [DateTime.now(), DateTime.now()];
-      cache.addAll('new_key', times);
+      final t = DateTime(2026, 1, 1, 12, 0, 0);
+      cache.addAll('new_key', [t, t]);
       expect(cache.timestamps('new_key').length, 1); // same instant → 1
     });
   });
