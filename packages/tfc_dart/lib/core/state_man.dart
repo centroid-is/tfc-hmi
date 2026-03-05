@@ -1252,11 +1252,8 @@ class StateMan {
         return ads.stream;
       } catch (e) {
         retries++;
-        if (retries > 3 && wrapper.subscriptionId != null) {
-          logger.w('[$alias] $retries consecutive failures for $key on '
-              'sub=${wrapper.subscriptionId}, forcing subscription recreation: $e');
-          wrapper.subscriptionId = null;
-          wrapper.stopHeartbeat();
+        if (retries > 10) {
+          logger.w('Failed to get initial value for $key: $e');
           retries = 0;
         }
         await Future.delayed(const Duration(seconds: 1));
