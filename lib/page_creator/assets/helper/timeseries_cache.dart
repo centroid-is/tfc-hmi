@@ -50,6 +50,20 @@ class TimeseriesCache {
     _caches[key]?.clear();
   }
 
+  /// Returns the oldest timestamp strictly after [since] across [keys],
+  /// or null if none exist. Used to schedule the next expiry timer.
+  DateTime? oldestAfter(List<String> keys, DateTime since) {
+    DateTime? oldest;
+    for (final key in keys) {
+      for (final t in _caches[key] ?? const <DateTime>{}) {
+        if (t.isAfter(since) && (oldest == null || t.isBefore(oldest))) {
+          oldest = t;
+        }
+      }
+    }
+    return oldest;
+  }
+
   /// Direct read access (unmodifiable view).
   Set<DateTime> timestamps(String key) =>
       _caches[key] ?? const {};

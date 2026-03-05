@@ -53,6 +53,8 @@ mixin TimeseriesNotifyMixin<T extends ConsumerStatefulWidget>
   Timer? _tsRefreshTimer;
   StreamSubscription<Map<String, String>>? _tsSubsSub;
   final List<StreamSubscription<String>> _tsNotifySubs = [];
+  final Set<String> _tsNotifyAlive = {};
+  Timer? _tsExpiryTimer;
 
   bool get _tsAlive => !_tsDisposed && mounted;
 
@@ -84,6 +86,7 @@ mixin TimeseriesNotifyMixin<T extends ConsumerStatefulWidget>
     _tsDisposed = true;
     _tsSubsSub?.cancel();
     _tsRefreshTimer?.cancel();
+    _tsExpiryTimer?.cancel();
     for (final sub in _tsNotifySubs) {
       sub.cancel();
     }
@@ -159,12 +162,14 @@ mixin TimeseriesNotifyMixin<T extends ConsumerStatefulWidget>
             if (notification.data.containsKey('time')) {
               final time = DateTime.parse(notification.data['time']);
               tsCache.addTimestamp(key, time);
+              _tsNotifyAlive.add(key);
               tsCache.prune(tsMaxWindowMinutes);
               if (_tsVisible) tsUpdateDisplay();
             }
           }
         });
         _tsNotifySubs.add(sub);
+        _tsNotifyAlive.add(key);
       } catch (_) {
         // Channel setup can fail if table doesn't exist yet
       }
@@ -173,7 +178,50 @@ mixin TimeseriesNotifyMixin<T extends ConsumerStatefulWidget>
 
   void _tsStartRefreshTimer() {
     _tsRefreshTimer?.cancel();
-    _tsRefreshTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+    _tsRefreshTimer = Timer.periodic(const Duration(seconds: 30), (_) async {
+      if (!_tsAlive || !_tsVisible) return;
+      await _tsRefetchStale();
+    });
+  }
+
+  /// Re-fetch from DB only for keys where NOTIFY setup failed.
+  Future<void> _tsRefetchStale() async {
+    if (_tsDb == null || !_tsAlive) return;
+    final staleKeys =
+        tsKeys.where((key) => !_tsNotifyAlive.contains(key)).toList();
+    if (staleKeys.isEmpty) return;
+
+    final since =
+        DateTime.now().subtract(Duration(minutes: tsMaxWindowMinutes));
+    final sm = await ref.read(stateManProvider.future);
+    if (!_tsAlive) return;
+
+    for (final key in staleKeys) {
+      try {
+        final tableName = sm.resolveKey(key);
+        final rows = await _tsDb!
+            .queryTimeseriesData(tableName, since, orderBy: 'time ASC');
+        if (!_tsAlive) return;
+        tsCache.clearKey(key);
+        tsCache.addAll(key, rows.map((r) => r.time));
+      } catch (_) {}
+    }
+    if (_tsAlive && _tsVisible) tsUpdateDisplay();
+  }
+
+  /// Schedule a display update for exactly when the oldest in-window event
+  /// expires from the counting window. Call from [tsUpdateDisplay].
+  void tsScheduleExpiry(int intervalMinutes) {
+    _tsExpiryTimer?.cancel();
+    final since =
+        DateTime.now().subtract(Duration(minutes: intervalMinutes));
+    final oldest = tsCache.oldestAfter(tsKeys, since);
+    if (oldest == null) return;
+    final delay = oldest
+        .add(Duration(minutes: intervalMinutes))
+        .difference(DateTime.now());
+    if (delay.isNegative) return;
+    _tsExpiryTimer = Timer(delay, () {
       if (!_tsAlive || !_tsVisible) return;
       tsCache.prune(tsMaxWindowMinutes);
       tsUpdateDisplay();

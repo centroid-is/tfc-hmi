@@ -335,6 +335,7 @@ class _BpmWidgetState extends ConsumerState<BpmWidget>
     final since = DateTime.now().subtract(Duration(minutes: _activeInterval));
     final count = tsCache.countSince(widget.config.key, since);
     setState(() => _count = count);
+    tsScheduleExpiry(_activeInterval);
   }
 
   // ── Lifecycle ───────────────────────────────────────────────────────

@@ -411,6 +411,7 @@ class _RatioNumberWidgetState extends ConsumerState<RatioNumberWidget>
     final c1 = tsCache.countSince(widget.config.key1, since);
     final c2 = tsCache.countSince(widget.config.key2, since);
     setState(() { _count1 = c1; _count2 = c2; });
+    tsScheduleExpiry(_activeSinceMinutes.inMinutes);
   }
 
   // ── Lifecycle ───────────────────────────────────────────────────────

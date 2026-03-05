@@ -153,4 +153,119 @@ void main() {
       expect(cache.timestamps('new_key').length, 1); // same instant → 1
     });
   });
+
+  group('oldestAfter', () {
+    test('returns null for empty cache', () {
+      cache.init(['a']);
+      final since = DateTime.now().subtract(const Duration(minutes: 5));
+      expect(cache.oldestAfter(['a'], since), isNull);
+    });
+
+    test('returns null when all events are before cutoff', () {
+      cache.init(['a']);
+      final now = DateTime.now();
+      cache.addAll('a', [
+        now.subtract(const Duration(minutes: 10)),
+        now.subtract(const Duration(minutes: 8)),
+      ]);
+      expect(cache.oldestAfter(['a'], now.subtract(const Duration(minutes: 5))), isNull);
+    });
+
+    test('returns oldest event after cutoff across keys', () {
+      cache.init(['a', 'b']);
+      final now = DateTime.now();
+      final oldest = now.subtract(const Duration(minutes: 4));
+      final newer = now.subtract(const Duration(minutes: 2));
+      cache.addTimestamp('a', newer);
+      cache.addTimestamp('b', oldest);
+      cache.addTimestamp('b', now.subtract(const Duration(minutes: 8))); // before cutoff
+      final result = cache.oldestAfter(['a', 'b'], now.subtract(const Duration(minutes: 5)));
+      expect(result, oldest);
+    });
+
+    test('expiry delay matches when oldest event ages out of window', () {
+      cache.init(['a']);
+      final now = DateTime(2026, 3, 5, 12, 0, 0);
+      final oldest = now.subtract(const Duration(minutes: 4, seconds: 30));
+      cache.addTimestamp('a', oldest);
+      cache.addTimestamp('a', now.subtract(const Duration(minutes: 1)));
+
+      final result = cache.oldestAfter(['a'], now.subtract(const Duration(minutes: 5)));
+      expect(result, oldest);
+      // oldest expires from a 5-min window in 30 seconds
+      final expiresAt = oldest.add(const Duration(minutes: 5));
+      expect(expiresAt.difference(now).inSeconds, 30);
+    });
+  });
+
+  group('NOTIFY failure regression', () {
+    // Reproduces production bug: BPM widgets with broken NOTIFY show
+    // decaying counts because the refresh timer only prunes — never
+    // re-fetches from DB.
+    //
+    // Production evidence (debug.log):
+    //   weigher1v: cache=20 forever, count: 15→13→11→9→8→7
+    //   batcher1:  cache≈160 declining, count: 29→26→22→18→15
+    //   (healthy weigher4v: cache fluctuates 183-185, count stable)
+
+    test('stale cache count decays to zero without re-fetch', () {
+      // Matches production: initial fetch = 20 events, then nothing.
+      const key = 'weigher1v.acceptWeight';
+      cache.init([key]);
+
+      final t0 = DateTime(2026, 3, 5, 12, 0, 0);
+      for (var i = 0; i < 20; i++) {
+        cache.addTimestamp(key, t0.subtract(Duration(seconds: i * 15)));
+      }
+      expect(cache.countSince(key, t0.subtract(const Duration(minutes: 5))), 20);
+
+      // --- Only prune runs (no NOTIFY, no re-fetch) ---
+
+      // 2 min later: 8 events aged out of 5-min window (120s / 15s)
+      cache.prune(60);
+      expect(cache.countSince(
+        key,
+        t0.add(const Duration(minutes: 2)).subtract(const Duration(minutes: 5)),
+      ), 12);
+
+      // 4 min later: only 4 remain
+      expect(cache.countSince(
+        key,
+        t0.add(const Duration(minutes: 4)).subtract(const Duration(minutes: 5)),
+      ), 4);
+
+      // 6 min later: all gone
+      expect(cache.countSince(
+        key,
+        t0.add(const Duration(minutes: 6)).subtract(const Duration(minutes: 5)),
+      ), 0);
+    });
+
+    test('periodic re-fetch keeps count healthy', () {
+      // After fix: refresh timer re-fetches from DB every 30s.
+      // Even without NOTIFY, fresh data enters the cache.
+      const key = 'weigher1v.acceptWeight';
+      cache.init([key]);
+
+      final t0 = DateTime(2026, 3, 5, 12, 0, 0);
+      for (var i = 0; i < 20; i++) {
+        cache.addTimestamp(key, t0.subtract(Duration(seconds: i * 15)));
+      }
+      expect(cache.countSince(key, t0.subtract(const Duration(minutes: 5))), 20);
+
+      // 3 min later: re-fetch adds 12 new events (machine rate ~4/min)
+      final t3 = t0.add(const Duration(minutes: 3));
+      for (var i = 0; i < 12; i++) {
+        cache.addTimestamp(key, t3.subtract(Duration(seconds: i * 15)));
+      }
+      cache.prune(60);
+
+      final count = cache.countSince(
+        key,
+        t3.subtract(const Duration(minutes: 5)),
+      );
+      // With re-fetched data, count stays healthy
+      expect(count, greaterThanOrEqualTo(16));
+    });
+  });
 }
