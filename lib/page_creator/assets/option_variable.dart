@@ -58,12 +58,7 @@ class OptionVariableConfig extends BaseAsset {
     this.defaultValue,
     this.showSearch = true,
     this.customLabel,
-  }) {
-    // Set default value if provided and no selection made
-    if (selectedValue == null && defaultValue != null) {
-      selectedValue = defaultValue;
-    }
-  }
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -162,7 +157,9 @@ class _OptionVariableWidgetState extends ConsumerState<OptionVariableWidget> {
     }
 
     _queryParam = getQueryParam(context, widget.config.variableName);
-    _selectedValue = _queryParam ?? widget.config.selectedValue;
+    _selectedValue = _queryParam ??
+        widget.config.selectedValue ??
+        widget.config.defaultValue;
 
     _initializeVariable();
   }
