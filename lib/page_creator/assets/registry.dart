@@ -22,6 +22,7 @@ import 'aircab.dart';
 import 'checklists.dart';
 import 'elcab.dart';
 import 'recipes.dart';
+import 'bpm.dart';
 import 'speedbatcher.dart';
 
 class AssetRegistry {
@@ -39,6 +40,7 @@ class AssetRegistry {
     NumberConfig: NumberConfig.fromJson,
     GraphAssetConfig: GraphAssetConfig.fromJson,
     RatioNumberConfig: RatioNumberConfig.fromJson,
+    BpmConfig: BpmConfig.fromJson,
     Baader221Config: Baader221Config.fromJson,
     AnalogBoxConfig: AnalogBoxConfig.fromJson,
     OptionVariableConfig: OptionVariableConfig.fromJson,
@@ -72,6 +74,7 @@ class AssetRegistry {
     ConveyorColorPaletteConfig: ConveyorColorPaletteConfig.preview,
     NumberConfig: NumberConfig.preview,
     RatioNumberConfig: RatioNumberConfig.preview,
+    BpmConfig: BpmConfig.preview,
     TableAssetConfig: TableAssetConfig.preview,
     GraphAssetConfig: GraphAssetConfig.preview,
     Baader221Config: Baader221Config.preview,

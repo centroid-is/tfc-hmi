@@ -235,7 +235,8 @@ class _NumberConfigEditorState extends State<_NumberConfigEditor> {
                         widget.config.writable = false; // enforce exclusivity
                         if (widget.config.graphConfig == null) {
                           widget.config.graphConfig =
-                              GraphAssetConfig.preview();
+                              GraphAssetConfig.preview(
+                                  key: widget.config.key);
                         }
                       } else {
                         widget.config.graphConfig = null;

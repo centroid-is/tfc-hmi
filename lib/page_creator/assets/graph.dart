@@ -92,9 +92,11 @@ class GraphAssetConfig extends BaseAsset {
   @override
   Map<String, dynamic> toJson() => _$GraphAssetConfigToJson(this);
 
-  GraphAssetConfig.preview()
-      : graphType = GraphType.line,
-        primarySeries = [],
+  GraphAssetConfig.preview({String? key})
+      : graphType = GraphType.timeseries,
+        primarySeries = key != null
+            ? [GraphSeriesConfig(key: key, label: '')]
+            : [],
         secondarySeries = [],
         xAxis = GraphAxisConfig(unit: 's'),
         yAxis = GraphAxisConfig(unit: ''),

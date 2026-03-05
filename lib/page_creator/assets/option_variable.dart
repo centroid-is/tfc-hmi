@@ -547,6 +547,32 @@ class _ConfigContent extends ConsumerWidget {
 
         const SizedBox(height: 20),
 
+        // Default option
+        DropdownButtonFormField<String?>(
+          value: config.options.any((o) => o.value == config.defaultValue)
+              ? config.defaultValue
+              : null,
+          decoration: const InputDecoration(
+            labelText: 'Default Option',
+            helperText: 'Option selected on first load (before user picks)',
+          ),
+          items: [
+            const DropdownMenuItem<String?>(
+              value: null,
+              child: Text('None'),
+            ),
+            ...config.options.map((o) => DropdownMenuItem<String?>(
+                  value: o.value,
+                  child: Text(o.label),
+                )),
+          ],
+          onChanged: (value) {
+            config.defaultValue = value;
+          },
+        ),
+
+        const SizedBox(height: 20),
+
         // Options list with editor
         Row(
           children: [

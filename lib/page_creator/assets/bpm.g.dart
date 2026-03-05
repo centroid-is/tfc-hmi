@@ -1,36 +1,29 @@
 // GENERATED CODE - DO NOT MODIFY BY HAND
 
-part of 'ratio_number.dart';
+part of 'bpm.dart';
 
 // **************************************************************************
 // JsonSerializableGenerator
 // **************************************************************************
 
-RatioNumberConfig _$RatioNumberConfigFromJson(Map<String, dynamic> json) =>
-    RatioNumberConfig(
-      key1: json['key1'] as String,
-      key2: json['key2'] as String,
-      key1Label: json['key1_label'] as String? ?? '',
-      key2Label: json['key2_label'] as String? ?? '',
+BpmConfig _$BpmConfigFromJson(Map<String, dynamic> json) => BpmConfig(
+      key: json['key'] as String,
       textColor: json['text_color'] == null
           ? Colors.black
           : const ColorConverter()
               .fromJson(json['text_color'] as Map<String, dynamic>),
-      sinceMinutes: json['since_minutes'] == null
-          ? const Duration(minutes: 10)
-          : Duration(microseconds: (json['since_minutes'] as num).toInt()),
-      howMany: (json['how_many'] as num?)?.toInt() ?? 10,
       pollInterval: json['poll_interval'] == null
-          ? const Duration(seconds: 1)
+          ? const Duration(seconds: 15)
           : Duration(microseconds: (json['poll_interval'] as num).toInt()),
+      defaultInterval: (json['default_interval'] as num?)?.toInt() ?? 1,
+      howMany: (json['how_many'] as num?)?.toInt() ?? 20,
       graphHeader: json['graph_header'] as String?,
-      barsClockAligned: json['bars_clock_aligned'] as bool? ?? false,
-      integersOnly: json['integers_only'] as bool? ?? false,
-      barsInteractive: json['bars_interactive'] as bool? ?? false,
       intervalPresets: (json['interval_presets'] as List<dynamic>?)
               ?.map((e) => (e as num).toInt())
               .toList() ??
-          [1, 5, 10, 60, 240],
+          [1, 5, 10, 30, 60],
+      showBph: json['show_bph'] as bool? ?? false,
+      unit: json['unit'] as String? ?? 'bpm',
       intervalVariable: json['interval_variable'] as String?,
     )
       ..variant = json['asset_name'] as String
@@ -40,26 +33,21 @@ RatioNumberConfig _$RatioNumberConfigFromJson(Map<String, dynamic> json) =>
       ..text = json['text'] as String?
       ..textPos = $enumDecodeNullable(_$TextPosEnumMap, json['textPos']);
 
-Map<String, dynamic> _$RatioNumberConfigToJson(RatioNumberConfig instance) =>
-    <String, dynamic>{
+Map<String, dynamic> _$BpmConfigToJson(BpmConfig instance) => <String, dynamic>{
       'asset_name': instance.variant,
       'coordinates': instance.coordinates,
       'size': instance.size,
       'text': instance.text,
       'textPos': _$TextPosEnumMap[instance.textPos],
-      'key1': instance.key1,
-      'key2': instance.key2,
-      'key1_label': instance.key1Label,
-      'key2_label': instance.key2Label,
+      'key': instance.key,
       'text_color': const ColorConverter().toJson(instance.textColor),
-      'since_minutes': instance.sinceMinutes.inMicroseconds,
-      'how_many': instance.howMany,
       'poll_interval': instance.pollInterval.inMicroseconds,
+      'default_interval': instance.defaultInterval,
+      'how_many': instance.howMany,
       'graph_header': instance.graphHeader,
-      'bars_clock_aligned': instance.barsClockAligned,
-      'integers_only': instance.integersOnly,
-      'bars_interactive': instance.barsInteractive,
       'interval_presets': instance.intervalPresets,
+      'show_bph': instance.showBph,
+      'unit': instance.unit,
       'interval_variable': instance.intervalVariable,
     };
 

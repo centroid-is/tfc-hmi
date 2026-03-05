@@ -1,0 +1,943 @@
+import 'dart:async';
+import 'dart:math' as math;
+
+import 'package:flutter/material.dart';
+import 'package:json_annotation/json_annotation.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import 'common.dart';
+import 'option_variable.dart';
+import '../../providers/current_page_assets.dart';
+import '../../providers/database.dart';
+import '../../providers/state_man.dart';
+import '../../widgets/graph.dart';
+import 'package:tfc/converter/color_converter.dart';
+import 'package:tfc_dart/core/database.dart';
+
+part 'bpm.g.dart';
+
+@JsonSerializable()
+class BpmConfig extends BaseAsset {
+  @override
+  String get displayName => 'BPM Counter';
+  @override
+  String get category => 'Text & Numbers';
+
+  String key;
+  @ColorConverter()
+  @JsonKey(name: 'text_color')
+  Color textColor;
+  @JsonKey(name: 'poll_interval')
+  Duration pollInterval;
+  @JsonKey(name: 'default_interval')
+  int defaultInterval; // in minutes
+  @JsonKey(name: 'how_many')
+  int howMany;
+  @JsonKey(name: 'graph_header')
+  String? graphHeader;
+  @JsonKey(name: 'interval_presets', defaultValue: [1, 5, 10, 30, 60])
+  List<int> intervalPresets;
+  @JsonKey(name: 'show_bph', defaultValue: false)
+  bool showBph;
+  @JsonKey(defaultValue: 'bpm')
+  String unit;
+  @JsonKey(name: 'interval_variable')
+  String? intervalVariable;
+
+  BpmConfig({
+    required this.key,
+    this.textColor = Colors.black,
+    this.pollInterval = const Duration(seconds: 15),
+    this.defaultInterval = 1,
+    this.howMany = 20,
+    this.graphHeader,
+    this.intervalPresets = const [1, 5, 10, 30, 60],
+    this.showBph = false,
+    this.unit = 'bpm',
+    this.intervalVariable,
+  });
+
+  BpmConfig.preview()
+      : key = "key",
+        textColor = Colors.black,
+        pollInterval = const Duration(seconds: 15),
+        defaultInterval = 1,
+        howMany = 20,
+        intervalPresets = const [1, 5, 10, 30, 60],
+        showBph = false,
+        unit = 'bpm',
+        intervalVariable = null;
+
+  factory BpmConfig.fromJson(Map<String, dynamic> json) =>
+      _$BpmConfigFromJson(json);
+  Map<String, dynamic> toJson() => _$BpmConfigToJson(this);
+
+  @override
+  Widget build(BuildContext context) => BpmWidget(config: this);
+
+  @override
+  Widget configure(BuildContext context) => _BpmConfigEditor(config: this);
+}
+
+/// Compute rate from a raw count over [windowMinutes].
+/// [bph] == true  → batches per hour
+/// [bph] == false → batches per minute
+double _rate(int count, int windowMinutes, {required bool bph}) {
+  if (windowMinutes <= 0) return 0;
+  return bph ? count * 60.0 / windowMinutes : count / windowMinutes.toDouble();
+}
+
+String _formatRate(double rate) {
+  if (rate == rate.roundToDouble()) return rate.toInt().toString();
+  return rate.toStringAsFixed(1);
+}
+
+// ---------------------------------------------------------------------------
+// Config editor
+// ---------------------------------------------------------------------------
+
+class _BpmConfigEditor extends ConsumerStatefulWidget {
+  final BpmConfig config;
+  const _BpmConfigEditor({required this.config});
+
+  @override
+  ConsumerState<_BpmConfigEditor> createState() => _BpmConfigEditorState();
+}
+
+class _BpmConfigEditorState extends ConsumerState<_BpmConfigEditor> {
+  Widget _buildIntervalVariableDropdown() {
+    final pageAssets = ref.watch(currentPageAssetsProvider);
+    final optionVars = pageAssets.whereType<OptionVariableConfig>().toList();
+
+    return DropdownButtonFormField<String?>(
+      value: widget.config.intervalVariable,
+      decoration: const InputDecoration(
+        labelText: 'Interval Variable',
+        helperText: 'Link to an OptionVariable to control interval',
+      ),
+      items: [
+        const DropdownMenuItem<String?>(
+          value: null,
+          child: Text('None — use default'),
+        ),
+        ...optionVars.map((ov) => DropdownMenuItem<String?>(
+              value: ov.variableName,
+              child: Text(ov.variableName),
+            )),
+      ],
+      onChanged: (value) =>
+          setState(() => widget.config.intervalVariable = value),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          KeyField(
+            initialValue: widget.config.key,
+            onChanged: (value) => setState(() => widget.config.key = value),
+          ),
+          const SizedBox(height: 16),
+          TextFormField(
+            initialValue: widget.config.text,
+            decoration: const InputDecoration(labelText: 'Label'),
+            onChanged: (value) => setState(() => widget.config.text = value),
+          ),
+          const SizedBox(height: 16),
+          TextFormField(
+            initialValue: widget.config.graphHeader,
+            decoration: const InputDecoration(
+              labelText: 'Graph Header',
+              helperText: 'Custom header for the chart dialog (optional)',
+            ),
+            onChanged: (value) =>
+                setState(() => widget.config.graphHeader = value),
+          ),
+          const SizedBox(height: 16),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: TextFormField(
+                  initialValue: widget.config.defaultInterval.toString(),
+                  decoration: const InputDecoration(
+                    labelText: 'Default Interval (minutes)',
+                    helperText: 'Window used for the main display rate',
+                  ),
+                  keyboardType: TextInputType.number,
+                  onChanged: (value) {
+                    final v = int.tryParse(value);
+                    if (v != null && v > 0) {
+                      setState(() => widget.config.defaultInterval = v);
+                    }
+                  },
+                ),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: _buildIntervalVariableDropdown(),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          TextFormField(
+            initialValue: widget.config.howMany.toString(),
+            decoration: const InputDecoration(
+              labelText: 'Chart Buckets',
+              helperText: 'Number of time buckets in the chart',
+            ),
+            keyboardType: TextInputType.number,
+            onChanged: (value) {
+              final v = int.tryParse(value);
+              if (v != null && v > 0) {
+                setState(() => widget.config.howMany = v);
+              }
+            },
+          ),
+          const SizedBox(height: 16),
+          TextFormField(
+            initialValue: widget.config.pollInterval.inSeconds.toString(),
+            decoration: const InputDecoration(
+              labelText: 'Poll Interval (seconds)',
+              helperText: 'How often to refresh the count',
+            ),
+            keyboardType: TextInputType.number,
+            onChanged: (value) {
+              final seconds = int.tryParse(value);
+              if (seconds != null && seconds > 0) {
+                setState(() =>
+                    widget.config.pollInterval = Duration(seconds: seconds));
+              }
+            },
+          ),
+          const SizedBox(height: 16),
+          TextFormField(
+            initialValue: widget.config.unit,
+            decoration: const InputDecoration(
+              labelText: 'Unit Prefix',
+              helperText: 'e.g. "b" for bpm/bph, "c" for cpm/cph',
+            ),
+            onChanged: (value) {
+              setState(() => widget.config.unit = value);
+            },
+          ),
+          const SizedBox(height: 16),
+          SwitchListTile(
+            title: Text('Show ${widget.config.unit} (Per Hour)'),
+            subtitle: Text('Off = ${widget.config.unit} (Per Minute)'),
+            value: widget.config.showBph,
+            onChanged: (value) => setState(() => widget.config.showBph = value),
+          ),
+          const SizedBox(height: 16),
+          DropdownButton<TextPos>(
+            value: widget.config.textPos ?? TextPos.right,
+            isExpanded: true,
+            onChanged: (value) =>
+                setState(() => widget.config.textPos = value!),
+            items: TextPos.values
+                .map((e) =>
+                    DropdownMenuItem<TextPos>(value: e, child: Text(e.name)))
+                .toList(),
+          ),
+          const SizedBox(height: 16),
+          CoordinatesField(
+            initialValue: widget.config.coordinates,
+            onChanged: (c) => setState(() => widget.config.coordinates = c),
+            enableAngle: true,
+          ),
+          const SizedBox(height: 16),
+          SizeField(
+            initialValue: widget.config.size,
+            onChanged: (size) => setState(() => widget.config.size = size),
+          ),
+          const SizedBox(height: 16),
+          const Text('Available Intervals',
+              style: TextStyle(fontWeight: FontWeight.bold)),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 4,
+            children: [1, 5, 10, 30, 60].map((minutes) {
+              final selected = widget.config.intervalPresets.contains(minutes);
+              return FilterChip(
+                label: Text(_formatIntervalMinutes(minutes)),
+                selected: selected,
+                onSelected: (value) {
+                  setState(() {
+                    if (value) {
+                      widget.config.intervalPresets.add(minutes);
+                      widget.config.intervalPresets.sort();
+                    } else {
+                      widget.config.intervalPresets.remove(minutes);
+                    }
+                  });
+                },
+              );
+            }).toList(),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+String _formatIntervalMinutes(int minutes) {
+  if (minutes < 60) return '${minutes}m';
+  if (minutes < 1440) return '${minutes ~/ 60}h';
+  return '${minutes ~/ 1440}d';
+}
+
+// ---------------------------------------------------------------------------
+// Main display widget
+// ---------------------------------------------------------------------------
+
+class BpmWidget extends ConsumerStatefulWidget {
+  final BpmConfig config;
+  const BpmWidget({super.key, required this.config});
+
+  @override
+  ConsumerState<BpmWidget> createState() => _BpmWidgetState();
+}
+
+class _BpmWidgetState extends ConsumerState<BpmWidget> {
+  late int _activeInterval;
+  StreamSubscription<Map<String, String>>? _subsSub;
+  Timer? _pollTimer;
+  List<DateTime> _cachedTimestamps = [];
+  int? _count;
+  DateTime? _lastFetchEnd;
+
+  @override
+  void initState() {
+    super.initState();
+    _activeInterval = widget.config.defaultInterval;
+    _watchIntervalVariable();
+    _initPolling();
+  }
+
+  void _watchIntervalVariable() {
+    final varName = widget.config.intervalVariable;
+    if (varName == null) return;
+
+    ref.read(stateManProvider.future).then((sm) {
+      final cur = sm.getSubstitution(varName);
+      if (cur != null) {
+        final v = int.tryParse(cur);
+        if (v != null && v > 0 && v != _activeInterval) {
+          _activeInterval = v;
+          _updateCount(); // instant — no DB hit
+        }
+      }
+      _subsSub = sm.substitutionsChanged.listen((subs) {
+        final v = int.tryParse(subs[varName] ?? '');
+        if (v != null && v > 0 && v != _activeInterval && mounted) {
+          _activeInterval = v;
+          _updateCount(); // instant — no DB hit
+        }
+      });
+    });
+  }
+
+  int get _maxMinutes => [
+        _activeInterval,
+        ...widget.config.intervalPresets,
+      ].reduce(math.max);
+
+  Future<void> _initPolling() async {
+    final db = await ref.read(databaseProvider.future);
+    if (db == null || !mounted) return;
+    // Initial: fetch entire window
+    final since = DateTime.now().subtract(Duration(minutes: _maxMinutes));
+    try {
+      final rows = await db.queryTimeseriesData(widget.config.key, since,
+          orderBy: 'time ASC');
+      if (!mounted) return;
+      _cachedTimestamps = rows.map((r) => r.time).toList();
+    } catch (_) {}
+    _lastFetchEnd = DateTime.now();
+    _updateCount();
+    _schedulePoll(db);
+  }
+
+  void _schedulePoll(Database db) {
+    _pollTimer?.cancel();
+    _pollTimer = Timer(widget.config.pollInterval, () => _pollNewData(db));
+  }
+
+  /// Poll: only fetch new data since last fetch, prune old.
+  Future<void> _pollNewData(Database db) async {
+    if (!mounted || _lastFetchEnd == null) return;
+    try {
+      final rows = await db.queryTimeseriesData(
+          widget.config.key, _lastFetchEnd!,
+          orderBy: 'time ASC');
+      if (!mounted) return;
+      _lastFetchEnd = DateTime.now();
+      if (rows.isNotEmpty) {
+        _cachedTimestamps.addAll(rows.map((r) => r.time));
+      }
+      // Prune timestamps older than the widest interval
+      final cutoff = DateTime.now().subtract(Duration(minutes: _maxMinutes));
+      _cachedTimestamps.removeWhere((t) => t.isBefore(cutoff));
+      _updateCount();
+    } catch (_) {}
+    _schedulePoll(db);
+  }
+
+  /// Recount from cached timestamps — no DB call.
+  void _updateCount() {
+    final since = DateTime.now().subtract(Duration(minutes: _activeInterval));
+    final count = _cachedTimestamps.where((t) => t.isAfter(since)).length;
+    if (mounted) setState(() => _count = count);
+  }
+
+  @override
+  void dispose() {
+    _subsSub?.cancel();
+    _pollTimer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (widget.config.key == "key") {
+      return _buildDisplay(context, "42 ${widget.config.unit}",
+          activeInterval: _activeInterval);
+    }
+
+    String displayValue = "---";
+    if (_count != null) {
+      final r = _rate(_count!, _activeInterval, bph: widget.config.showBph);
+      displayValue = "${_formatRate(r)} ${widget.config.unit}";
+    }
+    return _buildDisplay(context, displayValue,
+        activeInterval: _activeInterval);
+  }
+
+  Widget _buildDisplay(BuildContext context, String value,
+      {int? activeInterval}) {
+    Widget displayWidget = FittedBox(
+      fit: BoxFit.contain,
+      child: Transform.rotate(
+        angle: (widget.config.coordinates.angle ?? 0) * math.pi / 180,
+        child: Text(
+          value,
+          style: TextStyle(color: widget.config.textColor),
+        ),
+      ),
+    );
+
+    displayWidget = GestureDetector(
+      onTap: () => _showChartDialog(
+          context, activeInterval ?? widget.config.defaultInterval),
+      child: displayWidget,
+    );
+
+    return displayWidget;
+  }
+
+  void _showChartDialog(BuildContext context, int activeInterval) {
+    final navigator = Navigator.of(context);
+    showDialog(
+      context: navigator.context,
+      builder: (context) {
+        final size = MediaQuery.of(context).size;
+        return Dialog(
+          child: Container(
+            width: size.width * 0.8,
+            height: size.height * 0.8,
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      widget.config.graphHeader ??
+                          widget.config.text ??
+                          'BPM Counter',
+                      style: Theme.of(context).textTheme.titleLarge,
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close),
+                      onPressed: () => Navigator.of(context).pop(),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                Expanded(
+                  child: _BpmChartView(
+                    config: widget.config,
+                    initialInterval: activeInterval,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Dialog view: summary cards + line chart
+// ---------------------------------------------------------------------------
+
+class _BpmChartView extends ConsumerStatefulWidget {
+  final BpmConfig config;
+  final int initialInterval;
+
+  const _BpmChartView({required this.config, required this.initialInterval});
+
+  @override
+  ConsumerState<_BpmChartView> createState() => _BpmChartViewState();
+}
+
+class _BpmChartViewState extends ConsumerState<_BpmChartView> {
+  late Duration _selectedInterval;
+  List<DateTime> _rawTimestamps = [];
+  bool _isLoading = true;
+  late Graph _graph;
+  final Map<int, Graph> _graphs = {};
+  DateTime _dataStart = DateTime.now();
+  DateTime _dataEnd = DateTime.now();
+  Timer? _pollTimer;
+  bool _realTimeActive = true;
+  bool _fetchingOlder = false;
+  Database? _db;
+
+  /// Cached finalized (closed) buckets per interval.
+  final Map<int, List<(int, int)>> _bucketCache = {}; // ms → count
+  /// Current open bucket count & start per interval.
+  final Map<int, int> _openCount = {};
+  final Map<int, int> _openStartMs = {};
+
+  @override
+  void initState() {
+    super.initState();
+    _selectedInterval = Duration(minutes: widget.initialInterval);
+    _graph = _getOrCreateGraph(_selectedInterval.inMinutes);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _init());
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final theme = ref.watch(chartThemeNotifierProvider);
+    for (final graph in _graphs.values) {
+      graph.theme(theme);
+    }
+  }
+
+  Graph _getOrCreateGraph(int intervalMinutes) {
+    return _graphs[intervalMinutes] ??=
+        _createGraphForInterval(Duration(minutes: intervalMinutes));
+  }
+
+  Graph _createGraphForInterval(Duration interval) {
+    final xSpan = interval * widget.config.howMany;
+    return Graph(
+      config: GraphConfig(
+        type: GraphType.timeseries,
+        xAxis: const GraphAxisConfig(unit: ''),
+        yAxis: GraphAxisConfig(
+          unit: widget.config.unit,
+          min: 0,
+          integersOnly: true,
+        ),
+        pan: true,
+        tooltip: true,
+        xSpan: xSpan,
+      ),
+      data: [],
+      showButtons: true,
+      onPanUpdate: _onPanUpdate,
+      onPanEnd: _onPanEnd,
+      onNowPressed: _onNowPressed,
+      onSetDatePressed: _onSetDatePressed,
+      chartTheme: ref.read(chartThemeNotifierProvider),
+      redraw: () {
+        if (mounted) setState(() {});
+      },
+    );
+  }
+
+  // ── Bucket cache ──────────────────────────────────────────────────────
+
+  int _bucketStart(int tsMs, int intervalMs) =>
+      (tsMs ~/ intervalMs) * intervalMs;
+
+  /// Build full bucket cache from raw timestamps for one interval.
+  /// Always generates zero-filled buckets for the full viewport so the
+  /// series line spans the entire graph and pan gestures work.
+  void _buildCache(int minutes) {
+    final intervalMs = minutes * 60000;
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    final openMs = _bucketStart(nowMs, intervalMs);
+    final viewStartMs = openMs - (widget.config.howMany - 1) * intervalMs;
+
+    // Effective start: include older data if user panned into the past
+    int startMs = viewStartMs;
+    if (_rawTimestamps.isNotEmpty) {
+      final dataMs = _bucketStart(
+          _rawTimestamps.first.millisecondsSinceEpoch, intervalMs);
+      if (dataMs < startMs) startMs = dataMs;
+    }
+
+    // Count timestamps per closed bucket
+    final counts = <int, int>{};
+    int openCnt = 0;
+    for (final ts in _rawTimestamps) {
+      final b = _bucketStart(ts.millisecondsSinceEpoch, intervalMs);
+      if (b >= openMs) {
+        openCnt++;
+      } else if (b >= startMs) {
+        counts[b] = (counts[b] ?? 0) + 1;
+      }
+    }
+
+    // Generate zero-filled closed buckets for the full range
+    final closed = <(int, int)>[];
+    for (var b = startMs; b < openMs; b += intervalMs) {
+      closed.add((b, counts[b] ?? 0));
+    }
+
+    _bucketCache[minutes] = closed;
+    _openCount[minutes] = openCnt;
+    _openStartMs[minutes] = openMs;
+  }
+
+  /// Incrementally ingest new timestamps into all caches.
+  void _ingest(List<DateTime> newTs) {
+    if (newTs.isEmpty) return;
+    _rawTimestamps.addAll(newTs);
+
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+
+    for (final minutes in _bucketCache.keys.toList()) {
+      final intervalMs = minutes * 60000;
+      final cache = _bucketCache[minutes]!;
+      final openMs = _bucketStart(nowMs, intervalMs);
+      final prevOpenMs = _openStartMs[minutes] ?? openMs;
+
+      // Finalize rolled-over buckets
+      if (openMs > prevOpenMs) {
+        var fill = prevOpenMs;
+        while (fill < openMs) {
+          cache.add((fill, fill == prevOpenMs ? (_openCount[minutes] ?? 0) : 0));
+          fill += intervalMs;
+        }
+        _openCount[minutes] = 0;
+        _openStartMs[minutes] = openMs;
+      }
+
+      // Count new timestamps in the open bucket
+      for (final ts in newTs) {
+        if (ts.millisecondsSinceEpoch >= openMs) {
+          _openCount[minutes] = (_openCount[minutes] ?? 0) + 1;
+        }
+      }
+    }
+  }
+
+  /// Push cached buckets into a Graph.
+  void _pushToGraph(Graph graph, int minutes) {
+    final cache = _bucketCache[minutes];
+    if (cache == null) return;
+    final bph = widget.config.showBph;
+    final unit = widget.config.unit;
+    final data = <Map<String, dynamic>>[];
+    for (final (ms, count) in cache) {
+      data.add({
+        'x': ms.toDouble(),
+        'y': _rate(count, minutes, bph: bph),
+        's': unit,
+      });
+    }
+    // Append open bucket
+    final openMs = _openStartMs[minutes];
+    if (openMs != null) {
+      data.add({
+        'x': openMs.toDouble(),
+        'y': _rate(_openCount[minutes] ?? 0, minutes, bph: bph),
+        's': unit,
+      });
+    }
+    graph.data.clear();
+    if (data.isNotEmpty) graph.addAll(data);
+  }
+
+  // ── Init / fetch ──────────────────────────────────────────────────────
+
+  Future<void> _init() async {
+    _db = await ref.read(databaseProvider.future);
+    if (_db == null || !mounted) return;
+    await _fetchRawData(showSpinner: true);
+    _schedulePoll();
+  }
+
+  Future<void> _fetchRawData({bool showSpinner = false}) async {
+    if (showSpinner) setState(() => _isLoading = true);
+    try {
+      if (_db == null || !mounted) return;
+      final maxMinutes = widget.config.intervalPresets.reduce(math.max);
+      final totalWindow = Duration(minutes: maxMinutes * widget.config.howMany);
+      _dataStart = DateTime.now().subtract(totalWindow);
+      _dataEnd = DateTime.now();
+
+      final rows = await _db!.queryTimeseriesData(widget.config.key, _dataStart,
+          orderBy: 'time ASC');
+      if (!mounted) return;
+
+      _rawTimestamps = rows.map((r) => r.time).toList();
+      _bucketCache.clear();
+      _openCount.clear();
+      _openStartMs.clear();
+
+      // Build selected interval first
+      _buildCache(_selectedInterval.inMinutes);
+      _isLoading = false;
+      _pushToGraph(_graph, _selectedInterval.inMinutes);
+
+      // Build remaining in background
+      _buildRemainingCaches();
+    } catch (_) {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _buildRemainingCaches() async {
+    for (final minutes in widget.config.intervalPresets) {
+      if (!mounted) return;
+      if (_bucketCache.containsKey(minutes)) continue;
+      _buildCache(minutes);
+      final g = _getOrCreateGraph(minutes);
+      _pushToGraph(g, minutes);
+      await Future.delayed(Duration.zero);
+    }
+  }
+
+  // ── Polling ───────────────────────────────────────────────────────────
+
+  /// Schedule poll at next bucket boundary of selected interval + 1s buffer.
+  void _schedulePoll() {
+    _pollTimer?.cancel();
+    if (!_realTimeActive) return;
+
+    final intervalMs = _selectedInterval.inMilliseconds;
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    final nextBoundaryMs = _bucketStart(nowMs, intervalMs) + intervalMs;
+    final delayMs = (nextBoundaryMs - nowMs) + 1000;
+
+    _pollTimer = Timer(Duration(milliseconds: delayMs), () {
+      _pollNewData();
+      _schedulePoll();
+    });
+  }
+
+  Future<void> _pollNewData() async {
+    if (!_realTimeActive || _db == null || !mounted) return;
+    try {
+      final rows = await _db!.queryTimeseriesData(
+        widget.config.key, _dataEnd,
+        orderBy: 'time ASC',
+      );
+      if (!mounted) return;
+      _dataEnd = DateTime.now();
+
+      _ingest(rows.map((r) => r.time).toList());
+      _pushToGraph(_graph, _selectedInterval.inMinutes);
+      if (rows.isNotEmpty) {
+        _graph.panForward(DateTime.now().millisecondsSinceEpoch.toDouble());
+      }
+    } catch (_) {}
+  }
+
+  // --- Pan / navigation callbacks ---
+
+  void _onPanUpdate(GraphPanEvent event) {
+    if (event.visibleMinX == null) return;
+    if (event.delta != null && event.delta!.dx > 0) _disableRealTime();
+    final dataStartMs = _dataStart.millisecondsSinceEpoch.toDouble();
+    if (event.visibleMinX! < dataStartMs) {
+      _fetchOlderData(
+          DateTime.fromMillisecondsSinceEpoch(event.visibleMinX!.toInt()));
+    }
+  }
+
+  void _onPanEnd(GraphPanEvent event) => _onPanUpdate(event);
+
+  Future<void> _fetchOlderData(DateTime newStart) async {
+    if (_fetchingOlder || _db == null || !mounted) return;
+    _fetchingOlder = true;
+    try {
+      final fetchStart =
+          newStart.subtract(_selectedInterval * widget.config.howMany);
+      final rows = await _db!.queryTimeseriesData(
+        widget.config.key, _dataStart,
+        from: fetchStart, orderBy: 'time ASC',
+      );
+      if (!mounted) return;
+      if (rows.isNotEmpty) {
+        _rawTimestamps.insertAll(0, rows.map((r) => r.time).toList());
+      }
+      _dataStart = fetchStart;
+      // Rebuild caches with new historical data
+      _bucketCache.clear();
+      _openCount.clear();
+      _openStartMs.clear();
+      _buildCache(_selectedInterval.inMinutes);
+      _pushToGraph(_graph, _selectedInterval.inMinutes);
+      _buildRemainingCaches();
+    } catch (_) {
+    } finally {
+      _fetchingOlder = false;
+    }
+  }
+
+  void _onNowPressed() {
+    _realTimeActive = true;
+    _dataEnd = DateTime.now();
+    // Rebuild cache so zero-fill range is anchored to current time
+    _buildCache(_selectedInterval.inMinutes);
+    _graph.setNowButtonDisabled(true);
+    _schedulePoll();
+    _pushToGraph(_graph, _selectedInterval.inMinutes);
+  }
+
+  void _onSetDatePressed() => _disableRealTime();
+
+  void _disableRealTime() {
+    if (!_realTimeActive) return;
+    _realTimeActive = false;
+    _pollTimer?.cancel();
+    _graph.setNowButtonDisabled(false);
+  }
+
+  void _changeChartInterval(Duration interval) {
+    _selectedInterval = interval;
+    final minutes = interval.inMinutes;
+    if (!_bucketCache.containsKey(minutes)) _buildCache(minutes);
+    // Always create fresh graph so viewport is anchored to "now"
+    _graph = _createGraphForInterval(interval);
+    _graphs[minutes] = _graph;
+    _pushToGraph(_graph, minutes);
+    setState(() {});
+    if (_realTimeActive) _schedulePoll();
+  }
+
+  // --- Helpers ---
+
+  int _rateCount(int minutes) {
+    final now = DateTime.now();
+    final start = now.subtract(Duration(minutes: minutes));
+    int lo = 0, hi = _rawTimestamps.length;
+    while (lo < hi) {
+      final mid = (lo + hi) >> 1;
+      if (_rawTimestamps[mid].isBefore(start)) { lo = mid + 1; } else { hi = mid; }
+    }
+    final loIdx = lo;
+    lo = 0; hi = _rawTimestamps.length;
+    while (lo < hi) {
+      final mid = (lo + hi) >> 1;
+      if (_rawTimestamps[mid].isBefore(now)) { lo = mid + 1; } else { hi = mid; }
+    }
+    return lo - loIdx;
+  }
+
+  @override
+  void dispose() {
+    _pollTimer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final presets = widget.config.intervalPresets;
+
+    if (_isLoading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    return Column(
+      children: [
+        _buildRateSummary(context, presets),
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            const Spacer(),
+            if (presets.length > 1)
+              ToggleButtons(
+                isSelected: presets
+                    .map((m) => Duration(minutes: m) == _selectedInterval)
+                    .toList(),
+                onPressed: (i) =>
+                    _changeChartInterval(Duration(minutes: presets[i])),
+                borderRadius: BorderRadius.circular(8),
+                constraints: const BoxConstraints(minHeight: 36, minWidth: 48),
+                children: presets
+                    .map((m) => Padding(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 6),
+                          child: Text(_formatIntervalMinutes(m)),
+                        ))
+                    .toList(),
+              ),
+            const SizedBox(width: 8),
+            IconButton(
+              icon: _isLoading
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Icon(Icons.refresh),
+              onPressed: _isLoading ? null : _fetchRawData,
+              tooltip: 'Refresh',
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        Expanded(child: _graph.build(context)),
+      ],
+    );
+  }
+
+  Widget _buildRateSummary(BuildContext context, List<int> presets) {
+    return Row(
+      children: presets.map((minutes) {
+        final count = _rateCount(minutes);
+        final r = _rate(count, minutes, bph: widget.config.showBph);
+        return Expanded(
+          child: Card(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+              child: Column(
+                children: [
+                  Text(
+                    _formatIntervalMinutes(minutes),
+                    style: Theme.of(context).textTheme.labelSmall,
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    _formatRate(r),
+                    style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                          fontWeight: FontWeight.bold,
+                        ),
+                  ),
+                  Text(
+                    widget.config.unit,
+                    style: Theme.of(context).textTheme.labelSmall,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      }).toList(),
+    );
+  }
+}

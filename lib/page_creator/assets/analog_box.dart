@@ -315,7 +315,8 @@ class _AnalogBoxConfigEditorState extends State<_AnalogBoxConfigEditor> {
                   onChanged: (v) => setState(() {
                     showGraph = v;
                     if (v && widget.config.graphConfig == null) {
-                      widget.config.graphConfig = GraphAssetConfig.preview();
+                      widget.config.graphConfig = GraphAssetConfig.preview(
+                          key: widget.config.analogKey);
                     }
                     if (!v) widget.config.graphConfig = null;
                   }),
