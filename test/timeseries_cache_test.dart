@@ -198,6 +198,147 @@ void main() {
     });
   });
 
+  group('Value cache', () {
+    test('addEntry stores value alongside timestamp', () {
+      cache.init(['a']);
+      final t = DateTime.now();
+      cache.addEntry('a', t, 42.5);
+      expect(cache.latestValue('a'), (t, 42.5));
+    });
+
+    test('addEntries bulk adds from TimeseriesData-like list', () {
+      cache.init(['a']);
+      final now = DateTime.now();
+      final entries = [
+        (now.subtract(const Duration(seconds: 3)), 10),
+        (now.subtract(const Duration(seconds: 2)), 20),
+        (now.subtract(const Duration(seconds: 1)), 30),
+      ];
+      cache.addEntries('a', entries);
+      // latestValue returns the most recent
+      expect(cache.latestValue('a')?.$2, 30);
+    });
+
+    test('latestValue returns most recent entry', () {
+      cache.init(['a']);
+      final t1 = DateTime(2026, 1, 1, 12, 0, 0);
+      final t2 = DateTime(2026, 1, 1, 12, 0, 5);
+      final t3 = DateTime(2026, 1, 1, 12, 0, 10);
+      cache.addEntry('a', t1, 'first');
+      cache.addEntry('a', t3, 'third');
+      cache.addEntry('a', t2, 'second');
+      final result = cache.latestValue('a');
+      expect(result?.$1, t3);
+      expect(result?.$2, 'third');
+    });
+
+    test('latestValue returns null for empty key', () {
+      cache.init(['a']);
+      expect(cache.latestValue('a'), isNull);
+    });
+
+    test('latestValue returns null for unknown key', () {
+      expect(cache.latestValue('nonexistent'), isNull);
+    });
+
+    test('valuesSince returns entries after boundary', () {
+      cache.init(['a']);
+      final t1 = DateTime(2026, 1, 1, 12, 0, 0);
+      final t2 = DateTime(2026, 1, 1, 12, 3, 0);
+      final t3 = DateTime(2026, 1, 1, 12, 5, 0);
+      cache.addEntry('a', t1, 100);
+      cache.addEntry('a', t2, 200);
+      cache.addEntry('a', t3, 300);
+      final boundary = DateTime(2026, 1, 1, 12, 2, 0);
+      final results = cache.valuesSince('a', boundary);
+      expect(results.length, 2);
+      expect(results.first.$2, 200);
+      expect(results.last.$2, 300);
+    });
+
+    test('valuesSince returns empty for unknown key', () {
+      expect(cache.valuesSince('nonexistent', DateTime.now()), isEmpty);
+    });
+
+    test('sumSince sums numeric values after boundary', () {
+      cache.init(['a']);
+      final t1 = DateTime(2026, 1, 1, 12, 0, 0);
+      final t2 = DateTime(2026, 1, 1, 12, 3, 0);
+      final t3 = DateTime(2026, 1, 1, 12, 5, 0);
+      cache.addEntry('a', t1, 10.0);
+      cache.addEntry('a', t2, 20.0);
+      cache.addEntry('a', t3, 30.0);
+      final boundary = DateTime(2026, 1, 1, 12, 2, 0);
+      // t2 + t3 = 50.0
+      expect(cache.sumSince('a', boundary), 50.0);
+    });
+
+    test('sumSince returns 0 for empty/unknown key', () {
+      expect(cache.sumSince('nonexistent', DateTime.now()), 0.0);
+      cache.init(['a']);
+      expect(cache.sumSince('a', DateTime.now().subtract(const Duration(hours: 1))), 0.0);
+    });
+
+    test('sumSince handles string numeric values', () {
+      cache.init(['a']);
+      final t1 = DateTime(2026, 1, 1, 12, 1, 0);
+      final t2 = DateTime(2026, 1, 1, 12, 2, 0);
+      cache.addEntry('a', t1, '15.5');
+      cache.addEntry('a', t2, '4.5');
+      final boundary = DateTime(2026, 1, 1, 12, 0, 0);
+      expect(cache.sumSince('a', boundary), 20.0);
+    });
+
+    test('prune also removes old values', () {
+      cache.init(['a']);
+      final now = DateTime.now();
+      cache.addEntry('a', now.subtract(const Duration(minutes: 20)), 'old');
+      cache.addEntry('a', now.subtract(const Duration(minutes: 3)), 'recent');
+      cache.addEntry('a', now, 'now');
+      cache.prune(5);
+      final all = cache.valuesSince(
+          'a', now.subtract(const Duration(minutes: 30)));
+      expect(all.length, 2);
+    });
+
+    test('clearKey clears values too', () {
+      cache.init(['a', 'b']);
+      final now = DateTime.now();
+      cache.addEntry('a', now, 1);
+      cache.addEntry('b', now, 2);
+      cache.clearKey('a');
+      expect(cache.latestValue('a'), isNull);
+      expect(cache.latestValue('b'), isNotNull);
+    });
+
+    test('clear clears all values', () {
+      cache.init(['a', 'b']);
+      final now = DateTime.now();
+      cache.addEntry('a', now, 1);
+      cache.addEntry('b', now, 2);
+      cache.clear();
+      expect(cache.latestValue('a'), isNull);
+      expect(cache.latestValue('b'), isNull);
+    });
+
+    test('addEntry auto-creates key if missing', () {
+      final t = DateTime.now();
+      cache.addEntry('new_key', t, 99);
+      expect(cache.latestValue('new_key'), (t, 99));
+    });
+
+    test('existing countSince/addTimestamp still work (no regression)', () {
+      cache.init(['a']);
+      final now = DateTime.now();
+      cache.addTimestamp('a', now);
+      cache.addTimestamp('a', now.subtract(const Duration(minutes: 1)));
+      final since = now.subtract(const Duration(minutes: 2));
+      expect(cache.countSince('a', since), 2);
+      // Value cache should be empty — addTimestamp doesn't add values
+      expect(cache.latestValue('a'), isNull);
+    });
+  });
+
   group('NOTIFY failure regression', () {
     // Reproduces production bug: BPM widgets with broken NOTIFY show
     // decaying counts because the refresh timer only prunes — never

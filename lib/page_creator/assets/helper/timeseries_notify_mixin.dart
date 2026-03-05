@@ -43,6 +43,11 @@ mixin TimeseriesNotifyMixin<T extends ConsumerStatefulWidget>
   /// Typically reads [tsCache.countSince] and calls [setState].
   void tsUpdateDisplay();
 
+  /// Override to `true` to also cache values alongside timestamps.
+  /// When true, historical fetches and NOTIFY events store values via
+  /// [TimeseriesCache.addEntries] / [TimeseriesCache.addEntry].
+  bool get tsCacheValues => false;
+
   // ── Provided state ──────────────────────────────────────────────────
 
   final TimeseriesCache tsCache = TimeseriesCache();
@@ -134,7 +139,11 @@ mixin TimeseriesNotifyMixin<T extends ConsumerStatefulWidget>
         final rows = await _tsDb!
             .queryTimeseriesData(tableName, since, orderBy: 'time ASC');
         if (!_tsAlive) return;
-        tsCache.addAll(key, rows.map((r) => r.time));
+        if (tsCacheValues) {
+          tsCache.addEntries(key, rows.map((r) => (r.time, r.value)).toList());
+        } else {
+          tsCache.addAll(key, rows.map((r) => r.time));
+        }
       } catch (_) {
         // Table may not exist yet — that's fine
       }
@@ -161,7 +170,11 @@ mixin TimeseriesNotifyMixin<T extends ConsumerStatefulWidget>
           if (notification.action == drift_db.NotificationAction.insert) {
             if (notification.data.containsKey('time')) {
               final time = DateTime.parse(notification.data['time']);
-              tsCache.addTimestamp(key, time);
+              if (tsCacheValues) {
+                tsCache.addEntry(key, time, notification.data['value']);
+              } else {
+                tsCache.addTimestamp(key, time);
+              }
               _tsNotifyAlive.add(key);
               tsCache.prune(tsMaxWindowMinutes);
               if (_tsVisible) tsUpdateDisplay();
@@ -203,7 +216,11 @@ mixin TimeseriesNotifyMixin<T extends ConsumerStatefulWidget>
             .queryTimeseriesData(tableName, since, orderBy: 'time ASC');
         if (!_tsAlive) return;
         tsCache.clearKey(key);
-        tsCache.addAll(key, rows.map((r) => r.time));
+        if (tsCacheValues) {
+          tsCache.addEntries(key, rows.map((r) => (r.time, r.value)).toList());
+        } else {
+          tsCache.addAll(key, rows.map((r) => r.time));
+        }
       } catch (_) {}
     }
     if (_tsAlive && _tsVisible) tsUpdateDisplay();
