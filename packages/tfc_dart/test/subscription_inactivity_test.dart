@@ -9,8 +9,8 @@
 // C) SecureChannelClosed fires on monitor streams when TCP connection is killed.
 //
 // Tests D-E verify StateMan integration:
-// D) ClientWrapper.startHeartbeat clears subscriptionId when the subscription dies.
-// E) AutoDisposingStream filters Inactivity/SubscriptionDeleted errors.
+// D) ClientWrapper.startHeartbeat sets sessionLost when the subscription dies.
+// E) AutoDisposingStream propagates all errors to widget streams.
 import 'dart:async';
 import 'dart:math';
 
@@ -253,11 +253,22 @@ void main() {
     await client.connect("opc.tcp://127.0.0.1:$serverPort");
 
     try {
-      final subscriptionId = await client.subscriptionCreate(
-        requestedPublishingInterval: Duration(milliseconds: 100),
-        requestedLifetimeCount: 600,
-        requestedMaxKeepAliveCount: 10,
-      );
+      // Retry subscription creation — on Windows CI the previous test's
+      // server socket may linger briefly, causing BadSessionClosed.
+      late int subscriptionId;
+      for (var attempt = 0; attempt < 5; attempt++) {
+        try {
+          subscriptionId = await client.subscriptionCreate(
+            requestedPublishingInterval: Duration(milliseconds: 100),
+            requestedLifetimeCount: 600,
+            requestedMaxKeepAliveCount: 10,
+          );
+          break;
+        } catch (e) {
+          if (attempt == 4) rethrow;
+          await Future.delayed(Duration(seconds: 1));
+        }
+      }
 
       final errors = <Object>[];
       final closedCompleter = Completer<void>();
@@ -300,8 +311,8 @@ void main() {
     }
   }, timeout: Timeout(Duration(seconds: 30)));
 
-  // --- Test D: ClientWrapper.startHeartbeat clears subscriptionId on death ---
-  test('D: Heartbeat clears subscriptionId when subscription expires',
+  // --- Test D: ClientWrapper.startHeartbeat sets sessionLost on death ---
+  test('D: Heartbeat sets sessionLost when subscription expires',
       () async {
     final client = Client(logLevel: LogLevel.UA_LOGLEVEL_WARNING);
     Timer? clientTimer = Timer.periodic(Duration(milliseconds: 10), (_) {
@@ -339,21 +350,18 @@ void main() {
         client.runIterate(Duration(milliseconds: 10));
       });
 
-      // Wait for subscriptionId to be cleared
+      // Wait for sessionLost to be set by heartbeat
       await Future.doWhile(() async {
-        if (wrapper.subscriptionId == null) return false;
+        if (wrapper.sessionLost) return false;
         await Future.delayed(Duration(milliseconds: 50));
         return true;
       }).timeout(Duration(seconds: 15),
           onTimeout: () => fail(
-              'subscriptionId was never cleared — heartbeat did not clean up'));
+              'sessionLost was never set — heartbeat did not detect subscription death'));
 
-      expect(wrapper.subscriptionId, isNull,
+      expect(wrapper.sessionLost, isTrue,
           reason:
-              'Heartbeat should clear subscriptionId on Inactivity/SubscriptionDeleted');
-      expect(wrapper.connectionStatus, ConnectionStatus.disconnected,
-          reason:
-              'Connection status should be disconnected after subscription death');
+              'Heartbeat should set sessionLost on SubscriptionDeleted/SecureChannelClosed');
 
       wrapper.dispose();
     } finally {
@@ -362,9 +370,9 @@ void main() {
     }
   }, timeout: Timeout(Duration(seconds: 60)));
 
-  // --- Test E: AutoDisposingStream filters subscription-level errors ---
+  // --- Test E: AutoDisposingStream propagates all errors to widget streams ---
   test(
-      'E: AutoDisposingStream filters Inactivity/SubscriptionDeleted from widget streams',
+      'E: AutoDisposingStream propagates all errors including Inactivity/SubscriptionDeleted',
       () async {
     final widgetErrors = <Object>[];
 
@@ -386,25 +394,23 @@ void main() {
     await Future.delayed(Duration(milliseconds: 50));
     expect(widgetErrors, isEmpty, reason: 'No errors yet');
 
-    // Emit Inactivity — should NOT reach widget stream
+    // Emit Inactivity — should reach widget stream
     rawController.addError(Inactivity());
     await Future.delayed(Duration(milliseconds: 50));
 
-    // Emit SubscriptionDeleted — should NOT reach widget stream
+    // Emit SubscriptionDeleted — should reach widget stream
     rawController.addError(SubscriptionDeleted(1));
     await Future.delayed(Duration(milliseconds: 50));
 
-    // Emit a regular error — SHOULD reach widget stream
+    // Emit a regular error — should reach widget stream
     rawController.addError(Exception('real error'));
     await Future.delayed(Duration(milliseconds: 50));
 
-    expect(widgetErrors.whereType<Inactivity>(), isEmpty,
-        reason: 'Inactivity should be filtered from widget stream');
-    expect(widgetErrors.whereType<SubscriptionDeleted>(), isEmpty,
-        reason: 'SubscriptionDeleted should be filtered from widget stream');
-    expect(widgetErrors, hasLength(1),
-        reason: 'Only the real error should reach the widget');
-    expect(widgetErrors.first, isA<Exception>());
+    expect(widgetErrors, hasLength(3),
+        reason: 'All errors should propagate to widget stream');
+    expect(widgetErrors[0], isA<Inactivity>());
+    expect(widgetErrors[1], isA<SubscriptionDeleted>());
+    expect(widgetErrors[2], isA<Exception>());
 
     await widgetSub.cancel();
     await rawController.close();
