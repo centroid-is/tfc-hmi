@@ -52,7 +52,7 @@ class RateValueConfig extends BaseAsset {
   List<int> intervalPresets;
   @JsonKey(name: 'show_per_hour', defaultValue: false)
   bool showPerHour;
-  @JsonKey(defaultValue: 'kg')
+  @JsonKey(defaultValue: 'kg/min')
   String unit;
   @JsonKey(name: 'interval_variable')
   String? intervalVariable;
@@ -68,7 +68,7 @@ class RateValueConfig extends BaseAsset {
     this.graphHeader,
     this.intervalPresets = const [1, 5, 10, 30, 60],
     this.showPerHour = false,
-    this.unit = 'kg',
+    this.unit = 'kg/min',
     this.intervalVariable,
     this.decimalPlaces = 1,
   });
@@ -81,7 +81,7 @@ class RateValueConfig extends BaseAsset {
         howMany = 20,
         intervalPresets = const [1, 5, 10, 30, 60],
         showPerHour = false,
-        unit = 'kg',
+        unit = 'kg/min',
         intervalVariable = null,
         decimalPlaces = 1;
 
@@ -241,7 +241,7 @@ class _RateValueConfigEditorState
             initialValue: widget.config.unit,
             decoration: const InputDecoration(
               labelText: 'Unit',
-              helperText: 'e.g. "kg" for kg/min or kg/h',
+              helperText: 'Display unit e.g. "kg/min", "kg/h", "bpm"',
             ),
             onChanged: (value) {
               setState(() => widget.config.unit = value);
@@ -249,8 +249,8 @@ class _RateValueConfigEditorState
           ),
           const SizedBox(height: 16),
           SwitchListTile(
-            title: Text('Show ${widget.config.unit}/h (Per Hour)'),
-            subtitle: Text('Off = ${widget.config.unit}/min (Per Minute)'),
+            title: const Text('Calculate Per Hour'),
+            subtitle: const Text('Off = divide by minutes, On = multiply to hourly'),
             value: widget.config.showPerHour,
             onChanged: (value) =>
                 setState(() => widget.config.showPerHour = value),
@@ -388,9 +388,7 @@ class _RateValueWidgetState extends ConsumerState<RateValueWidget>
 
   @override
   Widget build(BuildContext context) {
-    final rateUnit = widget.config.showPerHour
-        ? '${widget.config.unit}/h'
-        : '${widget.config.unit}/min';
+    final rateUnit = widget.config.unit;
 
     if (widget.config.key == 'key') {
       return _buildDisplay(context, '42 $rateUnit',
@@ -533,9 +531,7 @@ class _RateValueChartViewState extends ConsumerState<_RateValueChartView> {
 
   Graph _createGraphForInterval(Duration interval) {
     final xSpan = interval * widget.config.howMany;
-    final rateUnit = widget.config.showPerHour
-        ? '${widget.config.unit}/h'
-        : '${widget.config.unit}/min';
+    final rateUnit = widget.config.unit;
     return Graph(
       config: GraphConfig(
         type: GraphType.timeseries,
@@ -903,9 +899,7 @@ class _RateValueChartViewState extends ConsumerState<_RateValueChartView> {
   }
 
   Widget _buildRateSummary(BuildContext context, List<int> presets) {
-    final rateUnit = widget.config.showPerHour
-        ? '${widget.config.unit}/h'
-        : '${widget.config.unit}/min';
+    final rateUnit = widget.config.unit;
     return Row(
       children: presets.map((minutes) {
         final sum = _rateSum(minutes);

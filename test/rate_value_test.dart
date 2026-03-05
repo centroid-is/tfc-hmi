@@ -15,7 +15,7 @@ void main() {
         intervalPresets: [1, 5, 10, 30],
         graphHeader: 'Throughput',
         howMany: 30,
-        unit: 'kg',
+        unit: 'kg/min',
         showPerHour: true,
         decimalPlaces: 2,
       );
@@ -33,7 +33,7 @@ void main() {
       expect(restored.intervalPresets, [1, 5, 10, 30]);
       expect(restored.graphHeader, 'Throughput');
       expect(restored.howMany, 30);
-      expect(restored.unit, 'kg');
+      expect(restored.unit, 'kg/min');
       expect(restored.showPerHour, true);
       expect(restored.decimalPlaces, 2);
       expect(restored.text, 'Weight Rate');
@@ -54,7 +54,7 @@ void main() {
       expect(config.defaultInterval, 1);
       expect(config.intervalPresets, [1, 5, 10, 30, 60]);
       expect(config.howMany, 20);
-      expect(config.unit, 'kg');
+      expect(config.unit, 'kg/min');
       expect(config.showPerHour, false);
     });
   });
@@ -67,7 +67,7 @@ void main() {
       expect(config.defaultInterval, 1);
       expect(config.displayName, 'Rate Value');
       expect(config.category, 'Text & Numbers');
-      expect(config.unit, 'kg');
+      expect(config.unit, 'kg/min');
     });
 
     test('displayName and category are correct', () {

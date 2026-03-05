@@ -24,7 +24,7 @@ RateValueConfig _$RateValueConfigFromJson(Map<String, dynamic> json) =>
               .toList() ??
           [1, 5, 10, 30, 60],
       showPerHour: json['show_per_hour'] as bool? ?? false,
-      unit: json['unit'] as String? ?? 'kg',
+      unit: json['unit'] as String? ?? 'kg/min',
       intervalVariable: json['interval_variable'] as String?,
       decimalPlaces: (json['decimal_places'] as num?)?.toInt() ?? 1,
     )
