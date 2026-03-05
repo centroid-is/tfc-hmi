@@ -831,7 +831,7 @@ packages:
     description:
       path: "."
       ref: main
-      resolved-ref: "145f6d786c857b507b472e1beec4e8806102eec9"
+      resolved-ref: "99644b359d61b71d5761fe15ec660428ab0793de"
       url: "https://github.com/centroid-is/open62541_dart.git"
     source: git
     version: "1.5.2-1"
