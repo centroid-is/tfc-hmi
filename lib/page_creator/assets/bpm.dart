@@ -383,16 +383,18 @@ class _BpmWidgetState extends ConsumerState<BpmWidget> {
     _schedulePoll(_db!);
   }
 
-  void _schedulePoll(Database db) {
+  void _schedulePoll(Database db, [Duration? delay]) {
     _pollTimer?.cancel();
     if (!_alive) return;
-    _pollTimer = Timer(widget.config.pollInterval, () => _pollNewData(db));
+    final wait = delay ?? widget.config.pollInterval;
+    _pollTimer = Timer(wait, () => _pollNewData(db));
   }
 
   Future<void> _pollNewData(Database db) async {
     if (!_alive || _lastFetchEnd == null) return;
     final fetchFrom = _lastFetchEnd!;
     _lastFetchEnd = DateTime.now();
+    final sw = Stopwatch()..start();
     try {
       final rows = await db.queryTimeseriesData(
           widget.config.key, fetchFrom,
@@ -405,8 +407,11 @@ class _BpmWidgetState extends ConsumerState<BpmWidget> {
       _cachedTimestamps.removeWhere((t) => t.isBefore(cutoff));
       _updateCount();
     } catch (_) {}
+    sw.stop();
     if (!_alive) return;
-    _schedulePoll(db);
+    // Back off: never poll faster than the query takes
+    final backoff = sw.elapsed > widget.config.pollInterval ? sw.elapsed : null;
+    _schedulePoll(db, backoff);
   }
 
   void _updateCount() {

@@ -451,16 +451,18 @@ class _RatioNumberWidgetState extends ConsumerState<RatioNumberWidget> {
     _schedulePoll(_db!);
   }
 
-  void _schedulePoll(Database db) {
+  void _schedulePoll(Database db, [Duration? delay]) {
     _pollTimer?.cancel();
     if (!_alive) return;
-    _pollTimer = Timer(widget.config.pollInterval, () => _pollNewData(db));
+    final wait = delay ?? widget.config.pollInterval;
+    _pollTimer = Timer(wait, () => _pollNewData(db));
   }
 
   Future<void> _pollNewData(Database db) async {
     if (!_alive || _lastFetchEnd == null) return;
     final fetchFrom = _lastFetchEnd!;
     _lastFetchEnd = DateTime.now();
+    final sw = Stopwatch()..start();
     final results = await Future.wait([
       _safeQuery(db, widget.config.key1, fetchFrom),
       _safeQuery(db, widget.config.key2, fetchFrom),
@@ -472,7 +474,10 @@ class _RatioNumberWidgetState extends ConsumerState<RatioNumberWidget> {
     _cachedTs1.removeWhere((t) => t.isBefore(cutoff));
     _cachedTs2.removeWhere((t) => t.isBefore(cutoff));
     _updateCounts();
-    _schedulePoll(db);
+    sw.stop();
+    // Back off: never poll faster than the query takes
+    final backoff = sw.elapsed > widget.config.pollInterval ? sw.elapsed : null;
+    _schedulePoll(db, backoff);
   }
 
   void _updateCounts() {
