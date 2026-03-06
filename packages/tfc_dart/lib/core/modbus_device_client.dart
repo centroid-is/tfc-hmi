@@ -1,6 +1,6 @@
 import 'package:open62541/open62541.dart' show DynamicValue, NodeId;
 import 'package:tfc_dart/core/modbus_client_wrapper.dart';
-import 'package:tfc_dart/core/state_man.dart' show ConnectionStatus, DeviceClient;
+import 'package:tfc_dart/core/state_man.dart' show ConnectionStatus, DeviceClient, ModbusConfig;
 
 /// Adapter that wraps [ModbusClientWrapper] as a [DeviceClient] for use in
 /// [StateMan].
@@ -102,18 +102,22 @@ class ModbusDeviceClientAdapter implements DeviceClient {
 
 /// Creates [DeviceClient] instances for Modbus devices.
 ///
-/// Each entry produces one [ModbusDeviceClientAdapter] wrapping a
-/// [ModbusClientWrapper]. Phase 8 will add [ModbusDeviceConfig] and Phase 9
-/// will wire this into data_acquisition_isolate.
+/// Each entry pairs a [ModbusConfig] (connection settings) with the register
+/// specs that define which keys this adapter will handle. Phase 9 will build
+/// the specs from keymappings and wire this into data_acquisition_isolate.
 List<DeviceClient> createModbusDeviceClients(
-  List<({String host, int port, int unitId, Map<String, ModbusRegisterSpec> specs, String? alias})> configs,
+  List<({ModbusConfig config, Map<String, ModbusRegisterSpec> specs})> configs,
 ) {
-  return configs.map((config) {
-    final wrapper = ModbusClientWrapper(config.host, config.port, config.unitId);
+  return configs.map((entry) {
+    final wrapper = ModbusClientWrapper(
+      entry.config.host,
+      entry.config.port,
+      entry.config.unitId,
+    );
     return ModbusDeviceClientAdapter(
       wrapper,
-      specs: config.specs,
-      serverAlias: config.alias,
+      specs: entry.specs,
+      serverAlias: entry.config.serverAlias,
     );
   }).toList();
 }

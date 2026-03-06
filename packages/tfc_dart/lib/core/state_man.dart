@@ -15,7 +15,10 @@ import 'package:jbtm/src/m2400_fields.dart' show M2400Field;
 import 'package:jbtm/src/m2400_client_wrapper.dart' show M2400ClientWrapper;
 import 'package:jbtm/src/msocket.dart' as jbtm show ConnectionStatus;
 
+import 'package:modbus_client/modbus_client.dart' show ModbusElementType;
+
 import 'collector.dart';
+import 'modbus_client_wrapper.dart' show ModbusDataType;
 import 'preferences.dart';
 
 part 'state_man.g.dart';
@@ -176,19 +179,154 @@ class M2400NodeConfig {
       'M2400NodeConfig(recordType: $recordType, field: $field, alias: $serverAlias, statusFilter: $statusFilter)';
 }
 
+// =============================================================================
+// Modbus configuration classes (Phase 8)
+// =============================================================================
+
+/// Modbus register type for JSON serialization.
+///
+/// Maps to [ModbusElementType] at runtime via [toModbusElementType] and
+/// [fromModbusElementType]. Kept as a separate enum so json_serializable
+/// generates camelCase string serialization without depending on the
+/// modbus_client package in the serialization layer.
+enum ModbusRegisterType {
+  coil,
+  discreteInput,
+  holdingRegister,
+  inputRegister;
+
+  /// Converts to the modbus_client library's [ModbusElementType].
+  ModbusElementType toModbusElementType() {
+    switch (this) {
+      case ModbusRegisterType.coil:
+        return ModbusElementType.coil;
+      case ModbusRegisterType.discreteInput:
+        return ModbusElementType.discreteInput;
+      case ModbusRegisterType.holdingRegister:
+        return ModbusElementType.holdingRegister;
+      case ModbusRegisterType.inputRegister:
+        return ModbusElementType.inputRegister;
+    }
+  }
+
+  /// Creates from the modbus_client library's [ModbusElementType].
+  static ModbusRegisterType fromModbusElementType(ModbusElementType type) {
+    switch (type) {
+      case ModbusElementType.coil:
+        return ModbusRegisterType.coil;
+      case ModbusElementType.discreteInput:
+        return ModbusRegisterType.discreteInput;
+      case ModbusElementType.holdingRegister:
+        return ModbusRegisterType.holdingRegister;
+      case ModbusElementType.inputRegister:
+        return ModbusRegisterType.inputRegister;
+      default:
+        throw ArgumentError('Unsupported ModbusElementType: $type');
+    }
+  }
+}
+
+/// Configuration for a named Modbus poll group.
+///
+/// Poll groups allow registers to be read at different intervals (e.g. fast
+/// control loop vs slow diagnostics).
+@JsonSerializable(explicitToJson: true)
+class ModbusPollGroupConfig {
+  String name;
+  @JsonKey(name: 'interval_ms')
+  int intervalMs;
+
+  ModbusPollGroupConfig({required this.name, this.intervalMs = 1000});
+
+  /// Convenience getter for use with Timer/Duration APIs.
+  Duration get interval => Duration(milliseconds: intervalMs);
+
+  factory ModbusPollGroupConfig.fromJson(Map<String, dynamic> json) =>
+      _$ModbusPollGroupConfigFromJson(json);
+  Map<String, dynamic> toJson() => _$ModbusPollGroupConfigToJson(this);
+
+  @override
+  String toString() => 'ModbusPollGroupConfig(name: $name, intervalMs: $intervalMs)';
+}
+
+/// Top-level configuration for a single Modbus TCP server connection.
+///
+/// Parallels [M2400Config] and [OpcUAConfig] in the config hierarchy.
+@JsonSerializable(explicitToJson: true)
+class ModbusConfig {
+  String host;
+  int port;
+  @JsonKey(name: 'unit_id')
+  int unitId;
+  @JsonKey(name: 'server_alias')
+  String? serverAlias;
+  @JsonKey(name: 'poll_groups', defaultValue: [])
+  List<ModbusPollGroupConfig> pollGroups;
+
+  ModbusConfig({
+    this.host = '',
+    this.port = 502,
+    this.unitId = 1,
+    this.serverAlias,
+    this.pollGroups = const [],
+  });
+
+  factory ModbusConfig.fromJson(Map<String, dynamic> json) =>
+      _$ModbusConfigFromJson(json);
+  Map<String, dynamic> toJson() => _$ModbusConfigToJson(this);
+
+  @override
+  String toString() =>
+      'ModbusConfig(host: $host, port: $port, unitId: $unitId, alias: $serverAlias, pollGroups: $pollGroups)';
+}
+
+/// Per-key configuration that describes which Modbus register a key maps to.
+///
+/// Parallels [M2400NodeConfig] and [OpcUANodeConfig] in the keymappings.
+@JsonSerializable(explicitToJson: true)
+class ModbusNodeConfig {
+  @JsonKey(name: 'server_alias')
+  String? serverAlias;
+  @JsonKey(name: 'register_type')
+  ModbusRegisterType registerType;
+  int address;
+  @JsonKey(name: 'data_type')
+  ModbusDataType dataType;
+  @JsonKey(name: 'poll_group')
+  String pollGroup;
+
+  ModbusNodeConfig({
+    this.serverAlias,
+    required this.registerType,
+    required this.address,
+    this.dataType = ModbusDataType.uint16,
+    this.pollGroup = 'default',
+  });
+
+  factory ModbusNodeConfig.fromJson(Map<String, dynamic> json) =>
+      _$ModbusNodeConfigFromJson(json);
+  Map<String, dynamic> toJson() => _$ModbusNodeConfigToJson(this);
+
+  @override
+  String toString() =>
+      'ModbusNodeConfig(alias: $serverAlias, registerType: $registerType, address: $address, dataType: $dataType, pollGroup: $pollGroup)';
+}
+
 @JsonSerializable(explicitToJson: true)
 class StateManConfig {
   List<OpcUAConfig> opcua;
   @JsonKey(defaultValue: [])
   List<M2400Config> jbtm;
+  @JsonKey(defaultValue: [])
+  List<ModbusConfig> modbus;
 
-  StateManConfig({required this.opcua, this.jbtm = const []});
+  StateManConfig({required this.opcua, this.jbtm = const [], this.modbus = const []});
 
   StateManConfig copy() => StateManConfig.fromJson(toJson());
 
   @override
   String toString() {
-    return 'StateManConfig(opcua: ${opcua.toString()}, jbtm: ${jbtm.toString()})';
+    return 'StateManConfig(opcua: ${opcua.toString()}, jbtm: ${jbtm.toString()}, modbus: ${modbus.toString()})';
   }
 
   static Future<StateManConfig> fromFile(String path) async {
@@ -263,12 +401,15 @@ class KeyMappingEntry {
   OpcUANodeConfig? opcuaNode;
   @JsonKey(name: 'm2400_node')
   M2400NodeConfig? m2400Node;
+  @JsonKey(name: 'modbus_node')
+  ModbusNodeConfig? modbusNode;
   bool? io; // if true, the key is an IO unit
   CollectEntry? collect;
 
-  String? get server => opcuaNode?.serverAlias ?? m2400Node?.serverAlias;
+  String? get server =>
+      opcuaNode?.serverAlias ?? m2400Node?.serverAlias ?? modbusNode?.serverAlias;
 
-  KeyMappingEntry({this.opcuaNode, this.m2400Node, this.collect});
+  KeyMappingEntry({this.opcuaNode, this.m2400Node, this.modbusNode, this.collect});
 
   factory KeyMappingEntry.fromJson(Map<String, dynamic> json) =>
       _$KeyMappingEntryFromJson(json);
@@ -276,7 +417,7 @@ class KeyMappingEntry {
 
   @override
   String toString() {
-    return 'KeyMappingEntry(opcuaNode: ${opcuaNode?.toString()}, collect: $collect, io: $io)';
+    return 'KeyMappingEntry(opcuaNode: ${opcuaNode?.toString()}, m2400Node: ${m2400Node?.toString()}, modbusNode: ${modbusNode?.toString()}, collect: $collect, io: $io)';
   }
 }
 
@@ -292,7 +433,9 @@ class KeyMappings {
 
   String? lookupServerAlias(String key) {
     final entry = nodes[key];
-    return entry?.opcuaNode?.serverAlias ?? entry?.m2400Node?.serverAlias;
+    return entry?.opcuaNode?.serverAlias ??
+        entry?.m2400Node?.serverAlias ??
+        entry?.modbusNode?.serverAlias;
   }
 
   String? lookupKey(NodeId nodeId) {

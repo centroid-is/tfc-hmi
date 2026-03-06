@@ -118,6 +118,81 @@ const _$M2400FieldEnumMap = {
   M2400Field.alibiText: 'alibiText',
 };
 
+ModbusPollGroupConfig _$ModbusPollGroupConfigFromJson(
+        Map<String, dynamic> json) =>
+    ModbusPollGroupConfig(
+      name: json['name'] as String,
+      intervalMs: (json['interval_ms'] as num?)?.toInt() ?? 1000,
+    );
+
+Map<String, dynamic> _$ModbusPollGroupConfigToJson(
+        ModbusPollGroupConfig instance) =>
+    <String, dynamic>{
+      'name': instance.name,
+      'interval_ms': instance.intervalMs,
+    };
+
+ModbusConfig _$ModbusConfigFromJson(Map<String, dynamic> json) => ModbusConfig(
+      host: json['host'] as String? ?? '',
+      port: (json['port'] as num?)?.toInt() ?? 502,
+      unitId: (json['unit_id'] as num?)?.toInt() ?? 1,
+      serverAlias: json['server_alias'] as String?,
+      pollGroups: (json['poll_groups'] as List<dynamic>?)
+              ?.map((e) =>
+                  ModbusPollGroupConfig.fromJson(e as Map<String, dynamic>))
+              .toList() ??
+          [],
+    );
+
+Map<String, dynamic> _$ModbusConfigToJson(ModbusConfig instance) =>
+    <String, dynamic>{
+      'host': instance.host,
+      'port': instance.port,
+      'unit_id': instance.unitId,
+      'server_alias': instance.serverAlias,
+      'poll_groups': instance.pollGroups.map((e) => e.toJson()).toList(),
+    };
+
+ModbusNodeConfig _$ModbusNodeConfigFromJson(Map<String, dynamic> json) =>
+    ModbusNodeConfig(
+      serverAlias: json['server_alias'] as String?,
+      registerType:
+          $enumDecode(_$ModbusRegisterTypeEnumMap, json['register_type']),
+      address: (json['address'] as num).toInt(),
+      dataType:
+          $enumDecodeNullable(_$ModbusDataTypeEnumMap, json['data_type']) ??
+              ModbusDataType.uint16,
+      pollGroup: json['poll_group'] as String? ?? 'default',
+    );
+
+Map<String, dynamic> _$ModbusNodeConfigToJson(ModbusNodeConfig instance) =>
+    <String, dynamic>{
+      'server_alias': instance.serverAlias,
+      'register_type': _$ModbusRegisterTypeEnumMap[instance.registerType]!,
+      'address': instance.address,
+      'data_type': _$ModbusDataTypeEnumMap[instance.dataType]!,
+      'poll_group': instance.pollGroup,
+    };
+
+const _$ModbusRegisterTypeEnumMap = {
+  ModbusRegisterType.coil: 'coil',
+  ModbusRegisterType.discreteInput: 'discreteInput',
+  ModbusRegisterType.holdingRegister: 'holdingRegister',
+  ModbusRegisterType.inputRegister: 'inputRegister',
+};
+
+const _$ModbusDataTypeEnumMap = {
+  ModbusDataType.bit: 'bit',
+  ModbusDataType.int16: 'int16',
+  ModbusDataType.uint16: 'uint16',
+  ModbusDataType.int32: 'int32',
+  ModbusDataType.uint32: 'uint32',
+  ModbusDataType.float32: 'float32',
+  ModbusDataType.int64: 'int64',
+  ModbusDataType.uint64: 'uint64',
+  ModbusDataType.float64: 'float64',
+};
+
 StateManConfig _$StateManConfigFromJson(Map<String, dynamic> json) =>
     StateManConfig(
       opcua: (json['opcua'] as List<dynamic>)
@@ -127,12 +202,17 @@ StateManConfig _$StateManConfigFromJson(Map<String, dynamic> json) =>
               ?.map((e) => M2400Config.fromJson(e as Map<String, dynamic>))
               .toList() ??
           [],
+      modbus: (json['modbus'] as List<dynamic>?)
+              ?.map((e) => ModbusConfig.fromJson(e as Map<String, dynamic>))
+              .toList() ??
+          [],
     );
 
 Map<String, dynamic> _$StateManConfigToJson(StateManConfig instance) =>
     <String, dynamic>{
       'opcua': instance.opcua.map((e) => e.toJson()).toList(),
       'jbtm': instance.jbtm.map((e) => e.toJson()).toList(),
+      'modbus': instance.modbus.map((e) => e.toJson()).toList(),
     };
 
 OpcUANodeConfig _$OpcUANodeConfigFromJson(Map<String, dynamic> json) =>
@@ -161,6 +241,10 @@ KeyMappingEntry _$KeyMappingEntryFromJson(Map<String, dynamic> json) =>
           ? null
           : M2400NodeConfig.fromJson(
               json['m2400_node'] as Map<String, dynamic>),
+      modbusNode: json['modbus_node'] == null
+          ? null
+          : ModbusNodeConfig.fromJson(
+              json['modbus_node'] as Map<String, dynamic>),
       collect: json['collect'] == null
           ? null
           : CollectEntry.fromJson(json['collect'] as Map<String, dynamic>),
@@ -170,6 +254,7 @@ Map<String, dynamic> _$KeyMappingEntryToJson(KeyMappingEntry instance) =>
     <String, dynamic>{
       'opcua_node': instance.opcuaNode?.toJson(),
       'm2400_node': instance.m2400Node?.toJson(),
+      'modbus_node': instance.modbusNode?.toJson(),
       'io': instance.io,
       'collect': instance.collect?.toJson(),
     };
