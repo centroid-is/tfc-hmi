@@ -21,11 +21,11 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Connection
 
-- [ ] **CONN-01**: User can connect to a Modbus TCP device by specifying host, port, and unit ID
-- [ ] **CONN-02**: Connection auto-recovers with exponential backoff after loss (matching MSocket pattern)
-- [ ] **CONN-03**: Connection status streams to UI (connected, connecting, disconnected)
+- [x] **CONN-01**: User can connect to a Modbus TCP device by specifying host, port, and unit ID
+- [x] **CONN-02**: Connection auto-recovers with exponential backoff after loss (matching MSocket pattern)
+- [x] **CONN-03**: Connection status streams to UI (connected, connecting, disconnected)
 - [ ] **CONN-04**: TCP keepalive detects dead connections within ~11 seconds on all platforms (macOS, Linux, Windows)
-- [ ] **CONN-05**: User can connect to multiple independent Modbus devices simultaneously
+- [x] **CONN-05**: User can connect to multiple independent Modbus devices simultaneously
 
 ### Reading
 
@@ -68,7 +68,7 @@ Requirements for initial release. Each maps to roadmap phases.
 
 - [x] **TEST-01**: modbus_client_tcp fork fixes have unit tests covering frame parsing, concurrent transactions, length validation, and keepalive
 - [x] **TEST-02**: modbus_client fork FC15 fix has regression test for 16+ coils
-- [ ] **TEST-03**: ModbusClientWrapper has unit tests for connection lifecycle, polling, read/write, and reconnect behavior
+- [x] **TEST-03**: ModbusClientWrapper has unit tests for connection lifecycle, polling, read/write, and reconnect behavior
 - [ ] **TEST-04**: ModbusDeviceClientAdapter has unit tests verifying DeviceClient interface contract
 - [ ] **TEST-05**: StateMan Modbus routing has integration tests (subscribe, read, readMany, write) alongside OPC UA keys
 - [ ] **TEST-06**: ModbusConfig and ModbusNodeConfig have JSON round-trip serialization tests
@@ -125,11 +125,11 @@ Which phases cover which requirements. Updated during roadmap creation.
 | TCPFIX-04 | Phase 1 | Complete |
 | TCPFIX-05 | Phase 1 | Complete |
 | LIBFIX-01 | Phase 2 | Complete |
-| CONN-01 | Phase 4 | Pending |
-| CONN-02 | Phase 4 | Pending |
-| CONN-03 | Phase 4 | Pending |
+| CONN-01 | Phase 4 | Complete |
+| CONN-02 | Phase 4 | Complete |
+| CONN-03 | Phase 4 | Complete |
 | CONN-04 | Phase 3 | Complete |
-| CONN-05 | Phase 4 | Pending |
+| CONN-05 | Phase 4 | Complete |
 | READ-01 | Phase 5 | Pending |
 | READ-02 | Phase 5 | Pending |
 | READ-03 | Phase 5 | Pending |
@@ -163,7 +163,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | UIKY-06 | Phase 11 | Pending |
 | TEST-01 | Phase 1 | Complete |
 | TEST-02 | Phase 2 | Complete |
-| TEST-03 | Phase 4 | Pending |
+| TEST-03 | Phase 4 | Complete |
 | TEST-04 | Phase 7 | Pending |
 | TEST-05 | Phase 9 | Pending |
 | TEST-06 | Phase 8 | Pending |

@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: completed
-stopped_at: Phase 4 context gathered
-last_updated: "2026-03-06T15:09:33.286Z"
-last_activity: 2026-03-06 -- Completed 02-01-PLAN.md
+status: active
+stopped_at: Completed 04-01-PLAN.md
+last_updated: "2026-03-06T15:42:33Z"
+last_activity: 2026-03-06 -- Completed 04-01-PLAN.md
 progress:
   total_phases: 11
-  completed_phases: 2
-  total_plans: 3
-  completed_plans: 3
-  percent: 100
+  completed_phases: 3
+  total_plans: 4
+  completed_plans: 4
+  percent: 36
 ---
 
 # Project State
@@ -21,23 +21,23 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-06)
 
 **Core value:** Modbus devices can be read from and written to through the same StateMan interface as OPC UA and M2400, without breaking existing protocol integrations.
-**Current focus:** Phase 2 -- FC15 Coil Write Fix
+**Current focus:** Phase 4 -- ModbusClientWrapper Connection
 
 ## Current Position
 
-Phase: 2 of 11 (FC15 Coil Write Fix) -- COMPLETE
+Phase: 4 of 11 (ModbusClientWrapper Connection) -- COMPLETE
 Plan: 1 of 1 in current phase (all plans complete)
-Status: Phase 2 complete. Ready for Phase 3.
-Last activity: 2026-03-06 -- Completed 02-01-PLAN.md
+Status: Phase 4 complete. Ready for Phase 5.
+Last activity: 2026-03-06 -- Completed 04-01-PLAN.md
 
-Progress: [██████████] 100%
+Progress: [████------] 36%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 3
-- Average duration: 4.7min
-- Total execution time: 0.23 hours
+- Total plans completed: 4
+- Average duration: 5.5min
+- Total execution time: 0.37 hours
 
 **By Phase:**
 
@@ -45,10 +45,11 @@ Progress: [██████████] 100%
 |-------|-------|-------|----------|
 | 01-tcp-transport-fixes | 2/2 | 11min | 5.5min |
 | 02-fc15-coil-write-fix | 1/1 | 3min | 3min |
+| 04-modbusclientwrapper-connection | 1/1 | 10min | 10min |
 
 **Recent Trend:**
-- Last 5 plans: 01-01 (5min), 01-02 (6min), 02-01 (3min)
-- Trend: Consistent, accelerating
+- Last 5 plans: 01-01 (5min), 01-02 (6min), 02-01 (3min), 04-01 (10min)
+- Trend: Consistent
 
 *Updated after each plan completion*
 
@@ -70,6 +71,10 @@ Recent decisions affecting current work:
 - 01-02: Incoming buffer approach for TCP stream reassembly instead of per-response partial buffering
 - 02-01: Optional quantity parameter approach over ModbusBitElement override -- coil count cannot be recovered from packed byte count
 - 02-01: Added publish_to: none to both fork pubspec.yaml files for clean dart analyze
+- 04-01: Own connection loop with doNotConnect mode -- ModbusClientTcp autoConnectAndKeepConnected has no status stream or backoff control
+- 04-01: Poll isConnected every 250ms for disconnect detection -- simpler than hooking into socket internals
+- 04-01: TCP keepalive only for dead connection detection (no app-level health probe yet)
+- 04-01: MockModbusClient extends ModbusClientTcp for unit tests -- factory injection, no Mockito needed
 
 ### Pending Todos
 
@@ -81,6 +86,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-06T15:09:33.283Z
-Stopped at: Phase 4 context gathered
-Resume file: .planning/phases/04-modbusclientwrapper-connection/04-CONTEXT.md
+Last session: 2026-03-06T15:42:33Z
+Stopped at: Completed 04-01-PLAN.md
+Resume file: .planning/phases/04-modbusclientwrapper-connection/04-01-SUMMARY.md
