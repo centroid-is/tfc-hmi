@@ -116,10 +116,10 @@ Plans:
   1. ModbusDeviceClientAdapter passes all DeviceClient interface contract tests (subscribe, read, write, connectionStream)
   2. Adapter correctly translates between DeviceClient method signatures and ModbusClientWrapper operations
   3. Adapter follows the same structural pattern as M2400DeviceClientAdapter (verifiable by code comparison)
-**Plans**: TBD
+**Plans:** 1 plan
 
 Plans:
-- [ ] 07-01: TBD
+- [ ] 07-01-PLAN.md -- TDD ModbusDeviceClientAdapter implementing DeviceClient with Object?-to-DynamicValue translation and write() interface addition
 
 ### Phase 8: Config Serialization
 **Goal**: Modbus server and node configurations persist through JSON serialization without breaking existing config files
