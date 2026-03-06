@@ -9,29 +9,29 @@ See: .planning/PROJECT.md (updated 2026-03-06)
 
 ## Current Position
 
-Phase: 1 of 11 (TCP Transport Fixes)
-Plan: 1 of 2 in current phase
-Status: Executing phase 1
-Last activity: 2026-03-06 -- Completed 01-01-PLAN.md
+Phase: 1 of 11 (TCP Transport Fixes) -- COMPLETE
+Plan: 2 of 2 in current phase (all plans complete)
+Status: Phase 1 complete. Ready for Phase 2.
+Last activity: 2026-03-06 -- Completed 01-02-PLAN.md
 
-Progress: [█░░░░░░░░░] 5%
+Progress: [██░░░░░░░░] 9%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 1
-- Average duration: 5min
-- Total execution time: 0.08 hours
+- Total plans completed: 2
+- Average duration: 5.5min
+- Total execution time: 0.18 hours
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| 01-tcp-transport-fixes | 1/2 | 5min | 5min |
+| 01-tcp-transport-fixes | 2/2 | 11min | 5.5min |
 
 **Recent Trend:**
-- Last 5 plans: 01-01 (5min)
-- Trend: Starting
+- Last 5 plans: 01-01 (5min), 01-02 (6min)
+- Trend: Consistent
 
 *Updated after each plan completion*
 
@@ -48,6 +48,9 @@ Recent decisions affecting current work:
 - 01-01: Forked modbus_client_tcp from pub cache into packages/ for proper TDD and version control
 - 01-01: MBAP length upper bound = 254 per Modbus spec (1 unit ID + 253 max PDU)
 - 01-01: keepAliveIdle=5s, keepAliveInterval=2s matches MSocket for ~11s dead connection detection
+- 01-02: MBAP frame parsing moved to router level for multi-response routing; _TcpResponse retains defense-in-depth checks
+- 01-02: Lock scope narrowed to protect only socket write, not response wait -- enables concurrent in-flight requests
+- 01-02: Incoming buffer approach for TCP stream reassembly instead of per-response partial buffering
 
 ### Pending Todos
 
@@ -61,5 +64,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-03-06
-Stopped at: Completed 01-01-PLAN.md (fork + 4 TCP fixes). Next: 01-02-PLAN.md
+Stopped at: Completed 01-02-PLAN.md (concurrent requests via transaction ID map). Phase 1 complete. Next: Phase 2.
 Resume file: None

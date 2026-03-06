@@ -10,7 +10,7 @@ Requirements for initial release. Each maps to roadmap phases.
 ### Library Fixes (modbus_client_tcp fork)
 
 - [x] **TCPFIX-01**: Frame length check accounts for 6-byte MBAP header (fix off-by-6 bug at line 297)
-- [ ] **TCPFIX-02**: Concurrent requests supported via transaction ID map (replace single _currentResponse with Map<int, _TcpResponse>)
+- [x] **TCPFIX-02**: Concurrent requests supported via transaction ID map (replace single _currentResponse with Map<int, _TcpResponse>)
 - [x] **TCPFIX-03**: MBAP length field validated (1-256 range, reject malformed responses)
 - [x] **TCPFIX-04**: TCP_NODELAY enabled after socket connect for low-latency communication
 - [x] **TCPFIX-05**: Keepalive values match MSocket (5s idle, 2s interval, 3 probes) across all platforms
@@ -120,7 +120,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | Requirement | Phase | Status |
 |-------------|-------|--------|
 | TCPFIX-01 | Phase 1 | Complete |
-| TCPFIX-02 | Phase 1 | Pending |
+| TCPFIX-02 | Phase 1 | Complete |
 | TCPFIX-03 | Phase 1 | Complete |
 | TCPFIX-04 | Phase 1 | Complete |
 | TCPFIX-05 | Phase 1 | Complete |
