@@ -129,10 +129,10 @@ Plans:
   1. ModbusConfig (host, port, unitId, alias, pollGroups) round-trips through JSON without data loss
   2. ModbusNodeConfig (serverAlias, registerType, address, dataType, pollGroup) round-trips through JSON without data loss
   3. Existing config.json and keymappings.json files without Modbus fields load successfully (defaultValue: [] for server list, null for node config)
-**Plans**: TBD
+**Plans:** 1 plan
 
 Plans:
-- [ ] 08-01: TBD
+- [ ] 08-01-PLAN.md -- TDD ModbusConfig/ModbusNodeConfig with backward-compatible JSON serialization (red/green)
 
 ### Phase 9: StateMan Integration
 **Goal**: Modbus keys work transparently through StateMan.subscribe(), read(), readMany(), and write() alongside OPC UA and M2400 keys
