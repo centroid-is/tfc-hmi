@@ -1083,22 +1083,21 @@ class _RenderLayoutRotatedBox extends RenderProxyBox {
       return;
     }
 
-    // 1) Layout the child at its normal constraints
     child!.layout(constraints, parentUsesSize: true);
+
+    if (_angle == 0.0) {
+      size = constraints.constrain(child!.size);
+      return;
+    }
+
     final w = child!.size.width;
     final h = child!.size.height;
-
-    // 2) Compute the axis-aligned bbox of the rotated rect
     final c = math.cos(_angle).abs();
     final s = math.sin(_angle).abs();
-    final boxW = w * c + h * s;
-    final boxH = w * s + h * c;
-
-    size = constraints.constrain(Size(boxW, boxH));
+    size = constraints.constrain(Size(w * c + h * s, w * s + h * c));
   }
 
   Offset _childOffset() {
-    // Center the child in our AABB
     return Offset((size.width - child!.size.width) / 2,
         (size.height - child!.size.height) / 2);
   }
@@ -1107,7 +1106,11 @@ class _RenderLayoutRotatedBox extends RenderProxyBox {
   void paint(PaintingContext context, Offset offset) {
     if (child == null) return;
 
-    // 3) Push the rotation transform + center
+    if (_angle == 0.0) {
+      context.paintChild(child!, offset);
+      return;
+    }
+
     final childOffset = _childOffset();
     final transform = Matrix4.identity()
       ..translate(offset.dx + child!.size.width / 2 + childOffset.dx,
@@ -1129,7 +1132,17 @@ class _RenderLayoutRotatedBox extends RenderProxyBox {
   bool hitTest(BoxHitTestResult result, {required Offset position}) {
     if (child == null) return false;
 
-    // 4) Convert `position` into the child's unrotated coords
+    if (_angle == 0.0) {
+      if (position.dx >= 0 &&
+          position.dx <= child!.size.width &&
+          position.dy >= 0 &&
+          position.dy <= child!.size.height) {
+        result.add(BoxHitTestEntry(this, position));
+        return true;
+      }
+      return false;
+    }
+
     final childOffset = _childOffset();
     final local = position - childOffset;
     final dx = local.dx - child!.size.width / 2;
@@ -1138,7 +1151,6 @@ class _RenderLayoutRotatedBox extends RenderProxyBox {
     final x0 = cosA * dx - sinA * dy + child!.size.width / 2;
     final y0 = sinA * dx + cosA * dy + child!.size.height / 2;
 
-    // 5) If inside the child's rect, hit
     if (x0 >= 0 &&
         x0 <= child!.size.width &&
         y0 >= 0 &&
