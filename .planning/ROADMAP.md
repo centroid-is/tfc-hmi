@@ -49,10 +49,10 @@ Plans:
 **Success Criteria** (what must be TRUE):
   1. FC15 (Write Multiple Coils) correctly encodes and verifies quantity for 16, 17, 32, and 64 coils
   2. Regression test confirms FC15 works for 1-15 coils (existing behavior preserved)
-**Plans**: TBD
+**Plans:** 1 plan
 
 Plans:
-- [ ] 02-01: TBD
+- [ ] 02-01-PLAN.md -- Fork modbus_client, fix FC15 quantity bug with TDD (red/green)
 
 ### Phase 3: Windows Keepalive
 **Goal**: MSocket detects dead TCP connections on Windows within ~11 seconds, matching macOS/Linux behavior
