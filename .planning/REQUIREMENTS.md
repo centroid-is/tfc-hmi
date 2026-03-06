@@ -119,13 +119,64 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| (Populated by roadmapper) | | |
+| TCPFIX-01 | Phase 1 | Pending |
+| TCPFIX-02 | Phase 1 | Pending |
+| TCPFIX-03 | Phase 1 | Pending |
+| TCPFIX-04 | Phase 1 | Pending |
+| TCPFIX-05 | Phase 1 | Pending |
+| LIBFIX-01 | Phase 2 | Pending |
+| CONN-01 | Phase 4 | Pending |
+| CONN-02 | Phase 4 | Pending |
+| CONN-03 | Phase 4 | Pending |
+| CONN-04 | Phase 3 | Pending |
+| CONN-05 | Phase 4 | Pending |
+| READ-01 | Phase 5 | Pending |
+| READ-02 | Phase 5 | Pending |
+| READ-03 | Phase 5 | Pending |
+| READ-04 | Phase 5 | Pending |
+| READ-05 | Phase 5 | Pending |
+| READ-06 | Phase 5 | Pending |
+| READ-07 | Phase 5 | Pending |
+| WRIT-01 | Phase 6 | Pending |
+| WRIT-02 | Phase 6 | Pending |
+| WRIT-03 | Phase 6 | Pending |
+| WRIT-04 | Phase 6 | Pending |
+| WRIT-05 | Phase 6 | Pending |
+| INTG-01 | Phase 7 | Pending |
+| INTG-02 | Phase 9 | Pending |
+| INTG-03 | Phase 9 | Pending |
+| INTG-04 | Phase 9 | Pending |
+| INTG-05 | Phase 9 | Pending |
+| INTG-06 | Phase 8 | Pending |
+| INTG-07 | Phase 8 | Pending |
+| INTG-08 | Phase 9 | Pending |
+| UISV-01 | Phase 10 | Pending |
+| UISV-02 | Phase 10 | Pending |
+| UISV-03 | Phase 10 | Pending |
+| UISV-04 | Phase 10 | Pending |
+| UISV-05 | Phase 10 | Pending |
+| UIKY-01 | Phase 11 | Pending |
+| UIKY-02 | Phase 11 | Pending |
+| UIKY-03 | Phase 11 | Pending |
+| UIKY-04 | Phase 11 | Pending |
+| UIKY-05 | Phase 11 | Pending |
+| UIKY-06 | Phase 11 | Pending |
+| TEST-01 | Phase 1 | Pending |
+| TEST-02 | Phase 2 | Pending |
+| TEST-03 | Phase 4 | Pending |
+| TEST-04 | Phase 7 | Pending |
+| TEST-05 | Phase 9 | Pending |
+| TEST-06 | Phase 8 | Pending |
+| TEST-07 | Phase 11 | Pending |
+| TEST-08 | Phase 10 | Pending |
+| TEST-09 | Cross-cutting (all phases) | Pending |
 
 **Coverage:**
-- v1 requirements: 46 total
-- Mapped to phases: 0
-- Unmapped: 46
+- v1 requirements: 51 total
+- Mapped to phases: 50 (unique phase assignment)
+- Cross-cutting: 1 (TEST-09 -- TDD process applies to all phases)
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-03-06*
-*Last updated: 2026-03-06 after initial definition*
+*Last updated: 2026-03-06 after roadmap creation*
