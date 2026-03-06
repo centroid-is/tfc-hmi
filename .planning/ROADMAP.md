@@ -103,10 +103,10 @@ Plans:
   1. Single coil (FC05) and single holding register (FC06) writes succeed through the wrapper
   2. Multiple coils (FC15) and multiple holding registers (FC16) writes succeed through the wrapper
   3. Attempting to write to input registers or discrete inputs returns a clear error (not a silent failure or crash)
-**Plans**: TBD
+**Plans:** 1 plan
 
 Plans:
-- [ ] 06-01: TBD
+- [ ] 06-01-PLAN.md -- TDD write operations (write, writeMultiple) with SCADA-safe error handling
 
 ### Phase 7: DeviceClient Adapter
 **Goal**: Modbus is accessible through the same DeviceClient interface as M2400, enabling polymorphic protocol handling
