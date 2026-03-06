@@ -36,11 +36,11 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. Malformed responses with invalid length fields (0 or >256) are rejected without crashing the client
   4. TCP_NODELAY is active on connections, eliminating Nagle algorithm latency
   5. Keepalive probes match MSocket values (5s idle, 2s interval, 3 probes) on macOS and Linux
-**Plans**: TBD
+**Plans:** 2 plans
 
 Plans:
-- [ ] 01-01: TBD
-- [ ] 01-02: TBD
+- [ ] 01-01-PLAN.md -- Fork into project, test infrastructure, fix frame parsing + validation + TCP_NODELAY + keepalive (TDD)
+- [ ] 01-02-PLAN.md -- Add concurrent request support via transaction ID map (TDD)
 
 ### Phase 2: FC15 Coil Write Fix
 **Goal**: Writing 16 or more coils in a single FC15 request reports the correct quantity in the response
@@ -187,7 +187,7 @@ Note: Phases 1, 2, and 3 have no inter-dependencies and could execute in paralle
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. TCP Transport Fixes | 0/2 | Not started | - |
+| 1. TCP Transport Fixes | 0/2 | Planned | - |
 | 2. FC15 Coil Write Fix | 0/1 | Not started | - |
 | 3. Windows Keepalive | 0/1 | Not started | - |
 | 4. Wrapper -- Connection | 0/2 | Not started | - |
