@@ -34,7 +34,7 @@ Requirements for initial release. Each maps to roadmap phases.
 - [x] **READ-03**: User can read holding registers (FC03) with configurable data types
 - [x] **READ-04**: User can read input registers (FC04) with configurable data types
 - [x] **READ-05**: Data types supported: bit, int16, uint16, int32, uint32, float32, int64, uint64, float64
-- [ ] **READ-06**: Contiguous registers can be read in a single batch request (register grouping/coalescing)
+- [x] **READ-06**: Contiguous registers can be read in a single batch request (register grouping/coalescing)
 - [x] **READ-07**: Poll groups with configurable intervals control how often registers are read
 
 ### Writing
@@ -135,7 +135,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | READ-03 | Phase 5 | Complete |
 | READ-04 | Phase 5 | Complete |
 | READ-05 | Phase 5 | Complete |
-| READ-06 | Phase 5 | Pending |
+| READ-06 | Phase 5 | Complete |
 | READ-07 | Phase 5 | Complete |
 | WRIT-01 | Phase 6 | Pending |
 | WRIT-02 | Phase 6 | Pending |

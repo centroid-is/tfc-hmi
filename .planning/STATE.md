@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: in-progress
-stopped_at: Completed 05-01-PLAN.md
-last_updated: "2026-03-06T17:39:03Z"
-last_activity: 2026-03-06 -- Completed 05-01-PLAN.md
+stopped_at: Completed 05-02-PLAN.md
+last_updated: "2026-03-06T18:02:49Z"
+last_activity: 2026-03-06 -- Completed 05-02-PLAN.md
 progress:
   total_phases: 11
   completed_phases: 3
   total_plans: 5
-  completed_plans: 5
-  percent: 45
+  completed_plans: 6
+  percent: 55
 ---
 
 # Project State
@@ -26,18 +26,18 @@ See: .planning/PROJECT.md (updated 2026-03-06)
 ## Current Position
 
 Phase: 5 of 11 (ModbusClientWrapper Reading)
-Plan: 1 of 2 in current phase
-Status: Plan 01 (individual reads) complete. Plan 02 (batch coalescing) remaining.
-Last activity: 2026-03-06 -- Completed 05-01-PLAN.md
+Plan: 2 of 2 in current phase
+Status: Phase 5 complete. All reading requirements fulfilled (READ-01 through READ-07).
+Last activity: 2026-03-06 -- Completed 05-02-PLAN.md
 
-Progress: [█████-----] 45%
+Progress: [██████----] 55%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 5
-- Average duration: 7.8min
-- Total execution time: 0.65 hours
+- Total plans completed: 6
+- Average duration: 9.5min
+- Total execution time: 0.95 hours
 
 **By Phase:**
 
@@ -46,10 +46,10 @@ Progress: [█████-----] 45%
 | 01-tcp-transport-fixes | 2/2 | 11min | 5.5min |
 | 02-fc15-coil-write-fix | 1/1 | 3min | 3min |
 | 04-modbusclientwrapper-connection | 1/1 | 10min | 10min |
-| 05-modbusclientwrapper-reading | 1/2 | 15min | 15min |
+| 05-modbusclientwrapper-reading | 2/2 | 34min | 17min |
 
 **Recent Trend:**
-- Last 5 plans: 01-01 (5min), 01-02 (6min), 02-01 (3min), 04-01 (10min), 05-01 (15min)
+- Last 5 plans: 01-02 (6min), 02-01 (3min), 04-01 (10min), 05-01 (15min), 05-02 (19min)
 - Trend: Consistent, larger phases take proportionally longer
 
 *Updated after each plan completion*
@@ -80,6 +80,9 @@ Recent decisions affecting current work:
 - 05-01: Individual element reads per poll tick -- batch coalescing deferred to Plan 02
 - 05-01: Lazy poll group creation -- subscribe() auto-creates default group at 1s interval
 - 05-01: ModbusNumRegister returns num (double due to multiplier formula) -- library behavior, not wrapper choice
+- 05-02: Gap thresholds 10 registers / 100 coils -- 20 bytes waste vs ~40ms TCP round-trip savings
+- 05-02: Replaced individual reads entirely with batch reads -- ModbusElementsGroup handles single elements too
+- 05-02: Pipe all subscription values after ALL groups read (not per-group) -- simpler, no subscription-to-group matching
 
 ### Pending Todos
 
@@ -91,6 +94,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-06T17:39:03Z
-Stopped at: Completed 05-01-PLAN.md
-Resume file: .planning/phases/05-modbusclientwrapper-reading/05-01-SUMMARY.md
+Last session: 2026-03-06T18:02:49Z
+Stopped at: Completed 05-02-PLAN.md
+Resume file: .planning/phases/05-modbusclientwrapper-reading/05-02-SUMMARY.md
