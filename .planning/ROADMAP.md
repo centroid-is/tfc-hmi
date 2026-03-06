@@ -89,11 +89,11 @@ Plans:
   2. Holding registers (FC03) and input registers (FC04) return values interpreted as the configured data type (int16, uint16, int32, uint32, float32, int64, uint64, float64)
   3. Poll groups fire at their configured intervals and deliver updated values to BehaviorSubject streams
   4. Contiguous registers in the same poll group are coalesced into single batch read requests
-**Plans**: TBD
+**Plans:** 2 plans
 
 Plans:
-- [ ] 05-01: TBD
-- [ ] 05-02: TBD
+- [ ] 05-01-PLAN.md -- Poll groups, register reads for all types/data types with TDD (red/green)
+- [ ] 05-02-PLAN.md -- Batch coalescing for contiguous same-type registers with TDD (red/green)
 
 ### Phase 6: ModbusClientWrapper -- Writing
 **Goal**: The application can write values to coils and holding registers, with clear rejection of writes to read-only types
