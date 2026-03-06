@@ -14,7 +14,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 - [ ] **Phase 1: TCP Transport Fixes** - Fix frame parsing, concurrent requests, validation, and socket options in modbus_client_tcp fork
 - [x] **Phase 2: FC15 Coil Write Fix** - Fix Write Multiple Coils quantity bug for 16+ coils in modbus_client fork (completed 2026-03-06)
-- [ ] **Phase 3: Windows Keepalive** - Add SO_KEEPALIVE with Windows socket constants to MSocket
+- [x] **Phase 3: Windows Keepalive** - Add SO_KEEPALIVE with Windows socket constants to MSocket (completed 2026-03-06)
 - [ ] **Phase 4: ModbusClientWrapper -- Connection** - Connection lifecycle, auto-reconnect, status streaming, multi-device support
 - [ ] **Phase 5: ModbusClientWrapper -- Reading** - Poll group timers, all register type reads, data type interpretation, batch reads
 - [ ] **Phase 6: ModbusClientWrapper -- Writing** - All write function codes, read-only rejection, multi-coil/register writes
@@ -189,7 +189,7 @@ Note: Phases 1, 2, and 3 have no inter-dependencies and could execute in paralle
 |-------|----------------|--------|-----------|
 | 1. TCP Transport Fixes | 0/2 | Planned | - |
 | 2. FC15 Coil Write Fix | 1/1 | Complete   | 2026-03-06 |
-| 3. Windows Keepalive | 0/1 | Not started | - |
+| 3. Windows Keepalive | 0/1 | Complete    | 2026-03-06 |
 | 4. Wrapper -- Connection | 0/2 | Not started | - |
 | 5. Wrapper -- Reading | 0/2 | Not started | - |
 | 6. Wrapper -- Writing | 0/1 | Not started | - |
