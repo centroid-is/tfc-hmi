@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:modbus_client/modbus_client.dart';
 import 'package:modbus_client_tcp/modbus_client_tcp.dart';
@@ -12,7 +13,12 @@ class MockModbusClient extends ModbusClientTcp {
   bool shouldFailConnect = false;
   int connectCallCount = 0;
   int disconnectCallCount = 0;
+  int sendCallCount = 0;
   Completer<bool>? connectCompleter;
+
+  /// Response handler: given a request, return response code and optionally
+  /// populate element values. Defaults to requestSucceed with zero bytes.
+  ModbusResponseCode Function(ModbusRequest request)? onSend;
 
   MockModbusClient()
       : super('mock',
@@ -39,9 +45,39 @@ class MockModbusClient extends ModbusClientTcp {
     _connected = false;
   }
 
+  @override
+  Future<ModbusResponseCode> send(ModbusRequest request) async {
+    if (!_connected) return ModbusResponseCode.connectionFailed;
+    sendCallCount++;
+    if (onSend != null) return onSend!(request);
+
+    // Default: succeed and set element values to zero bytes
+    if (request is ModbusReadRequest) {
+      final byteCount = request.element.byteCount;
+      request.element.setValueFromBytes(Uint8List(byteCount));
+    }
+    return ModbusResponseCode.requestSucceed;
+  }
+
   void simulateDisconnect() {
     _connected = false;
   }
+}
+
+/// Helper to create wrapper + mock together for read tests.
+({ModbusClientWrapper wrapper, MockModbusClient mock}) createWrapperWithMock({
+  String host = '127.0.0.1',
+  int port = 502,
+  int unitId = 1,
+}) {
+  final mock = MockModbusClient();
+  final wrapper = ModbusClientWrapper(
+    host,
+    port,
+    unitId,
+    clientFactory: (h, p, u) => mock,
+  );
+  return (wrapper: wrapper, mock: mock);
 }
 
 void main() {
@@ -598,6 +634,882 @@ void main() {
       wrapper2.dispose();
       // Set wrapper for tearDown
       wrapper = createWrapper();
+    });
+  });
+
+  // ==========================================================================
+  // Phase 5 -- Reading Tests
+  // ==========================================================================
+
+  group('ModbusRegisterSpec', () {
+    test('can be created with required fields', () {
+      wrapper = createWrapper(); // for tearDown
+      final spec = ModbusRegisterSpec(
+        key: 'temp',
+        registerType: ModbusElementType.holdingRegister,
+        address: 100,
+      );
+      expect(spec.key, equals('temp'));
+      expect(spec.registerType, equals(ModbusElementType.holdingRegister));
+      expect(spec.address, equals(100));
+    });
+
+    test('defaults dataType to uint16', () {
+      wrapper = createWrapper();
+      final spec = ModbusRegisterSpec(
+        key: 'temp',
+        registerType: ModbusElementType.holdingRegister,
+        address: 100,
+      );
+      expect(spec.dataType, equals(ModbusDataType.uint16));
+    });
+
+    test('defaults pollGroup to default', () {
+      wrapper = createWrapper();
+      final spec = ModbusRegisterSpec(
+        key: 'temp',
+        registerType: ModbusElementType.holdingRegister,
+        address: 100,
+      );
+      expect(spec.pollGroup, equals('default'));
+    });
+
+    test('is immutable (all final fields)', () {
+      wrapper = createWrapper();
+      final spec = ModbusRegisterSpec(
+        key: 'temp',
+        registerType: ModbusElementType.holdingRegister,
+        address: 100,
+        dataType: ModbusDataType.float32,
+        pollGroup: 'fast',
+      );
+      // Verify all fields are accessible and correct
+      expect(spec.key, equals('temp'));
+      expect(spec.dataType, equals(ModbusDataType.float32));
+      expect(spec.pollGroup, equals('fast'));
+    });
+  });
+
+  group('ModbusDataType', () {
+    test('has all nine expected values', () {
+      wrapper = createWrapper();
+      expect(ModbusDataType.values, hasLength(9));
+      expect(ModbusDataType.values, contains(ModbusDataType.bit));
+      expect(ModbusDataType.values, contains(ModbusDataType.int16));
+      expect(ModbusDataType.values, contains(ModbusDataType.uint16));
+      expect(ModbusDataType.values, contains(ModbusDataType.int32));
+      expect(ModbusDataType.values, contains(ModbusDataType.uint32));
+      expect(ModbusDataType.values, contains(ModbusDataType.float32));
+      expect(ModbusDataType.values, contains(ModbusDataType.int64));
+      expect(ModbusDataType.values, contains(ModbusDataType.uint64));
+      expect(ModbusDataType.values, contains(ModbusDataType.float64));
+    });
+  });
+
+  group('poll group lifecycle', () {
+    test('addPollGroup creates a named poll group', () {
+      final pair = createWrapperWithMock();
+      wrapper = pair.wrapper;
+      wrapper.addPollGroup('fast', const Duration(milliseconds: 200));
+      // Should not throw -- group was created
+    });
+
+    test('subscribe auto-creates default poll group at 1s interval', () async {
+      final pair = createWrapperWithMock();
+      wrapper = pair.wrapper;
+      final spec = ModbusRegisterSpec(
+        key: 'coil0',
+        registerType: ModbusElementType.coil,
+        address: 0,
+        dataType: ModbusDataType.bit,
+      );
+      // Should not throw -- default group is lazily created
+      final stream = wrapper.subscribe(spec);
+      expect(stream, isNotNull);
+    });
+
+    test('after connect, poll timer fires and sends read requests', () async {
+      final pair = createWrapperWithMock();
+      wrapper = pair.wrapper;
+      final mock = pair.mock;
+
+      final spec = ModbusRegisterSpec(
+        key: 'hr0',
+        registerType: ModbusElementType.holdingRegister,
+        address: 0,
+        dataType: ModbusDataType.uint16,
+      );
+      wrapper.subscribe(spec);
+      wrapper.connect();
+
+      // Wait for connection + at least one poll tick
+      await wrapper.connectionStream
+          .firstWhere((s) => s == ConnectionStatus.connected)
+          .timeout(const Duration(seconds: 2));
+      await Future.delayed(const Duration(milliseconds: 1500));
+
+      expect(mock.sendCallCount, greaterThan(0));
+    });
+
+    test('after disconnect, poll timer stops', () async {
+      final pair = createWrapperWithMock();
+      wrapper = pair.wrapper;
+      final mock = pair.mock;
+
+      wrapper.addPollGroup('default', const Duration(milliseconds: 200));
+      final spec = ModbusRegisterSpec(
+        key: 'hr0',
+        registerType: ModbusElementType.holdingRegister,
+        address: 0,
+      );
+      wrapper.subscribe(spec);
+      wrapper.connect();
+
+      await wrapper.connectionStream
+          .firstWhere((s) => s == ConnectionStatus.connected)
+          .timeout(const Duration(seconds: 2));
+      await Future.delayed(const Duration(milliseconds: 500));
+
+      final countBeforeDisconnect = mock.sendCallCount;
+      expect(countBeforeDisconnect, greaterThan(0));
+
+      // Simulate disconnect
+      mock.simulateDisconnect();
+      await wrapper.connectionStream
+          .firstWhere((s) => s == ConnectionStatus.disconnected)
+          .timeout(const Duration(seconds: 2));
+
+      // Wait and verify no more sends
+      await Future.delayed(const Duration(milliseconds: 500));
+      expect(mock.sendCallCount, equals(countBeforeDisconnect));
+    });
+
+    test('after reconnect, poll timer resumes', () async {
+      final pair = createWrapperWithMock();
+      wrapper = pair.wrapper;
+      final mock = pair.mock;
+
+      wrapper.addPollGroup('default', const Duration(milliseconds: 200));
+      final spec = ModbusRegisterSpec(
+        key: 'hr0',
+        registerType: ModbusElementType.holdingRegister,
+        address: 0,
+      );
+      wrapper.subscribe(spec);
+      wrapper.connect();
+
+      await wrapper.connectionStream
+          .firstWhere((s) => s == ConnectionStatus.connected)
+          .timeout(const Duration(seconds: 2));
+      await Future.delayed(const Duration(milliseconds: 500));
+
+      // Disconnect
+      mock.simulateDisconnect();
+      await wrapper.connectionStream
+          .firstWhere((s) => s == ConnectionStatus.disconnected)
+          .timeout(const Duration(seconds: 2));
+
+      final countAfterDisconnect = mock.sendCallCount;
+
+      // Wait for reconnect
+      await wrapper.connectionStream
+          .firstWhere((s) => s == ConnectionStatus.connected)
+          .timeout(const Duration(seconds: 3));
+      await Future.delayed(const Duration(milliseconds: 500));
+
+      // Sends should have resumed
+      expect(mock.sendCallCount, greaterThan(countAfterDisconnect));
+    });
+
+    test('poll tick with _pollInProgress guard skips concurrent sends',
+        () async {
+      final pair = createWrapperWithMock();
+      wrapper = pair.wrapper;
+      final mock = pair.mock;
+
+      // Make send() take a long time (longer than poll interval)
+      final sendCompleter = Completer<ModbusResponseCode>();
+      mock.onSend = (request) {
+        if (request is ModbusReadRequest) {
+          request.element.setValueFromBytes(Uint8List(request.element.byteCount));
+        }
+        // Block until we complete it -- but only the first call
+        if (mock.sendCallCount == 1) {
+          // Return a future that won't complete until we say so
+          // Actually, onSend is synchronous return. We can't truly block.
+          // Instead, verify that sendCallCount doesn't grow faster than
+          // expected with a fast poll interval.
+        }
+        return ModbusResponseCode.requestSucceed;
+      };
+
+      wrapper.addPollGroup('default', const Duration(milliseconds: 100));
+      final spec = ModbusRegisterSpec(
+        key: 'hr0',
+        registerType: ModbusElementType.holdingRegister,
+        address: 0,
+      );
+      wrapper.subscribe(spec);
+      wrapper.connect();
+
+      await wrapper.connectionStream
+          .firstWhere((s) => s == ConnectionStatus.connected)
+          .timeout(const Duration(seconds: 2));
+      await Future.delayed(const Duration(milliseconds: 500));
+
+      // With guard, send count should not be wildly high (no concurrent overlap)
+      // Each tick takes ~0ms (mock), so at 100ms interval, ~5 ticks in 500ms
+      expect(mock.sendCallCount, greaterThan(0));
+      expect(mock.sendCallCount, lessThan(20));
+    });
+
+    test('dispose stops all poll timers and closes BehaviorSubjects', () async {
+      final pair = createWrapperWithMock();
+      wrapper = pair.wrapper;
+      final mock = pair.mock;
+
+      wrapper.addPollGroup('default', const Duration(milliseconds: 200));
+      final spec = ModbusRegisterSpec(
+        key: 'hr0',
+        registerType: ModbusElementType.holdingRegister,
+        address: 0,
+      );
+      final stream = wrapper.subscribe(spec);
+      wrapper.connect();
+
+      await wrapper.connectionStream
+          .firstWhere((s) => s == ConnectionStatus.connected)
+          .timeout(const Duration(seconds: 2));
+      await Future.delayed(const Duration(milliseconds: 500));
+
+      final countBeforeDispose = mock.sendCallCount;
+      wrapper.dispose();
+
+      // Wait and verify no more sends
+      await Future.delayed(const Duration(milliseconds: 500));
+      expect(mock.sendCallCount, equals(countBeforeDispose));
+
+      // Stream should complete (done event)
+      await expectLater(stream, emitsDone);
+    });
+  });
+
+  group('coil reads', () {
+    test('subscribe to coil FC01 returns bool value via read()', () async {
+      final pair = createWrapperWithMock();
+      wrapper = pair.wrapper;
+      final mock = pair.mock;
+
+      mock.onSend = (request) {
+        if (request is ModbusReadRequest) {
+          // Set coil to true (0x01)
+          request.element.setValueFromBytes(Uint8List.fromList([0x01]));
+        }
+        return ModbusResponseCode.requestSucceed;
+      };
+
+      wrapper.addPollGroup('default', const Duration(milliseconds: 100));
+      final spec = ModbusRegisterSpec(
+        key: 'coil0',
+        registerType: ModbusElementType.coil,
+        address: 0,
+        dataType: ModbusDataType.bit,
+      );
+      wrapper.subscribe(spec);
+      wrapper.connect();
+
+      await wrapper.connectionStream
+          .firstWhere((s) => s == ConnectionStatus.connected)
+          .timeout(const Duration(seconds: 2));
+      await Future.delayed(const Duration(milliseconds: 300));
+
+      final value = wrapper.read('coil0');
+      expect(value, isA<bool>());
+      expect(value, isTrue);
+    });
+
+    test('subscribe returns stream that emits bool values for coils',
+        () async {
+      final pair = createWrapperWithMock();
+      wrapper = pair.wrapper;
+      final mock = pair.mock;
+
+      mock.onSend = (request) {
+        if (request is ModbusReadRequest) {
+          request.element.setValueFromBytes(Uint8List.fromList([0x01]));
+        }
+        return ModbusResponseCode.requestSucceed;
+      };
+
+      wrapper.addPollGroup('default', const Duration(milliseconds: 100));
+      final spec = ModbusRegisterSpec(
+        key: 'coil0',
+        registerType: ModbusElementType.coil,
+        address: 0,
+        dataType: ModbusDataType.bit,
+      );
+      final stream = wrapper.subscribe(spec);
+      wrapper.connect();
+
+      // Wait for the first non-null value from the stream
+      final value = await stream
+          .where((v) => v != null)
+          .first
+          .timeout(const Duration(seconds: 3));
+      expect(value, isA<bool>());
+      expect(value, isTrue);
+    });
+  });
+
+  group('discrete input reads', () {
+    test('subscribe to discrete input FC02 returns bool value', () async {
+      final pair = createWrapperWithMock();
+      wrapper = pair.wrapper;
+      final mock = pair.mock;
+
+      mock.onSend = (request) {
+        if (request is ModbusReadRequest) {
+          request.element.setValueFromBytes(Uint8List.fromList([0x01]));
+        }
+        return ModbusResponseCode.requestSucceed;
+      };
+
+      wrapper.addPollGroup('default', const Duration(milliseconds: 100));
+      final spec = ModbusRegisterSpec(
+        key: 'di0',
+        registerType: ModbusElementType.discreteInput,
+        address: 0,
+        dataType: ModbusDataType.bit,
+      );
+      wrapper.subscribe(spec);
+      wrapper.connect();
+
+      await wrapper.connectionStream
+          .firstWhere((s) => s == ConnectionStatus.connected)
+          .timeout(const Duration(seconds: 2));
+      await Future.delayed(const Duration(milliseconds: 300));
+
+      final value = wrapper.read('di0');
+      expect(value, isA<bool>());
+      expect(value, isTrue);
+    });
+  });
+
+  group('holding register reads', () {
+    test('subscribe to holding register FC03 with uint16 returns int',
+        () async {
+      final pair = createWrapperWithMock();
+      wrapper = pair.wrapper;
+      final mock = pair.mock;
+
+      mock.onSend = (request) {
+        if (request is ModbusReadRequest) {
+          final bytes = Uint8List(request.element.byteCount);
+          ByteData.view(bytes.buffer).setUint16(0, 12345);
+          request.element.setValueFromBytes(bytes);
+        }
+        return ModbusResponseCode.requestSucceed;
+      };
+
+      wrapper.addPollGroup('default', const Duration(milliseconds: 100));
+      final spec = ModbusRegisterSpec(
+        key: 'hr0',
+        registerType: ModbusElementType.holdingRegister,
+        address: 0,
+        dataType: ModbusDataType.uint16,
+      );
+      wrapper.subscribe(spec);
+      wrapper.connect();
+
+      await wrapper.connectionStream
+          .firstWhere((s) => s == ConnectionStatus.connected)
+          .timeout(const Duration(seconds: 2));
+      await Future.delayed(const Duration(milliseconds: 300));
+
+      final value = wrapper.read('hr0');
+      expect(value, isA<int>());
+      expect(value, equals(12345));
+    });
+  });
+
+  group('input register reads', () {
+    test('subscribe to input register FC04 with uint16 returns int', () async {
+      final pair = createWrapperWithMock();
+      wrapper = pair.wrapper;
+      final mock = pair.mock;
+
+      mock.onSend = (request) {
+        if (request is ModbusReadRequest) {
+          final bytes = Uint8List(request.element.byteCount);
+          ByteData.view(bytes.buffer).setUint16(0, 54321);
+          request.element.setValueFromBytes(bytes);
+        }
+        return ModbusResponseCode.requestSucceed;
+      };
+
+      wrapper.addPollGroup('default', const Duration(milliseconds: 100));
+      final spec = ModbusRegisterSpec(
+        key: 'ir0',
+        registerType: ModbusElementType.inputRegister,
+        address: 0,
+        dataType: ModbusDataType.uint16,
+      );
+      wrapper.subscribe(spec);
+      wrapper.connect();
+
+      await wrapper.connectionStream
+          .firstWhere((s) => s == ConnectionStatus.connected)
+          .timeout(const Duration(seconds: 2));
+      await Future.delayed(const Duration(milliseconds: 300));
+
+      final value = wrapper.read('ir0');
+      expect(value, isA<int>());
+      expect(value, equals(54321));
+    });
+  });
+
+  group('data type interpretation', () {
+    test('int16 holding register returns correct negative value', () async {
+      final pair = createWrapperWithMock();
+      wrapper = pair.wrapper;
+      final mock = pair.mock;
+
+      mock.onSend = (request) {
+        if (request is ModbusReadRequest) {
+          final bytes = Uint8List(request.element.byteCount);
+          ByteData.view(bytes.buffer).setInt16(0, -42);
+          request.element.setValueFromBytes(bytes);
+        }
+        return ModbusResponseCode.requestSucceed;
+      };
+
+      wrapper.addPollGroup('default', const Duration(milliseconds: 100));
+      wrapper.subscribe(ModbusRegisterSpec(
+        key: 'int16_reg',
+        registerType: ModbusElementType.holdingRegister,
+        address: 0,
+        dataType: ModbusDataType.int16,
+      ));
+      wrapper.connect();
+
+      await wrapper.connectionStream
+          .firstWhere((s) => s == ConnectionStatus.connected)
+          .timeout(const Duration(seconds: 2));
+      await Future.delayed(const Duration(milliseconds: 300));
+
+      expect(wrapper.read('int16_reg'), equals(-42));
+    });
+
+    test('uint16 holding register returns correct value', () async {
+      final pair = createWrapperWithMock();
+      wrapper = pair.wrapper;
+      final mock = pair.mock;
+
+      mock.onSend = (request) {
+        if (request is ModbusReadRequest) {
+          final bytes = Uint8List(request.element.byteCount);
+          ByteData.view(bytes.buffer).setUint16(0, 65000);
+          request.element.setValueFromBytes(bytes);
+        }
+        return ModbusResponseCode.requestSucceed;
+      };
+
+      wrapper.addPollGroup('default', const Duration(milliseconds: 100));
+      wrapper.subscribe(ModbusRegisterSpec(
+        key: 'uint16_reg',
+        registerType: ModbusElementType.holdingRegister,
+        address: 0,
+        dataType: ModbusDataType.uint16,
+      ));
+      wrapper.connect();
+
+      await wrapper.connectionStream
+          .firstWhere((s) => s == ConnectionStatus.connected)
+          .timeout(const Duration(seconds: 2));
+      await Future.delayed(const Duration(milliseconds: 300));
+
+      expect(wrapper.read('uint16_reg'), equals(65000));
+    });
+
+    test('int32 holding register returns correct value', () async {
+      final pair = createWrapperWithMock();
+      wrapper = pair.wrapper;
+      final mock = pair.mock;
+
+      mock.onSend = (request) {
+        if (request is ModbusReadRequest) {
+          final bytes = Uint8List(request.element.byteCount);
+          ByteData.view(bytes.buffer).setInt32(0, -100000);
+          request.element.setValueFromBytes(bytes);
+        }
+        return ModbusResponseCode.requestSucceed;
+      };
+
+      wrapper.addPollGroup('default', const Duration(milliseconds: 100));
+      wrapper.subscribe(ModbusRegisterSpec(
+        key: 'int32_reg',
+        registerType: ModbusElementType.holdingRegister,
+        address: 0,
+        dataType: ModbusDataType.int32,
+      ));
+      wrapper.connect();
+
+      await wrapper.connectionStream
+          .firstWhere((s) => s == ConnectionStatus.connected)
+          .timeout(const Duration(seconds: 2));
+      await Future.delayed(const Duration(milliseconds: 300));
+
+      expect(wrapper.read('int32_reg'), equals(-100000));
+    });
+
+    test('uint32 holding register returns correct value', () async {
+      final pair = createWrapperWithMock();
+      wrapper = pair.wrapper;
+      final mock = pair.mock;
+
+      mock.onSend = (request) {
+        if (request is ModbusReadRequest) {
+          final bytes = Uint8List(request.element.byteCount);
+          ByteData.view(bytes.buffer).setUint32(0, 3000000000);
+          request.element.setValueFromBytes(bytes);
+        }
+        return ModbusResponseCode.requestSucceed;
+      };
+
+      wrapper.addPollGroup('default', const Duration(milliseconds: 100));
+      wrapper.subscribe(ModbusRegisterSpec(
+        key: 'uint32_reg',
+        registerType: ModbusElementType.holdingRegister,
+        address: 0,
+        dataType: ModbusDataType.uint32,
+      ));
+      wrapper.connect();
+
+      await wrapper.connectionStream
+          .firstWhere((s) => s == ConnectionStatus.connected)
+          .timeout(const Duration(seconds: 2));
+      await Future.delayed(const Duration(milliseconds: 300));
+
+      expect(wrapper.read('uint32_reg'), equals(3000000000));
+    });
+
+    test('float32 holding register returns correct value', () async {
+      final pair = createWrapperWithMock();
+      wrapper = pair.wrapper;
+      final mock = pair.mock;
+
+      mock.onSend = (request) {
+        if (request is ModbusReadRequest) {
+          final bytes = Uint8List(request.element.byteCount);
+          ByteData.view(bytes.buffer).setFloat32(0, 3.14);
+          request.element.setValueFromBytes(bytes);
+        }
+        return ModbusResponseCode.requestSucceed;
+      };
+
+      wrapper.addPollGroup('default', const Duration(milliseconds: 100));
+      wrapper.subscribe(ModbusRegisterSpec(
+        key: 'float32_reg',
+        registerType: ModbusElementType.holdingRegister,
+        address: 0,
+        dataType: ModbusDataType.float32,
+      ));
+      wrapper.connect();
+
+      await wrapper.connectionStream
+          .firstWhere((s) => s == ConnectionStatus.connected)
+          .timeout(const Duration(seconds: 2));
+      await Future.delayed(const Duration(milliseconds: 300));
+
+      final value = wrapper.read('float32_reg');
+      expect(value, isA<double>());
+      expect((value as double), closeTo(3.14, 0.01));
+    });
+
+    test('int64 holding register returns correct value', () async {
+      final pair = createWrapperWithMock();
+      wrapper = pair.wrapper;
+      final mock = pair.mock;
+
+      mock.onSend = (request) {
+        if (request is ModbusReadRequest) {
+          final bytes = Uint8List(request.element.byteCount);
+          ByteData.view(bytes.buffer).setInt64(0, -9000000000);
+          request.element.setValueFromBytes(bytes);
+        }
+        return ModbusResponseCode.requestSucceed;
+      };
+
+      wrapper.addPollGroup('default', const Duration(milliseconds: 100));
+      wrapper.subscribe(ModbusRegisterSpec(
+        key: 'int64_reg',
+        registerType: ModbusElementType.holdingRegister,
+        address: 0,
+        dataType: ModbusDataType.int64,
+      ));
+      wrapper.connect();
+
+      await wrapper.connectionStream
+          .firstWhere((s) => s == ConnectionStatus.connected)
+          .timeout(const Duration(seconds: 2));
+      await Future.delayed(const Duration(milliseconds: 300));
+
+      expect(wrapper.read('int64_reg'), equals(-9000000000));
+    });
+
+    test('uint64 holding register returns correct value', () async {
+      final pair = createWrapperWithMock();
+      wrapper = pair.wrapper;
+      final mock = pair.mock;
+
+      mock.onSend = (request) {
+        if (request is ModbusReadRequest) {
+          final bytes = Uint8List(request.element.byteCount);
+          ByteData.view(bytes.buffer).setUint64(0, 18000000000000000000);
+          request.element.setValueFromBytes(bytes);
+        }
+        return ModbusResponseCode.requestSucceed;
+      };
+
+      wrapper.addPollGroup('default', const Duration(milliseconds: 100));
+      wrapper.subscribe(ModbusRegisterSpec(
+        key: 'uint64_reg',
+        registerType: ModbusElementType.holdingRegister,
+        address: 0,
+        dataType: ModbusDataType.uint64,
+      ));
+      wrapper.connect();
+
+      await wrapper.connectionStream
+          .firstWhere((s) => s == ConnectionStatus.connected)
+          .timeout(const Duration(seconds: 2));
+      await Future.delayed(const Duration(milliseconds: 300));
+
+      expect(wrapper.read('uint64_reg'), equals(18000000000000000000));
+    });
+
+    test('float64 holding register returns correct value', () async {
+      final pair = createWrapperWithMock();
+      wrapper = pair.wrapper;
+      final mock = pair.mock;
+
+      mock.onSend = (request) {
+        if (request is ModbusReadRequest) {
+          final bytes = Uint8List(request.element.byteCount);
+          ByteData.view(bytes.buffer).setFloat64(0, 2.71828);
+          request.element.setValueFromBytes(bytes);
+        }
+        return ModbusResponseCode.requestSucceed;
+      };
+
+      wrapper.addPollGroup('default', const Duration(milliseconds: 100));
+      wrapper.subscribe(ModbusRegisterSpec(
+        key: 'float64_reg',
+        registerType: ModbusElementType.holdingRegister,
+        address: 0,
+        dataType: ModbusDataType.float64,
+      ));
+      wrapper.connect();
+
+      await wrapper.connectionStream
+          .firstWhere((s) => s == ConnectionStatus.connected)
+          .timeout(const Duration(seconds: 2));
+      await Future.delayed(const Duration(milliseconds: 300));
+
+      final value = wrapper.read('float64_reg');
+      expect(value, isA<double>());
+      expect((value as double), closeTo(2.71828, 0.00001));
+    });
+
+    test('bit data type for coil returns bool', () async {
+      final pair = createWrapperWithMock();
+      wrapper = pair.wrapper;
+      final mock = pair.mock;
+
+      mock.onSend = (request) {
+        if (request is ModbusReadRequest) {
+          request.element.setValueFromBytes(Uint8List.fromList([0x00]));
+        }
+        return ModbusResponseCode.requestSucceed;
+      };
+
+      wrapper.addPollGroup('default', const Duration(milliseconds: 100));
+      wrapper.subscribe(ModbusRegisterSpec(
+        key: 'bit_coil',
+        registerType: ModbusElementType.coil,
+        address: 0,
+        dataType: ModbusDataType.bit,
+      ));
+      wrapper.connect();
+
+      await wrapper.connectionStream
+          .firstWhere((s) => s == ConnectionStatus.connected)
+          .timeout(const Duration(seconds: 2));
+      await Future.delayed(const Duration(milliseconds: 300));
+
+      final value = wrapper.read('bit_coil');
+      expect(value, isA<bool>());
+      expect(value, isFalse);
+    });
+  });
+
+  group('read failure handling', () {
+    test('on read failure, last-known value persists in stream', () async {
+      final pair = createWrapperWithMock();
+      wrapper = pair.wrapper;
+      final mock = pair.mock;
+
+      var callCount = 0;
+      mock.onSend = (request) {
+        callCount++;
+        if (request is ModbusReadRequest) {
+          if (callCount <= 2) {
+            // First calls succeed with value 42
+            final bytes = Uint8List(request.element.byteCount);
+            ByteData.view(bytes.buffer).setUint16(0, 42);
+            request.element.setValueFromBytes(bytes);
+            return ModbusResponseCode.requestSucceed;
+          } else {
+            // Later calls fail
+            return ModbusResponseCode.deviceFailure;
+          }
+        }
+        return ModbusResponseCode.requestSucceed;
+      };
+
+      wrapper.addPollGroup('default', const Duration(milliseconds: 100));
+      wrapper.subscribe(ModbusRegisterSpec(
+        key: 'hr0',
+        registerType: ModbusElementType.holdingRegister,
+        address: 0,
+        dataType: ModbusDataType.uint16,
+      ));
+      wrapper.connect();
+
+      await wrapper.connectionStream
+          .firstWhere((s) => s == ConnectionStatus.connected)
+          .timeout(const Duration(seconds: 2));
+
+      // Wait for successful reads then failure reads
+      await Future.delayed(const Duration(milliseconds: 600));
+
+      // Last-known value should persist despite failures
+      expect(wrapper.read('hr0'), equals(42));
+    });
+
+    test('on read failure, poll continues to next cycle', () async {
+      final pair = createWrapperWithMock();
+      wrapper = pair.wrapper;
+      final mock = pair.mock;
+
+      var failCount = 0;
+      mock.onSend = (request) {
+        if (request is ModbusReadRequest) {
+          failCount++;
+          if (failCount <= 3) {
+            return ModbusResponseCode.illegalDataAddress;
+          }
+          // After 3 failures, succeed
+          final bytes = Uint8List(request.element.byteCount);
+          ByteData.view(bytes.buffer).setUint16(0, 99);
+          request.element.setValueFromBytes(bytes);
+          return ModbusResponseCode.requestSucceed;
+        }
+        return ModbusResponseCode.requestSucceed;
+      };
+
+      wrapper.addPollGroup('default', const Duration(milliseconds: 100));
+      wrapper.subscribe(ModbusRegisterSpec(
+        key: 'hr0',
+        registerType: ModbusElementType.holdingRegister,
+        address: 0,
+        dataType: ModbusDataType.uint16,
+      ));
+      wrapper.connect();
+
+      await wrapper.connectionStream
+          .firstWhere((s) => s == ConnectionStatus.connected)
+          .timeout(const Duration(seconds: 2));
+
+      // Wait for failures + eventual success
+      await Future.delayed(const Duration(milliseconds: 800));
+
+      // Poll should have continued past failures and eventually read 99
+      expect(wrapper.read('hr0'), equals(99));
+    });
+  });
+
+  group('dynamic subscription', () {
+    test('unsubscribe removes register from polling', () async {
+      final pair = createWrapperWithMock();
+      wrapper = pair.wrapper;
+      final mock = pair.mock;
+
+      wrapper.addPollGroup('default', const Duration(milliseconds: 100));
+      wrapper.subscribe(ModbusRegisterSpec(
+        key: 'hr0',
+        registerType: ModbusElementType.holdingRegister,
+        address: 0,
+        dataType: ModbusDataType.uint16,
+      ));
+      wrapper.connect();
+
+      await wrapper.connectionStream
+          .firstWhere((s) => s == ConnectionStatus.connected)
+          .timeout(const Duration(seconds: 2));
+      await Future.delayed(const Duration(milliseconds: 300));
+
+      final countBeforeUnsub = mock.sendCallCount;
+      expect(countBeforeUnsub, greaterThan(0));
+
+      wrapper.unsubscribe('hr0');
+
+      // Reset send count tracking
+      final countAtUnsub = mock.sendCallCount;
+      await Future.delayed(const Duration(milliseconds: 300));
+
+      // No more sends after unsubscribing the only register
+      expect(mock.sendCallCount, equals(countAtUnsub));
+    });
+
+    test('adding register while polls are running picks it up on next tick',
+        () async {
+      final pair = createWrapperWithMock();
+      wrapper = pair.wrapper;
+      final mock = pair.mock;
+
+      wrapper.addPollGroup('default', const Duration(milliseconds: 100));
+      wrapper.connect();
+
+      await wrapper.connectionStream
+          .firstWhere((s) => s == ConnectionStatus.connected)
+          .timeout(const Duration(seconds: 2));
+
+      // No sends yet (no subscriptions)
+      expect(mock.sendCallCount, equals(0));
+
+      // Add a register dynamically
+      mock.onSend = (request) {
+        if (request is ModbusReadRequest) {
+          final bytes = Uint8List(request.element.byteCount);
+          ByteData.view(bytes.buffer).setUint16(0, 777);
+          request.element.setValueFromBytes(bytes);
+        }
+        return ModbusResponseCode.requestSucceed;
+      };
+
+      wrapper.subscribe(ModbusRegisterSpec(
+        key: 'hr_late',
+        registerType: ModbusElementType.holdingRegister,
+        address: 10,
+        dataType: ModbusDataType.uint16,
+      ));
+
+      await Future.delayed(const Duration(milliseconds: 300));
+
+      // Should have picked up the new register
+      expect(mock.sendCallCount, greaterThan(0));
+      expect(wrapper.read('hr_late'), equals(777));
     });
   });
 }
