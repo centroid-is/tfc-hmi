@@ -157,7 +157,7 @@ class _BaseScaffoldState extends ConsumerState<BaseScaffold> {
             );
           }
           return StreamBuilder(
-            stream: Stream.periodic(const Duration(milliseconds: 250)),
+            stream: Stream.periodic(const Duration(seconds: 1)),
             builder: (context, snapshot) {
               final currentTime = DateTime.now();
               return Text(

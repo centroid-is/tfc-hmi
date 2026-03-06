@@ -18,13 +18,14 @@ enum M2400RecordType {
   final int id;
   const M2400RecordType(this.id);
 
+  /// Pre-built lookup table for O(1) record type resolution.
+  static final Map<int, M2400RecordType> _byId = {
+    for (final type in values)
+      if (type != unknown) type.id: type,
+  };
+
   /// Look up record type by numeric ID. Returns [unknown] for unrecognized IDs.
-  static M2400RecordType fromId(int id) {
-    for (final type in values) {
-      if (type.id == id && type != unknown) return type;
-    }
-    return unknown;
-  }
+  static M2400RecordType fromId(int id) => _byId[id] ?? unknown;
 }
 
 /// An immutable M2400 record parsed from a framed byte stream.

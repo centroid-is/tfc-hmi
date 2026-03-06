@@ -166,7 +166,7 @@ M2400ParsedRecord parseTypedRecord(M2400Record raw) {
     typedFields: typed,
     unknownFields: unknown,
     rawFields: raw.fields,
-    receivedAt: DateTime.now(),
+    receivedAt: DateTime.timestamp(),
     deviceTimestamp: timestamp,
   );
 }

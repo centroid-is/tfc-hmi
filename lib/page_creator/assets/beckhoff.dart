@@ -1758,7 +1758,10 @@ class TriangleBoxPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(TriangleBoxPainter oldDelegate) => true;
+  bool shouldRepaint(TriangleBoxPainter oldDelegate) =>
+      oldDelegate.colorLeft != colorLeft ||
+      oldDelegate.colorRight != colorRight ||
+      oldDelegate.animationValue != animationValue;
 }
 
 @JsonSerializable()

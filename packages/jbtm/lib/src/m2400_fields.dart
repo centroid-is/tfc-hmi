@@ -93,15 +93,15 @@ enum M2400Field {
 
   const M2400Field(this.id, this.displayName, this.fieldType);
 
+  /// Pre-built lookup table for O(1) field resolution by numeric ID.
+  static final Map<int, M2400Field> _byId = {
+    for (final field in values)
+      if (field.id > 0) field.id: field,
+  };
+
   /// Look up field by numeric ID. Returns null for unknown IDs.
   /// Fields with id <= 0 are placeholders and cannot be matched.
-  static M2400Field? fromId(int id) {
-    if (id <= 0) return null;
-    for (final field in values) {
-      if (field.id == id) return field;
-    }
-    return null;
-  }
+  static M2400Field? fromId(int id) => _byId[id];
 }
 
 /// Weigher status codes from FLD_STATUS / FLD_WEIGHING_STATUS.
@@ -123,13 +123,14 @@ enum WeigherStatus {
 
   const WeigherStatus(this.code, this.displayName);
 
+  /// Pre-built lookup table for O(1) status resolution.
+  static final Map<int, WeigherStatus> _byCode = {
+    for (final status in values)
+      if (status != unknown) status.code: status,
+  };
+
   /// Look up status by numeric code. Returns [unknown] for undefined codes.
-  static WeigherStatus fromCode(int code) {
-    for (final status in values) {
-      if (status.code == code && status != unknown) return status;
-    }
-    return unknown;
-  }
+  static WeigherStatus fromCode(int code) => _byCode[code] ?? unknown;
 }
 
 /// Fields typically present in each record type.

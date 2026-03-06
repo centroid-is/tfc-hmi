@@ -332,7 +332,15 @@ class IO8Painter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant IO8Painter old) => true;
+  bool shouldRepaint(covariant IO8Painter old) =>
+      !listEquals(old.ledStates, ledStates) ||
+      old.disconnected != disconnected ||
+      old.selected != selected ||
+      old.topLabels != topLabels ||
+      old.name != name ||
+      old.animation.value != animation.value ||
+      !listEquals(old.ioLabels, ioLabels) ||
+      !listEquals(old.ioLabelColors, ioLabelColors);
 }
 
 // Base class with shared functionality
