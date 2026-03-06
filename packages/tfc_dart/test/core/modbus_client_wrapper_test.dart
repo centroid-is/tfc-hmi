@@ -2127,4 +2127,412 @@ void main() {
       expect(wrapper.read('coil2'), isTrue);
     });
   });
+
+  // ==========================================================================
+  // Phase 6 -- Write Tests
+  // ==========================================================================
+
+  group('write', () {
+    group('single coil write (FC05)', () {
+      test('write single coil sends write request when connected', () async {
+        final (:wrapper, :mock) = createWrapperWithMock();
+        addTearDown(wrapper.dispose);
+        wrapper.connect();
+        await Future.delayed(const Duration(milliseconds: 50));
+
+        ModbusRequest? capturedRequest;
+        mock.onSend = (request) {
+          capturedRequest = request;
+          return ModbusResponseCode.requestSucceed;
+        };
+
+        final spec = ModbusRegisterSpec(
+          key: 'coil0',
+          registerType: ModbusElementType.coil,
+          address: 0,
+        );
+        await wrapper.write(spec, true);
+
+        expect(capturedRequest, isA<ModbusWriteRequest>());
+        expect(mock.sendCallCount, equals(1));
+      });
+
+      test('write coil false sends write request', () async {
+        final (:wrapper, :mock) = createWrapperWithMock();
+        addTearDown(wrapper.dispose);
+        wrapper.connect();
+        await Future.delayed(const Duration(milliseconds: 50));
+
+        mock.onSend = (request) => ModbusResponseCode.requestSucceed;
+
+        final spec = ModbusRegisterSpec(
+          key: 'coil0',
+          registerType: ModbusElementType.coil,
+          address: 0,
+        );
+        await wrapper.write(spec, false);
+
+        expect(mock.sendCallCount, equals(1));
+      });
+    });
+
+    group('single holding register write (FC06)', () {
+      test('write uint16 value sends write request', () async {
+        final (:wrapper, :mock) = createWrapperWithMock();
+        addTearDown(wrapper.dispose);
+        wrapper.connect();
+        await Future.delayed(const Duration(milliseconds: 50));
+
+        ModbusRequest? capturedRequest;
+        mock.onSend = (request) {
+          capturedRequest = request;
+          return ModbusResponseCode.requestSucceed;
+        };
+
+        final spec = ModbusRegisterSpec(
+          key: 'hr100',
+          registerType: ModbusElementType.holdingRegister,
+          address: 100,
+          dataType: ModbusDataType.uint16,
+        );
+        await wrapper.write(spec, 42);
+
+        expect(capturedRequest, isA<ModbusWriteRequest>());
+        expect(mock.sendCallCount, equals(1));
+      });
+
+      test('write int16 signed value sends write request', () async {
+        final (:wrapper, :mock) = createWrapperWithMock();
+        addTearDown(wrapper.dispose);
+        wrapper.connect();
+        await Future.delayed(const Duration(milliseconds: 50));
+
+        mock.onSend = (request) => ModbusResponseCode.requestSucceed;
+
+        final spec = ModbusRegisterSpec(
+          key: 'hr101',
+          registerType: ModbusElementType.holdingRegister,
+          address: 101,
+          dataType: ModbusDataType.int16,
+        );
+        await wrapper.write(spec, -100);
+
+        expect(mock.sendCallCount, equals(1));
+      });
+    });
+
+    group('multi-register writes (auto FC16)', () {
+      test('write float32 sends write request (library auto-selects FC16)',
+          () async {
+        final (:wrapper, :mock) = createWrapperWithMock();
+        addTearDown(wrapper.dispose);
+        wrapper.connect();
+        await Future.delayed(const Duration(milliseconds: 50));
+
+        ModbusRequest? capturedRequest;
+        mock.onSend = (request) {
+          capturedRequest = request;
+          return ModbusResponseCode.requestSucceed;
+        };
+
+        final spec = ModbusRegisterSpec(
+          key: 'hr200',
+          registerType: ModbusElementType.holdingRegister,
+          address: 200,
+          dataType: ModbusDataType.float32,
+        );
+        await wrapper.write(spec, 23.5);
+
+        expect(capturedRequest, isA<ModbusWriteRequest>());
+        expect(mock.sendCallCount, equals(1));
+      });
+
+      test('write int32 sends write request (auto FC16)', () async {
+        final (:wrapper, :mock) = createWrapperWithMock();
+        addTearDown(wrapper.dispose);
+        wrapper.connect();
+        await Future.delayed(const Duration(milliseconds: 50));
+
+        mock.onSend = (request) => ModbusResponseCode.requestSucceed;
+
+        final spec = ModbusRegisterSpec(
+          key: 'hr300',
+          registerType: ModbusElementType.holdingRegister,
+          address: 300,
+          dataType: ModbusDataType.int32,
+        );
+        await wrapper.write(spec, 100000);
+
+        expect(mock.sendCallCount, equals(1));
+      });
+    });
+
+    group('writeMultiple', () {
+      test('writeMultiple coils (FC15) sends write request with quantity',
+          () async {
+        final (:wrapper, :mock) = createWrapperWithMock();
+        addTearDown(wrapper.dispose);
+        wrapper.connect();
+        await Future.delayed(const Duration(milliseconds: 50));
+
+        ModbusRequest? capturedRequest;
+        mock.onSend = (request) {
+          capturedRequest = request;
+          return ModbusResponseCode.requestSucceed;
+        };
+
+        final spec = ModbusRegisterSpec(
+          key: 'coil0',
+          registerType: ModbusElementType.coil,
+          address: 0,
+        );
+        // Write 8 coils packed as 1 byte (0xFF = all true)
+        await wrapper.writeMultiple(spec, Uint8List.fromList([0xFF]),
+            quantity: 8);
+
+        expect(capturedRequest, isA<ModbusWriteRequest>());
+        expect(mock.sendCallCount, equals(1));
+      });
+
+      test('writeMultiple holding registers (FC16) sends write request',
+          () async {
+        final (:wrapper, :mock) = createWrapperWithMock();
+        addTearDown(wrapper.dispose);
+        wrapper.connect();
+        await Future.delayed(const Duration(milliseconds: 50));
+
+        ModbusRequest? capturedRequest;
+        mock.onSend = (request) {
+          capturedRequest = request;
+          return ModbusResponseCode.requestSucceed;
+        };
+
+        final spec = ModbusRegisterSpec(
+          key: 'hr100',
+          registerType: ModbusElementType.holdingRegister,
+          address: 100,
+          dataType: ModbusDataType.uint16,
+        );
+        // Write 2 registers (4 bytes)
+        await wrapper.writeMultiple(
+            spec, Uint8List.fromList([0x00, 0x01, 0x00, 0x02]));
+
+        expect(capturedRequest, isA<ModbusWriteRequest>());
+        expect(mock.sendCallCount, equals(1));
+      });
+    });
+
+    group('read-only type rejection', () {
+      test('write to discrete input throws ArgumentError', () async {
+        final (:wrapper, :mock) = createWrapperWithMock();
+        addTearDown(wrapper.dispose);
+        wrapper.connect();
+        await Future.delayed(const Duration(milliseconds: 50));
+
+        final spec = ModbusRegisterSpec(
+          key: 'di0',
+          registerType: ModbusElementType.discreteInput,
+          address: 0,
+        );
+        expect(
+          () => wrapper.write(spec, true),
+          throwsA(isA<ArgumentError>().having(
+            (e) => e.message,
+            'message',
+            contains('read-only'),
+          )),
+        );
+      });
+
+      test('write to input register throws ArgumentError', () async {
+        final (:wrapper, :mock) = createWrapperWithMock();
+        addTearDown(wrapper.dispose);
+        wrapper.connect();
+        await Future.delayed(const Duration(milliseconds: 50));
+
+        final spec = ModbusRegisterSpec(
+          key: 'ir0',
+          registerType: ModbusElementType.inputRegister,
+          address: 0,
+          dataType: ModbusDataType.uint16,
+        );
+        expect(
+          () => wrapper.write(spec, 42),
+          throwsA(isA<ArgumentError>().having(
+            (e) => e.message,
+            'message',
+            contains('read-only'),
+          )),
+        );
+      });
+
+      test('writeMultiple to discrete input throws ArgumentError', () async {
+        final (:wrapper, :mock) = createWrapperWithMock();
+        addTearDown(wrapper.dispose);
+        wrapper.connect();
+        await Future.delayed(const Duration(milliseconds: 50));
+
+        final spec = ModbusRegisterSpec(
+          key: 'di0',
+          registerType: ModbusElementType.discreteInput,
+          address: 0,
+        );
+        expect(
+          () => wrapper.writeMultiple(spec, Uint8List.fromList([0x01]),
+              quantity: 1),
+          throwsA(isA<ArgumentError>()),
+        );
+      });
+
+      test('writeMultiple to input register throws ArgumentError', () async {
+        final (:wrapper, :mock) = createWrapperWithMock();
+        addTearDown(wrapper.dispose);
+        wrapper.connect();
+        await Future.delayed(const Duration(milliseconds: 50));
+
+        final spec = ModbusRegisterSpec(
+          key: 'ir0',
+          registerType: ModbusElementType.inputRegister,
+          address: 0,
+          dataType: ModbusDataType.uint16,
+        );
+        expect(
+          () => wrapper.writeMultiple(
+              spec, Uint8List.fromList([0x00, 0x01])),
+          throwsA(isA<ArgumentError>()),
+        );
+      });
+    });
+
+    group('connection gating', () {
+      test('write when disconnected throws StateError', () {
+        final (:wrapper, :mock) = createWrapperWithMock();
+        addTearDown(wrapper.dispose);
+        // Do NOT connect -- wrapper is disconnected
+
+        final spec = ModbusRegisterSpec(
+          key: 'coil0',
+          registerType: ModbusElementType.coil,
+          address: 0,
+        );
+        expect(
+          () => wrapper.write(spec, true),
+          throwsA(isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            contains('Not connected'),
+          )),
+        );
+      });
+
+      test('write when disposed throws StateError', () {
+        final (:wrapper, :mock) = createWrapperWithMock();
+        wrapper.dispose();
+
+        final spec = ModbusRegisterSpec(
+          key: 'coil0',
+          registerType: ModbusElementType.coil,
+          address: 0,
+        );
+        expect(
+          () => wrapper.write(spec, true),
+          throwsA(isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            contains('disposed'),
+          )),
+        );
+      });
+
+      test('write when send returns non-succeed code throws StateError',
+          () async {
+        final (:wrapper, :mock) = createWrapperWithMock();
+        addTearDown(wrapper.dispose);
+        wrapper.connect();
+        await Future.delayed(const Duration(milliseconds: 50));
+
+        mock.onSend = (request) => ModbusResponseCode.requestTimeout;
+
+        final spec = ModbusRegisterSpec(
+          key: 'coil0',
+          registerType: ModbusElementType.coil,
+          address: 0,
+        );
+        expect(
+          () => wrapper.write(spec, true),
+          throwsA(isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            contains('requestTimeout'),
+          )),
+        );
+      });
+
+      test('writeMultiple when disconnected throws StateError', () {
+        final (:wrapper, :mock) = createWrapperWithMock();
+        addTearDown(wrapper.dispose);
+
+        final spec = ModbusRegisterSpec(
+          key: 'coil0',
+          registerType: ModbusElementType.coil,
+          address: 0,
+        );
+        expect(
+          () => wrapper.writeMultiple(spec, Uint8List.fromList([0x01]),
+              quantity: 1),
+          throwsA(isA<StateError>()),
+        );
+      });
+    });
+
+    group('optimistic BehaviorSubject update', () {
+      test('write to subscribed key updates BehaviorSubject with written value',
+          () async {
+        final (:wrapper, :mock) = createWrapperWithMock();
+        addTearDown(wrapper.dispose);
+
+        final spec = ModbusRegisterSpec(
+          key: 'coil0',
+          registerType: ModbusElementType.coil,
+          address: 0,
+        );
+        final stream = wrapper.subscribe(spec);
+
+        wrapper.connect();
+        await Future.delayed(const Duration(milliseconds: 50));
+
+        mock.onSend = (request) {
+          if (request is ModbusReadGroupRequest) {
+            final dataSize = (request.elementGroup.addressRange + 7) ~/ 8;
+            request.internalSetElementData(Uint8List(dataSize));
+          }
+          return ModbusResponseCode.requestSucceed;
+        };
+
+        await wrapper.write(spec, true);
+
+        // The BehaviorSubject should now have the written value
+        final value = wrapper.read('coil0');
+        expect(value, isTrue);
+      });
+
+      test('write to unsubscribed key does not throw', () async {
+        final (:wrapper, :mock) = createWrapperWithMock();
+        addTearDown(wrapper.dispose);
+        wrapper.connect();
+        await Future.delayed(const Duration(milliseconds: 50));
+
+        mock.onSend = (request) => ModbusResponseCode.requestSucceed;
+
+        final spec = ModbusRegisterSpec(
+          key: 'unsubscribed_coil',
+          registerType: ModbusElementType.coil,
+          address: 99,
+        );
+        // Should complete without error -- no BehaviorSubject to update
+        await wrapper.write(spec, true);
+        expect(mock.sendCallCount, equals(1));
+      });
+    });
+  });
 }
