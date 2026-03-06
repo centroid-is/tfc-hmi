@@ -553,6 +553,9 @@ abstract class DeviceClient {
   /// Start connecting to the device.
   void connect();
 
+  /// Write a value to the device by key.
+  Future<void> write(String key, DynamicValue value);
+
   /// Dispose resources.
   void dispose();
 }
@@ -592,6 +595,11 @@ class M2400DeviceClientAdapter implements DeviceClient {
   @override
   Stream<ConnectionStatus> get connectionStream =>
       wrapper.statusStream.map(_mapStatus);
+
+  @override
+  Future<void> write(String key, DynamicValue value) {
+    throw UnsupportedError('M2400 does not support writes');
+  }
 
   @override
   void connect() => wrapper.connect();
