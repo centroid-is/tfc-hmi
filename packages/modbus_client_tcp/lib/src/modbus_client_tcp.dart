@@ -40,7 +40,14 @@ class ModbusClientTcp extends ModbusClient {
 
   Socket? _socket;
   final Lock _lock = Lock();
-  _TcpResponse? _currentResponse;
+
+  /// TCPFIX-02: Map of pending responses keyed by transaction ID.
+  /// Replaces the single `_currentResponse` to support concurrent requests.
+  final Map<int, _TcpResponse> _pendingResponses = {};
+
+  /// Buffer for incoming TCP data that may contain partial or concatenated
+  /// MBAP frames. Parsed by [_processIncomingBuffer].
+  List<int> _incomingBuffer = [];
 
   ModbusClientTcp(this.serverAddress,
       {this.serverPort = 502,
@@ -90,28 +97,32 @@ class ModbusClientTcp extends ModbusClient {
 
   @override
   Future<ModbusResponseCode> send(ModbusRequest request) async {
-    var res = await _lock.synchronized(() async {
+    // TCPFIX-02: Lock only protects connection and socket write.
+    // Response wait happens OUTSIDE the lock to allow concurrent requests.
+    int transactionId;
+    transactionId = await _lock.synchronized(() async {
       // Connect if needed
       try {
         if (connectionMode != ModbusConnectionMode.doNotConnect) {
           await connect();
         }
         if (!isConnected) {
-          return ModbusResponseCode.connectionFailed;
+          return -1; // Signal connection failure
         }
       } catch (ex) {
         ModbusAppLogger.severe(
             "Unexpected exception in sending TCP message", ex);
-        return ModbusResponseCode.connectionFailed;
+        return -1;
       }
 
       // Flushes any old pending data
       await _socket!.flush();
 
       // Create the new response handler
-      var transactionId = _getNextTransactionId();
-      _currentResponse = _TcpResponse(request,
-          transactionId: transactionId, timeout: getResponseTimeout(request));
+      var tid = _getNextTransactionId();
+      var response = _TcpResponse(request,
+          transactionId: tid, timeout: getResponseTimeout(request));
+      _pendingResponses[tid] = response;
 
       // Reset this request in case it was already used before
       request.reset();
@@ -120,7 +131,7 @@ class ModbusClientTcp extends ModbusClient {
       int pduLen = request.protocolDataUnit.length;
       var header = Uint8List(pduLen + 7);
       ByteData.view(header.buffer)
-        ..setUint16(0, transactionId) // Transaction ID
+        ..setUint16(0, tid) // Transaction ID
         ..setUint16(2, 0) // Protocol ID = 0
         ..setUint16(4, pduLen + 1) // PDU Length + Unit ID byte
         ..setUint8(6, getUnitId(request)); // Unit ID
@@ -130,9 +141,18 @@ class ModbusClientTcp extends ModbusClient {
       _socket!.add(header);
       ModbusAppLogger.finest("Sent data: ${ModbusAppLogger.toHex(header)}");
 
-      // Wait for the response code
-      return await request.responseCode;
+      return tid;
     });
+
+    // Connection failed?
+    if (transactionId == -1) {
+      return ModbusResponseCode.connectionFailed;
+    }
+
+    // Wait for response OUTSIDE the lock (enables concurrency)
+    var res = await request.responseCode;
+    _pendingResponses.remove(transactionId);
+
     // Need to disconnect?
     if (connectionMode == ModbusConnectionMode.autoConnectAndDisconnect) {
       await disconnect();
@@ -174,11 +194,64 @@ class ModbusClientTcp extends ModbusClient {
     return true;
   }
 
-  /// Handle received data from the socket
+  /// Handle received data from the socket.
+  ///
+  /// TCPFIX-02: Routes incoming data by transaction ID from the MBAP header.
+  /// Handles concatenated responses (multiple frames in one TCP segment) and
+  /// partial responses (frame split across segments) via [_incomingBuffer].
   void _onSocketData(Uint8List data) {
-    // Could receive buffered data before setting up the response object
-    // (https://github.com/cabbi/modbus_client_tcp/issues/6)
-    _currentResponse?.addResponseData(data);
+    _incomingBuffer += data;
+    _processIncomingBuffer();
+  }
+
+  /// Process buffered incoming data, extracting complete MBAP frames and
+  /// routing each to its corresponding [_TcpResponse] by transaction ID.
+  void _processIncomingBuffer() {
+    while (_incomingBuffer.length >= 6) {
+      // Read MBAP header fields
+      var headerView =
+          ByteData.view(Uint8List.fromList(_incomingBuffer).buffer, 0, 6);
+      var transactionId = headerView.getUint16(0);
+      var lengthField = headerView.getUint16(4);
+
+      // TCPFIX-03: Validate MBAP length field range (defense-in-depth)
+      if (lengthField < 1 || lengthField > 254) {
+        ModbusAppLogger.warning("Invalid MBAP length field in router",
+            "$lengthField not in range 1-254, discarding buffer");
+        // Signal failure to the pending response if one exists
+        var pendingResponse = _pendingResponses[transactionId];
+        if (pendingResponse != null) {
+          pendingResponse.request.setResponseCode(
+              ModbusResponseCode.requestRxFailed);
+        }
+        _incomingBuffer = [];
+        return;
+      }
+
+      // Total frame size = 6-byte header prefix + length field value
+      var totalFrameSize = lengthField + 6;
+
+      // Wait for more data if frame is incomplete
+      if (_incomingBuffer.length < totalFrameSize) {
+        break;
+      }
+
+      // Extract the complete frame
+      var frameBytes =
+          Uint8List.fromList(_incomingBuffer.sublist(0, totalFrameSize));
+
+      // Remove consumed bytes from buffer
+      _incomingBuffer = _incomingBuffer.sublist(totalFrameSize);
+
+      // Route to the correct pending response
+      var pendingResponse = _pendingResponses[transactionId];
+      if (pendingResponse != null) {
+        pendingResponse.addResponseData(frameBytes);
+      } else {
+        ModbusAppLogger.warning(
+            "Response for unknown transaction ID $transactionId, discarding");
+      }
+    }
   }
 
   /// Handle an error from the socket
@@ -271,6 +344,8 @@ class ModbusClientTcp extends ModbusClient {
       _socket!.destroy();
       _socket = null;
     }
+    _pendingResponses.clear();
+    _incomingBuffer = [];
   }
 }
 

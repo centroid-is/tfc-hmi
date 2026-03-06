@@ -335,14 +335,14 @@ void main() {
       final allRequestsReceived = Completer<void>();
 
       server = ModbusTestServer(onData: (socket, data) {
-        if (data.length < 7) return;
-        final view = ByteData.view(Uint8List.fromList(data).buffer);
-        final transactionId = view.getUint16(0);
-        final unitId = view.getUint8(6);
-        receivedRequests.add(_ReceivedRequest(socket, transactionId, unitId));
+        // Parse potentially concatenated MBAP requests from the data
+        final requests = _parseRequests(data);
+        for (final req in requests) {
+          receivedRequests.add(_ReceivedRequest(socket, req.tid, req.unitId));
+        }
 
-        // Once we have both requests, respond in reverse order
-        if (receivedRequests.length == 2) {
+        // Once we have both requests, signal
+        if (receivedRequests.length >= 2 && !allRequestsReceived.isCompleted) {
           allRequestsReceived.complete();
         }
       });
@@ -398,14 +398,11 @@ void main() {
     test('response for unknown transaction ID is discarded', () async {
       // Server sends a response with an unknown transaction ID first,
       // then sends the real response. The real request should still resolve.
-      var requestCount = 0;
-
       server = ModbusTestServer(onData: (socket, data) {
         if (data.length < 7) return;
         final view = ByteData.view(Uint8List.fromList(data).buffer);
         final transactionId = view.getUint16(0);
         final unitId = view.getUint8(6);
-        requestCount++;
 
         // First, send a response with a bogus transaction ID (0xFFFF)
         final bogusPdu = Uint8List.fromList([0x03, 0x02, 0xDE, 0xAD]);
@@ -443,13 +440,12 @@ void main() {
       final allRequestsReceived = Completer<void>();
 
       server = ModbusTestServer(onData: (socket, data) {
-        if (data.length < 7) return;
-        final view = ByteData.view(Uint8List.fromList(data).buffer);
-        final transactionId = view.getUint16(0);
-        final unitId = view.getUint8(6);
-        receivedRequests.add(_ReceivedRequest(socket, transactionId, unitId));
+        final requests = _parseRequests(data);
+        for (final req in requests) {
+          receivedRequests.add(_ReceivedRequest(socket, req.tid, req.unitId));
+        }
 
-        if (receivedRequests.length == 2) {
+        if (receivedRequests.length >= 2 && !allRequestsReceived.isCompleted) {
           allRequestsReceived.complete();
         }
       });
@@ -536,4 +532,32 @@ class _ReceivedRequest {
   final int transactionId;
   final int unitId;
   _ReceivedRequest(this.socket, this.transactionId, this.unitId);
+}
+
+/// Parsed MBAP request header from raw bytes.
+class _ParsedRequest {
+  final int tid;
+  final int unitId;
+  _ParsedRequest(this.tid, this.unitId);
+}
+
+/// Parse potentially concatenated MBAP requests from raw TCP data.
+///
+/// Each MBAP request has a 7-byte header (transaction ID 2 + protocol ID 2 +
+/// length 2 + unit ID 1) followed by the PDU. The length field tells us how
+/// many bytes follow the 6-byte prefix (unit ID + PDU).
+List<_ParsedRequest> _parseRequests(Uint8List data) {
+  final requests = <_ParsedRequest>[];
+  var offset = 0;
+  while (offset + 6 <= data.length) {
+    final view = ByteData.view(data.buffer, data.offsetInBytes + offset, 6);
+    final tid = view.getUint16(0);
+    final lengthField = view.getUint16(4);
+    final totalFrameSize = lengthField + 6;
+    if (offset + totalFrameSize > data.length) break;
+    final unitId = data[offset + 6];
+    requests.add(_ParsedRequest(tid, unitId));
+    offset += totalFrameSize;
+  }
+  return requests;
 }
