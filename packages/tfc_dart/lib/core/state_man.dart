@@ -869,6 +869,7 @@ class StateMan {
   }
 
   void setSubstitution(String key, String value) {
+    if (_substitutions[key] == value) return;
     _substitutions[key] = value;
     logger.d('Substitution set: $key = $value');
     _subsMap$.add(Map.unmodifiable(_substitutions));
