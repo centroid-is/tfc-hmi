@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:logger/logger.dart';
 import 'package:modbus_client/modbus_client.dart';
@@ -317,6 +318,85 @@ class ModbusClientWrapper {
 
     if (!sub.value$.isClosed) {
       sub.value$.close();
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Public API -- Writing (Phase 6)
+  // ---------------------------------------------------------------------------
+
+  /// Writes a single value to the Modbus device register described by [spec].
+  ///
+  /// For coils (FC05): [value] should be `bool`.
+  /// For holding registers (FC06): [value] should be `num` (int or double).
+  /// For multi-register types (int32, float32, etc.): the library automatically
+  /// uses FC16 when byteCount > 2.
+  ///
+  /// Throws [StateError] if disconnected or disposed (SCADA safety: writes are
+  /// never queued). Throws [ArgumentError] for read-only register types
+  /// (discrete inputs, input registers). Throws [StateError] with the response
+  /// code name if the device rejects the write.
+  ///
+  /// If the key has an active subscription, the BehaviorSubject is
+  /// optimistically updated with [value] after a successful write.
+  Future<void> write(ModbusRegisterSpec spec, Object? value) async {
+    _validateWriteAccess(spec);
+
+    final element = _createElement(spec);
+    final request = element.getWriteRequest(value);
+    final result = await _client!.send(request);
+
+    if (result != ModbusResponseCode.requestSucceed) {
+      throw StateError('Write failed: ${result.name}');
+    }
+
+    // Optimistic update: push written value into BehaviorSubject if subscribed
+    final sub = _subscriptions[spec.key];
+    if (sub != null && !sub.value$.isClosed) {
+      sub.value$.add(value);
+    }
+  }
+
+  /// Writes multiple coils or registers in a single Modbus transaction.
+  ///
+  /// For coils (FC15): pass packed [bytes] and explicit [quantity] (coil count).
+  /// For holding registers (FC16): pass raw [bytes] (2 bytes per register).
+  ///
+  /// Same error semantics as [write]: throws on disconnect, dispose, read-only
+  /// types, and failed sends.
+  Future<void> writeMultiple(ModbusRegisterSpec spec, Uint8List bytes,
+      {int? quantity}) async {
+    _validateWriteAccess(spec);
+
+    final element = _createElement(spec);
+    final request = element.getMultipleWriteRequest(bytes, quantity: quantity);
+    final result = await _client!.send(request);
+
+    if (result != ModbusResponseCode.requestSucceed) {
+      throw StateError('Write multiple failed: ${result.name}');
+    }
+  }
+
+  /// Shared validation for [write] and [writeMultiple].
+  ///
+  /// Checks disposed state, connection status, and rejects read-only types.
+  void _validateWriteAccess(ModbusRegisterSpec spec) {
+    if (_disposed) {
+      throw StateError('ModbusClientWrapper has been disposed');
+    }
+    if (connectionStatus != ConnectionStatus.connected || _client == null) {
+      throw StateError(
+          'Not connected -- cannot write (writes are not queued)');
+    }
+
+    final type = spec.registerType;
+    if (type == ModbusElementType.discreteInput ||
+        type == ModbusElementType.inputRegister) {
+      final typeName = type == ModbusElementType.discreteInput
+          ? 'discrete input'
+          : 'input register';
+      throw ArgumentError(
+          'Cannot write to $typeName -- read-only register type');
     }
   }
 

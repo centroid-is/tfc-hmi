@@ -2135,8 +2135,9 @@ void main() {
   group('write', () {
     group('single coil write (FC05)', () {
       test('write single coil sends write request when connected', () async {
-        final (:wrapper, :mock) = createWrapperWithMock();
-        addTearDown(wrapper.dispose);
+        final pair = createWrapperWithMock();
+        wrapper = pair.wrapper;
+        final mock = pair.mock;
         wrapper.connect();
         await Future.delayed(const Duration(milliseconds: 50));
 
@@ -2158,8 +2159,9 @@ void main() {
       });
 
       test('write coil false sends write request', () async {
-        final (:wrapper, :mock) = createWrapperWithMock();
-        addTearDown(wrapper.dispose);
+        final pair = createWrapperWithMock();
+        wrapper = pair.wrapper;
+        final mock = pair.mock;
         wrapper.connect();
         await Future.delayed(const Duration(milliseconds: 50));
 
@@ -2178,8 +2180,9 @@ void main() {
 
     group('single holding register write (FC06)', () {
       test('write uint16 value sends write request', () async {
-        final (:wrapper, :mock) = createWrapperWithMock();
-        addTearDown(wrapper.dispose);
+        final pair = createWrapperWithMock();
+        wrapper = pair.wrapper;
+        final mock = pair.mock;
         wrapper.connect();
         await Future.delayed(const Duration(milliseconds: 50));
 
@@ -2202,8 +2205,9 @@ void main() {
       });
 
       test('write int16 signed value sends write request', () async {
-        final (:wrapper, :mock) = createWrapperWithMock();
-        addTearDown(wrapper.dispose);
+        final pair = createWrapperWithMock();
+        wrapper = pair.wrapper;
+        final mock = pair.mock;
         wrapper.connect();
         await Future.delayed(const Duration(milliseconds: 50));
 
@@ -2224,8 +2228,9 @@ void main() {
     group('multi-register writes (auto FC16)', () {
       test('write float32 sends write request (library auto-selects FC16)',
           () async {
-        final (:wrapper, :mock) = createWrapperWithMock();
-        addTearDown(wrapper.dispose);
+        final pair = createWrapperWithMock();
+        wrapper = pair.wrapper;
+        final mock = pair.mock;
         wrapper.connect();
         await Future.delayed(const Duration(milliseconds: 50));
 
@@ -2248,8 +2253,9 @@ void main() {
       });
 
       test('write int32 sends write request (auto FC16)', () async {
-        final (:wrapper, :mock) = createWrapperWithMock();
-        addTearDown(wrapper.dispose);
+        final pair = createWrapperWithMock();
+        wrapper = pair.wrapper;
+        final mock = pair.mock;
         wrapper.connect();
         await Future.delayed(const Duration(milliseconds: 50));
 
@@ -2270,8 +2276,9 @@ void main() {
     group('writeMultiple', () {
       test('writeMultiple coils (FC15) sends write request with quantity',
           () async {
-        final (:wrapper, :mock) = createWrapperWithMock();
-        addTearDown(wrapper.dispose);
+        final pair = createWrapperWithMock();
+        wrapper = pair.wrapper;
+        final mock = pair.mock;
         wrapper.connect();
         await Future.delayed(const Duration(milliseconds: 50));
 
@@ -2296,8 +2303,9 @@ void main() {
 
       test('writeMultiple holding registers (FC16) sends write request',
           () async {
-        final (:wrapper, :mock) = createWrapperWithMock();
-        addTearDown(wrapper.dispose);
+        final pair = createWrapperWithMock();
+        wrapper = pair.wrapper;
+        final mock = pair.mock;
         wrapper.connect();
         await Future.delayed(const Duration(milliseconds: 50));
 
@@ -2324,8 +2332,8 @@ void main() {
 
     group('read-only type rejection', () {
       test('write to discrete input throws ArgumentError', () async {
-        final (:wrapper, :mock) = createWrapperWithMock();
-        addTearDown(wrapper.dispose);
+        final pair = createWrapperWithMock();
+        wrapper = pair.wrapper;
         wrapper.connect();
         await Future.delayed(const Duration(milliseconds: 50));
 
@@ -2345,8 +2353,8 @@ void main() {
       });
 
       test('write to input register throws ArgumentError', () async {
-        final (:wrapper, :mock) = createWrapperWithMock();
-        addTearDown(wrapper.dispose);
+        final pair = createWrapperWithMock();
+        wrapper = pair.wrapper;
         wrapper.connect();
         await Future.delayed(const Duration(milliseconds: 50));
 
@@ -2367,8 +2375,8 @@ void main() {
       });
 
       test('writeMultiple to discrete input throws ArgumentError', () async {
-        final (:wrapper, :mock) = createWrapperWithMock();
-        addTearDown(wrapper.dispose);
+        final pair = createWrapperWithMock();
+        wrapper = pair.wrapper;
         wrapper.connect();
         await Future.delayed(const Duration(milliseconds: 50));
 
@@ -2385,8 +2393,8 @@ void main() {
       });
 
       test('writeMultiple to input register throws ArgumentError', () async {
-        final (:wrapper, :mock) = createWrapperWithMock();
-        addTearDown(wrapper.dispose);
+        final pair = createWrapperWithMock();
+        wrapper = pair.wrapper;
         wrapper.connect();
         await Future.delayed(const Duration(milliseconds: 50));
 
@@ -2406,8 +2414,8 @@ void main() {
 
     group('connection gating', () {
       test('write when disconnected throws StateError', () {
-        final (:wrapper, :mock) = createWrapperWithMock();
-        addTearDown(wrapper.dispose);
+        final pair = createWrapperWithMock();
+        wrapper = pair.wrapper;
         // Do NOT connect -- wrapper is disconnected
 
         final spec = ModbusRegisterSpec(
@@ -2426,7 +2434,8 @@ void main() {
       });
 
       test('write when disposed throws StateError', () {
-        final (:wrapper, :mock) = createWrapperWithMock();
+        final pair = createWrapperWithMock();
+        wrapper = pair.wrapper;
         wrapper.dispose();
 
         final spec = ModbusRegisterSpec(
@@ -2446,8 +2455,9 @@ void main() {
 
       test('write when send returns non-succeed code throws StateError',
           () async {
-        final (:wrapper, :mock) = createWrapperWithMock();
-        addTearDown(wrapper.dispose);
+        final pair = createWrapperWithMock();
+        wrapper = pair.wrapper;
+        final mock = pair.mock;
         wrapper.connect();
         await Future.delayed(const Duration(milliseconds: 50));
 
@@ -2469,8 +2479,8 @@ void main() {
       });
 
       test('writeMultiple when disconnected throws StateError', () {
-        final (:wrapper, :mock) = createWrapperWithMock();
-        addTearDown(wrapper.dispose);
+        final pair = createWrapperWithMock();
+        wrapper = pair.wrapper;
 
         final spec = ModbusRegisterSpec(
           key: 'coil0',
@@ -2488,15 +2498,16 @@ void main() {
     group('optimistic BehaviorSubject update', () {
       test('write to subscribed key updates BehaviorSubject with written value',
           () async {
-        final (:wrapper, :mock) = createWrapperWithMock();
-        addTearDown(wrapper.dispose);
+        final pair = createWrapperWithMock();
+        wrapper = pair.wrapper;
+        final mock = pair.mock;
 
         final spec = ModbusRegisterSpec(
           key: 'coil0',
           registerType: ModbusElementType.coil,
           address: 0,
         );
-        final stream = wrapper.subscribe(spec);
+        wrapper.subscribe(spec);
 
         wrapper.connect();
         await Future.delayed(const Duration(milliseconds: 50));
@@ -2517,8 +2528,9 @@ void main() {
       });
 
       test('write to unsubscribed key does not throw', () async {
-        final (:wrapper, :mock) = createWrapperWithMock();
-        addTearDown(wrapper.dispose);
+        final pair = createWrapperWithMock();
+        wrapper = pair.wrapper;
+        final mock = pair.mock;
         wrapper.connect();
         await Future.delayed(const Duration(milliseconds: 50));
 
