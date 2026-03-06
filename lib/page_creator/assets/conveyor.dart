@@ -359,13 +359,13 @@ class _ConveyorState extends ConsumerState<Conveyor>
     _augerRpm = rpm;
     if (rpm != 0 && _augerAnimationTimer == null) {
       _augerAnimationTimer =
-          Timer.periodic(const Duration(milliseconds: 16), (_) {
+          Timer.periodic(const Duration(milliseconds: 32), (_) {
         if (!mounted) {
           _augerAnimationTimer?.cancel();
           _augerAnimationTimer = null;
           return;
         }
-        var phase = _augerPhase.value + _augerRpm / 60.0 * 2 * pi * 0.016;
+        var phase = _augerPhase.value + _augerRpm / 60.0 * 2 * pi * 0.032;
         if (phase > 2 * pi) phase -= 2 * pi;
         if (phase < -2 * pi) phase += 2 * pi;
         _augerPhase.value = phase;

@@ -58,6 +58,18 @@ async def profile(ws_uri, duration=10):
             main_iso = isolates[0]["id"]
         print(f"Isolate: {main_iso}")
 
+        # 1b. Boost sampling rate: 1000μs (default) → 250μs (4x more samples)
+        await ws.send(json.dumps({
+            "jsonrpc": "2.0", "id": "1b",
+            "method": "setFlag",
+            "params": {"name": "profile_period", "value": "250"}
+        }))
+        flag_resp = json.loads(await ws.recv())
+        if "error" not in flag_resp:
+            print("Sampling rate set to 250μs (4x default)")
+        else:
+            print(f"Could not set sampling rate: {flag_resp.get('error', {}).get('message', '?')}")
+
         # 2. Clear old samples
         await ws.send(json.dumps({"jsonrpc": "2.0", "id": "2", "method": "clearCpuSamples", "params": {"isolateId": main_iso}}))
         await ws.recv()
