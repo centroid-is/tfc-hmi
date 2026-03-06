@@ -72,6 +72,13 @@ class _PollGroup {
   final List<_RegisterSubscription> _subscriptions = [];
   bool _pollInProgress = false;
 
+  /// When true, the coalesced groups must be recalculated on the next tick.
+  /// Starts dirty so the first tick builds the groups.
+  bool _dirty = true;
+
+  /// Cached coalesced [ModbusElementsGroup] instances, rebuilt when [_dirty].
+  List<ModbusElementsGroup> _cachedGroups = [];
+
   _PollGroup({
     required this.name,
     required this.interval,
@@ -131,6 +138,18 @@ class ModbusClientWrapper {
     printer: SimplePrinter(),
     level: Level.info,
   );
+
+  // ---------------------------------------------------------------------------
+  // Batch coalescing constants (Phase 5, Plan 02)
+  // ---------------------------------------------------------------------------
+
+  /// Maximum gap (in register addresses) before splitting into separate batches.
+  /// Reading 10 extra registers wastes only 20 bytes vs saving a TCP round-trip.
+  static const _registerGapThreshold = 10;
+
+  /// Maximum gap (in coil addresses) before splitting into separate batches.
+  /// Reading 100 extra coils wastes only ~13 bytes vs saving a TCP round-trip.
+  static const _coilGapThreshold = 100;
 
   // ---------------------------------------------------------------------------
   // Poll infrastructure (Phase 5)
@@ -264,6 +283,7 @@ class ModbusClientWrapper {
       ),
     );
     group._subscriptions.add(subscription);
+    group._dirty = true; // trigger coalescing recalculation on next tick
 
     // Initialize poll lifecycle listener if not already active
     _initPollLifecycle();
@@ -292,6 +312,7 @@ class ModbusClientWrapper {
     final group = _pollGroups[sub.spec.pollGroup];
     if (group != null) {
       group._subscriptions.remove(sub);
+      group._dirty = true; // trigger coalescing recalculation on next tick
     }
 
     if (!sub.value$.isClosed) {
@@ -390,7 +411,7 @@ class ModbusClientWrapper {
     }
   }
 
-  /// Executes a single poll tick for a group: reads all subscribed registers
+  /// Executes a single poll tick for a group: reads coalesced batch groups
   /// and pipes values into their BehaviorSubjects.
   ///
   /// Guarded by [_pollInProgress] to prevent concurrent sends if a tick
@@ -402,33 +423,111 @@ class ModbusClientWrapper {
     group._pollInProgress = true;
 
     try {
-      for (final sub in List.of(group._subscriptions)) {
+      // Rebuild coalesced groups if subscriptions changed
+      if (group._dirty) {
+        group._cachedGroups =
+            _buildCoalescedGroups(group._subscriptions);
+        group._dirty = false;
+      }
+
+      for (final elemGroup in group._cachedGroups) {
         if (_disposed || connectionStatus != ConnectionStatus.connected) break;
 
         try {
-          final request = sub.element.getReadRequest(
+          final request = elemGroup.getReadRequest(
             responseTimeout: group.responseTimeout,
           );
           final result = await _client!.send(request);
 
-          if (result == ModbusResponseCode.requestSucceed) {
-            if (!sub.value$.isClosed) {
-              sub.value$.add(sub.element.value);
-            }
-          } else {
+          if (result != ModbusResponseCode.requestSucceed) {
             _log.w(
-                'Poll group "${group.name}" read failed for "${sub.spec.key}": ${result.name}');
-            // Last-known value remains in BehaviorSubject (SCADA behavior)
+                'Poll group "${group.name}" batch read failed: ${result.name}');
+            // Last-known values remain in BehaviorSubjects (SCADA behavior)
           }
         } catch (e) {
           _log.w(
-              'Poll group "${group.name}" error reading "${sub.spec.key}": $e');
-          // Continue to next register
+              'Poll group "${group.name}" batch read error: $e');
+          // Continue to next group
+        }
+      }
+
+      // Pipe all subscription values after all groups have been read.
+      // Elements are shared references -- batch reads populated them in-place.
+      for (final sub in group._subscriptions) {
+        if (!sub.value$.isClosed) {
+          sub.value$.add(sub.element.value);
         }
       }
     } finally {
       group._pollInProgress = false;
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Batch coalescing (Phase 5, Plan 02)
+  // ---------------------------------------------------------------------------
+
+  /// Builds coalesced [ModbusElementsGroup] instances from a list of
+  /// subscriptions. Contiguous same-type elements within the gap threshold
+  /// are merged into single batch reads. Oversized batches are automatically
+  /// split at Modbus limits (125 registers / 2000 coils).
+  List<ModbusElementsGroup> _buildCoalescedGroups(
+      List<_RegisterSubscription> subs) {
+    if (subs.isEmpty) return [];
+
+    // Group subscriptions by element type
+    final byType = <ModbusElementType, List<_RegisterSubscription>>{};
+    for (final sub in subs) {
+      byType.putIfAbsent(sub.element.type, () => []).add(sub);
+    }
+
+    final groups = <ModbusElementsGroup>[];
+
+    for (final typeSubs in byType.values) {
+      // Sort by address
+      typeSubs.sort((a, b) => a.element.address - b.element.address);
+
+      final isRegister = typeSubs.first.element.type.isRegister;
+      final maxRange = isRegister
+          ? ModbusElementsGroup.maxRegistersRange // 125
+          : ModbusElementsGroup.maxCoilsRange; // 2000
+      final gapThreshold =
+          isRegister ? _registerGapThreshold : _coilGapThreshold;
+
+      var currentBatch = <_RegisterSubscription>[typeSubs.first];
+
+      for (var i = 1; i < typeSubs.length; i++) {
+        final prev = currentBatch.last;
+        final curr = typeSubs[i];
+
+        // Calculate the end address of the previous element
+        final prevEnd = prev.element.address +
+            (isRegister ? prev.element.byteCount ~/ 2 : 1);
+        final gap = curr.element.address - prevEnd;
+
+        // Calculate the batch range if we add the current element
+        final currEnd = curr.element.address +
+            (isRegister ? curr.element.byteCount ~/ 2 : 1);
+        final batchRange = currEnd - currentBatch.first.element.address;
+
+        // Start new batch if gap too large or would exceed Modbus limit
+        if (gap > gapThreshold || batchRange > maxRange) {
+          groups.add(
+              ModbusElementsGroup(currentBatch.map((s) => s.element)));
+          currentBatch = [curr];
+        } else {
+          currentBatch.add(curr);
+        }
+      }
+
+      // Flush the final batch
+      if (currentBatch.isNotEmpty) {
+        groups
+            .add(ModbusElementsGroup(currentBatch.map((s) => s.element)));
+      }
+    }
+
+    return groups;
   }
 
   // ---------------------------------------------------------------------------

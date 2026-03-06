@@ -834,7 +834,12 @@ void main() {
 
       // Verify poll guard prevents runaway send calls
       mock.onSend = (request) {
-        if (request is ModbusReadRequest) {
+        if (request is ModbusReadGroupRequest) {
+          final dataSize = request.elementGroup.type!.isRegister
+              ? request.elementGroup.addressRange * 2
+              : (request.elementGroup.addressRange + 7) ~/ 8;
+          request.internalSetElementData(Uint8List(dataSize));
+        } else if (request is ModbusReadRequest) {
           request.element.setValueFromBytes(Uint8List(request.element.byteCount));
         }
         // Block until we complete it -- but only the first call
@@ -911,8 +916,13 @@ void main() {
       final mock = pair.mock;
 
       mock.onSend = (request) {
-        if (request is ModbusReadRequest) {
-          // Set coil to true (0x01)
+        if (request is ModbusReadGroupRequest) {
+          // Set coil to true (bit 0 = 1)
+          final dataSize = (request.elementGroup.addressRange + 7) ~/ 8;
+          final data = Uint8List(dataSize);
+          data[0] = 0x01;
+          request.internalSetElementData(data);
+        } else if (request is ModbusReadRequest) {
           request.element.setValueFromBytes(Uint8List.fromList([0x01]));
         }
         return ModbusResponseCode.requestSucceed;
@@ -945,7 +955,12 @@ void main() {
       final mock = pair.mock;
 
       mock.onSend = (request) {
-        if (request is ModbusReadRequest) {
+        if (request is ModbusReadGroupRequest) {
+          final dataSize = (request.elementGroup.addressRange + 7) ~/ 8;
+          final data = Uint8List(dataSize);
+          data[0] = 0x01;
+          request.internalSetElementData(data);
+        } else if (request is ModbusReadRequest) {
           request.element.setValueFromBytes(Uint8List.fromList([0x01]));
         }
         return ModbusResponseCode.requestSucceed;
@@ -978,7 +993,12 @@ void main() {
       final mock = pair.mock;
 
       mock.onSend = (request) {
-        if (request is ModbusReadRequest) {
+        if (request is ModbusReadGroupRequest) {
+          final dataSize = (request.elementGroup.addressRange + 7) ~/ 8;
+          final data = Uint8List(dataSize);
+          data[0] = 0x01;
+          request.internalSetElementData(data);
+        } else if (request is ModbusReadRequest) {
           request.element.setValueFromBytes(Uint8List.fromList([0x01]));
         }
         return ModbusResponseCode.requestSucceed;
@@ -1013,7 +1033,12 @@ void main() {
       final mock = pair.mock;
 
       mock.onSend = (request) {
-        if (request is ModbusReadRequest) {
+        if (request is ModbusReadGroupRequest) {
+          final dataSize = request.elementGroup.addressRange * 2;
+          final data = Uint8List(dataSize);
+          ByteData.view(data.buffer).setUint16(0, 12345);
+          request.internalSetElementData(data);
+        } else if (request is ModbusReadRequest) {
           final bytes = Uint8List(request.element.byteCount);
           ByteData.view(bytes.buffer).setUint16(0, 12345);
           request.element.setValueFromBytes(bytes);
@@ -1050,7 +1075,12 @@ void main() {
       final mock = pair.mock;
 
       mock.onSend = (request) {
-        if (request is ModbusReadRequest) {
+        if (request is ModbusReadGroupRequest) {
+          final dataSize = request.elementGroup.addressRange * 2;
+          final data = Uint8List(dataSize);
+          ByteData.view(data.buffer).setUint16(0, 54321);
+          request.internalSetElementData(data);
+        } else if (request is ModbusReadRequest) {
           final bytes = Uint8List(request.element.byteCount);
           ByteData.view(bytes.buffer).setUint16(0, 54321);
           request.element.setValueFromBytes(bytes);
@@ -1080,19 +1110,32 @@ void main() {
   });
 
   group('data type interpretation', () {
+    /// Helper that creates an onSend handler supporting both group and
+    /// individual read requests. [setBytes] writes the expected test value
+    /// into the provided ByteData at offset 0.
+    ModbusResponseCode Function(ModbusRequest) registerOnSend(
+        void Function(ByteData view, int byteCount) setBytes) {
+      return (request) {
+        if (request is ModbusReadGroupRequest) {
+          final dataSize = request.elementGroup.addressRange * 2;
+          final data = Uint8List(dataSize);
+          setBytes(ByteData.view(data.buffer), dataSize);
+          request.internalSetElementData(data);
+        } else if (request is ModbusReadRequest) {
+          final bytes = Uint8List(request.element.byteCount);
+          setBytes(ByteData.view(bytes.buffer), request.element.byteCount);
+          request.element.setValueFromBytes(bytes);
+        }
+        return ModbusResponseCode.requestSucceed;
+      };
+    }
+
     test('int16 holding register returns correct negative value', () async {
       final pair = createWrapperWithMock();
       wrapper = pair.wrapper;
       final mock = pair.mock;
 
-      mock.onSend = (request) {
-        if (request is ModbusReadRequest) {
-          final bytes = Uint8List(request.element.byteCount);
-          ByteData.view(bytes.buffer).setInt16(0, -42);
-          request.element.setValueFromBytes(bytes);
-        }
-        return ModbusResponseCode.requestSucceed;
-      };
+      mock.onSend = registerOnSend((view, _) => view.setInt16(0, -42));
 
       wrapper.addPollGroup('default', const Duration(milliseconds: 100));
       wrapper.subscribe(ModbusRegisterSpec(
@@ -1116,14 +1159,7 @@ void main() {
       wrapper = pair.wrapper;
       final mock = pair.mock;
 
-      mock.onSend = (request) {
-        if (request is ModbusReadRequest) {
-          final bytes = Uint8List(request.element.byteCount);
-          ByteData.view(bytes.buffer).setUint16(0, 65000);
-          request.element.setValueFromBytes(bytes);
-        }
-        return ModbusResponseCode.requestSucceed;
-      };
+      mock.onSend = registerOnSend((view, _) => view.setUint16(0, 65000));
 
       wrapper.addPollGroup('default', const Duration(milliseconds: 100));
       wrapper.subscribe(ModbusRegisterSpec(
@@ -1147,14 +1183,7 @@ void main() {
       wrapper = pair.wrapper;
       final mock = pair.mock;
 
-      mock.onSend = (request) {
-        if (request is ModbusReadRequest) {
-          final bytes = Uint8List(request.element.byteCount);
-          ByteData.view(bytes.buffer).setInt32(0, -100000);
-          request.element.setValueFromBytes(bytes);
-        }
-        return ModbusResponseCode.requestSucceed;
-      };
+      mock.onSend = registerOnSend((view, _) => view.setInt32(0, -100000));
 
       wrapper.addPollGroup('default', const Duration(milliseconds: 100));
       wrapper.subscribe(ModbusRegisterSpec(
@@ -1178,14 +1207,7 @@ void main() {
       wrapper = pair.wrapper;
       final mock = pair.mock;
 
-      mock.onSend = (request) {
-        if (request is ModbusReadRequest) {
-          final bytes = Uint8List(request.element.byteCount);
-          ByteData.view(bytes.buffer).setUint32(0, 3000000000);
-          request.element.setValueFromBytes(bytes);
-        }
-        return ModbusResponseCode.requestSucceed;
-      };
+      mock.onSend = registerOnSend((view, _) => view.setUint32(0, 3000000000));
 
       wrapper.addPollGroup('default', const Duration(milliseconds: 100));
       wrapper.subscribe(ModbusRegisterSpec(
@@ -1209,14 +1231,7 @@ void main() {
       wrapper = pair.wrapper;
       final mock = pair.mock;
 
-      mock.onSend = (request) {
-        if (request is ModbusReadRequest) {
-          final bytes = Uint8List(request.element.byteCount);
-          ByteData.view(bytes.buffer).setFloat32(0, 3.14);
-          request.element.setValueFromBytes(bytes);
-        }
-        return ModbusResponseCode.requestSucceed;
-      };
+      mock.onSend = registerOnSend((view, _) => view.setFloat32(0, 3.14));
 
       wrapper.addPollGroup('default', const Duration(milliseconds: 100));
       wrapper.subscribe(ModbusRegisterSpec(
@@ -1242,14 +1257,8 @@ void main() {
       wrapper = pair.wrapper;
       final mock = pair.mock;
 
-      mock.onSend = (request) {
-        if (request is ModbusReadRequest) {
-          final bytes = Uint8List(request.element.byteCount);
-          ByteData.view(bytes.buffer).setInt64(0, -9000000000);
-          request.element.setValueFromBytes(bytes);
-        }
-        return ModbusResponseCode.requestSucceed;
-      };
+      mock.onSend =
+          registerOnSend((view, _) => view.setInt64(0, -9000000000));
 
       wrapper.addPollGroup('default', const Duration(milliseconds: 100));
       wrapper.subscribe(ModbusRegisterSpec(
@@ -1273,14 +1282,8 @@ void main() {
       wrapper = pair.wrapper;
       final mock = pair.mock;
 
-      mock.onSend = (request) {
-        if (request is ModbusReadRequest) {
-          final bytes = Uint8List(request.element.byteCount);
-          ByteData.view(bytes.buffer).setUint64(0, 4000000000);
-          request.element.setValueFromBytes(bytes);
-        }
-        return ModbusResponseCode.requestSucceed;
-      };
+      mock.onSend =
+          registerOnSend((view, _) => view.setUint64(0, 4000000000));
 
       wrapper.addPollGroup('default', const Duration(milliseconds: 100));
       wrapper.subscribe(ModbusRegisterSpec(
@@ -1304,14 +1307,8 @@ void main() {
       wrapper = pair.wrapper;
       final mock = pair.mock;
 
-      mock.onSend = (request) {
-        if (request is ModbusReadRequest) {
-          final bytes = Uint8List(request.element.byteCount);
-          ByteData.view(bytes.buffer).setFloat64(0, 2.71828);
-          request.element.setValueFromBytes(bytes);
-        }
-        return ModbusResponseCode.requestSucceed;
-      };
+      mock.onSend =
+          registerOnSend((view, _) => view.setFloat64(0, 2.71828));
 
       wrapper.addPollGroup('default', const Duration(milliseconds: 100));
       wrapper.subscribe(ModbusRegisterSpec(
@@ -1338,7 +1335,10 @@ void main() {
       final mock = pair.mock;
 
       mock.onSend = (request) {
-        if (request is ModbusReadRequest) {
+        if (request is ModbusReadGroupRequest) {
+          final dataSize = (request.elementGroup.addressRange + 7) ~/ 8;
+          request.internalSetElementData(Uint8List(dataSize)); // all zeros = false
+        } else if (request is ModbusReadRequest) {
           request.element.setValueFromBytes(Uint8List.fromList([0x00]));
         }
         return ModbusResponseCode.requestSucceed;
@@ -1373,15 +1373,23 @@ void main() {
       var callCount = 0;
       mock.onSend = (request) {
         callCount++;
-        if (request is ModbusReadRequest) {
+        if (request is ModbusReadGroupRequest) {
           if (callCount <= 2) {
-            // First calls succeed with value 42
+            final dataSize = request.elementGroup.addressRange * 2;
+            final data = Uint8List(dataSize);
+            ByteData.view(data.buffer).setUint16(0, 42);
+            request.internalSetElementData(data);
+            return ModbusResponseCode.requestSucceed;
+          } else {
+            return ModbusResponseCode.deviceFailure;
+          }
+        } else if (request is ModbusReadRequest) {
+          if (callCount <= 2) {
             final bytes = Uint8List(request.element.byteCount);
             ByteData.view(bytes.buffer).setUint16(0, 42);
             request.element.setValueFromBytes(bytes);
             return ModbusResponseCode.requestSucceed;
           } else {
-            // Later calls fail
             return ModbusResponseCode.deviceFailure;
           }
         }
@@ -1415,12 +1423,21 @@ void main() {
 
       var failCount = 0;
       mock.onSend = (request) {
-        if (request is ModbusReadRequest) {
+        if (request is ModbusReadGroupRequest) {
           failCount++;
           if (failCount <= 3) {
             return ModbusResponseCode.illegalDataAddress;
           }
-          // After 3 failures, succeed
+          final dataSize = request.elementGroup.addressRange * 2;
+          final data = Uint8List(dataSize);
+          ByteData.view(data.buffer).setUint16(0, 99);
+          request.internalSetElementData(data);
+          return ModbusResponseCode.requestSucceed;
+        } else if (request is ModbusReadRequest) {
+          failCount++;
+          if (failCount <= 3) {
+            return ModbusResponseCode.illegalDataAddress;
+          }
           final bytes = Uint8List(request.element.byteCount);
           ByteData.view(bytes.buffer).setUint16(0, 99);
           request.element.setValueFromBytes(bytes);
@@ -1501,7 +1518,12 @@ void main() {
 
       // Add a register dynamically
       mock.onSend = (request) {
-        if (request is ModbusReadRequest) {
+        if (request is ModbusReadGroupRequest) {
+          final dataSize = request.elementGroup.addressRange * 2;
+          final data = Uint8List(dataSize);
+          ByteData.view(data.buffer).setUint16(0, 777);
+          request.internalSetElementData(data);
+        } else if (request is ModbusReadRequest) {
           final bytes = Uint8List(request.element.byteCount);
           ByteData.view(bytes.buffer).setUint16(0, 777);
           request.element.setValueFromBytes(bytes);
