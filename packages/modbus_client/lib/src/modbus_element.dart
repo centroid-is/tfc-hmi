@@ -92,13 +92,23 @@ abstract class ModbusElement<T> {
   }
 
   /// Gets a write request from multiple register elements.
+  ///
+  /// [quantity] is the number of outputs (coils or registers) being written.
+  /// For FC16 (registers), this defaults to `bytes.length ~/ 2` (2 bytes per
+  /// register). For FC15 (coils), callers MUST provide the actual coil count
+  /// since it cannot be recovered from the packed byte count.
   ModbusWriteRequest getMultipleWriteRequest(Uint8List bytes,
-      {int? unitId, Duration? responseTimeout, ModbusEndianness? endianness}) {
+      {int? quantity,
+      int? unitId,
+      Duration? responseTimeout,
+      ModbusEndianness? endianness}) {
     if (type.writeMultipleFunction == null) {
       throw ModbusException(
           context: "ModbusBitElement",
           msg: "$type element does not support multiple write request!");
     }
+    assert(quantity == null || quantity > 0,
+        'quantity must be positive when provided');
     // Build the request object
     var pdu = Uint8List(6 + bytes.length);
     pdu.setAll(
@@ -106,7 +116,7 @@ abstract class ModbusElement<T> {
     ByteData.view(pdu.buffer)
       ..setUint8(0, type.writeMultipleFunction!.code)
       ..setUint16(1, address)
-      ..setUint16(3, bytes.length ~/ 2) // value register count
+      ..setUint16(3, quantity ?? bytes.length ~/ 2) // coil count or register count
       ..setUint8(5, bytes.length); // value byte count
     return ModbusWriteRequest(this, pdu, type.writeMultipleFunction!,
         unitId: unitId,
