@@ -9,7 +9,8 @@ environment:
 dependencies:
   logging: ^1.2.0
   synchronized: ^3.1.0
-  modbus_client: ^1.4.2
+  modbus_client:
+    path: ../modbus_client
 
 dev_dependencies:
   lints: ^3.0.0
