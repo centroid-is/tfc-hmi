@@ -47,7 +47,7 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Integration
 
-- [ ] **INTG-01**: ModbusDeviceClientAdapter implements DeviceClient interface (same pattern as M2400DeviceClientAdapter)
+- [x] **INTG-01**: ModbusDeviceClientAdapter implements DeviceClient interface (same pattern as M2400DeviceClientAdapter)
 - [ ] **INTG-02**: StateMan.subscribe() returns polling stream for Modbus keys transparently
 - [ ] **INTG-03**: StateMan.read() returns current value for Modbus keys
 - [ ] **INTG-04**: StateMan.write() routes to Modbus device for Modbus keys
@@ -69,7 +69,7 @@ Requirements for initial release. Each maps to roadmap phases.
 - [x] **TEST-01**: modbus_client_tcp fork fixes have unit tests covering frame parsing, concurrent transactions, length validation, and keepalive
 - [x] **TEST-02**: modbus_client fork FC15 fix has regression test for 16+ coils
 - [x] **TEST-03**: ModbusClientWrapper has unit tests for connection lifecycle, polling, read/write, and reconnect behavior
-- [ ] **TEST-04**: ModbusDeviceClientAdapter has unit tests verifying DeviceClient interface contract
+- [x] **TEST-04**: ModbusDeviceClientAdapter has unit tests verifying DeviceClient interface contract
 - [ ] **TEST-05**: StateMan Modbus routing has integration tests (subscribe, read, readMany, write) alongside OPC UA keys
 - [ ] **TEST-06**: ModbusConfig and ModbusNodeConfig have JSON round-trip serialization tests
 - [ ] **TEST-07**: Key repository Modbus config UI has widget tests
@@ -142,7 +142,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | WRIT-03 | Phase 6 | Complete |
 | WRIT-04 | Phase 6 | Complete |
 | WRIT-05 | Phase 6 | Complete |
-| INTG-01 | Phase 7 | Pending |
+| INTG-01 | Phase 7 | Complete |
 | INTG-02 | Phase 9 | Pending |
 | INTG-03 | Phase 9 | Pending |
 | INTG-04 | Phase 9 | Pending |
@@ -164,7 +164,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | TEST-01 | Phase 1 | Complete |
 | TEST-02 | Phase 2 | Complete |
 | TEST-03 | Phase 4 | Complete |
-| TEST-04 | Phase 7 | Pending |
+| TEST-04 | Phase 7 | Complete |
 | TEST-05 | Phase 9 | Pending |
 | TEST-06 | Phase 8 | Pending |
 | TEST-07 | Phase 11 | Pending |
