@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: completed
-stopped_at: Phase 5 context gathered
-last_updated: "2026-03-06T15:57:32.122Z"
-last_activity: 2026-03-06 -- Completed 04-01-PLAN.md
+status: in-progress
+stopped_at: Completed 05-01-PLAN.md
+last_updated: "2026-03-06T17:39:03Z"
+last_activity: 2026-03-06 -- Completed 05-01-PLAN.md
 progress:
   total_phases: 11
   completed_phases: 3
-  total_plans: 4
-  completed_plans: 4
-  percent: 36
+  total_plans: 5
+  completed_plans: 5
+  percent: 45
 ---
 
 # Project State
@@ -21,23 +21,23 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-06)
 
 **Core value:** Modbus devices can be read from and written to through the same StateMan interface as OPC UA and M2400, without breaking existing protocol integrations.
-**Current focus:** Phase 4 -- ModbusClientWrapper Connection
+**Current focus:** Phase 5 -- ModbusClientWrapper Reading
 
 ## Current Position
 
-Phase: 4 of 11 (ModbusClientWrapper Connection) -- COMPLETE
-Plan: 1 of 1 in current phase (all plans complete)
-Status: Phase 4 complete. Ready for Phase 5.
-Last activity: 2026-03-06 -- Completed 04-01-PLAN.md
+Phase: 5 of 11 (ModbusClientWrapper Reading)
+Plan: 1 of 2 in current phase
+Status: Plan 01 (individual reads) complete. Plan 02 (batch coalescing) remaining.
+Last activity: 2026-03-06 -- Completed 05-01-PLAN.md
 
-Progress: [████------] 36%
+Progress: [█████-----] 45%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 4
-- Average duration: 5.5min
-- Total execution time: 0.37 hours
+- Total plans completed: 5
+- Average duration: 7.8min
+- Total execution time: 0.65 hours
 
 **By Phase:**
 
@@ -46,10 +46,11 @@ Progress: [████------] 36%
 | 01-tcp-transport-fixes | 2/2 | 11min | 5.5min |
 | 02-fc15-coil-write-fix | 1/1 | 3min | 3min |
 | 04-modbusclientwrapper-connection | 1/1 | 10min | 10min |
+| 05-modbusclientwrapper-reading | 1/2 | 15min | 15min |
 
 **Recent Trend:**
-- Last 5 plans: 01-01 (5min), 01-02 (6min), 02-01 (3min), 04-01 (10min)
-- Trend: Consistent
+- Last 5 plans: 01-01 (5min), 01-02 (6min), 02-01 (3min), 04-01 (10min), 05-01 (15min)
+- Trend: Consistent, larger phases take proportionally longer
 
 *Updated after each plan completion*
 
@@ -75,6 +76,10 @@ Recent decisions affecting current work:
 - 04-01: Poll isConnected every 250ms for disconnect detection -- simpler than hooking into socket internals
 - 04-01: TCP keepalive only for dead connection detection (no app-level health probe yet)
 - 04-01: MockModbusClient extends ModbusClientTcp for unit tests -- factory injection, no Mockito needed
+- 05-01: Object? as BehaviorSubject value type -- bool/int/double are all Object; Phase 7 adapter wraps to DynamicValue
+- 05-01: Individual element reads per poll tick -- batch coalescing deferred to Plan 02
+- 05-01: Lazy poll group creation -- subscribe() auto-creates default group at 1s interval
+- 05-01: ModbusNumRegister returns num (double due to multiplier formula) -- library behavior, not wrapper choice
 
 ### Pending Todos
 
@@ -86,6 +91,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-06T15:57:32.119Z
-Stopped at: Phase 5 context gathered
-Resume file: .planning/phases/05-modbusclientwrapper-reading/05-CONTEXT.md
+Last session: 2026-03-06T17:39:03Z
+Stopped at: Completed 05-01-PLAN.md
+Resume file: .planning/phases/05-modbusclientwrapper-reading/05-01-SUMMARY.md

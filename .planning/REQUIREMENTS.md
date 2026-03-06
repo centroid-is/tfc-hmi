@@ -29,13 +29,13 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Reading
 
-- [ ] **READ-01**: User can read coils (FC01) and see boolean values
-- [ ] **READ-02**: User can read discrete inputs (FC02) and see boolean values
-- [ ] **READ-03**: User can read holding registers (FC03) with configurable data types
-- [ ] **READ-04**: User can read input registers (FC04) with configurable data types
-- [ ] **READ-05**: Data types supported: bit, int16, uint16, int32, uint32, float32, int64, uint64, float64
+- [x] **READ-01**: User can read coils (FC01) and see boolean values
+- [x] **READ-02**: User can read discrete inputs (FC02) and see boolean values
+- [x] **READ-03**: User can read holding registers (FC03) with configurable data types
+- [x] **READ-04**: User can read input registers (FC04) with configurable data types
+- [x] **READ-05**: Data types supported: bit, int16, uint16, int32, uint32, float32, int64, uint64, float64
 - [ ] **READ-06**: Contiguous registers can be read in a single batch request (register grouping/coalescing)
-- [ ] **READ-07**: Poll groups with configurable intervals control how often registers are read
+- [x] **READ-07**: Poll groups with configurable intervals control how often registers are read
 
 ### Writing
 
@@ -130,13 +130,13 @@ Which phases cover which requirements. Updated during roadmap creation.
 | CONN-03 | Phase 4 | Complete |
 | CONN-04 | Phase 3 | Complete |
 | CONN-05 | Phase 4 | Complete |
-| READ-01 | Phase 5 | Pending |
-| READ-02 | Phase 5 | Pending |
-| READ-03 | Phase 5 | Pending |
-| READ-04 | Phase 5 | Pending |
-| READ-05 | Phase 5 | Pending |
+| READ-01 | Phase 5 | Complete |
+| READ-02 | Phase 5 | Complete |
+| READ-03 | Phase 5 | Complete |
+| READ-04 | Phase 5 | Complete |
+| READ-05 | Phase 5 | Complete |
 | READ-06 | Phase 5 | Pending |
-| READ-07 | Phase 5 | Pending |
+| READ-07 | Phase 5 | Complete |
 | WRIT-01 | Phase 6 | Pending |
 | WRIT-02 | Phase 6 | Pending |
 | WRIT-03 | Phase 6 | Pending |
