@@ -75,11 +75,10 @@ Plans:
   2. Connection status (connected, connecting, disconnected) streams via BehaviorSubject observable by any subscriber
   3. After connection loss, wrapper automatically reconnects with exponential backoff without manual intervention
   4. Multiple ModbusClientWrapper instances operate independently against different devices without interference
-**Plans**: TBD
+**Plans:** 1 plan
 
 Plans:
-- [ ] 04-01: TBD
-- [ ] 04-02: TBD
+- [ ] 04-01-PLAN.md -- ModbusClientWrapper connection lifecycle with TDD (red/green)
 
 ### Phase 5: ModbusClientWrapper -- Reading
 **Goal**: All four Modbus register types can be read with configurable polling and correct data type interpretation
@@ -190,7 +189,7 @@ Note: Phases 1, 2, and 3 have no inter-dependencies and could execute in paralle
 | 1. TCP Transport Fixes | 0/2 | Planned | - |
 | 2. FC15 Coil Write Fix | 1/1 | Complete   | 2026-03-06 |
 | 3. Windows Keepalive | 0/1 | Complete    | 2026-03-06 |
-| 4. Wrapper -- Connection | 0/2 | Not started | - |
+| 4. Wrapper -- Connection | 0/1 | Planned | - |
 | 5. Wrapper -- Reading | 0/2 | Not started | - |
 | 6. Wrapper -- Writing | 0/1 | Not started | - |
 | 7. DeviceClient Adapter | 0/1 | Not started | - |
