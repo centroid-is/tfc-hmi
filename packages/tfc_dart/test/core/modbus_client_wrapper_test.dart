@@ -52,7 +52,12 @@ class MockModbusClient extends ModbusClientTcp {
     if (onSend != null) return onSend!(request);
 
     // Default: succeed and set element values to zero bytes
-    if (request is ModbusReadRequest) {
+    if (request is ModbusReadGroupRequest) {
+      final dataSize = request.elementGroup.type!.isRegister
+          ? request.elementGroup.addressRange * 2
+          : (request.elementGroup.addressRange + 7) ~/ 8;
+      request.internalSetElementData(Uint8List(dataSize));
+    } else if (request is ModbusReadRequest) {
       final byteCount = request.element.byteCount;
       request.element.setValueFromBytes(Uint8List(byteCount));
     }
@@ -1516,6 +1521,588 @@ void main() {
       // Should have picked up the new register
       expect(mock.sendCallCount, greaterThan(0));
       expect(wrapper.read('hr_late'), equals(777));
+    });
+  });
+
+  // ==========================================================================
+  // Phase 5 Plan 02 -- Batch Coalescing Tests
+  // ==========================================================================
+
+  group('batch coalescing', () {
+    // Helper: set up a wrapper with a fast poll group and track requests
+    ({
+      ModbusClientWrapper wrapper,
+      MockModbusClient mock,
+      List<ModbusRequest> requests,
+    }) setupCoalesceTest({Duration pollInterval = const Duration(milliseconds: 100)}) {
+      final mock = MockModbusClient();
+      final requests = <ModbusRequest>[];
+      mock.onSend = (request) {
+        requests.add(request);
+        if (request is ModbusReadGroupRequest) {
+          final dataSize = request.elementGroup.type!.isRegister
+              ? request.elementGroup.addressRange * 2
+              : (request.elementGroup.addressRange + 7) ~/ 8;
+          request.internalSetElementData(Uint8List(dataSize));
+        } else if (request is ModbusReadRequest) {
+          request.element.setValueFromBytes(
+              Uint8List(request.element.byteCount));
+        }
+        return ModbusResponseCode.requestSucceed;
+      };
+      final wrapper = ModbusClientWrapper(
+        '127.0.0.1',
+        502,
+        1,
+        clientFactory: (h, p, u) => mock,
+      );
+      wrapper.addPollGroup('default', pollInterval);
+      return (wrapper: wrapper, mock: mock, requests: requests);
+    }
+
+    // -- Coalescing basics --
+
+    test('coalesce two contiguous holding registers into 1 batch read',
+        () async {
+      final t = setupCoalesceTest();
+      wrapper = t.wrapper;
+
+      wrapper.subscribe(ModbusRegisterSpec(
+        key: 'hr100',
+        registerType: ModbusElementType.holdingRegister,
+        address: 100,
+        dataType: ModbusDataType.uint16,
+      ));
+      wrapper.subscribe(ModbusRegisterSpec(
+        key: 'hr101',
+        registerType: ModbusElementType.holdingRegister,
+        address: 101,
+        dataType: ModbusDataType.uint16,
+      ));
+      wrapper.connect();
+
+      await wrapper.connectionStream
+          .firstWhere((s) => s == ConnectionStatus.connected)
+          .timeout(const Duration(seconds: 2));
+      await Future.delayed(const Duration(milliseconds: 300));
+
+      // Should be batch reads (ModbusReadGroupRequest), not individual
+      final groupRequests =
+          t.requests.whereType<ModbusReadGroupRequest>().toList();
+      final individualRequests =
+          t.requests.whereType<ModbusReadRequest>().toList();
+
+      // Expect batch reads, not individual reads
+      expect(groupRequests, isNotEmpty,
+          reason: 'Contiguous registers should use batch reads');
+      expect(individualRequests, isEmpty,
+          reason: 'No individual reads when coalescing is active');
+
+      // Each poll tick should produce exactly 1 send call (1 batch for 2 regs)
+      // After 300ms with 100ms interval, expect ~3 ticks = ~3 group requests
+      expect(groupRequests.length, greaterThanOrEqualTo(1));
+      // Verify the group covers both addresses
+      final firstGroup = groupRequests.first;
+      expect(firstGroup.elementGroup.startAddress, equals(100));
+      expect(firstGroup.elementGroup.addressRange, equals(2));
+    });
+
+    test('coalesce three contiguous coils into 1 batch read', () async {
+      final t = setupCoalesceTest();
+      wrapper = t.wrapper;
+
+      for (var i = 0; i < 3; i++) {
+        wrapper.subscribe(ModbusRegisterSpec(
+          key: 'coil$i',
+          registerType: ModbusElementType.coil,
+          address: i,
+          dataType: ModbusDataType.bit,
+        ));
+      }
+      wrapper.connect();
+
+      await wrapper.connectionStream
+          .firstWhere((s) => s == ConnectionStatus.connected)
+          .timeout(const Duration(seconds: 2));
+      await Future.delayed(const Duration(milliseconds: 300));
+
+      final groupRequests =
+          t.requests.whereType<ModbusReadGroupRequest>().toList();
+      expect(groupRequests, isNotEmpty,
+          reason: 'Contiguous coils should use batch reads');
+      // Each tick = 1 group request for 3 coils
+      expect(groupRequests.first.elementGroup.addressRange, equals(3));
+    });
+
+    test('registers in different poll groups are NOT coalesced together',
+        () async {
+      final t = setupCoalesceTest();
+      wrapper = t.wrapper;
+
+      wrapper.addPollGroup('fast', const Duration(milliseconds: 100));
+      wrapper.subscribe(ModbusRegisterSpec(
+        key: 'hr100',
+        registerType: ModbusElementType.holdingRegister,
+        address: 100,
+        dataType: ModbusDataType.uint16,
+        pollGroup: 'default',
+      ));
+      wrapper.subscribe(ModbusRegisterSpec(
+        key: 'hr101',
+        registerType: ModbusElementType.holdingRegister,
+        address: 101,
+        dataType: ModbusDataType.uint16,
+        pollGroup: 'fast',
+      ));
+      wrapper.connect();
+
+      await wrapper.connectionStream
+          .firstWhere((s) => s == ConnectionStatus.connected)
+          .timeout(const Duration(seconds: 2));
+      await Future.delayed(const Duration(milliseconds: 300));
+
+      // Each group should have its own request; they should NOT be merged
+      // With 2 groups, each tick produces 2 requests (1 per group)
+      final groupRequests =
+          t.requests.whereType<ModbusReadGroupRequest>().toList();
+      // Each group request should have addressRange of 1 (single register)
+      for (final gr in groupRequests) {
+        expect(gr.elementGroup.addressRange, equals(1),
+            reason: 'Each poll group should have its own separate batch');
+      }
+    });
+
+    test('different types (coil + holding) in same group are NOT coalesced',
+        () async {
+      final t = setupCoalesceTest();
+      wrapper = t.wrapper;
+
+      wrapper.subscribe(ModbusRegisterSpec(
+        key: 'coil0',
+        registerType: ModbusElementType.coil,
+        address: 0,
+        dataType: ModbusDataType.bit,
+      ));
+      wrapper.subscribe(ModbusRegisterSpec(
+        key: 'hr0',
+        registerType: ModbusElementType.holdingRegister,
+        address: 0,
+        dataType: ModbusDataType.uint16,
+      ));
+      wrapper.connect();
+
+      await wrapper.connectionStream
+          .firstWhere((s) => s == ConnectionStatus.connected)
+          .timeout(const Duration(seconds: 2));
+      await Future.delayed(const Duration(milliseconds: 300));
+
+      // Should have 2 separate batch reads per tick (one for coils, one for registers)
+      final groupRequests =
+          t.requests.whereType<ModbusReadGroupRequest>().toList();
+      expect(groupRequests.length, greaterThanOrEqualTo(2),
+          reason: 'Different types produce separate batches');
+      // Verify types are separate
+      final types =
+          groupRequests.map((gr) => gr.elementGroup.type).toSet();
+      expect(types.length, equals(2),
+          reason: 'Should have both coil and holding register groups');
+    });
+
+    // -- Gap handling --
+
+    test('coalesce registers within gap threshold (gap=4, threshold=10)',
+        () async {
+      final t = setupCoalesceTest();
+      wrapper = t.wrapper;
+
+      wrapper.subscribe(ModbusRegisterSpec(
+        key: 'hr100',
+        registerType: ModbusElementType.holdingRegister,
+        address: 100,
+        dataType: ModbusDataType.uint16,
+      ));
+      wrapper.subscribe(ModbusRegisterSpec(
+        key: 'hr105',
+        registerType: ModbusElementType.holdingRegister,
+        address: 105,
+        dataType: ModbusDataType.uint16,
+      ));
+      wrapper.connect();
+
+      await wrapper.connectionStream
+          .firstWhere((s) => s == ConnectionStatus.connected)
+          .timeout(const Duration(seconds: 2));
+      await Future.delayed(const Duration(milliseconds: 300));
+
+      final groupRequests =
+          t.requests.whereType<ModbusReadGroupRequest>().toList();
+      expect(groupRequests, isNotEmpty);
+      // Should be coalesced into 1 batch spanning 100-105
+      expect(groupRequests.first.elementGroup.startAddress, equals(100));
+      expect(groupRequests.first.elementGroup.addressRange, equals(6));
+    });
+
+    test('do NOT coalesce registers when gap exceeds threshold (gap=19, threshold=10)',
+        () async {
+      final t = setupCoalesceTest();
+      wrapper = t.wrapper;
+
+      wrapper.subscribe(ModbusRegisterSpec(
+        key: 'hr100',
+        registerType: ModbusElementType.holdingRegister,
+        address: 100,
+        dataType: ModbusDataType.uint16,
+      ));
+      wrapper.subscribe(ModbusRegisterSpec(
+        key: 'hr120',
+        registerType: ModbusElementType.holdingRegister,
+        address: 120,
+        dataType: ModbusDataType.uint16,
+      ));
+      wrapper.connect();
+
+      await wrapper.connectionStream
+          .firstWhere((s) => s == ConnectionStatus.connected)
+          .timeout(const Duration(seconds: 2));
+      await Future.delayed(const Duration(milliseconds: 300));
+
+      final groupRequests =
+          t.requests.whereType<ModbusReadGroupRequest>().toList();
+      // Should be 2 separate batches per tick
+      // Count unique start addresses across all requests
+      final startAddresses =
+          groupRequests.map((gr) => gr.elementGroup.startAddress).toSet();
+      expect(startAddresses, containsAll([100, 120]),
+          reason: 'Large gap should produce 2 separate batches');
+    });
+
+    test('coalesce coils within coil gap threshold (gap=49, threshold=100)',
+        () async {
+      final t = setupCoalesceTest();
+      wrapper = t.wrapper;
+
+      wrapper.subscribe(ModbusRegisterSpec(
+        key: 'coil0',
+        registerType: ModbusElementType.coil,
+        address: 0,
+        dataType: ModbusDataType.bit,
+      ));
+      wrapper.subscribe(ModbusRegisterSpec(
+        key: 'coil50',
+        registerType: ModbusElementType.coil,
+        address: 50,
+        dataType: ModbusDataType.bit,
+      ));
+      wrapper.connect();
+
+      await wrapper.connectionStream
+          .firstWhere((s) => s == ConnectionStatus.connected)
+          .timeout(const Duration(seconds: 2));
+      await Future.delayed(const Duration(milliseconds: 300));
+
+      final groupRequests =
+          t.requests.whereType<ModbusReadGroupRequest>().toList();
+      expect(groupRequests, isNotEmpty);
+      // Should be coalesced into 1 batch
+      expect(groupRequests.first.elementGroup.startAddress, equals(0));
+      expect(groupRequests.first.elementGroup.addressRange, equals(51));
+    });
+
+    test('do NOT coalesce coils when gap exceeds coil threshold (gap=149, threshold=100)',
+        () async {
+      final t = setupCoalesceTest();
+      wrapper = t.wrapper;
+
+      wrapper.subscribe(ModbusRegisterSpec(
+        key: 'coil0',
+        registerType: ModbusElementType.coil,
+        address: 0,
+        dataType: ModbusDataType.bit,
+      ));
+      wrapper.subscribe(ModbusRegisterSpec(
+        key: 'coil150',
+        registerType: ModbusElementType.coil,
+        address: 150,
+        dataType: ModbusDataType.bit,
+      ));
+      wrapper.connect();
+
+      await wrapper.connectionStream
+          .firstWhere((s) => s == ConnectionStatus.connected)
+          .timeout(const Duration(seconds: 2));
+      await Future.delayed(const Duration(milliseconds: 300));
+
+      final groupRequests =
+          t.requests.whereType<ModbusReadGroupRequest>().toList();
+      final startAddresses =
+          groupRequests.map((gr) => gr.elementGroup.startAddress).toSet();
+      expect(startAddresses, containsAll([0, 150]),
+          reason: 'Large coil gap should produce 2 separate batches');
+    });
+
+    // -- Auto-split oversized batches --
+
+    test('auto-split 130 contiguous registers into 2 batches (125 + 5)',
+        () async {
+      final t = setupCoalesceTest();
+      wrapper = t.wrapper;
+
+      // Subscribe 130 contiguous uint16 holding registers (addr 0-129)
+      for (var i = 0; i < 130; i++) {
+        wrapper.subscribe(ModbusRegisterSpec(
+          key: 'hr$i',
+          registerType: ModbusElementType.holdingRegister,
+          address: i,
+          dataType: ModbusDataType.uint16,
+        ));
+      }
+      wrapper.connect();
+
+      await wrapper.connectionStream
+          .firstWhere((s) => s == ConnectionStatus.connected)
+          .timeout(const Duration(seconds: 2));
+      await Future.delayed(const Duration(milliseconds: 300));
+
+      final groupRequests =
+          t.requests.whereType<ModbusReadGroupRequest>().toList();
+      // Each tick should produce exactly 2 batch reads
+      // After ~3 ticks: expect 6 group requests total (2 per tick)
+      expect(groupRequests.length, greaterThanOrEqualTo(2));
+
+      // Verify the split: find the two distinct address ranges
+      final ranges = <int>{};
+      for (final gr in groupRequests) {
+        ranges.add(gr.elementGroup.addressRange);
+      }
+      expect(ranges, containsAll([125, 5]),
+          reason: 'Should split into 125-register and 5-register batches');
+    });
+
+    // -- Dirty flag recalculation --
+
+    test('adding new subscription marks group dirty and triggers recalculation',
+        () async {
+      final t = setupCoalesceTest();
+      wrapper = t.wrapper;
+
+      wrapper.subscribe(ModbusRegisterSpec(
+        key: 'hr100',
+        registerType: ModbusElementType.holdingRegister,
+        address: 100,
+        dataType: ModbusDataType.uint16,
+      ));
+      wrapper.connect();
+
+      await wrapper.connectionStream
+          .firstWhere((s) => s == ConnectionStatus.connected)
+          .timeout(const Duration(seconds: 2));
+      await Future.delayed(const Duration(milliseconds: 300));
+
+      // Record state before adding new subscription
+      t.requests.clear();
+
+      // Add a new contiguous register
+      wrapper.subscribe(ModbusRegisterSpec(
+        key: 'hr101',
+        registerType: ModbusElementType.holdingRegister,
+        address: 101,
+        dataType: ModbusDataType.uint16,
+      ));
+
+      await Future.delayed(const Duration(milliseconds: 300));
+
+      // After recalculation, the new register should be in the batch
+      final groupRequests =
+          t.requests.whereType<ModbusReadGroupRequest>().toList();
+      expect(groupRequests, isNotEmpty,
+          reason: 'New subscription should trigger recalculation');
+      // The batch should now cover both registers
+      final lastGroup = groupRequests.last;
+      expect(lastGroup.elementGroup.addressRange, equals(2),
+          reason: 'Recalculated group should include new register');
+    });
+
+    test('removing subscription marks group dirty and triggers recalculation',
+        () async {
+      final t = setupCoalesceTest();
+      wrapper = t.wrapper;
+
+      wrapper.subscribe(ModbusRegisterSpec(
+        key: 'hr100',
+        registerType: ModbusElementType.holdingRegister,
+        address: 100,
+        dataType: ModbusDataType.uint16,
+      ));
+      wrapper.subscribe(ModbusRegisterSpec(
+        key: 'hr101',
+        registerType: ModbusElementType.holdingRegister,
+        address: 101,
+        dataType: ModbusDataType.uint16,
+      ));
+      wrapper.connect();
+
+      await wrapper.connectionStream
+          .firstWhere((s) => s == ConnectionStatus.connected)
+          .timeout(const Duration(seconds: 2));
+      await Future.delayed(const Duration(milliseconds: 300));
+
+      t.requests.clear();
+
+      // Remove one subscription
+      wrapper.unsubscribe('hr101');
+
+      await Future.delayed(const Duration(milliseconds: 300));
+
+      // After recalculation, batch should only cover 1 register
+      final groupRequests =
+          t.requests.whereType<ModbusReadGroupRequest>().toList();
+      expect(groupRequests, isNotEmpty);
+      for (final gr in groupRequests) {
+        expect(gr.elementGroup.addressRange, equals(1),
+            reason: 'After removing hr101, batch should only cover hr100');
+      }
+    });
+
+    test('poll ticks without subscription changes reuse cached groups',
+        () async {
+      final t = setupCoalesceTest();
+      wrapper = t.wrapper;
+
+      wrapper.subscribe(ModbusRegisterSpec(
+        key: 'hr100',
+        registerType: ModbusElementType.holdingRegister,
+        address: 100,
+        dataType: ModbusDataType.uint16,
+      ));
+      wrapper.subscribe(ModbusRegisterSpec(
+        key: 'hr101',
+        registerType: ModbusElementType.holdingRegister,
+        address: 101,
+        dataType: ModbusDataType.uint16,
+      ));
+      wrapper.connect();
+
+      await wrapper.connectionStream
+          .firstWhere((s) => s == ConnectionStatus.connected)
+          .timeout(const Duration(seconds: 2));
+      await Future.delayed(const Duration(milliseconds: 500));
+
+      // All group requests should have the same structure (cached, not recalculated)
+      final groupRequests =
+          t.requests.whereType<ModbusReadGroupRequest>().toList();
+      expect(groupRequests.length, greaterThanOrEqualTo(3),
+          reason: 'Multiple ticks should have fired');
+      for (final gr in groupRequests) {
+        expect(gr.elementGroup.startAddress, equals(100));
+        expect(gr.elementGroup.addressRange, equals(2));
+      }
+    });
+
+    // -- Value delivery after batch read --
+
+    test('batch read of contiguous registers delivers correct values per subscriber',
+        () async {
+      final t = setupCoalesceTest();
+      wrapper = t.wrapper;
+
+      // Set up onSend to provide distinct values per address
+      t.mock.onSend = (request) {
+        t.requests.add(request);
+        if (request is ModbusReadGroupRequest) {
+          final group = request.elementGroup;
+          final dataSize = group.type!.isRegister
+              ? group.addressRange * 2
+              : (group.addressRange + 7) ~/ 8;
+          final data = Uint8List(dataSize);
+          final view = ByteData.view(data.buffer);
+          // Write distinct values for each register in the group
+          for (final elem in group) {
+            if (elem.type.isRegister) {
+              final offset = (elem.address - group.startAddress) * 2;
+              // Address 100 -> value 1000, address 101 -> value 1010
+              view.setUint16(offset, elem.address * 10);
+            }
+          }
+          request.internalSetElementData(data);
+        }
+        return ModbusResponseCode.requestSucceed;
+      };
+
+      wrapper.subscribe(ModbusRegisterSpec(
+        key: 'hr100',
+        registerType: ModbusElementType.holdingRegister,
+        address: 100,
+        dataType: ModbusDataType.uint16,
+      ));
+      wrapper.subscribe(ModbusRegisterSpec(
+        key: 'hr101',
+        registerType: ModbusElementType.holdingRegister,
+        address: 101,
+        dataType: ModbusDataType.uint16,
+      ));
+      wrapper.connect();
+
+      await wrapper.connectionStream
+          .firstWhere((s) => s == ConnectionStatus.connected)
+          .timeout(const Duration(seconds: 2));
+      await Future.delayed(const Duration(milliseconds: 300));
+
+      // Each subscriber should receive its own value
+      expect(wrapper.read('hr100'), equals(1000));
+      expect(wrapper.read('hr101'), equals(1010));
+    });
+
+    test('batch read of contiguous coils delivers correct boolean values',
+        () async {
+      final t = setupCoalesceTest();
+      wrapper = t.wrapper;
+
+      t.mock.onSend = (request) {
+        t.requests.add(request);
+        if (request is ModbusReadGroupRequest) {
+          final group = request.elementGroup;
+          if (group.type!.isBit) {
+            // Coils at addresses 0, 1, 2
+            // Byte packing: bit 0 = coil 0, bit 1 = coil 1, bit 2 = coil 2
+            // Set coil 0 = true, coil 1 = false, coil 2 = true -> 0b00000101 = 0x05
+            final dataSize = (group.addressRange + 7) ~/ 8;
+            final data = Uint8List(dataSize);
+            data[0] = 0x05; // bits: ...00000101
+            request.internalSetElementData(data);
+          }
+        }
+        return ModbusResponseCode.requestSucceed;
+      };
+
+      wrapper.subscribe(ModbusRegisterSpec(
+        key: 'coil0',
+        registerType: ModbusElementType.coil,
+        address: 0,
+        dataType: ModbusDataType.bit,
+      ));
+      wrapper.subscribe(ModbusRegisterSpec(
+        key: 'coil1',
+        registerType: ModbusElementType.coil,
+        address: 1,
+        dataType: ModbusDataType.bit,
+      ));
+      wrapper.subscribe(ModbusRegisterSpec(
+        key: 'coil2',
+        registerType: ModbusElementType.coil,
+        address: 2,
+        dataType: ModbusDataType.bit,
+      ));
+      wrapper.connect();
+
+      await wrapper.connectionStream
+          .firstWhere((s) => s == ConnectionStatus.connected)
+          .timeout(const Duration(seconds: 2));
+      await Future.delayed(const Duration(milliseconds: 300));
+
+      // Verify each coil has correct boolean value
+      expect(wrapper.read('coil0'), isTrue);
+      expect(wrapper.read('coil1'), isFalse);
+      expect(wrapper.read('coil2'), isTrue);
     });
   });
 }
