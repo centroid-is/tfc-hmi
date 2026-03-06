@@ -442,10 +442,14 @@ void main() {
 
       wrapper.dispose();
 
-      // Stream should be done (closed)
+      // Stream should close after dispose. BehaviorSubject replays
+      // its last value to new subscribers before emitting done.
       await expectLater(
         wrapper.connectionStream,
-        emitsDone,
+        emitsInOrder([
+          ConnectionStatus.disconnected,
+          emitsDone,
+        ]),
       );
     });
 
