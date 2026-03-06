@@ -52,8 +52,8 @@ Requirements for initial release. Each maps to roadmap phases.
 - [ ] **INTG-03**: StateMan.read() returns current value for Modbus keys
 - [ ] **INTG-04**: StateMan.write() routes to Modbus device for Modbus keys
 - [ ] **INTG-05**: Modbus keys coexist with OPC UA and M2400 keys without interference
-- [ ] **INTG-06**: ModbusConfig stored in StateManConfig with backward-compatible JSON (defaultValue: [])
-- [ ] **INTG-07**: ModbusNodeConfig stored in KeyMappingEntry alongside opcuaNode and m2400Node
+- [x] **INTG-06**: ModbusConfig stored in StateManConfig with backward-compatible JSON (defaultValue: [])
+- [x] **INTG-07**: ModbusNodeConfig stored in KeyMappingEntry alongside opcuaNode and m2400Node
 - [ ] **INTG-08**: createModbusDeviceClients factory wired into data_acquisition_isolate
 
 ### UI — Server Configuration
@@ -71,7 +71,7 @@ Requirements for initial release. Each maps to roadmap phases.
 - [x] **TEST-03**: ModbusClientWrapper has unit tests for connection lifecycle, polling, read/write, and reconnect behavior
 - [x] **TEST-04**: ModbusDeviceClientAdapter has unit tests verifying DeviceClient interface contract
 - [ ] **TEST-05**: StateMan Modbus routing has integration tests (subscribe, read, readMany, write) alongside OPC UA keys
-- [ ] **TEST-06**: ModbusConfig and ModbusNodeConfig have JSON round-trip serialization tests
+- [x] **TEST-06**: ModbusConfig and ModbusNodeConfig have JSON round-trip serialization tests
 - [ ] **TEST-07**: Key repository Modbus config UI has widget tests
 - [ ] **TEST-08**: Server config Modbus section has widget tests
 - [ ] **TEST-09**: Tests written before implementation (TDD — red/green/refactor cycle)
@@ -147,8 +147,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | INTG-03 | Phase 9 | Pending |
 | INTG-04 | Phase 9 | Pending |
 | INTG-05 | Phase 9 | Pending |
-| INTG-06 | Phase 8 | Pending |
-| INTG-07 | Phase 8 | Pending |
+| INTG-06 | Phase 8 | Complete |
+| INTG-07 | Phase 8 | Complete |
 | INTG-08 | Phase 9 | Pending |
 | UISV-01 | Phase 10 | Pending |
 | UISV-02 | Phase 10 | Pending |
@@ -166,7 +166,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | TEST-03 | Phase 4 | Complete |
 | TEST-04 | Phase 7 | Complete |
 | TEST-05 | Phase 9 | Pending |
-| TEST-06 | Phase 8 | Pending |
+| TEST-06 | Phase 8 | Complete |
 | TEST-07 | Phase 11 | Pending |
 | TEST-08 | Phase 10 | Pending |
 | TEST-09 | Cross-cutting (all phases) | Pending |
