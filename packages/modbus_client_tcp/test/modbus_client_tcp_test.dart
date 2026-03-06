@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:modbus_client/modbus_client.dart';
@@ -317,4 +318,222 @@ void main() {
       expect(client.keepAliveCount, equals(3));
     });
   });
+
+  group('concurrent requests (TCPFIX-02)', () {
+    late ModbusTestServer server;
+    late ModbusClientTcp client;
+
+    tearDown(() async {
+      await client.disconnect();
+      await server.shutdown();
+    });
+
+    test('two concurrent requests resolve by transaction ID', () async {
+      // Server collects requests and responds to the SECOND one first,
+      // then the FIRST, to prove transaction ID routing works.
+      final receivedRequests = <_ReceivedRequest>[];
+      final allRequestsReceived = Completer<void>();
+
+      server = ModbusTestServer(onData: (socket, data) {
+        if (data.length < 7) return;
+        final view = ByteData.view(Uint8List.fromList(data).buffer);
+        final transactionId = view.getUint16(0);
+        final unitId = view.getUint8(6);
+        receivedRequests.add(_ReceivedRequest(socket, transactionId, unitId));
+
+        // Once we have both requests, respond in reverse order
+        if (receivedRequests.length == 2) {
+          allRequestsReceived.complete();
+        }
+      });
+      final port = await server.start();
+      client = ModbusClientTcp('127.0.0.1',
+          serverPort: port,
+          connectionTimeout: const Duration(seconds: 2),
+          responseTimeout: const Duration(seconds: 3),
+          unitId: 1);
+
+      // Create two different registers at different addresses
+      final reg1 = ModbusUint16Register(
+          name: 'reg1', address: 0, type: ModbusElementType.holdingRegister);
+      final reg2 = ModbusUint16Register(
+          name: 'reg2', address: 10, type: ModbusElementType.holdingRegister);
+
+      // Send both requests concurrently (do NOT await the first)
+      final future1 = client.send(reg1.getReadRequest());
+      final future2 = client.send(reg2.getReadRequest());
+
+      // Wait for both requests to arrive at the server
+      await allRequestsReceived.future.timeout(const Duration(seconds: 2));
+
+      // Respond to the SECOND request first (value = 0xBBBB)
+      final pdu2 = Uint8List.fromList([0x03, 0x02, 0xBB, 0xBB]);
+      server.sendToClient(
+          receivedRequests[1].socket,
+          ModbusTestServer.buildResponse(
+              receivedRequests[1].transactionId,
+              receivedRequests[1].unitId,
+              pdu2));
+
+      // Small delay then respond to the FIRST request (value = 0xAAAA)
+      await Future.delayed(const Duration(milliseconds: 50));
+      final pdu1 = Uint8List.fromList([0x03, 0x02, 0xAA, 0xAA]);
+      server.sendToClient(
+          receivedRequests[0].socket,
+          ModbusTestServer.buildResponse(
+              receivedRequests[0].transactionId,
+              receivedRequests[0].unitId,
+              pdu1));
+
+      // Both should resolve correctly
+      final code1 = await future1;
+      final code2 = await future2;
+
+      expect(code1, equals(ModbusResponseCode.requestSucceed));
+      expect(code2, equals(ModbusResponseCode.requestSucceed));
+      expect(reg1.value, equals(0xAAAA));
+      expect(reg2.value, equals(0xBBBB));
+    });
+
+    test('response for unknown transaction ID is discarded', () async {
+      // Server sends a response with an unknown transaction ID first,
+      // then sends the real response. The real request should still resolve.
+      var requestCount = 0;
+
+      server = ModbusTestServer(onData: (socket, data) {
+        if (data.length < 7) return;
+        final view = ByteData.view(Uint8List.fromList(data).buffer);
+        final transactionId = view.getUint16(0);
+        final unitId = view.getUint8(6);
+        requestCount++;
+
+        // First, send a response with a bogus transaction ID (0xFFFF)
+        final bogusPdu = Uint8List.fromList([0x03, 0x02, 0xDE, 0xAD]);
+        server.sendToClient(socket,
+            ModbusTestServer.buildResponse(0xFFFF, unitId, bogusPdu));
+
+        // Then send the real response after a short delay
+        Future.delayed(const Duration(milliseconds: 50), () {
+          final realPdu = Uint8List.fromList([0x03, 0x02, 0x00, 0x42]);
+          server.sendToClient(socket,
+              ModbusTestServer.buildResponse(transactionId, unitId, realPdu));
+        });
+      });
+      final port = await server.start();
+      client = ModbusClientTcp('127.0.0.1',
+          serverPort: port,
+          connectionTimeout: const Duration(seconds: 2),
+          responseTimeout: const Duration(seconds: 3),
+          unitId: 1);
+
+      final register = ModbusUint16Register(
+          name: 'test', address: 0, type: ModbusElementType.holdingRegister);
+      final request = register.getReadRequest();
+      final code = await client.send(request);
+
+      // Should succeed with the real response, not the bogus one
+      expect(code, equals(ModbusResponseCode.requestSucceed));
+      expect(register.value, equals(0x0042));
+    });
+
+    test('concatenated responses in single TCP segment', () async {
+      // Server waits for both requests, then sends BOTH responses
+      // concatenated in a single TCP write.
+      final receivedRequests = <_ReceivedRequest>[];
+      final allRequestsReceived = Completer<void>();
+
+      server = ModbusTestServer(onData: (socket, data) {
+        if (data.length < 7) return;
+        final view = ByteData.view(Uint8List.fromList(data).buffer);
+        final transactionId = view.getUint16(0);
+        final unitId = view.getUint8(6);
+        receivedRequests.add(_ReceivedRequest(socket, transactionId, unitId));
+
+        if (receivedRequests.length == 2) {
+          allRequestsReceived.complete();
+        }
+      });
+      final port = await server.start();
+      client = ModbusClientTcp('127.0.0.1',
+          serverPort: port,
+          connectionTimeout: const Duration(seconds: 2),
+          responseTimeout: const Duration(seconds: 3),
+          unitId: 1);
+
+      final reg1 = ModbusUint16Register(
+          name: 'reg1', address: 0, type: ModbusElementType.holdingRegister);
+      final reg2 = ModbusUint16Register(
+          name: 'reg2', address: 10, type: ModbusElementType.holdingRegister);
+
+      // Send both concurrently
+      final future1 = client.send(reg1.getReadRequest());
+      final future2 = client.send(reg2.getReadRequest());
+
+      // Wait for both requests to arrive
+      await allRequestsReceived.future.timeout(const Duration(seconds: 2));
+
+      // Build two responses and concatenate them into a single TCP write
+      final pdu1 = Uint8List.fromList([0x03, 0x02, 0x11, 0x11]);
+      final response1 = ModbusTestServer.buildResponse(
+          receivedRequests[0].transactionId,
+          receivedRequests[0].unitId,
+          pdu1);
+
+      final pdu2 = Uint8List.fromList([0x03, 0x02, 0x22, 0x22]);
+      final response2 = ModbusTestServer.buildResponse(
+          receivedRequests[1].transactionId,
+          receivedRequests[1].unitId,
+          pdu2);
+
+      // Concatenate both responses into a single byte array
+      final concatenated = Uint8List(response1.length + response2.length);
+      concatenated.setAll(0, response1);
+      concatenated.setAll(response1.length, response2);
+
+      // Send as a single TCP write (single _onSocketData callback)
+      server.sendToClient(receivedRequests[0].socket, concatenated);
+
+      // Both should resolve correctly
+      final code1 = await future1;
+      final code2 = await future2;
+
+      expect(code1, equals(ModbusResponseCode.requestSucceed));
+      expect(code2, equals(ModbusResponseCode.requestSucceed));
+      expect(reg1.value, equals(0x1111));
+      expect(reg2.value, equals(0x2222));
+    });
+
+    test('single request still works (backward compatibility)', () async {
+      server = ModbusTestServer(onData: (socket, data) {
+        if (data.length < 7) return;
+        final view = ByteData.view(Uint8List.fromList(data).buffer);
+        final transactionId = view.getUint16(0);
+        final unitId = view.getUint8(6);
+
+        final pdu = Uint8List.fromList([0x03, 0x02, 0x00, 0x99]);
+        server.sendToClient(socket,
+            ModbusTestServer.buildResponse(transactionId, unitId, pdu));
+      });
+      final port = await server.start();
+      client = ModbusClientTcp('127.0.0.1',
+          serverPort: port,
+          connectionTimeout: const Duration(seconds: 2),
+          responseTimeout: const Duration(seconds: 2),
+          unitId: 1);
+
+      final register = ModbusUint16Register(
+          name: 'test', address: 0, type: ModbusElementType.holdingRegister);
+      final code = await client.send(register.getReadRequest());
+      expect(code, equals(ModbusResponseCode.requestSucceed));
+      expect(register.value, equals(0x0099));
+    });
+  });
+}
+
+/// Helper to track received requests in test server callbacks.
+class _ReceivedRequest {
+  final Socket socket;
+  final int transactionId;
+  final int unitId;
+  _ReceivedRequest(this.socket, this.transactionId, this.unitId);
 }
