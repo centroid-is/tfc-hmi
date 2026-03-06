@@ -54,13 +54,13 @@ DynamicValue convertRecordToDynamicValue(M2400ParsedRecord record) {
     parent[entry.key.toString()] = DynamicValue(value: entry.value);
   }
 
-  // Add metadata timestamps
+  // Add metadata timestamps as microseconds (avoids string allocation)
   parent['receivedAt'] =
-      DynamicValue(value: record.receivedAt.toIso8601String());
+      DynamicValue(value: record.receivedAt.microsecondsSinceEpoch);
 
   if (record.deviceTimestamp != null) {
     parent['deviceTimestamp'] =
-        DynamicValue(value: record.deviceTimestamp!.toIso8601String());
+        DynamicValue(value: record.deviceTimestamp!.microsecondsSinceEpoch);
   }
 
   return parent;

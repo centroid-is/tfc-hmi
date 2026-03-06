@@ -189,6 +189,7 @@ class _AssetStackState extends ConsumerState<AssetStack> {
                   transform: asset.coordinates.angle != null
                       ? _buildTransform(cfg)
                       : Matrix4.identity(),
+                  child: RepaintBoundary(
                   child: widget.absorb
                       ? SizedBox(
                           width: asset.size.width * W,
@@ -216,6 +217,7 @@ class _AssetStackState extends ConsumerState<AssetStack> {
                           height: asset.size.height * H,
                           child: asset.build(context),
                         ),
+                ),
                 ),
               ),
             ),
