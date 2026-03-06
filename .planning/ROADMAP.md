@@ -13,7 +13,7 @@ This roadmap delivers Modbus TCP as a third protocol in TFC-HMI alongside OPC UA
 Decimal phases appear between their surrounding integers in numeric order.
 
 - [ ] **Phase 1: TCP Transport Fixes** - Fix frame parsing, concurrent requests, validation, and socket options in modbus_client_tcp fork
-- [ ] **Phase 2: FC15 Coil Write Fix** - Fix Write Multiple Coils quantity bug for 16+ coils in modbus_client fork
+- [x] **Phase 2: FC15 Coil Write Fix** - Fix Write Multiple Coils quantity bug for 16+ coils in modbus_client fork (completed 2026-03-06)
 - [ ] **Phase 3: Windows Keepalive** - Add SO_KEEPALIVE with Windows socket constants to MSocket
 - [ ] **Phase 4: ModbusClientWrapper -- Connection** - Connection lifecycle, auto-reconnect, status streaming, multi-device support
 - [ ] **Phase 5: ModbusClientWrapper -- Reading** - Poll group timers, all register type reads, data type interpretation, batch reads
@@ -49,7 +49,7 @@ Plans:
 **Success Criteria** (what must be TRUE):
   1. FC15 (Write Multiple Coils) correctly encodes and verifies quantity for 16, 17, 32, and 64 coils
   2. Regression test confirms FC15 works for 1-15 coils (existing behavior preserved)
-**Plans:** 1 plan
+**Plans:** 1/1 plans complete
 
 Plans:
 - [ ] 02-01-PLAN.md -- Fork modbus_client, fix FC15 quantity bug with TDD (red/green)
@@ -188,7 +188,7 @@ Note: Phases 1, 2, and 3 have no inter-dependencies and could execute in paralle
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. TCP Transport Fixes | 0/2 | Planned | - |
-| 2. FC15 Coil Write Fix | 0/1 | Not started | - |
+| 2. FC15 Coil Write Fix | 1/1 | Complete   | 2026-03-06 |
 | 3. Windows Keepalive | 0/1 | Not started | - |
 | 4. Wrapper -- Connection | 0/2 | Not started | - |
 | 5. Wrapper -- Reading | 0/2 | Not started | - |

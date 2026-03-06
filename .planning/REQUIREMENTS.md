@@ -17,7 +17,7 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Library Fixes (modbus_client fork)
 
-- [ ] **LIBFIX-01**: FC15 (Write Multiple Coils) correctly reports quantity for 16+ coils
+- [x] **LIBFIX-01**: FC15 (Write Multiple Coils) correctly reports quantity for 16+ coils
 
 ### Connection
 
@@ -67,7 +67,7 @@ Requirements for initial release. Each maps to roadmap phases.
 ### Testing (TDD)
 
 - [x] **TEST-01**: modbus_client_tcp fork fixes have unit tests covering frame parsing, concurrent transactions, length validation, and keepalive
-- [ ] **TEST-02**: modbus_client fork FC15 fix has regression test for 16+ coils
+- [x] **TEST-02**: modbus_client fork FC15 fix has regression test for 16+ coils
 - [ ] **TEST-03**: ModbusClientWrapper has unit tests for connection lifecycle, polling, read/write, and reconnect behavior
 - [ ] **TEST-04**: ModbusDeviceClientAdapter has unit tests verifying DeviceClient interface contract
 - [ ] **TEST-05**: StateMan Modbus routing has integration tests (subscribe, read, readMany, write) alongside OPC UA keys
@@ -124,7 +124,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | TCPFIX-03 | Phase 1 | Complete |
 | TCPFIX-04 | Phase 1 | Complete |
 | TCPFIX-05 | Phase 1 | Complete |
-| LIBFIX-01 | Phase 2 | Pending |
+| LIBFIX-01 | Phase 2 | Complete |
 | CONN-01 | Phase 4 | Pending |
 | CONN-02 | Phase 4 | Pending |
 | CONN-03 | Phase 4 | Pending |
@@ -162,7 +162,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | UIKY-05 | Phase 11 | Pending |
 | UIKY-06 | Phase 11 | Pending |
 | TEST-01 | Phase 1 | Complete |
-| TEST-02 | Phase 2 | Pending |
+| TEST-02 | Phase 2 | Complete |
 | TEST-03 | Phase 4 | Pending |
 | TEST-04 | Phase 7 | Pending |
 | TEST-05 | Phase 9 | Pending |

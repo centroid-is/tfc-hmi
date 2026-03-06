@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: completed
-stopped_at: Phase 2 context gathered
-last_updated: "2026-03-06T13:43:27.028Z"
-last_activity: 2026-03-06 -- Completed 01-02-PLAN.md
+stopped_at: Completed 02-01-PLAN.md
+last_updated: "2026-03-06T14:23:24.277Z"
+last_activity: 2026-03-06 -- Completed 02-01-PLAN.md
 progress:
   total_phases: 11
-  completed_phases: 1
-  total_plans: 2
-  completed_plans: 2
-  percent: 9
+  completed_phases: 2
+  total_plans: 3
+  completed_plans: 3
+  percent: 27
 ---
 
 # Project State
@@ -21,33 +21,34 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-06)
 
 **Core value:** Modbus devices can be read from and written to through the same StateMan interface as OPC UA and M2400, without breaking existing protocol integrations.
-**Current focus:** Phase 1 -- TCP Transport Fixes
+**Current focus:** Phase 2 -- FC15 Coil Write Fix
 
 ## Current Position
 
-Phase: 1 of 11 (TCP Transport Fixes) -- COMPLETE
-Plan: 2 of 2 in current phase (all plans complete)
-Status: Phase 1 complete. Ready for Phase 2.
-Last activity: 2026-03-06 -- Completed 01-02-PLAN.md
+Phase: 2 of 11 (FC15 Coil Write Fix) -- COMPLETE
+Plan: 1 of 1 in current phase (all plans complete)
+Status: Phase 2 complete. Ready for Phase 3.
+Last activity: 2026-03-06 -- Completed 02-01-PLAN.md
 
-Progress: [██░░░░░░░░] 9%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 2
-- Average duration: 5.5min
-- Total execution time: 0.18 hours
+- Total plans completed: 3
+- Average duration: 4.7min
+- Total execution time: 0.23 hours
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
 | 01-tcp-transport-fixes | 2/2 | 11min | 5.5min |
+| 02-fc15-coil-write-fix | 1/1 | 3min | 3min |
 
 **Recent Trend:**
-- Last 5 plans: 01-01 (5min), 01-02 (6min)
-- Trend: Consistent
+- Last 5 plans: 01-01 (5min), 01-02 (6min), 02-01 (3min)
+- Trend: Consistent, accelerating
 
 *Updated after each plan completion*
 
@@ -67,6 +68,8 @@ Recent decisions affecting current work:
 - 01-02: MBAP frame parsing moved to router level for multi-response routing; _TcpResponse retains defense-in-depth checks
 - 01-02: Lock scope narrowed to protect only socket write, not response wait -- enables concurrent in-flight requests
 - 01-02: Incoming buffer approach for TCP stream reassembly instead of per-response partial buffering
+- 02-01: Optional quantity parameter approach over ModbusBitElement override -- coil count cannot be recovered from packed byte count
+- 02-01: Added publish_to: none to both fork pubspec.yaml files for clean dart analyze
 
 ### Pending Todos
 
@@ -74,11 +77,10 @@ None yet.
 
 ### Blockers/Concerns
 
-- FC15 bug nature unclear: may be library defect or usage error (test with ModbusCoil first per maintainer suggestion in issue #19)
 - Need actual production config.json and keymappings.json to validate backward compatibility before Phase 8
 
 ## Session Continuity
 
-Last session: 2026-03-06T13:43:27.026Z
-Stopped at: Phase 2 context gathered
-Resume file: .planning/phases/02-fc15-coil-write-fix/02-CONTEXT.md
+Last session: 2026-03-06T14:23:24.276Z
+Stopped at: Completed 02-01-PLAN.md
+Resume file: None
