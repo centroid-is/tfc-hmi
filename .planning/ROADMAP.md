@@ -17,7 +17,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 3: Windows Keepalive** - Add SO_KEEPALIVE with Windows socket constants to MSocket (completed 2026-03-06)
 - [ ] **Phase 4: ModbusClientWrapper -- Connection** - Connection lifecycle, auto-reconnect, status streaming, multi-device support
 - [ ] **Phase 5: ModbusClientWrapper -- Reading** - Poll group timers, all register type reads, data type interpretation, batch reads
-- [ ] **Phase 6: ModbusClientWrapper -- Writing** - All write function codes, read-only rejection, multi-coil/register writes
+- [x] **Phase 6: ModbusClientWrapper -- Writing** - All write function codes, read-only rejection, multi-coil/register writes (completed 2026-03-06)
 - [ ] **Phase 7: DeviceClient Adapter** - ModbusDeviceClientAdapter implementing DeviceClient interface
 - [ ] **Phase 8: Config Serialization** - ModbusConfig and ModbusNodeConfig with backward-compatible JSON round-tripping
 - [ ] **Phase 9: StateMan Integration** - Wire Modbus into subscribe, read, readMany, write and data_acquisition_isolate
@@ -103,7 +103,7 @@ Plans:
   1. Single coil (FC05) and single holding register (FC06) writes succeed through the wrapper
   2. Multiple coils (FC15) and multiple holding registers (FC16) writes succeed through the wrapper
   3. Attempting to write to input registers or discrete inputs returns a clear error (not a silent failure or crash)
-**Plans:** 1 plan
+**Plans:** 1/1 plans complete
 
 Plans:
 - [ ] 06-01-PLAN.md -- TDD write operations (write, writeMultiple) with SCADA-safe error handling
@@ -191,7 +191,7 @@ Note: Phases 1, 2, and 3 have no inter-dependencies and could execute in paralle
 | 3. Windows Keepalive | 0/1 | Complete    | 2026-03-06 |
 | 4. Wrapper -- Connection | 0/1 | Planned | - |
 | 5. Wrapper -- Reading | 0/2 | Not started | - |
-| 6. Wrapper -- Writing | 0/1 | Not started | - |
+| 6. Wrapper -- Writing | 1/1 | Complete   | 2026-03-06 |
 | 7. DeviceClient Adapter | 0/1 | Not started | - |
 | 8. Config Serialization | 0/1 | Not started | - |
 | 9. StateMan Integration | 0/2 | Not started | - |

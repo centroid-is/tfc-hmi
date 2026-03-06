@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: completed
-stopped_at: Phase 6 context gathered
-last_updated: "2026-03-06T18:30:36.603Z"
-last_activity: 2026-03-06 -- Completed 05-02-PLAN.md
+status: in-progress
+stopped_at: Completed 06-01-PLAN.md
+last_updated: "2026-03-06T19:33:03Z"
+last_activity: 2026-03-06 -- Completed 06-01-PLAN.md
 progress:
   total_phases: 11
-  completed_phases: 4
-  total_plans: 6
-  completed_plans: 6
-  percent: 55
+  completed_phases: 5
+  total_plans: 7
+  completed_plans: 7
+  percent: 64
 ---
 
 # Project State
@@ -21,23 +21,23 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-06)
 
 **Core value:** Modbus devices can be read from and written to through the same StateMan interface as OPC UA and M2400, without breaking existing protocol integrations.
-**Current focus:** Phase 5 -- ModbusClientWrapper Reading
+**Current focus:** Phase 6 -- ModbusClientWrapper Writing
 
 ## Current Position
 
-Phase: 5 of 11 (ModbusClientWrapper Reading)
-Plan: 2 of 2 in current phase
-Status: Phase 5 complete. All reading requirements fulfilled (READ-01 through READ-07).
-Last activity: 2026-03-06 -- Completed 05-02-PLAN.md
+Phase: 6 of 11 (ModbusClientWrapper Writing)
+Plan: 1 of 1 in current phase
+Status: Phase 6 complete. All writing requirements fulfilled (WRIT-01 through WRIT-05).
+Last activity: 2026-03-06 -- Completed 06-01-PLAN.md
 
-Progress: [██████----] 55%
+Progress: [███████---] 64%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 6
-- Average duration: 9.5min
-- Total execution time: 0.95 hours
+- Total plans completed: 7
+- Average duration: 9.1min
+- Total execution time: 1.07 hours
 
 **By Phase:**
 
@@ -47,10 +47,11 @@ Progress: [██████----] 55%
 | 02-fc15-coil-write-fix | 1/1 | 3min | 3min |
 | 04-modbusclientwrapper-connection | 1/1 | 10min | 10min |
 | 05-modbusclientwrapper-reading | 2/2 | 34min | 17min |
+| 06-modbusclientwrapper-writing | 1/1 | 6min | 6min |
 
 **Recent Trend:**
-- Last 5 plans: 01-02 (6min), 02-01 (3min), 04-01 (10min), 05-01 (15min), 05-02 (19min)
-- Trend: Consistent, larger phases take proportionally longer
+- Last 5 plans: 02-01 (3min), 04-01 (10min), 05-01 (15min), 05-02 (19min), 06-01 (6min)
+- Trend: Write phase fast due to clean reuse of existing patterns (createElement, send, MockModbusClient)
 
 *Updated after each plan completion*
 
@@ -83,6 +84,10 @@ Recent decisions affecting current work:
 - 05-02: Gap thresholds 10 registers / 100 coils -- 20 bytes waste vs ~40ms TCP round-trip savings
 - 05-02: Replaced individual reads entirely with batch reads -- ModbusElementsGroup handles single elements too
 - 05-02: Pipe all subscription values after ALL groups read (not per-group) -- simpler, no subscription-to-group matching
+- 06-01: Spec-based write API (not key-based) -- write-only registers may never be subscribed, spec carries all metadata
+- 06-01: Shared _validateWriteAccess() extracts disposed/connected/read-only checks for write() and writeMultiple()
+- 06-01: Optimistic BehaviorSubject update after successful write -- immediate UI feedback vs waiting for next poll tick
+- 06-01: No write concurrency serialization at wrapper level -- Modbus TCP transport handles concurrent transactions via transaction IDs
 
 ### Pending Todos
 
@@ -94,6 +99,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-06T18:30:36.594Z
-Stopped at: Phase 6 context gathered
-Resume file: .planning/phases/06-modbusclientwrapper-writing/06-CONTEXT.md
+Last session: 2026-03-06T19:33:03Z
+Stopped at: Completed 06-01-PLAN.md
+Resume file: .planning/phases/06-modbusclientwrapper-writing/06-01-SUMMARY.md

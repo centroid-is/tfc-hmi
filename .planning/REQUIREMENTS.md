@@ -39,11 +39,11 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Writing
 
-- [ ] **WRIT-01**: User can write a single coil (FC05) via StateMan.write()
-- [ ] **WRIT-02**: User can write a single holding register (FC06) via StateMan.write()
-- [ ] **WRIT-03**: User can write multiple holding registers (FC16) via StateMan.write()
-- [ ] **WRIT-04**: User can write multiple coils (FC15) via StateMan.write()
-- [ ] **WRIT-05**: Write operations to read-only register types (input registers, discrete inputs) are rejected with clear error
+- [x] **WRIT-01**: User can write a single coil (FC05) via StateMan.write()
+- [x] **WRIT-02**: User can write a single holding register (FC06) via StateMan.write()
+- [x] **WRIT-03**: User can write multiple holding registers (FC16) via StateMan.write()
+- [x] **WRIT-04**: User can write multiple coils (FC15) via StateMan.write()
+- [x] **WRIT-05**: Write operations to read-only register types (input registers, discrete inputs) are rejected with clear error
 
 ### Integration
 
@@ -137,11 +137,11 @@ Which phases cover which requirements. Updated during roadmap creation.
 | READ-05 | Phase 5 | Complete |
 | READ-06 | Phase 5 | Complete |
 | READ-07 | Phase 5 | Complete |
-| WRIT-01 | Phase 6 | Pending |
-| WRIT-02 | Phase 6 | Pending |
-| WRIT-03 | Phase 6 | Pending |
-| WRIT-04 | Phase 6 | Pending |
-| WRIT-05 | Phase 6 | Pending |
+| WRIT-01 | Phase 6 | Complete |
+| WRIT-02 | Phase 6 | Complete |
+| WRIT-03 | Phase 6 | Complete |
+| WRIT-04 | Phase 6 | Complete |
+| WRIT-05 | Phase 6 | Complete |
 | INTG-01 | Phase 7 | Pending |
 | INTG-02 | Phase 9 | Pending |
 | INTG-03 | Phase 9 | Pending |
