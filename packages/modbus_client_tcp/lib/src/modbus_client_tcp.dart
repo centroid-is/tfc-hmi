@@ -12,7 +12,12 @@ class ModbusClientTcp extends ModbusClient {
   final Duration connectionTimeout;
   final Duration? delayAfterConnect;
 
-  /// Interval for TCP keep-alive probes. Set to [Duration.zero] to disable.
+  /// Time before the first keep-alive probe is sent on an idle connection.
+  /// Set to [Duration.zero] (along with [keepAliveInterval]) to disable.
+  final Duration keepAliveIdle;
+
+  /// Interval between keep-alive probes after the initial [keepAliveIdle].
+  /// Set to [Duration.zero] (along with [keepAliveIdle]) to disable.
   final Duration keepAliveInterval;
 
   /// Number of unacknowledged keep-alive probes before the connection is
@@ -43,7 +48,8 @@ class ModbusClientTcp extends ModbusClient {
       this.connectionTimeout = const Duration(seconds: 3),
       super.responseTimeout = const Duration(seconds: 3),
       this.delayAfterConnect,
-      this.keepAliveInterval = const Duration(seconds: 10),
+      this.keepAliveIdle = const Duration(seconds: 5),
+      this.keepAliveInterval = const Duration(seconds: 2),
       this.keepAliveCount = 3,
       super.unitId});
 
@@ -145,6 +151,7 @@ class ModbusClientTcp extends ModbusClient {
     try {
       _socket = await Socket.connect(serverAddress, serverPort,
           timeout: connectionTimeout);
+      _socket!.setOption(SocketOption.tcpNoDelay, true);
       _enableKeepAlive(_socket!);
       // listen to the received data event stream
       _socket!.listen((Uint8List data) {
@@ -181,9 +188,20 @@ class ModbusClientTcp extends ModbusClient {
   }
 
   /// Enable TCP keep-alive on the socket with platform-specific options.
+  ///
+  /// Uses [keepAliveIdle] for the initial idle time before the first probe,
+  /// [keepAliveInterval] for the interval between subsequent probes, and
+  /// [keepAliveCount] for the number of unanswered probes before declaring
+  /// the connection dead.
+  ///
+  /// Default values match MSocket: 5s idle, 2s interval, 3 probes (~11s).
   void _enableKeepAlive(Socket socket) {
-    if (keepAliveInterval == Duration.zero) return;
+    if (keepAliveIdle == Duration.zero &&
+        keepAliveInterval == Duration.zero) {
+      return;
+    }
 
+    final idleSeconds = keepAliveIdle.inSeconds;
     final intervalSeconds = keepAliveInterval.inSeconds;
     final count = keepAliveCount;
 
@@ -200,7 +218,7 @@ class ModbusClientTcp extends ModbusClient {
       try {
         socket.setRawOption(
           RawSocketOption.fromInt(
-              RawSocketOption.levelTcp, 3, intervalSeconds),
+              RawSocketOption.levelTcp, 3, idleSeconds),
         );
         socket.setRawOption(
           RawSocketOption.fromInt(
@@ -217,12 +235,11 @@ class ModbusClientTcp extends ModbusClient {
       final isMac = Platform.isMacOS || Platform.isIOS;
 
       // TCP_KEEPIDLE (Linux=4) / TCP_KEEPALIVE (macOS=0x10)
-      // Reuse the interval as the initial idle time.
       socket.setRawOption(
         RawSocketOption.fromInt(
           RawSocketOption.levelTcp,
           isMac ? 0x10 : 4,
-          intervalSeconds,
+          idleSeconds,
         ),
       );
 
@@ -299,9 +316,20 @@ class _TcpResponse {
         return;
       }
       _resDataLen = resView.getUint16(4);
+      // TCPFIX-03: Validate MBAP length field range (1-254 per Modbus spec).
+      // Min 1 = unit ID byte only; max 254 = 1 unit ID + 253 max PDU bytes.
+      if (_resDataLen! < 1 || _resDataLen! > 254) {
+        ModbusAppLogger.warning(
+            "Invalid MBAP length field", "$_resDataLen not in range 1-254");
+        _timeout.complete();
+        request.setResponseCode(ModbusResponseCode.requestRxFailed);
+        return;
+      }
     }
     // Got all data
-    if (_resDataLen != null && _data.length >= _resDataLen!) {
+    // TCPFIX-01: Account for the 6-byte MBAP header prefix (transaction ID 2 +
+    // protocol ID 2 + length field 2) that is NOT included in the length value.
+    if (_resDataLen != null && _data.length >= _resDataLen! + 6) {
       _timeout.complete();
       request.setFromPduResponse(Uint8List.fromList(_data.sublist(7)));
     }
