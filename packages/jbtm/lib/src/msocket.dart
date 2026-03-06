@@ -139,6 +139,26 @@ class MSocket {
         // TCP_KEEPCNT=0x102 (number of probes before declaring dead)
         socket.setRawOption(
             RawSocketOption.fromInt(RawSocketOption.levelTcp, 0x102, 3));
+      } else if (Platform.isWindows) {
+        // Windows: SOL_SOCKET level, SO_KEEPALIVE=0x0008
+        socket.setRawOption(
+            RawSocketOption.fromInt(RawSocketOption.levelSocket, 0x0008, 1));
+        // Windows 10 1709+ supports fine-grained keepalive options.
+        // Older versions fall back to SO_KEEPALIVE with OS defaults.
+        try {
+          // TCP_KEEPIDLE=3 (idle time in seconds)
+          socket.setRawOption(
+              RawSocketOption.fromInt(RawSocketOption.levelTcp, 3, 5));
+          // TCP_KEEPINTVL=17 (interval between probes in seconds)
+          socket.setRawOption(
+              RawSocketOption.fromInt(RawSocketOption.levelTcp, 17, 2));
+          // TCP_KEEPCNT=16 (number of probes before declaring dead)
+          socket.setRawOption(
+              RawSocketOption.fromInt(RawSocketOption.levelTcp, 16, 3));
+        } on SocketException {
+          // Older Windows versions don't support fine-grained keepalive
+          // options. SO_KEEPALIVE is still enabled with OS defaults.
+        }
       } else if (Platform.isLinux || Platform.isAndroid) {
         // Linux/Android: SOL_SOCKET level, SO_KEEPALIVE=0x0009
         socket.setRawOption(
