@@ -10,28 +10,28 @@ See: .planning/PROJECT.md (updated 2026-03-06)
 ## Current Position
 
 Phase: 1 of 11 (TCP Transport Fixes)
-Plan: 0 of 2 in current phase
-Status: Ready to plan
-Last activity: 2026-03-06 -- Roadmap created
+Plan: 1 of 2 in current phase
+Status: Executing phase 1
+Last activity: 2026-03-06 -- Completed 01-01-PLAN.md
 
-Progress: [░░░░░░░░░░] 0%
+Progress: [█░░░░░░░░░] 5%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 0
-- Average duration: -
-- Total execution time: 0 hours
+- Total plans completed: 1
+- Average duration: 5min
+- Total execution time: 0.08 hours
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| - | - | - | - |
+| 01-tcp-transport-fixes | 1/2 | 5min | 5min |
 
 **Recent Trend:**
-- Last 5 plans: -
-- Trend: -
+- Last 5 plans: 01-01 (5min)
+- Trend: Starting
 
 *Updated after each plan completion*
 
@@ -45,6 +45,9 @@ Recent decisions affecting current work:
 - Roadmap: Phases 1-3 (library fixes) have no inter-dependencies and could run in parallel
 - Roadmap: TEST-09 (TDD process) is cross-cutting -- applies to all phases, not assigned to a single phase
 - Roadmap: CONN-04 (cross-platform keepalive) split -- Linux/macOS covered by Phase 1 (TCPFIX-05), Windows by Phase 3
+- 01-01: Forked modbus_client_tcp from pub cache into packages/ for proper TDD and version control
+- 01-01: MBAP length upper bound = 254 per Modbus spec (1 unit ID + 253 max PDU)
+- 01-01: keepAliveIdle=5s, keepAliveInterval=2s matches MSocket for ~11s dead connection detection
 
 ### Pending Todos
 
@@ -58,5 +61,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-03-06
-Stopped at: Roadmap created, ready to plan Phase 1
+Stopped at: Completed 01-01-PLAN.md (fork + 4 TCP fixes). Next: 01-02-PLAN.md
 Resume file: None

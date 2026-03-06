@@ -9,11 +9,11 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Library Fixes (modbus_client_tcp fork)
 
-- [ ] **TCPFIX-01**: Frame length check accounts for 6-byte MBAP header (fix off-by-6 bug at line 297)
+- [x] **TCPFIX-01**: Frame length check accounts for 6-byte MBAP header (fix off-by-6 bug at line 297)
 - [ ] **TCPFIX-02**: Concurrent requests supported via transaction ID map (replace single _currentResponse with Map<int, _TcpResponse>)
-- [ ] **TCPFIX-03**: MBAP length field validated (1-256 range, reject malformed responses)
-- [ ] **TCPFIX-04**: TCP_NODELAY enabled after socket connect for low-latency communication
-- [ ] **TCPFIX-05**: Keepalive values match MSocket (5s idle, 2s interval, 3 probes) across all platforms
+- [x] **TCPFIX-03**: MBAP length field validated (1-256 range, reject malformed responses)
+- [x] **TCPFIX-04**: TCP_NODELAY enabled after socket connect for low-latency communication
+- [x] **TCPFIX-05**: Keepalive values match MSocket (5s idle, 2s interval, 3 probes) across all platforms
 
 ### Library Fixes (modbus_client fork)
 
@@ -66,7 +66,7 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Testing (TDD)
 
-- [ ] **TEST-01**: modbus_client_tcp fork fixes have unit tests covering frame parsing, concurrent transactions, length validation, and keepalive
+- [x] **TEST-01**: modbus_client_tcp fork fixes have unit tests covering frame parsing, concurrent transactions, length validation, and keepalive
 - [ ] **TEST-02**: modbus_client fork FC15 fix has regression test for 16+ coils
 - [ ] **TEST-03**: ModbusClientWrapper has unit tests for connection lifecycle, polling, read/write, and reconnect behavior
 - [ ] **TEST-04**: ModbusDeviceClientAdapter has unit tests verifying DeviceClient interface contract
@@ -119,11 +119,11 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| TCPFIX-01 | Phase 1 | Pending |
+| TCPFIX-01 | Phase 1 | Complete |
 | TCPFIX-02 | Phase 1 | Pending |
-| TCPFIX-03 | Phase 1 | Pending |
-| TCPFIX-04 | Phase 1 | Pending |
-| TCPFIX-05 | Phase 1 | Pending |
+| TCPFIX-03 | Phase 1 | Complete |
+| TCPFIX-04 | Phase 1 | Complete |
+| TCPFIX-05 | Phase 1 | Complete |
 | LIBFIX-01 | Phase 2 | Pending |
 | CONN-01 | Phase 4 | Pending |
 | CONN-02 | Phase 4 | Pending |
@@ -161,7 +161,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | UIKY-04 | Phase 11 | Pending |
 | UIKY-05 | Phase 11 | Pending |
 | UIKY-06 | Phase 11 | Pending |
-| TEST-01 | Phase 1 | Pending |
+| TEST-01 | Phase 1 | Complete |
 | TEST-02 | Phase 2 | Pending |
 | TEST-03 | Phase 4 | Pending |
 | TEST-04 | Phase 7 | Pending |
