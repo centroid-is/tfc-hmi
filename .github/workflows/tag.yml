@@ -74,3 +74,10 @@ jobs:
       ref: ${{ needs.retag-pubspec.outputs.ref }}
       release: true
     secrets: inherit
+
+  windows-build:
+    needs: [retag-pubspec]
+    uses: ./.github/workflows/windows.yml
+    with:
+      ref: ${{ needs.retag-pubspec.outputs.ref }}
+    secrets: inherit
