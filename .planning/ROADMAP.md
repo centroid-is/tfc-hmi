@@ -214,3 +214,34 @@ Phase 12 is a gap closure phase from the v1.0 audit.
 | 10. Server Config UI | 2/2 | Complete    | 2026-03-07 |
 | 11. Key Repository UI | 2/2 | Complete    | 2026-03-07 |
 | 12. Windows Keepalive Merge | 0/1 | Gap Closure | - |
+
+### Phase 13: manual test against a real device
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 12
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 13 to break down)
+
+### Phase 14: UMAS protocol support - Schneider browse via FC90
+
+**Goal:** Schneider PLC variables can be browsed by name via UMAS protocol through a shared protocol-agnostic browse dialog, with UMAS toggle in Modbus server config and Browse button in key repository
+**Depends on:** Phase 11 (requires Modbus server config and key repository UI)
+**Requirements**: UMAS-01, UMAS-02, UMAS-03, UMAS-04, UMAS-05, UMAS-06, UMAS-07, UMAS-08, TEST-10, TEST-11, TEST-12
+**Success Criteria** (what must be TRUE):
+  1. UmasClient sends FC90 frames through existing ModbusClientTcp transport and parses UMAS responses
+  2. Data dictionary variable names and data types can be read from a Schneider PLC with Data Dictionary enabled
+  3. Variable tree is built from flat dictionary data using dot-separated name hierarchy
+  4. OPC UA browse dialog is extracted into a protocol-agnostic BrowsePanel widget
+  5. OPC UA browse works identically through the new adapter layer (no visual or behavioral changes)
+  6. UMAS checkbox appears in Modbus server config card
+  7. Browse button appears in key repository Modbus config section when UMAS is enabled
+  8. Selecting a UMAS variable populates register address and data type in key config
+**Plans:** 3 plans
+
+Plans:
+- [ ] 14-01-PLAN.md -- UMAS protocol client: types, FC90 request/response, data dictionary reading (TDD)
+- [ ] 14-02-PLAN.md -- Protocol-agnostic browse panel extraction + OPC UA adapter (TDD)
+- [ ] 14-03-PLAN.md -- UMAS integration: config field, server checkbox, browse adapter, key repository Browse button
