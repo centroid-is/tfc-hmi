@@ -144,11 +144,11 @@ Plans:
   3. StateMan.write() routes to the correct Modbus device and register for Modbus keys
   4. OPC UA and M2400 keys continue working identically when Modbus keys are present in the same config
   5. createModbusDeviceClients factory instantiates adapters from config and is wired into data_acquisition_isolate
-**Plans**: TBD
+**Plans:** 2 plans
 
 Plans:
-- [ ] 09-01: TBD
-- [ ] 09-02: TBD
+- [ ] 09-01-PLAN.md -- TDD Modbus routing in StateMan (subscribe/read/readMany/write) and buildSpecsFromKeyMappings helper
+- [ ] 09-02-PLAN.md -- Wire Modbus into data_acquisition_isolate, main.dart, and Flutter UI provider
 
 ### Phase 10: Server Config UI
 **Goal**: Operators can add, edit, remove, and monitor Modbus TCP servers through the settings UI
