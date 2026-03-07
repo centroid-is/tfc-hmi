@@ -239,7 +239,7 @@ Plans:
   6. UMAS checkbox appears in Modbus server config card
   7. Browse button appears in key repository Modbus config section when UMAS is enabled
   8. Selecting a UMAS variable populates register address and data type in key config
-**Plans:** 3 plans
+**Plans:** 2/3 plans executed
 
 Plans:
 - [ ] 14-01-PLAN.md -- UMAS protocol client: types, FC90 request/response, data dictionary reading (TDD)

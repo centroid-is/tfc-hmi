@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: completed
-stopped_at: All phases complete
-last_updated: "2026-03-07T14:16:15.262Z"
-last_activity: 2026-03-07 -- 11-02 complete, Visual Verification Approved
+status: Protocol-agnostic BrowsePanel extracted. Plan 03 (UMAS browse adapter) next.
+stopped_at: Completed 14-02-PLAN.md
+last_updated: "2026-03-07T20:41:32.229Z"
+last_activity: 2026-03-07 -- 14-02 complete, protocol-agnostic BrowsePanel extracted
 progress:
-  total_phases: 11
+  total_phases: 14
   completed_phases: 10
-  total_plans: 15
-  completed_plans: 15
-  percent: 100
+  total_plans: 18
+  completed_plans: 17
+  percent: 94
 ---
 
 # Project State
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-06)
 
 **Core value:** Modbus devices can be read from and written to through the same StateMan interface as OPC UA and M2400, without breaking existing protocol integrations.
-**Current focus:** Phase 11 -- Key Repository UI
+**Current focus:** Phase 14 -- UMAS Protocol Support (Schneider Browse via FC90)
 
 ## Current Position
 
-Phase: 11 of 11 (Key Repository UI)
-Plan: 2 of 2 in current phase (ALL COMPLETE)
-Status: All 15 plans across 11 phases complete. Modbus integration fully implemented.
-Last activity: 2026-03-07 -- 11-02 complete, Visual Verification Approved
+Phase: 14 (UMAS Protocol Support)
+Plan: 2 of 3 in current phase (14-02 COMPLETE)
+Status: Protocol-agnostic BrowsePanel extracted. Plan 03 (UMAS browse adapter) next.
+Last activity: 2026-03-07 -- 14-02 complete, protocol-agnostic BrowsePanel extracted
 
-Progress: [██████████] 100%
+Progress: [█████████░] 94%
 
 ## Performance Metrics
 
@@ -62,8 +62,15 @@ Progress: [██████████] 100%
 *Updated after each plan completion*
 | Phase 11 P01 | 5min | 2 tasks | 3 files |
 | Phase 11 P02 | 2min | 1 task | 0 files |
+| Phase 14 P01 | ~10min | 3 tasks | 4 files |
+| Phase 14 P02 | 8min | 2 tasks | 4 files |
 
 ## Accumulated Context
+
+### Roadmap Evolution
+
+- Phase 13 added: manual test against a real device
+- Phase 14 added: UMAS protocol support - Schneider browse via FC90
 
 ### Decisions
 
@@ -118,6 +125,10 @@ Recent decisions affecting current work:
 - [Phase 11-01]: Data type dropdown shows 'Data Type (auto)' label when auto-locked, single 'bit' item, onChanged null
 - [Phase 11-01]: Three-way protocol rendering: if (_isModbus) ... else if (_isM2400) ... else OPC UA
 - [Phase 11-02]: Visual verification approved via automated test coverage (41 widget tests, 8 Modbus-specific)
+- [Phase 14-02]: BrowseNode.id stores NodeId.toString() for OPC UA -- enables lossless round-trip via parseNodeId
+- [Phase 14-02]: BrowseTreeEntry (public) replaces private _TreeNode to satisfy dart analyze lint
+- [Phase 14-02]: formatDynamicValue moved to OpcUaBrowseDataSource as static method (OPC UA specific)
+- [Phase 14-02]: Breadcrumb root label is "Root" in generic panel (protocol-neutral, was "Objects")
 
 ### Pending Todos
 
@@ -129,6 +140,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-07T14:14:00Z
-Stopped at: All phases complete
-Resume file: .planning/phases/11-key-repository-ui/11-02-SUMMARY.md
+Last session: 2026-03-07T20:41:32.224Z
+Stopped at: Completed 14-02-PLAN.md
+Resume file: None
