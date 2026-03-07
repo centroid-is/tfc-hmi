@@ -383,44 +383,88 @@ class _ConveyorConfigContentState extends State<_ConveyorConfigContent> {
         else
           ...widget.config.gates.asMap().entries.map((mapEntry) {
             final entry = mapEntry.value;
-            return ListTile(
-              dense: true,
-              title: Text(
-                '${entry.gate.gateVariant.name} - ${entry.side.name} @ ${(entry.position * 100).round()}%',
-              ),
-              trailing: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  IconButton(
-                    icon: const Icon(Icons.edit, size: 20),
-                    tooltip: 'Edit gate',
-                    onPressed: () => showDialog(
-                      context: context,
-                      builder: (_) => AlertDialog(
-                        title: const Text('Edit Gate'),
-                        content: SizedBox(
-                          width: 300,
-                          child: entry.gate.configure(context),
-                        ),
-                        actions: [
-                          TextButton(
-                            onPressed: () => Navigator.of(context).pop(),
-                            child: const Text('Done'),
+            return Card(
+              margin: const EdgeInsets.symmetric(vertical: 4),
+              child: Padding(
+                padding: const EdgeInsets.all(8.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Header: variant name + edit/delete
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            entry.gate.gateVariant.name,
+                            style: Theme.of(context).textTheme.bodyMedium,
                           ),
-                        ],
-                      ),
-                    ).then((_) => setState(() {})),
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.delete, size: 20),
-                    tooltip: 'Remove gate',
-                    onPressed: () => setState(() {
-                      widget.config.gates.removeAt(
-                        widget.config.gates.indexOf(entry),
-                      );
-                    }),
-                  ),
-                ],
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.edit, size: 20),
+                          tooltip: 'Edit gate',
+                          onPressed: () => showDialog(
+                            context: context,
+                            builder: (_) => AlertDialog(
+                              title: const Text('Edit Gate'),
+                              content: SizedBox(
+                                width: 300,
+                                child: entry.gate.configure(context),
+                              ),
+                              actions: [
+                                TextButton(
+                                  onPressed: () =>
+                                      Navigator.of(context).pop(),
+                                  child: const Text('Done'),
+                                ),
+                              ],
+                            ),
+                          ).then((_) => setState(() {})),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.delete, size: 20),
+                          tooltip: 'Remove gate',
+                          onPressed: () => setState(() {
+                            widget.config.gates.removeAt(
+                              widget.config.gates.indexOf(entry),
+                            );
+                          }),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    // Side toggle: Top (left) / Bottom (right)
+                    Text('Conveyor Side',
+                        style: Theme.of(context).textTheme.bodySmall),
+                    const SizedBox(height: 4),
+                    SegmentedButton<GateSide>(
+                      segments: const [
+                        ButtonSegment(
+                            value: GateSide.left, label: Text('Top')),
+                        ButtonSegment(
+                            value: GateSide.right, label: Text('Bottom')),
+                      ],
+                      selected: {entry.side},
+                      onSelectionChanged: (selection) {
+                        setState(() => entry.side = selection.first);
+                      },
+                    ),
+                    const SizedBox(height: 8),
+                    // Position slider
+                    Text(
+                      'Belt Position: ${(entry.position * 100).round()}%',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                    Slider(
+                      min: 0.0,
+                      max: 1.0,
+                      divisions: 100,
+                      value: entry.position,
+                      label: '${(entry.position * 100).round()}%',
+                      onChanged: (v) =>
+                          setState(() => entry.position = v),
+                    ),
+                  ],
+                ),
               ),
             );
           }),
