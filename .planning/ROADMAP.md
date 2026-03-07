@@ -14,7 +14,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Standalone Diverter Gate** - Config, registry, pneumatic diverter painter, animated transitions, OPC UA state binding, standalone placement
 - [ ] **Phase 2: Full Feature Set** - Force controls with dialog, slider and pusher painter variants, color pickers, forced-state theming
-- [ ] **Phase 3: Child-of-Conveyor Integration** - Gates as conveyor children with belt positioning, auto-scaling, overflow rendering, and hit-test fix
+- [x] **Phase 3: Child-of-Conveyor Integration** - Gates as conveyor children with belt positioning, auto-scaling, overflow rendering, and hit-test fix (completed 2026-03-07)
 
 ## Phase Details
 
@@ -62,7 +62,7 @@ Plans:
   2. Child gate renders at the correct fractional position along the conveyor belt, on the selected side (left/right)
   3. Child gate flap spans the belt width and pneumatic cylinder extends visually outside the conveyor bounding box
   4. User can click a child gate to open its own config/force dialog independently of the parent conveyor
-**Plans:** 2 plans
+**Plans:** 2/2 plans complete
 
 Plans:
 - [ ] 03-01-PLAN.md -- Data model: position field on gate config, gates list on conveyor config, serialization tests
@@ -71,10 +71,30 @@ Plans:
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 -> 2 -> 3
+Phases execute in numeric order: 1 -> 2 -> 3 -> 4
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Standalone Diverter Gate | 3/3 | Complete | 2026-03-07 |
 | 2. Full Feature Set | 2/2 | Complete | 2026-03-07 |
-| 3. Child-of-Conveyor Integration | 2/2 | Complete | 2026-03-07 |
+| 3. Child-of-Conveyor Integration | 2/2 | Complete    | 2026-03-07 |
+| 4. Fix Gate Architecture & Redesign Painters | 0/3 | Planned | — |
+
+### Phase 4: Fix gate architecture and redesign painters
+
+**Goal:** Clean architecture with ChildGateEntry wrapper for conveyor placement metadata, flush belt-edge positioning, and realistic painter redesigns for all three gate variants
+**Requirements**: None (refactoring phase -- improves existing completed requirements)
+**Depends on:** Phase 3
+**Success Criteria** (what must be TRUE):
+  1. ChildGateEntry wrapper holds position and side -- ConveyorGateConfig has no position field
+  2. Child gates render flush at belt edge (50/50 split) on both left and right sides
+  3. Diverter painter shows concave deflector arm shape
+  4. Slider painter shows solid lid pushed by elongated pneumatic actuator
+  5. All painters have realistic elongated actuator proportions
+  6. Backward-compatible JSON deserialization for existing saved pages
+**Plans:** 3 plans
+
+Plans:
+- [ ] 04-01-PLAN.md -- ChildGateEntry data model, field migration, JSON backward compat, serialization tests
+- [ ] 04-02-PLAN.md -- Conveyor widget wiring, config dialog updates, flush positioning, editor cleanup
+- [ ] 04-03-PLAN.md -- Painter redesigns (diverter, slider, pusher) with golden image updates and visual verification

@@ -34,6 +34,36 @@ enum GateSide {
   right,
 }
 
+/// Wrapper for a gate placed as a child of a conveyor belt.
+///
+/// Holds conveyor-specific placement metadata (position along the belt and
+/// which side the gate is on) separately from the gate's own configuration.
+@JsonSerializable(explicitToJson: true)
+class ChildGateEntry {
+  /// Fractional position along conveyor belt (0.0 = start, 1.0 = end).
+  double position;
+
+  @JsonKey(unknownEnumValue: GateSide.left)
+  GateSide side;
+
+  @JsonKey(fromJson: _gateFromJson, toJson: _gateToJson)
+  ConveyorGateConfig gate;
+
+  ChildGateEntry({
+    this.position = 0.5,
+    this.side = GateSide.left,
+    required this.gate,
+  });
+
+  factory ChildGateEntry.fromJson(Map<String, dynamic> json) =>
+      _$ChildGateEntryFromJson(json);
+  Map<String, dynamic> toJson() => _$ChildGateEntryToJson(this);
+}
+
+ConveyorGateConfig _gateFromJson(Map<String, dynamic> json) =>
+    ConveyorGateConfig.fromJson(json);
+Map<String, dynamic> _gateToJson(ConveyorGateConfig gate) => gate.toJson();
+
 /// Configuration for a conveyor gate asset.
 ///
 /// Extends [BaseAsset] with fields specific to the pneumatic diverter gate:
@@ -79,10 +109,6 @@ class ConveyorGateConfig extends BaseAsset {
   /// OPC UA key to subscribe for force-close active feedback (DATA-05).
   String forceCloseFeedbackKey;
 
-  /// Fractional position along conveyor belt (0.0 = start, 1.0 = end).
-  /// Only meaningful when this gate is a child of a conveyor.
-  double position;
-
   ConveyorGateConfig({
     this.gateVariant = GateVariant.pneumatic,
     this.side = GateSide.left,
@@ -96,7 +122,6 @@ class ConveyorGateConfig extends BaseAsset {
     this.forceOpenFeedbackKey = '',
     this.forceCloseKey = '',
     this.forceCloseFeedbackKey = '',
-    this.position = 0.5,
   });
 
   /// Preview factory with reasonable defaults for the asset palette.
@@ -112,8 +137,7 @@ class ConveyorGateConfig extends BaseAsset {
         forceOpenKey = '',
         forceOpenFeedbackKey = '',
         forceCloseKey = '',
-        forceCloseFeedbackKey = '',
-        position = 0.5;
+        forceCloseFeedbackKey = '';
 
   factory ConveyorGateConfig.fromJson(Map<String, dynamic> json) =>
       _$ConveyorGateConfigFromJson(json);
@@ -684,21 +708,6 @@ class _ConveyorGateConfigEditorState extends State<_ConveyorGateConfigEditor>
             onSelectionChanged: (selection) {
               setState(() => config.side = selection.first);
             },
-          ),
-          const SizedBox(height: 16),
-
-          // -- Belt Position (for child-of-conveyor mode) --
-          Text(
-            'Belt Position: ${(config.position * 100).round()}%',
-            style: Theme.of(context).textTheme.bodySmall,
-          ),
-          Slider(
-            min: 0.0,
-            max: 1.0,
-            divisions: 100,
-            value: config.position,
-            label: '${(config.position * 100).round()}%',
-            onChanged: (v) => setState(() => config.position = v),
           ),
           const SizedBox(height: 16),
 

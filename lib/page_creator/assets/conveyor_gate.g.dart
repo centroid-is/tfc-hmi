@@ -6,6 +6,27 @@ part of 'conveyor_gate.dart';
 // JsonSerializableGenerator
 // **************************************************************************
 
+ChildGateEntry _$ChildGateEntryFromJson(Map<String, dynamic> json) =>
+    ChildGateEntry(
+      position: (json['position'] as num?)?.toDouble() ?? 0.5,
+      side: $enumDecodeNullable(_$GateSideEnumMap, json['side'],
+              unknownValue: GateSide.left) ??
+          GateSide.left,
+      gate: _gateFromJson(json['gate'] as Map<String, dynamic>),
+    );
+
+Map<String, dynamic> _$ChildGateEntryToJson(ChildGateEntry instance) =>
+    <String, dynamic>{
+      'position': instance.position,
+      'side': _$GateSideEnumMap[instance.side]!,
+      'gate': _gateToJson(instance.gate),
+    };
+
+const _$GateSideEnumMap = {
+  GateSide.left: 'left',
+  GateSide.right: 'right',
+};
+
 ConveyorGateConfig _$ConveyorGateConfigFromJson(Map<String, dynamic> json) =>
     ConveyorGateConfig(
       gateVariant: $enumDecodeNullable(
@@ -29,7 +50,6 @@ ConveyorGateConfig _$ConveyorGateConfigFromJson(Map<String, dynamic> json) =>
       forceOpenFeedbackKey: json['forceOpenFeedbackKey'] as String? ?? '',
       forceCloseKey: json['forceCloseKey'] as String? ?? '',
       forceCloseFeedbackKey: json['forceCloseFeedbackKey'] as String? ?? '',
-      position: (json['position'] as num?)?.toDouble() ?? 0.5,
     )
       ..variant = json['asset_name'] as String
       ..coordinates =
@@ -57,18 +77,12 @@ Map<String, dynamic> _$ConveyorGateConfigToJson(ConveyorGateConfig instance) =>
       'forceOpenFeedbackKey': instance.forceOpenFeedbackKey,
       'forceCloseKey': instance.forceCloseKey,
       'forceCloseFeedbackKey': instance.forceCloseFeedbackKey,
-      'position': instance.position,
     };
 
 const _$GateVariantEnumMap = {
   GateVariant.pneumatic: 'pneumatic',
   GateVariant.slider: 'slider',
   GateVariant.pusher: 'pusher',
-};
-
-const _$GateSideEnumMap = {
-  GateSide.left: 'left',
-  GateSide.right: 'right',
 };
 
 const _$TextPosEnumMap = {
