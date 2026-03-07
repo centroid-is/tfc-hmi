@@ -809,12 +809,12 @@ class _ConveyorState extends ConsumerState<Conveyor>
     final gateSize = beltHeight; // square so flap spans belt width
     final xCenter = entry.position * conveyorSize.width;
 
-    // Gate hinge aligns with belt edge.
-    // Left side: gate extends upward (cylinder above belt)
-    // Right side: gate extends downward (cylinder below belt)
+    // Gate flush against belt edge with 50/50 split.
+    // Left side: half above belt, half inside (flush against top edge)
+    // Right side: half below belt, half inside (flush against bottom edge)
     final yTop = entry.side == GateSide.left
-        ? -gateSize * 0.3 // overflow above
-        : conveyorSize.height - gateSize * 0.7; // overflow below
+        ? -gateSize * 0.5 // half above belt (flush against top edge)
+        : conveyorSize.height - gateSize * 0.5; // half below belt (flush against bottom edge)
 
     return Positioned(
       left: xCenter - gateSize / 2,
