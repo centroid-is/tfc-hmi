@@ -524,6 +524,169 @@ void main() {
       expect(register.value, equals(0x0099));
     });
   });
+
+  group('FC90 UMAS MBAP length exemption', () {
+    test('FC90 response with MBAP length 500 bytes is accepted', () async {
+      late ModbusTestServer server;
+      server = ModbusTestServer(onData: (socket, data) {
+        if (data.length < 7) return;
+        final view = ByteData.view(Uint8List.fromList(data).buffer);
+        final transactionId = view.getUint16(0);
+        final unitId = view.getUint8(6);
+
+        // Build FC90 response with MBAP length = 500
+        // PDU: FC=0x5A + pairingKey + status(0xFE) + subFunc + padding
+        final pduLen = 499; // length field = unitId(1) + pdu(499) = 500
+        final pdu = Uint8List(pduLen);
+        pdu[0] = 0x5A; // FC90
+        pdu[1] = 0x00; // pairing key
+        pdu[2] = 0xFE; // success status
+        pdu[3] = 0x01; // sub-function echo
+        final response = ModbusTestServer.buildResponse(
+            transactionId, unitId, pdu);
+        server.sendToClient(socket, response);
+      });
+      final port = await server.start();
+      final client = ModbusClientTcp('127.0.0.1',
+          serverPort: port,
+          connectionTimeout: const Duration(seconds: 2),
+          responseTimeout: const Duration(seconds: 2),
+          unitId: 1);
+
+      try {
+        final request = _Fc90TestRequest();
+        final code = await client.send(request);
+        expect(code, equals(ModbusResponseCode.requestSucceed));
+      } finally {
+        await client.disconnect();
+        await server.shutdown();
+      }
+    });
+
+    test('FC90 response with MBAP length 5000 bytes is accepted', () async {
+      late ModbusTestServer server;
+      server = ModbusTestServer(onData: (socket, data) {
+        if (data.length < 7) return;
+        final view = ByteData.view(Uint8List.fromList(data).buffer);
+        final transactionId = view.getUint16(0);
+        final unitId = view.getUint8(6);
+
+        final pduLen = 4999; // length field = unitId(1) + pdu(4999) = 5000
+        final pdu = Uint8List(pduLen);
+        pdu[0] = 0x5A;
+        pdu[1] = 0x00;
+        pdu[2] = 0xFE;
+        pdu[3] = 0x01;
+        final response = ModbusTestServer.buildResponse(
+            transactionId, unitId, pdu);
+        server.sendToClient(socket, response);
+      });
+      final port = await server.start();
+      final client = ModbusClientTcp('127.0.0.1',
+          serverPort: port,
+          connectionTimeout: const Duration(seconds: 2),
+          responseTimeout: const Duration(seconds: 2),
+          unitId: 1);
+
+      try {
+        final request = _Fc90TestRequest();
+        final code = await client.send(request);
+        expect(code, equals(ModbusResponseCode.requestSucceed));
+      } finally {
+        await client.disconnect();
+        await server.shutdown();
+      }
+    });
+
+    test('non-FC90 response with MBAP length 255 is still rejected', () async {
+      late ModbusTestServer server;
+      server = ModbusTestServer(onData: (socket, data) {
+        if (data.length < 7) return;
+        final view = ByteData.view(Uint8List.fromList(data).buffer);
+        final transactionId = view.getUint16(0);
+        final unitId = view.getUint8(6);
+
+        // FC03 response with length=255 (exceeds Modbus spec max of 254)
+        final pdu = Uint8List.fromList([0x03, 0x00]);
+        final response = ModbusTestServer.buildRawFrame(
+            transactionId, 255, unitId, pdu);
+        server.sendToClient(socket, response);
+      });
+      final port = await server.start();
+      final client = ModbusClientTcp('127.0.0.1',
+          serverPort: port,
+          connectionTimeout: const Duration(seconds: 2),
+          responseTimeout: const Duration(seconds: 2),
+          unitId: 1);
+
+      try {
+        final register = ModbusUint16Register(
+            name: 'test', address: 0, type: ModbusElementType.holdingRegister);
+        final request = register.getReadRequest();
+        final code = await client.send(request);
+        expect(code, equals(ModbusResponseCode.requestRxFailed));
+      } finally {
+        await client.disconnect();
+        await server.shutdown();
+      }
+    });
+
+    test('FC90 response within old limit (254 bytes) still works', () async {
+      late ModbusTestServer server;
+      server = ModbusTestServer(onData: (socket, data) {
+        if (data.length < 7) return;
+        final view = ByteData.view(Uint8List.fromList(data).buffer);
+        final transactionId = view.getUint16(0);
+        final unitId = view.getUint8(6);
+
+        // FC90 response with MBAP length = 10 (well within limit)
+        final pdu = Uint8List.fromList([
+          0x5A, 0x00, 0xFE, 0x01, // FC, pairing, status, subFunc
+          0xF0, 0x00, // max frame size LE = 240
+          0x00, 0x00, 0x00, // padding
+        ]);
+        final response = ModbusTestServer.buildResponse(
+            transactionId, unitId, pdu);
+        server.sendToClient(socket, response);
+      });
+      final port = await server.start();
+      final client = ModbusClientTcp('127.0.0.1',
+          serverPort: port,
+          connectionTimeout: const Duration(seconds: 2),
+          responseTimeout: const Duration(seconds: 2),
+          unitId: 1);
+
+      try {
+        final request = _Fc90TestRequest();
+        final code = await client.send(request);
+        expect(code, equals(ModbusResponseCode.requestSucceed));
+      } finally {
+        await client.disconnect();
+        await server.shutdown();
+      }
+    });
+  });
+}
+
+/// Simple FC90 test request for UMAS MBAP length validation tests.
+class _Fc90TestRequest extends ModbusRequest {
+  _Fc90TestRequest() : super();
+
+  @override
+  FunctionCode get functionCode =>
+      const ModbusFunctionCode(0x5A, FunctionType.custom);
+
+  @override
+  Uint8List get protocolDataUnit =>
+      Uint8List.fromList([0x5A, 0x00, 0x01]); // FC90, pairingKey, subFunc
+
+  @override
+  int get responsePduLength => -1;
+
+  @override
+  ModbusResponseCode internalSetFromPduResponse(Uint8List pdu) {
+    return ModbusResponseCode.requestSucceed;
+  }
 }
 
 /// Helper to track received requests in test server callbacks.

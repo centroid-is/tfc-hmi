@@ -214,10 +214,14 @@ class ModbusClientTcp extends ModbusClient {
       var transactionId = headerView.getUint16(0);
       var lengthField = headerView.getUint16(4);
 
-      // TCPFIX-03: Validate MBAP length field range (defense-in-depth)
-      if (lengthField < 1 || lengthField > 254) {
+      // TCPFIX-03: Validate MBAP length field range (defense-in-depth).
+      // Standard Modbus limits MBAP length to 1-254, but UMAS (FC90/0x5A)
+      // responses can be much larger (data dictionary 500-5000 bytes).
+      final functionCode = _incomingBuffer.length > 7 ? _incomingBuffer[7] : 0;
+      final maxLength = (functionCode == 0x5A) ? 65535 : 254;
+      if (lengthField < 1 || lengthField > maxLength) {
         ModbusAppLogger.warning("Invalid MBAP length field in router",
-            "$lengthField not in range 1-254, discarding buffer");
+            "$lengthField not in range 1-$maxLength, discarding buffer");
         // Signal failure to the pending response if one exists
         var pendingResponse = _pendingResponses[transactionId];
         if (pendingResponse != null) {
@@ -391,11 +395,13 @@ class _TcpResponse {
         return;
       }
       _resDataLen = resView.getUint16(4);
-      // TCPFIX-03: Validate MBAP length field range (1-254 per Modbus spec).
-      // Min 1 = unit ID byte only; max 254 = 1 unit ID + 253 max PDU bytes.
-      if (_resDataLen! < 1 || _resDataLen! > 254) {
+      // TCPFIX-03: Validate MBAP length field range.
+      // Standard Modbus: 1-254 (1 unit ID + 253 max PDU).
+      // UMAS FC90 (0x5A): up to 65535 for large data dictionary responses.
+      final maxLen = (request.functionCode.code == 0x5A) ? 65535 : 254;
+      if (_resDataLen! < 1 || _resDataLen! > maxLen) {
         ModbusAppLogger.warning(
-            "Invalid MBAP length field", "$_resDataLen not in range 1-254");
+            "Invalid MBAP length field", "$_resDataLen not in range 1-$maxLen");
         _timeout.complete();
         request.setResponseCode(ModbusResponseCode.requestRxFailed);
         return;
