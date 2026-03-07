@@ -547,39 +547,76 @@ void main() {
     });
   });
 
-  group('ConveyorGateConfig position field', () {
-    test('position roundtrips correctly through toJson/fromJson', () {
-      final config = ConveyorGateConfig(position: 0.3);
-      final json = config.toJson();
-      final restored = ConveyorGateConfig.fromJson(json);
+  group('ChildGateEntry', () {
+    test('JSON roundtrip preserves position, side, and gate fields', () {
+      final entry = ChildGateEntry(
+        position: 0.3,
+        side: GateSide.right,
+        gate: ConveyorGateConfig(
+          gateVariant: GateVariant.slider,
+          stateKey: 'ns=2;s=Gate1.State',
+        ),
+      );
+
+      final json = entry.toJson();
+      final restored = ChildGateEntry.fromJson(json);
+
       expect(restored.position, 0.3);
+      expect(restored.side, GateSide.right);
+      expect(restored.gate.gateVariant, GateVariant.slider);
+      expect(restored.gate.stateKey, 'ns=2;s=Gate1.State');
     });
 
-    test('preview() has position=0.5', () {
-      final config = ConveyorGateConfig.preview();
-      expect(config.position, 0.5);
+    test('default constructor has position=0.5 and side=GateSide.left', () {
+      final entry = ChildGateEntry(gate: ConveyorGateConfig());
+
+      expect(entry.position, 0.5);
+      expect(entry.side, GateSide.left);
     });
 
-    test('JSON without position field deserializes to 0.5 (backward compat)',
-        () {
-      final json = ConveyorGateConfig.preview().toJson();
-      json.remove('position');
-      final restored = ConveyorGateConfig.fromJson(json);
-      expect(restored.position, 0.5);
+    test('nested gate fields survive serialization roundtrip', () {
+      final entry = ChildGateEntry(
+        position: 0.7,
+        side: GateSide.left,
+        gate: ConveyorGateConfig(
+          gateVariant: GateVariant.pusher,
+          openAngleDegrees: 60.0,
+          openTimeMs: 500,
+          closeTimeMs: 300,
+          openColor: Colors.blue,
+          closedColor: Colors.red,
+          forceOpenKey: 'ns=2;s=Gate1.ForceOpen',
+        ),
+      );
+
+      final json = entry.toJson();
+      final restored = ChildGateEntry.fromJson(json);
+
+      expect(restored.gate.gateVariant, GateVariant.pusher);
+      expect(restored.gate.openAngleDegrees, 60.0);
+      expect(restored.gate.openTimeMs, 500);
+      expect(restored.gate.closeTimeMs, 300);
+      expect(restored.gate.openColor.value, Colors.blue.value);
+      expect(restored.gate.closedColor.value, Colors.red.value);
+      expect(restored.gate.forceOpenKey, 'ns=2;s=Gate1.ForceOpen');
     });
   });
 
   group('ConveyorConfig gates list', () {
-    test('gates list with one gate roundtrips correctly', () {
+    test('gates list with one ChildGateEntry roundtrips correctly', () {
       final conveyor = ConveyorConfig();
-      conveyor.gates.add(ConveyorGateConfig(position: 0.7));
+      conveyor.gates.add(ChildGateEntry(
+        position: 0.7,
+        gate: ConveyorGateConfig(gateVariant: GateVariant.pneumatic),
+      ));
 
       final json = conveyor.toJson();
       final restored = ConveyorConfig.fromJson(json);
 
       expect(restored.gates, hasLength(1));
-      expect(restored.gates.first, isA<ConveyorGateConfig>());
-      expect((restored.gates.first as ConveyorGateConfig).position, 0.7);
+      expect(restored.gates.first, isA<ChildGateEntry>());
+      expect(restored.gates.first.position, 0.7);
+      expect(restored.gates.first.gate.gateVariant, GateVariant.pneumatic);
     });
 
     test('preview() has empty gates list', () {
@@ -597,30 +634,74 @@ void main() {
 
     test('multiple gates of different variants roundtrip all gates', () {
       final conveyor = ConveyorConfig();
-      conveyor.gates.add(ConveyorGateConfig(
-        gateVariant: GateVariant.pneumatic,
+      conveyor.gates.add(ChildGateEntry(
         position: 0.2,
+        gate: ConveyorGateConfig(gateVariant: GateVariant.pneumatic),
       ));
-      conveyor.gates.add(ConveyorGateConfig(
-        gateVariant: GateVariant.slider,
+      conveyor.gates.add(ChildGateEntry(
         position: 0.5,
+        gate: ConveyorGateConfig(gateVariant: GateVariant.slider),
       ));
-      conveyor.gates.add(ConveyorGateConfig(
-        gateVariant: GateVariant.pusher,
+      conveyor.gates.add(ChildGateEntry(
         position: 0.8,
+        gate: ConveyorGateConfig(gateVariant: GateVariant.pusher),
       ));
 
       final json = conveyor.toJson();
       final restored = ConveyorConfig.fromJson(json);
 
       expect(restored.gates, hasLength(3));
-      final gates = restored.gates.cast<ConveyorGateConfig>();
-      expect(gates[0].gateVariant, GateVariant.pneumatic);
-      expect(gates[0].position, 0.2);
-      expect(gates[1].gateVariant, GateVariant.slider);
-      expect(gates[1].position, 0.5);
-      expect(gates[2].gateVariant, GateVariant.pusher);
-      expect(gates[2].position, 0.8);
+      expect(restored.gates[0].gate.gateVariant, GateVariant.pneumatic);
+      expect(restored.gates[0].position, 0.2);
+      expect(restored.gates[1].gate.gateVariant, GateVariant.slider);
+      expect(restored.gates[1].position, 0.5);
+      expect(restored.gates[2].gate.gateVariant, GateVariant.pusher);
+      expect(restored.gates[2].position, 0.8);
+    });
+
+    test('old-format JSON (flat gate with asset_name) deserializes into ChildGateEntry', () {
+      // Simulate old JSON where gates were serialized as flat ConveyorGateConfig objects
+      final oldGateJson = ConveyorGateConfig(
+        gateVariant: GateVariant.pneumatic,
+        side: GateSide.right,
+      ).toJson();
+      // In old format, position was inline on the gate config
+      oldGateJson['position'] = 0.3;
+
+      final conveyorJson = ConveyorConfig.preview().toJson();
+      conveyorJson['gates'] = [oldGateJson];
+
+      final restored = ConveyorConfig.fromJson(conveyorJson);
+
+      expect(restored.gates, hasLength(1));
+      expect(restored.gates.first, isA<ChildGateEntry>());
+      expect(restored.gates.first.position, 0.3);
+      expect(restored.gates.first.gate.gateVariant, GateVariant.pneumatic);
+    });
+
+    test('old-format JSON extracts side from gate into ChildGateEntry', () {
+      final oldGateJson = ConveyorGateConfig(
+        gateVariant: GateVariant.slider,
+        side: GateSide.right,
+      ).toJson();
+      oldGateJson['position'] = 0.6;
+
+      final conveyorJson = ConveyorConfig.preview().toJson();
+      conveyorJson['gates'] = [oldGateJson];
+
+      final restored = ConveyorConfig.fromJson(conveyorJson);
+
+      expect(restored.gates.first.side, GateSide.right);
+      expect(restored.gates.first.position, 0.6);
+    });
+
+    test('ConveyorGateConfig JSON without position field still deserializes', () {
+      final json = ConveyorGateConfig.preview().toJson();
+      // Ensure no position key exists (it shouldn't after migration, but verify)
+      json.remove('position');
+      final restored = ConveyorGateConfig.fromJson(json);
+      // Should not throw; gate config is valid without position
+      expect(restored.gateVariant, GateVariant.pneumatic);
     });
   });
 }
