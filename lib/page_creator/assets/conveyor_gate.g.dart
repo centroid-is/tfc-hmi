@@ -25,6 +25,10 @@ ConveyorGateConfig _$ConveyorGateConfigFromJson(Map<String, dynamic> json) =>
       closedColor: json['closedColor'] == null
           ? Colors.white
           : _colorFromJson((json['closedColor'] as num).toInt()),
+      forceOpenKey: json['forceOpenKey'] as String? ?? '',
+      forceOpenFeedbackKey: json['forceOpenFeedbackKey'] as String? ?? '',
+      forceCloseKey: json['forceCloseKey'] as String? ?? '',
+      forceCloseFeedbackKey: json['forceCloseFeedbackKey'] as String? ?? '',
     )
       ..variant = json['asset_name'] as String
       ..coordinates =
@@ -48,6 +52,10 @@ Map<String, dynamic> _$ConveyorGateConfigToJson(ConveyorGateConfig instance) =>
       'closeTimeMs': instance.closeTimeMs,
       'openColor': _colorToJson(instance.openColor),
       'closedColor': _colorToJson(instance.closedColor),
+      'forceOpenKey': instance.forceOpenKey,
+      'forceOpenFeedbackKey': instance.forceOpenFeedbackKey,
+      'forceCloseKey': instance.forceCloseKey,
+      'forceCloseFeedbackKey': instance.forceCloseFeedbackKey,
     };
 
 const _$GateVariantEnumMap = {

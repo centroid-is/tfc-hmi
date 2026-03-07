@@ -63,6 +63,45 @@ void main() {
       expect(config.openColor, Colors.green);
       expect(config.closedColor, Colors.white);
       expect(config.stateKey, '');
+      expect(config.forceOpenKey, '');
+      expect(config.forceOpenFeedbackKey, '');
+      expect(config.forceCloseKey, '');
+      expect(config.forceCloseFeedbackKey, '');
+    });
+
+    // ── Force key serialization ──
+
+    test('JSON roundtrip with force key fields preserves all four keys', () {
+      final config = ConveyorGateConfig(
+        forceOpenKey: 'ns=2;s=Gate1.ForceOpen',
+        forceOpenFeedbackKey: 'ns=2;s=Gate1.ForceOpenFb',
+        forceCloseKey: 'ns=2;s=Gate1.ForceClose',
+        forceCloseFeedbackKey: 'ns=2;s=Gate1.ForceCloseFb',
+      );
+
+      final json = config.toJson();
+      final restored = ConveyorGateConfig.fromJson(json);
+
+      expect(restored.forceOpenKey, 'ns=2;s=Gate1.ForceOpen');
+      expect(restored.forceOpenFeedbackKey, 'ns=2;s=Gate1.ForceOpenFb');
+      expect(restored.forceCloseKey, 'ns=2;s=Gate1.ForceClose');
+      expect(restored.forceCloseFeedbackKey, 'ns=2;s=Gate1.ForceCloseFb');
+    });
+
+    test('JSON without force keys deserializes to empty strings (backward compat)', () {
+      final json = ConveyorGateConfig.preview().toJson();
+      // Remove force keys to simulate legacy JSON
+      json.remove('forceOpenKey');
+      json.remove('forceOpenFeedbackKey');
+      json.remove('forceCloseKey');
+      json.remove('forceCloseFeedbackKey');
+
+      final restored = ConveyorGateConfig.fromJson(json);
+
+      expect(restored.forceOpenKey, '');
+      expect(restored.forceOpenFeedbackKey, '');
+      expect(restored.forceCloseKey, '');
+      expect(restored.forceCloseFeedbackKey, '');
     });
 
     // ── Display metadata ──

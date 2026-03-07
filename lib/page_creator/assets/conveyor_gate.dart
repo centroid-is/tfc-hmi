@@ -66,6 +66,18 @@ class ConveyorGateConfig extends BaseAsset {
   @JsonKey(fromJson: _colorFromJson, toJson: _colorToJson)
   Color closedColor;
 
+  /// OPC UA key to write a force-open command (DATA-02).
+  String forceOpenKey;
+
+  /// OPC UA key to subscribe for force-open active feedback (DATA-03).
+  String forceOpenFeedbackKey;
+
+  /// OPC UA key to write a force-close command (DATA-04).
+  String forceCloseKey;
+
+  /// OPC UA key to subscribe for force-close active feedback (DATA-05).
+  String forceCloseFeedbackKey;
+
   ConveyorGateConfig({
     this.gateVariant = GateVariant.pneumatic,
     this.side = GateSide.left,
@@ -75,6 +87,10 @@ class ConveyorGateConfig extends BaseAsset {
     this.closeTimeMs,
     this.openColor = Colors.green,
     this.closedColor = Colors.white,
+    this.forceOpenKey = '',
+    this.forceOpenFeedbackKey = '',
+    this.forceCloseKey = '',
+    this.forceCloseFeedbackKey = '',
   });
 
   /// Preview factory with reasonable defaults for the asset palette.
@@ -86,7 +102,11 @@ class ConveyorGateConfig extends BaseAsset {
         openTimeMs = 800,
         closeTimeMs = null,
         openColor = Colors.green,
-        closedColor = Colors.white;
+        closedColor = Colors.white,
+        forceOpenKey = '',
+        forceOpenFeedbackKey = '',
+        forceCloseKey = '',
+        forceCloseFeedbackKey = '';
 
   factory ConveyorGateConfig.fromJson(Map<String, dynamic> json) =>
       _$ConveyorGateConfigFromJson(json);
@@ -166,17 +186,37 @@ class _ConveyorGateState extends ConsumerState<ConveyorGate>
     }
   }
 
+  /// Selects the correct painter based on [ConveyorGateConfig.gateVariant].
+  CustomPainter _createPainter(Color stateColor) {
+    switch (widget.config.gateVariant) {
+      case GateVariant.pneumatic:
+        return PneumaticDiverterPainter(
+          progress: _progress,
+          stateColor: stateColor,
+          openAngleDegrees: widget.config.openAngleDegrees,
+          side: widget.config.side,
+        );
+      case GateVariant.slider:
+        return SliderGatePainter(
+          progress: _progress,
+          stateColor: stateColor,
+          side: widget.config.side,
+        );
+      case GateVariant.pusher:
+        return PusherGatePainter(
+          progress: _progress,
+          stateColor: stateColor,
+          side: widget.config.side,
+        );
+    }
+  }
+
   Widget _buildGate(Color stateColor) {
     return LayoutRotatedBox(
       angle: (widget.config.coordinates.angle ?? 0.0) * pi / 180,
       child: CustomPaint(
         size: widget.config.size.toSize(MediaQuery.of(context).size),
-        painter: PneumaticDiverterPainter(
-          progress: _progress,
-          stateColor: stateColor,
-          openAngleDegrees: widget.config.openAngleDegrees,
-          side: widget.config.side,
-        ),
+        painter: _createPainter(stateColor),
       ),
     );
   }
@@ -228,7 +268,7 @@ class _ConveyorGateConfigEditor extends StatefulWidget {
 
 class _ConveyorGateConfigEditorState extends State<_ConveyorGateConfigEditor>
     with SingleTickerProviderStateMixin {
-  /// Progress notifier drives the PneumaticDiverterPainter repaint.
+  /// Progress notifier drives the gate painter repaint.
   late final ValueNotifier<double> _previewProgress;
 
   /// Animation controller for the "play" preview cycle.
@@ -264,6 +304,31 @@ class _ConveyorGateConfigEditorState extends State<_ConveyorGateConfigEditor>
     _openTimeController.dispose();
     _closeTimeController.dispose();
     super.dispose();
+  }
+
+  /// Select the correct painter for the config editor live preview.
+  CustomPainter _previewPainter(ConveyorGateConfig config) {
+    switch (config.gateVariant) {
+      case GateVariant.pneumatic:
+        return PneumaticDiverterPainter(
+          progress: _previewProgress,
+          stateColor: config.openColor,
+          openAngleDegrees: config.openAngleDegrees,
+          side: config.side,
+        );
+      case GateVariant.slider:
+        return SliderGatePainter(
+          progress: _previewProgress,
+          stateColor: config.openColor,
+          side: config.side,
+        );
+      case GateVariant.pusher:
+        return PusherGatePainter(
+          progress: _previewProgress,
+          stateColor: config.openColor,
+          side: config.side,
+        );
+    }
   }
 
   void _playPreview() {
@@ -330,12 +395,7 @@ class _ConveyorGateConfigEditorState extends State<_ConveyorGateConfigEditor>
                   width: 150,
                   height: 150,
                   child: CustomPaint(
-                    painter: PneumaticDiverterPainter(
-                      progress: _previewProgress,
-                      stateColor: config.openColor,
-                      openAngleDegrees: config.openAngleDegrees,
-                      side: config.side,
-                    ),
+                    painter: _previewPainter(config),
                   ),
                 ),
                 IconButton(
