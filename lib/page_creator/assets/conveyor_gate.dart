@@ -79,6 +79,10 @@ class ConveyorGateConfig extends BaseAsset {
   /// OPC UA key to subscribe for force-close active feedback (DATA-05).
   String forceCloseFeedbackKey;
 
+  /// Fractional position along conveyor belt (0.0 = start, 1.0 = end).
+  /// Only meaningful when this gate is a child of a conveyor.
+  double position;
+
   ConveyorGateConfig({
     this.gateVariant = GateVariant.pneumatic,
     this.side = GateSide.left,
@@ -92,6 +96,7 @@ class ConveyorGateConfig extends BaseAsset {
     this.forceOpenFeedbackKey = '',
     this.forceCloseKey = '',
     this.forceCloseFeedbackKey = '',
+    this.position = 0.5,
   });
 
   /// Preview factory with reasonable defaults for the asset palette.
@@ -107,7 +112,8 @@ class ConveyorGateConfig extends BaseAsset {
         forceOpenKey = '',
         forceOpenFeedbackKey = '',
         forceCloseKey = '',
-        forceCloseFeedbackKey = '';
+        forceCloseFeedbackKey = '',
+        position = 0.5;
 
   factory ConveyorGateConfig.fromJson(Map<String, dynamic> json) =>
       _$ConveyorGateConfigFromJson(json);

@@ -29,6 +29,7 @@ ConveyorGateConfig _$ConveyorGateConfigFromJson(Map<String, dynamic> json) =>
       forceOpenFeedbackKey: json['forceOpenFeedbackKey'] as String? ?? '',
       forceCloseKey: json['forceCloseKey'] as String? ?? '',
       forceCloseFeedbackKey: json['forceCloseFeedbackKey'] as String? ?? '',
+      position: (json['position'] as num?)?.toDouble() ?? 0.5,
     )
       ..variant = json['asset_name'] as String
       ..coordinates =
@@ -56,6 +57,7 @@ Map<String, dynamic> _$ConveyorGateConfigToJson(ConveyorGateConfig instance) =>
       'forceOpenFeedbackKey': instance.forceOpenFeedbackKey,
       'forceCloseKey': instance.forceCloseKey,
       'forceCloseFeedbackKey': instance.forceCloseFeedbackKey,
+      'position': instance.position,
     };
 
 const _$GateVariantEnumMap = {

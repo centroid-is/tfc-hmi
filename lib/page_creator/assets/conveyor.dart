@@ -14,6 +14,7 @@ import '../../widgets/graph.dart';
 import 'auger_conveyor_painter.dart';
 import 'package:tfc_dart/core/database.dart';
 import 'package:tfc_dart/core/collector.dart';
+import '../page.dart';
 
 part 'conveyor.g.dart';
 
@@ -151,6 +152,9 @@ class ConveyorConfig extends BaseAsset {
   String? augerRpmKey;
   AugerOpenEnd? augerOpenEnd;
 
+  @AssetListConverter()
+  List<Asset> gates;
+
   ConveyorConfig(
       {this.key,
       this.batchesKey,
@@ -162,11 +166,15 @@ class ConveyorConfig extends BaseAsset {
       this.showFrequency,
       this.showAuger,
       this.augerRpmKey,
-      this.augerOpenEnd});
+      this.augerOpenEnd,
+      List<Asset>? gates})
+      : gates = gates != null ? List<Asset>.of(gates) : [];
 
   static const previewStr = 'Conveyor Preview';
 
-  ConveyorConfig.preview() : key = previewStr;
+  ConveyorConfig.preview()
+      : gates = [],
+        key = previewStr;
 
   @override
   Widget build(BuildContext context) => Conveyor(this);
