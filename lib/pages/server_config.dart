@@ -1723,6 +1723,8 @@ class _ModbusServerConfigCardState extends State<_ModbusServerConfigCard> {
   late TextEditingController _portController;
   late TextEditingController _unitIdController;
   late TextEditingController _aliasController;
+  List<TextEditingController> _pollGroupNameControllers = [];
+  List<TextEditingController> _pollGroupIntervalControllers = [];
   ConnectionStatus? _connectionStatus;
   StreamSubscription<ConnectionStatus>? _statusSub;
 
@@ -1738,6 +1740,24 @@ class _ModbusServerConfigCardState extends State<_ModbusServerConfigCard> {
         TextEditingController(text: widget.server.serverAlias ?? '');
     _connectionStatus = widget.connectionStatus;
     _subscribeToStatus();
+    _initPollGroupControllers();
+  }
+
+  void _initPollGroupControllers() {
+    // Dispose old controllers
+    for (final c in _pollGroupNameControllers) {
+      c.dispose();
+    }
+    for (final c in _pollGroupIntervalControllers) {
+      c.dispose();
+    }
+    // Create new controllers from current poll groups
+    _pollGroupNameControllers = widget.server.pollGroups
+        .map((pg) => TextEditingController(text: pg.name))
+        .toList();
+    _pollGroupIntervalControllers = widget.server.pollGroups
+        .map((pg) => TextEditingController(text: pg.intervalMs.toString()))
+        .toList();
   }
 
   @override
@@ -1746,6 +1766,9 @@ class _ModbusServerConfigCardState extends State<_ModbusServerConfigCard> {
     if (widget.connectionStream != oldWidget.connectionStream) {
       _connectionStatus = widget.connectionStatus;
       _subscribeToStatus();
+    }
+    if (widget.server.pollGroups.length != _pollGroupNameControllers.length) {
+      _initPollGroupControllers();
     }
   }
 
@@ -1763,7 +1786,59 @@ class _ModbusServerConfigCardState extends State<_ModbusServerConfigCard> {
     _portController.dispose();
     _unitIdController.dispose();
     _aliasController.dispose();
+    for (final c in _pollGroupNameControllers) {
+      c.dispose();
+    }
+    for (final c in _pollGroupIntervalControllers) {
+      c.dispose();
+    }
     super.dispose();
+  }
+
+  void _addPollGroup() {
+    final pollGroups = List<ModbusPollGroupConfig>.from(widget.server.pollGroups);
+    pollGroups.add(ModbusPollGroupConfig(
+      name: 'group_${widget.server.pollGroups.length}',
+      intervalMs: 1000,
+    ));
+    final updated = ModbusConfig(
+      host: _hostController.text,
+      port: int.tryParse(_portController.text) ?? 502,
+      unitId: (int.tryParse(_unitIdController.text) ?? 1).clamp(1, 247),
+      pollGroups: pollGroups,
+    )..serverAlias =
+        _aliasController.text.isEmpty ? null : _aliasController.text;
+    widget.onUpdate(updated);
+  }
+
+  void _removePollGroup(int index) {
+    final pollGroups = List<ModbusPollGroupConfig>.from(widget.server.pollGroups);
+    pollGroups.removeAt(index);
+    final updated = ModbusConfig(
+      host: _hostController.text,
+      port: int.tryParse(_portController.text) ?? 502,
+      unitId: (int.tryParse(_unitIdController.text) ?? 1).clamp(1, 247),
+      pollGroups: pollGroups,
+    )..serverAlias =
+        _aliasController.text.isEmpty ? null : _aliasController.text;
+    widget.onUpdate(updated);
+  }
+
+  void _updatePollGroup(int index) {
+    final pollGroups = List<ModbusPollGroupConfig>.from(widget.server.pollGroups);
+    pollGroups[index] = ModbusPollGroupConfig(
+      name: _pollGroupNameControllers[index].text,
+      intervalMs: (int.tryParse(_pollGroupIntervalControllers[index].text) ?? 1000)
+          .clamp(50, 999999),
+    );
+    final updated = ModbusConfig(
+      host: _hostController.text,
+      port: int.tryParse(_portController.text) ?? 502,
+      unitId: (int.tryParse(_unitIdController.text) ?? 1).clamp(1, 247),
+      pollGroups: pollGroups,
+    )..serverAlias =
+        _aliasController.text.isEmpty ? null : _aliasController.text;
+    widget.onUpdate(updated);
   }
 
   Color _connectionStatusColor() {
@@ -1981,6 +2056,55 @@ class _ModbusServerConfigCardState extends State<_ModbusServerConfigCard> {
                     prefixIcon: FaIcon(FontAwesomeIcons.tag, size: 16),
                   ),
                   onChanged: (_) => _updateServer(),
+                ),
+                const Divider(height: 24),
+                ExpansionTile(
+                  title: Text('Poll Groups (${widget.server.pollGroups.length})'),
+                  leading: const FaIcon(FontAwesomeIcons.clockRotateLeft, size: 16),
+                  initiallyExpanded: false,
+                  children: [
+                    ...widget.server.pollGroups.asMap().entries.map((entry) {
+                      final i = entry.key;
+                      return Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                        child: Row(children: [
+                          Expanded(
+                            flex: 2,
+                            child: TextField(
+                              controller: _pollGroupNameControllers[i],
+                              decoration: const InputDecoration(
+                                  labelText: 'Name', isDense: true),
+                              onChanged: (_) => _updatePollGroup(i),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            flex: 1,
+                            child: TextField(
+                              controller: _pollGroupIntervalControllers[i],
+                              decoration: const InputDecoration(
+                                  labelText: 'Interval (ms)', isDense: true),
+                              keyboardType: TextInputType.number,
+                              onChanged: (_) => _updatePollGroup(i),
+                            ),
+                          ),
+                          IconButton(
+                            icon: const FaIcon(FontAwesomeIcons.trash, size: 14),
+                            onPressed: () => _removePollGroup(i),
+                            tooltip: 'Remove poll group',
+                          ),
+                        ]),
+                      );
+                    }),
+                    Padding(
+                      padding: const EdgeInsets.all(8),
+                      child: TextButton.icon(
+                        icon: const FaIcon(FontAwesomeIcons.plus, size: 14),
+                        label: const Text('Add Poll Group'),
+                        onPressed: _addPollGroup,
+                      ),
+                    ),
+                  ],
                 ),
               ],
             ),
