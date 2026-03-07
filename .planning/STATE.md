@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: complete
-stopped_at: Completed 03-02-PLAN.md
-last_updated: "2026-03-07T16:25:00Z"
-last_activity: 2026-03-07 -- Phase 3 Plan 2 complete (milestone complete)
+status: in-progress
+stopped_at: Completed 04-01-PLAN.md
+last_updated: "2026-03-07T19:43:24Z"
+last_activity: 2026-03-07 -- Phase 4 Plan 1 complete
 progress:
-  total_phases: 3
+  total_phases: 4
   completed_phases: 3
-  total_plans: 8
-  completed_plans: 8
-  percent: 100
+  total_plans: 11
+  completed_plans: 9
+  percent: 82
 ---
 
 # Project State
@@ -21,23 +21,23 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-07)
 
 **Core value:** Operators can see at a glance whether each gate along a conveyor line is open, closed, or being forced -- with realistic animated visuals matching physical equipment
-**Current focus:** Phase 3 - Child-of-Conveyor Integration
+**Current focus:** Phase 4 - Fix Gate Architecture and Redesign Painters
 
 ## Current Position
 
-Phase: 3 of 3 (Child-of-Conveyor Integration)
-Plan: 2 of 2 complete
-Status: Complete
-Last activity: 2026-03-07 -- Phase 3 Plan 2 complete
+Phase: 4 of 4 (Fix Gate Architecture and Redesign Painters)
+Plan: 1 of 3 complete
+Status: In Progress
+Last activity: 2026-03-07 -- Phase 4 Plan 1 complete
 
-Progress: [████████████████████] 8/8 plans (100%)
+Progress: [████████████████░░░░] 9/11 plans (82%)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 7
+- Total plans completed: 9
 - Average duration: 5min
-- Total execution time: 37 min
+- Total execution time: 43 min
 
 **By Phase:**
 
@@ -50,10 +50,11 @@ Progress: [████████████████████] 8/8 pla
 | 02 | 02 | 4min | 2 | 2 |
 | 03 | 01 | 3min | 1 | 5 |
 | 03 | 02 | 15min | 3 | 4 |
+| 04 | 01 | 6min | 2 | 6 |
 
 **Recent Trend:**
-- Last 3 plans: 4min, 3min, 15min
-- Trend: Final plan longer due to test infrastructure work
+- Last 3 plans: 3min, 15min, 6min
+- Trend: Stabilizing after Phase 3 test infrastructure overhead
 
 *Updated after each plan completion*
 
@@ -80,10 +81,17 @@ Recent decisions affecting current work:
 - [Phase 03]: LayoutBuilder in _buildGate detects bounded constraints for child-of-conveyor sizing vs MediaQuery for standalone
 - [Phase 03]: Config dialog gate tests as unit tests (KeyField stateManProvider dependency prevents widget tests)
 - [Phase 03]: Gate cylinder overflow uses 30/70 split proportions for belt-edge alignment
+- [Phase 04]: ChildGateEntry wrapper separates conveyor placement metadata from gate config
+- [Phase 04]: Backward compat migration detects old format via asset_name key without gate sub-object
+- [Phase 04]: Belt Position slider removed from standalone gate config editor (position now on ChildGateEntry)
 
 ### Pending Todos
 
 None yet.
+
+### Roadmap Evolution
+
+- Phase 4 added: Fix gate architecture and redesign painters
 
 ### Blockers/Concerns
 
@@ -92,6 +100,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-07T16:25:00Z
-Stopped at: Completed 03-02-PLAN.md (milestone complete)
-Resume file: .planning/phases/03-child-of-conveyor-integration/03-02-SUMMARY.md
+Last session: 2026-03-07T19:43:24Z
+Stopped at: Completed 04-01-PLAN.md
+Resume file: .planning/phases/04-fix-gate-architecture-and-redesign-painters/04-01-SUMMARY.md
