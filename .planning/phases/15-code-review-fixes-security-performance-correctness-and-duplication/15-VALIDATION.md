@@ -38,22 +38,24 @@ created: 2026-03-07
 
 | Task ID | Plan | Wave | Requirement | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|-----------|-------------------|-------------|--------|
-| 15-01-01 | 01 | 1 | CORR-02 | unit | `dart test test/state_man_test.dart` | ✅ | ⬜ pending |
-| 15-01-02 | 01 | 1 | CORR-01 | widget | `flutter test test/pages/server_config_test.dart` | ✅ | ⬜ pending |
-| 15-01-03 | 01 | 1 | CORR-03 | lint | `dart analyze packages/tfc_dart/lib/core/umas_types.dart` | ✅ | ⬜ pending |
-| 15-01-04 | 01 | 1 | CORR-04 | unit | `dart test` | ✅ | ⬜ pending |
-| 15-01-05 | 01 | 1 | CORR-05 | unit | `dart test test/core/modbus_client_wrapper_test.dart` | ✅ | ⬜ pending |
-| 15-02-01 | 02 | 1 | SEC-01 | widget | `flutter test test/pages/server_config_test.dart` | ✅ | ⬜ pending |
-| 15-02-02 | 02 | 1 | SEC-02 | unit | `dart test test/core/umas_client_test.dart` | ❌ W0 | ⬜ pending |
+| 15-01-01 | 01 | 1 | CORR-02 | unit | `dart test test/core/state_man_test.dart` | ✅ | ⬜ pending |
+| 15-01-02 | 01 | 1 | CORR-03 | lint | `dart analyze packages/tfc_dart/lib/core/umas_types.dart` | ✅ | ⬜ pending |
+| 15-01-03 | 01 | 1 | CORR-04 | unit | `dart test test/core/umas_client_test.dart` | ✅ | ⬜ pending |
+| 15-01-04 | 01 | 1 | DUP-06 | unit | `dart test test/core/modbus_device_client_test.dart` | ✅ | ⬜ pending |
+| 15-01-05 | 01 | 1 | SEC-02 | unit | `dart test test/core/umas_client_test.dart` | ✅ | ⬜ pending |
+| 15-01-06 | 01 | 1 | DUP-07 | lint | `dart analyze lib/pages/key_repository.dart` | ✅ | ⬜ pending |
+| 15-01-07 | 01 | 1 | DUP-08 | lint | `dart analyze lib/pages/key_repository.dart` | ✅ | ⬜ pending |
+| 15-01-08 | 01 | 1 | PERF-01 | lint | `dart analyze lib/widgets/umas_browse.dart` | ✅ | ⬜ pending |
+| 15-01-09 | 01 | 1 | PERF-02 | unit | `cd packages/modbus_client_tcp && dart test` | ✅ | ⬜ pending |
+| 15-02-01 | 02 | 1 | CORR-01 | widget | `flutter test test/pages/server_config_test.dart` | ✅ | ⬜ pending |
+| 15-02-02 | 02 | 1 | SEC-01 | widget | `flutter test test/pages/server_config_test.dart` | ✅ | ⬜ pending |
 | 15-02-03 | 02 | 1 | SEC-03 | unit | `dart test test/core/modbus_client_wrapper_test.dart` | ✅ | ⬜ pending |
-| 15-03-01 | 03 | 2 | DUP-06 | unit | `dart test test/core/modbus_device_client_test.dart` | ✅ | ⬜ pending |
-| 15-03-02 | 03 | 2 | DUP-01 | widget | `flutter test test/pages/server_config_test.dart` | ✅ | ⬜ pending |
-| 15-03-03 | 03 | 2 | DUP-02 | widget | `flutter test test/pages/server_config_test.dart` | ✅ | ⬜ pending |
-| 15-03-04 | 03 | 2 | DUP-03/04/05 | widget | `flutter test test/pages/server_config_test.dart` | ✅ | ⬜ pending |
-| 15-03-05 | 03 | 2 | DUP-07 | unit | `dart test` | ✅ | ⬜ pending |
-| 15-03-06 | 03 | 2 | DUP-08 | unit | `dart test` | ✅ | ⬜ pending |
-| 15-04-01 | 04 | 2 | PERF-01 | unit | `dart test` | ❌ W0 | ⬜ pending |
-| 15-04-02 | 04 | 2 | PERF-02 | unit | `dart test` | ❌ W0 | ⬜ pending |
+| 15-02-04 | 02 | 1 | CORR-05 | unit | `dart test test/core/modbus_client_wrapper_test.dart` | ✅ | ⬜ pending |
+| 15-03-01 | 03 | 2 | DUP-01 | widget | `flutter test test/pages/server_config_test.dart` | ✅ | ⬜ pending |
+| 15-03-02 | 03 | 2 | DUP-03 | widget | `flutter test test/pages/server_config_test.dart` | ✅ | ⬜ pending |
+| 15-03-03 | 03 | 2 | DUP-04 | widget | `flutter test test/pages/server_config_test.dart` | ✅ | ⬜ pending |
+| 15-03-04 | 03 | 2 | DUP-05 | widget | `flutter test test/pages/server_config_test.dart` | ✅ | ⬜ pending |
+| 15-03-05 | 03 | 2 | DUP-02 | widget | `flutter test test/pages/server_config_test.dart` | ✅ | ⬜ pending |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
