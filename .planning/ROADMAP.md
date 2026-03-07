@@ -159,7 +159,7 @@ Plans:
   2. User can edit and delete existing Modbus server entries
   3. Each Modbus server shows live connection status (connected/connecting/disconnected indicator)
   4. User can configure named poll groups with intervals per server
-**Plans:** 2 plans
+**Plans:** 1/2 plans executed
 
 Plans:
 - [ ] 10-01-PLAN.md -- TDD Modbus server section CRUD + connection status (clone JBTM pattern with unitId field)
@@ -196,5 +196,5 @@ Note: Phases 1, 2, and 3 have no inter-dependencies and could execute in paralle
 | 7. DeviceClient Adapter | 0/1 | Not started | - |
 | 8. Config Serialization | 0/1 | Not started | - |
 | 9. StateMan Integration | 2/2 | Complete | 2026-03-07 |
-| 10. Server Config UI | 0/2 | Not started | - |
+| 10. Server Config UI | 1/2 | In Progress|  |
 | 11. Key Repository UI | 0/1 | Not started | - |

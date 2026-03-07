@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: completed
-stopped_at: Phase 10 context gathered
-last_updated: "2026-03-07T08:13:49.699Z"
-last_activity: 2026-03-07 -- Completed 09-02-PLAN.md
+stopped_at: Completed 10-01-PLAN.md
+last_updated: "2026-03-07T13:00:22.630Z"
+last_activity: 2026-03-07 -- Completed 10-01-PLAN.md
 progress:
   total_phases: 11
   completed_phases: 8
-  total_plans: 11
-  completed_plans: 11
+  total_plans: 13
+  completed_plans: 12
   percent: 100
 ---
 
@@ -25,10 +25,10 @@ See: .planning/PROJECT.md (updated 2026-03-06)
 
 ## Current Position
 
-Phase: 9 of 11 (StateMan Integration) -- COMPLETE
-Plan: 2 of 2 in current phase
-Status: Phase 9 complete. Modbus device clients wired into data_acquisition_isolate, main.dart spawner, and Flutter UI provider.
-Last activity: 2026-03-07 -- Completed 09-02-PLAN.md
+Phase: 10 of 11 (Server Config UI)
+Plan: 1 of 1 in current phase
+Status: Plan 10-01 complete. Modbus TCP Servers section with CRUD, connection status, and 10 widget tests.
+Last activity: 2026-03-07 -- Completed 10-01-PLAN.md
 
 Progress: [██████████] 100%
 
@@ -57,6 +57,7 @@ Progress: [██████████] 100%
 - Trend: Consistent ~11min for integration/wiring plans
 
 *Updated after each plan completion*
+| Phase 10 P01 | 9min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -103,6 +104,9 @@ Recent decisions affecting current work:
 - 09-02: DataAcquisitionIsolateConfig.modbusJson defaults to const [] for backward compatibility
 - 09-02: Isolate name fallback: 'modbus' when only modbusJson present (was blanket 'jbtm')
 - 09-02: All three creation paths (isolate, main.dart spawner, Flutter UI provider) use same buildModbusDeviceClients factory
+- [Phase 10]: Extracted ServerConfigBody from ServerConfigPage to bypass BaseScaffold/Beamer dependency in widget tests
+- [Phase 10]: Override stateManProvider with throw in test helper to prevent real network connections while showing 'Not active' status
+- [Phase 10]: Connection status lookup matches ModbusDeviceClientAdapter by serverAlias first, falls back to host+port matching
 
 ### Pending Todos
 
@@ -114,6 +118,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-07T08:13:49.690Z
-Stopped at: Phase 10 context gathered
-Resume file: .planning/phases/10-server-config-ui/10-CONTEXT.md
+Last session: 2026-03-07T13:00:22.626Z
+Stopped at: Completed 10-01-PLAN.md
+Resume file: None

@@ -58,10 +58,10 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### UI — Server Configuration
 
-- [ ] **UISV-01**: User can add a Modbus TCP server with host, port, unit ID, and alias
-- [ ] **UISV-02**: User can edit existing Modbus server configuration
-- [ ] **UISV-03**: User can remove a Modbus server
-- [ ] **UISV-04**: User can see live connection status per Modbus server
+- [x] **UISV-01**: User can add a Modbus TCP server with host, port, unit ID, and alias
+- [x] **UISV-02**: User can edit existing Modbus server configuration
+- [x] **UISV-03**: User can remove a Modbus server
+- [x] **UISV-04**: User can see live connection status per Modbus server
 - [ ] **UISV-05**: User can configure poll groups per server (name + interval in ms)
 
 ### Testing (TDD)
@@ -73,7 +73,7 @@ Requirements for initial release. Each maps to roadmap phases.
 - [x] **TEST-05**: StateMan Modbus routing has integration tests (subscribe, read, readMany, write) alongside OPC UA keys
 - [x] **TEST-06**: ModbusConfig and ModbusNodeConfig have JSON round-trip serialization tests
 - [ ] **TEST-07**: Key repository Modbus config UI has widget tests
-- [ ] **TEST-08**: Server config Modbus section has widget tests
+- [x] **TEST-08**: Server config Modbus section has widget tests
 - [ ] **TEST-09**: Tests written before implementation (TDD — red/green/refactor cycle)
 
 ### UI — Key Repository
@@ -150,10 +150,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 | INTG-06 | Phase 8 | Complete |
 | INTG-07 | Phase 8 | Complete |
 | INTG-08 | Phase 9 | Complete |
-| UISV-01 | Phase 10 | Pending |
-| UISV-02 | Phase 10 | Pending |
-| UISV-03 | Phase 10 | Pending |
-| UISV-04 | Phase 10 | Pending |
+| UISV-01 | Phase 10 | Complete |
+| UISV-02 | Phase 10 | Complete |
+| UISV-03 | Phase 10 | Complete |
+| UISV-04 | Phase 10 | Complete |
 | UISV-05 | Phase 10 | Pending |
 | UIKY-01 | Phase 11 | Pending |
 | UIKY-02 | Phase 11 | Pending |
@@ -168,7 +168,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | TEST-05 | Phase 9 | Complete |
 | TEST-06 | Phase 8 | Complete |
 | TEST-07 | Phase 11 | Pending |
-| TEST-08 | Phase 10 | Pending |
+| TEST-08 | Phase 10 | Complete |
 | TEST-09 | Cross-cutting (all phases) | Pending |
 
 **Coverage:**
