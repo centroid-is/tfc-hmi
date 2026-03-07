@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:tfc/page_creator/assets/conveyor.dart';
 import 'package:tfc/page_creator/assets/conveyor_gate.dart';
 import 'package:tfc/page_creator/assets/conveyor_gate_painter.dart';
 
@@ -543,6 +544,83 @@ void main() {
           configWithoutFeedback.forceOpenFeedbackKey.isNotEmpty ||
               configWithoutFeedback.forceCloseFeedbackKey.isNotEmpty;
       expect(hasNoFeedback, isFalse);
+    });
+  });
+
+  group('ConveyorGateConfig position field', () {
+    test('position roundtrips correctly through toJson/fromJson', () {
+      final config = ConveyorGateConfig(position: 0.3);
+      final json = config.toJson();
+      final restored = ConveyorGateConfig.fromJson(json);
+      expect(restored.position, 0.3);
+    });
+
+    test('preview() has position=0.5', () {
+      final config = ConveyorGateConfig.preview();
+      expect(config.position, 0.5);
+    });
+
+    test('JSON without position field deserializes to 0.5 (backward compat)',
+        () {
+      final json = ConveyorGateConfig.preview().toJson();
+      json.remove('position');
+      final restored = ConveyorGateConfig.fromJson(json);
+      expect(restored.position, 0.5);
+    });
+  });
+
+  group('ConveyorConfig gates list', () {
+    test('gates list with one gate roundtrips correctly', () {
+      final conveyor = ConveyorConfig();
+      conveyor.gates.add(ConveyorGateConfig(position: 0.7));
+
+      final json = conveyor.toJson();
+      final restored = ConveyorConfig.fromJson(json);
+
+      expect(restored.gates, hasLength(1));
+      expect(restored.gates.first, isA<ConveyorGateConfig>());
+      expect((restored.gates.first as ConveyorGateConfig).position, 0.7);
+    });
+
+    test('preview() has empty gates list', () {
+      final config = ConveyorConfig.preview();
+      expect(config.gates, isEmpty);
+    });
+
+    test('JSON without gates field deserializes to empty list (backward compat)',
+        () {
+      final json = ConveyorConfig.preview().toJson();
+      json.remove('gates');
+      final restored = ConveyorConfig.fromJson(json);
+      expect(restored.gates, isEmpty);
+    });
+
+    test('multiple gates of different variants roundtrip all gates', () {
+      final conveyor = ConveyorConfig();
+      conveyor.gates.add(ConveyorGateConfig(
+        gateVariant: GateVariant.pneumatic,
+        position: 0.2,
+      ));
+      conveyor.gates.add(ConveyorGateConfig(
+        gateVariant: GateVariant.slider,
+        position: 0.5,
+      ));
+      conveyor.gates.add(ConveyorGateConfig(
+        gateVariant: GateVariant.pusher,
+        position: 0.8,
+      ));
+
+      final json = conveyor.toJson();
+      final restored = ConveyorConfig.fromJson(json);
+
+      expect(restored.gates, hasLength(3));
+      final gates = restored.gates.cast<ConveyorGateConfig>();
+      expect(gates[0].gateVariant, GateVariant.pneumatic);
+      expect(gates[0].position, 0.2);
+      expect(gates[1].gateVariant, GateVariant.slider);
+      expect(gates[1].position, 0.5);
+      expect(gates[2].gateVariant, GateVariant.pusher);
+      expect(gates[2].position, 0.8);
     });
   });
 }

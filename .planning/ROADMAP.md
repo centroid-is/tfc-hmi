@@ -49,8 +49,8 @@ Plans:
 **Plans:** 3 plans
 
 Plans:
-- [ ] 02-01-PLAN.md -- Slider and pusher painters, force key config fields, variant dispatch, golden tests
-- [ ] 02-02-PLAN.md -- Force dialog with OPC UA write/feedback, forced-state color, config editor updates
+- [x] 02-01-PLAN.md -- Slider and pusher painters, force key config fields, variant dispatch, golden tests
+- [x] 02-02-PLAN.md -- Force dialog with OPC UA write/feedback, forced-state color, config editor updates
 - [ ] 02-03-PLAN.md -- Visual and functional verification checkpoint
 
 ### Phase 3: Child-of-Conveyor Integration
@@ -76,5 +76,5 @@ Phases execute in numeric order: 1 → 2 → 3
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Standalone Diverter Gate | 3/3 | Complete | 2026-03-07 |
-| 2. Full Feature Set | 0/3 | Planned | - |
+| 2. Full Feature Set | 2/3 | In Progress | - |
 | 3. Child-of-Conveyor Integration | 0/0 | Not started | - |
