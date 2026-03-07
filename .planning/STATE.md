@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: in-progress
-stopped_at: Completed 09-01-PLAN.md
-last_updated: "2026-03-07T07:33:40Z"
-last_activity: 2026-03-07 -- Completed 09-01-PLAN.md
+stopped_at: Completed 09-02-PLAN.md
+last_updated: "2026-03-07T07:50:46.684Z"
+last_activity: 2026-03-07 -- Completed 09-02-PLAN.md
 progress:
   total_phases: 11
   completed_phases: 8
   total_plans: 11
-  completed_plans: 10
+  completed_plans: 11
   percent: 91
 ---
 
@@ -25,19 +25,19 @@ See: .planning/PROJECT.md (updated 2026-03-06)
 
 ## Current Position
 
-Phase: 9 of 11 (StateMan Integration)
-Plan: 1 of 2 in current phase
-Status: Plan 09-01 complete. Modbus key routing in StateMan subscribe/read/readMany/write with buildSpecsFromKeyMappings and buildModbusDeviceClients factory.
-Last activity: 2026-03-07 -- Completed 09-01-PLAN.md
+Phase: 9 of 11 (StateMan Integration) -- COMPLETE
+Plan: 2 of 2 in current phase
+Status: Phase 9 complete. Modbus device clients wired into data_acquisition_isolate, main.dart spawner, and Flutter UI provider.
+Last activity: 2026-03-07 -- Completed 09-02-PLAN.md
 
-Progress: [████████░░] 83%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 10
-- Average duration: 9.0min
-- Total execution time: 1.50 hours
+- Total plans completed: 11
+- Average duration: 9.2min
+- Total execution time: 1.68 hours
 
 **By Phase:**
 
@@ -50,11 +50,11 @@ Progress: [████████░░] 83%
 | 06-modbusclientwrapper-writing | 1/1 | 6min | 6min |
 | 07-deviceclient-adapter | 1/1 | 4min | 4min |
 | 08-config-serialization | 1/1 | 11min | 11min |
-| 09-stateman-integration | 1/2 | 11min | 11min |
+| 09-stateman-integration | 2/2 | 22min | 11min |
 
 **Recent Trend:**
-- Last 5 plans: 05-02 (19min), 06-01 (6min), 07-01 (4min), 08-01 (11min), 09-01 (11min)
-- Trend: Consistent ~11min for TDD plans with config/routing complexity
+- Last 5 plans: 06-01 (6min), 07-01 (4min), 08-01 (11min), 09-01 (11min), 09-02 (11min)
+- Trend: Consistent ~11min for integration/wiring plans
 
 *Updated after each plan completion*
 
@@ -100,6 +100,9 @@ Recent decisions affecting current work:
 - 09-01: readMany partitions keys into DeviceClient (Modbus/M2400) vs OPC UA before processing
 - 09-01: buildModbusDeviceClients pre-configures poll groups from ModbusConfig.pollGroups before adapter creation
 - 09-01: _resolveModbusDeviceClient matches by serverAlias between modbusNode config and adapter instance
+- 09-02: DataAcquisitionIsolateConfig.modbusJson defaults to const [] for backward compatibility
+- 09-02: Isolate name fallback: 'modbus' when only modbusJson present (was blanket 'jbtm')
+- 09-02: All three creation paths (isolate, main.dart spawner, Flutter UI provider) use same buildModbusDeviceClients factory
 
 ### Pending Todos
 
@@ -111,6 +114,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-07T07:22:22Z
-Stopped at: Completed 09-01-PLAN.md
-Resume file: .planning/phases/09-stateman-integration/09-01-SUMMARY.md
+Last session: 2026-03-07T07:48:27Z
+Stopped at: Completed 09-02-PLAN.md
+Resume file: .planning/phases/09-stateman-integration/09-02-SUMMARY.md
