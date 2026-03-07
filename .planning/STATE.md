@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Protocol-agnostic BrowsePanel extracted. Plan 03 (UMAS browse adapter) next.
-stopped_at: Completed 14-02-PLAN.md
-last_updated: "2026-03-07T20:41:32.229Z"
-last_activity: 2026-03-07 -- 14-02 complete, protocol-agnostic BrowsePanel extracted
+status: Phase 14 complete. All 3 plans done. UMAS browse fully wired into UI.
+stopped_at: Completed 14-03-PLAN.md
+last_updated: "2026-03-07T20:52:49Z"
+last_activity: 2026-03-07 -- 14-03 complete, UMAS browse adapter wired into UI
 progress:
   total_phases: 14
   completed_phases: 10
   total_plans: 18
-  completed_plans: 17
-  percent: 94
+  completed_plans: 18
+  percent: 100
 ---
 
 # Project State
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-03-06)
 ## Current Position
 
 Phase: 14 (UMAS Protocol Support)
-Plan: 2 of 3 in current phase (14-02 COMPLETE)
-Status: Protocol-agnostic BrowsePanel extracted. Plan 03 (UMAS browse adapter) next.
-Last activity: 2026-03-07 -- 14-02 complete, protocol-agnostic BrowsePanel extracted
+Plan: 3 of 3 in current phase (14-03 COMPLETE)
+Status: Phase 14 complete. All 3 plans done. UMAS browse fully wired into UI.
+Last activity: 2026-03-07 -- 14-03 complete, UMAS browse adapter wired into UI
 
-Progress: [█████████░] 94%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
@@ -64,6 +64,7 @@ Progress: [█████████░] 94%
 | Phase 11 P02 | 2min | 1 task | 0 files |
 | Phase 14 P01 | ~10min | 3 tasks | 4 files |
 | Phase 14 P02 | 8min | 2 tasks | 4 files |
+| Phase 14 P03 | 10min | 2 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -129,6 +130,11 @@ Recent decisions affecting current work:
 - [Phase 14-02]: BrowseTreeEntry (public) replaces private _TreeNode to satisfy dart analyze lint
 - [Phase 14-02]: formatDynamicValue moved to OpcUaBrowseDataSource as static method (OPC UA specific)
 - [Phase 14-02]: Breadcrumb root label is "Root" in generic panel (protocol-neutral, was "Objects")
+- [Phase 14-03]: browseUmasNode null-checks wrapper.client before creating UmasClient (snackbar if not connected)
+- [Phase 14-03]: _ModbusConfigSection converted to ConsumerStatefulWidget for stateManProvider access
+- [Phase 14-03]: _buildConfig helper centralizes ModbusConfig construction in server config card (DRY)
+- [Phase 14-03]: UMAS data type mapping uses uppercase switch with byteSize fallback for unknown types
+- [Phase 14-03]: stateManProvider override added to buildTestableKeyRepository to prevent timer leaks
 
 ### Pending Todos
 
@@ -140,6 +146,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-07T20:41:32.224Z
-Stopped at: Completed 14-02-PLAN.md
+Last session: 2026-03-07T20:52:49Z
+Stopped at: Completed 14-03-PLAN.md
 Resume file: None
