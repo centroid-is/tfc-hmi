@@ -72,18 +72,18 @@ Requirements for initial release. Each maps to roadmap phases.
 - [x] **TEST-04**: ModbusDeviceClientAdapter has unit tests verifying DeviceClient interface contract
 - [x] **TEST-05**: StateMan Modbus routing has integration tests (subscribe, read, readMany, write) alongside OPC UA keys
 - [x] **TEST-06**: ModbusConfig and ModbusNodeConfig have JSON round-trip serialization tests
-- [ ] **TEST-07**: Key repository Modbus config UI has widget tests
+- [x] **TEST-07**: Key repository Modbus config UI has widget tests
 - [x] **TEST-08**: Server config Modbus section has widget tests
 - [ ] **TEST-09**: Tests written before implementation (TDD — red/green/refactor cycle)
 
 ### UI — Key Repository
 
-- [ ] **UIKY-01**: User can switch a key between OPC UA, M2400, and Modbus protocols
-- [ ] **UIKY-02**: User can select Modbus server (by alias) for a key
-- [ ] **UIKY-03**: User can configure register type (coil, discrete input, holding register, input register)
-- [ ] **UIKY-04**: User can set register address
-- [ ] **UIKY-05**: User can select data type (auto-locked to bit for coil/discrete input)
-- [ ] **UIKY-06**: User can assign key to a poll group
+- [x] **UIKY-01**: User can switch a key between OPC UA, M2400, and Modbus protocols
+- [x] **UIKY-02**: User can select Modbus server (by alias) for a key
+- [x] **UIKY-03**: User can configure register type (coil, discrete input, holding register, input register)
+- [x] **UIKY-04**: User can set register address
+- [x] **UIKY-05**: User can select data type (auto-locked to bit for coil/discrete input)
+- [x] **UIKY-06**: User can assign key to a poll group
 
 ## v2 Requirements
 
@@ -155,19 +155,19 @@ Which phases cover which requirements. Updated during roadmap creation.
 | UISV-03 | Phase 10 | Complete |
 | UISV-04 | Phase 10 | Complete |
 | UISV-05 | Phase 10 | Complete |
-| UIKY-01 | Phase 11 | Pending |
-| UIKY-02 | Phase 11 | Pending |
-| UIKY-03 | Phase 11 | Pending |
-| UIKY-04 | Phase 11 | Pending |
-| UIKY-05 | Phase 11 | Pending |
-| UIKY-06 | Phase 11 | Pending |
+| UIKY-01 | Phase 11 | Complete |
+| UIKY-02 | Phase 11 | Complete |
+| UIKY-03 | Phase 11 | Complete |
+| UIKY-04 | Phase 11 | Complete |
+| UIKY-05 | Phase 11 | Complete |
+| UIKY-06 | Phase 11 | Complete |
 | TEST-01 | Phase 1 | Complete |
 | TEST-02 | Phase 2 | Complete |
 | TEST-03 | Phase 4 | Complete |
 | TEST-04 | Phase 7 | Complete |
 | TEST-05 | Phase 9 | Complete |
 | TEST-06 | Phase 8 | Complete |
-| TEST-07 | Phase 11 | Pending |
+| TEST-07 | Phase 11 | Complete |
 | TEST-08 | Phase 10 | Complete |
 | TEST-09 | Cross-cutting (all phases) | Pending |
 
