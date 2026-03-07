@@ -174,10 +174,11 @@ Plans:
   2. When Modbus is selected, user can choose a server alias, register type, address, data type, and poll group
   3. Data type selection auto-locks to "bit" when coil or discrete input register type is chosen
   4. Configured Modbus keys display live values from the connected device
-**Plans**: TBD
+**Plans:** 2 plans
 
 Plans:
-- [ ] 11-01: TBD
+- [ ] 11-01-PLAN.md -- TDD Modbus config section in key repository (RED tests then GREEN implementation)
+- [ ] 11-02-PLAN.md -- Visual verification of Modbus key repository UI
 
 ## Progress
 
@@ -197,4 +198,4 @@ Note: Phases 1, 2, and 3 have no inter-dependencies and could execute in paralle
 | 8. Config Serialization | 0/1 | Not started | - |
 | 9. StateMan Integration | 2/2 | Complete | 2026-03-07 |
 | 10. Server Config UI | 2/2 | Complete    | 2026-03-07 |
-| 11. Key Repository UI | 0/1 | Not started | - |
+| 11. Key Repository UI | 0/2 | Not started | - |
