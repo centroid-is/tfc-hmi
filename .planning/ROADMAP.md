@@ -22,7 +22,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [ ] **Phase 8: Config Serialization** - ModbusConfig and ModbusNodeConfig with backward-compatible JSON round-tripping
 - [ ] **Phase 9: StateMan Integration** - Wire Modbus into subscribe, read, readMany, write and data_acquisition_isolate
 - [x] **Phase 10: Server Config UI** - Modbus server CRUD, connection status, poll group configuration (completed 2026-03-07)
-- [ ] **Phase 11: Key Repository UI** - Protocol switching, register type/address/data type/poll group configuration per key
+- [x] **Phase 11: Key Repository UI** - Protocol switching, register type/address/data type/poll group configuration per key (completed 2026-03-07)
 
 ## Phase Details
 
@@ -174,7 +174,7 @@ Plans:
   2. When Modbus is selected, user can choose a server alias, register type, address, data type, and poll group
   3. Data type selection auto-locks to "bit" when coil or discrete input register type is chosen
   4. Configured Modbus keys display live values from the connected device
-**Plans:** 1/2 plans executed
+**Plans:** 2/2 plans complete
 
 Plans:
 - [ ] 11-01-PLAN.md -- TDD Modbus config section in key repository (RED tests then GREEN implementation)
@@ -198,4 +198,4 @@ Note: Phases 1, 2, and 3 have no inter-dependencies and could execute in paralle
 | 8. Config Serialization | 0/1 | Not started | - |
 | 9. StateMan Integration | 2/2 | Complete | 2026-03-07 |
 | 10. Server Config UI | 2/2 | Complete    | 2026-03-07 |
-| 11. Key Repository UI | 1/2 | In Progress|  |
+| 11. Key Repository UI | 2/2 | Complete   | 2026-03-07 |
