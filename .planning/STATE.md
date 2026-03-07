@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: completed
-stopped_at: Completed 08-01-PLAN.md
-last_updated: "2026-03-06T21:12:21.263Z"
-last_activity: 2026-03-06 -- Completed 08-01-PLAN.md
+status: in-progress
+stopped_at: Completed 09-01-PLAN.md
+last_updated: "2026-03-07T07:33:40Z"
+last_activity: 2026-03-07 -- Completed 09-01-PLAN.md
 progress:
   total_phases: 11
-  completed_phases: 7
-  total_plans: 9
-  completed_plans: 9
-  percent: 100
+  completed_phases: 8
+  total_plans: 11
+  completed_plans: 10
+  percent: 91
 ---
 
 # Project State
@@ -21,23 +21,23 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-06)
 
 **Core value:** Modbus devices can be read from and written to through the same StateMan interface as OPC UA and M2400, without breaking existing protocol integrations.
-**Current focus:** Phase 8 -- Config Serialization
+**Current focus:** Phase 9 -- StateMan Integration
 
 ## Current Position
 
-Phase: 8 of 11 (Config Serialization)
-Plan: 1 of 1 in current phase
-Status: Phase 8 complete. ModbusConfig/ModbusNodeConfig JSON-serializable classes integrated into StateManConfig and KeyMappingEntry with backward compatibility.
-Last activity: 2026-03-06 -- Completed 08-01-PLAN.md
+Phase: 9 of 11 (StateMan Integration)
+Plan: 1 of 2 in current phase
+Status: Plan 09-01 complete. Modbus key routing in StateMan subscribe/read/readMany/write with buildSpecsFromKeyMappings and buildModbusDeviceClients factory.
+Last activity: 2026-03-07 -- Completed 09-01-PLAN.md
 
-Progress: [██████████] 100%
+Progress: [████████░░] 83%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 9
-- Average duration: 8.8min
-- Total execution time: 1.32 hours
+- Total plans completed: 10
+- Average duration: 9.0min
+- Total execution time: 1.50 hours
 
 **By Phase:**
 
@@ -50,10 +50,11 @@ Progress: [██████████] 100%
 | 06-modbusclientwrapper-writing | 1/1 | 6min | 6min |
 | 07-deviceclient-adapter | 1/1 | 4min | 4min |
 | 08-config-serialization | 1/1 | 11min | 11min |
+| 09-stateman-integration | 1/2 | 11min | 11min |
 
 **Recent Trend:**
-- Last 5 plans: 05-01 (15min), 05-02 (19min), 06-01 (6min), 07-01 (4min), 08-01 (11min)
-- Trend: Config serialization slightly longer due to TDD cycle with build_runner regeneration and full enum coverage
+- Last 5 plans: 05-02 (19min), 06-01 (6min), 07-01 (4min), 08-01 (11min), 09-01 (11min)
+- Trend: Consistent ~11min for TDD plans with config/routing complexity
 
 *Updated after each plan completion*
 
@@ -96,6 +97,9 @@ Recent decisions affecting current work:
 - 08-01: ModbusRegisterType as separate Dart enum (not reusing ModbusElementType) for clean camelCase JSON serialization
 - 08-01: Default case with ArgumentError in fromModbusElementType to satisfy non-exhaustive switch on external enum
 - 08-01: createModbusDeviceClients uses named record with ModbusConfig instead of anonymous field record
+- 09-01: readMany partitions keys into DeviceClient (Modbus/M2400) vs OPC UA before processing
+- 09-01: buildModbusDeviceClients pre-configures poll groups from ModbusConfig.pollGroups before adapter creation
+- 09-01: _resolveModbusDeviceClient matches by serverAlias between modbusNode config and adapter instance
 
 ### Pending Todos
 
@@ -107,6 +111,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-06T21:01:17Z
-Stopped at: Completed 08-01-PLAN.md
-Resume file: .planning/phases/08-config-serialization/08-01-SUMMARY.md
+Last session: 2026-03-07T07:22:22Z
+Stopped at: Completed 09-01-PLAN.md
+Resume file: .planning/phases/09-stateman-integration/09-01-SUMMARY.md
