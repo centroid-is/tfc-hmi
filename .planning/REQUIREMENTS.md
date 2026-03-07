@@ -54,10 +54,10 @@
 
 - [x] **CHILD-01**: ConveyorConfig updated with gates list (subdevices pattern from EK1100)
 - [x] **CHILD-02**: Gate position as fraction (0.0-1.0) along conveyor belt length
-- [ ] **CHILD-03**: Gate scales from conveyor dimensions (flap spans belt width)
-- [ ] **CHILD-04**: Pneumatic cylinder extends outside conveyor bounding box visually
-- [ ] **CHILD-05**: Gate has own click target opening its own config dialog (separate from conveyor click)
-- [ ] **CHILD-06**: Conveyor config dialog supports adding/removing/managing child gates
+- [x] **CHILD-03**: Gate scales from conveyor dimensions (flap spans belt width)
+- [x] **CHILD-04**: Pneumatic cylinder extends outside conveyor bounding box visually
+- [x] **CHILD-05**: Gate has own click target opening its own config dialog (separate from conveyor click)
+- [x] **CHILD-06**: Conveyor config dialog supports adding/removing/managing child gates
 
 ## v2 Requirements
 
@@ -113,10 +113,10 @@
 | SOLO-04 | Phase 1 | Complete |
 | CHILD-01 | Phase 3 | Complete |
 | CHILD-02 | Phase 3 | Complete |
-| CHILD-03 | Phase 3 | Pending |
-| CHILD-04 | Phase 3 | Pending |
-| CHILD-05 | Phase 3 | Pending |
-| CHILD-06 | Phase 3 | Pending |
+| CHILD-03 | Phase 3 | Complete |
+| CHILD-04 | Phase 3 | Complete |
+| CHILD-05 | Phase 3 | Complete |
+| CHILD-06 | Phase 3 | Complete |
 
 **Coverage:**
 - v1 requirements: 33 total

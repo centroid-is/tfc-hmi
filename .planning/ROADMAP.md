@@ -76,5 +76,5 @@ Phases execute in numeric order: 1 -> 2 -> 3
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Standalone Diverter Gate | 3/3 | Complete | 2026-03-07 |
-| 2. Full Feature Set | 2/3 | In Progress | - |
-| 3. Child-of-Conveyor Integration | 0/2 | Not started | - |
+| 2. Full Feature Set | 2/2 | Complete | 2026-03-07 |
+| 3. Child-of-Conveyor Integration | 2/2 | Complete | 2026-03-07 |
