@@ -333,7 +333,11 @@ void _paintLinearGate(
 // SliderGatePainter
 // ---------------------------------------------------------------------------
 
-/// Slider gate = actuator + rod + horizontal lid (blade rotated 90°).
+/// Slider gate with actuator, connecting rod, and wide horizontal lid.
+///
+/// The lid slides horizontally to cover (closed) or reveal (open) the belt
+/// area. Unlike the pusher which has a thin vertical blade, the slider draws
+/// a wide rectangular plate.
 class SliderGatePainter extends CustomPainter {
   final ValueNotifier<double> progress;
   final Color stateColor;
@@ -351,15 +355,89 @@ class SliderGatePainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
+    final w = size.width;
+    final h = size.height;
+
+    // Apply activeOut inversion (same behavior as before)
     final p = activeOut ? progress.value : 1.0 - progress.value;
-    _paintLinearGate(
-      canvas,
-      size,
-      stateColor: stateColor,
-      side: side,
-      slideProgress: p,
-      bladeAngleDegrees: 90.0 + lidAngleDegrees,
-    );
+
+    // Actuator dimensions (consistent with pusher)
+    final actuatorWidth = w * 0.30;
+    final actuatorHeight = h * 0.18;
+    final actuatorY = (h - actuatorHeight) / 2;
+    final rodDiameter = actuatorHeight * 0.25;
+    final rodCenterY = h * 0.5;
+
+    // Lid dimensions -- wide horizontal plate (the key difference from pusher)
+    final lidWidth = w * 0.50;
+    final lidHeight = h * 0.70;
+
+    // Rod/lid travel calculation
+    final minStub = w * 0.05;
+    final beltArea = w - actuatorWidth;
+    final lidTravel = beltArea - minStub - lidWidth;
+    // p=0 (closed): lid at far end covering belt
+    // p=1 (open): lid pulled toward actuator
+    final lidOffset = minStub + lidTravel * p;
+
+    if (side == GateSide.left) {
+      // Actuator on left
+      _drawCylinder(canvas, Rect.fromLTWH(0, actuatorY, actuatorWidth, actuatorHeight));
+
+      // Rod from actuator to lid
+      final rodEnd = actuatorWidth + lidOffset;
+      _drawRod(canvas, Rect.fromLTWH(
+        actuatorWidth, rodCenterY - rodDiameter / 2,
+        lidOffset, rodDiameter,
+      ));
+
+      // Lid at rod end (optionally tilted by lidAngleDegrees)
+      if (lidAngleDegrees != 0.0) {
+        canvas.save();
+        canvas.translate(rodEnd + lidWidth / 2, h / 2);
+        canvas.rotate(lidAngleDegrees * pi / 180);
+        _drawLid(canvas, Rect.fromCenter(
+          center: Offset.zero,
+          width: lidWidth,
+          height: lidHeight,
+        ), stateColor);
+        canvas.restore();
+      } else {
+        _drawLid(canvas, Rect.fromLTWH(
+          rodEnd, (h - lidHeight) / 2,
+          lidWidth, lidHeight,
+        ), stateColor);
+      }
+    } else {
+      // Actuator on right (mirrored)
+      _drawCylinder(canvas, Rect.fromLTWH(
+        w - actuatorWidth, actuatorY, actuatorWidth, actuatorHeight,
+      ));
+
+      final rodStart = w - actuatorWidth - lidOffset;
+      _drawRod(canvas, Rect.fromLTWH(
+        rodStart, rodCenterY - rodDiameter / 2,
+        lidOffset, rodDiameter,
+      ));
+
+      // Lid to the left of rod
+      if (lidAngleDegrees != 0.0) {
+        canvas.save();
+        canvas.translate(rodStart - lidWidth / 2, h / 2);
+        canvas.rotate(-lidAngleDegrees * pi / 180);
+        _drawLid(canvas, Rect.fromCenter(
+          center: Offset.zero,
+          width: lidWidth,
+          height: lidHeight,
+        ), stateColor);
+        canvas.restore();
+      } else {
+        _drawLid(canvas, Rect.fromLTWH(
+          rodStart - lidWidth, (h - lidHeight) / 2,
+          lidWidth, lidHeight,
+        ), stateColor);
+      }
+    }
   }
 
   @override
