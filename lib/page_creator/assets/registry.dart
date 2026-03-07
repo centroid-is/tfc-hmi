@@ -25,6 +25,7 @@ import 'recipes.dart';
 import 'bpm.dart';
 import 'rate_value.dart';
 import 'speedbatcher.dart';
+import 'conveyor_gate.dart';
 
 class AssetRegistry {
   static final Logger _log = Logger();
@@ -65,6 +66,7 @@ class AssetRegistry {
     RecipesConfig: RecipesConfig.fromJson,
     SpeedBatcherConfig: SpeedBatcherConfig.fromJson,
     GateStatusConfig: GateStatusConfig.fromJson,
+    ConveyorGateConfig: ConveyorGateConfig.fromJson,
   };
 
   static final Map<Type, Asset Function()> defaultFactories = {
@@ -102,6 +104,7 @@ class AssetRegistry {
     RecipesConfig: RecipesConfig.preview,
     SpeedBatcherConfig: SpeedBatcherConfig.preview,
     GateStatusConfig: GateStatusConfig.preview,
+    ConveyorGateConfig: ConveyorGateConfig.preview,
   };
 
   static void registerFromJsonFactory<T extends Asset>(
