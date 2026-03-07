@@ -1019,14 +1019,28 @@ void main() {
       await tester.tap(find.text('modbus_key'));
       await tester.pumpAndSettle();
 
-      // Tap the poll group dropdown
-      final pollGroupDropdown = find.byType(DropdownButtonFormField<String>);
-      // There should be at least one String dropdown (server alias and poll group)
-      // Find the one with poll group value
-      await tester.tap(pollGroupDropdown.last);
+      // Scroll to make poll group dropdown visible
+      await tester.scrollUntilVisible(
+        find.text('Poll Group'),
+        200,
+        scrollable: find.byType(Scrollable).first,
+      );
       await tester.pumpAndSettle();
 
-      // Both poll groups should be available
+      // The selected value 'default (1000ms)' should be visible in the dropdown
+      expect(find.text('default (1000ms)'), findsOneWidget);
+
+      // Tap the poll group dropdown to open it and see all items
+      // Use ancestor to find specifically the poll group dropdown
+      final pollGroupDropdown = find.ancestor(
+        of: find.text('Poll Group'),
+        matching: find.byType(DropdownButtonFormField<String>),
+      );
+      expect(pollGroupDropdown, findsOneWidget);
+      await tester.tap(pollGroupDropdown);
+      await tester.pumpAndSettle();
+
+      // Both poll groups should be available in the menu
       expect(find.text('default (1000ms)'), findsAtLeastNWidgets(1));
       expect(find.text('fast (100ms)'), findsAtLeastNWidgets(1));
     });
@@ -1039,10 +1053,12 @@ void main() {
       ));
       await tester.pumpAndSettle();
 
-      // Verify subtitle text for modbus_temp key
+      // Verify subtitle text for modbus_temp key contains compact format
+      // Both keys have @ plc_1, so check the full subtitle pattern
       expect(find.textContaining('holdingRegister[100]'), findsOneWidget);
       expect(find.textContaining('float32'), findsOneWidget);
-      expect(find.textContaining('@ plc_1'), findsOneWidget);
+      // Both modbus_temp and modbus_coil have @ plc_1
+      expect(find.textContaining('@ plc_1'), findsNWidgets(2));
     });
 
     testWidgets('search filter matches Modbus server alias',

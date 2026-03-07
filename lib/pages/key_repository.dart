@@ -11,6 +11,7 @@ import 'package:path/path.dart' as path;
 import '../widgets/base_scaffold.dart';
 import '../widgets/opcua_browse.dart';
 import 'package:tfc_dart/core/state_man.dart';
+import 'package:tfc_dart/core/modbus_client_wrapper.dart' show ModbusDataType;
 import '../widgets/opcua_array_index_field.dart';
 import 'package:tfc_dart/core/collector.dart';
 import 'package:tfc_dart/core/database.dart';
@@ -334,7 +335,7 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
     return fuzzyFilter(entries, _searchQuery, [
       (e) => e.key,
       (e) => e.value.opcuaNode?.identifier ?? '',
-      (e) => e.value.opcuaNode?.serverAlias ?? e.value.m2400Node?.serverAlias ?? '',
+      (e) => e.value.opcuaNode?.serverAlias ?? e.value.m2400Node?.serverAlias ?? e.value.modbusNode?.serverAlias ?? '',
     ]);
   }
 
@@ -349,6 +350,14 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
   List<String> get _jbtmServerAliases {
     if (_stateManConfig == null) return [];
     return _stateManConfig!.jbtm
+        .where((c) => c.serverAlias != null && c.serverAlias!.isNotEmpty)
+        .map((c) => c.serverAlias!)
+        .toList();
+  }
+
+  List<String> get _modbusServerAliases {
+    if (_stateManConfig == null) return [];
+    return _stateManConfig!.modbus
         .where((c) => c.serverAlias != null && c.serverAlias!.isNotEmpty)
         .map((c) => c.serverAlias!)
         .toList();
@@ -515,6 +524,8 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
                         entry: entry.value,
                         serverAliases: _serverAliases,
                         jbtmServerAliases: _jbtmServerAliases,
+                        modbusServerAliases: _modbusServerAliases,
+                        modbusConfigs: _stateManConfig?.modbus ?? [],
                         onUpdate: (updated) => _updateEntry(entry.key, updated),
                         onRename: (newName) => _renameKey(entry.key, newName),
                         onCopy: () => _duplicateKey(entry.key),
@@ -607,6 +618,8 @@ class _KeyMappingCard extends StatefulWidget {
   final KeyMappingEntry entry;
   final List<String> serverAliases;
   final List<String> jbtmServerAliases;
+  final List<String> modbusServerAliases;
+  final List<ModbusConfig> modbusConfigs;
   final Function(KeyMappingEntry) onUpdate;
   final Function(String) onRename;
   final VoidCallback onCopy;
@@ -620,6 +633,8 @@ class _KeyMappingCard extends StatefulWidget {
     required this.entry,
     required this.serverAliases,
     required this.jbtmServerAliases,
+    required this.modbusServerAliases,
+    required this.modbusConfigs,
     required this.onUpdate,
     required this.onRename,
     required this.onCopy,
@@ -679,8 +694,18 @@ class _KeyMappingCardState extends State<_KeyMappingCard> {
   }
 
   bool get _isM2400 => widget.entry.m2400Node != null;
+  bool get _isModbus => widget.entry.modbusNode != null;
 
   String _buildSubtitle() {
+    if (_isModbus) {
+      final node = widget.entry.modbusNode!;
+      var subtitle = '${node.registerType.name}[${node.address}]';
+      subtitle += ' ${node.dataType.name}';
+      if (node.serverAlias != null && node.serverAlias!.isNotEmpty) {
+        subtitle += ' @ ${node.serverAlias}';
+      }
+      return subtitle;
+    }
     if (_isM2400) {
       final node = widget.entry.m2400Node!;
       var subtitle = 'REC=${node.recordType.name}(${node.recordType.id})';
@@ -736,11 +761,31 @@ class _KeyMappingCardState extends State<_KeyMappingCard> {
     widget.onUpdate(updatedEntry);
   }
 
+  void _switchToModbus() {
+    final updatedEntry = KeyMappingEntry(
+      modbusNode: ModbusNodeConfig(
+        registerType: ModbusRegisterType.holdingRegister,
+        address: 0,
+      ),
+      collect: widget.entry.collect,
+    );
+    widget.onUpdate(updatedEntry);
+  }
+
+  void _updateModbusConfig(ModbusNodeConfig config) {
+    final updatedEntry = KeyMappingEntry(
+      modbusNode: config,
+      collect: widget.entry.collect,
+    );
+    widget.onUpdate(updatedEntry);
+  }
+
   void _toggleCollect(bool enabled) {
     setState(() => _collectEnabled = enabled);
     final updatedEntry = KeyMappingEntry(
       opcuaNode: widget.entry.opcuaNode,
       m2400Node: widget.entry.m2400Node,
+      modbusNode: widget.entry.modbusNode,
       collect: enabled
           ? CollectEntry(
               key: widget.keyName,
@@ -756,6 +801,7 @@ class _KeyMappingCardState extends State<_KeyMappingCard> {
     final updatedEntry = KeyMappingEntry(
       opcuaNode: widget.entry.opcuaNode,
       m2400Node: widget.entry.m2400Node,
+      modbusNode: widget.entry.modbusNode,
       collect: collect,
     );
     widget.onUpdate(updatedEntry);
@@ -848,7 +894,7 @@ class _KeyMappingCardState extends State<_KeyMappingCard> {
                 ),
                 const SizedBox(height: 12),
                 // Device type selector
-                if (widget.jbtmServerAliases.isNotEmpty)
+                if (widget.jbtmServerAliases.isNotEmpty || widget.modbusServerAliases.isNotEmpty)
                   Padding(
                     padding: const EdgeInsets.only(bottom: 4.0),
                     child: Row(
@@ -860,25 +906,44 @@ class _KeyMappingCardState extends State<_KeyMappingCard> {
                         const SizedBox(width: 12),
                         ChoiceChip(
                           label: const Text('OPC UA'),
-                          selected: !_isM2400,
+                          selected: !_isM2400 && !_isModbus,
                           onSelected: (selected) {
-                            if (selected && _isM2400) _switchToOpcUa();
+                            if (selected && (_isM2400 || _isModbus)) _switchToOpcUa();
                           },
                         ),
-                        const SizedBox(width: 8),
-                        ChoiceChip(
-                          label: const Text('M2400'),
-                          selected: _isM2400,
-                          onSelected: (selected) {
-                            if (selected && !_isM2400) _switchToM2400();
-                          },
-                        ),
+                        if (widget.jbtmServerAliases.isNotEmpty) ...[
+                          const SizedBox(width: 8),
+                          ChoiceChip(
+                            label: const Text('M2400'),
+                            selected: _isM2400,
+                            onSelected: (selected) {
+                              if (selected && !_isM2400) _switchToM2400();
+                            },
+                          ),
+                        ],
+                        if (widget.modbusServerAliases.isNotEmpty) ...[
+                          const SizedBox(width: 8),
+                          ChoiceChip(
+                            label: const Text('Modbus'),
+                            selected: _isModbus,
+                            onSelected: (selected) {
+                              if (selected && !_isModbus) _switchToModbus();
+                            },
+                          ),
+                        ],
                       ],
                     ),
                   ),
                 const SizedBox(height: 4),
                 // Protocol-specific config section
-                if (_isM2400)
+                if (_isModbus)
+                  _ModbusConfigSection(
+                    config: widget.entry.modbusNode!,
+                    modbusServerAliases: widget.modbusServerAliases,
+                    modbusConfigs: widget.modbusConfigs,
+                    onChanged: _updateModbusConfig,
+                  )
+                else if (_isM2400)
                   _M2400ConfigSection(
                     config: widget.entry.m2400Node ??
                         M2400NodeConfig(recordType: M2400RecordType.recBatch),
@@ -1299,6 +1364,216 @@ class _M2400ConfigSectionState extends State<_M2400ConfigSection> {
                 },
               ),
             ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ===================== Modbus Config Section =====================
+
+class _ModbusConfigSection extends StatefulWidget {
+  final ModbusNodeConfig config;
+  final List<String> modbusServerAliases;
+  final List<ModbusConfig> modbusConfigs;
+  final Function(ModbusNodeConfig) onChanged;
+
+  const _ModbusConfigSection({
+    required this.config,
+    required this.modbusServerAliases,
+    required this.modbusConfigs,
+    required this.onChanged,
+  });
+
+  @override
+  State<_ModbusConfigSection> createState() => _ModbusConfigSectionState();
+}
+
+class _ModbusConfigSectionState extends State<_ModbusConfigSection> {
+  String? _selectedAlias;
+  late ModbusRegisterType _selectedRegisterType;
+  late TextEditingController _addressController;
+  late ModbusDataType _selectedDataType;
+  late String _selectedPollGroup;
+
+  bool get _isBooleanRegisterType =>
+      _selectedRegisterType == ModbusRegisterType.coil ||
+      _selectedRegisterType == ModbusRegisterType.discreteInput;
+
+  @override
+  void initState() {
+    super.initState();
+    _selectedAlias = widget.config.serverAlias;
+    _selectedRegisterType = widget.config.registerType;
+    _addressController =
+        TextEditingController(text: widget.config.address.toString());
+    _selectedDataType = widget.config.dataType;
+    _selectedPollGroup = widget.config.pollGroup;
+  }
+
+  @override
+  void dispose() {
+    _addressController.dispose();
+    super.dispose();
+  }
+
+  List<ModbusPollGroupConfig> _getAvailablePollGroups() {
+    if (_selectedAlias == null) {
+      return [ModbusPollGroupConfig(name: 'default', intervalMs: 1000)];
+    }
+    final serverConfig = widget.modbusConfigs.cast<ModbusConfig?>().firstWhere(
+          (c) => c!.serverAlias == _selectedAlias,
+          orElse: () => null,
+        );
+    if (serverConfig != null && serverConfig.pollGroups.isNotEmpty) {
+      return serverConfig.pollGroups;
+    }
+    return [ModbusPollGroupConfig(name: 'default', intervalMs: 1000)];
+  }
+
+  void _notifyChanged() {
+    final config = ModbusNodeConfig(
+      serverAlias: _selectedAlias,
+      registerType: _selectedRegisterType,
+      address: int.tryParse(_addressController.text) ?? 0,
+      dataType: _selectedDataType,
+      pollGroup: _selectedPollGroup,
+    );
+    widget.onChanged(config);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(12.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const FaIcon(FontAwesomeIcons.networkWired, size: 16),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text('Modbus Key Configuration',
+                      style: Theme.of(context).textTheme.titleSmall),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            // Server alias dropdown
+            DropdownButtonFormField<String>(
+              value: _selectedAlias,
+              decoration: const InputDecoration(
+                labelText: 'Server Alias',
+                prefixIcon: FaIcon(FontAwesomeIcons.server, size: 16),
+              ),
+              items: [
+                const DropdownMenuItem<String>(
+                    value: null, child: Text('(none)')),
+                ...widget.modbusServerAliases.map((alias) =>
+                    DropdownMenuItem(value: alias, child: Text(alias))),
+              ],
+              onChanged: (value) {
+                setState(() {
+                  _selectedAlias = value;
+                  _selectedPollGroup = 'default';
+                });
+                _notifyChanged();
+              },
+            ),
+            const SizedBox(height: 12),
+            // Register type dropdown
+            DropdownButtonFormField<ModbusRegisterType>(
+              value: _selectedRegisterType,
+              decoration: const InputDecoration(
+                labelText: 'Register Type',
+                prefixIcon: FaIcon(FontAwesomeIcons.layerGroup, size: 16),
+              ),
+              items: ModbusRegisterType.values
+                  .map((rt) => DropdownMenuItem(
+                        value: rt,
+                        child: Text(rt.name),
+                      ))
+                  .toList(),
+              onChanged: (ModbusRegisterType? value) {
+                if (value == null) return;
+                setState(() {
+                  _selectedRegisterType = value;
+                  // Auto-lock data type for boolean register types
+                  if (value == ModbusRegisterType.coil ||
+                      value == ModbusRegisterType.discreteInput) {
+                    _selectedDataType = ModbusDataType.bit;
+                  } else if (_selectedDataType == ModbusDataType.bit) {
+                    // Switching away from boolean type -- reset to default
+                    _selectedDataType = ModbusDataType.uint16;
+                  }
+                });
+                _notifyChanged();
+              },
+            ),
+            const SizedBox(height: 12),
+            // Address field
+            TextField(
+              controller: _addressController,
+              decoration: const InputDecoration(
+                labelText: 'Address',
+                prefixIcon: FaIcon(FontAwesomeIcons.locationDot, size: 16),
+              ),
+              keyboardType: TextInputType.number,
+              onChanged: (_) => _notifyChanged(),
+            ),
+            const SizedBox(height: 12),
+            // Data type dropdown (disabled for coil/discrete input)
+            DropdownButtonFormField<ModbusDataType>(
+              value: _selectedDataType,
+              decoration: InputDecoration(
+                labelText:
+                    _isBooleanRegisterType ? 'Data Type (auto)' : 'Data Type',
+                prefixIcon:
+                    const FaIcon(FontAwesomeIcons.hashtag, size: 16),
+              ),
+              items: _isBooleanRegisterType
+                  ? [
+                      const DropdownMenuItem(
+                          value: ModbusDataType.bit, child: Text('bit'))
+                    ]
+                  : ModbusDataType.values
+                      .map((dt) =>
+                          DropdownMenuItem(value: dt, child: Text(dt.name)))
+                      .toList(),
+              onChanged: _isBooleanRegisterType
+                  ? null // null disables the dropdown
+                  : (value) {
+                      if (value == null) return;
+                      setState(() => _selectedDataType = value);
+                      _notifyChanged();
+                    },
+            ),
+            const SizedBox(height: 12),
+            // Poll group dropdown
+            DropdownButtonFormField<String>(
+              value: _selectedPollGroup,
+              decoration: const InputDecoration(
+                labelText: 'Poll Group',
+                prefixIcon:
+                    FaIcon(FontAwesomeIcons.clockRotateLeft, size: 16),
+              ),
+              items: _getAvailablePollGroups()
+                  .map((pg) => DropdownMenuItem(
+                        value: pg.name,
+                        child: Text('${pg.name} (${pg.intervalMs}ms)'),
+                      ))
+                  .toList(),
+              onChanged: _selectedAlias == null
+                  ? null
+                  : (value) {
+                      if (value == null) return;
+                      setState(() => _selectedPollGroup = value);
+                      _notifyChanged();
+                    },
+            ),
           ],
         ),
       ),
