@@ -626,6 +626,26 @@ class _ConveyorGateConfigEditorState extends State<_ConveyorGateConfigEditor>
           ),
           const Divider(),
 
+          // -- Gate Variant --
+          Text('Gate Variant',
+              style: Theme.of(context).textTheme.bodySmall),
+          const SizedBox(height: 4),
+          SegmentedButton<GateVariant>(
+            segments: const [
+              ButtonSegment(
+                  value: GateVariant.pneumatic, label: Text('Diverter')),
+              ButtonSegment(
+                  value: GateVariant.slider, label: Text('Slider')),
+              ButtonSegment(
+                  value: GateVariant.pusher, label: Text('Pusher')),
+            ],
+            selected: {config.gateVariant},
+            onSelectionChanged: (selection) {
+              setState(() => config.gateVariant = selection.first);
+            },
+          ),
+          const SizedBox(height: 16),
+
           // -- OPC UA State Key --
           KeyField(
             label: 'OPC UA State Key',
@@ -649,20 +669,22 @@ class _ConveyorGateConfigEditorState extends State<_ConveyorGateConfigEditor>
           ),
           const SizedBox(height: 16),
 
-          // -- Opening Angle --
-          Text(
-            'Opening Angle: ${config.openAngleDegrees.round()}\u00B0',
-            style: Theme.of(context).textTheme.bodySmall,
-          ),
-          Slider(
-            min: 0,
-            max: 90,
-            divisions: 90,
-            value: config.openAngleDegrees,
-            label: '${config.openAngleDegrees.round()}\u00B0',
-            onChanged: (v) => setState(() => config.openAngleDegrees = v),
-          ),
-          const SizedBox(height: 8),
+          // -- Opening Angle (diverter only, Pitfall 4) --
+          if (config.gateVariant == GateVariant.pneumatic) ...[
+            Text(
+              'Opening Angle: ${config.openAngleDegrees.round()}\u00B0',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            Slider(
+              min: 0,
+              max: 90,
+              divisions: 90,
+              value: config.openAngleDegrees,
+              label: '${config.openAngleDegrees.round()}\u00B0',
+              onChanged: (v) => setState(() => config.openAngleDegrees = v),
+            ),
+            const SizedBox(height: 8),
+          ],
 
           // -- Open Time --
           TextFormField(
@@ -729,6 +751,37 @@ class _ConveyorGateConfigEditorState extends State<_ConveyorGateConfigEditor>
                 const Text('Closed Color'),
               ],
             ),
+          ),
+          const SizedBox(height: 16),
+
+          // -- Force Controls --
+          Text('Force Controls',
+              style: Theme.of(context).textTheme.titleSmall),
+          const SizedBox(height: 8),
+          KeyField(
+            label: 'Force Open Key',
+            initialValue: config.forceOpenKey,
+            onChanged: (v) => setState(() => config.forceOpenKey = v),
+          ),
+          const SizedBox(height: 8),
+          KeyField(
+            label: 'Force Open Feedback Key',
+            initialValue: config.forceOpenFeedbackKey,
+            onChanged: (v) =>
+                setState(() => config.forceOpenFeedbackKey = v),
+          ),
+          const SizedBox(height: 8),
+          KeyField(
+            label: 'Force Close Key',
+            initialValue: config.forceCloseKey,
+            onChanged: (v) => setState(() => config.forceCloseKey = v),
+          ),
+          const SizedBox(height: 8),
+          KeyField(
+            label: 'Force Close Feedback Key',
+            initialValue: config.forceCloseFeedbackKey,
+            onChanged: (v) =>
+                setState(() => config.forceCloseFeedbackKey = v),
           ),
           const SizedBox(height: 16),
 
