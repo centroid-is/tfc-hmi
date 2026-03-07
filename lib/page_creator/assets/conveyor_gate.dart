@@ -97,6 +97,10 @@ class ConveyorGateConfig extends BaseAsset {
   @JsonKey(fromJson: _colorFromJson, toJson: _colorToJson)
   Color closedColor;
 
+  /// For slider variant: when true, active/open state pushes lid OUT.
+  /// When false, active state pulls lid IN (retracted).
+  bool sliderActiveOut;
+
   /// OPC UA key to write a force-open command (DATA-02).
   String forceOpenKey;
 
@@ -118,6 +122,7 @@ class ConveyorGateConfig extends BaseAsset {
     this.closeTimeMs,
     this.openColor = Colors.green,
     this.closedColor = Colors.white,
+    this.sliderActiveOut = true,
     this.forceOpenKey = '',
     this.forceOpenFeedbackKey = '',
     this.forceCloseKey = '',
@@ -134,6 +139,7 @@ class ConveyorGateConfig extends BaseAsset {
         closeTimeMs = null,
         openColor = Colors.green,
         closedColor = Colors.white,
+        sliderActiveOut = true,
         forceOpenKey = '',
         forceOpenFeedbackKey = '',
         forceCloseKey = '',
@@ -246,6 +252,7 @@ class _ConveyorGateState extends ConsumerState<ConveyorGate>
           progress: _progress,
           stateColor: stateColor,
           side: widget.config.side,
+          activeOut: widget.config.sliderActiveOut,
         );
       case GateVariant.pusher:
         return PusherGatePainter(
@@ -577,6 +584,7 @@ class _ConveyorGateConfigEditorState extends State<_ConveyorGateConfigEditor>
           progress: _previewProgress,
           stateColor: config.openColor,
           side: config.side,
+          activeOut: config.sliderActiveOut,
         );
       case GateVariant.pusher:
         return PusherGatePainter(
@@ -710,6 +718,20 @@ class _ConveyorGateConfigEditorState extends State<_ConveyorGateConfigEditor>
             },
           ),
           const SizedBox(height: 16),
+
+          // -- Slider Active Direction --
+          if (config.gateVariant == GateVariant.slider) ...[
+            SwitchListTile(
+              title: const Text('Active Position Out'),
+              subtitle: Text(config.sliderActiveOut
+                  ? 'Open = lid pushed out'
+                  : 'Open = lid pulled in'),
+              value: config.sliderActiveOut,
+              onChanged: (v) => setState(() => config.sliderActiveOut = v),
+              contentPadding: EdgeInsets.zero,
+            ),
+            const SizedBox(height: 8),
+          ],
 
           // -- Opening Angle (diverter only, Pitfall 4) --
           if (config.gateVariant == GateVariant.pneumatic) ...[

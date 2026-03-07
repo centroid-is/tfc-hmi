@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: in-progress
-stopped_at: Completed 04-02-PLAN.md
-last_updated: "2026-03-07T19:50:30Z"
-last_activity: 2026-03-07 -- Phase 4 Plan 2 complete
+status: complete
+stopped_at: Completed 04-03-PLAN.md (milestone complete)
+last_updated: "2026-03-07T19:55:59Z"
+last_activity: 2026-03-07 -- Phase 4 Plan 3 complete (milestone v1.0 done)
 progress:
   total_phases: 4
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 11
-  completed_plans: 10
-  percent: 91
+  completed_plans: 11
+  percent: 100
 ---
 
 # Project State
@@ -26,18 +26,18 @@ See: .planning/PROJECT.md (updated 2026-03-07)
 ## Current Position
 
 Phase: 4 of 4 (Fix Gate Architecture and Redesign Painters)
-Plan: 2 of 3 complete
-Status: In Progress
-Last activity: 2026-03-07 -- Phase 4 Plan 2 complete
+Plan: 3 of 3 complete
+Status: Complete
+Last activity: 2026-03-07 -- Phase 4 Plan 3 complete (milestone v1.0 done)
 
-Progress: [██████████████████░░] 10/11 plans (91%)
+Progress: [████████████████████] 11/11 plans (100%)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 10
-- Average duration: 5min
-- Total execution time: 47 min
+- Total plans completed: 11
+- Average duration: 4min
+- Total execution time: 49 min
 
 **By Phase:**
 
@@ -52,10 +52,11 @@ Progress: [██████████████████░░] 10/11 p
 | 03 | 02 | 15min | 3 | 4 |
 | 04 | 01 | 6min | 2 | 6 |
 | 04 | 02 | 4min | 2 | 3 |
+| 04 | 03 | 2min | 2 | 8 |
 
 **Recent Trend:**
-- Last 3 plans: 15min, 6min, 4min
-- Trend: Decreasing -- incremental changes on established architecture
+- Last 3 plans: 6min, 4min, 2min
+- Trend: Decreasing -- painter redesign was straightforward on established architecture
 
 *Updated after each plan completion*
 
@@ -87,6 +88,9 @@ Recent decisions affecting current work:
 - [Phase 04]: Belt Position slider removed from standalone gate config editor (position now on ChildGateEntry)
 - [Phase 04]: 50/50 flush belt-edge split replaces 30/70 for visually centered child gate positioning
 - [Phase 04]: Gate State Key label replaces OPC UA State Key for protocol-agnostic terminology
+- [Phase 04]: Diverter concave side tied to GateSide (left=concave top, right=concave bottom) rather than separate config field
+- [Phase 04]: No pneumatic actuator on diverter -- uses pivot mechanism only, matching physical equipment
+- [Phase 04]: Shared _drawLid helper extracted for slider gate lid rendering with consistent shading
 
 ### Pending Todos
 
@@ -103,6 +107,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-07T19:50:30Z
-Stopped at: Completed 04-02-PLAN.md
-Resume file: .planning/phases/04-fix-gate-architecture-and-redesign-painters/04-02-SUMMARY.md
+Last session: 2026-03-07T19:55:59Z
+Stopped at: Completed 04-03-PLAN.md (milestone v1.0 complete)
+Resume file: .planning/phases/04-fix-gate-architecture-and-redesign-painters/04-03-SUMMARY.md

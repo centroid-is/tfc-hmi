@@ -46,6 +46,7 @@ ConveyorGateConfig _$ConveyorGateConfigFromJson(Map<String, dynamic> json) =>
       closedColor: json['closedColor'] == null
           ? Colors.white
           : _colorFromJson((json['closedColor'] as num).toInt()),
+      sliderActiveOut: json['sliderActiveOut'] as bool? ?? true,
       forceOpenKey: json['forceOpenKey'] as String? ?? '',
       forceOpenFeedbackKey: json['forceOpenFeedbackKey'] as String? ?? '',
       forceCloseKey: json['forceCloseKey'] as String? ?? '',
@@ -73,6 +74,7 @@ Map<String, dynamic> _$ConveyorGateConfigToJson(ConveyorGateConfig instance) =>
       'closeTimeMs': instance.closeTimeMs,
       'openColor': _colorToJson(instance.openColor),
       'closedColor': _colorToJson(instance.closedColor),
+      'sliderActiveOut': instance.sliderActiveOut,
       'forceOpenKey': instance.forceOpenKey,
       'forceOpenFeedbackKey': instance.forceOpenFeedbackKey,
       'forceCloseKey': instance.forceCloseKey,

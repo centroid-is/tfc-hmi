@@ -150,13 +150,11 @@ class PneumaticDiverterPainter extends CustomPainter {
     // Direction: left hinge draws arm to the right, right hinge to the left
     final dir = side == GateSide.left ? 1.0 : -1.0;
 
-    // Build asymmetric deflector arm path:
-    // - Concave edge: curves inward (the catching/scooping side)
-    // - Convex edge: curves outward (the outer/back side)
+    // Deflector arm: one edge STRAIGHT, one edge CONCAVE (curves inward).
+    // The concave side is the "catching" edge that redirects product.
     //
-    // For left-hinged gates: top edge is concave (scoops product downward)
-    // For right-hinged gates: bottom edge is concave (scoops product upward)
-    // This is handled by swapping which edge gets which curve shape.
+    // Left-hinged: top edge straight, bottom edge concave (scoops inward)
+    // Right-hinged: bottom edge straight, top edge concave (scoops inward)
 
     final path = Path();
 
@@ -164,22 +162,14 @@ class PneumaticDiverterPainter extends CustomPainter {
     path.moveTo(0, -pivotRadius);
 
     if (side == GateSide.left) {
-      // Left hinge: top edge = concave (scoop), bottom edge = convex (outer)
-
-      // Top edge (CONCAVE): pulls inward toward arm centerline
-      path.cubicTo(
-        dir * armLength * 0.25, -pivotRadius * 0.3, // ctrl1: pull inward quickly
-        dir * armLength * 0.65, -tipWidth * 1.2, // ctrl2: gentle approach to tip
-        dir * armLength, -tipWidth, // end: narrow tip top
-      );
+      // Top edge: STRAIGHT line from pivot to tip
+      path.lineTo(dir * armLength, -tipWidth);
     } else {
-      // Right hinge: top edge = convex (outer), bottom edge = concave (scoop)
-
-      // Top edge (CONVEX): bulges outward away from arm centerline
+      // Top edge: CONCAVE — deep scoop inward toward arm center
       path.cubicTo(
-        dir * armLength * 0.30, -pivotRadius * 1.3, // ctrl1: push outward
-        dir * armLength * 0.60, -tipWidth * 3.0, // ctrl2: wide curve
-        dir * armLength, -tipWidth, // end: narrow tip top
+        dir * armLength * 0.35, pivotRadius * 0.1, // ctrl1: pull far inward past centerline
+        dir * armLength * 0.70, tipWidth * 0.5, // ctrl2: stay close to center near tip
+        dir * armLength, -tipWidth, // end: narrow tip
       );
     }
 
@@ -191,19 +181,15 @@ class PneumaticDiverterPainter extends CustomPainter {
     );
 
     if (side == GateSide.left) {
-      // Left hinge: bottom edge = convex (outer, bulges outward)
+      // Bottom edge: CONCAVE — deep scoop inward toward arm center
       path.cubicTo(
-        dir * armLength * 0.60, tipWidth * 3.0, // ctrl1: push outward
-        dir * armLength * 0.30, pivotRadius * 1.3, // ctrl2: wide curve
+        dir * armLength * 0.70, -tipWidth * 0.5, // ctrl1: stay close to center near tip
+        dir * armLength * 0.35, -pivotRadius * 0.1, // ctrl2: pull far inward past centerline
         0, pivotRadius, // end: back to pivot
       );
     } else {
-      // Right hinge: bottom edge = concave (scoop, pulls inward)
-      path.cubicTo(
-        dir * armLength * 0.65, tipWidth * 1.2, // ctrl1: pull inward
-        dir * armLength * 0.25, pivotRadius * 0.3, // ctrl2: quick approach
-        0, pivotRadius, // end: back to pivot
-      );
+      // Bottom edge: STRAIGHT line back to pivot
+      path.lineTo(0, pivotRadius);
     }
 
     // Close with pivot circle arc
@@ -290,10 +276,15 @@ class SliderGatePainter extends CustomPainter {
   final Color stateColor;
   final GateSide side;
 
+  /// When true, active/open state means lid is pushed OUT (away from belt).
+  /// When false, active/open state means lid is pulled IN (retracted).
+  final bool activeOut;
+
   SliderGatePainter({
     required this.progress,
     required this.stateColor,
     required this.side,
+    this.activeOut = true,
   }) : super(repaint: progress);
 
   @override
@@ -322,10 +313,13 @@ class SliderGatePainter extends CustomPainter {
     // Belt area = space beyond the actuator where the lid operates
     final beltArea = w - actuatorWidth;
 
-    // The lid slides: at progress=0 it covers the belt edge,
-    // at progress=1 it has slid away from the belt.
+    // The lid slides based on activeOut:
+    // activeOut=true:  progress 0→1 = lid starts at belt, slides away (out)
+    // activeOut=false: progress 0→1 = lid starts away, slides to belt (in)
     final lidTravel = beltArea;
-    final slideOffset = lidTravel * progress.value;
+    final slideOffset = activeOut
+        ? lidTravel * progress.value
+        : lidTravel * (1.0 - progress.value);
 
     if (side == GateSide.left) {
       // Actuator on the left
@@ -397,7 +391,8 @@ class SliderGatePainter extends CustomPainter {
   @override
   bool shouldRepaint(SliderGatePainter oldDelegate) =>
       stateColor != oldDelegate.stateColor ||
-      side != oldDelegate.side;
+      side != oldDelegate.side ||
+      activeOut != oldDelegate.activeOut;
 }
 
 // ---------------------------------------------------------------------------
@@ -406,28 +401,34 @@ class SliderGatePainter extends CustomPainter {
 
 /// Paints a pusher gate as a 2D top-down representation.
 ///
-/// The gate consists of:
-/// 1. An elongated, thin metallic grey cylinder body on one side
-/// 2. A rod extending from the cylinder proportional to [progress]
-/// 3. A wide blade (snow-plow style) at the tip of the rod
+/// Uses the same actuator + rod + perpendicular blade layout as the slider,
+/// but the blade pushes product across the belt rather than acting as a lid.
 ///
-/// At [progress] = 0 (closed): blade retracted, belt clear.
-/// At [progress] = 1 (open): blade fully extended across belt (~85% width).
+/// The blade angle and vertical offset are configurable to allow different
+/// pusher geometries (angled deflector vs straight push).
 ///
-/// "Open" means actively diverting (blade extended). "Closed" means clear path.
+/// At [progress] = 0 (closed): blade retracted against actuator.
+/// At [progress] = 1 (open): blade fully extended across belt.
 ///
-/// [side] determines which edge the cylinder sits on:
-/// - [GateSide.left]: cylinder on left, blade pushes toward right
-/// - [GateSide.right]: cylinder on right, blade pushes toward left
+/// [side] determines which edge the actuator sits on.
 class PusherGatePainter extends CustomPainter {
   final ValueNotifier<double> progress;
   final Color stateColor;
   final GateSide side;
 
+  /// Angle of the blade in degrees (0 = perpendicular to rod).
+  final double bladeAngleDegrees;
+
+  /// Vertical offset of the blade center from rod center, as fraction of height.
+  /// 0.0 = centered on rod, positive = shifted down, negative = shifted up.
+  final double bladeOffsetFraction;
+
   PusherGatePainter({
     required this.progress,
     required this.stateColor,
     required this.side,
+    this.bladeAngleDegrees = 0.0,
+    this.bladeOffsetFraction = 0.0,
   }) : super(repaint: progress);
 
   @override
@@ -435,132 +436,101 @@ class PusherGatePainter extends CustomPainter {
     final w = size.width;
     final h = size.height;
 
-    // Elongated thin actuator proportions:
-    // - Cylinder body: w * 0.30 width, h * 0.22 height (longer and thinner)
-    // - Rod: extends from cylinder center, diameter ~15% of cylinder height
-    // - Blade: wide (~85% of width when fully extended), thickness ~12% of height
+    // Same layout as slider: elongated actuator + rod + blade
+    final actuatorWidth = w * 0.30;
+    final actuatorHeight = h * 0.18;
+    final actuatorY = (h - actuatorHeight) / 2;
 
-    final cylinderWidth = w * 0.30;
-    final cylinderHeight = h * 0.22;
-    final cylinderY = (h - cylinderHeight) / 2;
+    final rodDiameter = actuatorHeight * 0.25;
+    final rodCenterY = h * 0.5;
 
-    final rodDiameter = cylinderHeight * 0.18;
-    final rodCenterY = h * 0.50;
+    final bladeThickness = h * 0.08;
+    final bladeHeight = h * 0.85;
 
-    final bladeWidth = h * 0.12;
-    final bladeMaxExtension = w * 0.85;
-    final bladeExtension = bladeMaxExtension * progress.value;
-
-    // Rod length = how far from cylinder edge to blade front
-    final rodLength = bladeExtension;
+    final beltArea = w - actuatorWidth;
+    final slideOffset = beltArea * progress.value;
 
     if (side == GateSide.left) {
-      // Cylinder on the left
       _drawCylinder(
         canvas,
-        Rect.fromLTWH(0, cylinderY, cylinderWidth, cylinderHeight),
+        Rect.fromLTWH(0, actuatorY, actuatorWidth, actuatorHeight),
       );
 
-      // Rod extends from right edge of cylinder
+      final bladeX = actuatorWidth + slideOffset;
+
+      // Rod from actuator to blade
+      final rodLength = (bladeX - actuatorWidth).clamp(0.0, double.infinity);
       if (rodLength > 0) {
         _drawRod(
           canvas,
           Rect.fromLTWH(
-            cylinderWidth,
+            actuatorWidth,
             rodCenterY - rodDiameter / 2,
-            rodLength.clamp(1.0, double.infinity),
+            rodLength,
             rodDiameter,
           ),
         );
       }
 
-      // Blade at rod tip (perpendicular to rod, i.e., vertical bar)
-      if (progress.value > 0.01) {
-        final bladeX = cylinderWidth + bladeExtension - bladeWidth / 2;
-        final bladeRect = RRect.fromRectAndRadius(
-          Rect.fromLTWH(bladeX, h * 0.10, bladeWidth, h * 0.80),
-          const Radius.circular(2.0),
-        );
-        canvas.drawRRect(bladeRect, Paint()..color = stateColor);
-        canvas.drawRRect(
-          bladeRect,
-          Paint()
-            ..color = Colors.black.withValues(alpha: 0.3)
-            ..style = PaintingStyle.stroke
-            ..strokeWidth = 1.0,
-        );
-        // Blade shading
-        canvas.drawRRect(
-          bladeRect,
-          Paint()
-            ..shader = LinearGradient(
-              begin: Alignment.centerLeft,
-              end: Alignment.centerRight,
-              colors: [
-                Colors.white.withValues(alpha: 0.15),
-                Colors.transparent,
-                Colors.black.withValues(alpha: 0.1),
-              ],
-              stops: const [0.0, 0.5, 1.0],
-            ).createShader(bladeRect.outerRect),
-        );
-      }
+      // Blade with configurable angle and offset
+      final bladeCenterY = h * 0.5 + h * bladeOffsetFraction;
+      canvas.save();
+      canvas.translate(bladeX, bladeCenterY);
+      canvas.rotate(bladeAngleDegrees * pi / 180);
+      _drawLid(
+        canvas,
+        Rect.fromCenter(
+          center: Offset.zero,
+          width: bladeThickness,
+          height: bladeHeight,
+        ),
+        stateColor,
+      );
+      canvas.restore();
     } else {
-      // Cylinder on the right
       _drawCylinder(
         canvas,
-        Rect.fromLTWH(w - cylinderWidth, cylinderY, cylinderWidth, cylinderHeight),
+        Rect.fromLTWH(w - actuatorWidth, actuatorY, actuatorWidth, actuatorHeight),
       );
 
-      // Rod extends from left edge of cylinder toward the left
+      final bladeX = (w - actuatorWidth) - slideOffset;
+
+      final rodStart = bladeX;
+      final rodEnd = w - actuatorWidth;
+      final rodLength = (rodEnd - rodStart).clamp(0.0, double.infinity);
       if (rodLength > 0) {
         _drawRod(
           canvas,
           Rect.fromLTWH(
-            (w - cylinderWidth - rodLength).clamp(0.0, double.infinity),
+            rodStart,
             rodCenterY - rodDiameter / 2,
-            rodLength.clamp(1.0, double.infinity),
+            rodLength,
             rodDiameter,
           ),
         );
       }
 
-      // Blade at rod tip
-      if (progress.value > 0.01) {
-        final bladeX = w - cylinderWidth - bladeExtension - bladeWidth / 2;
-        final bladeRect = RRect.fromRectAndRadius(
-          Rect.fromLTWH(bladeX, h * 0.10, bladeWidth, h * 0.80),
-          const Radius.circular(2.0),
-        );
-        canvas.drawRRect(bladeRect, Paint()..color = stateColor);
-        canvas.drawRRect(
-          bladeRect,
-          Paint()
-            ..color = Colors.black.withValues(alpha: 0.3)
-            ..style = PaintingStyle.stroke
-            ..strokeWidth = 1.0,
-        );
-        // Blade shading
-        canvas.drawRRect(
-          bladeRect,
-          Paint()
-            ..shader = LinearGradient(
-              begin: Alignment.centerLeft,
-              end: Alignment.centerRight,
-              colors: [
-                Colors.white.withValues(alpha: 0.15),
-                Colors.transparent,
-                Colors.black.withValues(alpha: 0.1),
-              ],
-              stops: const [0.0, 0.5, 1.0],
-            ).createShader(bladeRect.outerRect),
-        );
-      }
+      final bladeCenterY = h * 0.5 + h * bladeOffsetFraction;
+      canvas.save();
+      canvas.translate(bladeX, bladeCenterY);
+      canvas.rotate(-bladeAngleDegrees * pi / 180);
+      _drawLid(
+        canvas,
+        Rect.fromCenter(
+          center: Offset.zero,
+          width: bladeThickness,
+          height: bladeHeight,
+        ),
+        stateColor,
+      );
+      canvas.restore();
     }
   }
 
   @override
   bool shouldRepaint(PusherGatePainter oldDelegate) =>
       stateColor != oldDelegate.stateColor ||
-      side != oldDelegate.side;
+      side != oldDelegate.side ||
+      bladeAngleDegrees != oldDelegate.bladeAngleDegrees ||
+      bladeOffsetFraction != oldDelegate.bladeOffsetFraction;
 }

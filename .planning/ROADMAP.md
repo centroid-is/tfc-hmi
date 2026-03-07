@@ -78,7 +78,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4
 | 1. Standalone Diverter Gate | 3/3 | Complete | 2026-03-07 |
 | 2. Full Feature Set | 2/2 | Complete | 2026-03-07 |
 | 3. Child-of-Conveyor Integration | 2/2 | Complete    | 2026-03-07 |
-| 4. Fix Gate Architecture & Redesign Painters | 2/3 | In Progress|  |
+| 4. Fix Gate Architecture & Redesign Painters | 3/3 | Complete   | 2026-03-07 |
 
 ### Phase 4: Fix gate architecture and redesign painters
 
@@ -92,7 +92,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4
   4. Slider painter shows solid lid pushed by elongated pneumatic actuator
   5. All painters have realistic elongated actuator proportions
   6. Backward-compatible JSON deserialization for existing saved pages
-**Plans:** 2/3 plans executed
+**Plans:** 3/3 plans complete
 
 Plans:
 - [ ] 04-01-PLAN.md -- ChildGateEntry data model, field migration, JSON backward compat, serialization tests
