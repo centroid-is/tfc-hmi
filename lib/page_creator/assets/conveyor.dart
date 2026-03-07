@@ -331,6 +331,72 @@ class _ConveyorConfigContentState extends State<_ConveyorConfigContent> {
           onChanged: (c) => setState(() => widget.config.coordinates = c),
           enableAngle: true,
         ),
+        const SizedBox(height: 16),
+        const Divider(),
+        Text('Gates', style: Theme.of(context).textTheme.titleSmall),
+        const SizedBox(height: 8),
+        FilledButton.icon(
+          onPressed: () {
+            setState(() {
+              widget.config.gates.add(ConveyorGateConfig());
+            });
+          },
+          icon: const Icon(Icons.add),
+          label: const Text('Add Gate'),
+        ),
+        const SizedBox(height: 8),
+        if (widget.config.gates.whereType<ConveyorGateConfig>().isEmpty)
+          Text('No gates configured',
+              style: Theme.of(context).textTheme.bodyMedium)
+        else
+          ...widget.config.gates
+              .whereType<ConveyorGateConfig>()
+              .toList()
+              .asMap()
+              .entries
+              .map((entry) {
+            final gate = entry.value;
+            return ListTile(
+              dense: true,
+              title: Text(
+                '${gate.gateVariant.name} - ${gate.side.name} @ ${(gate.position * 100).round()}%',
+              ),
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  IconButton(
+                    icon: const Icon(Icons.edit, size: 20),
+                    tooltip: 'Edit gate',
+                    onPressed: () => showDialog(
+                      context: context,
+                      builder: (_) => AlertDialog(
+                        title: const Text('Edit Gate'),
+                        content: SizedBox(
+                          width: 300,
+                          child: gate.configure(context),
+                        ),
+                        actions: [
+                          TextButton(
+                            onPressed: () => Navigator.of(context).pop(),
+                            child: const Text('Done'),
+                          ),
+                        ],
+                      ),
+                    ).then((_) => setState(() {})),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.delete, size: 20),
+                    tooltip: 'Remove gate',
+                    onPressed: () => setState(() {
+                      widget.config.gates.removeAt(
+                        widget.config.gates.indexOf(gate),
+                      );
+                    }),
+                  ),
+                ],
+              ),
+            );
+          }),
       ],
     );
   }

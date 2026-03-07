@@ -687,6 +687,21 @@ class _ConveyorGateConfigEditorState extends State<_ConveyorGateConfigEditor>
           ),
           const SizedBox(height: 16),
 
+          // -- Belt Position (for child-of-conveyor mode) --
+          Text(
+            'Belt Position: ${(config.position * 100).round()}%',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+          Slider(
+            min: 0.0,
+            max: 1.0,
+            divisions: 100,
+            value: config.position,
+            label: '${(config.position * 100).round()}%',
+            onChanged: (v) => setState(() => config.position = v),
+          ),
+          const SizedBox(height: 16),
+
           // -- Opening Angle (diverter only, Pitfall 4) --
           if (config.gateVariant == GateVariant.pneumatic) ...[
             Text(
