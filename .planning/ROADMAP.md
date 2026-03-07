@@ -245,3 +245,13 @@ Plans:
 - [ ] 14-01-PLAN.md -- UMAS protocol client: types, FC90 request/response, data dictionary reading (TDD)
 - [ ] 14-02-PLAN.md -- Protocol-agnostic browse panel extraction + OPC UA adapter (TDD)
 - [ ] 14-03-PLAN.md -- UMAS integration: config field, server checkbox, browse adapter, key repository Browse button
+
+### Phase 15: Code Review Fixes: security, performance, correctness, and duplication
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 14
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 15 to break down)

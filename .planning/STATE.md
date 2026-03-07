@@ -72,6 +72,7 @@ Progress: [██████████] 100%
 
 - Phase 13 added: manual test against a real device
 - Phase 14 added: UMAS protocol support - Schneider browse via FC90
+- Phase 15 added: Code review fixes — security, performance, correctness, and duplication
 
 ### Decisions
 
