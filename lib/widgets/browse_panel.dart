@@ -65,12 +65,17 @@ abstract class BrowseDataSource {
 // Internal tree node (adds depth + parentId tracking)
 // ---------------------------------------------------------------------------
 
-class _TreeNode {
+/// Internal tree node that decorates [BrowseNode] with depth and parent info.
+///
+/// This is an implementation detail of [BrowsePanel] and [BrowseNodeTile];
+/// external callers should use [BrowseNode] instead.
+@visibleForTesting
+class BrowseTreeEntry {
   final BrowseNode node;
   final int depth;
   final String parentId;
 
-  const _TreeNode({
+  const BrowseTreeEntry({
     required this.node,
     required this.depth,
     required this.parentId,
@@ -148,11 +153,11 @@ class BrowsePanel extends StatefulWidget {
 
 @visibleForTesting
 class BrowsePanelState extends State<BrowsePanel> {
-  List<_TreeNode> _roots = [];
-  final Map<String, List<_TreeNode>> _children = {};
+  List<BrowseTreeEntry> _roots = [];
+  final Map<String, List<BrowseTreeEntry>> _children = {};
   final Set<String> _expanded = {};
   final Set<String> _loading = {};
-  _TreeNode? _selected;
+  BrowseTreeEntry? _selected;
   bool _rootLoading = true;
   String? _error;
 
@@ -185,7 +190,7 @@ class BrowsePanelState extends State<BrowsePanel> {
       final results = await widget.dataSource.fetchRoots();
       if (!mounted) return;
       final roots = results
-          .map((node) => _TreeNode(
+          .map((node) => BrowseTreeEntry(
                 node: node,
                 depth: 0,
                 parentId: _rootParentId,
@@ -214,7 +219,7 @@ class BrowsePanelState extends State<BrowsePanel> {
       final results = await widget.dataSource.fetchChildren(browseNode);
       if (!mounted) return;
       final nodes = results
-          .map((node) => _TreeNode(
+          .map((node) => BrowseTreeEntry(
                 node: node,
                 depth: parentDepth + 1,
                 parentId: nodeId,
@@ -236,7 +241,7 @@ class BrowsePanelState extends State<BrowsePanel> {
     }
   }
 
-  void _prefetchChildren(List<_TreeNode> nodes) {
+  void _prefetchChildren(List<BrowseTreeEntry> nodes) {
     for (final node in nodes) {
       if (node.isExpandable && !_children.containsKey(node.id)) {
         _prefetchSingle(node);
@@ -244,7 +249,7 @@ class BrowsePanelState extends State<BrowsePanel> {
     }
   }
 
-  Future<void> _prefetchSingle(_TreeNode treeNode) async {
+  Future<void> _prefetchSingle(BrowseTreeEntry treeNode) async {
     if (_children.containsKey(treeNode.id)) return;
     try {
       final results = await widget.dataSource.fetchChildren(treeNode.node);
@@ -252,7 +257,7 @@ class BrowsePanelState extends State<BrowsePanel> {
       if (_children.containsKey(treeNode.id)) return;
       setState(() {
         _children[treeNode.id] = results
-            .map((node) => _TreeNode(
+            .map((node) => BrowseTreeEntry(
                   node: node,
                   depth: treeNode.depth + 1,
                   parentId: treeNode.id,
@@ -263,7 +268,7 @@ class BrowsePanelState extends State<BrowsePanel> {
     } catch (_) {}
   }
 
-  Future<void> _loadVariableDetails(_TreeNode treeNode) async {
+  Future<void> _loadVariableDetails(BrowseTreeEntry treeNode) async {
     final nodeId = treeNode.id;
     if (_detailLoadedFor == nodeId) return;
     setState(() {
@@ -290,7 +295,7 @@ class BrowsePanelState extends State<BrowsePanel> {
                 _children[nodeId]!.isEmpty)) {
           final depth = treeNode.depth;
           _children[nodeId] = detail.structChildren!
-              .map((child) => _TreeNode(
+              .map((child) => BrowseTreeEntry(
                     node: child,
                     depth: depth + 1,
                     parentId: nodeId,
@@ -308,7 +313,7 @@ class BrowsePanelState extends State<BrowsePanel> {
     }
   }
 
-  void _toggleExpand(_TreeNode treeNode) {
+  void _toggleExpand(BrowseTreeEntry treeNode) {
     if (!treeNode.isExpandable) return;
     final nodeId = treeNode.id;
     if (_expanded.contains(nodeId)) {
@@ -320,7 +325,7 @@ class BrowsePanelState extends State<BrowsePanel> {
     }
   }
 
-  void _onTapNode(_TreeNode treeNode) {
+  void _onTapNode(BrowseTreeEntry treeNode) {
     if (treeNode.isVariable) {
       if (_selected?.id == treeNode.id) {
         widget.onSelected(treeNode.node);
@@ -333,16 +338,16 @@ class BrowsePanelState extends State<BrowsePanel> {
     }
   }
 
-  void _onDoubleTapNode(_TreeNode treeNode) {
+  void _onDoubleTapNode(BrowseTreeEntry treeNode) {
     if (treeNode.isVariable) {
       widget.onSelected(treeNode.node);
     }
   }
 
   @visibleForTesting
-  List<_TreeNode> flattenTree() {
-    final flat = <_TreeNode>[];
-    void walk(List<_TreeNode> nodes) {
+  List<BrowseTreeEntry> flattenTree() {
+    final flat = <BrowseTreeEntry>[];
+    void walk(List<BrowseTreeEntry> nodes) {
       for (final node in nodes) {
         flat.add(node);
         if (node.isExpandable &&
@@ -359,13 +364,13 @@ class BrowsePanelState extends State<BrowsePanel> {
   List<String> _buildBreadcrumb() {
     if (_selected == null) return ['Root'];
     final path = <String>['Root'];
-    _TreeNode? current = _selected;
+    BrowseTreeEntry? current = _selected;
     final segments = <String>[];
     while (current != null) {
       segments.insert(0, current.displayName);
       final parentId = current.parentId;
       if (parentId == _rootParentId) break;
-      _TreeNode? parent;
+      BrowseTreeEntry? parent;
       for (final root in _roots) {
         parent = _findNode(root, parentId);
         if (parent != null) break;
@@ -376,7 +381,7 @@ class BrowsePanelState extends State<BrowsePanel> {
     return path;
   }
 
-  _TreeNode? _findNode(_TreeNode node, String targetId) {
+  BrowseTreeEntry? _findNode(BrowseTreeEntry node, String targetId) {
     if (node.id == targetId) return node;
     final kids = _children[node.id];
     if (kids == null) return null;
@@ -557,7 +562,7 @@ class BrowsePanelState extends State<BrowsePanel> {
 // ---------------------------------------------------------------------------
 
 class BrowseNodeTile extends StatelessWidget {
-  final _TreeNode node;
+  final BrowseTreeEntry node;
   final bool isSelected;
   final bool isExpanded;
   final bool isLoading;

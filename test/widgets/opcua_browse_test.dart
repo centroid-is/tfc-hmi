@@ -17,6 +17,7 @@ import 'package:open62541/open62541.dart'
         NodeClass,
         NodeId;
 
+import 'package:tfc/widgets/browse_panel.dart';
 import 'package:tfc/widgets/opcua_browse.dart';
 
 // ---------------------------------------------------------------------------
@@ -157,22 +158,22 @@ BrowseResultItem _method(String name, {int ns = 2, String? id}) =>
       nodeClass: NodeClass.UA_NODECLASS_METHOD,
     );
 
-/// Pumps an [OpcUaBrowsePanel] inside a dialog (using [showOpcUaBrowseDialog]).
-/// Returns a future that completes when the dialog is closed with the result.
+/// Pumps a [BrowsePanel] with an [OpcUaBrowseDataSource] inside a dialog.
 Future<void> _showPanel(
   WidgetTester tester,
   FakeClientApi client, {
   String alias = 'TestServer',
 }) async {
+  final dataSource = OpcUaBrowseDataSource(client);
   await tester.pumpWidget(
     MaterialApp(
       home: Builder(
         builder: (context) => Scaffold(
           body: Center(
             child: ElevatedButton(
-              onPressed: () => showOpcUaBrowseDialog(
+              onPressed: () => showBrowseDialog(
                 context: context,
-                client: client,
+                dataSource: dataSource,
                 serverAlias: alias,
               ),
               child: const Text('Open'),
@@ -191,7 +192,7 @@ Future<void> _showPanel(
 // ---------------------------------------------------------------------------
 
 void main() {
-  group('OpcUaBrowsePanel', () {
+  group('OpcUaBrowseDataSource via BrowsePanel', () {
     testWidgets('shows loading indicator then root nodes', (tester) async {
       final client = FakeClientApi(
         browseResults: {
@@ -326,7 +327,7 @@ void main() {
       await tester.tap(find.text('Select'));
       await tester.pumpAndSettle();
 
-      expect(find.byType(OpcUaBrowsePanel), findsNothing);
+      expect(find.byType(BrowsePanel), findsNothing);
     });
 
     testWidgets('double-tapping a variable dismisses dialog', (tester) async {
@@ -354,7 +355,7 @@ void main() {
       await tester.pump(kDoubleTapTimeout);
       await tester.pumpAndSettle();
 
-      expect(find.byType(OpcUaBrowsePanel), findsNothing);
+      expect(find.byType(BrowsePanel), findsNothing);
     });
 
     testWidgets('Cancel button dismisses dialog', (tester) async {
@@ -367,7 +368,7 @@ void main() {
       await tester.tap(find.text('Cancel'));
       await tester.pumpAndSettle();
 
-      expect(find.byType(OpcUaBrowsePanel), findsNothing);
+      expect(find.byType(BrowsePanel), findsNothing);
     });
 
     testWidgets('Select button is disabled when no variable selected',
@@ -450,14 +451,14 @@ void main() {
       );
     });
 
-    testWidgets('breadcrumb shows Objects by default', (tester) async {
+    testWidgets('breadcrumb shows Root by default', (tester) async {
       final client = FakeClientApi(
         browseResults: {NodeId.objectsFolder: [_variable('X')]},
       );
 
       await _showPanel(tester, client);
 
-      expect(find.text('Objects'), findsOneWidget);
+      expect(find.text('Root'), findsOneWidget);
     });
 
     testWidgets('tapping already-selected variable confirms selection',
@@ -478,14 +479,14 @@ void main() {
       await tester.tap(find.text('ConfirmVar'));
       await tester.pump(kDoubleTapTimeout);
       await tester.pumpAndSettle();
-      expect(find.byType(OpcUaBrowsePanel), findsOneWidget);
+      expect(find.byType(BrowsePanel), findsOneWidget);
 
       // Second tap: confirm (dismiss). After selection, the breadcrumb also
       // shows 'ConfirmVar', so tap the BrowseNodeTile directly.
       await tester.tap(find.byType(BrowseNodeTile));
       await tester.pump(kDoubleTapTimeout);
       await tester.pumpAndSettle();
-      expect(find.byType(OpcUaBrowsePanel), findsNothing);
+      expect(find.byType(BrowsePanel), findsNothing);
     });
 
     testWidgets('method nodes are not selectable', (tester) async {
@@ -545,7 +546,7 @@ void main() {
       final client = FakeClientApi(
         browseResults: {
           NodeId.objectsFolder: [structVar],
-          // Browse of the variable returns empty — server doesn't
+          // Browse of the variable returns empty -- server doesn't
           // expose struct fields as child nodes.
         },
         readResults: {
@@ -555,7 +556,7 @@ void main() {
 
       await _showPanel(tester, client);
 
-      // Tap to select the struct variable — it auto-expands
+      // Tap to select the struct variable -- it auto-expands
       await tester.tap(find.text('hmi'));
       await tester.pump(kDoubleTapTimeout);
       await tester.pumpAndSettle();
@@ -576,56 +577,54 @@ void main() {
     });
   });
 
-  group('BrowseTreeNode', () {
-    test('isExpandable is true for objects', () {
-      final node = BrowseTreeNode(
-        item: _object('Obj'),
-        depth: 0,
-        parentNodeId: NodeId.objectsFolder,
-      );
-      expect(node.isExpandable, true);
-      expect(node.isVariable, false);
+  group('OpcUaBrowseDataSource.parseNodeId', () {
+    test('parses numeric NodeId', () {
+      final nodeId = OpcUaBrowseDataSource.parseNodeId('ns=0;i=2258');
+      expect(nodeId.namespace, 0);
+      expect(nodeId.isNumeric(), true);
+      expect(nodeId.numeric, 2258);
     });
 
-    test('isVariable is true for variables', () {
-      final node = BrowseTreeNode(
-        item: _variable('Var'),
-        depth: 0,
-        parentNodeId: NodeId.objectsFolder,
-      );
-      expect(node.isVariable, true);
-      expect(node.isExpandable, true);
+    test('parses string NodeId', () {
+      final nodeId = OpcUaBrowseDataSource.parseNodeId('ns=2;s=MyVar');
+      expect(nodeId.namespace, 2);
+      expect(nodeId.isString(), true);
+      expect(nodeId.string, 'MyVar');
     });
 
-    test('method nodes are neither expandable nor variable', () {
-      final node = BrowseTreeNode(
-        item: _method('Meth'),
-        depth: 0,
-        parentNodeId: NodeId.objectsFolder,
+    test('parses string NodeId with dots', () {
+      final nodeId = OpcUaBrowseDataSource.parseNodeId('ns=4;s=GVL.roe.hmi');
+      expect(nodeId.namespace, 4);
+      expect(nodeId.isString(), true);
+      expect(nodeId.string, 'GVL.roe.hmi');
+    });
+
+    test('throws on invalid format', () {
+      expect(
+        () => OpcUaBrowseDataSource.parseNodeId('invalid'),
+        throwsA(isA<ArgumentError>()),
       );
-      expect(node.isExpandable, false);
-      expect(node.isVariable, false);
     });
   });
 
-  group('formatDynamicValue', () {
+  group('OpcUaBrowseDataSource.formatDynamicValue', () {
     test('formats null value', () {
-      expect(OpcUaBrowsePanelState.formatDynamicValue(DynamicValue()), 'null');
+      expect(OpcUaBrowseDataSource.formatDynamicValue(DynamicValue()), 'null');
     });
 
     test('formats simple value', () {
       final dv = DynamicValue()..value = 42;
-      expect(OpcUaBrowsePanelState.formatDynamicValue(dv), '42');
+      expect(OpcUaBrowseDataSource.formatDynamicValue(dv), '42');
     });
 
     test('formats string value', () {
       final dv = DynamicValue()..value = 'hello';
-      expect(OpcUaBrowsePanelState.formatDynamicValue(dv), 'hello');
+      expect(OpcUaBrowseDataSource.formatDynamicValue(dv), 'hello');
     });
 
     test('truncates long string', () {
       final dv = DynamicValue()..value = 'x' * 200;
-      final result = OpcUaBrowsePanelState.formatDynamicValue(dv);
+      final result = OpcUaBrowseDataSource.formatDynamicValue(dv);
       expect(result.length, 120);
       expect(result.endsWith('...'), true);
     });
