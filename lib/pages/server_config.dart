@@ -1727,6 +1727,7 @@ class _ModbusServerConfigCardState extends State<_ModbusServerConfigCard> {
   List<TextEditingController> _pollGroupIntervalControllers = [];
   ConnectionStatus? _connectionStatus;
   StreamSubscription<ConnectionStatus>? _statusSub;
+  late bool _umasEnabled;
 
   @override
   void initState() {
@@ -1738,6 +1739,7 @@ class _ModbusServerConfigCardState extends State<_ModbusServerConfigCard> {
         TextEditingController(text: widget.server.unitId.toString());
     _aliasController =
         TextEditingController(text: widget.server.serverAlias ?? '');
+    _umasEnabled = widget.server.umasEnabled;
     _connectionStatus = widget.connectionStatus;
     _subscribeToStatus();
     _initPollGroupControllers();
@@ -1795,33 +1797,31 @@ class _ModbusServerConfigCardState extends State<_ModbusServerConfigCard> {
     super.dispose();
   }
 
+  /// Builds a [ModbusConfig] from the current controller/field state.
+  ModbusConfig _buildConfig({List<ModbusPollGroupConfig>? pollGroups}) {
+    return ModbusConfig(
+      host: _hostController.text,
+      port: int.tryParse(_portController.text) ?? 502,
+      unitId: (int.tryParse(_unitIdController.text) ?? 1).clamp(1, 247),
+      pollGroups: pollGroups ?? widget.server.pollGroups,
+      umasEnabled: _umasEnabled,
+    )..serverAlias =
+        _aliasController.text.isEmpty ? null : _aliasController.text;
+  }
+
   void _addPollGroup() {
     final pollGroups = List<ModbusPollGroupConfig>.from(widget.server.pollGroups);
     pollGroups.add(ModbusPollGroupConfig(
       name: 'group_${widget.server.pollGroups.length}',
       intervalMs: 1000,
     ));
-    final updated = ModbusConfig(
-      host: _hostController.text,
-      port: int.tryParse(_portController.text) ?? 502,
-      unitId: (int.tryParse(_unitIdController.text) ?? 1).clamp(1, 247),
-      pollGroups: pollGroups,
-    )..serverAlias =
-        _aliasController.text.isEmpty ? null : _aliasController.text;
-    widget.onUpdate(updated);
+    widget.onUpdate(_buildConfig(pollGroups: pollGroups));
   }
 
   void _removePollGroup(int index) {
     final pollGroups = List<ModbusPollGroupConfig>.from(widget.server.pollGroups);
     pollGroups.removeAt(index);
-    final updated = ModbusConfig(
-      host: _hostController.text,
-      port: int.tryParse(_portController.text) ?? 502,
-      unitId: (int.tryParse(_unitIdController.text) ?? 1).clamp(1, 247),
-      pollGroups: pollGroups,
-    )..serverAlias =
-        _aliasController.text.isEmpty ? null : _aliasController.text;
-    widget.onUpdate(updated);
+    widget.onUpdate(_buildConfig(pollGroups: pollGroups));
   }
 
   void _updatePollGroup(int index) {
@@ -1831,14 +1831,7 @@ class _ModbusServerConfigCardState extends State<_ModbusServerConfigCard> {
       intervalMs: (int.tryParse(_pollGroupIntervalControllers[index].text) ?? 1000)
           .clamp(50, 999999),
     );
-    final updated = ModbusConfig(
-      host: _hostController.text,
-      port: int.tryParse(_portController.text) ?? 502,
-      unitId: (int.tryParse(_unitIdController.text) ?? 1).clamp(1, 247),
-      pollGroups: pollGroups,
-    )..serverAlias =
-        _aliasController.text.isEmpty ? null : _aliasController.text;
-    widget.onUpdate(updated);
+    widget.onUpdate(_buildConfig(pollGroups: pollGroups));
   }
 
   Color _connectionStatusColor() {
@@ -1882,14 +1875,7 @@ class _ModbusServerConfigCardState extends State<_ModbusServerConfigCard> {
   }
 
   void _updateServer() {
-    final updated = ModbusConfig(
-      host: _hostController.text,
-      port: int.tryParse(_portController.text) ?? 502,
-      unitId: (int.tryParse(_unitIdController.text) ?? 1).clamp(1, 247),
-      pollGroups: widget.server.pollGroups,
-    )..serverAlias =
-        _aliasController.text.isEmpty ? null : _aliasController.text;
-    widget.onUpdate(updated);
+    widget.onUpdate(_buildConfig());
   }
 
   @override
@@ -2105,6 +2091,16 @@ class _ModbusServerConfigCardState extends State<_ModbusServerConfigCard> {
                       ),
                     ),
                   ],
+                ),
+                const Divider(height: 24),
+                CheckboxListTile(
+                  title: const Text('Schneider UMAS'),
+                  subtitle: const Text('Enable variable browsing via FC90'),
+                  value: _umasEnabled,
+                  onChanged: (value) {
+                    setState(() => _umasEnabled = value ?? false);
+                    _updateServer();
+                  },
                 ),
               ],
             ),

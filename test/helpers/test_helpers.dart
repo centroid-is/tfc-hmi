@@ -106,6 +106,10 @@ Widget buildTestableKeyRepository({
             stateManConfig: stateManConfig,
           )),
       databaseProvider.overrideWith((ref) async => null),
+      // Override stateManProvider to avoid real network connections.
+      // Throwing makes valueOrNull return null and isLoading false.
+      stateManProvider.overrideWith((ref) =>
+          throw StateError('No StateMan in tests')),
     ],
     child: MaterialApp(
       home: Scaffold(
@@ -193,6 +197,25 @@ StateManConfig sampleStateManConfigWithModbus() {
           ModbusPollGroupConfig(name: 'fast', intervalMs: 100),
         ],
       )..serverAlias = 'plc_1',
+    ],
+  );
+}
+
+/// Creates a sample [StateManConfig] with a UMAS-enabled Modbus server.
+/// For testing Browse button visibility in key repository.
+StateManConfig sampleStateManConfigWithUmas() {
+  return StateManConfig(
+    opcua: [],
+    modbus: [
+      ModbusConfig(
+        host: '192.168.1.200',
+        port: 502,
+        unitId: 1,
+        umasEnabled: true,
+        pollGroups: [
+          ModbusPollGroupConfig(name: 'default', intervalMs: 1000),
+        ],
+      )..serverAlias = 'schneider_plc',
     ],
   );
 }

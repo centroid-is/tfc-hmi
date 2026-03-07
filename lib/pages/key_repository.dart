@@ -10,6 +10,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as path;
 import '../widgets/base_scaffold.dart';
 import '../widgets/opcua_browse.dart';
+import '../widgets/umas_browse.dart';
 import 'package:tfc_dart/core/state_man.dart';
 import 'package:tfc_dart/core/modbus_client_wrapper.dart' show ModbusDataType;
 import '../widgets/opcua_array_index_field.dart';
@@ -1373,7 +1374,7 @@ class _M2400ConfigSectionState extends State<_M2400ConfigSection> {
 
 // ===================== Modbus Config Section =====================
 
-class _ModbusConfigSection extends StatefulWidget {
+class _ModbusConfigSection extends ConsumerStatefulWidget {
   final ModbusNodeConfig config;
   final List<String> modbusServerAliases;
   final List<ModbusConfig> modbusConfigs;
@@ -1387,10 +1388,10 @@ class _ModbusConfigSection extends StatefulWidget {
   });
 
   @override
-  State<_ModbusConfigSection> createState() => _ModbusConfigSectionState();
+  ConsumerState<_ModbusConfigSection> createState() => _ModbusConfigSectionState();
 }
 
-class _ModbusConfigSectionState extends State<_ModbusConfigSection> {
+class _ModbusConfigSectionState extends ConsumerState<_ModbusConfigSection> {
   String? _selectedAlias;
   late ModbusRegisterType _selectedRegisterType;
   late TextEditingController _addressController;
@@ -1400,6 +1401,69 @@ class _ModbusConfigSectionState extends State<_ModbusConfigSection> {
   bool get _isBooleanRegisterType =>
       _selectedRegisterType == ModbusRegisterType.coil ||
       _selectedRegisterType == ModbusRegisterType.discreteInput;
+
+  bool get _isUmasEnabled {
+    if (_selectedAlias == null) return false;
+    final config = widget.modbusConfigs.cast<ModbusConfig?>().firstWhere(
+      (c) => c!.serverAlias == _selectedAlias,
+      orElse: () => null,
+    );
+    return config?.umasEnabled ?? false;
+  }
+
+  Future<void> _openUmasBrowseDialog(BuildContext context) async {
+    final stateManAsync = ref.read(stateManProvider);
+    final stateMan = stateManAsync.valueOrNull;
+    if (stateMan == null) return;
+
+    final result = await browseUmasNode(
+      context: context,
+      stateMan: stateMan,
+      serverAlias: _selectedAlias,
+    );
+
+    if (result != null) {
+      final blockNo = int.tryParse(result.metadata['blockNo'] ?? '') ?? 0;
+      final offset = int.tryParse(result.metadata['offset'] ?? '') ?? 0;
+      final address = blockNo + offset;
+      final dataTypeName = result.metadata['dataTypeName'] ?? '';
+      final byteSize = int.tryParse(result.metadata['byteSize'] ?? '') ?? 2;
+
+      setState(() {
+        _addressController.text = address.toString();
+        _selectedRegisterType = ModbusRegisterType.holdingRegister;
+        _selectedDataType = _mapUmasDataType(dataTypeName, byteSize);
+      });
+      _notifyChanged();
+    }
+  }
+
+  ModbusDataType _mapUmasDataType(String umasType, int byteSize) {
+    switch (umasType.toUpperCase()) {
+      case 'BOOL':
+        return ModbusDataType.bit;
+      case 'INT':
+        return ModbusDataType.int16;
+      case 'UINT':
+        return ModbusDataType.uint16;
+      case 'DINT':
+        return ModbusDataType.int32;
+      case 'UDINT':
+        return ModbusDataType.uint32;
+      case 'REAL':
+        return ModbusDataType.float32;
+      case 'LREAL':
+        return ModbusDataType.float64;
+      case 'LINT':
+        return ModbusDataType.int64;
+      case 'ULINT':
+        return ModbusDataType.uint64;
+      default:
+        if (byteSize <= 2) return ModbusDataType.uint16;
+        if (byteSize <= 4) return ModbusDataType.uint32;
+        return ModbusDataType.float64;
+    }
+  }
 
   @override
   void initState() {
@@ -1459,6 +1523,12 @@ class _ModbusConfigSectionState extends State<_ModbusConfigSection> {
                   child: Text('Modbus Key Configuration',
                       style: Theme.of(context).textTheme.titleSmall),
                 ),
+                if (_isUmasEnabled)
+                  TextButton.icon(
+                    onPressed: () => _openUmasBrowseDialog(context),
+                    icon: const FaIcon(FontAwesomeIcons.sitemap, size: 14),
+                    label: const Text('Browse'),
+                  ),
               ],
             ),
             const SizedBox(height: 12),

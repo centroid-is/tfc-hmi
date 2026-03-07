@@ -142,6 +142,7 @@ ModbusConfig _$ModbusConfigFromJson(Map<String, dynamic> json) => ModbusConfig(
                   ModbusPollGroupConfig.fromJson(e as Map<String, dynamic>))
               .toList() ??
           [],
+      umasEnabled: json['umas_enabled'] as bool? ?? false,
     );
 
 Map<String, dynamic> _$ModbusConfigToJson(ModbusConfig instance) =>
@@ -151,6 +152,7 @@ Map<String, dynamic> _$ModbusConfigToJson(ModbusConfig instance) =>
       'unit_id': instance.unitId,
       'server_alias': instance.serverAlias,
       'poll_groups': instance.pollGroups.map((e) => e.toJson()).toList(),
+      'umas_enabled': instance.umasEnabled,
     };
 
 ModbusNodeConfig _$ModbusNodeConfigFromJson(Map<String, dynamic> json) =>

@@ -263,6 +263,8 @@ class ModbusConfig {
   String? serverAlias;
   @JsonKey(name: 'poll_groups', defaultValue: [])
   List<ModbusPollGroupConfig> pollGroups;
+  @JsonKey(name: 'umas_enabled', defaultValue: false)
+  bool umasEnabled;
 
   ModbusConfig({
     this.host = '',
@@ -270,6 +272,7 @@ class ModbusConfig {
     this.unitId = 1,
     this.serverAlias,
     this.pollGroups = const [],
+    this.umasEnabled = false,
   });
 
   factory ModbusConfig.fromJson(Map<String, dynamic> json) =>

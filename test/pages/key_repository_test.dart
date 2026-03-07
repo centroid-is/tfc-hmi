@@ -1143,4 +1143,88 @@ void main() {
           reason: 'Collection should be enabled');
     });
   });
+
+  // ==================== Group 12: UMAS Browse Button ====================
+  group('UMAS browse button', () {
+    testWidgets('Browse button visible when UMAS enabled on selected server',
+        (tester) async {
+      await tester.pumpWidget(buildTestableKeyRepository(
+        keyMappings: KeyMappings(nodes: {
+          'umas_key': KeyMappingEntry(
+            modbusNode: ModbusNodeConfig(
+              serverAlias: 'schneider_plc',
+              registerType: ModbusRegisterType.holdingRegister,
+              address: 100,
+              dataType: ModbusDataType.uint16,
+              pollGroup: 'default',
+            ),
+          ),
+        }),
+        stateManConfig: sampleStateManConfigWithUmas(),
+      ));
+      await tester.pumpAndSettle();
+
+      // Expand the card
+      await tester.tap(find.text('umas_key'));
+      await tester.pumpAndSettle();
+
+      // The Browse button should be visible in the Modbus config section
+      expect(find.text('Browse'), findsOneWidget);
+    });
+
+    testWidgets('Browse button hidden when UMAS disabled on selected server',
+        (tester) async {
+      await tester.pumpWidget(buildTestableKeyRepository(
+        keyMappings: KeyMappings(nodes: {
+          'modbus_key': KeyMappingEntry(
+            modbusNode: ModbusNodeConfig(
+              serverAlias: 'plc_1',
+              registerType: ModbusRegisterType.holdingRegister,
+              address: 100,
+              dataType: ModbusDataType.uint16,
+              pollGroup: 'default',
+            ),
+          ),
+        }),
+        stateManConfig: sampleStateManConfigWithModbus(),
+      ));
+      await tester.pumpAndSettle();
+
+      // Expand the card
+      await tester.tap(find.text('modbus_key'));
+      await tester.pumpAndSettle();
+
+      // The Browse button should NOT be visible
+      // (we need to check specifically within the Modbus config section)
+      // Since there's no OPC UA Browse button either, just check there's none
+      final browseButtons = find.text('Browse');
+      expect(browseButtons, findsNothing);
+    });
+
+    testWidgets('Browse button hidden when no server alias selected',
+        (tester) async {
+      await tester.pumpWidget(buildTestableKeyRepository(
+        keyMappings: KeyMappings(nodes: {
+          'no_alias_key': KeyMappingEntry(
+            modbusNode: ModbusNodeConfig(
+              serverAlias: null,
+              registerType: ModbusRegisterType.holdingRegister,
+              address: 0,
+              dataType: ModbusDataType.uint16,
+              pollGroup: 'default',
+            ),
+          ),
+        }),
+        stateManConfig: sampleStateManConfigWithUmas(),
+      ));
+      await tester.pumpAndSettle();
+
+      // Expand the card
+      await tester.tap(find.text('no_alias_key'));
+      await tester.pumpAndSettle();
+
+      // No Browse button when no server alias selected
+      expect(find.text('Browse'), findsNothing);
+    });
+  });
 }

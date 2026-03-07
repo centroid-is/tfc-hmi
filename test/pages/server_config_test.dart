@@ -514,4 +514,80 @@ void main() {
       expect(find.text('Save Configuration'), findsAtLeastNWidgets(1));
     });
   });
+
+  // ==================== Group 8: UMAS Checkbox ====================
+  group('UMAS checkbox', () {
+    testWidgets('UMAS checkbox appears in Modbus server config card',
+        (tester) async {
+      await tester.pumpWidget(buildTestableServerConfig(
+        stateManConfig: sampleModbusStateManConfig(),
+      ));
+      await tester.pumpAndSettle();
+
+      // Scroll to Modbus section
+      await tester.scrollUntilVisible(
+        find.text('Modbus TCP Servers'),
+        200,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.pumpAndSettle();
+
+      // Expand the server card
+      await tester.tap(find.text('plc_1'));
+      await tester.pumpAndSettle();
+
+      // Scroll to UMAS checkbox
+      await tester.scrollUntilVisible(
+        find.text('Schneider UMAS'),
+        200,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Schneider UMAS'), findsOneWidget);
+      expect(find.text('Enable variable browsing via FC90'), findsOneWidget);
+    });
+
+    testWidgets('toggling UMAS checkbox triggers unsaved changes',
+        (tester) async {
+      await tester.pumpWidget(buildTestableServerConfig(
+        stateManConfig: sampleModbusStateManConfig(),
+      ));
+      await tester.pumpAndSettle();
+
+      // Scroll to Modbus section
+      await tester.scrollUntilVisible(
+        find.text('Modbus TCP Servers'),
+        200,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.pumpAndSettle();
+
+      // Expand the server card
+      await tester.tap(find.text('plc_1'));
+      await tester.pumpAndSettle();
+
+      // Scroll to UMAS checkbox
+      await tester.scrollUntilVisible(
+        find.text('Schneider UMAS'),
+        200,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.pumpAndSettle();
+
+      // Tap the checkbox
+      await tester.tap(find.text('Schneider UMAS'));
+      await tester.pumpAndSettle();
+
+      // Scroll back to top to check for unsaved changes badge
+      await tester.scrollUntilVisible(
+        find.text('Modbus TCP Servers'),
+        -200,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('Unsaved'), findsAtLeastNWidgets(1));
+    });
+  });
 }
