@@ -8,6 +8,7 @@ import 'package:tfc_dart/core/secure_storage/interface.dart';
 import 'package:tfc_dart/core/state_man.dart';
 import 'package:tfc_dart/core/collector.dart';
 import 'package:tfc_dart/core/database.dart';
+import 'package:tfc_dart/core/modbus_client_wrapper.dart' show ModbusDataType;
 
 import 'package:tfc/providers/preferences.dart';
 import 'package:tfc/providers/database.dart';
@@ -135,6 +136,53 @@ StateManConfig sampleModbusStateManConfig() {
 StateManConfig sampleModbusWithTwoPollGroups() {
   return StateManConfig(
     opcua: [],
+    modbus: [
+      ModbusConfig(
+        host: '192.168.1.100',
+        port: 502,
+        unitId: 1,
+        pollGroups: [
+          ModbusPollGroupConfig(name: 'default', intervalMs: 1000),
+          ModbusPollGroupConfig(name: 'fast', intervalMs: 100),
+        ],
+      )..serverAlias = 'plc_1',
+    ],
+  );
+}
+
+/// Creates sample [KeyMappings] with Modbus keys for tests.
+KeyMappings sampleModbusKeyMappings() {
+  return KeyMappings(nodes: {
+    'modbus_temp': KeyMappingEntry(
+      modbusNode: ModbusNodeConfig(
+        serverAlias: 'plc_1',
+        registerType: ModbusRegisterType.holdingRegister,
+        address: 100,
+        dataType: ModbusDataType.float32,
+        pollGroup: 'default',
+      ),
+    ),
+    'modbus_coil': KeyMappingEntry(
+      modbusNode: ModbusNodeConfig(
+        serverAlias: 'plc_1',
+        registerType: ModbusRegisterType.coil,
+        address: 0,
+        dataType: ModbusDataType.bit,
+        pollGroup: 'default',
+      ),
+    ),
+  });
+}
+
+/// Creates a sample [StateManConfig] with both OPC UA and Modbus servers.
+/// Enables testing that Modbus ChoiceChip appears alongside OPC UA.
+StateManConfig sampleStateManConfigWithModbus() {
+  return StateManConfig(
+    opcua: [
+      OpcUAConfig()
+        ..endpoint = 'opc.tcp://localhost:4840'
+        ..serverAlias = 'main_server',
+    ],
     modbus: [
       ModbusConfig(
         host: '192.168.1.100',
