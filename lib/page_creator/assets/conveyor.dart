@@ -15,6 +15,7 @@ import 'auger_conveyor_painter.dart';
 import 'package:tfc_dart/core/database.dart';
 import 'package:tfc_dart/core/collector.dart';
 import '../page.dart';
+import 'conveyor_gate.dart';
 
 part 'conveyor.g.dart';
 
@@ -670,21 +671,65 @@ class _ConveyorState extends ConsumerState<Conveyor>
       );
     }
 
+    final conveyorPaint = CustomPaint(
+      size: paintSize,
+      painter: _ConveyorPainter(
+        color: color,
+        showExclamation: showExclamation ?? false,
+        bidirectional: widget.config.bidirectional ?? false,
+        reverseDirection: widget.config.reverseDirection ?? false,
+        showFrequency: widget.config.showFrequency ?? false,
+        frequency: frequency,
+        batches: _batches,
+        angle: widget.config.coordinates.angle ?? 0.0,
+      ),
+    );
+
+    final gateConfigs =
+        widget.config.gates.whereType<ConveyorGateConfig>().toList();
+
+    final Widget content;
+    if (gateConfigs.isEmpty) {
+      content = conveyorPaint;
+    } else {
+      content = SizedBox(
+        width: paintSize.width,
+        height: paintSize.height,
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            conveyorPaint,
+            for (final gate in gateConfigs)
+              _positionedChildGate(gate, paintSize),
+          ],
+        ),
+      );
+    }
+
     return LayoutRotatedBox(
       angle: (widget.config.coordinates.angle ?? 0.0) * pi / 180,
-      child: CustomPaint(
-        size: paintSize,
-        painter: _ConveyorPainter(
-          color: color,
-          showExclamation: showExclamation ?? false,
-          bidirectional: widget.config.bidirectional ?? false,
-          reverseDirection: widget.config.reverseDirection ?? false,
-          showFrequency: widget.config.showFrequency ?? false,
-          frequency: frequency,
-          batches: _batches,
-          angle: widget.config.coordinates.angle ?? 0.0,
-        ),
-      ),
+      child: content,
+    );
+  }
+
+  Widget _positionedChildGate(ConveyorGateConfig gate, Size conveyorSize) {
+    final beltHeight = conveyorSize.height; // cross-belt dimension
+    final gateSize = beltHeight; // square so flap spans belt width
+    final xCenter = gate.position * conveyorSize.width;
+
+    // Gate hinge aligns with belt edge.
+    // Left side: gate extends upward (cylinder above belt)
+    // Right side: gate extends downward (cylinder below belt)
+    final yTop = gate.side == GateSide.left
+        ? -gateSize * 0.3 // overflow above
+        : conveyorSize.height - gateSize * 0.7; // overflow below
+
+    return Positioned(
+      left: xCenter - gateSize / 2,
+      top: yTop,
+      width: gateSize,
+      height: gateSize,
+      child: ConveyorGate(config: gate),
     );
   }
 

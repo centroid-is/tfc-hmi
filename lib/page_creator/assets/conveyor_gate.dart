@@ -235,9 +235,21 @@ class _ConveyorGateState extends ConsumerState<ConveyorGate>
   Widget _buildGate(Color stateColor) {
     return LayoutRotatedBox(
       angle: (widget.config.coordinates.angle ?? 0.0) * pi / 180,
-      child: CustomPaint(
-        size: widget.config.size.toSize(MediaQuery.of(context).size),
-        painter: _createPainter(stateColor),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          // When placed inside a Positioned with explicit size (child-of-conveyor),
+          // use the constraints directly. Otherwise fall back to config.size (standalone).
+          final Size paintSize;
+          if (constraints.hasBoundedWidth && constraints.hasBoundedHeight) {
+            paintSize = Size(constraints.maxWidth, constraints.maxHeight);
+          } else {
+            paintSize = widget.config.size.toSize(MediaQuery.of(context).size);
+          }
+          return CustomPaint(
+            size: paintSize,
+            painter: _createPainter(stateColor),
+          );
+        },
       ),
     );
   }
