@@ -1,10 +1,19 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:shared_preferences_platform_interface/in_memory_shared_preferences_async.dart';
+import 'package:shared_preferences_platform_interface/shared_preferences_async_platform_interface.dart';
 
 import '../helpers/test_helpers.dart';
 
 void main() {
+  // Initialize mock SharedPreferences for DatabaseConfigWidget and OPC UA sections
+  setUp(() {
+    SharedPreferences.setMockInitialValues({});
+    SharedPreferencesAsyncPlatform.instance =
+        InMemorySharedPreferencesAsync.empty();
+  });
   // ==================== Group 1: Modbus Section Rendering ====================
   group('Modbus section rendering', () {
     testWidgets('renders "Modbus TCP Servers" section header', (tester) async {

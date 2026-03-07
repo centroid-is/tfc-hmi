@@ -18,6 +18,7 @@ import 'package:cryptography_flutter/cryptography_flutter.dart' as crypto_fl;
 import '../widgets/base_scaffold.dart';
 import '../widgets/preferences.dart';
 import 'package:tfc_dart/core/state_man.dart';
+import 'package:tfc_dart/core/modbus_device_client.dart';
 import 'package:tfc_dart/core/database.dart';
 import '../providers/state_man.dart';
 import '../providers/preferences.dart';
@@ -534,6 +535,10 @@ class ServerConfigBody extends ConsumerWidget {
 
           // JBTM M2400 Servers Section
           _JbtmServersSection(key: ValueKey('jbtm_$refreshKey')),
+          const SizedBox(height: 16),
+
+          // Modbus TCP Servers Section
+          _ModbusServersSection(key: ValueKey('modbus_$refreshKey')),
           const ImportExportCard(),
         ],
       ),
@@ -1379,6 +1384,600 @@ class _JbtmServerConfigCardState extends State<_JbtmServerConfigCard> {
                   decoration: const InputDecoration(
                     labelText: 'Server Alias (optional)',
                     hintText: 'My M2400 Scale',
+                    prefixIcon: FaIcon(FontAwesomeIcons.tag, size: 16),
+                  ),
+                  onChanged: (_) => _updateServer(),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ===================== Modbus TCP Servers Section =====================
+
+class _ModbusServersSection extends ConsumerStatefulWidget {
+  const _ModbusServersSection({super.key});
+  @override
+  ConsumerState<_ModbusServersSection> createState() =>
+      _ModbusServersSectionState();
+}
+
+class _ModbusServersSectionState extends ConsumerState<_ModbusServersSection> {
+  StateManConfig? _config;
+  StateManConfig? _savedConfig;
+  bool _isLoading = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadConfig();
+  }
+
+  Future<void> _loadConfig() async {
+    setState(() {
+      _isLoading = true;
+      _error = null;
+    });
+
+    try {
+      _config = await StateManConfig.fromPrefs(
+          await ref.read(preferencesProvider.future));
+      _savedConfig = _config?.copy();
+    } catch (e) {
+      _error = e.toString();
+    } finally {
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
+    }
+  }
+
+  bool get _hasUnsavedChanges {
+    if (_config == null || _savedConfig == null) return false;
+    final currentJson = jsonEncode(_config!.toJson());
+    final savedJson = jsonEncode(_savedConfig!.toJson());
+    return currentJson != savedJson;
+  }
+
+  Future<void> _saveConfig() async {
+    if (_config == null) return;
+
+    try {
+      _config!.toPrefs(await ref.read(preferencesProvider.future));
+      _savedConfig = await StateManConfig.fromPrefs(
+          await ref.read(preferencesProvider.future));
+      ref.invalidate(stateManProvider);
+      setState(() {});
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content: Text('Modbus configuration saved successfully!'),
+              backgroundColor: Colors.green),
+        );
+      }
+    } catch (e) {
+      if (!context.mounted) return;
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+              content: Text('Failed to save Modbus configuration: $e'),
+              backgroundColor: Theme.of(context).colorScheme.error),
+        );
+      }
+    }
+  }
+
+  void _addServer() {
+    setState(() => _config?.modbus.add(ModbusConfig(
+          host: 'localhost',
+          port: 502,
+          unitId: 1,
+          pollGroups: [ModbusPollGroupConfig(name: 'default', intervalMs: 1000)],
+        )));
+  }
+
+  Widget _buildModbusServerList(StateManConfig config) {
+    final stateManAsync = ref.watch(stateManProvider);
+    final StateMan? stateMan = stateManAsync.valueOrNull;
+
+    return ListView.builder(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      itemCount: config.modbus.length,
+      itemBuilder: (context, index) {
+        ModbusDeviceClientAdapter? adapter;
+        if (stateMan != null) {
+          final server = config.modbus[index];
+          adapter = stateMan.deviceClients
+              .whereType<ModbusDeviceClientAdapter>()
+              .cast<ModbusDeviceClientAdapter?>()
+              .firstWhere(
+                (dc) =>
+                    (server.serverAlias != null &&
+                        server.serverAlias!.isNotEmpty &&
+                        dc!.serverAlias == server.serverAlias) ||
+                    (dc!.wrapper.host == server.host &&
+                        dc.wrapper.port == server.port),
+                orElse: () => null,
+              );
+        }
+        return _ModbusServerConfigCard(
+          server: config.modbus[index],
+          onUpdate: (server) => _updateServer(index, server),
+          onRemove: () => _removeServer(index),
+          connectionStatus: adapter?.connectionStatus,
+          connectionStream: adapter?.connectionStream,
+          stateManLoading: stateManAsync.isLoading,
+        );
+      },
+    );
+  }
+
+  void _updateServer(int index, ModbusConfig server) {
+    setState(() => _config!.modbus[index] = server);
+  }
+
+  void _removeServer(int index) {
+    setState(() => _config!.modbus.removeAt(index));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_isLoading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    if (_error != null) {
+      return Card(
+        child: Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              FaIcon(FontAwesomeIcons.triangleExclamation,
+                  size: 64, color: Theme.of(context).colorScheme.error),
+              const SizedBox(height: 16),
+              Text('Error loading Modbus configuration: $_error'),
+              const SizedBox(height: 16),
+              ElevatedButton(
+                  onPressed: _loadConfig, child: const Text('Retry')),
+            ],
+          ),
+        ),
+      );
+    }
+
+    final config = _config ?? StateManConfig(opcua: []);
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final isNarrow = constraints.maxWidth < 500;
+                if (isNarrow) {
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Row(
+                        children: [
+                          const FaIcon(FontAwesomeIcons.networkWired, size: 20),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text('Modbus TCP Servers',
+                                style: Theme.of(context).textTheme.titleMedium),
+                          ),
+                          if (_hasUnsavedChanges) ...[
+                            const SizedBox(width: 4),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                  color: Colors.orange,
+                                  borderRadius: BorderRadius.circular(12)),
+                              child: const Text('Unsaved',
+                                  style: TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.bold)),
+                            ),
+                          ],
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      ElevatedButton.icon(
+                        onPressed: _addServer,
+                        icon: const FaIcon(FontAwesomeIcons.plus, size: 16),
+                        label: const Text('Add Server'),
+                      ),
+                    ],
+                  );
+                }
+                return Row(
+                  children: [
+                    const FaIcon(FontAwesomeIcons.networkWired, size: 20),
+                    const SizedBox(width: 8),
+                    Text('Modbus TCP Servers',
+                        style: Theme.of(context).textTheme.titleMedium),
+                    if (_hasUnsavedChanges) ...[
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 4),
+                        decoration: BoxDecoration(
+                            color: Colors.orange,
+                            borderRadius: BorderRadius.circular(12)),
+                        child: const Text('Unsaved Changes',
+                            style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 12,
+                                fontWeight: FontWeight.bold)),
+                      ),
+                    ],
+                    const Spacer(),
+                    const SizedBox(width: 8),
+                    ElevatedButton.icon(
+                      onPressed: _addServer,
+                      icon: const FaIcon(FontAwesomeIcons.plus, size: 16),
+                      label: const Text('Add Server'),
+                    ),
+                  ],
+                );
+              },
+            ),
+            const SizedBox(height: 16),
+            config.modbus.isEmpty
+                ? const SizedBox(
+                    height: 200,
+                    child: _EmptyModbusServersWidget(),
+                  )
+                : _buildModbusServerList(config),
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                if (config.modbus.isNotEmpty || _hasUnsavedChanges)
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      onPressed: _hasUnsavedChanges ? _saveConfig : null,
+                      icon: FaIcon(FontAwesomeIcons.floppyDisk,
+                          size: 16,
+                          color: _hasUnsavedChanges ? null : Colors.grey),
+                      label: Text(_hasUnsavedChanges
+                          ? 'Save Configuration'
+                          : 'All Changes Saved'),
+                      style: ElevatedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 16),
+                          backgroundColor:
+                              _hasUnsavedChanges ? null : Colors.grey),
+                    ),
+                  ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _EmptyModbusServersWidget extends StatelessWidget {
+  const _EmptyModbusServersWidget();
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const FaIcon(FontAwesomeIcons.networkWired,
+              size: 64, color: Colors.grey),
+          const SizedBox(height: 16),
+          Text('No Modbus servers configured',
+              style: Theme.of(context)
+                  .textTheme
+                  .titleLarge
+                  ?.copyWith(color: Colors.grey)),
+          const SizedBox(height: 8),
+          const Text('Add your first Modbus TCP server to get started',
+              style: TextStyle(color: Colors.grey)),
+        ],
+      ),
+    );
+  }
+}
+
+// ===================== Modbus Server Config Card =====================
+
+class _ModbusServerConfigCard extends StatefulWidget {
+  final ModbusConfig server;
+  final Function(ModbusConfig) onUpdate;
+  final VoidCallback onRemove;
+  final ConnectionStatus? connectionStatus;
+  final Stream<ConnectionStatus>? connectionStream;
+  final bool stateManLoading;
+
+  const _ModbusServerConfigCard({
+    required this.server,
+    required this.onUpdate,
+    required this.onRemove,
+    this.connectionStatus,
+    this.connectionStream,
+    this.stateManLoading = false,
+  });
+
+  @override
+  State<_ModbusServerConfigCard> createState() =>
+      _ModbusServerConfigCardState();
+}
+
+class _ModbusServerConfigCardState extends State<_ModbusServerConfigCard> {
+  late TextEditingController _hostController;
+  late TextEditingController _portController;
+  late TextEditingController _unitIdController;
+  late TextEditingController _aliasController;
+  ConnectionStatus? _connectionStatus;
+  StreamSubscription<ConnectionStatus>? _statusSub;
+
+  @override
+  void initState() {
+    super.initState();
+    _hostController = TextEditingController(text: widget.server.host);
+    _portController =
+        TextEditingController(text: widget.server.port.toString());
+    _unitIdController =
+        TextEditingController(text: widget.server.unitId.toString());
+    _aliasController =
+        TextEditingController(text: widget.server.serverAlias ?? '');
+    _connectionStatus = widget.connectionStatus;
+    _subscribeToStatus();
+  }
+
+  @override
+  void didUpdateWidget(covariant _ModbusServerConfigCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.connectionStream != oldWidget.connectionStream) {
+      _connectionStatus = widget.connectionStatus;
+      _subscribeToStatus();
+    }
+  }
+
+  void _subscribeToStatus() {
+    _statusSub?.cancel();
+    _statusSub = widget.connectionStream?.listen((status) {
+      if (mounted) setState(() => _connectionStatus = status);
+    });
+  }
+
+  @override
+  void dispose() {
+    _statusSub?.cancel();
+    _hostController.dispose();
+    _portController.dispose();
+    _unitIdController.dispose();
+    _aliasController.dispose();
+    super.dispose();
+  }
+
+  Color _connectionStatusColor() {
+    if (_connectionStatus == null) {
+      return widget.stateManLoading ? Colors.orange : Colors.grey;
+    }
+    return switch (_connectionStatus!) {
+      ConnectionStatus.connected => Colors.green,
+      ConnectionStatus.connecting => Colors.orange,
+      ConnectionStatus.disconnected => Colors.red,
+    };
+  }
+
+  String _connectionStatusLabel() {
+    if (_connectionStatus == null) {
+      return widget.stateManLoading ? 'Loading...' : 'Not active';
+    }
+    return switch (_connectionStatus!) {
+      ConnectionStatus.connected => 'Connected',
+      ConnectionStatus.connecting => 'Connecting...',
+      ConnectionStatus.disconnected => 'Disconnected',
+    };
+  }
+
+  Widget _buildStatusChip() {
+    final color = _connectionStatusColor();
+    final label = _connectionStatusLabel();
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withAlpha(30),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withAlpha(120)),
+      ),
+      child: Text(
+        label,
+        style:
+            TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w600),
+      ),
+    );
+  }
+
+  void _updateServer() {
+    final updated = ModbusConfig(
+      host: _hostController.text,
+      port: int.tryParse(_portController.text) ?? 502,
+      unitId: (int.tryParse(_unitIdController.text) ?? 1).clamp(1, 247),
+      pollGroups: widget.server.pollGroups,
+    )..serverAlias =
+        _aliasController.text.isEmpty ? null : _aliasController.text;
+    widget.onUpdate(updated);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      margin: const EdgeInsets.only(bottom: 16),
+      child: ExpansionTile(
+        leading: const FaIcon(FontAwesomeIcons.networkWired, size: 20),
+        title: Text(
+          widget.server.serverAlias ??
+              '${widget.server.host}:${widget.server.port}',
+          style: const TextStyle(fontWeight: FontWeight.bold),
+          overflow: TextOverflow.ellipsis,
+          maxLines: 1,
+        ),
+        subtitle: Text(
+          '${widget.server.host}:${widget.server.port} (Unit ${widget.server.unitId})',
+          style: TextStyle(color: Colors.grey[600]),
+          overflow: TextOverflow.ellipsis,
+          maxLines: 1,
+        ),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _buildStatusChip(),
+            const SizedBox(width: 8),
+            IconButton(
+              icon: const FaIcon(FontAwesomeIcons.trash, size: 16),
+              onPressed: () {
+                showDialog(
+                  context: context,
+                  builder: (context) => AlertDialog(
+                    title: const Text('Remove Server'),
+                    content: const Text(
+                        'Are you sure you want to remove this Modbus server?'),
+                    actions: [
+                      TextButton(
+                          onPressed: () => Navigator.pop(context),
+                          child: const Text('Cancel')),
+                      TextButton(
+                          onPressed: () {
+                            Navigator.pop(context);
+                            widget.onRemove();
+                          },
+                          child: const Text('Remove')),
+                    ],
+                  ),
+                );
+              },
+            ),
+            const SizedBox(width: 8),
+            const FaIcon(FontAwesomeIcons.chevronDown, size: 16),
+          ],
+        ),
+        onExpansionChanged: (expanded) => setState(() {}),
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(16.0),
+            child: Column(
+              children: [
+                LayoutBuilder(
+                  builder: (context, constraints) {
+                    final isNarrow = constraints.maxWidth < 400;
+                    if (isNarrow) {
+                      return Column(
+                        children: [
+                          TextField(
+                            controller: _hostController,
+                            decoration: const InputDecoration(
+                              labelText: 'Host',
+                              hintText: 'localhost',
+                              prefixIcon:
+                                  FaIcon(FontAwesomeIcons.server, size: 16),
+                            ),
+                            onChanged: (_) => _updateServer(),
+                          ),
+                          const SizedBox(height: 12),
+                          TextField(
+                            controller: _portController,
+                            decoration: const InputDecoration(
+                              labelText: 'Port',
+                              hintText: '502',
+                              prefixIcon:
+                                  FaIcon(FontAwesomeIcons.hashtag, size: 16),
+                            ),
+                            keyboardType: TextInputType.number,
+                            onChanged: (_) => _updateServer(),
+                          ),
+                          const SizedBox(height: 12),
+                          TextField(
+                            controller: _unitIdController,
+                            decoration: const InputDecoration(
+                              labelText: 'Unit ID',
+                              hintText: '1-247',
+                              prefixIcon: FaIcon(FontAwesomeIcons.addressCard,
+                                  size: 16),
+                            ),
+                            keyboardType: TextInputType.number,
+                            onChanged: (_) => _updateServer(),
+                          ),
+                        ],
+                      );
+                    }
+                    return Column(
+                      children: [
+                        Row(
+                          children: [
+                            Expanded(
+                              flex: 3,
+                              child: TextField(
+                                controller: _hostController,
+                                decoration: const InputDecoration(
+                                  labelText: 'Host',
+                                  hintText: 'localhost',
+                                  prefixIcon: FaIcon(FontAwesomeIcons.server,
+                                      size: 16),
+                                ),
+                                onChanged: (_) => _updateServer(),
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              flex: 1,
+                              child: TextField(
+                                controller: _portController,
+                                decoration: const InputDecoration(
+                                  labelText: 'Port',
+                                  hintText: '502',
+                                  prefixIcon: FaIcon(FontAwesomeIcons.hashtag,
+                                      size: 16),
+                                ),
+                                keyboardType: TextInputType.number,
+                                onChanged: (_) => _updateServer(),
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              flex: 1,
+                              child: TextField(
+                                controller: _unitIdController,
+                                decoration: const InputDecoration(
+                                  labelText: 'Unit ID',
+                                  hintText: '1-247',
+                                  prefixIcon: FaIcon(
+                                      FontAwesomeIcons.addressCard,
+                                      size: 16),
+                                ),
+                                keyboardType: TextInputType.number,
+                                onChanged: (_) => _updateServer(),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    );
+                  },
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _aliasController,
+                  decoration: const InputDecoration(
+                    labelText: 'Server Alias (optional)',
+                    hintText: 'My Modbus Server',
                     prefixIcon: FaIcon(FontAwesomeIcons.tag, size: 16),
                   ),
                   onChanged: (_) => _updateServer(),

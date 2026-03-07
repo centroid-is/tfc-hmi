@@ -11,6 +11,7 @@ import 'package:tfc_dart/core/database.dart';
 
 import 'package:tfc/providers/preferences.dart';
 import 'package:tfc/providers/database.dart';
+import 'package:tfc/providers/state_man.dart';
 import 'package:tfc/pages/key_repository.dart';
 import 'package:tfc/pages/server_config.dart';
 
@@ -144,6 +145,11 @@ Widget buildTestableServerConfig({
             stateManConfig: stateManConfig,
           )),
       databaseProvider.overrideWith((ref) async => null),
+      // Override stateManProvider to avoid real network connections.
+      // Throwing makes valueOrNull return null and isLoading false,
+      // so connection status shows "Not active" (grey).
+      stateManProvider.overrideWith((ref) =>
+          throw StateError('No StateMan in tests')),
     ],
     child: MaterialApp(
       home: Scaffold(
