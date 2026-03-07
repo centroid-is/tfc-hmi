@@ -62,19 +62,19 @@ Plans:
   2. Child gate renders at the correct fractional position along the conveyor belt, on the selected side (left/right)
   3. Child gate flap spans the belt width and pneumatic cylinder extends visually outside the conveyor bounding box
   4. User can click a child gate to open its own config/force dialog independently of the parent conveyor
-**Plans**: TBD
+**Plans:** 2 plans
 
 Plans:
-- [ ] 03-01: TBD
-- [ ] 03-02: TBD
+- [ ] 03-01-PLAN.md -- Data model: position field on gate config, gates list on conveyor config, serialization tests
+- [ ] 03-02-PLAN.md -- Widget composition with Stack/overflow, config dialog gate management, position slider, visual verification
 
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 → 2 → 3
+Phases execute in numeric order: 1 -> 2 -> 3
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Standalone Diverter Gate | 3/3 | Complete | 2026-03-07 |
 | 2. Full Feature Set | 2/3 | In Progress | - |
-| 3. Child-of-Conveyor Integration | 0/0 | Not started | - |
+| 3. Child-of-Conveyor Integration | 0/2 | Not started | - |
