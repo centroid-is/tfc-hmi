@@ -9,7 +9,7 @@ void main() {
 
     test('JSON roundtrip preserves all fields', () {
       final config = ConveyorGateConfig(
-        variant: GateVariant.pneumatic,
+        gateVariant: GateVariant.pneumatic,
         side: GateSide.right,
         stateKey: 'ns=2;s=Gate1.State',
         openAngleDegrees: 60.0,
@@ -22,19 +22,19 @@ void main() {
       final json = config.toJson();
       final restored = ConveyorGateConfig.fromJson(json);
 
-      expect(restored.variant, GateVariant.pneumatic);
+      expect(restored.gateVariant, GateVariant.pneumatic);
       expect(restored.side, GateSide.right);
       expect(restored.stateKey, 'ns=2;s=Gate1.State');
       expect(restored.openAngleDegrees, 60.0);
       expect(restored.openTimeMs, 500);
       expect(restored.closeTimeMs, 300);
-      expect(restored.openColor, Colors.blue);
-      expect(restored.closedColor, Colors.red);
+      expect(restored.openColor.value, Colors.blue.value);
+      expect(restored.closedColor.value, Colors.red.value);
     });
 
     test('JSON roundtrip preserves null closeTimeMs', () {
       final config = ConveyorGateConfig(
-        variant: GateVariant.pneumatic,
+        gateVariant: GateVariant.pneumatic,
         side: GateSide.left,
         stateKey: '',
         openAngleDegrees: 45.0,
@@ -55,7 +55,7 @@ void main() {
     test('preview factory has correct defaults', () {
       final config = ConveyorGateConfig.preview();
 
-      expect(config.variant, GateVariant.pneumatic);
+      expect(config.gateVariant, GateVariant.pneumatic);
       expect(config.side, GateSide.left);
       expect(config.openAngleDegrees, 45.0);
       expect(config.openTimeMs, 800);
@@ -81,9 +81,9 @@ void main() {
 
     test('unknown GateVariant falls back to pneumatic', () {
       final json = ConveyorGateConfig.preview().toJson();
-      json['variant'] = 'unknown_future_variant';
+      json['gateVariant'] = 'unknown_future_variant';
       final restored = ConveyorGateConfig.fromJson(json);
-      expect(restored.variant, GateVariant.pneumatic);
+      expect(restored.gateVariant, GateVariant.pneumatic);
     });
 
     test('unknown GateSide falls back to left', () {
@@ -184,6 +184,7 @@ void main() {
     // ── Widget rendering tests ──
 
     testWidgets('renders without errors at default size', (tester) async {
+      const testKey = Key('gate_paint_test');
       await tester.pumpWidget(
         MaterialApp(
           home: Scaffold(
@@ -192,6 +193,7 @@ void main() {
                 width: 200,
                 height: 200,
                 child: CustomPaint(
+                  key: testKey,
                   painter: PneumaticDiverterPainter(
                     progress: ValueNotifier(0.0),
                     stateColor: Colors.green,
@@ -204,10 +206,11 @@ void main() {
           ),
         ),
       );
-      expect(find.byType(CustomPaint), findsOneWidget);
+      expect(find.byKey(testKey), findsOneWidget);
     });
 
     testWidgets('renders with right side without errors', (tester) async {
+      const testKey = Key('gate_paint_test');
       await tester.pumpWidget(
         MaterialApp(
           home: Scaffold(
@@ -216,6 +219,7 @@ void main() {
                 width: 200,
                 height: 200,
                 child: CustomPaint(
+                  key: testKey,
                   painter: PneumaticDiverterPainter(
                     progress: ValueNotifier(1.0),
                     stateColor: Colors.green,
@@ -228,7 +232,7 @@ void main() {
           ),
         ),
       );
-      expect(find.byType(CustomPaint), findsOneWidget);
+      expect(find.byKey(testKey), findsOneWidget);
     });
   });
 }
