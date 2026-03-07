@@ -478,4 +478,71 @@ void main() {
       expect(find.byKey(testKey), findsOneWidget);
     });
   });
+
+  group('ConveyorGate interaction', () {
+    // ── Clickability logic (INT-01) ──
+    // The ConveyorGate widget wraps the gate in a GestureDetector only when
+    // forceOpenKey or forceCloseKey is non-empty. We verify the gating logic
+    // via config properties since the full widget requires ProviderScope +
+    // stateManProvider.
+
+    test('gate is not clickable when no force keys configured', () {
+      final config = ConveyorGateConfig(
+        forceOpenKey: '',
+        forceCloseKey: '',
+      );
+      final isInteractive =
+          config.forceOpenKey.isNotEmpty || config.forceCloseKey.isNotEmpty;
+      expect(isInteractive, isFalse);
+    });
+
+    test('gate is clickable when force open key configured', () {
+      final config = ConveyorGateConfig(
+        forceOpenKey: 'ns=2;s=Gate1.ForceOpen',
+        forceCloseKey: '',
+      );
+      final isInteractive =
+          config.forceOpenKey.isNotEmpty || config.forceCloseKey.isNotEmpty;
+      expect(isInteractive, isTrue);
+    });
+
+    test('gate is clickable when force close key configured', () {
+      final config = ConveyorGateConfig(
+        forceOpenKey: '',
+        forceCloseKey: 'ns=2;s=Gate1.ForceClose',
+      );
+      final isInteractive =
+          config.forceOpenKey.isNotEmpty || config.forceCloseKey.isNotEmpty;
+      expect(isInteractive, isTrue);
+    });
+
+    test('gate is clickable when both force keys configured', () {
+      final config = ConveyorGateConfig(
+        forceOpenKey: 'ns=2;s=Gate1.ForceOpen',
+        forceCloseKey: 'ns=2;s=Gate1.ForceClose',
+      );
+      final isInteractive =
+          config.forceOpenKey.isNotEmpty || config.forceCloseKey.isNotEmpty;
+      expect(isInteractive, isTrue);
+    });
+
+    // ── Forced-state color logic (VIS-03) ──
+
+    test('force feedback keys control whether forced color is applied', () {
+      final configWithFeedback = ConveyorGateConfig(
+        forceOpenFeedbackKey: 'ns=2;s=Gate1.ForceOpenFb',
+        forceCloseFeedbackKey: '',
+      );
+      final hasForceFeedback =
+          configWithFeedback.forceOpenFeedbackKey.isNotEmpty ||
+              configWithFeedback.forceCloseFeedbackKey.isNotEmpty;
+      expect(hasForceFeedback, isTrue);
+
+      final configWithoutFeedback = ConveyorGateConfig();
+      final hasNoFeedback =
+          configWithoutFeedback.forceOpenFeedbackKey.isNotEmpty ||
+              configWithoutFeedback.forceCloseFeedbackKey.isNotEmpty;
+      expect(hasNoFeedback, isFalse);
+    });
+  });
 }

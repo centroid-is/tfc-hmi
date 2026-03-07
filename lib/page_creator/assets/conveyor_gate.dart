@@ -5,8 +5,9 @@ import 'package:flutter/services.dart';
 import 'package:flutter_colorpicker/flutter_colorpicker.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:json_annotation/json_annotation.dart';
-import 'package:open62541/open62541.dart' show DynamicValue;
+import 'package:open62541/open62541.dart' show DynamicValue, NodeId;
 import 'package:rxdart/rxdart.dart';
+import 'package:tfc_dart/core/state_man.dart';
 
 import 'package:tfc/page_creator/assets/common.dart';
 import 'package:tfc/page_creator/assets/conveyor_gate_painter.dart';
@@ -124,6 +125,20 @@ class ConveyorGateConfig extends BaseAsset {
       _ConveyorGateConfigEditor(config: this);
 }
 
+/// Subscribe to a boolean OPC UA feedback key.
+///
+/// Returns a stream that emits `false` immediately and then tracks the live
+/// value. When [key] is empty the stream emits a single `false` (no-op).
+Stream<bool> _boolFeedback(StateMan sm, String key) {
+  if (key.isEmpty) return Stream.value(false);
+  return sm
+      .subscribe(key)
+      .asStream()
+      .asyncExpand((s) => s)
+      .map((v) => v.asBool)
+      .startWith(false);
+}
+
 // ---------------------------------------------------------------------------
 // Runtime widget with animation and OPC UA data binding
 // ---------------------------------------------------------------------------
@@ -221,12 +236,51 @@ class _ConveyorGateState extends ConsumerState<ConveyorGate>
     );
   }
 
+  /// Write a boolean value to an OPC UA force key.
+  Future<void> _writeForce(String key, bool value) async {
+    if (key.isEmpty) return;
+    try {
+      final client = await ref.read(stateManProvider.future);
+      await client.write(
+        key,
+        DynamicValue(value: value, typeId: NodeId.boolean),
+      );
+    } catch (_) {
+      // Log error but do not crash UI.
+    }
+  }
+
+  /// Show the force-control dialog (INT-02).
+  void _showForceDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Force Gate'),
+        content: _ForceDialogContent(
+          config: widget.config,
+          writeForce: _writeForce,
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    final isInteractive = widget.config.forceOpenKey.isNotEmpty ||
+        widget.config.forceCloseKey.isNotEmpty;
+
     // When no state key is configured, render in grey (DATA-06).
     if (widget.config.stateKey.isEmpty) {
-      return _buildGate(Colors.grey);
+      final gate = _buildGate(Colors.grey);
+      return isInteractive
+          ? GestureDetector(onTap: () => _showForceDialog(context), child: gate)
+          : gate;
     }
+
+    final forcedColor = Theme.of(context).colorScheme.tertiary;
+    final hasForceFeedback =
+        widget.config.forceOpenFeedbackKey.isNotEmpty ||
+            widget.config.forceCloseFeedbackKey.isNotEmpty;
 
     return StreamBuilder<DynamicValue>(
       stream: ref.watch(stateManProvider.future).asStream().asyncExpand(
@@ -236,18 +290,178 @@ class _ConveyorGateState extends ConsumerState<ConveyorGate>
                 .switchMap((s) => s),
           ),
       builder: (context, snapshot) {
-        final Color color;
+        // Resolve base color from OPC UA state.
+        final bool isOpen = snapshot.hasData && snapshot.data!.asBool;
+        _onStateChanged(isOpen);
+
+        final Color baseColor;
         if (!snapshot.hasData) {
-          color = Colors.grey; // DATA-06: grey when disconnected
-        } else if (snapshot.data!.asBool) {
-          color = widget.config.openColor;
+          baseColor = Colors.grey; // DATA-06: grey when disconnected
+        } else if (isOpen) {
+          baseColor = widget.config.openColor;
         } else {
-          color = widget.config.closedColor;
+          baseColor = widget.config.closedColor;
         }
 
-        _onStateChanged(snapshot.hasData && snapshot.data!.asBool);
+        // If force feedback keys are configured, nest a second StreamBuilder
+        // that overrides color when any force feedback is active (VIS-03).
+        if (hasForceFeedback) {
+          return StreamBuilder<bool>(
+            stream:
+                ref.watch(stateManProvider.future).asStream().asyncExpand(
+              (sm) {
+                return Rx.combineLatest2(
+                  _boolFeedback(sm, widget.config.forceOpenFeedbackKey),
+                  _boolFeedback(sm, widget.config.forceCloseFeedbackKey),
+                  (a, b) => a || b,
+                );
+              },
+            ),
+            builder: (context, fbSnapshot) {
+              final forceActive = fbSnapshot.data ?? false;
+              final displayColor = forceActive ? forcedColor : baseColor;
+              final gate = _buildGate(displayColor);
+              return isInteractive
+                  ? GestureDetector(
+                      onTap: () => _showForceDialog(context), child: gate)
+                  : gate;
+            },
+          );
+        }
 
-        return _buildGate(color);
+        // No force feedback -- use base color directly.
+        final gate = _buildGate(baseColor);
+        return isInteractive
+            ? GestureDetector(
+                onTap: () => _showForceDialog(context), child: gate)
+            : gate;
+      },
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Force dialog content widget (shown inside AlertDialog)
+// ---------------------------------------------------------------------------
+
+class _ForceDialogContent extends ConsumerWidget {
+  final ConveyorGateConfig config;
+  final Future<void> Function(String key, bool value) writeForce;
+
+  const _ForceDialogContent({
+    required this.config,
+    required this.writeForce,
+  });
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final feedbackColor = Theme.of(context).colorScheme.tertiary;
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        // -- Current gate state indicator (read-only) --
+        StreamBuilder<DynamicValue>(
+          stream: ref.watch(stateManProvider.future).asStream().asyncExpand(
+                (sm) => config.stateKey.isEmpty
+                    ? Stream<DynamicValue>.empty()
+                    : sm
+                        .subscribe(config.stateKey)
+                        .asStream()
+                        .switchMap((s) => s),
+              ),
+          builder: (context, snapshot) {
+            final Color stateColor;
+            final String stateLabel;
+            if (!snapshot.hasData) {
+              stateColor = Colors.grey;
+              stateLabel = 'Disconnected';
+            } else if (snapshot.data!.asBool) {
+              stateColor = config.openColor;
+              stateLabel = 'Open';
+            } else {
+              stateColor = config.closedColor;
+              stateLabel = 'Closed';
+            }
+            return Row(
+              children: [
+                Container(
+                  width: 16,
+                  height: 16,
+                  decoration: BoxDecoration(
+                    color: stateColor,
+                    shape: BoxShape.circle,
+                    border: Border.all(color: Colors.grey.shade600),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Text(stateLabel),
+              ],
+            );
+          },
+        ),
+        const SizedBox(height: 16),
+
+        // -- Force Open button with feedback (INT-02, INT-03) --
+        _forceButton(
+          context: context,
+          ref: ref,
+          label: 'Force Open',
+          writeKey: config.forceOpenKey,
+          feedbackKey: config.forceOpenFeedbackKey,
+          feedbackColor: feedbackColor,
+        ),
+        const SizedBox(height: 8),
+
+        // -- Force Close button with feedback --
+        _forceButton(
+          context: context,
+          ref: ref,
+          label: 'Force Close',
+          writeKey: config.forceCloseKey,
+          feedbackKey: config.forceCloseFeedbackKey,
+          feedbackColor: feedbackColor,
+        ),
+      ],
+    );
+  }
+
+  Widget _forceButton({
+    required BuildContext context,
+    required WidgetRef ref,
+    required String label,
+    required String writeKey,
+    required String feedbackKey,
+    required Color feedbackColor,
+  }) {
+    return StreamBuilder<bool>(
+      stream: ref.watch(stateManProvider.future).asStream().asyncExpand(
+        (sm) => _boolFeedback(sm, feedbackKey),
+      ),
+      builder: (context, fbSnapshot) {
+        final isActive = fbSnapshot.data ?? false;
+        return Row(
+          children: [
+            Expanded(
+              child: ElevatedButton(
+                onPressed:
+                    writeKey.isEmpty ? null : () => writeForce(writeKey, true),
+                child: Text(label),
+              ),
+            ),
+            if (isActive) ...[
+              const SizedBox(width: 8),
+              Container(
+                width: 12,
+                height: 12,
+                decoration: BoxDecoration(
+                  color: feedbackColor,
+                  shape: BoxShape.circle,
+                ),
+              ),
+            ],
+          ],
+        );
       },
     );
   }

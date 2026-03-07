@@ -46,11 +46,12 @@ Plans:
   3. User can switch gate variant to slider or pusher in the config dialog, and each renders with its own distinct visual (sliding plate or extending blade)
   4. User can pick custom colors for active and closed states using color picker controls in the config dialog
   5. Gate with no force keys configured is display-only and not clickable
-**Plans**: TBD
+**Plans:** 3 plans
 
 Plans:
-- [ ] 02-01: TBD
-- [ ] 02-02: TBD
+- [ ] 02-01-PLAN.md -- Slider and pusher painters, force key config fields, variant dispatch, golden tests
+- [ ] 02-02-PLAN.md -- Force dialog with OPC UA write/feedback, forced-state color, config editor updates
+- [ ] 02-03-PLAN.md -- Visual and functional verification checkpoint
 
 ### Phase 3: Child-of-Conveyor Integration
 **Goal**: Integrators can attach gates to conveyor assets so they render at specific belt positions with correct scaling and independent interaction
@@ -75,5 +76,5 @@ Phases execute in numeric order: 1 → 2 → 3
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Standalone Diverter Gate | 3/3 | Complete | 2026-03-07 |
-| 2. Full Feature Set | 0/0 | Not started | - |
+| 2. Full Feature Set | 0/3 | Planned | - |
 | 3. Child-of-Conveyor Integration | 0/0 | Not started | - |
