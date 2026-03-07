@@ -234,7 +234,216 @@ void main() {
     });
   });
 
-  // ==================== Group 6: Save Button ====================
+  // ==================== Group 6: Poll Group Configuration ====================
+  group('Poll group configuration', () {
+    testWidgets('shows Poll Groups header with count', (tester) async {
+      await tester.pumpWidget(buildTestableServerConfig(
+        stateManConfig: sampleModbusWithTwoPollGroups(),
+      ));
+      await tester.pumpAndSettle();
+
+      // Scroll to Modbus section
+      await tester.scrollUntilVisible(
+        find.text('Modbus TCP Servers'),
+        200,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.pumpAndSettle();
+
+      // Expand the server card
+      await tester.tap(find.text('plc_1'));
+      await tester.pumpAndSettle();
+
+      // Scroll to see poll groups header
+      await tester.scrollUntilVisible(
+        find.text('Poll Groups (2)'),
+        200,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Poll Groups (2)'), findsOneWidget);
+    });
+
+    testWidgets('expanding poll groups shows name and interval fields',
+        (tester) async {
+      await tester.pumpWidget(buildTestableServerConfig(
+        stateManConfig: sampleModbusWithTwoPollGroups(),
+      ));
+      await tester.pumpAndSettle();
+
+      // Scroll to Modbus section
+      await tester.scrollUntilVisible(
+        find.text('Modbus TCP Servers'),
+        200,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.pumpAndSettle();
+
+      // Expand server card
+      await tester.tap(find.text('plc_1'));
+      await tester.pumpAndSettle();
+
+      // Scroll to poll groups and expand
+      await tester.scrollUntilVisible(
+        find.text('Poll Groups (2)'),
+        200,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Poll Groups (2)'));
+      await tester.pumpAndSettle();
+
+      // Should show name fields with 'default' and 'fast' values
+      expect(find.widgetWithText(TextField, 'Name'), findsAtLeastNWidgets(1));
+      expect(
+          find.widgetWithText(TextField, 'Interval (ms)'), findsAtLeastNWidgets(1));
+    });
+
+    testWidgets('add poll group creates new row', (tester) async {
+      await tester.pumpWidget(buildTestableServerConfig(
+        stateManConfig: sampleModbusStateManConfig(),
+      ));
+      await tester.pumpAndSettle();
+
+      // Scroll to Modbus section
+      await tester.scrollUntilVisible(
+        find.text('Modbus TCP Servers'),
+        200,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.pumpAndSettle();
+
+      // Expand server card
+      await tester.tap(find.text('plc_1'));
+      await tester.pumpAndSettle();
+
+      // Scroll to and expand poll groups
+      await tester.scrollUntilVisible(
+        find.text('Poll Groups (1)'),
+        200,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Poll Groups (1)'));
+      await tester.pumpAndSettle();
+
+      // Scroll to Add Poll Group button
+      await tester.scrollUntilVisible(
+        find.text('Add Poll Group'),
+        200,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.pumpAndSettle();
+
+      // Tap add
+      await tester.tap(find.text('Add Poll Group'));
+      await tester.pumpAndSettle();
+
+      // Count should increase to 2
+      expect(find.text('Poll Groups (2)'), findsOneWidget);
+    });
+
+    testWidgets('delete poll group removes row', (tester) async {
+      await tester.pumpWidget(buildTestableServerConfig(
+        stateManConfig: sampleModbusWithTwoPollGroups(),
+      ));
+      await tester.pumpAndSettle();
+
+      // Scroll to Modbus section
+      await tester.scrollUntilVisible(
+        find.text('Modbus TCP Servers'),
+        200,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.pumpAndSettle();
+
+      // Expand server card
+      await tester.tap(find.text('plc_1'));
+      await tester.pumpAndSettle();
+
+      // Scroll to and expand poll groups
+      await tester.scrollUntilVisible(
+        find.text('Poll Groups (2)'),
+        200,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Poll Groups (2)'));
+      await tester.pumpAndSettle();
+
+      // Find trash icons within poll group rows -- the small ones (size 14)
+      // The server card trash is size 16, poll group trash is size 14
+      final pollGroupTrashIcons = find.byWidgetPredicate(
+          (w) => w is FaIcon && w.icon == FontAwesomeIcons.trash && w.size == 14);
+      expect(pollGroupTrashIcons, findsAtLeastNWidgets(1));
+
+      // Tap first poll group trash icon
+      await tester.tap(pollGroupTrashIcons.first);
+      await tester.pumpAndSettle();
+
+      // Count should decrease to 1
+      expect(find.text('Poll Groups (1)'), findsOneWidget);
+    });
+
+    testWidgets('editing poll group triggers unsaved changes', (tester) async {
+      await tester.pumpWidget(buildTestableServerConfig(
+        stateManConfig: sampleModbusStateManConfig(),
+      ));
+      await tester.pumpAndSettle();
+
+      // Scroll to Modbus section
+      await tester.scrollUntilVisible(
+        find.text('Modbus TCP Servers'),
+        200,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.pumpAndSettle();
+
+      // Expand server card
+      await tester.tap(find.text('plc_1'));
+      await tester.pumpAndSettle();
+
+      // Scroll to and expand poll groups
+      await tester.scrollUntilVisible(
+        find.text('Poll Groups (1)'),
+        200,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Poll Groups (1)'));
+      await tester.pumpAndSettle();
+
+      // Scroll to interval field
+      await tester.scrollUntilVisible(
+        find.widgetWithText(TextField, 'Interval (ms)'),
+        200,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.pumpAndSettle();
+
+      // Change interval
+      final intervalField = find.widgetWithText(TextField, 'Interval (ms)');
+      await tester.enterText(intervalField.first, '500');
+      await tester.pumpAndSettle();
+
+      // Scroll back up to see unsaved badge
+      await tester.scrollUntilVisible(
+        find.text('Modbus TCP Servers'),
+        -200,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('Unsaved'), findsAtLeastNWidgets(1));
+    });
+  });
+
+  // ==================== Group 7: Save Button ====================
   group('Save button', () {
     testWidgets('Save button disabled when no changes', (tester) async {
       await tester.pumpWidget(buildTestableServerConfig(

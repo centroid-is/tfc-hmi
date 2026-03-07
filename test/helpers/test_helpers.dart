@@ -131,6 +131,24 @@ StateManConfig sampleModbusStateManConfig() {
   );
 }
 
+/// Creates a sample [StateManConfig] with one Modbus server that has 2 poll groups.
+StateManConfig sampleModbusWithTwoPollGroups() {
+  return StateManConfig(
+    opcua: [],
+    modbus: [
+      ModbusConfig(
+        host: '192.168.1.100',
+        port: 502,
+        unitId: 1,
+        pollGroups: [
+          ModbusPollGroupConfig(name: 'default', intervalMs: 1000),
+          ModbusPollGroupConfig(name: 'fast', intervalMs: 100),
+        ],
+      )..serverAlias = 'plc_1',
+    ],
+  );
+}
+
 /// Wraps the [ServerConfigPage] body in a testable widget tree.
 ///
 /// Bypasses [BaseScaffold] (which requires Beamer routing context) by
