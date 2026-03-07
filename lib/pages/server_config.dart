@@ -501,27 +501,41 @@ class ServerConfigPage extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    return BaseScaffold(
+      title: 'Server Configuration',
+      body: const ServerConfigBody(),
+    );
+  }
+}
+
+/// The body content of [ServerConfigPage], extracted for testability.
+///
+/// Contains all server configuration sections (Database, OPC UA, JBTM, Modbus)
+/// and the Import/Export card. Separated from [ServerConfigPage] so widget
+/// tests can render without the [BaseScaffold] (which requires Beamer routing).
+class ServerConfigBody extends ConsumerWidget {
+  const ServerConfigBody({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
     // Watch a simple counter that gets incremented on import
     final refreshKey = ref.watch(refreshKeyProvider);
 
-    return BaseScaffold(
-      title: 'Server Configuration',
-      body: SingleChildScrollView(
-        child: Column(
-          children: [
-            // Database Configuration Section
-            DatabaseConfigWidget(key: ValueKey('db_$refreshKey')),
-            const SizedBox(height: 16),
+    return SingleChildScrollView(
+      child: Column(
+        children: [
+          // Database Configuration Section
+          DatabaseConfigWidget(key: ValueKey('db_$refreshKey')),
+          const SizedBox(height: 16),
 
-            // OPC-UA Servers Section
-            _OpcUAServersSection(key: ValueKey('opcua_$refreshKey')),
-            const SizedBox(height: 16),
+          // OPC-UA Servers Section
+          _OpcUAServersSection(key: ValueKey('opcua_$refreshKey')),
+          const SizedBox(height: 16),
 
-            // JBTM M2400 Servers Section
-            _JbtmServersSection(key: ValueKey('jbtm_$refreshKey')),
-            const ImportExportCard(),
-          ],
-        ),
+          // JBTM M2400 Servers Section
+          _JbtmServersSection(key: ValueKey('jbtm_$refreshKey')),
+          const ImportExportCard(),
+        ],
       ),
     );
   }

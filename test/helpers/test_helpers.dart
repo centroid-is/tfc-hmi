@@ -12,6 +12,7 @@ import 'package:tfc_dart/core/database.dart';
 import 'package:tfc/providers/preferences.dart';
 import 'package:tfc/providers/database.dart';
 import 'package:tfc/pages/key_repository.dart';
+import 'package:tfc/pages/server_config.dart';
 
 /// In-memory secure storage for tests.
 class FakeSecureStorage implements MySecureStorage {
@@ -107,6 +108,46 @@ Widget buildTestableKeyRepository({
     child: MaterialApp(
       home: Scaffold(
         body: KeyRepositoryContent(),
+      ),
+    ),
+  );
+}
+
+/// Creates a sample [StateManConfig] with one Modbus server for tests.
+StateManConfig sampleModbusStateManConfig() {
+  return StateManConfig(
+    opcua: [],
+    modbus: [
+      ModbusConfig(
+        host: '192.168.1.100',
+        port: 502,
+        unitId: 1,
+        pollGroups: [
+          ModbusPollGroupConfig(name: 'default', intervalMs: 1000),
+        ],
+      )..serverAlias = 'plc_1',
+    ],
+  );
+}
+
+/// Wraps the [ServerConfigPage] body in a testable widget tree.
+///
+/// Bypasses [BaseScaffold] (which requires Beamer routing context) by
+/// rendering the same Column of sections that [ServerConfigPage.build]
+/// produces. This tests all section widgets without needing a full router.
+Widget buildTestableServerConfig({
+  StateManConfig? stateManConfig,
+}) {
+  return ProviderScope(
+    overrides: [
+      preferencesProvider.overrideWith((ref) => createTestPreferences(
+            stateManConfig: stateManConfig,
+          )),
+      databaseProvider.overrideWith((ref) async => null),
+    ],
+    child: MaterialApp(
+      home: Scaffold(
+        body: const ServerConfigBody(),
       ),
     ),
   );
