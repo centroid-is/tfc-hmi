@@ -688,9 +688,9 @@ class _ConveyorGateConfigEditorState extends State<_ConveyorGateConfigEditor>
           ),
           const SizedBox(height: 16),
 
-          // -- OPC UA State Key --
+          // -- Gate State Key --
           KeyField(
-            label: 'OPC UA State Key',
+            label: 'Gate State Key',
             initialValue: config.stateKey,
             onChanged: (v) => setState(() => config.stateKey = v),
           ),
