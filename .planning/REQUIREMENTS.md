@@ -62,7 +62,7 @@ Requirements for initial release. Each maps to roadmap phases.
 - [x] **UISV-02**: User can edit existing Modbus server configuration
 - [x] **UISV-03**: User can remove a Modbus server
 - [x] **UISV-04**: User can see live connection status per Modbus server
-- [ ] **UISV-05**: User can configure poll groups per server (name + interval in ms)
+- [x] **UISV-05**: User can configure poll groups per server (name + interval in ms)
 
 ### Testing (TDD)
 
@@ -154,7 +154,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | UISV-02 | Phase 10 | Complete |
 | UISV-03 | Phase 10 | Complete |
 | UISV-04 | Phase 10 | Complete |
-| UISV-05 | Phase 10 | Pending |
+| UISV-05 | Phase 10 | Complete |
 | UIKY-01 | Phase 11 | Pending |
 | UIKY-02 | Phase 11 | Pending |
 | UIKY-03 | Phase 11 | Pending |

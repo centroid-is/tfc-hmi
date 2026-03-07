@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: completed
-stopped_at: Completed 10-01-PLAN.md
-last_updated: "2026-03-07T13:00:22.630Z"
-last_activity: 2026-03-07 -- Completed 10-01-PLAN.md
+status: checkpoint
+stopped_at: 10-02 Task 2 checkpoint:human-verify
+last_updated: "2026-03-07T13:07:00.000Z"
+last_activity: 2026-03-07 -- 10-02 Task 1 complete, awaiting visual verification
 progress:
   total_phases: 11
-  completed_phases: 8
+  completed_phases: 9
   total_plans: 13
-  completed_plans: 12
+  completed_plans: 13
   percent: 100
 ---
 
@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-03-06)
 ## Current Position
 
 Phase: 10 of 11 (Server Config UI)
-Plan: 1 of 1 in current phase
-Status: Plan 10-01 complete. Modbus TCP Servers section with CRUD, connection status, and 10 widget tests.
-Last activity: 2026-03-07 -- Completed 10-01-PLAN.md
+Plan: 2 of 2 in current phase
+Status: Plan 10-02 Task 1 complete (poll groups TDD). Awaiting visual verification checkpoint.
+Last activity: 2026-03-07 -- 10-02 Task 1 complete, awaiting visual verification
 
 Progress: [██████████] 100%
 
@@ -58,6 +58,7 @@ Progress: [██████████] 100%
 
 *Updated after each plan completion*
 | Phase 10 P01 | 9min | 2 tasks | 3 files |
+| Phase 10 P02 | 5min | 1 task (checkpoint pending) | 3 files |
 
 ## Accumulated Context
 
@@ -107,6 +108,8 @@ Recent decisions affecting current work:
 - [Phase 10]: Extracted ServerConfigBody from ServerConfigPage to bypass BaseScaffold/Beamer dependency in widget tests
 - [Phase 10]: Override stateManProvider with throw in test helper to prevent real network connections while showing 'Not active' status
 - [Phase 10]: Connection status lookup matches ModbusDeviceClientAdapter by serverAlias first, falls back to host+port matching
+- [Phase 10-02]: Poll group controllers re-initialized on length change in didUpdateWidget, not every rebuild
+- [Phase 10-02]: Interval clamped to min 50ms to prevent accidental high-frequency polling
 
 ### Pending Todos
 
@@ -118,6 +121,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-07T13:00:22.626Z
-Stopped at: Completed 10-01-PLAN.md
+Last session: 2026-03-07T13:07:00Z
+Stopped at: 10-02 Task 2 checkpoint:human-verify
 Resume file: None

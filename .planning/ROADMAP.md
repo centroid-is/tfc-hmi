@@ -21,7 +21,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [ ] **Phase 7: DeviceClient Adapter** - ModbusDeviceClientAdapter implementing DeviceClient interface
 - [ ] **Phase 8: Config Serialization** - ModbusConfig and ModbusNodeConfig with backward-compatible JSON round-tripping
 - [ ] **Phase 9: StateMan Integration** - Wire Modbus into subscribe, read, readMany, write and data_acquisition_isolate
-- [ ] **Phase 10: Server Config UI** - Modbus server CRUD, connection status, poll group configuration
+- [x] **Phase 10: Server Config UI** - Modbus server CRUD, connection status, poll group configuration (completed 2026-03-07)
 - [ ] **Phase 11: Key Repository UI** - Protocol switching, register type/address/data type/poll group configuration per key
 
 ## Phase Details
@@ -159,7 +159,7 @@ Plans:
   2. User can edit and delete existing Modbus server entries
   3. Each Modbus server shows live connection status (connected/connecting/disconnected indicator)
   4. User can configure named poll groups with intervals per server
-**Plans:** 1/2 plans executed
+**Plans:** 2/2 plans complete
 
 Plans:
 - [ ] 10-01-PLAN.md -- TDD Modbus server section CRUD + connection status (clone JBTM pattern with unitId field)
@@ -196,5 +196,5 @@ Note: Phases 1, 2, and 3 have no inter-dependencies and could execute in paralle
 | 7. DeviceClient Adapter | 0/1 | Not started | - |
 | 8. Config Serialization | 0/1 | Not started | - |
 | 9. StateMan Integration | 2/2 | Complete | 2026-03-07 |
-| 10. Server Config UI | 1/2 | In Progress|  |
+| 10. Server Config UI | 2/2 | Complete   | 2026-03-07 |
 | 11. Key Repository UI | 0/1 | Not started | - |
