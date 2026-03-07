@@ -180,11 +180,25 @@ Plans:
 - [ ] 11-01-PLAN.md -- TDD Modbus config section in key repository (RED tests then GREEN implementation)
 - [ ] 11-02-PLAN.md -- Visual verification of Modbus key repository UI
 
+### Phase 12: Windows Keepalive Merge
+**Goal:** MSocket detects dead TCP connections on Windows within ~11 seconds, matching macOS/Linux behavior — cherry-pick existing fix from main
+**Depends on:** Nothing (independent fix)
+**Requirements:** CONN-04
+**Gap Closure:** Closes CONN-04 and Phase 3→MSocket integration gap from v1.0 audit
+**Success Criteria** (what must be TRUE):
+  1. MSocket sets SO_KEEPALIVE with Windows-specific constants on Platform.isWindows
+  2. Dead connection detection time is consistent across macOS, Linux, and Windows (~11 seconds)
+**Plans:** 1 plan
+
+Plans:
+- [ ] 12-01-PLAN.md -- Cherry-pick commit 29833ba from origin/main, verify MSocket Windows keepalive
+
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10 -> 11
+Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10 -> 11 -> 12
 Note: Phases 1, 2, and 3 have no inter-dependencies and could execute in parallel.
+Phase 12 is a gap closure phase from the v1.0 audit.
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
@@ -199,3 +213,4 @@ Note: Phases 1, 2, and 3 have no inter-dependencies and could execute in paralle
 | 9. StateMan Integration | 2/2 | Complete | 2026-03-07 |
 | 10. Server Config UI | 2/2 | Complete    | 2026-03-07 |
 | 11. Key Repository UI | 2/2 | Complete    | 2026-03-07 |
+| 12. Windows Keepalive Merge | 0/1 | Gap Closure | - |

@@ -74,7 +74,7 @@ Requirements for initial release. Each maps to roadmap phases.
 - [x] **TEST-06**: ModbusConfig and ModbusNodeConfig have JSON round-trip serialization tests
 - [x] **TEST-07**: Key repository Modbus config UI has widget tests
 - [x] **TEST-08**: Server config Modbus section has widget tests
-- [ ] **TEST-09**: Tests written before implementation (TDD — red/green/refactor cycle)
+- [x] **TEST-09**: Tests written before implementation (TDD — red/green/refactor cycle)
 
 ### UI — Key Repository
 
@@ -128,7 +128,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | CONN-01 | Phase 4 | Complete |
 | CONN-02 | Phase 4 | Complete |
 | CONN-03 | Phase 4 | Complete |
-| CONN-04 | Phase 3 | Complete |
+| CONN-04 | Phase 12 (gap closure) | Pending |
 | CONN-05 | Phase 4 | Complete |
 | READ-01 | Phase 5 | Complete |
 | READ-02 | Phase 5 | Complete |
@@ -169,7 +169,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | TEST-06 | Phase 8 | Complete |
 | TEST-07 | Phase 11 | Complete |
 | TEST-08 | Phase 10 | Complete |
-| TEST-09 | Cross-cutting (all phases) | Pending |
+| TEST-09 | Cross-cutting (all phases) | Complete |
 
 **Coverage:**
 - v1 requirements: 51 total
@@ -179,4 +179,4 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 ---
 *Requirements defined: 2026-03-06*
-*Last updated: 2026-03-06 after roadmap creation*
+*Last updated: 2026-03-07 after gap closure planning*
