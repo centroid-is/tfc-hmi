@@ -235,4 +235,208 @@ void main() {
       expect(find.byKey(testKey), findsOneWidget);
     });
   });
+
+  group('SliderGatePainter', () {
+    // ── shouldRepaint ──
+
+    test('shouldRepaint returns false when stateColor and side are identical',
+        () {
+      final progress = ValueNotifier(0.0);
+      final a = SliderGatePainter(
+        progress: progress,
+        stateColor: Colors.green,
+        side: GateSide.left,
+      );
+      final b = SliderGatePainter(
+        progress: progress,
+        stateColor: Colors.green,
+        side: GateSide.left,
+      );
+      expect(a.shouldRepaint(b), isFalse);
+    });
+
+    test('shouldRepaint returns true when stateColor changes', () {
+      final progress = ValueNotifier(0.0);
+      final a = SliderGatePainter(
+        progress: progress,
+        stateColor: Colors.green,
+        side: GateSide.left,
+      );
+      final b = SliderGatePainter(
+        progress: progress,
+        stateColor: Colors.red,
+        side: GateSide.left,
+      );
+      expect(a.shouldRepaint(b), isTrue);
+    });
+
+    test('shouldRepaint returns true when side changes', () {
+      final progress = ValueNotifier(0.0);
+      final a = SliderGatePainter(
+        progress: progress,
+        stateColor: Colors.green,
+        side: GateSide.left,
+      );
+      final b = SliderGatePainter(
+        progress: progress,
+        stateColor: Colors.green,
+        side: GateSide.right,
+      );
+      expect(a.shouldRepaint(b), isTrue);
+    });
+
+    // ── Widget rendering tests ──
+
+    testWidgets('renders without errors at default size', (tester) async {
+      const testKey = Key('slider_paint_test');
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Center(
+              child: SizedBox(
+                width: 200,
+                height: 200,
+                child: CustomPaint(
+                  key: testKey,
+                  painter: SliderGatePainter(
+                    progress: ValueNotifier(0.0),
+                    stateColor: Colors.green,
+                    side: GateSide.left,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      expect(find.byKey(testKey), findsOneWidget);
+    });
+
+    testWidgets('renders with right side without errors', (tester) async {
+      const testKey = Key('slider_paint_test');
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Center(
+              child: SizedBox(
+                width: 200,
+                height: 200,
+                child: CustomPaint(
+                  key: testKey,
+                  painter: SliderGatePainter(
+                    progress: ValueNotifier(1.0),
+                    stateColor: Colors.white,
+                    side: GateSide.right,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      expect(find.byKey(testKey), findsOneWidget);
+    });
+  });
+
+  group('PusherGatePainter', () {
+    // ── shouldRepaint ──
+
+    test('shouldRepaint returns false when stateColor and side are identical',
+        () {
+      final progress = ValueNotifier(0.0);
+      final a = PusherGatePainter(
+        progress: progress,
+        stateColor: Colors.green,
+        side: GateSide.left,
+      );
+      final b = PusherGatePainter(
+        progress: progress,
+        stateColor: Colors.green,
+        side: GateSide.left,
+      );
+      expect(a.shouldRepaint(b), isFalse);
+    });
+
+    test('shouldRepaint returns true when stateColor changes', () {
+      final progress = ValueNotifier(0.0);
+      final a = PusherGatePainter(
+        progress: progress,
+        stateColor: Colors.green,
+        side: GateSide.left,
+      );
+      final b = PusherGatePainter(
+        progress: progress,
+        stateColor: Colors.red,
+        side: GateSide.left,
+      );
+      expect(a.shouldRepaint(b), isTrue);
+    });
+
+    test('shouldRepaint returns true when side changes', () {
+      final progress = ValueNotifier(0.0);
+      final a = PusherGatePainter(
+        progress: progress,
+        stateColor: Colors.green,
+        side: GateSide.left,
+      );
+      final b = PusherGatePainter(
+        progress: progress,
+        stateColor: Colors.green,
+        side: GateSide.right,
+      );
+      expect(a.shouldRepaint(b), isTrue);
+    });
+
+    // ── Widget rendering tests ──
+
+    testWidgets('renders without errors at default size', (tester) async {
+      const testKey = Key('pusher_paint_test');
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Center(
+              child: SizedBox(
+                width: 200,
+                height: 200,
+                child: CustomPaint(
+                  key: testKey,
+                  painter: PusherGatePainter(
+                    progress: ValueNotifier(0.0),
+                    stateColor: Colors.green,
+                    side: GateSide.left,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      expect(find.byKey(testKey), findsOneWidget);
+    });
+
+    testWidgets('renders with right side without errors', (tester) async {
+      const testKey = Key('pusher_paint_test');
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Center(
+              child: SizedBox(
+                width: 200,
+                height: 200,
+                child: CustomPaint(
+                  key: testKey,
+                  painter: PusherGatePainter(
+                    progress: ValueNotifier(1.0),
+                    stateColor: Colors.white,
+                    side: GateSide.right,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      expect(find.byKey(testKey), findsOneWidget);
+    });
+  });
 }
