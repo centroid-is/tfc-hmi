@@ -12,7 +12,7 @@ Build a configurable ConveyorGate HMI asset in three phases: first deliver a wor
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 1: Standalone Diverter Gate** - Config, registry, pneumatic diverter painter, animated transitions, OPC UA state binding, standalone placement
+- [x] **Phase 1: Standalone Diverter Gate** - Config, registry, pneumatic diverter painter, animated transitions, OPC UA state binding, standalone placement
 - [ ] **Phase 2: Full Feature Set** - Force controls with dialog, slider and pusher painter variants, color pickers, forced-state theming
 - [ ] **Phase 3: Child-of-Conveyor Integration** - Gates as conveyor children with belt positioning, auto-scaling, overflow rendering, and hit-test fix
 
@@ -32,9 +32,9 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Plans:** 3 plans
 
 Plans:
-- [ ] 01-01-PLAN.md -- Config model, pneumatic diverter painter, unit tests, golden tests
-- [ ] 01-02-PLAN.md -- Config dialog with live preview, color pickers, angle slider
-- [ ] 01-03-PLAN.md -- Widget with animation + OPC UA binding, registry integration
+- [x] 01-01-PLAN.md -- Config model, pneumatic diverter painter, unit tests, golden tests
+- [x] 01-02-PLAN.md -- Config dialog with live preview, color pickers, angle slider
+- [x] 01-03-PLAN.md -- Widget with animation + OPC UA binding, registry integration
 
 ### Phase 2: Full Feature Set
 **Goal**: Operators can force gates open/closed via tap interaction, see forced-state feedback, and choose between three gate visual variants
@@ -74,6 +74,6 @@ Phases execute in numeric order: 1 → 2 → 3
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Standalone Diverter Gate | 0/3 | Planning complete | - |
+| 1. Standalone Diverter Gate | 3/3 | Complete | 2026-03-07 |
 | 2. Full Feature Set | 0/0 | Not started | - |
 | 3. Child-of-Conveyor Integration | 0/0 | Not started | - |
