@@ -1,10 +1,16 @@
+import 'dart:math';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_colorpicker/flutter_colorpicker.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:json_annotation/json_annotation.dart';
+import 'package:open62541/open62541.dart' show DynamicValue;
+import 'package:rxdart/rxdart.dart';
 
 import 'package:tfc/page_creator/assets/common.dart';
 import 'package:tfc/page_creator/assets/conveyor_gate_painter.dart';
+import 'package:tfc/providers/state_man.dart';
 
 part 'conveyor_gate.g.dart';
 
@@ -90,16 +96,121 @@ class ConveyorGateConfig extends BaseAsset {
 
   @override
   Widget build(BuildContext context) {
-    // Stub -- full widget implementation in Plan 03
-    return Container(
-      color: Colors.grey.shade300,
-      child: const Center(child: Text('Gate')),
-    );
+    return ConveyorGate(config: this);
   }
 
   @override
   Widget configure(BuildContext context) =>
       _ConveyorGateConfigEditor(config: this);
+}
+
+// ---------------------------------------------------------------------------
+// Runtime widget with animation and OPC UA data binding
+// ---------------------------------------------------------------------------
+
+/// Animated conveyor gate driven by an OPC UA boolean state key.
+///
+/// The gate subscribes to [ConveyorGateConfig.stateKey] via [stateManProvider]
+/// and smoothly animates between open (true) and closed (false) positions using
+/// an ease-out curve. When the key is empty or OPC UA data is unavailable, the
+/// gate renders in grey.
+class ConveyorGate extends ConsumerStatefulWidget {
+  final ConveyorGateConfig config;
+  const ConveyorGate({super.key, required this.config});
+
+  @override
+  ConsumerState<ConveyorGate> createState() => _ConveyorGateState();
+}
+
+class _ConveyorGateState extends ConsumerState<ConveyorGate>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+  late final ValueNotifier<double> _progress;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: Duration(milliseconds: widget.config.openTimeMs),
+    );
+    _progress = ValueNotifier<double>(0.0);
+    _controller.addListener(() {
+      _progress.value = Curves.easeOut.transform(_controller.value);
+    });
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    _progress.dispose();
+    super.dispose();
+  }
+
+  /// Trigger animation toward open or closed.
+  ///
+  /// Sets the appropriate duration before animating so that open and close
+  /// speeds can differ. Called on every OPC UA state change, including after
+  /// reconnects, ensuring the visual always matches the live state.
+  void _onStateChanged(bool isOpen) {
+    if (isOpen) {
+      _controller.duration =
+          Duration(milliseconds: widget.config.openTimeMs);
+      _controller.forward();
+    } else {
+      _controller.duration = Duration(
+        milliseconds:
+            widget.config.closeTimeMs ?? widget.config.openTimeMs,
+      );
+      _controller.reverse();
+    }
+  }
+
+  Widget _buildGate(Color stateColor) {
+    return LayoutRotatedBox(
+      angle: (widget.config.coordinates.angle ?? 0.0) * pi / 180,
+      child: CustomPaint(
+        size: widget.config.size.toSize(MediaQuery.of(context).size),
+        painter: PneumaticDiverterPainter(
+          progress: _progress,
+          stateColor: stateColor,
+          openAngleDegrees: widget.config.openAngleDegrees,
+          side: widget.config.side,
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // When no state key is configured, render in grey (DATA-06).
+    if (widget.config.stateKey.isEmpty) {
+      return _buildGate(Colors.grey);
+    }
+
+    return StreamBuilder<DynamicValue>(
+      stream: ref.watch(stateManProvider.future).asStream().asyncExpand(
+            (stateMan) => stateMan
+                .subscribe(widget.config.stateKey)
+                .asStream()
+                .switchMap((s) => s),
+          ),
+      builder: (context, snapshot) {
+        final Color color;
+        if (!snapshot.hasData) {
+          color = Colors.grey; // DATA-06: grey when disconnected
+        } else if (snapshot.data!.asBool) {
+          color = widget.config.openColor;
+        } else {
+          color = widget.config.closedColor;
+        }
+
+        _onStateChanged(snapshot.hasData && snapshot.data!.asBool);
+
+        return _buildGate(color);
+      },
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------
