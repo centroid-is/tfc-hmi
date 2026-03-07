@@ -71,7 +71,7 @@ Plans:
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 -> 2 -> 3 -> 4
+Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
@@ -79,6 +79,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4
 | 2. Full Feature Set | 2/2 | Complete | 2026-03-07 |
 | 3. Child-of-Conveyor Integration | 2/2 | Complete    | 2026-03-07 |
 | 4. Fix Gate Architecture & Redesign Painters | 3/3 | Complete   | 2026-03-07 |
+| 5. Painter Fixes & Gate Positioning UI | 0/2 | In Progress | |
 
 ### Phase 4: Fix gate architecture and redesign painters
 
@@ -98,3 +99,20 @@ Plans:
 - [ ] 04-01-PLAN.md -- ChildGateEntry data model, field migration, JSON backward compat, serialization tests
 - [ ] 04-02-PLAN.md -- Conveyor widget wiring, config dialog updates, flush positioning, editor cleanup
 - [ ] 04-03-PLAN.md -- Painter redesigns (diverter, slider, pusher) with golden image updates and visual verification
+
+### Phase 5: Painter fixes and gate positioning UI
+
+**Goal:** Fix diverter edge assignments and animation direction, rewrite slider painter with proper horizontal lid, and add gate top/bottom positioning controls to conveyor config dialog
+**Requirements**: SLIDER-FIX, DIVERTER-FIX, DIVERTER-ANIM-FIX, GATE-POSITION-UI
+**Depends on:** Phase 4
+**Success Criteria** (what must be TRUE):
+  1. Diverter concave edge matches documented decision (left=concave top, right=concave bottom)
+  2. Right-side diverter animates in the correct direction
+  3. Slider gate shows a wide horizontal lid covering belt area, not a rotated thin blade
+  4. User can toggle child gate between top and bottom of conveyor via config dialog
+  5. User can adjust child gate belt position via slider in config dialog
+**Plans:** 2 plans
+
+Plans:
+- [ ] 05-01-PLAN.md -- Fix diverter edge swap + animation direction, rewrite slider painter, regenerate goldens
+- [ ] 05-02-PLAN.md -- Add side toggle (Top/Bottom) and position slider to conveyor config dialog gate list
