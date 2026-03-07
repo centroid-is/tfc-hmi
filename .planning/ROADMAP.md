@@ -184,7 +184,7 @@ Plans:
 **Goal:** MSocket detects dead TCP connections on Windows within ~11 seconds, matching macOS/Linux behavior — cherry-pick existing fix from main
 **Depends on:** Nothing (independent fix)
 **Requirements:** CONN-04
-**Gap Closure:** Closes CONN-04 and Phase 3→MSocket integration gap from v1.0 audit
+**Gap Closure:** Closes CONN-04 and Phase 3->MSocket integration gap from v1.0 audit
 **Success Criteria** (what must be TRUE):
   1. MSocket sets SO_KEEPALIVE with Windows-specific constants on Platform.isWindows
   2. Dead connection detection time is consistent across macOS, Linux, and Windows (~11 seconds)
@@ -248,10 +248,21 @@ Plans:
 
 ### Phase 15: Code Review Fixes: security, performance, correctness, and duplication
 
-**Goal:** [To be planned]
-**Requirements**: TBD
+**Goal:** All identified code review issues (5 correctness bugs, 3 security gaps, 8 duplication instances, 2 performance issues) are resolved across the Modbus integration codebase, with shared UI widgets extracted and dead code removed
 **Depends on:** Phase 14
-**Plans:** 0 plans
+**Requirements**: CORR-01, CORR-02, CORR-03, CORR-04, CORR-05, SEC-01, SEC-02, SEC-03, DUP-01, DUP-02, DUP-03, DUP-04, DUP-05, DUP-06, DUP-07, DUP-08, PERF-01, PERF-02
+**Success Criteria** (what must be TRUE):
+  1. StateMan.read() and write() throw immediately when key not found (no 17-minute hang)
+  2. Config saves are awaited before subsequent reads in all three server config sections
+  3. UMAS response parsing rejects oversized variable names and limits total count
+  4. Port number validated to 1-65535 range, heartbeat address configurable
+  5. ConnectionStatusChip is a single shared widget used by all three server card types
+  6. Dead code (createModbusDeviceClients) removed, UMAS domain logic moved to domain layer
+  7. UMAS tree node lookup is O(1) via path index
+  8. All existing tests pass after all changes
+**Plans:** 3 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 15 to break down)
+- [ ] 15-01-PLAN.md -- Fix correctness bugs, remove dead code, extract domain utilities, improve performance (non-UI files)
+- [ ] 15-02-PLAN.md -- Fix missing await, port validation, heartbeat config, unawaited cleanup (server_config + wrapper)
+- [ ] 15-03-PLAN.md -- Extract duplicated UI patterns into shared widgets (server_config deduplication)
