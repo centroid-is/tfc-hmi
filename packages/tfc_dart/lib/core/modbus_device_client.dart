@@ -1,6 +1,7 @@
 import 'package:open62541/open62541.dart' show DynamicValue, NodeId;
 import 'package:tfc_dart/core/modbus_client_wrapper.dart';
-import 'package:tfc_dart/core/state_man.dart' show ConnectionStatus, DeviceClient, ModbusConfig;
+import 'package:tfc_dart/core/state_man.dart'
+    show ConnectionStatus, DeviceClient, KeyMappings, ModbusConfig, ModbusNodeConfig;
 
 /// Adapter that wraps [ModbusClientWrapper] as a [DeviceClient] for use in
 /// [StateMan].
@@ -103,8 +104,9 @@ class ModbusDeviceClientAdapter implements DeviceClient {
 /// Creates [DeviceClient] instances for Modbus devices.
 ///
 /// Each entry pairs a [ModbusConfig] (connection settings) with the register
-/// specs that define which keys this adapter will handle. Phase 9 will build
-/// the specs from keymappings and wire this into data_acquisition_isolate.
+/// specs that define which keys this adapter will handle. For the higher-level
+/// factory that builds specs from key mappings automatically, see
+/// [buildModbusDeviceClients].
 List<DeviceClient> createModbusDeviceClients(
   List<({ModbusConfig config, Map<String, ModbusRegisterSpec> specs})> configs,
 ) {
@@ -118,6 +120,66 @@ List<DeviceClient> createModbusDeviceClients(
       wrapper,
       specs: entry.specs,
       serverAlias: entry.config.serverAlias,
+    );
+  }).toList();
+}
+
+// ---------------------------------------------------------------------------
+// Config-to-spec helpers (Phase 9)
+// ---------------------------------------------------------------------------
+
+/// Converts [KeyMappings] entries with a [ModbusNodeConfig] into a map of
+/// [ModbusRegisterSpec] instances, filtered by [serverAlias].
+///
+/// Entries without a `modbusNode`, or whose `modbusNode.serverAlias` does not
+/// match [serverAlias], are skipped.
+Map<String, ModbusRegisterSpec> buildSpecsFromKeyMappings(
+  KeyMappings keyMappings,
+  String? serverAlias,
+) {
+  final specs = <String, ModbusRegisterSpec>{};
+  for (final entry in keyMappings.nodes.entries) {
+    final modbusNode = entry.value.modbusNode;
+    if (modbusNode == null) continue;
+    if (modbusNode.serverAlias != serverAlias) continue;
+    specs[entry.key] = ModbusRegisterSpec(
+      key: entry.key,
+      registerType: modbusNode.registerType.toModbusElementType(),
+      address: modbusNode.address,
+      dataType: modbusNode.dataType,
+      pollGroup: modbusNode.pollGroup,
+    );
+  }
+  return specs;
+}
+
+/// Builds Modbus [DeviceClient] instances from config and key mappings.
+///
+/// For each [ModbusConfig], translates key mappings into [ModbusRegisterSpec]s
+/// via [buildSpecsFromKeyMappings], pre-configures poll groups from
+/// [ModbusConfig.pollGroups], and creates the adapter.
+///
+/// This is the primary entry point for both data_acquisition_isolate and
+/// the Flutter UI provider.
+List<DeviceClient> buildModbusDeviceClients(
+  List<ModbusConfig> modbusConfigs,
+  KeyMappings keyMappings,
+) {
+  return modbusConfigs.map((config) {
+    final specs = buildSpecsFromKeyMappings(keyMappings, config.serverAlias);
+    final wrapper = ModbusClientWrapper(
+      config.host,
+      config.port,
+      config.unitId,
+    );
+    // Pre-configure poll groups from config BEFORE adapter creation
+    for (final pg in config.pollGroups) {
+      wrapper.addPollGroup(pg.name, pg.interval);
+    }
+    return ModbusDeviceClientAdapter(
+      wrapper,
+      specs: specs,
+      serverAlias: config.serverAlias,
     );
   }).toList();
 }

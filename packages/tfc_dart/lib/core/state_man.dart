@@ -19,6 +19,7 @@ import 'package:modbus_client/modbus_client.dart' show ModbusElementType;
 
 import 'collector.dart';
 import 'modbus_client_wrapper.dart' show ModbusDataType;
+import 'modbus_device_client.dart' show ModbusDeviceClientAdapter;
 import 'preferences.dart';
 
 part 'state_man.g.dart';
@@ -1104,6 +1105,19 @@ class StateMan {
     return null;
   }
 
+  /// Find the Modbus [DeviceClient] that owns [key], or null if not a Modbus key.
+  DeviceClient? _resolveModbusDeviceClient(String key) {
+    final entry = keyMappings.nodes[key];
+    if (entry?.modbusNode == null) return null;
+    final alias = entry!.modbusNode!.serverAlias;
+    for (final dc in deviceClients) {
+      if (dc is ModbusDeviceClientAdapter && dc.serverAlias == alias) {
+        if (dc.canSubscribe(key)) return dc;
+      }
+    }
+    return null;
+  }
+
   /// Example: read("myKey")
   Future<DynamicValue> read(String key) async {
     key = resolveKey(key);
@@ -1124,6 +1138,16 @@ class StateMan {
       }
       if (m2400.fieldName != null) {
         value = value[m2400.fieldName!];
+      }
+      return value;
+    }
+
+    // Check Modbus key
+    final modbusDc = _resolveModbusDeviceClient(key);
+    if (modbusDc != null) {
+      final value = modbusDc.read(key);
+      if (value == null) {
+        throw StateManException('No cached value for key: "$key" -- not polled yet');
       }
       return value;
     }
@@ -1149,10 +1173,40 @@ class StateMan {
   }
 
   Future<Map<String, DynamicValue>> readMany(List<String> keys) async {
-    final parameters = <ClientApi, Map<NodeId, List<AttributeId>>>{};
+    final results = <String, DynamicValue>{};
 
+    // Separate DeviceClient keys from OPC UA keys
+    final opcuaKeys = <String>[];
     for (final keyToResolve in keys) {
       final key = resolveKey(keyToResolve);
+
+      // Check Modbus
+      final modbusDc = _resolveModbusDeviceClient(key);
+      if (modbusDc != null) {
+        final value = modbusDc.read(key);
+        if (value != null) results[key] = value;
+        continue;
+      }
+
+      // Check M2400
+      final m2400 = _resolveM2400Key(key);
+      if (m2400 != null) {
+        final value = m2400.dc.read(m2400.subscribeKey);
+        if (value != null) {
+          var result = value;
+          if (m2400.fieldName != null) result = result[m2400.fieldName!];
+          results[key] = result;
+        }
+        continue;
+      }
+
+      opcuaKeys.add(key);
+    }
+
+    // Process remaining OPC UA keys
+    final parameters = <ClientApi, Map<NodeId, List<AttributeId>>>{};
+
+    for (final key in opcuaKeys) {
       final client = _getClientWrapper(key).client;
       final nodeId = _lookupNodeId(key);
       if (nodeId == null) {
@@ -1169,7 +1223,6 @@ class StateMan {
       };
     }
 
-    final results = <String, DynamicValue>{};
     for (final pair in parameters.entries) {
       final client = pair.key;
       final parameters = pair.value;
@@ -1198,6 +1251,14 @@ class StateMan {
   /// Example: write("myKey", DynamicValue(value: 42, typeId: NodeId.int16))
   Future<void> write(String key, DynamicValue value) async {
     key = resolveKey(key);
+
+    // Check Modbus (and other DeviceClient protocols)
+    final modbusDc = _resolveModbusDeviceClient(key);
+    if (modbusDc != null) {
+      await modbusDc.write(key, value);
+      return;
+    }
+
     try {
       final client = _getClientWrapper(key).client;
       final nodeId = _lookupNodeId(key);
@@ -1243,6 +1304,12 @@ class StateMan {
         stream = stream.map((dv) => dv[m2400.fieldName!]);
       }
       return stream;
+    }
+
+    // Check Modbus key
+    final modbusDc = _resolveModbusDeviceClient(key);
+    if (modbusDc != null) {
+      return modbusDc.subscribe(key);
     }
 
     // Fall through to OPC UA
