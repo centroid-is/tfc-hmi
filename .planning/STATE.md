@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: in_progress
-stopped_at: Completed 15-02-PLAN.md
-last_updated: "2026-03-08T07:29:15Z"
+status: completed
+stopped_at: Completed 15-01-PLAN.md
+last_updated: "2026-03-08T07:32:48.130Z"
 last_activity: 2026-03-08 -- 15-02 complete, config save races fixed, heartbeat configurable
 progress:
   total_phases: 15
   completed_phases: 11
   total_plans: 21
-  completed_plans: 19
+  completed_plans: 20
   percent: 90
 ---
 
@@ -66,6 +66,7 @@ Progress: [█████████ ] 90%
 | Phase 14 P02 | 8min | 2 tasks | 4 files |
 | Phase 14 P03 | 10min | 2 tasks | 9 files |
 | Phase 15 P02 | 9min | 2 tasks | 2 files |
+| Phase 15 P01 | 11min | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -139,6 +140,9 @@ Recent decisions affecting current work:
 - [Phase 14-03]: stateManProvider override added to buildTestableKeyRepository to prevent timer leaks
 - [Phase 15-02]: Emit disconnected synchronously in dispose() before closing BehaviorSubject to preserve listener ordering
 - [Phase 15-02]: unawaited() in disconnect() and dispose() documents intentional fire-and-forget (not accidental)
+- [Phase 15]: BytesBuilder with copy:false for zero-copy TCP buffer accumulation
+- [Phase 15]: findByAlias extension on List<ModbusConfig> keeps lookup local to key_repository.dart
+- [Phase 15]: Path index built once in fetchRoots(), reused for all subsequent lookups
 
 ### Pending Todos
 
@@ -150,6 +154,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-08T07:29:15Z
-Stopped at: Completed 15-02-PLAN.md
+Last session: 2026-03-08T07:32:44.812Z
+Stopped at: Completed 15-01-PLAN.md
 Resume file: None

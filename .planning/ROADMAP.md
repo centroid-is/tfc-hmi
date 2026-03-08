@@ -260,7 +260,7 @@ Plans:
   6. Dead code (createModbusDeviceClients) removed, UMAS domain logic moved to domain layer
   7. UMAS tree node lookup is O(1) via path index
   8. All existing tests pass after all changes
-**Plans:** 1/3 plans executed
+**Plans:** 2/3 plans executed
 
 Plans:
 - [ ] 15-01-PLAN.md -- Fix correctness bugs, remove dead code, extract domain utilities, improve performance (non-UI files)
