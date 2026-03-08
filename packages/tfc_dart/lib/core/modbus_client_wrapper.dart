@@ -168,6 +168,13 @@ class ModbusClientWrapper {
   /// Default poll interval when no explicit interval is configured.
   static const _defaultPollInterval = Duration(seconds: 1);
 
+  // ---------------------------------------------------------------------------
+  // Idle heartbeat (keeps connection alive when no subscriptions are polling)
+  // ---------------------------------------------------------------------------
+
+  Timer? _heartbeatTimer;
+  final Duration _heartbeatInterval;
+
   /// Creates a wrapper for a Modbus device at [host]:[port] with [unitId].
   ///
   /// Provide [clientFactory] to inject a custom/mock ModbusClientTcp for
@@ -179,7 +186,15 @@ class ModbusClientWrapper {
     this.port,
     this.unitId, {
     ModbusClientTcp Function(String, int, int)? clientFactory,
-  }) : _clientFactory = clientFactory ?? _defaultFactory;
+    Duration heartbeatInterval = const Duration(seconds: 10),
+    this.heartbeatAddress = 0,
+  })  : _clientFactory = clientFactory ?? _defaultFactory,
+        _heartbeatInterval = heartbeatInterval;
+
+  /// The holding register address to read during idle heartbeat probes.
+  /// Defaults to 0 for backward compatibility. Override for devices where
+  /// register 0 has undesired side-effects.
+  final int heartbeatAddress;
 
   static ModbusClientTcp _defaultFactory(String host, int port, int unitId) {
     return ModbusClientTcp(
@@ -217,7 +232,7 @@ class ModbusClientWrapper {
   /// reconnected by calling [connect] again. Streams remain open.
   void disconnect() {
     _stopped = true;
-    _cleanupClient();
+    unawaited(_cleanupClient());
   }
 
   /// Terminal shutdown -- stops reconnect, disconnects, and closes all streams.
@@ -225,7 +240,15 @@ class ModbusClientWrapper {
   void dispose() {
     _stopped = true;
     _disposed = true;
-    _cleanupClient();
+    // Emit disconnected synchronously before closing the stream, so
+    // listeners see the final status before done. _cleanupClient is async
+    // but its status-add is guarded by isClosed, so it will be a no-op.
+    if (!_status.isClosed &&
+        _status.value != ConnectionStatus.disconnected) {
+      _status.add(ConnectionStatus.disconnected);
+    }
+    unawaited(_cleanupClient());
+    _stopHeartbeat();
     _stopAllPolling();
     _pollLifecycleSubscription?.cancel();
     _pollLifecycleSubscription = null;
@@ -319,6 +342,12 @@ class ModbusClientWrapper {
     if (!sub.value$.isClosed) {
       sub.value$.close();
     }
+
+    // Resume heartbeat if no subscriptions remain and still connected
+    if (_subscriptions.isEmpty &&
+        connectionStatus == ConnectionStatus.connected) {
+      _startHeartbeat();
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -406,6 +435,7 @@ class ModbusClientWrapper {
 
   Future<void> _connectionLoop() async {
     while (!_stopped) {
+      _log.i('ModbusClientWrapper($host:$port) connecting...');
       if (!_status.isClosed) {
         _status.add(ConnectionStatus.connecting);
       }
@@ -424,18 +454,26 @@ class ModbusClientWrapper {
         }
 
         // Connected successfully
+        _log.i('ModbusClientWrapper($host:$port) connected');
         if (!_status.isClosed) {
           _status.add(ConnectionStatus.connected);
         }
         _backoff = _initialBackoff;
 
+        // Start idle heartbeat if no subscriptions are generating traffic
+        if (_subscriptions.isEmpty) {
+          _startHeartbeat();
+        }
+
         // Block until connection drops or stopped
         await _awaitDisconnect();
+        _log.i('ModbusClientWrapper($host:$port) connection lost');
       } catch (e) {
         _log.i('ModbusClientWrapper($host:$port) connection error: $e');
       }
 
       // Socket is gone -- clean up
+      _stopHeartbeat();
       await _cleanupClientInstance();
       if (!_stopped && !_status.isClosed) {
         _status.add(ConnectionStatus.disconnected);
@@ -471,16 +509,24 @@ class ModbusClientWrapper {
         _startAllPolling();
       } else {
         _stopAllPolling();
+        _stopHeartbeat();
       }
     });
   }
 
   /// Starts Timer.periodic for each poll group that has subscriptions.
   void _startAllPolling() {
+    final hasActiveSubscriptions = _subscriptions.isNotEmpty;
     for (final group in _pollGroups.values) {
       if (group._subscriptions.isNotEmpty) {
         group.start(() => _onPollTick(group));
       }
+    }
+    // Heartbeat runs only when no subscriptions are generating traffic
+    if (hasActiveSubscriptions) {
+      _stopHeartbeat();
+    } else {
+      _startHeartbeat();
     }
   }
 
@@ -489,6 +535,36 @@ class ModbusClientWrapper {
     for (final group in _pollGroups.values) {
       group.stop();
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Idle heartbeat
+  // ---------------------------------------------------------------------------
+
+  /// Starts a periodic read of holding register 0 to keep the TCP connection
+  /// alive when no subscriptions are generating Modbus traffic.
+  void _startHeartbeat() {
+    _heartbeatTimer?.cancel();
+    _heartbeatTimer = Timer.periodic(_heartbeatInterval, (_) async {
+      if (_disposed || connectionStatus != ConnectionStatus.connected) return;
+      if (_client == null) return;
+      try {
+        final element = ModbusUint16Register(
+          name: '_heartbeat',
+          address: heartbeatAddress,
+          type: ModbusElementType.holdingRegister,
+        );
+        final request = element.getReadRequest();
+        await _client!.send(request);
+      } catch (e) {
+        _log.w('ModbusClientWrapper($host:$port) heartbeat error: $e');
+      }
+    });
+  }
+
+  void _stopHeartbeat() {
+    _heartbeatTimer?.cancel();
+    _heartbeatTimer = null;
   }
 
   /// Executes a single poll tick for a group: reads coalesced batch groups
@@ -674,8 +750,8 @@ class ModbusClientWrapper {
   }
 
   /// Stops the client and emits disconnected status if appropriate.
-  void _cleanupClient() {
-    _cleanupClientInstance();
+  Future<void> _cleanupClient() async {
+    await _cleanupClientInstance();
     if (!_status.isClosed &&
         _status.value != ConnectionStatus.disconnected) {
       _status.add(ConnectionStatus.disconnected);
