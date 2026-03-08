@@ -715,82 +715,13 @@ class _OpcUAServersSectionState extends ConsumerState<_OpcUAServersSection> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            LayoutBuilder(
-              builder: (context, constraints) {
-                final isNarrow = constraints.maxWidth < 500;
-                if (isNarrow) {
-                  return Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Row(
-                        children: [
-                          const FaIcon(FontAwesomeIcons.server, size: 20),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text('OPC-UA Servers',
-                                style: Theme.of(context).textTheme.titleMedium),
-                          ),
-                          if (_hasUnsavedChanges) ...[
-                            const SizedBox(width: 4),
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 6, vertical: 2),
-                              decoration: BoxDecoration(
-                                  color: Colors.orange,
-                                  borderRadius: BorderRadius.circular(12)),
-                              child: const Text('Unsaved',
-                                  style: TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 10,
-                                      fontWeight: FontWeight.bold)),
-                            ),
-                          ],
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      ElevatedButton.icon(
-                        onPressed: _addServer,
-                        icon: const FaIcon(FontAwesomeIcons.plus, size: 16),
-                        label: const Text('Add Server'),
-                      ),
-                    ],
-                  );
-                }
-                return Row(
-                  children: [
-                    const FaIcon(FontAwesomeIcons.server, size: 20),
-                    const SizedBox(width: 8),
-                    Text('OPC-UA Servers',
-                        style: Theme.of(context).textTheme.titleMedium),
-                    if (_hasUnsavedChanges) ...[
-                      const SizedBox(width: 8),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 8, vertical: 4),
-                        decoration: BoxDecoration(
-                            color: Colors.orange,
-                            borderRadius: BorderRadius.circular(12)),
-                        child: const Text('Unsaved Changes',
-                            style: TextStyle(
-                                color: Colors.white,
-                                fontSize: 12,
-                                fontWeight: FontWeight.bold)),
-                      ),
-                    ],
-                    const Spacer(),
-                    // Import/Export Buttons
-                    const SizedBox(width: 8),
-                    ElevatedButton.icon(
-                      onPressed: _addServer,
-                      icon: const FaIcon(FontAwesomeIcons.plus, size: 16),
-                      label: const Text('Add Server'),
-                    ),
-                  ],
-                );
-              },
+            _ServerSectionHeader(
+              title: 'OPC-UA Servers',
+              icon: FontAwesomeIcons.server,
+              hasUnsavedChanges: _hasUnsavedChanges,
+              onAdd: _addServer,
             ),
             const SizedBox(height: 16),
-            // Server list with constrained height
             config.opcua.isEmpty
                 ? const SizedBox(
                     height: 200,
@@ -802,28 +733,11 @@ class _OpcUAServersSectionState extends ConsumerState<_OpcUAServersSection> {
                   )
                 : _buildServerList(config),
             const SizedBox(height: 16),
-            // place import and export button in bottom right corner
-            // place save config button in bottom left corner, it should take 60% of the width
-            Row(
-              children: [
-                if (config.opcua.isNotEmpty || _hasUnsavedChanges)
-                  Expanded(
-                    child: ElevatedButton.icon(
-                      onPressed: _hasUnsavedChanges ? _saveConfig : null,
-                      icon: FaIcon(FontAwesomeIcons.floppyDisk,
-                          size: 16,
-                          color: _hasUnsavedChanges ? null : Colors.grey),
-                      label: Text(_hasUnsavedChanges
-                          ? 'Save Configuration'
-                          : 'All Changes Saved'),
-                      style: ElevatedButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(vertical: 16),
-                          backgroundColor:
-                              _hasUnsavedChanges ? null : Colors.grey),
-                    ),
-                  ),
-              ],
-            ),
+            if (config.opcua.isNotEmpty || _hasUnsavedChanges)
+              _SaveConfigButton(
+                hasUnsavedChanges: _hasUnsavedChanges,
+                onSave: _saveConfig,
+              ),
           ],
         ),
       ),
@@ -859,6 +773,132 @@ class _EmptyServersPlaceholder extends StatelessWidget {
           Text(subtitle, style: const TextStyle(color: Colors.grey)),
         ],
       ),
+    );
+  }
+}
+
+/// Section header with icon, title, unsaved badge, and add button.
+///
+/// Used by OPC UA, JBTM, and Modbus server config sections to show
+/// a responsive header row that collapses on narrow screens.
+class _ServerSectionHeader extends StatelessWidget {
+  final String title;
+  final IconData icon;
+  final bool hasUnsavedChanges;
+  final VoidCallback onAdd;
+
+  const _ServerSectionHeader({
+    required this.title,
+    required this.icon,
+    required this.hasUnsavedChanges,
+    required this.onAdd,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final isNarrow = constraints.maxWidth < 500;
+        if (isNarrow) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  FaIcon(icon, size: 20),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(title,
+                        style: Theme.of(context).textTheme.titleMedium),
+                  ),
+                  if (hasUnsavedChanges) ...[
+                    const SizedBox(width: 4),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                          color: Colors.orange,
+                          borderRadius: BorderRadius.circular(12)),
+                      child: const Text('Unsaved',
+                          style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold)),
+                    ),
+                  ],
+                ],
+              ),
+              const SizedBox(height: 8),
+              ElevatedButton.icon(
+                onPressed: onAdd,
+                icon: const FaIcon(FontAwesomeIcons.plus, size: 16),
+                label: const Text('Add Server'),
+              ),
+            ],
+          );
+        }
+        return Row(
+          children: [
+            FaIcon(icon, size: 20),
+            const SizedBox(width: 8),
+            Text(title,
+                style: Theme.of(context).textTheme.titleMedium),
+            if (hasUnsavedChanges) ...[
+              const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                    color: Colors.orange,
+                    borderRadius: BorderRadius.circular(12)),
+                child: const Text('Unsaved Changes',
+                    style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold)),
+              ),
+            ],
+            const Spacer(),
+            const SizedBox(width: 8),
+            ElevatedButton.icon(
+              onPressed: onAdd,
+              icon: const FaIcon(FontAwesomeIcons.plus, size: 16),
+              label: const Text('Add Server'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+/// Save/saved-state button for server config sections.
+///
+/// Shows "Save Configuration" (enabled, themed) when there are unsaved changes,
+/// or "All Changes Saved" (disabled, grey) when config matches saved state.
+class _SaveConfigButton extends StatelessWidget {
+  final bool hasUnsavedChanges;
+  final VoidCallback onSave;
+
+  const _SaveConfigButton({
+    required this.hasUnsavedChanges,
+    required this.onSave,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return ElevatedButton.icon(
+      onPressed: hasUnsavedChanges ? onSave : null,
+      icon: FaIcon(FontAwesomeIcons.floppyDisk,
+          size: 16,
+          color: hasUnsavedChanges ? null : Colors.grey),
+      label: Text(hasUnsavedChanges
+          ? 'Save Configuration'
+          : 'All Changes Saved'),
+      style: ElevatedButton.styleFrom(
+          padding: const EdgeInsets.symmetric(vertical: 16),
+          backgroundColor:
+              hasUnsavedChanges ? null : Colors.grey),
     );
   }
 }
@@ -1022,78 +1062,11 @@ class _JbtmServersSectionState extends ConsumerState<_JbtmServersSection> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            LayoutBuilder(
-              builder: (context, constraints) {
-                final isNarrow = constraints.maxWidth < 500;
-                if (isNarrow) {
-                  return Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Row(
-                        children: [
-                          const FaIcon(FontAwesomeIcons.scaleBalanced, size: 20),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text('JBTM M2400 Servers',
-                                style: Theme.of(context).textTheme.titleMedium),
-                          ),
-                          if (_hasUnsavedChanges) ...[
-                            const SizedBox(width: 4),
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 6, vertical: 2),
-                              decoration: BoxDecoration(
-                                  color: Colors.orange,
-                                  borderRadius: BorderRadius.circular(12)),
-                              child: const Text('Unsaved',
-                                  style: TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 10,
-                                      fontWeight: FontWeight.bold)),
-                            ),
-                          ],
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      ElevatedButton.icon(
-                        onPressed: _addServer,
-                        icon: const FaIcon(FontAwesomeIcons.plus, size: 16),
-                        label: const Text('Add Server'),
-                      ),
-                    ],
-                  );
-                }
-                return Row(
-                  children: [
-                    const FaIcon(FontAwesomeIcons.scaleBalanced, size: 20),
-                    const SizedBox(width: 8),
-                    Text('JBTM M2400 Servers',
-                        style: Theme.of(context).textTheme.titleMedium),
-                    if (_hasUnsavedChanges) ...[
-                      const SizedBox(width: 8),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 8, vertical: 4),
-                        decoration: BoxDecoration(
-                            color: Colors.orange,
-                            borderRadius: BorderRadius.circular(12)),
-                        child: const Text('Unsaved Changes',
-                            style: TextStyle(
-                                color: Colors.white,
-                                fontSize: 12,
-                                fontWeight: FontWeight.bold)),
-                      ),
-                    ],
-                    const Spacer(),
-                    const SizedBox(width: 8),
-                    ElevatedButton.icon(
-                      onPressed: _addServer,
-                      icon: const FaIcon(FontAwesomeIcons.plus, size: 16),
-                      label: const Text('Add Server'),
-                    ),
-                  ],
-                );
-              },
+            _ServerSectionHeader(
+              title: 'JBTM M2400 Servers',
+              icon: FontAwesomeIcons.scaleBalanced,
+              hasUnsavedChanges: _hasUnsavedChanges,
+              onAdd: _addServer,
             ),
             const SizedBox(height: 16),
             config.jbtm.isEmpty
@@ -1107,26 +1080,11 @@ class _JbtmServersSectionState extends ConsumerState<_JbtmServersSection> {
                   )
                 : _buildJbtmServerList(config),
             const SizedBox(height: 16),
-            Row(
-              children: [
-                if (config.jbtm.isNotEmpty || _hasUnsavedChanges)
-                  Expanded(
-                    child: ElevatedButton.icon(
-                      onPressed: _hasUnsavedChanges ? _saveConfig : null,
-                      icon: FaIcon(FontAwesomeIcons.floppyDisk,
-                          size: 16,
-                          color: _hasUnsavedChanges ? null : Colors.grey),
-                      label: Text(_hasUnsavedChanges
-                          ? 'Save Configuration'
-                          : 'All Changes Saved'),
-                      style: ElevatedButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(vertical: 16),
-                          backgroundColor:
-                              _hasUnsavedChanges ? null : Colors.grey),
-                    ),
-                  ),
-              ],
-            ),
+            if (config.jbtm.isNotEmpty || _hasUnsavedChanges)
+              _SaveConfigButton(
+                hasUnsavedChanges: _hasUnsavedChanges,
+                onSave: _saveConfig,
+              ),
           ],
         ),
       ),
@@ -1518,78 +1476,11 @@ class _ModbusServersSectionState extends ConsumerState<_ModbusServersSection> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            LayoutBuilder(
-              builder: (context, constraints) {
-                final isNarrow = constraints.maxWidth < 500;
-                if (isNarrow) {
-                  return Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Row(
-                        children: [
-                          const FaIcon(FontAwesomeIcons.networkWired, size: 20),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text('Modbus TCP Servers',
-                                style: Theme.of(context).textTheme.titleMedium),
-                          ),
-                          if (_hasUnsavedChanges) ...[
-                            const SizedBox(width: 4),
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 6, vertical: 2),
-                              decoration: BoxDecoration(
-                                  color: Colors.orange,
-                                  borderRadius: BorderRadius.circular(12)),
-                              child: const Text('Unsaved',
-                                  style: TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 10,
-                                      fontWeight: FontWeight.bold)),
-                            ),
-                          ],
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      ElevatedButton.icon(
-                        onPressed: _addServer,
-                        icon: const FaIcon(FontAwesomeIcons.plus, size: 16),
-                        label: const Text('Add Server'),
-                      ),
-                    ],
-                  );
-                }
-                return Row(
-                  children: [
-                    const FaIcon(FontAwesomeIcons.networkWired, size: 20),
-                    const SizedBox(width: 8),
-                    Text('Modbus TCP Servers',
-                        style: Theme.of(context).textTheme.titleMedium),
-                    if (_hasUnsavedChanges) ...[
-                      const SizedBox(width: 8),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 8, vertical: 4),
-                        decoration: BoxDecoration(
-                            color: Colors.orange,
-                            borderRadius: BorderRadius.circular(12)),
-                        child: const Text('Unsaved Changes',
-                            style: TextStyle(
-                                color: Colors.white,
-                                fontSize: 12,
-                                fontWeight: FontWeight.bold)),
-                      ),
-                    ],
-                    const Spacer(),
-                    const SizedBox(width: 8),
-                    ElevatedButton.icon(
-                      onPressed: _addServer,
-                      icon: const FaIcon(FontAwesomeIcons.plus, size: 16),
-                      label: const Text('Add Server'),
-                    ),
-                  ],
-                );
-              },
+            _ServerSectionHeader(
+              title: 'Modbus TCP Servers',
+              icon: FontAwesomeIcons.networkWired,
+              hasUnsavedChanges: _hasUnsavedChanges,
+              onAdd: _addServer,
             ),
             const SizedBox(height: 16),
             config.modbus.isEmpty
@@ -1603,26 +1494,11 @@ class _ModbusServersSectionState extends ConsumerState<_ModbusServersSection> {
                   )
                 : _buildModbusServerList(config),
             const SizedBox(height: 16),
-            Row(
-              children: [
-                if (config.modbus.isNotEmpty || _hasUnsavedChanges)
-                  Expanded(
-                    child: ElevatedButton.icon(
-                      onPressed: _hasUnsavedChanges ? _saveConfig : null,
-                      icon: FaIcon(FontAwesomeIcons.floppyDisk,
-                          size: 16,
-                          color: _hasUnsavedChanges ? null : Colors.grey),
-                      label: Text(_hasUnsavedChanges
-                          ? 'Save Configuration'
-                          : 'All Changes Saved'),
-                      style: ElevatedButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(vertical: 16),
-                          backgroundColor:
-                              _hasUnsavedChanges ? null : Colors.grey),
-                    ),
-                  ),
-              ],
-            ),
+            if (config.modbus.isNotEmpty || _hasUnsavedChanges)
+              _SaveConfigButton(
+                hasUnsavedChanges: _hasUnsavedChanges,
+                onSave: _saveConfig,
+              ),
           ],
         ),
       ),
