@@ -326,8 +326,7 @@ class _ConveyorConfigContentState extends State<_ConveyorConfigContent> {
           const SizedBox(height: 8),
           KeyField(
             initialValue: widget.config.augerRpmKey,
-            onChanged: (val) =>
-                setState(() => widget.config.augerRpmKey = val),
+            onChanged: (val) => setState(() => widget.config.augerRpmKey = val),
             label: 'Output shaft RPM key',
           ),
           const SizedBox(height: 8),
@@ -344,8 +343,7 @@ class _ConveyorConfigContentState extends State<_ConveyorConfigContent> {
                       value: AugerOpenEnd.right, child: Text('Right')),
                   DropdownMenuItem(
                       value: AugerOpenEnd.left, child: Text('Left')),
-                  DropdownMenuItem(
-                      value: null, child: Text('None')),
+                  DropdownMenuItem(value: null, child: Text('None')),
                 ],
               ),
             ],
@@ -412,8 +410,7 @@ class _ConveyorConfigContentState extends State<_ConveyorConfigContent> {
                               ),
                               actions: [
                                 TextButton(
-                                  onPressed: () =>
-                                      Navigator.of(context).pop(),
+                                  onPressed: () => Navigator.of(context).pop(),
                                   child: const Text('Done'),
                                 ),
                               ],
@@ -438,8 +435,7 @@ class _ConveyorConfigContentState extends State<_ConveyorConfigContent> {
                     const SizedBox(height: 4),
                     SegmentedButton<GateSide>(
                       segments: const [
-                        ButtonSegment(
-                            value: GateSide.left, label: Text('Top')),
+                        ButtonSegment(value: GateSide.left, label: Text('Top')),
                         ButtonSegment(
                             value: GateSide.right, label: Text('Bottom')),
                       ],
@@ -460,8 +456,7 @@ class _ConveyorConfigContentState extends State<_ConveyorConfigContent> {
                       divisions: 100,
                       value: entry.position,
                       label: '${(entry.position * 100).round()}%',
-                      onChanged: (v) =>
-                          setState(() => entry.position = v),
+                      onChanged: (v) => setState(() => entry.position = v),
                     ),
                   ],
                 ),
@@ -853,27 +848,55 @@ class _ConveyorState extends ConsumerState<Conveyor>
     final gateSize = beltHeight; // square so flap spans belt width
     final xCenter = entry.position * conveyorSize.width;
 
-    // Gate rotated 90° so actuator points AWAY from belt, lid sits at border.
-    // 50/50 split: gate center on the border, lid half inside, actuator half outside.
-    final yTop = entry.side == GateSide.left
-        ? -gateSize * 0.5 // centered on top border
-        : conveyorSize.height - gateSize * 0.5; // centered on bottom border
+    // Overhang: how far the gate extends outside the conveyor border.
+    // Pusher uses pi/2 rotation so content spans full height — less overhang
+    // keeps the actuator closer to the edge. Slider/pneumatic have centered
+    // elements and need more overhang.
+    final outsideOverhang = switch (entry.gate.gateVariant) {
+      GateVariant.pusher => gateSize * 0.4,
+      GateVariant.slider => gateSize * 0.57,
+      GateVariant.pneumatic => gateSize * 0.6,
+    };
 
-    // Rotate gate perpendicular to conveyor (+90° clockwise for both):
-    // Top (left): actuator (left) → points up (outside), lid → into belt
-    // Bottom (right): actuator (right) → points down (outside), lid → into belt
-    const rotation = pi / 2;
+    // Same rotation for both sides; bottom gates are mirrored, not rotated 180°.
+    final rotation = switch (entry.gate.gateVariant) {
+      GateVariant.slider => pi,
+      GateVariant.pneumatic => entry.side == GateSide.left ? 0.0 : pi,
+      GateVariant.pusher => pi / 2,
+    };
 
-    return Positioned(
-      left: xCenter - gateSize / 2,
-      top: yTop,
+    final isBottom = entry.side == GateSide.right;
+
+    final child = SizedBox(
       width: gateSize,
       height: gateSize,
-      child: Transform.rotate(
-        angle: rotation,
-        child: ConveyorGate(config: entry.gate),
+      child: Transform.flip(
+        flipX: false,
+        flipY: isBottom && entry.gate.gateVariant != GateVariant.pneumatic,
+        child: Transform.rotate(
+          angle: rotation,
+          child: ConveyorGate(config: entry.gate),
+        ),
       ),
     );
+
+    if (entry.side == GateSide.left) {
+      return Positioned(
+        left: xCenter - gateSize / 2,
+        top: -outsideOverhang,
+        width: gateSize,
+        height: gateSize,
+        child: child,
+      );
+    } else {
+      return Positioned(
+        left: xCenter - gateSize / 2,
+        bottom: -outsideOverhang,
+        width: gateSize,
+        height: gateSize,
+        child: child,
+      );
+    }
   }
 
   void _showDetailsDialog(BuildContext context) {
