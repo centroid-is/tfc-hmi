@@ -47,7 +47,7 @@ class ModbusClientTcp extends ModbusClient {
 
   /// Buffer for incoming TCP data that may contain partial or concatenated
   /// MBAP frames. Parsed by [_processIncomingBuffer].
-  List<int> _incomingBuffer = [];
+  final BytesBuilder _incomingBuffer = BytesBuilder(copy: false);
 
   ModbusClientTcp(this.serverAddress,
       {this.serverPort = 502,
@@ -200,7 +200,7 @@ class ModbusClientTcp extends ModbusClient {
   /// Handles concatenated responses (multiple frames in one TCP segment) and
   /// partial responses (frame split across segments) via [_incomingBuffer].
   void _onSocketData(Uint8List data) {
-    _incomingBuffer += data;
+    _incomingBuffer.add(data);
     _processIncomingBuffer();
   }
 
@@ -208,16 +208,18 @@ class ModbusClientTcp extends ModbusClient {
   /// routing each to its corresponding [_TcpResponse] by transaction ID.
   void _processIncomingBuffer() {
     while (_incomingBuffer.length >= 6) {
+      // Take a snapshot of the buffer for header parsing
+      final bufferBytes = _incomingBuffer.toBytes();
+
       // Read MBAP header fields
-      var headerView =
-          ByteData.view(Uint8List.fromList(_incomingBuffer).buffer, 0, 6);
+      var headerView = ByteData.view(bufferBytes.buffer, 0, 6);
       var transactionId = headerView.getUint16(0);
       var lengthField = headerView.getUint16(4);
 
       // TCPFIX-03: Validate MBAP length field range (defense-in-depth).
       // Standard Modbus limits MBAP length to 1-254, but UMAS (FC90/0x5A)
       // responses can be much larger (data dictionary 500-5000 bytes).
-      final functionCode = _incomingBuffer.length > 7 ? _incomingBuffer[7] : 0;
+      final functionCode = bufferBytes.length > 7 ? bufferBytes[7] : 0;
       final maxLength = (functionCode == 0x5A) ? 65535 : 254;
       if (lengthField < 1 || lengthField > maxLength) {
         ModbusAppLogger.warning("Invalid MBAP length field in router",
@@ -228,7 +230,7 @@ class ModbusClientTcp extends ModbusClient {
           pendingResponse.request.setResponseCode(
               ModbusResponseCode.requestRxFailed);
         }
-        _incomingBuffer = [];
+        _incomingBuffer.clear();
         return;
       }
 
@@ -236,16 +238,19 @@ class ModbusClientTcp extends ModbusClient {
       var totalFrameSize = lengthField + 6;
 
       // Wait for more data if frame is incomplete
-      if (_incomingBuffer.length < totalFrameSize) {
+      if (bufferBytes.length < totalFrameSize) {
         break;
       }
 
       // Extract the complete frame
       var frameBytes =
-          Uint8List.fromList(_incomingBuffer.sublist(0, totalFrameSize));
+          Uint8List.fromList(bufferBytes.sublist(0, totalFrameSize));
 
-      // Remove consumed bytes from buffer
-      _incomingBuffer = _incomingBuffer.sublist(totalFrameSize);
+      // Rebuild the buffer from remaining bytes
+      _incomingBuffer.clear();
+      if (bufferBytes.length > totalFrameSize) {
+        _incomingBuffer.add(bufferBytes.sublist(totalFrameSize));
+      }
 
       // Route to the correct pending response
       var pendingResponse = _pendingResponses[transactionId];
@@ -349,7 +354,7 @@ class ModbusClientTcp extends ModbusClient {
       _socket = null;
     }
     _pendingResponses.clear();
-    _incomingBuffer = [];
+    _incomingBuffer.clear();
   }
 }
 

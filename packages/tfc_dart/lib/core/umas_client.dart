@@ -57,6 +57,11 @@ class UmasRequest extends ModbusRequest {
 /// Accepts a send function for dependency injection (use ModbusClientTcp.send
 /// in production, or a mock in tests).
 class UmasClient {
+  /// Maximum allowed variable name length in bytes (defense against malformed responses).
+  static const _maxNameLength = 1024;
+
+  /// Maximum number of variables/data types parsed from a single response.
+  static const _maxVariables = 10000;
   final Future<ModbusResponseCode> Function(ModbusRequest request) sendFn;
   int _pairingKey = 0x00;
   int? maxFrameSize;
@@ -143,8 +148,11 @@ class UmasClient {
     int pos = 0;
 
     while (pos + 2 <= data.length) {
+      if (variables.length >= _maxVariables) break;
+
       final view = ByteData.sublistView(data, pos);
       final nameLen = view.getUint16(0, Endian.little);
+      if (nameLen > _maxNameLength) break;
       pos += 2;
 
       if (pos + nameLen + 6 > data.length) break;
@@ -210,9 +218,12 @@ class UmasClient {
     int pos = 0;
 
     while (pos + 4 <= data.length) {
+      if (types.length >= _maxVariables) break;
+
       final view = ByteData.sublistView(data, pos);
       final typeId = view.getUint16(0, Endian.little);
       final nameLen = view.getUint16(2, Endian.little);
+      if (nameLen > _maxNameLength) break;
       pos += 4;
 
       if (pos + nameLen + 2 > data.length) break;

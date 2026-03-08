@@ -1,3 +1,35 @@
+import 'package:tfc_dart/core/modbus_client_wrapper.dart' show ModbusDataType;
+
+/// Maps a UMAS data type name to the corresponding Modbus data type.
+///
+/// Uses [byteSize] as a fallback for unknown type names.
+ModbusDataType mapUmasDataTypeToModbus(String umasType, int byteSize) {
+  switch (umasType.toUpperCase()) {
+    case 'BOOL':
+      return ModbusDataType.bit;
+    case 'INT':
+      return ModbusDataType.int16;
+    case 'UINT':
+      return ModbusDataType.uint16;
+    case 'DINT':
+      return ModbusDataType.int32;
+    case 'UDINT':
+      return ModbusDataType.uint32;
+    case 'REAL':
+      return ModbusDataType.float32;
+    case 'LREAL':
+      return ModbusDataType.float64;
+    case 'LINT':
+      return ModbusDataType.int64;
+    case 'ULINT':
+      return ModbusDataType.uint64;
+    default:
+      if (byteSize <= 2) return ModbusDataType.uint16;
+      if (byteSize <= 4) return ModbusDataType.uint32;
+      return ModbusDataType.float64;
+  }
+}
+
 /// UMAS sub-function codes for Schneider PLC communication via FC90.
 enum UmasSubFunction {
   init(0x01),

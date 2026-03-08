@@ -13,6 +13,7 @@ import '../widgets/opcua_browse.dart';
 import '../widgets/umas_browse.dart';
 import 'package:tfc_dart/core/state_man.dart';
 import 'package:tfc_dart/core/modbus_client_wrapper.dart' show ModbusDataType;
+import 'package:tfc_dart/core/umas_types.dart' show mapUmasDataTypeToModbus;
 import '../widgets/opcua_array_index_field.dart';
 import 'package:tfc_dart/core/collector.dart';
 import 'package:tfc_dart/core/database.dart';
@@ -23,6 +24,17 @@ import 'package:jbtm/src/m2400_fields.dart'
 import '../providers/preferences.dart';
 import '../providers/state_man.dart';
 import '../providers/database.dart';
+
+/// Extension to find a [ModbusConfig] by server alias without nullable cast.
+extension ModbusConfigListExt on List<ModbusConfig> {
+  ModbusConfig? findByAlias(String? alias) {
+    if (alias == null) return null;
+    for (final c in this) {
+      if (c.serverAlias == alias) return c;
+    }
+    return null;
+  }
+}
 
 enum _KeyStatus { ok, error, serverDisconnected }
 
@@ -1404,10 +1416,7 @@ class _ModbusConfigSectionState extends ConsumerState<_ModbusConfigSection> {
 
   bool get _isUmasEnabled {
     if (_selectedAlias == null) return false;
-    final config = widget.modbusConfigs.cast<ModbusConfig?>().firstWhere(
-      (c) => c!.serverAlias == _selectedAlias,
-      orElse: () => null,
-    );
+    final config = widget.modbusConfigs.findByAlias(_selectedAlias);
     return config?.umasEnabled ?? false;
   }
 
@@ -1432,36 +1441,9 @@ class _ModbusConfigSectionState extends ConsumerState<_ModbusConfigSection> {
       setState(() {
         _addressController.text = address.toString();
         _selectedRegisterType = ModbusRegisterType.holdingRegister;
-        _selectedDataType = _mapUmasDataType(dataTypeName, byteSize);
+        _selectedDataType = mapUmasDataTypeToModbus(dataTypeName, byteSize);
       });
       _notifyChanged();
-    }
-  }
-
-  ModbusDataType _mapUmasDataType(String umasType, int byteSize) {
-    switch (umasType.toUpperCase()) {
-      case 'BOOL':
-        return ModbusDataType.bit;
-      case 'INT':
-        return ModbusDataType.int16;
-      case 'UINT':
-        return ModbusDataType.uint16;
-      case 'DINT':
-        return ModbusDataType.int32;
-      case 'UDINT':
-        return ModbusDataType.uint32;
-      case 'REAL':
-        return ModbusDataType.float32;
-      case 'LREAL':
-        return ModbusDataType.float64;
-      case 'LINT':
-        return ModbusDataType.int64;
-      case 'ULINT':
-        return ModbusDataType.uint64;
-      default:
-        if (byteSize <= 2) return ModbusDataType.uint16;
-        if (byteSize <= 4) return ModbusDataType.uint32;
-        return ModbusDataType.float64;
     }
   }
 
@@ -1486,10 +1468,7 @@ class _ModbusConfigSectionState extends ConsumerState<_ModbusConfigSection> {
     if (_selectedAlias == null) {
       return [ModbusPollGroupConfig(name: 'default', intervalMs: 1000)];
     }
-    final serverConfig = widget.modbusConfigs.cast<ModbusConfig?>().firstWhere(
-          (c) => c!.serverAlias == _selectedAlias,
-          orElse: () => null,
-        );
+    final serverConfig = widget.modbusConfigs.findByAlias(_selectedAlias);
     if (serverConfig != null && serverConfig.pollGroups.isNotEmpty) {
       return serverConfig.pollGroups;
     }

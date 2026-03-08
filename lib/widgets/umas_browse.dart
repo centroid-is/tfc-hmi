@@ -13,13 +13,26 @@ import 'browse_panel.dart';
 class UmasBrowseDataSource implements BrowseDataSource {
   final UmasClient _client;
   List<UmasVariableTreeNode>? _tree; // Cached after initial browse
+  Map<String, UmasVariableTreeNode>? _pathIndex; // O(1) lookup by path
 
   UmasBrowseDataSource(this._client);
 
   @override
   Future<List<BrowseNode>> fetchRoots() async {
     _tree ??= await _client.browse();
+    _buildPathIndex(_tree!);
     return _tree!.map(_toBrowseNode).toList();
+  }
+
+  void _buildPathIndex(List<UmasVariableTreeNode> roots) {
+    _pathIndex = {};
+    void index(List<UmasVariableTreeNode> nodes) {
+      for (final node in nodes) {
+        _pathIndex![node.path] = node;
+        index(node.children);
+      }
+    }
+    index(roots);
   }
 
   @override
@@ -61,16 +74,7 @@ class UmasBrowseDataSource implements BrowseDataSource {
   }
 
   UmasVariableTreeNode? _findTreeNode(String path) {
-    if (_tree == null) return null;
-    UmasVariableTreeNode? search(List<UmasVariableTreeNode> nodes) {
-      for (final node in nodes) {
-        if (node.path == path) return node;
-        final found = search(node.children);
-        if (found != null) return found;
-      }
-      return null;
-    }
-    return search(_tree!);
+    return _pathIndex?[path];
   }
 }
 
