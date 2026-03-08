@@ -101,6 +101,12 @@ class ConveyorGateConfig extends BaseAsset {
   /// When false, active state pulls lid IN (retracted).
   bool sliderActiveOut;
 
+  /// For slider variant: angle of the lid in degrees (0 = perpendicular).
+  double sliderLidAngleDegrees;
+
+  /// For slider variant: lid length as fraction of gate width (0.1–1.0).
+  double sliderLidLength;
+
   /// OPC UA key to write a force-open command (DATA-02).
   String forceOpenKey;
 
@@ -123,6 +129,8 @@ class ConveyorGateConfig extends BaseAsset {
     this.openColor = Colors.green,
     this.closedColor = Colors.white,
     this.sliderActiveOut = true,
+    this.sliderLidAngleDegrees = 0.0,
+    this.sliderLidLength = 0.55,
     this.forceOpenKey = '',
     this.forceOpenFeedbackKey = '',
     this.forceCloseKey = '',
@@ -140,6 +148,8 @@ class ConveyorGateConfig extends BaseAsset {
         openColor = Colors.green,
         closedColor = Colors.white,
         sliderActiveOut = true,
+        sliderLidAngleDegrees = 0.0,
+        sliderLidLength = 0.55,
         forceOpenKey = '',
         forceOpenFeedbackKey = '',
         forceCloseKey = '',
@@ -253,6 +263,8 @@ class _ConveyorGateState extends ConsumerState<ConveyorGate>
           stateColor: stateColor,
           side: widget.config.side,
           activeOut: widget.config.sliderActiveOut,
+          lidAngleDegrees: widget.config.sliderLidAngleDegrees,
+          lidLengthFraction: widget.config.sliderLidLength,
         );
       case GateVariant.pusher:
         return PusherGatePainter(
@@ -585,6 +597,8 @@ class _ConveyorGateConfigEditorState extends State<_ConveyorGateConfigEditor>
           stateColor: config.openColor,
           side: config.side,
           activeOut: config.sliderActiveOut,
+          lidAngleDegrees: config.sliderLidAngleDegrees,
+          lidLengthFraction: config.sliderLidLength,
         );
       case GateVariant.pusher:
         return PusherGatePainter(
@@ -600,6 +614,10 @@ class _ConveyorGateConfigEditorState extends State<_ConveyorGateConfigEditor>
       _animController.stop();
       return;
     }
+    final openMs = widget.config.openTimeMs;
+    final closeMs = widget.config.closeTimeMs ?? openMs;
+    _animController.duration = Duration(milliseconds: openMs);
+    _animController.reverseDuration = Duration(milliseconds: closeMs);
     _animController.forward().then((_) {
       if (mounted) _animController.reverse();
     });
@@ -719,7 +737,7 @@ class _ConveyorGateConfigEditorState extends State<_ConveyorGateConfigEditor>
           ),
           const SizedBox(height: 16),
 
-          // -- Slider Active Direction --
+          // -- Slider Active Direction + Lid Angle --
           if (config.gateVariant == GateVariant.slider) ...[
             SwitchListTile(
               title: const Text('Active Position Out'),
@@ -729,6 +747,34 @@ class _ConveyorGateConfigEditorState extends State<_ConveyorGateConfigEditor>
               value: config.sliderActiveOut,
               onChanged: (v) => setState(() => config.sliderActiveOut = v),
               contentPadding: EdgeInsets.zero,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Lid Angle: ${config.sliderLidAngleDegrees.round()}\u00B0',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            Slider(
+              min: -45,
+              max: 45,
+              divisions: 90,
+              value: config.sliderLidAngleDegrees,
+              label: '${config.sliderLidAngleDegrees.round()}\u00B0',
+              onChanged: (v) =>
+                  setState(() => config.sliderLidAngleDegrees = v),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Lid Length: ${(config.sliderLidLength * 100).round()}%',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            Slider(
+              min: 0.1,
+              max: 1.0,
+              divisions: 18,
+              value: config.sliderLidLength,
+              label: '${(config.sliderLidLength * 100).round()}%',
+              onChanged: (v) =>
+                  setState(() => config.sliderLidLength = v),
             ),
             const SizedBox(height: 8),
           ],

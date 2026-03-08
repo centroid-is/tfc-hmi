@@ -344,6 +344,7 @@ class SliderGatePainter extends CustomPainter {
   final GateSide side;
   final bool activeOut;
   final double lidAngleDegrees;
+  final double lidLengthFraction;
 
   SliderGatePainter({
     required this.progress,
@@ -351,6 +352,7 @@ class SliderGatePainter extends CustomPainter {
     required this.side,
     this.activeOut = true,
     this.lidAngleDegrees = 0.0,
+    this.lidLengthFraction = 0.55,
   }) : super(repaint: progress);
 
   @override
@@ -369,7 +371,7 @@ class SliderGatePainter extends CustomPainter {
     final rodCenterY = h * 0.5;
 
     // Lid dimensions -- thin horizontal plate (the key difference from pusher)
-    final lidWidth = w * 0.55;
+    final lidWidth = w * lidLengthFraction;
     final lidHeight = h * 0.15;
 
     // Rod/lid travel calculation
@@ -445,7 +447,8 @@ class SliderGatePainter extends CustomPainter {
       stateColor != oldDelegate.stateColor ||
       side != oldDelegate.side ||
       activeOut != oldDelegate.activeOut ||
-      lidAngleDegrees != oldDelegate.lidAngleDegrees;
+      lidAngleDegrees != oldDelegate.lidAngleDegrees ||
+      lidLengthFraction != oldDelegate.lidLengthFraction;
 }
 
 // ---------------------------------------------------------------------------
