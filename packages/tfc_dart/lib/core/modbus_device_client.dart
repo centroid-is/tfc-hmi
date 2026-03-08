@@ -101,29 +101,6 @@ class ModbusDeviceClientAdapter implements DeviceClient {
   }
 }
 
-/// Creates [DeviceClient] instances for Modbus devices.
-///
-/// Each entry pairs a [ModbusConfig] (connection settings) with the register
-/// specs that define which keys this adapter will handle. For the higher-level
-/// factory that builds specs from key mappings automatically, see
-/// [buildModbusDeviceClients].
-List<DeviceClient> createModbusDeviceClients(
-  List<({ModbusConfig config, Map<String, ModbusRegisterSpec> specs})> configs,
-) {
-  return configs.map((entry) {
-    final wrapper = ModbusClientWrapper(
-      entry.config.host,
-      entry.config.port,
-      entry.config.unitId,
-    );
-    return ModbusDeviceClientAdapter(
-      wrapper,
-      specs: entry.specs,
-      serverAlias: entry.config.serverAlias,
-    );
-  }).toList();
-}
-
 // ---------------------------------------------------------------------------
 // Config-to-spec helpers (Phase 9)
 // ---------------------------------------------------------------------------

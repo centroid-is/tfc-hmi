@@ -1,5 +1,3 @@
-import 'dart:typed_data';
-
 /// UMAS sub-function codes for Schneider PLC communication via FC90.
 enum UmasSubFunction {
   init(0x01),

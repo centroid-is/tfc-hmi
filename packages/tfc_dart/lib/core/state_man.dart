@@ -1160,7 +1160,6 @@ class StateMan {
       final client = _getClientWrapper(key).client;
       final nodeId = _lookupNodeId(key);
       if (nodeId == null) {
-        await Future.delayed(const Duration(seconds: 1000));
         throw StateManException("Key: \"$key\" not found");
       }
       final (id, idx) = nodeId;
@@ -1266,7 +1265,6 @@ class StateMan {
       final client = _getClientWrapper(key).client;
       final nodeId = _lookupNodeId(key);
       if (nodeId == null) {
-        await Future.delayed(const Duration(seconds: 1000));
         throw StateManException("Key: \"$key\" not found");
       }
       final (id, idx) = nodeId;

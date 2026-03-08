@@ -66,7 +66,7 @@ class UmasClient {
   /// Initialize UMAS communication (sub-function 0x01).
   /// Returns max frame size and optionally firmware version.
   Future<UmasInitResult> init() async {
-    final request = UmasRequest(umasSubFunction: 0x01, pairingKey: _pairingKey);
+    final request = UmasRequest(umasSubFunction: UmasSubFunction.init.code, pairingKey: _pairingKey);
     final code = await sendFn(request);
 
     if (code != ModbusResponseCode.requestSucceed) {
@@ -104,7 +104,7 @@ class UmasClient {
   Future<List<UmasVariable>> readVariableNames() async {
     // Payload: record type 0xDD02 sent as [0x02, 0xDD] (little-endian)
     final request = UmasRequest(
-      umasSubFunction: 0x26,
+      umasSubFunction: UmasSubFunction.readDataDictionary.code,
       pairingKey: _pairingKey,
       payload: Uint8List.fromList([0x02, 0xDD]),
     );
@@ -172,7 +172,7 @@ class UmasClient {
   /// Read data type references from the data dictionary (0x26 with record type 0xDD03).
   Future<List<UmasDataTypeRef>> readDataTypes() async {
     final request = UmasRequest(
-      umasSubFunction: 0x26,
+      umasSubFunction: UmasSubFunction.readDataDictionary.code,
       pairingKey: _pairingKey,
       payload: Uint8List.fromList([0x03, 0xDD]),
     );
