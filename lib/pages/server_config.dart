@@ -16,6 +16,7 @@ import 'package:cryptography/cryptography.dart' as crypto;
 import 'package:cryptography_flutter/cryptography_flutter.dart' as crypto_fl;
 
 import '../widgets/base_scaffold.dart';
+import '../widgets/connection_status_chip.dart';
 import '../widgets/preferences.dart';
 import 'package:tfc_dart/core/state_man.dart';
 import 'package:tfc_dart/core/modbus_device_client.dart';
@@ -793,7 +794,11 @@ class _OpcUAServersSectionState extends ConsumerState<_OpcUAServersSection> {
             config.opcua.isEmpty
                 ? const SizedBox(
                     height: 200,
-                    child: _EmptyServersWidget(),
+                    child: _EmptyServersPlaceholder(
+                      icon: FontAwesomeIcons.server,
+                      title: 'No servers configured',
+                      subtitle: 'Add your first OPC-UA server to get started',
+                    ),
                   )
                 : _buildServerList(config),
             const SizedBox(height: 16),
@@ -826,24 +831,32 @@ class _OpcUAServersSectionState extends ConsumerState<_OpcUAServersSection> {
   }
 }
 
-class _EmptyServersWidget extends StatelessWidget {
-  const _EmptyServersWidget();
+class _EmptyServersPlaceholder extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String subtitle;
+
+  const _EmptyServersPlaceholder({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+  });
+
   @override
   Widget build(BuildContext context) {
     return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          const FaIcon(FontAwesomeIcons.server, size: 64, color: Colors.grey),
+          FaIcon(icon, size: 64, color: Colors.grey),
           const SizedBox(height: 16),
-          Text('No servers configured',
+          Text(title,
               style: Theme.of(context)
                   .textTheme
                   .titleLarge
                   ?.copyWith(color: Colors.grey)),
           const SizedBox(height: 8),
-          const Text('Add your first OPC-UA server to get started',
-              style: TextStyle(color: Colors.grey)),
+          Text(subtitle, style: const TextStyle(color: Colors.grey)),
         ],
       ),
     );
@@ -1086,7 +1099,11 @@ class _JbtmServersSectionState extends ConsumerState<_JbtmServersSection> {
             config.jbtm.isEmpty
                 ? const SizedBox(
                     height: 200,
-                    child: _EmptyJbtmServersWidget(),
+                    child: _EmptyServersPlaceholder(
+                      icon: FontAwesomeIcons.scaleBalanced,
+                      title: 'No JBTM servers configured',
+                      subtitle: 'Add your first JBTM M2400 server to get started',
+                    ),
                   )
                 : _buildJbtmServerList(config),
             const SizedBox(height: 16),
@@ -1117,29 +1134,6 @@ class _JbtmServersSectionState extends ConsumerState<_JbtmServersSection> {
   }
 }
 
-class _EmptyJbtmServersWidget extends StatelessWidget {
-  const _EmptyJbtmServersWidget();
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          const FaIcon(FontAwesomeIcons.scaleBalanced, size: 64, color: Colors.grey),
-          const SizedBox(height: 16),
-          Text('No JBTM servers configured',
-              style: Theme.of(context)
-                  .textTheme
-                  .titleLarge
-                  ?.copyWith(color: Colors.grey)),
-          const SizedBox(height: 8),
-          const Text('Add your first JBTM M2400 server to get started',
-              style: TextStyle(color: Colors.grey)),
-        ],
-      ),
-    );
-  }
-}
 
 // ===================== JBTM Server Config Card =====================
 
@@ -1207,46 +1201,6 @@ class _JbtmServerConfigCardState extends State<_JbtmServerConfigCard> {
     super.dispose();
   }
 
-  Color _connectionStatusColor() {
-    if (_connectionStatus == null) {
-      return widget.stateManLoading ? Colors.orange : Colors.grey;
-    }
-    return switch (_connectionStatus!) {
-      ConnectionStatus.connected => Colors.green,
-      ConnectionStatus.connecting => Colors.orange,
-      ConnectionStatus.disconnected => Colors.red,
-    };
-  }
-
-  String _connectionStatusLabel() {
-    if (_connectionStatus == null) {
-      return widget.stateManLoading ? 'Loading...' : 'Not active';
-    }
-    return switch (_connectionStatus!) {
-      ConnectionStatus.connected => 'Connected',
-      ConnectionStatus.connecting => 'Connecting...',
-      ConnectionStatus.disconnected => 'Disconnected',
-    };
-  }
-
-  Widget _buildStatusChip() {
-    final color = _connectionStatusColor();
-    final label = _connectionStatusLabel();
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-      decoration: BoxDecoration(
-        color: color.withAlpha(30),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: color.withAlpha(120)),
-      ),
-      child: Text(
-        label,
-        style:
-            TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w600),
-      ),
-    );
-  }
-
   void _updateServer() {
     final updated = M2400Config(
       host: _hostController.text,
@@ -1277,7 +1231,10 @@ class _JbtmServerConfigCardState extends State<_JbtmServerConfigCard> {
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            _buildStatusChip(),
+            ConnectionStatusChip(
+              status: _connectionStatus,
+              stateManLoading: widget.stateManLoading,
+            ),
             const SizedBox(width: 8),
             IconButton(
               icon: const FaIcon(FontAwesomeIcons.trash, size: 16),
@@ -1638,7 +1595,11 @@ class _ModbusServersSectionState extends ConsumerState<_ModbusServersSection> {
             config.modbus.isEmpty
                 ? const SizedBox(
                     height: 200,
-                    child: _EmptyModbusServersWidget(),
+                    child: _EmptyServersPlaceholder(
+                      icon: FontAwesomeIcons.networkWired,
+                      title: 'No Modbus servers configured',
+                      subtitle: 'Add your first Modbus TCP server to get started',
+                    ),
                   )
                 : _buildModbusServerList(config),
             const SizedBox(height: 16),
@@ -1669,30 +1630,6 @@ class _ModbusServersSectionState extends ConsumerState<_ModbusServersSection> {
   }
 }
 
-class _EmptyModbusServersWidget extends StatelessWidget {
-  const _EmptyModbusServersWidget();
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          const FaIcon(FontAwesomeIcons.networkWired,
-              size: 64, color: Colors.grey),
-          const SizedBox(height: 16),
-          Text('No Modbus servers configured',
-              style: Theme.of(context)
-                  .textTheme
-                  .titleLarge
-                  ?.copyWith(color: Colors.grey)),
-          const SizedBox(height: 8),
-          const Text('Add your first Modbus TCP server to get started',
-              style: TextStyle(color: Colors.grey)),
-        ],
-      ),
-    );
-  }
-}
 
 // ===================== Modbus Server Config Card =====================
 
@@ -1834,46 +1771,6 @@ class _ModbusServerConfigCardState extends State<_ModbusServerConfigCard> {
     widget.onUpdate(_buildConfig(pollGroups: pollGroups));
   }
 
-  Color _connectionStatusColor() {
-    if (_connectionStatus == null) {
-      return widget.stateManLoading ? Colors.orange : Colors.grey;
-    }
-    return switch (_connectionStatus!) {
-      ConnectionStatus.connected => Colors.green,
-      ConnectionStatus.connecting => Colors.orange,
-      ConnectionStatus.disconnected => Colors.red,
-    };
-  }
-
-  String _connectionStatusLabel() {
-    if (_connectionStatus == null) {
-      return widget.stateManLoading ? 'Loading...' : 'Not active';
-    }
-    return switch (_connectionStatus!) {
-      ConnectionStatus.connected => 'Connected',
-      ConnectionStatus.connecting => 'Connecting...',
-      ConnectionStatus.disconnected => 'Disconnected',
-    };
-  }
-
-  Widget _buildStatusChip() {
-    final color = _connectionStatusColor();
-    final label = _connectionStatusLabel();
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-      decoration: BoxDecoration(
-        color: color.withAlpha(30),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: color.withAlpha(120)),
-      ),
-      child: Text(
-        label,
-        style:
-            TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w600),
-      ),
-    );
-  }
-
   void _updateServer() {
     widget.onUpdate(_buildConfig());
   }
@@ -1900,7 +1797,10 @@ class _ModbusServerConfigCardState extends State<_ModbusServerConfigCard> {
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            _buildStatusChip(),
+            ConnectionStatusChip(
+              status: _connectionStatus,
+              stateManLoading: widget.stateManLoading,
+            ),
             const SizedBox(width: 8),
             IconButton(
               icon: const FaIcon(FontAwesomeIcons.trash, size: 16),
@@ -2293,46 +2193,6 @@ class _ServerConfigCardState extends State<_ServerConfigCard> {
     return ls != null ? String.fromCharCodes(ls) : null;
   }
 
-  Color _connectionStatusColor() {
-    if (_connectionStatus == null) {
-      return widget.stateManLoading ? Colors.orange : Colors.grey;
-    }
-    return switch (_connectionStatus!) {
-      ConnectionStatus.connected => Colors.green,
-      ConnectionStatus.connecting => Colors.orange,
-      ConnectionStatus.disconnected => Colors.red,
-    };
-  }
-
-  String _connectionStatusLabel() {
-    if (_connectionStatus == null) {
-      return widget.stateManLoading ? 'Loading...' : 'Not active';
-    }
-    return switch (_connectionStatus!) {
-      ConnectionStatus.connected => 'Connected',
-      ConnectionStatus.connecting => 'Connecting...',
-      ConnectionStatus.disconnected => 'Disconnected',
-    };
-  }
-
-  Widget _buildStatusChip() {
-    final color = _connectionStatusColor();
-    final label = _connectionStatusLabel();
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-      decoration: BoxDecoration(
-        color: color.withAlpha(30),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: color.withAlpha(120)),
-      ),
-      child: Text(
-        label,
-        style:
-            TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w600),
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final sslCertString = uint8ListToString(widget.server.sslCert);
@@ -2362,7 +2222,10 @@ class _ServerConfigCardState extends State<_ServerConfigCard> {
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            _buildStatusChip(),
+            ConnectionStatusChip(
+              status: _connectionStatus,
+              stateManLoading: widget.stateManLoading,
+            ),
             const SizedBox(width: 8),
             IconButton(
               icon: const FaIcon(FontAwesomeIcons.trash, size: 16),
