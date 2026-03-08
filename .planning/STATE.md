@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: completed
-stopped_at: Completed 14-03-PLAN.md
-last_updated: "2026-03-07T21:13:19.051Z"
-last_activity: 2026-03-07 -- 14-03 complete, UMAS browse adapter wired into UI
+status: in_progress
+stopped_at: Completed 15-02-PLAN.md
+last_updated: "2026-03-08T07:29:15Z"
+last_activity: 2026-03-08 -- 15-02 complete, config save races fixed, heartbeat configurable
 progress:
-  total_phases: 14
+  total_phases: 15
   completed_phases: 11
-  total_plans: 18
-  completed_plans: 18
-  percent: 100
+  total_plans: 21
+  completed_plans: 19
+  percent: 90
 ---
 
 # Project State
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-06)
 
 **Core value:** Modbus devices can be read from and written to through the same StateMan interface as OPC UA and M2400, without breaking existing protocol integrations.
-**Current focus:** Phase 14 -- UMAS Protocol Support (Schneider Browse via FC90)
+**Current focus:** Phase 15 -- Code Review Fixes (Security, Performance, Correctness, Duplication)
 
 ## Current Position
 
-Phase: 14 (UMAS Protocol Support)
-Plan: 3 of 3 in current phase (14-03 COMPLETE)
-Status: Phase 14 complete. All 3 plans done. UMAS browse fully wired into UI.
-Last activity: 2026-03-07 -- 14-03 complete, UMAS browse adapter wired into UI
+Phase: 15 (Code Review Fixes)
+Plan: 2 of 3 in current phase (15-02 COMPLETE)
+Status: 15-02 complete. Config save races fixed, port validation added, heartbeat configurable, async cleanup.
+Last activity: 2026-03-08 -- 15-02 complete, config save races fixed, heartbeat configurable
 
-Progress: [██████████] 100%
+Progress: [█████████ ] 90%
 
 ## Performance Metrics
 
@@ -65,6 +65,7 @@ Progress: [██████████] 100%
 | Phase 14 P01 | ~10min | 3 tasks | 4 files |
 | Phase 14 P02 | 8min | 2 tasks | 4 files |
 | Phase 14 P03 | 10min | 2 tasks | 9 files |
+| Phase 15 P02 | 9min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -136,6 +137,8 @@ Recent decisions affecting current work:
 - [Phase 14-03]: _buildConfig helper centralizes ModbusConfig construction in server config card (DRY)
 - [Phase 14-03]: UMAS data type mapping uses uppercase switch with byteSize fallback for unknown types
 - [Phase 14-03]: stateManProvider override added to buildTestableKeyRepository to prevent timer leaks
+- [Phase 15-02]: Emit disconnected synchronously in dispose() before closing BehaviorSubject to preserve listener ordering
+- [Phase 15-02]: unawaited() in disconnect() and dispose() documents intentional fire-and-forget (not accidental)
 
 ### Pending Todos
 
@@ -147,6 +150,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-07T20:52:49Z
-Stopped at: Completed 14-03-PLAN.md
+Last session: 2026-03-08T07:29:15Z
+Stopped at: Completed 15-02-PLAN.md
 Resume file: None
