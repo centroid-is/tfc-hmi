@@ -79,7 +79,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 | 2. Full Feature Set | 2/2 | Complete | 2026-03-07 |
 | 3. Child-of-Conveyor Integration | 2/2 | Complete    | 2026-03-07 |
 | 4. Fix Gate Architecture & Redesign Painters | 3/3 | Complete   | 2026-03-07 |
-| 5. Painter Fixes & Gate Positioning UI | 0/2 | In Progress | |
+| 5. Painter Fixes & Gate Positioning UI | 2/2 | Complete | 2026-03-07 |
 
 ### Phase 4: Fix gate architecture and redesign painters
 
@@ -111,8 +111,8 @@ Plans:
   3. Slider gate shows a wide horizontal lid covering belt area, not a rotated thin blade
   4. User can toggle child gate between top and bottom of conveyor via config dialog
   5. User can adjust child gate belt position via slider in config dialog
-**Plans:** 2 plans
+**Plans:** 2/2 plans complete
 
 Plans:
-- [ ] 05-01-PLAN.md -- Fix diverter edge swap + animation direction, rewrite slider painter, regenerate goldens
-- [ ] 05-02-PLAN.md -- Add side toggle (Top/Bottom) and position slider to conveyor config dialog gate list
+- [x] 05-01-PLAN.md -- Fix diverter edge swap + animation direction, rewrite slider painter, regenerate goldens
+- [x] 05-02-PLAN.md -- Add side toggle (Top/Bottom) and position slider to conveyor config dialog gate list

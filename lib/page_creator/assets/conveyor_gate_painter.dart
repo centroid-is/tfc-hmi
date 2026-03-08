@@ -368,9 +368,9 @@ class SliderGatePainter extends CustomPainter {
     final rodDiameter = actuatorHeight * 0.25;
     final rodCenterY = h * 0.5;
 
-    // Lid dimensions -- wide horizontal plate (the key difference from pusher)
-    final lidWidth = w * 0.50;
-    final lidHeight = h * 0.70;
+    // Lid dimensions -- thin horizontal plate (the key difference from pusher)
+    final lidWidth = w * 0.55;
+    final lidHeight = h * 0.15;
 
     // Rod/lid travel calculation
     final minStub = w * 0.05;
