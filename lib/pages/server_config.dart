@@ -603,7 +603,7 @@ class _OpcUAServersSectionState extends ConsumerState<_OpcUAServersSection> {
     if (_config == null) return;
 
     try {
-      _config!.toPrefs(await ref.read(preferencesProvider.future));
+      await _config!.toPrefs(await ref.read(preferencesProvider.future));
       _savedConfig = await StateManConfig.fromPrefs(
           await ref.read(preferencesProvider.future));
       ref.invalidate(stateManProvider);
@@ -901,7 +901,7 @@ class _JbtmServersSectionState extends ConsumerState<_JbtmServersSection> {
     if (_config == null) return;
 
     try {
-      _config!.toPrefs(await ref.read(preferencesProvider.future));
+      await _config!.toPrefs(await ref.read(preferencesProvider.future));
       _savedConfig = await StateManConfig.fromPrefs(
           await ref.read(preferencesProvider.future));
       ref.invalidate(stateManProvider);
@@ -1448,7 +1448,7 @@ class _ModbusServersSectionState extends ConsumerState<_ModbusServersSection> {
     if (_config == null) return;
 
     try {
-      _config!.toPrefs(await ref.read(preferencesProvider.future));
+      await _config!.toPrefs(await ref.read(preferencesProvider.future));
       _savedConfig = await StateManConfig.fromPrefs(
           await ref.read(preferencesProvider.future));
       ref.invalidate(stateManProvider);
@@ -1801,7 +1801,7 @@ class _ModbusServerConfigCardState extends State<_ModbusServerConfigCard> {
   ModbusConfig _buildConfig({List<ModbusPollGroupConfig>? pollGroups}) {
     return ModbusConfig(
       host: _hostController.text,
-      port: int.tryParse(_portController.text) ?? 502,
+      port: (int.tryParse(_portController.text) ?? 502).clamp(1, 65535),
       unitId: (int.tryParse(_unitIdController.text) ?? 1).clamp(1, 247),
       pollGroups: pollGroups ?? widget.server.pollGroups,
       umasEnabled: _umasEnabled,
