@@ -853,19 +853,26 @@ class _ConveyorState extends ConsumerState<Conveyor>
     final gateSize = beltHeight; // square so flap spans belt width
     final xCenter = entry.position * conveyorSize.width;
 
-    // Gate flush against belt edge with 50/50 split.
-    // Left side: half above belt, half inside (flush against top edge)
-    // Right side: half below belt, half inside (flush against bottom edge)
+    // Gate rotated 90° so actuator points AWAY from belt, lid sits at border.
+    // 50/50 split: gate center on the border, lid half inside, actuator half outside.
     final yTop = entry.side == GateSide.left
-        ? -gateSize * 0.5 // half above belt (flush against top edge)
-        : conveyorSize.height - gateSize * 0.5; // half below belt (flush against bottom edge)
+        ? -gateSize * 0.5 // centered on top border
+        : conveyorSize.height - gateSize * 0.5; // centered on bottom border
+
+    // Rotate gate perpendicular to conveyor (+90° clockwise for both):
+    // Top (left): actuator (left) → points up (outside), lid → into belt
+    // Bottom (right): actuator (right) → points down (outside), lid → into belt
+    const rotation = pi / 2;
 
     return Positioned(
       left: xCenter - gateSize / 2,
       top: yTop,
       width: gateSize,
       height: gateSize,
-      child: ConveyorGate(config: entry.gate),
+      child: Transform.rotate(
+        angle: rotation,
+        child: ConveyorGate(config: entry.gate),
+      ),
     );
   }
 

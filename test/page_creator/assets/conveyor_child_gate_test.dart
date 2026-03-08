@@ -64,82 +64,39 @@ void main() {
     });
   });
 
-  group('Child gate flush belt-edge positioning (CHILD-04, 50/50 split)', () {
-    test('left-side gate yTop = -gateSize * 0.5 for flush belt-edge placement',
-        () {
-      // Replicate the _positionedChildGate formula with 50/50 split:
-      // yTop = -gateSize * 0.5  for GateSide.left
+  group('Child gate positioning on conveyor border (50/50 split + rotation)',
+      () {
+    test('left-side (top) gate centered on top border', () {
       const conveyorSize = Size(200, 40);
-      final entry = ChildGateEntry(
-        position: 0.5,
-        side: GateSide.left,
-        gate: ConveyorGateConfig(),
-      );
+      final gateSize = conveyorSize.height;
+      final yTop = -gateSize * 0.5;
 
-      final beltHeight = conveyorSize.height;
-      final gateSize = beltHeight;
-      final yTop = entry.side == GateSide.left
-          ? -gateSize * 0.5
-          : conveyorSize.height - gateSize * 0.5;
-
-      // For conveyorSize=(200,40): gateSize=40, yTop = -20
-      expect(yTop, lessThan(0),
-          reason: 'Left-side gate should overflow above conveyor');
+      // Gate from -20 to +20, centered on y=0 (top border)
       expect(yTop, -20.0);
+      expect(yTop, lessThan(0),
+          reason: 'Top gate should overflow above conveyor');
     });
 
-    test(
-        'right-side gate yTop = conveyorSize.height - gateSize * 0.5 for flush belt-edge placement',
-        () {
-      // Replicate the _positionedChildGate formula with 50/50 split:
-      // yTop = conveyorSize.height - gateSize * 0.5  for GateSide.right
+    test('right-side (bottom) gate centered on bottom border', () {
       const conveyorSize = Size(200, 40);
-      final entry = ChildGateEntry(
-        position: 0.5,
-        side: GateSide.right,
-        gate: ConveyorGateConfig(),
-      );
+      final gateSize = conveyorSize.height;
+      final yTop = conveyorSize.height - gateSize * 0.5;
 
-      final beltHeight = conveyorSize.height;
-      final gateSize = beltHeight;
-      final yTop = entry.side == GateSide.left
-          ? -gateSize * 0.5
-          : conveyorSize.height - gateSize * 0.5;
-
-      // For conveyorSize=(200,40): gateSize=40, yTop = 40 - 20 = 20
-      // yTop + gateSize = 20 + 40 = 60 > conveyorSize.height (40)
-      expect(yTop + gateSize, greaterThan(conveyorSize.height),
-          reason: 'Right-side gate should overflow below conveyor');
+      // Gate from 20 to 60, centered on y=40 (bottom border)
       expect(yTop, 20.0);
+      expect(yTop + gateSize, greaterThan(conveyorSize.height),
+          reason: 'Bottom gate should overflow below conveyor');
     });
 
-    test('both sides place gate OUTSIDE conveyor belt boundary', () {
+    test('both sides overflow outside conveyor boundary', () {
       const conveyorSize = Size(200, 40);
       final gateSize = conveyorSize.height;
 
-      // Left side: top of gate is above conveyor
-      final leftEntry = ChildGateEntry(
-        position: 0.5,
-        side: GateSide.left,
-        gate: ConveyorGateConfig(),
-      );
-      final leftYTop = leftEntry.side == GateSide.left
-          ? -gateSize * 0.5
-          : conveyorSize.height - gateSize * 0.5;
-      expect(leftYTop, lessThan(0),
-          reason: 'Left gate top edge should be above conveyor');
+      final leftYTop = -gateSize * 0.5;
+      expect(leftYTop, lessThan(0));
 
-      // Right side: bottom of gate is below conveyor
-      final rightEntry = ChildGateEntry(
-        position: 0.5,
-        side: GateSide.right,
-        gate: ConveyorGateConfig(),
-      );
-      final rightYTop = rightEntry.side == GateSide.left
-          ? -gateSize * 0.5
-          : conveyorSize.height - gateSize * 0.5;
-      expect(rightYTop + gateSize, greaterThan(conveyorSize.height),
-          reason: 'Right gate bottom edge should be below conveyor');
+      final rightYTop = conveyorSize.height - gateSize * 0.5;
+      expect(rightYTop + gateSize, greaterThan(conveyorSize.height));
     });
   });
 
