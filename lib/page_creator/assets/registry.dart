@@ -35,6 +35,7 @@ class AssetRegistry {
     LEDConfig: LEDConfig.fromJson,
     ButtonConfig: ButtonConfig.fromJson,
     ConveyorConfig: ConveyorConfig.fromJson,
+    ConveyorGateConfig: ConveyorGateConfig.fromJson,
     ConveyorColorPaletteConfig: ConveyorColorPaletteConfig.fromJson,
     ArrowConfig: ArrowConfig.fromJson,
     LEDColumnConfig: LEDColumnConfig.fromJson,
@@ -66,7 +67,6 @@ class AssetRegistry {
     RecipesConfig: RecipesConfig.fromJson,
     SpeedBatcherConfig: SpeedBatcherConfig.fromJson,
     GateStatusConfig: GateStatusConfig.fromJson,
-    ConveyorGateConfig: ConveyorGateConfig.fromJson,
   };
 
   static final Map<Type, Asset Function()> defaultFactories = {
@@ -75,6 +75,7 @@ class AssetRegistry {
     ButtonConfig: ButtonConfig.preview,
     ArrowConfig: ArrowConfig.preview,
     ConveyorConfig: ConveyorConfig.preview,
+    ConveyorGateConfig: ConveyorGateConfig.preview,
     ConveyorColorPaletteConfig: ConveyorColorPaletteConfig.preview,
     NumberConfig: NumberConfig.preview,
     RatioNumberConfig: RatioNumberConfig.preview,
@@ -104,7 +105,6 @@ class AssetRegistry {
     RecipesConfig: RecipesConfig.preview,
     SpeedBatcherConfig: SpeedBatcherConfig.preview,
     GateStatusConfig: GateStatusConfig.preview,
-    ConveyorGateConfig: ConveyorGateConfig.preview,
   };
 
   static void registerFromJsonFactory<T extends Asset>(

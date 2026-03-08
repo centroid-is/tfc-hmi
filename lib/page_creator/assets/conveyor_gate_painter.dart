@@ -141,9 +141,10 @@ class PneumaticDiverterPainter extends CustomPainter {
     final hingeX = side == GateSide.left ? 0.0 : w;
     final hingeY = h * 0.5;
 
-    // Animation angle
+    // Animation angle (includes small visual correction for asymmetric arm shape)
     final angle = openAngleDegrees * (pi / 180) * progress.value;
-    final signedAngle = -angle;
+    final correction = 5.0 * (pi / 180);
+    final signedAngle = -angle + correction;
 
     canvas.save();
     canvas.translate(hingeX, hingeY);
@@ -365,14 +366,14 @@ class SliderGatePainter extends CustomPainter {
 
     // Actuator dimensions (consistent with pusher)
     final actuatorWidth = w * 0.30;
-    final actuatorHeight = h * 0.18;
+    final lidHeight = h * 0.15;
+    final actuatorHeight = lidHeight;
     final actuatorY = (h - actuatorHeight) / 2;
     final rodDiameter = actuatorHeight * 0.25;
     final rodCenterY = h * 0.5;
 
     // Lid dimensions -- thin horizontal plate (the key difference from pusher)
     final lidWidth = w * lidLengthFraction;
-    final lidHeight = h * 0.15;
 
     // Rod/lid travel calculation
     final minStub = w * 0.05;
