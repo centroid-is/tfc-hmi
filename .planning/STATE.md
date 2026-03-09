@@ -3,9 +3,9 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: completed
-stopped_at: Completed 16-02-PLAN.md (wrapper/UI fixes)
-last_updated: "2026-03-09T10:57:21Z"
-last_activity: 2026-03-09 -- 16-02 complete, address validation + unit ID expansion + rich write errors
+stopped_at: Completed 16-03-PLAN.md (byte order config)
+last_updated: "2026-03-09T12:41:06Z"
+last_activity: 2026-03-09 -- 16-03 complete, byte order config with per-server endianness dropdown
 progress:
   total_phases: 15
   completed_phases: 12
@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-03-06)
 ## Current Position
 
 Phase: 16 (Modbus Protocol Spec Research)
-Plan: 2 of 3 in current phase (16-02 COMPLETE)
-Status: Phase 16 plan 02 complete. Address validation, unit ID 0-255, rich write error messages.
-Last activity: 2026-03-09 -- 16-02 complete, address validation + unit ID expansion + rich write errors (BUG-01, VAL-03, FEAT-03)
+Plan: 3 of 3 in current phase (16-03 COMPLETE)
+Status: Phase 16 complete. All 3 plans done. Byte order config with per-server endianness dropdown.
+Last activity: 2026-03-09 -- 16-03 complete, byte order config with ABCD/CDAB/BADC/DCBA dropdown (FEAT-01)
 
 Progress: [██████████] 100%
 
@@ -70,6 +70,7 @@ Progress: [██████████] 100%
 | Phase 15 P03 | 7min | 2 tasks | 2 files |
 | Phase 16 P01 | 6min | 2 tasks | 4 files |
 | Phase 16 P02 | 12min | 2 tasks | 5 files |
+| Phase 16 P03 | 12min | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -155,6 +156,9 @@ Recent decisions affecting current work:
 - [Phase 16-02]: Assert for ModbusRegisterSpec (code-constructed), clamp for ModbusNodeConfig (JSON-deserialized) -- crash-safe on bad data
 - [Phase 16-02]: Unit ID 0-255 for TCP without warnings -- all values are spec-valid in TCP context
 - [Phase 16-02]: _describeException covers standard Modbus codes 0x01-0x0B plus library transport codes
+- [Phase 16-03]: Endianness is per-device (per ModbusConfig), not per-register -- all registers on a device use same byte order
+- [Phase 16-03]: Single-register types (int16/uint16) and bit types unaffected by endianness -- only 32-bit and 64-bit types pass through
+- [Phase 16-03]: buildSpecsFromKeyMappings accepts endianness as optional parameter with ABCD default for backward compatibility
 
 ### Pending Todos
 
@@ -166,6 +170,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-09T10:57:21Z
-Stopped at: Completed 16-02-PLAN.md (wrapper/UI fixes)
+Last session: 2026-03-09T12:41:06Z
+Stopped at: Completed 16-03-PLAN.md (byte order config)
 Resume file: None
