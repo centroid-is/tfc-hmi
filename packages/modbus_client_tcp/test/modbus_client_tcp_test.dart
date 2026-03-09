@@ -666,6 +666,233 @@ void main() {
       }
     });
   });
+
+  group('response byte count validation (BUG-02)', () {
+    test('FC03 response with correct byte count is accepted', () async {
+      // Reading 2 registers = expected byte count of 4 (2 bytes per register)
+      late ModbusTestServer server;
+      server = ModbusTestServer(onData: (socket, data) {
+        if (data.length < 7) return;
+        final view = ByteData.view(Uint8List.fromList(data).buffer);
+        final transactionId = view.getUint16(0);
+        final unitId = view.getUint8(6);
+
+        // FC03 response: byte count = 2 (correct for 1 Uint16 register)
+        final pdu = Uint8List.fromList([
+          0x03, // FC03
+          0x02, // byte count = 2 (matches Uint16 byteCount)
+          0x00, 0x42, // register value
+        ]);
+        final response = ModbusTestServer.buildResponse(
+            transactionId, unitId, pdu);
+        server.sendToClient(socket, response);
+      });
+      final port = await server.start();
+      final client = ModbusClientTcp('127.0.0.1',
+          serverPort: port,
+          connectionTimeout: const Duration(seconds: 2),
+          responseTimeout: const Duration(seconds: 2),
+          unitId: 1);
+
+      try {
+        final register = ModbusUint16Register(
+            name: 'test', address: 0, type: ModbusElementType.holdingRegister);
+        final request = register.getReadRequest();
+        final code = await client.send(request);
+        expect(code, equals(ModbusResponseCode.requestSucceed));
+        expect(register.value, equals(0x0042));
+      } finally {
+        await client.disconnect();
+        await server.shutdown();
+      }
+    });
+
+    test('FC03 response with wrong byte count returns requestRxFailed',
+        () async {
+      // Reading 1 Uint16 register = expected byte count of 2,
+      // but response says byte count = 4
+      late ModbusTestServer server;
+      server = ModbusTestServer(onData: (socket, data) {
+        if (data.length < 7) return;
+        final view = ByteData.view(Uint8List.fromList(data).buffer);
+        final transactionId = view.getUint16(0);
+        final unitId = view.getUint8(6);
+
+        // FC03 response with WRONG byte count (4 instead of 2)
+        final pdu = Uint8List.fromList([
+          0x03, // FC03
+          0x04, // byte count = 4 (WRONG for Uint16, should be 2)
+          0x00, 0x42, 0x00, 0x43, // extra data
+        ]);
+        final response = ModbusTestServer.buildResponse(
+            transactionId, unitId, pdu);
+        server.sendToClient(socket, response);
+      });
+      final port = await server.start();
+      final client = ModbusClientTcp('127.0.0.1',
+          serverPort: port,
+          connectionTimeout: const Duration(seconds: 2),
+          responseTimeout: const Duration(seconds: 2),
+          unitId: 1);
+
+      try {
+        final register = ModbusUint16Register(
+            name: 'test', address: 0, type: ModbusElementType.holdingRegister);
+        final request = register.getReadRequest();
+        final code = await client.send(request);
+        expect(code, equals(ModbusResponseCode.requestRxFailed));
+      } finally {
+        await client.disconnect();
+        await server.shutdown();
+      }
+    });
+
+    test('FC01 response with correct byte count is accepted', () async {
+      // Reading 1 coil = expected byte count of 1 (ceil(1/8) = 1)
+      late ModbusTestServer server;
+      server = ModbusTestServer(onData: (socket, data) {
+        if (data.length < 7) return;
+        final view = ByteData.view(Uint8List.fromList(data).buffer);
+        final transactionId = view.getUint16(0);
+        final unitId = view.getUint8(6);
+
+        // FC01 response: byte count = 1 (correct for 1 coil)
+        final pdu = Uint8List.fromList([
+          0x01, // FC01
+          0x01, // byte count = 1
+          0x01, // coil value = ON
+        ]);
+        final response = ModbusTestServer.buildResponse(
+            transactionId, unitId, pdu);
+        server.sendToClient(socket, response);
+      });
+      final port = await server.start();
+      final client = ModbusClientTcp('127.0.0.1',
+          serverPort: port,
+          connectionTimeout: const Duration(seconds: 2),
+          responseTimeout: const Duration(seconds: 2),
+          unitId: 1);
+
+      try {
+        final coil = ModbusCoil(name: 'test', address: 0);
+        final request = coil.getReadRequest();
+        final code = await client.send(request);
+        expect(code, equals(ModbusResponseCode.requestSucceed));
+        expect(coil.value, equals(true));
+      } finally {
+        await client.disconnect();
+        await server.shutdown();
+      }
+    });
+
+    test('FC01 response with wrong byte count returns requestRxFailed',
+        () async {
+      // Reading 1 coil = expected byte count of 1,
+      // but response says byte count = 2
+      late ModbusTestServer server;
+      server = ModbusTestServer(onData: (socket, data) {
+        if (data.length < 7) return;
+        final view = ByteData.view(Uint8List.fromList(data).buffer);
+        final transactionId = view.getUint16(0);
+        final unitId = view.getUint8(6);
+
+        // FC01 response with WRONG byte count (2 instead of 1)
+        final pdu = Uint8List.fromList([
+          0x01, // FC01
+          0x02, // byte count = 2 (WRONG, should be 1)
+          0x01, 0x00, // extra data
+        ]);
+        final response = ModbusTestServer.buildResponse(
+            transactionId, unitId, pdu);
+        server.sendToClient(socket, response);
+      });
+      final port = await server.start();
+      final client = ModbusClientTcp('127.0.0.1',
+          serverPort: port,
+          connectionTimeout: const Duration(seconds: 2),
+          responseTimeout: const Duration(seconds: 2),
+          unitId: 1);
+
+      try {
+        final coil = ModbusCoil(name: 'test', address: 0);
+        final request = coil.getReadRequest();
+        final code = await client.send(request);
+        expect(code, equals(ModbusResponseCode.requestRxFailed));
+      } finally {
+        await client.disconnect();
+        await server.shutdown();
+      }
+    });
+  });
+
+  group('unit ID validation (BUG-03)', () {
+    test('response with matching unit ID is accepted', () async {
+      late ModbusTestServer server;
+      server = ModbusTestServer(onData: (socket, data) {
+        if (data.length < 7) return;
+        final view = ByteData.view(Uint8List.fromList(data).buffer);
+        final transactionId = view.getUint16(0);
+        final unitId = view.getUint8(6);
+
+        // Response with same unit ID as request
+        final pdu = Uint8List.fromList([0x03, 0x02, 0x00, 0x42]);
+        final response = ModbusTestServer.buildResponse(
+            transactionId, unitId, pdu);
+        server.sendToClient(socket, response);
+      });
+      final port = await server.start();
+      final client = ModbusClientTcp('127.0.0.1',
+          serverPort: port,
+          connectionTimeout: const Duration(seconds: 2),
+          responseTimeout: const Duration(seconds: 2),
+          unitId: 5);
+
+      try {
+        final register = ModbusUint16Register(
+            name: 'test', address: 0, type: ModbusElementType.holdingRegister);
+        final request = register.getReadRequest();
+        final code = await client.send(request);
+        expect(code, equals(ModbusResponseCode.requestSucceed));
+        expect(register.value, equals(0x0042));
+      } finally {
+        await client.disconnect();
+        await server.shutdown();
+      }
+    });
+
+    test('response with mismatched unit ID returns requestRxFailed', () async {
+      late ModbusTestServer server;
+      server = ModbusTestServer(onData: (socket, data) {
+        if (data.length < 7) return;
+        final view = ByteData.view(Uint8List.fromList(data).buffer);
+        final transactionId = view.getUint16(0);
+        // Intentionally use a DIFFERENT unit ID in the response
+        final wrongUnitId = 99;
+
+        final pdu = Uint8List.fromList([0x03, 0x02, 0x00, 0x42]);
+        final response = ModbusTestServer.buildResponse(
+            transactionId, wrongUnitId, pdu);
+        server.sendToClient(socket, response);
+      });
+      final port = await server.start();
+      final client = ModbusClientTcp('127.0.0.1',
+          serverPort: port,
+          connectionTimeout: const Duration(seconds: 2),
+          responseTimeout: const Duration(seconds: 2),
+          unitId: 5);
+
+      try {
+        final register = ModbusUint16Register(
+            name: 'test', address: 0, type: ModbusElementType.holdingRegister);
+        final request = register.getReadRequest();
+        final code = await client.send(request);
+        expect(code, equals(ModbusResponseCode.requestRxFailed));
+      } finally {
+        await client.disconnect();
+        await server.shutdown();
+      }
+    });
+  });
 }
 
 /// Simple FC90 test request for UMAS MBAP length validation tests.
