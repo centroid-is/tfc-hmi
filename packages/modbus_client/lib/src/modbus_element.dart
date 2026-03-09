@@ -109,6 +109,22 @@ abstract class ModbusElement<T> {
     }
     assert(quantity == null || quantity > 0,
         'quantity must be positive when provided');
+    // BUG-05: Enforce Modbus spec write quantity limits.
+    // The byte count field (pdu[5]) is uint8, max useful value = 246.
+    assert(bytes.length <= 246,
+        'Byte count ${bytes.length} exceeds max 246 (FC15: 1968 coils, FC16: 123 registers)');
+    // FC16 (0x10): max 123 registers per write
+    if (type.writeMultipleFunction!.code == 0x10) {
+      final regCount = quantity ?? bytes.length ~/ 2;
+      assert(regCount <= 123,
+          'FC16 max quantity is 123 registers, got $regCount');
+    }
+    // FC15 (0x0F): max 1968 coils per write
+    if (type.writeMultipleFunction!.code == 0x0F) {
+      final coilCount = quantity ?? bytes.length ~/ 2;
+      assert(coilCount <= 1968,
+          'FC15 max quantity is 1968 coils, got $coilCount');
+    }
     // Build the request object
     var pdu = Uint8List(6 + bytes.length);
     pdu.setAll(
