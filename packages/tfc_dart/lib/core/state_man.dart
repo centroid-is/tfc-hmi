@@ -269,11 +269,11 @@ class ModbusConfig {
   ModbusConfig({
     this.host = '',
     this.port = 502,
-    this.unitId = 1,
+    int unitId = 1,
     this.serverAlias,
     this.pollGroups = const [],
     this.umasEnabled = false,
-  });
+  }) : unitId = unitId.clamp(0, 255);
 
   factory ModbusConfig.fromJson(Map<String, dynamic> json) =>
       _$ModbusConfigFromJson(json);

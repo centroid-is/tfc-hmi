@@ -1615,7 +1615,7 @@ class _ModbusServerConfigCardState extends State<_ModbusServerConfigCard> {
     return ModbusConfig(
       host: _hostController.text,
       port: (int.tryParse(_portController.text) ?? 502).clamp(1, 65535),
-      unitId: (int.tryParse(_unitIdController.text) ?? 1).clamp(1, 247),
+      unitId: (int.tryParse(_unitIdController.text) ?? 1).clamp(0, 255),
       pollGroups: pollGroups ?? widget.server.pollGroups,
       umasEnabled: _umasEnabled,
     )..serverAlias =
@@ -1745,7 +1745,7 @@ class _ModbusServerConfigCardState extends State<_ModbusServerConfigCard> {
                             controller: _unitIdController,
                             decoration: const InputDecoration(
                               labelText: 'Unit ID',
-                              hintText: '1-247',
+                              hintText: '0-255',
                               prefixIcon: FaIcon(FontAwesomeIcons.addressCard,
                                   size: 16),
                             ),
@@ -1794,7 +1794,7 @@ class _ModbusServerConfigCardState extends State<_ModbusServerConfigCard> {
                                 controller: _unitIdController,
                                 decoration: const InputDecoration(
                                   labelText: 'Unit ID',
-                                  hintText: '1-247',
+                                  hintText: '0-255',
                                   prefixIcon: FaIcon(
                                       FontAwesomeIcons.addressCard,
                                       size: 16),
