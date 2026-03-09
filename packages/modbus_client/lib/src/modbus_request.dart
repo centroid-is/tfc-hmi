@@ -73,10 +73,25 @@ abstract class ModbusRequest {
 abstract class ModbusElementRequest extends ModbusRequest {
   ModbusElementRequest({super.unitId, super.responseTimeout, super.endianness});
 
+  /// Returns the expected byte count for a read response, or null to skip
+  /// validation (e.g. for group requests that override this method).
+  int? get expectedResponseByteCount => null;
+
   @override
   ModbusResponseCode internalSetFromPduResponse(Uint8List pdu) {
     // Assign response data
     if (functionCode.type == FunctionType.read) {
+      // BUG-02: Validate byte count field (pdu[1]) against expected size
+      final expectedBytes = expectedResponseByteCount;
+      if (expectedBytes != null && pdu.length >= 2) {
+        final actualByteCount = pdu[1];
+        if (actualByteCount != expectedBytes) {
+          ModbusAppLogger.warning(
+              "Response byte count mismatch",
+              "expected $expectedBytes, got $actualByteCount");
+          return ModbusResponseCode.requestRxFailed;
+        }
+      }
       internalSetElementData(pdu.sublist(2));
     } else if (functionCode.type == FunctionType.writeSingle) {
       internalSetElementData(pdu.sublist(3));
@@ -115,6 +130,12 @@ class ModbusReadRequest extends ModbusElementRequest {
 
   @override
   int get responsePduLength => 2 + element.byteCount;
+
+  /// BUG-02: Expected byte count for single-element reads.
+  /// For register reads (FC03/FC04), this is element.byteCount (e.g. 2 for Uint16).
+  /// For bit reads (FC01/FC02), byteCount is 1 (the element stores 1 byte).
+  @override
+  int get expectedResponseByteCount => element.byteCount;
 
   @override
   void internalSetElementData(Uint8List data) {

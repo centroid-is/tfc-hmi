@@ -121,7 +121,9 @@ class ModbusClientTcp extends ModbusClient {
       // Create the new response handler
       var tid = _getNextTransactionId();
       var response = _TcpResponse(request,
-          transactionId: tid, timeout: getResponseTimeout(request));
+          transactionId: tid,
+          timeout: getResponseTimeout(request),
+          unitId: getUnitId(request));
       _pendingResponses[tid] = response;
 
       // Reset this request in case it was already used before
@@ -361,6 +363,7 @@ class ModbusClientTcp extends ModbusClient {
 class _TcpResponse {
   final ModbusRequest request;
   final int transactionId;
+  final int unitId;
   final Duration timeout;
 
   final Completer _timeout = Completer();
@@ -368,7 +371,9 @@ class _TcpResponse {
   int? _resDataLen;
 
   _TcpResponse(this.request,
-      {required this.timeout, required this.transactionId}) {
+      {required this.timeout,
+      required this.transactionId,
+      required this.unitId}) {
     _timeout.future.timeout(timeout, onTimeout: () {
       request.setResponseCode(ModbusResponseCode.requestTimeout);
     });
@@ -410,6 +415,18 @@ class _TcpResponse {
         _timeout.complete();
         request.setResponseCode(ModbusResponseCode.requestRxFailed);
         return;
+      }
+      // BUG-03: Validate unit ID in MBAP response header (byte 6).
+      // Must match the unit ID sent in the request.
+      if (_data.length >= 7) {
+        final responseUnitId = _data[6];
+        if (responseUnitId != unitId) {
+          ModbusAppLogger.warning("Response unit ID mismatch",
+              "expected $unitId, got $responseUnitId");
+          _timeout.complete();
+          request.setResponseCode(ModbusResponseCode.requestRxFailed);
+          return;
+        }
       }
     }
     // Got all data

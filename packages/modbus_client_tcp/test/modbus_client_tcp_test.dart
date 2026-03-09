@@ -16,7 +16,7 @@ void main() {
     setUp(() async {
       // Create a server that responds to FC03 read holding register requests.
       // The onData callback parses the incoming MBAP request and replies with
-      // a valid FC03 response containing 3 registers (6 data bytes).
+      // a valid FC03 response containing 1 register (2 data bytes).
       server = ModbusTestServer(onData: (socket, data) {
         // Parse incoming MBAP request
         if (data.length < 7) return;
@@ -24,19 +24,15 @@ void main() {
         final transactionId = view.getUint16(0);
         final unitId = view.getUint8(6);
 
-        // Build FC03 response: function code + byte count + 6 data bytes
-        // 3 registers = 6 bytes of data
+        // Build FC03 response: function code + byte count + 2 data bytes
+        // 1 register = 2 bytes of data (matches Uint16 element byteCount)
         final pdu = Uint8List.fromList([
           0x03, // FC03 read holding registers
-          0x06, // byte count = 6
+          0x02, // byte count = 2
           0x00, 0x01, // register 0 = 1
-          0x00, 0x02, // register 1 = 2
-          0x00, 0x03, // register 2 = 3
         ]);
         final response = ModbusTestServer.buildResponse(
             transactionId, unitId, pdu);
-        // Total frame = 7 header + 8 PDU = 15 bytes
-        // MBAP length field = 9 (1 unitId + 8 PDU)
         server.sendToClient(socket, response);
       });
       final port = await server.start();
@@ -72,17 +68,17 @@ void main() {
         final unitId = view.getUint8(6);
 
         final pdu = Uint8List.fromList([
-          0x03, 0x06,
-          0x00, 0x01, 0x00, 0x02, 0x00, 0x03,
+          0x03, 0x02,
+          0x00, 0x01,
         ]);
         final response = ModbusTestServer.buildResponse(
             transactionId, unitId, pdu);
 
-        // Split at byte 9: first 9 bytes, then remaining 6 bytes
-        server.sendToClient(socket, response.sublist(0, 9));
+        // Split at byte 7: first 7 bytes (header), then remaining (PDU)
+        server.sendToClient(socket, response.sublist(0, 7));
         // Small delay to ensure separate TCP segments
         Future.delayed(const Duration(milliseconds: 50), () {
-          server.sendToClient(socket, response.sublist(9));
+          server.sendToClient(socket, response.sublist(7));
         });
       });
       final port = await server.start();
@@ -109,8 +105,8 @@ void main() {
         final unitId = view.getUint8(6);
 
         final pdu = Uint8List.fromList([
-          0x03, 0x06,
-          0x00, 0x01, 0x00, 0x02, 0x00, 0x03,
+          0x03, 0x02,
+          0x00, 0x01,
         ]);
         final response = ModbusTestServer.buildResponse(
             transactionId, unitId, pdu);
@@ -238,9 +234,10 @@ void main() {
           unitId: 1);
 
       try {
-        final register = ModbusUint16Register(
-            name: 'test', address: 0, type: ModbusElementType.holdingRegister);
-        final request = register.getReadRequest();
+        // Use a custom request (not element-based) to bypass byte count
+        // validation, since this test is about MBAP length limits, not
+        // element-level data validation.
+        final request = _Fc03RawRequest();
         final code = await client.send(request);
         expect(code, equals(ModbusResponseCode.requestSucceed));
       } finally {
@@ -893,6 +890,28 @@ void main() {
       }
     });
   });
+}
+
+/// Raw FC03 test request that skips byte count validation.
+/// Used for MBAP-level tests (e.g., max length field) where we don't want
+/// element-level byte count checks interfering.
+class _Fc03RawRequest extends ModbusRequest {
+  _Fc03RawRequest() : super();
+
+  @override
+  FunctionCode get functionCode => ModbusFunctionCode.readHoldingRegisters;
+
+  @override
+  Uint8List get protocolDataUnit =>
+      Uint8List.fromList([0x03, 0x00, 0x00, 0x00, 0x01]); // FC03, addr=0, qty=1
+
+  @override
+  int get responsePduLength => -1;
+
+  @override
+  ModbusResponseCode internalSetFromPduResponse(Uint8List pdu) {
+    return ModbusResponseCode.requestSucceed;
+  }
 }
 
 /// Simple FC90 test request for UMAS MBAP length validation tests.
