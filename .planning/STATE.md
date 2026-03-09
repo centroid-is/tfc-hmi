@@ -3,9 +3,9 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: completed
-stopped_at: Completed 15-03-PLAN.md (Phase 15 complete)
-last_updated: "2026-03-08T07:48:09.520Z"
-last_activity: 2026-03-08 -- 15-03 complete, UI deduplication done, 261 lines removed
+stopped_at: Completed 16-02-PLAN.md (wrapper/UI fixes)
+last_updated: "2026-03-09T10:57:21Z"
+last_activity: 2026-03-09 -- 16-02 complete, address validation + unit ID expansion + rich write errors
 progress:
   total_phases: 15
   completed_phases: 12
@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-03-06)
 ## Current Position
 
 Phase: 16 (Modbus Protocol Spec Research)
-Plan: 1 of 1 in current phase (16-01 COMPLETE)
-Status: Phase 16 plan 01 complete. Response byte count, unit ID validation, write quantity limits.
-Last activity: 2026-03-09 -- 16-01 complete, library protocol compliance hardened (BUG-02, BUG-03, BUG-05)
+Plan: 2 of 3 in current phase (16-02 COMPLETE)
+Status: Phase 16 plan 02 complete. Address validation, unit ID 0-255, rich write error messages.
+Last activity: 2026-03-09 -- 16-02 complete, address validation + unit ID expansion + rich write errors (BUG-01, VAL-03, FEAT-03)
 
 Progress: [██████████] 100%
 
@@ -69,6 +69,7 @@ Progress: [██████████] 100%
 | Phase 15 P01 | 11min | 2 tasks | 7 files |
 | Phase 15 P03 | 7min | 2 tasks | 2 files |
 | Phase 16 P01 | 6min | 2 tasks | 4 files |
+| Phase 16 P02 | 12min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -151,6 +152,9 @@ Recent decisions affecting current work:
 - [Phase 16-01]: expectedResponseByteCount as nullable getter -- null skips validation (for group requests)
 - [Phase 16-01]: Unit ID validation inside header parsing block, not separate check (single execution)
 - [Phase 16-01]: Write limit assertions (not exceptions) -- zero overhead in release, fail-fast in debug
+- [Phase 16-02]: Assert for ModbusRegisterSpec (code-constructed), clamp for ModbusNodeConfig (JSON-deserialized) -- crash-safe on bad data
+- [Phase 16-02]: Unit ID 0-255 for TCP without warnings -- all values are spec-valid in TCP context
+- [Phase 16-02]: _describeException covers standard Modbus codes 0x01-0x0B plus library transport codes
 
 ### Pending Todos
 
@@ -162,6 +166,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-09T10:51:01Z
-Stopped at: Completed 16-01-PLAN.md (library protocol compliance)
+Last session: 2026-03-09T10:57:21Z
+Stopped at: Completed 16-02-PLAN.md (wrapper/UI fixes)
 Resume file: None
