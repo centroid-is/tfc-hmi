@@ -20,6 +20,7 @@ import '../widgets/connection_status_chip.dart';
 import '../widgets/preferences.dart';
 import 'package:tfc_dart/core/state_man.dart';
 import 'package:tfc_dart/core/modbus_device_client.dart';
+import 'package:modbus_client/modbus_client.dart' show ModbusEndianness;
 import 'package:tfc_dart/core/database.dart';
 import '../providers/state_man.dart';
 import '../providers/preferences.dart';
@@ -1541,6 +1542,7 @@ class _ModbusServerConfigCardState extends State<_ModbusServerConfigCard> {
   ConnectionStatus? _connectionStatus;
   StreamSubscription<ConnectionStatus>? _statusSub;
   late bool _umasEnabled;
+  late ModbusEndianness _endianness;
 
   @override
   void initState() {
@@ -1553,6 +1555,7 @@ class _ModbusServerConfigCardState extends State<_ModbusServerConfigCard> {
     _aliasController =
         TextEditingController(text: widget.server.serverAlias ?? '');
     _umasEnabled = widget.server.umasEnabled;
+    _endianness = widget.server.endianness;
     _connectionStatus = widget.connectionStatus;
     _subscribeToStatus();
     _initPollGroupControllers();
@@ -1618,6 +1621,7 @@ class _ModbusServerConfigCardState extends State<_ModbusServerConfigCard> {
       unitId: (int.tryParse(_unitIdController.text) ?? 1).clamp(0, 255),
       pollGroups: pollGroups ?? widget.server.pollGroups,
       umasEnabled: _umasEnabled,
+      endianness: _endianness,
     )..serverAlias =
         _aliasController.text.isEmpty ? null : _aliasController.text;
   }
@@ -1867,6 +1871,61 @@ class _ModbusServerConfigCardState extends State<_ModbusServerConfigCard> {
                       ),
                     ),
                   ],
+                ),
+                const Divider(height: 24),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  child: DropdownButtonFormField<ModbusEndianness>(
+                    value: _endianness,
+                    decoration: InputDecoration(
+                      label: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Text('Byte Order'),
+                          const SizedBox(width: 4),
+                          Tooltip(
+                            message: 'Byte order for 32-bit values (float, int32, etc.).\n'
+                                'Most devices use ABCD (Big-Endian, Modbus standard).\n\n'
+                                'Common vendor defaults:\n'
+                                '\u2022 Schneider/Modicon: CDAB (Word Swap)\n'
+                                '\u2022 Siemens S7: ABCD (Big-Endian)\n'
+                                '\u2022 Allen-Bradley/Rockwell: CDAB or DCBA (varies by model)\n'
+                                '\u2022 ABB: ABCD (Big-Endian)\n'
+                                '\u2022 Omron: CDAB (Word Swap)\n'
+                                '\u2022 Danfoss: ABCD (Big-Endian)\n'
+                                '\u2022 Wago: ABCD (Big-Endian)\n\n'
+                                'If multi-register values read as garbage, try CDAB first.',
+                            child: Icon(Icons.info_outline, size: 16,
+                                color: Theme.of(context).colorScheme.onSurfaceVariant),
+                          ),
+                        ],
+                      ),
+                    ),
+                    items: const [
+                      DropdownMenuItem(
+                        value: ModbusEndianness.ABCD,
+                        child: Text('ABCD (Big-Endian)'),
+                      ),
+                      DropdownMenuItem(
+                        value: ModbusEndianness.CDAB,
+                        child: Text('CDAB (Word Swap)'),
+                      ),
+                      DropdownMenuItem(
+                        value: ModbusEndianness.BADC,
+                        child: Text('BADC (Byte Swap)'),
+                      ),
+                      DropdownMenuItem(
+                        value: ModbusEndianness.DCBA,
+                        child: Text('DCBA (Little-Endian)'),
+                      ),
+                    ],
+                    onChanged: (value) {
+                      if (value != null) {
+                        setState(() => _endianness = value);
+                        _updateServer();
+                      }
+                    },
+                  ),
                 ),
                 const Divider(height: 24),
                 CheckboxListTile(

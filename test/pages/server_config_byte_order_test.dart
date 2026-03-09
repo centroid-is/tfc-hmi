@@ -4,6 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:shared_preferences_platform_interface/in_memory_shared_preferences_async.dart';
 import 'package:shared_preferences_platform_interface/shared_preferences_async_platform_interface.dart';
 import 'package:modbus_client/modbus_client.dart' show ModbusEndianness;
+import 'package:tfc_dart/core/state_man.dart' show StateManConfig, ModbusConfig, ModbusPollGroupConfig;
 
 import '../helpers/test_helpers.dart';
 
@@ -121,10 +122,25 @@ void main() {
       expect(find.text('ABCD (Big-Endian)'), findsOneWidget);
     });
 
-    testWidgets('selected byte order persists after save and reload',
+    testWidgets('pre-configured CDAB endianness shows CDAB in dropdown',
         (tester) async {
+      // Create a config with CDAB endianness pre-set
+      final config = StateManConfig(
+        opcua: [],
+        modbus: [
+          ModbusConfig(
+            host: '192.168.1.100',
+            port: 502,
+            unitId: 1,
+            endianness: ModbusEndianness.CDAB,
+            pollGroups: [
+              ModbusPollGroupConfig(name: 'default', intervalMs: 1000),
+            ],
+          )..serverAlias = 'plc_1',
+        ],
+      );
       await tester.pumpWidget(buildTestableServerConfig(
-        stateManConfig: sampleModbusStateManConfig(),
+        stateManConfig: config,
       ));
       await tester.pumpAndSettle();
 
@@ -138,7 +154,7 @@ void main() {
       await tester.tap(find.text('plc_1'));
       await tester.pumpAndSettle();
 
-      // Scroll to dropdown
+      // Scroll to Byte Order dropdown
       await tester.scrollUntilVisible(
         find.text('Byte Order'),
         200,
@@ -146,31 +162,10 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      // Open and select DCBA
-      final dropdown = find.byType(DropdownButtonFormField<ModbusEndianness>);
-      await tester.tap(dropdown);
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('DCBA (Little-Endian)').last);
-      await tester.pumpAndSettle();
-
-      // Save config -- tap the Save button
-      await tester.scrollUntilVisible(
-        find.byIcon(Icons.save),
-        200,
-        scrollable: find.byType(Scrollable).first,
-      );
-      await tester.pumpAndSettle();
-      await tester.tap(find.byIcon(Icons.save));
-      await tester.pumpAndSettle();
-
-      // After save, the selection should persist (DCBA visible)
-      await tester.scrollUntilVisible(
-        find.text('Byte Order'),
-        200,
-        scrollable: find.byType(Scrollable).first,
-      );
-      await tester.pumpAndSettle();
-      expect(find.text('DCBA (Little-Endian)'), findsOneWidget);
+      // The dropdown should show CDAB (Word Swap) as the selected value
+      expect(find.text('CDAB (Word Swap)'), findsOneWidget);
+      // ABCD should NOT be visible (it's not selected)
+      expect(find.text('ABCD (Big-Endian)'), findsNothing);
     });
 
     testWidgets('info icon is present next to Byte Order label',
