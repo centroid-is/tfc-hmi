@@ -4,7 +4,7 @@ import 'dart:typed_data';
 import 'package:modbus_client/modbus_client.dart';
 import 'package:modbus_client_tcp/modbus_client_tcp.dart';
 import 'package:tfc_dart/core/modbus_client_wrapper.dart';
-import 'package:tfc_dart/core/state_man.dart' show ConnectionStatus;
+import 'package:tfc_dart/core/state_man.dart' show ConnectionStatus, ModbusConfig;
 import 'package:test/test.dart';
 
 /// Mock ModbusClientTcp for testing wrapper behavior without real TCP.
@@ -2797,6 +2797,42 @@ void main() {
           ),
         )),
       );
+    });
+  });
+
+  // ===========================================================================
+  // VAL-03: Unit ID range expansion to 0-255
+  // ===========================================================================
+
+  group('Unit ID range (VAL-03)', () {
+    test('ModbusConfig accepts unit ID 0 (broadcast)', () {
+      wrapper = createWrapper(); // for tearDown
+      final config = ModbusConfig(host: '127.0.0.1', port: 502, unitId: 0);
+      expect(config.unitId, 0);
+    });
+
+    test('ModbusConfig accepts unit ID 255 (direct TCP addressing)', () {
+      wrapper = createWrapper(); // for tearDown
+      final config = ModbusConfig(host: '127.0.0.1', port: 502, unitId: 255);
+      expect(config.unitId, 255);
+    });
+
+    test('ModbusConfig accepts unit ID 247 (was max before, still valid)', () {
+      wrapper = createWrapper(); // for tearDown
+      final config = ModbusConfig(host: '127.0.0.1', port: 502, unitId: 247);
+      expect(config.unitId, 247);
+    });
+
+    test('ModbusConfig clamps unit ID 256 to 255', () {
+      wrapper = createWrapper(); // for tearDown
+      final config = ModbusConfig(host: '127.0.0.1', port: 502, unitId: 256);
+      expect(config.unitId, 255);
+    });
+
+    test('ModbusConfig clamps unit ID -1 to 0', () {
+      wrapper = createWrapper(); // for tearDown
+      final config = ModbusConfig(host: '127.0.0.1', port: 502, unitId: -1);
+      expect(config.unitId, 0);
     });
   });
 }
