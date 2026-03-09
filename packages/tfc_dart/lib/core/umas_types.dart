@@ -68,14 +68,45 @@ class UmasDataTypeRef {
   final String name;
   final int byteSize;
 
+  /// Class identifier from the PLC4X mspec (0xDD03 record field).
+  /// 2 = UDT/struct, 4 = array, other values = elementary.
+  final int classIdentifier;
+
+  /// Data type code from the PLC4X mspec (0xDD03 record field).
+  final int dataType;
+
   const UmasDataTypeRef({
     required this.id,
     required this.name,
     required this.byteSize,
+    this.classIdentifier = 0,
+    this.dataType = 0,
   });
 
   @override
   String toString() => 'UmasDataTypeRef($id: $name, ${byteSize}B)';
+}
+
+/// PLC identification data from sub-function 0x02 response.
+class UmasPlcIdent {
+  /// Hardware identifier (uint32 from ident field).
+  final int hardwareId;
+
+  /// Memory block index used for 0x26 data dictionary requests.
+  final int index;
+
+  /// Number of memory banks reported by the PLC.
+  final int numberOfMemoryBanks;
+
+  const UmasPlcIdent({
+    required this.hardwareId,
+    required this.index,
+    required this.numberOfMemoryBanks,
+  });
+
+  @override
+  String toString() => 'UmasPlcIdent(hwId=0x${hardwareId.toRadixString(16)}, '
+      'index=$index, banks=$numberOfMemoryBanks)';
 }
 
 /// A node in the hierarchical variable tree built from data dictionary.
