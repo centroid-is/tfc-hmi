@@ -66,12 +66,84 @@ class UmasClient {
   int _pairingKey = 0x00;
   int? maxFrameSize;
 
+  /// Hardware ID from 0x02 (Read PLC Identification) response.
+  int? _hardwareId;
+
+  /// Memory block index from 0x02 response, used in 0x26 payloads.
+  int? _index;
+
   UmasClient({required this.sendFn});
+
+  /// Read PLC identification (sub-function 0x02).
+  ///
+  /// Extracts hardwareId and memory block index needed for 0x26 requests.
+  /// Must be called before readVariableNames/readDataTypes/browse.
+  Future<UmasPlcIdent> readPlcId() async {
+    final request = UmasRequest(
+      umasSubFunction: UmasSubFunction.readId.code,
+      pairingKey: _pairingKey,
+    );
+    final code = await sendFn(request);
+
+    if (code != ModbusResponseCode.requestSucceed) {
+      throw UmasException(
+          errorCode: code.code,
+          message: 'UMAS readPlcId failed: ${code.name}');
+    }
+
+    final pdu = request.responsePdu;
+    if (pdu == null || pdu.length < 4) {
+      throw UmasException(
+          errorCode: 0, message: 'Empty UMAS readPlcId response');
+    }
+
+    final status = pdu[2];
+    if (status == 0xFD) {
+      final errorCode = pdu.length > 3 ? pdu[3] : 0;
+      throw UmasException(
+          errorCode: errorCode,
+          message:
+              'UMAS readPlcId error: 0x${errorCode.toRadixString(16)}');
+    }
+
+    // Parse payload after the 4-byte header (FC + pairing + status + subFunc)
+    final payload = pdu.sublist(4);
+    if (payload.length < 7) {
+      throw UmasException(
+          errorCode: 0,
+          message: 'UMAS readPlcId response too short: ${payload.length}');
+    }
+
+    final pd = ByteData.sublistView(payload);
+    // range(2) + ident/hardwareId(4 LE) + numberOfMemoryBanks(1) + memBlockEntries
+    // Skip range (2 bytes), read hardwareId (4 bytes LE)
+    final hardwareId = pd.getUint32(2, Endian.little);
+
+    // numberOfMemoryBanks at offset 6
+    final numberOfMemoryBanks = pd.getUint8(6);
+
+    // First memory block entry starts at offset 7:
+    //   address(2 LE) + blockType(1) + unknown(2) + memoryLength(4) = 9 bytes
+    int index = 0;
+    if (numberOfMemoryBanks > 0 && payload.length >= 9) {
+      index = pd.getUint16(7, Endian.little);
+    }
+
+    _hardwareId = hardwareId;
+    _index = index;
+
+    return UmasPlcIdent(
+      hardwareId: hardwareId,
+      index: index,
+      numberOfMemoryBanks: numberOfMemoryBanks,
+    );
+  }
 
   /// Initialize UMAS communication (sub-function 0x01).
   /// Returns max frame size and optionally firmware version.
   Future<UmasInitResult> init() async {
-    final request = UmasRequest(umasSubFunction: UmasSubFunction.init.code, pairingKey: _pairingKey);
+    final request = UmasRequest(
+        umasSubFunction: UmasSubFunction.init.code, pairingKey: _pairingKey);
     final code = await sendFn(request);
 
     if (code != ModbusResponseCode.requestSucceed) {
@@ -91,7 +163,9 @@ class UmasClient {
     if (status == 0xFD) {
       final errorCode = pdu.length > 3 ? pdu[3] : 0;
       throw UmasException(
-          errorCode: errorCode, message: 'UMAS init error: 0x${errorCode.toRadixString(16)}');
+          errorCode: errorCode,
+          message:
+              'UMAS init error: 0x${errorCode.toRadixString(16)}');
     }
 
     _pairingKey = responsePairingKey;
@@ -105,66 +179,119 @@ class UmasClient {
     return UmasInitResult(maxFrameSize: maxFrameSize ?? 240);
   }
 
+  /// Build the full 13-byte payload for 0x26 (ReadDataDictionary) requests.
+  ///
+  /// Format per PLC4X mspec:
+  /// recordType(2 LE) + index(1) + hardwareId(4 LE) + blockNo(2 LE) +
+  /// offset(2 LE) + blank(2 LE)
+  Uint8List _build0x26Payload({
+    required int recordType,
+    required int blockNo,
+    required int offset,
+  }) {
+    final bd = ByteData(13);
+    bd.setUint16(0, recordType, Endian.little);
+    bd.setUint8(2, _index ?? 0);
+    bd.setUint32(3, _hardwareId ?? 0, Endian.little);
+    bd.setUint16(7, blockNo, Endian.little);
+    bd.setUint16(9, offset, Endian.little);
+    bd.setUint16(11, 0x0000, Endian.little); // blank
+    return bd.buffer.asUint8List();
+  }
+
   /// Read variable names from the data dictionary (0x26 with record type 0xDD02).
+  ///
+  /// Paginates: loops until nextAddress == 0 after first response.
   Future<List<UmasVariable>> readVariableNames() async {
-    // Payload: record type 0xDD02 sent as [0x02, 0xDD] (little-endian)
-    final request = UmasRequest(
-      umasSubFunction: UmasSubFunction.readDataDictionary.code,
-      pairingKey: _pairingKey,
-      payload: Uint8List.fromList([0x02, 0xDD]),
-    );
-    final code = await sendFn(request);
+    final allVariables = <UmasVariable>[];
+    int offset = 0x0000;
+    bool firstMessage = true;
 
-    if (code != ModbusResponseCode.requestSucceed) {
-      throw UmasException(
-          errorCode: code.code,
-          message: 'Data Dictionary read failed: ${code.name}');
+    while (offset != 0x0000 || firstMessage) {
+      firstMessage = false;
+
+      final payload = _build0x26Payload(
+        recordType: 0xDD02,
+        blockNo: 0xFFFF,
+        offset: offset,
+      );
+      final request = UmasRequest(
+        umasSubFunction: UmasSubFunction.readDataDictionary.code,
+        pairingKey: _pairingKey,
+        payload: payload,
+      );
+      final code = await sendFn(request);
+
+      if (code != ModbusResponseCode.requestSucceed) {
+        throw UmasException(
+            errorCode: code.code,
+            message: 'Data Dictionary read failed: ${code.name}');
+      }
+
+      final pdu = request.responsePdu;
+      if (pdu == null || pdu.length < 4) {
+        throw UmasException(
+            errorCode: 0, message: 'Empty data dictionary response');
+      }
+
+      final status = pdu[2];
+      if (status == 0xFD) {
+        final errorCode = pdu.length > 3 ? pdu[3] : 0;
+        throw UmasException(
+            errorCode: errorCode,
+            message: 'Data Dictionary not enabled on PLC (error: '
+                '0x${errorCode.toRadixString(16)})');
+      }
+
+      // Parse variable records from payload after 4-byte UMAS header
+      final (nextAddress, variables) = _parseVariableRecords(pdu.sublist(4));
+      allVariables.addAll(variables);
+      offset = nextAddress;
     }
 
-    final pdu = request.responsePdu;
-    if (pdu == null || pdu.length < 4) {
-      throw UmasException(
-          errorCode: 0, message: 'Empty data dictionary response');
-    }
-
-    final status = pdu[2];
-    if (status == 0xFD) {
-      final errorCode = pdu.length > 3 ? pdu[3] : 0;
-      throw UmasException(
-          errorCode: errorCode,
-          message: 'Data Dictionary not enabled on PLC (error: '
-              '0x${errorCode.toRadixString(16)})');
-    }
-
-    // Parse variable records from payload after 4-byte header
-    return _parseVariableRecords(pdu.sublist(4));
+    return allVariables;
   }
 
   /// Parse variable name records from the 0xDD02 response payload.
-  /// Each record: name_length(2 LE) + name(UTF-8) + block_no(2 LE) +
-  ///              offset(2 LE) + data_type_id(2 LE)
-  List<UmasVariable> _parseVariableRecords(Uint8List data) {
-    final variables = <UmasVariable>[];
-    int pos = 0;
+  ///
+  /// Header: range(1) + nextAddress(2 LE) + unknown1(2 LE) + noOfRecords(2 LE)
+  /// Each record: dataType(2 LE) + block(2 LE) + offset(2 LE) + unknown4(2 LE) +
+  ///              stringLength(2 LE) + name (null-terminated)
+  (int nextAddress, List<UmasVariable>) _parseVariableRecords(Uint8List data) {
+    if (data.length < 7) return (0, []);
 
-    while (pos + 2 <= data.length) {
+    final hd = ByteData.sublistView(data);
+    // Header: range(1) + nextAddress(2 LE) + unknown1(2 LE) + noOfRecords(2 LE)
+    // Skip range byte
+    final nextAddress = hd.getUint16(1, Endian.little);
+    // Skip unknown1 (2 bytes) at offset 3
+    final noOfRecords = hd.getUint16(5, Endian.little);
+
+    final variables = <UmasVariable>[];
+    int pos = 7; // Start of records after 7-byte header
+
+    for (int i = 0; i < noOfRecords && pos + 10 <= data.length; i++) {
       if (variables.length >= _maxVariables) break;
 
       final view = ByteData.sublistView(data, pos);
-      final nameLen = view.getUint16(0, Endian.little);
-      if (nameLen > _maxNameLength) break;
-      pos += 2;
+      final dataTypeId = view.getUint16(0, Endian.little);
+      final blockNo = view.getUint16(2, Endian.little);
+      final offset = view.getUint16(4, Endian.little);
+      // skip unknown4 (2 bytes) at relative offset 6
+      final stringLength = view.getUint16(8, Endian.little);
+      pos += 10;
 
-      if (pos + nameLen + 6 > data.length) break;
+      if (stringLength > _maxNameLength || pos + stringLength > data.length) {
+        break;
+      }
 
-      final name = utf8.decode(data.sublist(pos, pos + nameLen));
-      pos += nameLen;
-
-      final fieldView = ByteData.sublistView(data, pos);
-      final blockNo = fieldView.getUint16(0, Endian.little);
-      final offset = fieldView.getUint16(2, Endian.little);
-      final dataTypeId = fieldView.getUint16(4, Endian.little);
-      pos += 6;
+      // Read name bytes and strip trailing null
+      var nameBytes = data.sublist(pos, pos + stringLength);
+      while (nameBytes.isNotEmpty && nameBytes.last == 0x00) {
+        nameBytes = nameBytes.sublist(0, nameBytes.length - 1);
+      }
+      final name = utf8.decode(nameBytes);
+      pos += stringLength;
 
       variables.add(UmasVariable(
         name: name,
@@ -174,71 +301,116 @@ class UmasClient {
       ));
     }
 
-    return variables;
+    return (nextAddress, variables);
   }
 
   /// Read data type references from the data dictionary (0x26 with record type 0xDD03).
+  ///
+  /// Paginates: loops until nextAddress == 0 after first response.
   Future<List<UmasDataTypeRef>> readDataTypes() async {
-    final request = UmasRequest(
-      umasSubFunction: UmasSubFunction.readDataDictionary.code,
-      pairingKey: _pairingKey,
-      payload: Uint8List.fromList([0x03, 0xDD]),
-    );
-    final code = await sendFn(request);
+    final allTypes = <UmasDataTypeRef>[];
+    int blockNo = 0x0000;
+    bool firstMessage = true;
 
-    if (code != ModbusResponseCode.requestSucceed) {
-      throw UmasException(
-          errorCode: code.code,
-          message: 'Data Dictionary type read failed: ${code.name}');
+    while (blockNo != 0x0000 || firstMessage) {
+      firstMessage = false;
+
+      final payload = _build0x26Payload(
+        recordType: 0xDD03,
+        blockNo: blockNo,
+        offset: 0x0000,
+      );
+      final request = UmasRequest(
+        umasSubFunction: UmasSubFunction.readDataDictionary.code,
+        pairingKey: _pairingKey,
+        payload: payload,
+      );
+      final code = await sendFn(request);
+
+      if (code != ModbusResponseCode.requestSucceed) {
+        throw UmasException(
+            errorCode: code.code,
+            message: 'Data Dictionary type read failed: ${code.name}');
+      }
+
+      final pdu = request.responsePdu;
+      if (pdu == null || pdu.length < 4) {
+        throw UmasException(
+            errorCode: 0, message: 'Empty data type response');
+      }
+
+      final status = pdu[2];
+      if (status == 0xFD) {
+        final errorCode = pdu.length > 3 ? pdu[3] : 0;
+        throw UmasException(
+            errorCode: errorCode,
+            message: 'Data Dictionary not enabled on PLC (error: '
+                '0x${errorCode.toRadixString(16)})');
+      }
+
+      final (nextAddress, types) = _parseDataTypeRecords(pdu.sublist(4));
+      allTypes.addAll(types);
+      blockNo = nextAddress;
     }
 
-    final pdu = request.responsePdu;
-    if (pdu == null || pdu.length < 4) {
-      throw UmasException(
-          errorCode: 0, message: 'Empty data type response');
-    }
-
-    final status = pdu[2];
-    if (status == 0xFD) {
-      final errorCode = pdu.length > 3 ? pdu[3] : 0;
-      throw UmasException(
-          errorCode: errorCode,
-          message: 'Data Dictionary not enabled on PLC (error: '
-              '0x${errorCode.toRadixString(16)})');
-    }
-
-    return _parseDataTypeRecords(pdu.sublist(4));
+    return allTypes;
   }
 
   /// Parse data type records from the 0xDD03 response payload.
-  /// Each record: type_id(2 LE) + name_length(2 LE) + name(UTF-8) +
-  ///              byte_size(2 LE)
-  List<UmasDataTypeRef> _parseDataTypeRecords(Uint8List data) {
-    final types = <UmasDataTypeRef>[];
-    int pos = 0;
+  ///
+  /// Header: range(1) + nextAddress(2 LE) + unknown1(1) + noOfRecords(2 LE)
+  /// Each record: dataSize(2 LE) + unknown1(2 LE) + classIdentifier(1) +
+  ///              dataType(1) + stringLength(1) + name (null-terminated)
+  (int nextAddress, List<UmasDataTypeRef>) _parseDataTypeRecords(
+      Uint8List data) {
+    if (data.length < 6) return (0, []);
 
-    while (pos + 4 <= data.length) {
+    final hd = ByteData.sublistView(data);
+    // Header: range(1) + nextAddress(2 LE) + unknown1(1) + noOfRecords(2 LE)
+    // Skip range byte
+    final nextAddress = hd.getUint16(1, Endian.little);
+    // Skip unknown1 (1 byte) at offset 3
+    final noOfRecords = hd.getUint16(4, Endian.little);
+
+    final types = <UmasDataTypeRef>[];
+    int pos = 6; // Start of records after 6-byte header
+
+    for (int i = 0; i < noOfRecords && pos + 7 <= data.length; i++) {
       if (types.length >= _maxVariables) break;
 
       final view = ByteData.sublistView(data, pos);
-      final typeId = view.getUint16(0, Endian.little);
-      final nameLen = view.getUint16(2, Endian.little);
-      if (nameLen > _maxNameLength) break;
-      pos += 4;
+      final dataSize = view.getUint16(0, Endian.little);
+      // skip unknown1 (2 bytes) at relative offset 2
+      final classIdentifier = view.getUint8(4);
+      final dataType = view.getUint8(5);
+      final stringLength = view.getUint8(6);
+      pos += 7;
 
-      if (pos + nameLen + 2 > data.length) break;
+      if (stringLength > _maxNameLength || pos + stringLength > data.length) {
+        break;
+      }
 
-      final name = utf8.decode(data.sublist(pos, pos + nameLen));
-      pos += nameLen;
+      // Read name bytes and strip trailing null
+      var nameBytes = data.sublist(pos, pos + stringLength);
+      while (nameBytes.isNotEmpty && nameBytes.last == 0x00) {
+        nameBytes = nameBytes.sublist(0, nameBytes.length - 1);
+      }
+      final name = utf8.decode(nameBytes);
+      pos += stringLength;
 
-      final sizeView = ByteData.sublistView(data, pos);
-      final byteSize = sizeView.getUint16(0, Endian.little);
-      pos += 2;
-
-      types.add(UmasDataTypeRef(id: typeId, name: name, byteSize: byteSize));
+      // Use a running ID based on position (PLC4X assigns IDs sequentially
+      // starting from an offset; for now use 100 + index as a simple scheme).
+      // The actual ID comes from the data dictionary ordering.
+      types.add(UmasDataTypeRef(
+        id: 100 + i,
+        name: name,
+        byteSize: dataSize,
+        classIdentifier: classIdentifier,
+        dataType: dataType,
+      ));
     }
 
-    return types;
+    return (nextAddress, types);
   }
 
   /// Build a hierarchical variable tree from a flat list of variables.
@@ -256,12 +428,13 @@ class UmasClient {
     return tree.build();
   }
 
-  /// Convenience method: init -> readVariableNames -> readDataTypes -> buildVariableTree.
+  /// Convenience method: readPlcId -> init -> readDataTypes -> readVariableNames -> buildVariableTree.
   /// This is the primary entry point for the browse dialog.
   Future<List<UmasVariableTreeNode>> browse() async {
+    await readPlcId();
     await init();
-    final variables = await readVariableNames();
     final dataTypes = await readDataTypes();
+    final variables = await readVariableNames();
     return buildVariableTree(variables, dataTypes);
   }
 }
