@@ -15,7 +15,7 @@ import 'package:jbtm/src/m2400_fields.dart' show M2400Field;
 import 'package:jbtm/src/m2400_client_wrapper.dart' show M2400ClientWrapper;
 import 'package:jbtm/src/msocket.dart' as jbtm show ConnectionStatus;
 
-import 'package:modbus_client/modbus_client.dart' show ModbusElementType;
+import 'package:modbus_client/modbus_client.dart' show ModbusElementType, ModbusEndianness;
 
 import 'collector.dart';
 import 'modbus_client_wrapper.dart' show ModbusDataType;
@@ -265,6 +265,8 @@ class ModbusConfig {
   List<ModbusPollGroupConfig> pollGroups;
   @JsonKey(name: 'umas_enabled', defaultValue: false)
   bool umasEnabled;
+  @JsonKey(defaultValue: ModbusEndianness.ABCD)
+  ModbusEndianness endianness;
 
   ModbusConfig({
     this.host = '',
@@ -273,6 +275,7 @@ class ModbusConfig {
     this.serverAlias,
     this.pollGroups = const [],
     this.umasEnabled = false,
+    this.endianness = ModbusEndianness.ABCD,
   }) : unitId = unitId.clamp(0, 255);
 
   factory ModbusConfig.fromJson(Map<String, dynamic> json) =>

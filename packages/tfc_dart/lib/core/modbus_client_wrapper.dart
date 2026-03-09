@@ -35,6 +35,7 @@ class ModbusRegisterSpec {
   final int address;
   final ModbusDataType dataType;
   final String pollGroup;
+  final ModbusEndianness endianness;
 
   const ModbusRegisterSpec({
     required this.key,
@@ -42,6 +43,7 @@ class ModbusRegisterSpec {
     required this.address,
     this.dataType = ModbusDataType.uint16,
     this.pollGroup = 'default',
+    this.endianness = ModbusEndianness.ABCD,
   }) : assert(address >= 0 && address <= 65535,
             'Modbus address must be 0-65535, got: $address');
 }
@@ -712,23 +714,25 @@ class ModbusClientWrapper {
     }
 
     // Register types -- select by dataType
+    // Multi-register types (32-bit, 64-bit) pass endianness for byte/word
+    // ordering. Single-register types (16-bit) and bit types are unaffected.
     switch (spec.dataType) {
       case ModbusDataType.int16:
         return ModbusInt16Register(name: name, address: address, type: type);
       case ModbusDataType.uint16:
         return ModbusUint16Register(name: name, address: address, type: type);
       case ModbusDataType.int32:
-        return ModbusInt32Register(name: name, address: address, type: type);
+        return ModbusInt32Register(name: name, address: address, type: type, endianness: spec.endianness);
       case ModbusDataType.uint32:
-        return ModbusUint32Register(name: name, address: address, type: type);
+        return ModbusUint32Register(name: name, address: address, type: type, endianness: spec.endianness);
       case ModbusDataType.float32:
-        return ModbusFloatRegister(name: name, address: address, type: type);
+        return ModbusFloatRegister(name: name, address: address, type: type, endianness: spec.endianness);
       case ModbusDataType.int64:
-        return ModbusInt64Register(name: name, address: address, type: type);
+        return ModbusInt64Register(name: name, address: address, type: type, endianness: spec.endianness);
       case ModbusDataType.uint64:
-        return ModbusUint64Register(name: name, address: address, type: type);
+        return ModbusUint64Register(name: name, address: address, type: type, endianness: spec.endianness);
       case ModbusDataType.float64:
-        return ModbusDoubleRegister(name: name, address: address, type: type);
+        return ModbusDoubleRegister(name: name, address: address, type: type, endianness: spec.endianness);
       case ModbusDataType.bit:
         // bit for register type defaults to uint16
         return ModbusUint16Register(name: name, address: address, type: type);

@@ -1,4 +1,5 @@
 import 'package:open62541/open62541.dart' show DynamicValue, NodeId;
+import 'package:modbus_client/modbus_client.dart' show ModbusEndianness;
 import 'package:tfc_dart/core/modbus_client_wrapper.dart';
 import 'package:tfc_dart/core/state_man.dart'
     show ConnectionStatus, DeviceClient, KeyMappings, ModbusConfig, ModbusNodeConfig;
@@ -110,10 +111,15 @@ class ModbusDeviceClientAdapter implements DeviceClient {
 ///
 /// Entries without a `modbusNode`, or whose `modbusNode.serverAlias` does not
 /// match [serverAlias], are skipped.
+///
+/// The [endianness] parameter is the per-device byte order from
+/// [ModbusConfig.endianness]. All specs for a given device share the same
+/// endianness since byte order is a device-level property.
 Map<String, ModbusRegisterSpec> buildSpecsFromKeyMappings(
   KeyMappings keyMappings,
-  String? serverAlias,
-) {
+  String? serverAlias, {
+  ModbusEndianness endianness = ModbusEndianness.ABCD,
+}) {
   final specs = <String, ModbusRegisterSpec>{};
   for (final entry in keyMappings.nodes.entries) {
     final modbusNode = entry.value.modbusNode;
@@ -125,6 +131,7 @@ Map<String, ModbusRegisterSpec> buildSpecsFromKeyMappings(
       address: modbusNode.address,
       dataType: modbusNode.dataType,
       pollGroup: modbusNode.pollGroup,
+      endianness: endianness,
     );
   }
   return specs;
@@ -143,7 +150,10 @@ List<DeviceClient> buildModbusDeviceClients(
   KeyMappings keyMappings,
 ) {
   return modbusConfigs.map((config) {
-    final specs = buildSpecsFromKeyMappings(keyMappings, config.serverAlias);
+    final specs = buildSpecsFromKeyMappings(
+      keyMappings, config.serverAlias,
+      endianness: config.endianness,
+    );
     final wrapper = ModbusClientWrapper(
       config.host,
       config.port,
