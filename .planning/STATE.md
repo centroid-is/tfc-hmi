@@ -80,6 +80,7 @@ Progress: [██████████] 100%
 - Phase 14 added: UMAS protocol support - Schneider browse via FC90
 - Phase 15 added: Code review fixes — security, performance, correctness, and duplication
 - Phase 16 added: Modbus protocol spec research — find bugs and missing features
+- Phase 17 added: fix and verify umas against real schneider plc
 
 ### Decisions
 

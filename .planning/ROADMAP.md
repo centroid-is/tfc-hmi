@@ -287,3 +287,13 @@ Plans:
 - [x] 16-01-PLAN.md -- Library-level response validation and write quantity limits (BUG-02, BUG-03, BUG-05)
 - [x] 16-02-PLAN.md -- Wrapper/UI address validation, unit ID range, exception detail surfacing (BUG-01, VAL-03, FEAT-03)
 - [x] 16-03-PLAN.md -- Byte order configuration per Modbus server (FEAT-01)
+
+### Phase 17: fix and verify umas against real schneider plc
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 16
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 17 to break down)
