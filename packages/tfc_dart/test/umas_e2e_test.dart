@@ -1,8 +1,8 @@
-/// End-to-end integration test: UmasClient + ModbusClientTcp → stub server.
+/// End-to-end integration test: UmasClient + ModbusClientTcp -> stub server.
 ///
 /// Starts the Python stub UMAS server, connects via real ModbusClientTcp,
-/// and exercises the full browse() flow including init, readVariableNames,
-/// readDataTypes, and tree building.
+/// and exercises the full browse() flow including readPlcId, init,
+/// readDataTypes, readVariableNames, and tree building.
 ///
 /// Run: dart test test/umas_e2e_test.dart
 @TestOn('vm')
@@ -13,7 +13,6 @@ import 'dart:io';
 
 import 'package:modbus_client_tcp/modbus_client_tcp.dart';
 import 'package:tfc_dart/core/umas_client.dart';
-import 'package:tfc_dart/core/umas_types.dart';
 import 'package:test/test.dart';
 
 const _stubPort = 15020; // High port to avoid conflicts
@@ -105,6 +104,7 @@ void main() {
     expect(tcp.isConnected, isTrue);
 
     final umas = UmasClient(sendFn: tcp.send);
+    // browse() now does: readPlcId -> init -> readDataTypes -> readVariableNames -> tree
     final tree = await umas.browse();
 
     // Stub serves 10 variables under "Application" root
@@ -123,12 +123,13 @@ void main() {
     expect(gvl.children, hasLength(5));
     expect(gvl.isFolder, isTrue);
 
-    // Check a leaf variable
+    // Check a leaf variable -- verify data survived the format change
     final temp = gvl.children.firstWhere((c) => c.name == 'temperature');
     expect(temp.isFolder, isFalse);
     expect(temp.variable, isNotNull);
     expect(temp.variable!.blockNo, 1);
     expect(temp.variable!.offset, 0);
+    expect(temp.variable!.dataTypeId, 5); // REAL
     expect(temp.dataType?.name, 'REAL');
     expect(temp.dataType?.byteSize, 4);
 
@@ -137,6 +138,7 @@ void main() {
     expect(motor.children, hasLength(3));
     final speed = motor.children.firstWhere((c) => c.name == 'speed');
     expect(speed.variable!.blockNo, 2);
+    expect(speed.variable!.dataTypeId, 5); // REAL
     expect(speed.dataType?.name, 'REAL');
 
     // Counters folder
@@ -147,7 +149,8 @@ void main() {
     expect(runtime.dataType?.name, 'TIME');
   });
 
-  test('init() returns maxFrameSize', () async {
+  test('init() returns maxFrameSize (standalone, no readPlcId needed)',
+      () async {
     await tcp.connect();
     final umas = UmasClient(sendFn: tcp.send);
     final result = await umas.init();
@@ -156,9 +159,12 @@ void main() {
     expect(result.maxFrameSize, 1024);
   });
 
-  test('readVariableNames returns all 10 variables', () async {
+  test('readVariableNames returns all 10 variables (requires readPlcId + init)',
+      () async {
     await tcp.connect();
     final umas = UmasClient(sendFn: tcp.send);
+    // readPlcId sets _hardwareId and _index needed by 0x26 payload
+    await umas.readPlcId();
     await umas.init();
 
     final vars = await umas.readVariableNames();
@@ -171,19 +177,31 @@ void main() {
     expect(vars[0].dataTypeId, 5); // REAL
   });
 
-  test('readDataTypes returns custom types', () async {
+  test('readDataTypes returns custom types (requires readPlcId + init)',
+      () async {
     await tcp.connect();
     final umas = UmasClient(sendFn: tcp.send);
+    await umas.readPlcId();
     await umas.init();
 
     final types = await umas.readDataTypes();
     expect(types, hasLength(2));
-    expect(types[0].id, 100);
     expect(types[0].name, 'MY_STRUCT');
     expect(types[0].byteSize, 16);
-    expect(types[1].id, 101);
+    expect(types[0].classIdentifier, 2);
     expect(types[1].name, 'ALARM_TYPE');
     expect(types[1].byteSize, 8);
+    expect(types[1].dataType, 5);
+  });
+
+  test('readPlcId returns valid hardware identification', () async {
+    await tcp.connect();
+    final umas = UmasClient(sendFn: tcp.send);
+    final ident = await umas.readPlcId();
+
+    expect(ident.hardwareId, 0x12345678);
+    expect(ident.index, 0);
+    expect(ident.numberOfMemoryBanks, 1);
   });
 
   test('variable tree paths are correct for BrowseDataSource IDs', () async {
