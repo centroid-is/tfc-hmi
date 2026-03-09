@@ -288,12 +288,22 @@ Plans:
 - [x] 16-02-PLAN.md -- Wrapper/UI address validation, unit ID range, exception detail surfacing (BUG-01, VAL-03, FEAT-03)
 - [x] 16-03-PLAN.md -- Byte order configuration per Modbus server (FEAT-01)
 
-### Phase 17: fix and verify umas against real schneider plc
+### Phase 17: Fix and Verify UMAS Against Real Schneider PLC
 
-**Goal:** [To be planned]
-**Requirements**: TBD
+**Goal:** All six UMAS protocol bugs identified by comparing against the PLC4X mspec are fixed (incomplete 0x26 payload, missing 0x02 init step, no pagination, wrong response header parsing, wrong variable record format, wrong data type record format), and the corrected implementation is verified against a real Schneider PLC at 10.50.10.123
 **Depends on:** Phase 16
-**Plans:** 0 plans
+**Requirements**: FIX-01, FIX-02, FIX-03, FIX-04, FIX-05, FIX-06, VER-01, VER-02
+**Success Criteria** (what must be TRUE):
+  1. 0x26 request sends full 13-byte payload (recordType + index + hardwareId + blockNo + offset + blank)
+  2. readPlcId() calls 0x02 and extracts hardwareId and memory block index
+  3. Paginated 0x26 reads loop until nextAddress == 0
+  4. Response header (range/nextAddress/noOfRecords) parsed before records
+  5. Variable records use corrected field order (dataType first, name last)
+  6. Data type records use corrected field order with classIdentifier
+  7. UmasClient.init() succeeds against real Schneider PLC at 10.50.10.123
+  8. UmasClient.browse() returns non-empty variable tree from real PLC
+**Plans:** 2 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 17 to break down)
+- [ ] 17-01-PLAN.md -- Fix UMAS protocol bugs: readPlcId, 13-byte 0x26 payload, pagination, corrected record formats (TDD)
+- [ ] 17-02-PLAN.md -- Live hardware integration tests against real Schneider PLC + human verification
