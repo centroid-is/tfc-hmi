@@ -38,21 +38,20 @@ created: 2026-03-09
 
 | Task ID | Plan | Wave | Requirement | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|-----------|-------------------|-------------|--------|
-| 16-01-01 | 01 | 1 | BUG-01 | unit | `cd packages/tfc_dart && dart test test/core/modbus_client_wrapper_test.dart --reporter compact` | Existing file, new tests needed | ⬜ pending |
-| 16-01-02 | 01 | 1 | BUG-05 | unit | `cd packages/tfc_dart && dart test test/core/modbus_client_wrapper_test.dart --reporter compact` | Existing file, new tests needed | ⬜ pending |
-| 16-01-03 | 01 | 1 | VAL-03 | unit | `cd packages/tfc_dart && dart test test/core/modbus_client_wrapper_test.dart --reporter compact` | Existing file, new tests needed | ⬜ pending |
-| 16-01-04 | 01 | 1 | BUG-02 | unit | `cd packages/tfc_dart && dart test test/core/modbus_client_wrapper_test.dart --reporter compact` | Existing file, new tests needed | ⬜ pending |
-| 16-01-05 | 01 | 1 | BUG-03 | unit | `cd packages/tfc_dart && dart test test/core/modbus_client_wrapper_test.dart --reporter compact` | Existing file, new tests needed | ⬜ pending |
-| 16-02-01 | 02 | 2 | FEAT-01 | unit | `cd packages/tfc_dart && dart test test/core/modbus_client_wrapper_test.dart --reporter compact` | Existing file, new tests needed | ⬜ pending |
-| 16-02-02 | 02 | 2 | FEAT-03 | unit | `cd packages/tfc_dart && dart test test/core/modbus_client_wrapper_test.dart --reporter compact` | Existing file, new tests needed | ⬜ pending |
+| 16-01-01 | 01 | 1 | BUG-02, BUG-03 | unit | `cd packages/modbus_client_tcp && dart test --reporter compact` | Existing file, new tests needed | pending |
+| 16-01-02 | 01 | 1 | BUG-05 | unit | `cd packages/modbus_client && dart test --reporter compact` | Existing file, new tests needed | pending |
+| 16-02-01 | 02 | 1 | BUG-01, FEAT-03 | unit | `cd packages/tfc_dart && dart test test/core/modbus_client_wrapper_test.dart --reporter compact` | Existing file, new tests needed | pending |
+| 16-02-02 | 02 | 1 | VAL-03 | unit | `cd packages/tfc_dart && dart test test/core/modbus_client_wrapper_test.dart --reporter compact` | Existing file, new tests needed | pending |
+| 16-03-01 | 03 | 2 | FEAT-01 | unit | `cd packages/tfc_dart && dart test test/core/modbus_client_wrapper_test.dart --reporter compact` | Existing file, new tests needed | pending |
+| 16-03-02 | 03 | 2 | FEAT-01 | widget | `cd centroid-hmi && flutter test test/server_config_byte_order_test.dart --reporter compact` | New file | pending |
 
-*Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
+*Status: pending / green / red / flaky*
 
 ---
 
 ## Wave 0 Requirements
 
-*Existing infrastructure covers all phase requirements. Test files exist, new test cases need to be added within them.*
+*Existing infrastructure covers all phase requirements. Test files exist, new test cases need to be added within them. One new widget test file (centroid-hmi/test/server_config_byte_order_test.dart) will be created in Plan 03 Task 2.*
 
 ---
 
