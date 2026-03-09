@@ -3,9 +3,9 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: in-progress
-stopped_at: Completed 17-01-PLAN.md (fix UMAS wire format bugs)
-last_updated: "2026-03-09T14:23:04Z"
-last_activity: 2026-03-09 -- 17-01 complete, corrected all 6 UMAS wire format bugs (readPlcId, 13-byte payload, pagination, mspec record parsing)
+stopped_at: Completed 17-02-PLAN.md (live UMAS hardware testing)
+last_updated: "2026-03-09T14:39:44Z"
+last_activity: 2026-03-09 -- 17-02 complete, live UMAS tests against real PLC, fixed response PDU byte order, added unitId threading
 progress:
   total_phases: 17
   completed_phases: 13
@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-03-06)
 ## Current Position
 
 Phase: 17 (Fix and Verify UMAS Against Real Schneider PLC)
-Plan: 1 of 1 in current phase (17-01 COMPLETE)
-Status: Phase 17 Plan 01 complete. All 6 UMAS wire format bugs fixed: readPlcId, 13-byte 0x26 payload, pagination, mspec record parsing.
-Last activity: 2026-03-09 -- 17-01 complete, corrected all 6 UMAS wire format bugs
+Plan: 2 of 2 in current phase (17-02 COMPLETE)
+Status: Phase 17 complete. All UMAS wire format bugs fixed (Plan 01) and verified against real Schneider PLC (Plan 02). PLC returns 0x83 for all UMAS subfunctions -- needs Data Dictionary enabled.
+Last activity: 2026-03-09 -- 17-02 complete, live UMAS tests against real PLC, corrected response PDU byte order
 
 Progress: [██████████] 100%
 
@@ -72,6 +72,7 @@ Progress: [██████████] 100%
 | Phase 16 P02 | 12min | 2 tasks | 5 files |
 | Phase 16 P03 | 12min | 2 tasks | 7 files |
 | Phase 17 P01 | 10min | 2 tasks | 5 files |
+| Phase 17 P02 | 12min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -165,6 +166,10 @@ Recent decisions affecting current work:
 - [Phase 17-01]: Data type IDs assigned sequentially as 100+i from DD03 record order -- DD03 format has no type ID field
 - [Phase 17-01]: Null-terminated strings: parse stringLength bytes then strip trailing 0x00 for safe handling
 - [Phase 17-01]: DD02 pagination via offset field (blockNo=0xFFFF); DD03 pagination via blockNo field (offset=0x0000)
+- [Phase 17-02]: UMAS response PDU format is FC+pairingKey+subFuncEcho+status (not FC+pairingKey+status+subFuncEcho as assumed in Phase 14)
+- [Phase 17-02]: UmasClient accepts optional unitId parameter threaded to all UmasRequest instances (Schneider PLCs typically use 255)
+- [Phase 17-02]: Live tests catch UmasException and pass with diagnostic output when PLC does not support UMAS
+- [Phase 17-02]: _checkStatus() helper centralizes status checking with clear error messages including hex status codes
 
 ### Pending Todos
 
@@ -176,6 +181,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-09T14:23:04Z
-Stopped at: Completed 17-01-PLAN.md (fix UMAS wire format bugs)
+Last session: 2026-03-09T14:39:44Z
+Stopped at: Completed 17-02-PLAN.md (live UMAS hardware testing)
 Resume file: None

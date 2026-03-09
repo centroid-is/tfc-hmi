@@ -214,6 +214,11 @@ Phase 12 is a gap closure phase from the v1.0 audit.
 | 10. Server Config UI | 2/2 | Complete    | 2026-03-07 |
 | 11. Key Repository UI | 2/2 | Complete    | 2026-03-07 |
 | 12. Windows Keepalive Merge | 0/1 | Gap Closure | - |
+| 13. Manual Test | 0/0 | TBD | - |
+| 14. UMAS Protocol Support | 3/3 | Complete | 2026-03-08 |
+| 15. Code Review Fixes | 3/3 | Complete | 2026-03-08 |
+| 16. Modbus Protocol Spec | 3/3 | Complete | 2026-03-09 |
+| 17. Fix/Verify UMAS | 2/2 | Complete | 2026-03-09 |
 
 ### Phase 13: manual test against a real device
 
@@ -302,8 +307,8 @@ Plans:
   6. Data type records use corrected field order with classIdentifier
   7. UmasClient.init() succeeds against real Schneider PLC at 10.50.10.123
   8. UmasClient.browse() returns non-empty variable tree from real PLC
-**Plans:** 1/2 plans executed
+**Plans:** 2/2 plans complete
 
 Plans:
-- [ ] 17-01-PLAN.md -- Fix UMAS protocol bugs: readPlcId, 13-byte 0x26 payload, pagination, corrected record formats (TDD)
-- [ ] 17-02-PLAN.md -- Live hardware integration tests against real Schneider PLC + human verification
+- [x] 17-01-PLAN.md -- Fix UMAS protocol bugs: readPlcId, 13-byte 0x26 payload, pagination, corrected record formats (TDD)
+- [x] 17-02-PLAN.md -- Live hardware integration tests against real Schneider PLC + human verification
