@@ -267,12 +267,23 @@ Plans:
 - [ ] 15-02-PLAN.md -- Fix missing await, port validation, heartbeat config, unawaited cleanup (server_config + wrapper)
 - [ ] 15-03-PLAN.md -- Extract duplicated UI patterns into shared widgets (server_config deduplication)
 
-### Phase 16: Modbus protocol spec research — find bugs and missing features
+### Phase 16: Modbus protocol spec research -- find bugs and missing features
 
-**Goal:** [To be planned]
-**Requirements**: TBD
+**Goal:** All Modbus protocol compliance gaps identified in the spec audit are fixed (address validation, response byte count checking, unit ID response validation, write quantity limits), unit ID range expanded to 0-255 for TCP, write errors surface detailed exception information, and byte order is configurable per device for multi-register interoperability
 **Depends on:** Phase 15
-**Plans:** 0 plans
+**Requirements**: BUG-01, BUG-02, BUG-03, BUG-05, VAL-03, FEAT-01, FEAT-03
+**Success Criteria** (what must be TRUE):
+  1. Register addresses are validated to 0-65535 at spec, config, and UI layers
+  2. Response byte count is validated against expected size for read responses
+  3. Unit ID in MBAP response header is validated against request unit ID
+  4. FC15/FC16 write quantity limits are enforced per spec (max 1968 coils, 123 registers)
+  5. Unit ID field accepts 0-255 for TCP connections (was 1-247)
+  6. Write failure messages include exception code number and human-readable description
+  7. Byte order (ABCD/CDAB/BADC/DCBA) is configurable per Modbus server
+  8. Endianness from config flows through wrapper to modbus_client element constructors
+**Plans:** 3 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 16 to break down)
+- [ ] 16-01-PLAN.md -- Library-level response validation and write quantity limits (BUG-02, BUG-03, BUG-05)
+- [ ] 16-02-PLAN.md -- Wrapper/UI address validation, unit ID range, exception detail surfacing (BUG-01, VAL-03, FEAT-03)
+- [ ] 16-03-PLAN.md -- Byte order configuration per Modbus server (FEAT-01)
