@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-06)
 
 **Core value:** Modbus devices can be read from and written to through the same StateMan interface as OPC UA and M2400, without breaking existing protocol integrations.
-**Current focus:** Phase 15 -- Code Review Fixes (Security, Performance, Correctness, Duplication)
+**Current focus:** Phase 16 -- Modbus Protocol Spec Research (find bugs and missing features)
 
 ## Current Position
 
-Phase: 15 (Code Review Fixes)
-Plan: 3 of 3 in current phase (15-03 COMPLETE)
-Status: Phase 15 complete. All 3 plans done -- perf/security fixes, config correctness, UI deduplication.
-Last activity: 2026-03-08 -- 15-03 complete, UI deduplication done, 261 lines removed
+Phase: 16 (Modbus Protocol Spec Research)
+Plan: 1 of 1 in current phase (16-01 COMPLETE)
+Status: Phase 16 plan 01 complete. Response byte count, unit ID validation, write quantity limits.
+Last activity: 2026-03-09 -- 16-01 complete, library protocol compliance hardened (BUG-02, BUG-03, BUG-05)
 
 Progress: [██████████] 100%
 
@@ -68,6 +68,7 @@ Progress: [██████████] 100%
 | Phase 15 P02 | 9min | 2 tasks | 2 files |
 | Phase 15 P01 | 11min | 2 tasks | 7 files |
 | Phase 15 P03 | 7min | 2 tasks | 2 files |
+| Phase 16 P01 | 6min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -147,6 +148,9 @@ Recent decisions affecting current work:
 - [Phase 15]: BytesBuilder with copy:false for zero-copy TCP buffer accumulation
 - [Phase 15]: findByAlias extension on List<ModbusConfig> keeps lookup local to key_repository.dart
 - [Phase 15]: Path index built once in fetchRoots(), reused for all subsequent lookups
+- [Phase 16-01]: expectedResponseByteCount as nullable getter -- null skips validation (for group requests)
+- [Phase 16-01]: Unit ID validation inside header parsing block, not separate check (single execution)
+- [Phase 16-01]: Write limit assertions (not exceptions) -- zero overhead in release, fail-fast in debug
 
 ### Pending Todos
 
@@ -158,6 +162,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-08T07:41:40Z
-Stopped at: Completed 15-03-PLAN.md (Phase 15 complete)
+Last session: 2026-03-09T10:51:01Z
+Stopped at: Completed 16-01-PLAN.md (library protocol compliance)
 Resume file: None

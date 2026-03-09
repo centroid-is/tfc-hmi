@@ -281,7 +281,7 @@ Plans:
   6. Write failure messages include exception code number and human-readable description
   7. Byte order (ABCD/CDAB/BADC/DCBA) is configurable per Modbus server
   8. Endianness from config flows through wrapper to modbus_client element constructors
-**Plans:** 3 plans
+**Plans:** 1/3 plans executed
 
 Plans:
 - [ ] 16-01-PLAN.md -- Library-level response validation and write quantity limits (BUG-02, BUG-03, BUG-05)
