@@ -4,13 +4,13 @@ milestone: v1.0
 milestone_name: milestone
 status: completed
 stopped_at: Completed 16-03-PLAN.md (byte order config)
-last_updated: "2026-03-09T12:41:06Z"
-last_activity: 2026-03-09 -- 16-03 complete, byte order config with per-server endianness dropdown
+last_updated: "2026-03-09T13:36:24.127Z"
+last_activity: 2026-03-09 -- 16-03 complete, byte order config with ABCD/CDAB/BADC/DCBA dropdown (FEAT-01)
 progress:
-  total_phases: 15
-  completed_phases: 12
-  total_plans: 21
-  completed_plans: 21
+  total_phases: 16
+  completed_phases: 13
+  total_plans: 24
+  completed_plans: 24
   percent: 100
 ---
 
