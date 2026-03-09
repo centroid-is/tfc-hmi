@@ -302,10 +302,10 @@ class ModbusNodeConfig {
   ModbusNodeConfig({
     this.serverAlias,
     required this.registerType,
-    required this.address,
+    required int address,
     this.dataType = ModbusDataType.uint16,
     this.pollGroup = 'default',
-  });
+  }) : address = address.clamp(0, 65535);
 
   factory ModbusNodeConfig.fromJson(Map<String, dynamic> json) =>
       _$ModbusNodeConfigFromJson(json);

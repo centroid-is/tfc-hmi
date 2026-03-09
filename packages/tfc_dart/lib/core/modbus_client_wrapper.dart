@@ -42,7 +42,8 @@ class ModbusRegisterSpec {
     required this.address,
     this.dataType = ModbusDataType.uint16,
     this.pollGroup = 'default',
-  });
+  }) : assert(address >= 0 && address <= 65535,
+            'Modbus address must be 0-65535, got: $address');
 }
 
 // =============================================================================
@@ -376,7 +377,8 @@ class ModbusClientWrapper {
     final result = await _client!.send(request);
 
     if (result != ModbusResponseCode.requestSucceed) {
-      throw StateError('Write failed: ${result.name}');
+      throw StateError(
+          'Write failed: ${result.name} (0x${result.code.toRadixString(16).padLeft(2, '0')}) -- ${_describeException(result)}');
     }
 
     // Optimistic update: push written value into BehaviorSubject if subscribed
@@ -402,7 +404,8 @@ class ModbusClientWrapper {
     final result = await _client!.send(request);
 
     if (result != ModbusResponseCode.requestSucceed) {
-      throw StateError('Write multiple failed: ${result.name}');
+      throw StateError(
+          'Write multiple failed: ${result.name} (0x${result.code.toRadixString(16).padLeft(2, '0')}) -- ${_describeException(result)}');
     }
   }
 
@@ -767,5 +770,45 @@ class ModbusClientWrapper {
     if (value < min) return min;
     if (value > max) return max;
     return value;
+  }
+
+  /// Returns a human-readable description for a Modbus exception code.
+  ///
+  /// Covers the standard Modbus exception codes (0x01-0x0B) plus common
+  /// library-internal transport errors. Used in write error messages to give
+  /// operators actionable information.
+  static String _describeException(ModbusResponseCode code) {
+    switch (code) {
+      case ModbusResponseCode.illegalFunction:
+        return 'Function code not supported by device';
+      case ModbusResponseCode.illegalDataAddress:
+        return 'Register address does not exist on device';
+      case ModbusResponseCode.illegalDataValue:
+        return 'Value out of range for this register';
+      case ModbusResponseCode.deviceFailure:
+        return 'Device internal error';
+      case ModbusResponseCode.acknowledge:
+        return 'Request accepted but processing not complete';
+      case ModbusResponseCode.deviceBusy:
+        return 'Device busy, retry later';
+      case ModbusResponseCode.negativeAcknowledgment:
+        return 'Device cannot perform the programming request';
+      case ModbusResponseCode.memoryParityError:
+        return 'Memory parity error during extended memory read';
+      case ModbusResponseCode.gatewayPathUnavailable:
+        return 'Gateway path unavailable';
+      case ModbusResponseCode.gatewayTargetDeviceFailedToRespond:
+        return 'Gateway target device not responding';
+      case ModbusResponseCode.requestTimeout:
+        return 'Request timed out';
+      case ModbusResponseCode.connectionFailed:
+        return 'Connection failed';
+      case ModbusResponseCode.requestTxFailed:
+        return 'Request transmission failed';
+      case ModbusResponseCode.requestRxFailed:
+        return 'Response reception failed';
+      default:
+        return 'Unexpected error';
+    }
   }
 }

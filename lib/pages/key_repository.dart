@@ -1479,7 +1479,7 @@ class _ModbusConfigSectionState extends ConsumerState<_ModbusConfigSection> {
     final config = ModbusNodeConfig(
       serverAlias: _selectedAlias,
       registerType: _selectedRegisterType,
-      address: int.tryParse(_addressController.text) ?? 0,
+      address: (int.tryParse(_addressController.text) ?? 0).clamp(0, 65535),
       dataType: _selectedDataType,
       pollGroup: _selectedPollGroup,
     );
