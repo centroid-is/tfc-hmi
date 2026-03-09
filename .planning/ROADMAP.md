@@ -266,3 +266,13 @@ Plans:
 - [ ] 15-01-PLAN.md -- Fix correctness bugs, remove dead code, extract domain utilities, improve performance (non-UI files)
 - [ ] 15-02-PLAN.md -- Fix missing await, port validation, heartbeat config, unawaited cleanup (server_config + wrapper)
 - [ ] 15-03-PLAN.md -- Extract duplicated UI patterns into shared widgets (server_config deduplication)
+
+### Phase 16: Modbus protocol spec research — find bugs and missing features
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 15
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 16 to break down)
