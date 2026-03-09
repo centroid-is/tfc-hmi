@@ -115,15 +115,21 @@ def build_data_types_payload(data_types, next_address=0x0000):
 
 
 def build_success_response(sub_func, payload, pairing_key=0x00):
-    """Build FC90 success PDU: [0x5A, pairingKey, 0xFE, subFunc, ...payload]."""
-    pdu = bytearray([0x5A, pairing_key, 0xFE, sub_func])
+    """Build FC90 success PDU: [0x5A, pairingKey, subFunc, 0xFE, ...payload].
+
+    Real Schneider PLC format: FC + pairingKey + subFuncEcho + status + payload.
+    """
+    pdu = bytearray([0x5A, pairing_key, sub_func, 0xFE])
     pdu += payload
     return bytes(pdu)
 
 
-def build_error_response(error_code, pairing_key=0x00):
-    """Build FC90 error PDU: [0x5A, pairingKey, 0xFD, errorCode]."""
-    return bytes([0x5A, pairing_key, 0xFD, error_code])
+def build_error_response(error_code, pairing_key=0x00, sub_func=0x00):
+    """Build FC90 error PDU: [0x5A, pairingKey, subFunc, 0xFD, errorCode].
+
+    Real Schneider PLC format: FC + pairingKey + subFuncEcho + status + errorCode.
+    """
+    return bytes([0x5A, pairing_key, sub_func, 0xFD, error_code])
 
 
 def wrap_mbap(transaction_id, unit_id, pdu):
@@ -180,7 +186,7 @@ class UmasHandler(socketserver.BaseRequestHandler):
 
     def handle_pdu(self, pdu):
         if len(pdu) < 3:
-            return build_error_response(0x01)
+            return build_error_response(0x01, sub_func=0x00)
 
         fc = pdu[0]
         if fc != 0x5A:
@@ -207,7 +213,7 @@ class UmasHandler(socketserver.BaseRequestHandler):
         elif sub_func == 0x26:
             # ReadDataDictionary -- accept full 13-byte payload
             if len(payload) < 2:
-                return build_error_response(0x02, self.pairing_key)
+                return build_error_response(0x02, self.pairing_key, sub_func)
 
             record_type = struct.unpack("<H", payload[:2])[0]
             print(f"[STUB]   recordType={record_type:#06x} payloadLen={len(payload)}")
@@ -230,11 +236,11 @@ class UmasHandler(socketserver.BaseRequestHandler):
                 data = build_data_types_payload(DATA_TYPES, next_address=0x0000)
                 return build_success_response(sub_func, data, self.pairing_key)
             else:
-                return build_error_response(0x03, self.pairing_key)
+                return build_error_response(0x03, self.pairing_key, sub_func)
 
         else:
             print(f"[STUB] Unknown subFunc {sub_func:#04x}")
-            return build_error_response(0x04, self.pairing_key)
+            return build_error_response(0x04, self.pairing_key, sub_func)
 
 
 class ReusableTCPServer(socketserver.ThreadingTCPServer):

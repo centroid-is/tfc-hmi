@@ -63,6 +63,10 @@ class UmasClient {
   /// Maximum number of variables/data types parsed from a single response.
   static const _maxVariables = 10000;
   final Future<ModbusResponseCode> Function(ModbusRequest request) sendFn;
+
+  /// Optional Modbus unit ID for UMAS requests.
+  /// Schneider PLCs typically use 255 (0xFF) or 254 (0xFE).
+  final int? unitId;
   int _pairingKey = 0x00;
   int? maxFrameSize;
 
@@ -72,7 +76,42 @@ class UmasClient {
   /// Memory block index from 0x02 response, used in 0x26 payloads.
   int? _index;
 
-  UmasClient({required this.sendFn});
+  UmasClient({required this.sendFn, this.unitId});
+
+  /// UMAS success status byte value.
+  static const _statusSuccess = 0xFE;
+
+  /// UMAS error status byte value (followed by error code byte).
+  static const _statusError = 0xFD;
+
+  /// Check UMAS response PDU and throw on error.
+  ///
+  /// Real Schneider PLC response format:
+  ///   pdu[0] = FC (0x5A)
+  ///   pdu[1] = PairingKey
+  ///   pdu[2] = SubFuncEcho
+  ///   pdu[3] = Status (0xFE=success, 0xFD=error, other=error code)
+  ///   pdu[4+] = Payload (on success) or error code (on 0xFD error)
+  void _checkStatus(Uint8List pdu, String operation) {
+    if (pdu.length < 4) {
+      throw UmasException(
+          errorCode: 0, message: 'UMAS $operation response too short');
+    }
+    final status = pdu[3];
+    if (status == _statusError) {
+      final errorCode = pdu.length > 4 ? pdu[4] : 0;
+      throw UmasException(
+          errorCode: errorCode,
+          message: 'UMAS $operation error: '
+              '0x${errorCode.toRadixString(16)}');
+    }
+    if (status != _statusSuccess) {
+      throw UmasException(
+          errorCode: status,
+          message: 'UMAS $operation failed with status '
+              '0x${status.toRadixString(16)}');
+    }
+  }
 
   /// Read PLC identification (sub-function 0x02).
   ///
@@ -82,6 +121,7 @@ class UmasClient {
     final request = UmasRequest(
       umasSubFunction: UmasSubFunction.readId.code,
       pairingKey: _pairingKey,
+      unitId: unitId,
     );
     final code = await sendFn(request);
 
@@ -97,16 +137,9 @@ class UmasClient {
           errorCode: 0, message: 'Empty UMAS readPlcId response');
     }
 
-    final status = pdu[2];
-    if (status == 0xFD) {
-      final errorCode = pdu.length > 3 ? pdu[3] : 0;
-      throw UmasException(
-          errorCode: errorCode,
-          message:
-              'UMAS readPlcId error: 0x${errorCode.toRadixString(16)}');
-    }
+    _checkStatus(pdu, 'readPlcId');
 
-    // Parse payload after the 4-byte header (FC + pairing + status + subFunc)
+    // Parse payload after the 4-byte header (FC + pairing + subFuncEcho + status)
     final payload = pdu.sublist(4);
     if (payload.length < 7) {
       throw UmasException(
@@ -143,7 +176,9 @@ class UmasClient {
   /// Returns max frame size and optionally firmware version.
   Future<UmasInitResult> init() async {
     final request = UmasRequest(
-        umasSubFunction: UmasSubFunction.init.code, pairingKey: _pairingKey);
+        umasSubFunction: UmasSubFunction.init.code,
+        pairingKey: _pairingKey,
+        unitId: unitId);
     final code = await sendFn(request);
 
     if (code != ModbusResponseCode.requestSucceed) {
@@ -156,21 +191,13 @@ class UmasClient {
       throw UmasException(errorCode: 0, message: 'Empty UMAS init response');
     }
 
-    // PDU: FC(0x5A) + pairingKey + status + subFuncEcho + payload
+    _checkStatus(pdu, 'init');
+
+    // PDU: FC(0x5A) + pairingKey + subFuncEcho + status + payload
     final responsePairingKey = pdu[1];
-    final status = pdu[2];
-
-    if (status == 0xFD) {
-      final errorCode = pdu.length > 3 ? pdu[3] : 0;
-      throw UmasException(
-          errorCode: errorCode,
-          message:
-              'UMAS init error: 0x${errorCode.toRadixString(16)}');
-    }
-
     _pairingKey = responsePairingKey;
 
-    // Parse payload after the 4-byte header (FC + pairing + status + subFunc)
+    // Parse payload after the 4-byte header (FC + pairing + subFuncEcho + status)
     if (pdu.length >= 6) {
       final payloadView = ByteData.sublistView(pdu, 4);
       maxFrameSize = payloadView.getUint16(0, Endian.little);
@@ -219,6 +246,7 @@ class UmasClient {
         umasSubFunction: UmasSubFunction.readDataDictionary.code,
         pairingKey: _pairingKey,
         payload: payload,
+        unitId: unitId,
       );
       final code = await sendFn(request);
 
@@ -234,14 +262,7 @@ class UmasClient {
             errorCode: 0, message: 'Empty data dictionary response');
       }
 
-      final status = pdu[2];
-      if (status == 0xFD) {
-        final errorCode = pdu.length > 3 ? pdu[3] : 0;
-        throw UmasException(
-            errorCode: errorCode,
-            message: 'Data Dictionary not enabled on PLC (error: '
-                '0x${errorCode.toRadixString(16)})');
-      }
+      _checkStatus(pdu, 'readVariableNames');
 
       // Parse variable records from payload after 4-byte UMAS header
       final (nextAddress, variables) = _parseVariableRecords(pdu.sublist(4));
@@ -324,6 +345,7 @@ class UmasClient {
         umasSubFunction: UmasSubFunction.readDataDictionary.code,
         pairingKey: _pairingKey,
         payload: payload,
+        unitId: unitId,
       );
       final code = await sendFn(request);
 
@@ -339,14 +361,7 @@ class UmasClient {
             errorCode: 0, message: 'Empty data type response');
       }
 
-      final status = pdu[2];
-      if (status == 0xFD) {
-        final errorCode = pdu.length > 3 ? pdu[3] : 0;
-        throw UmasException(
-            errorCode: errorCode,
-            message: 'Data Dictionary not enabled on PLC (error: '
-                '0x${errorCode.toRadixString(16)})');
-      }
+      _checkStatus(pdu, 'readDataTypes');
 
       final (nextAddress, types) = _parseDataTypeRecords(pdu.sublist(4));
       allTypes.addAll(types);
