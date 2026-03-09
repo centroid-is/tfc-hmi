@@ -2547,4 +2547,256 @@ void main() {
       });
     });
   });
+
+  group('Idle heartbeat', () {
+    /// Helper that creates wrapper+mock with a fast heartbeat for testing.
+    ({ModbusClientWrapper wrapper, MockModbusClient mock})
+        createHeartbeatPair() {
+      final mock = MockModbusClient();
+      final wrapper = ModbusClientWrapper(
+        '127.0.0.1',
+        502,
+        1,
+        clientFactory: (h, p, u) => mock,
+        heartbeatInterval: const Duration(milliseconds: 500),
+      );
+      return (wrapper: wrapper, mock: mock);
+    }
+
+    test('sends periodic reads when connected with no subscriptions', () async {
+      final pair = createHeartbeatPair();
+      wrapper = pair.wrapper;
+      final mock = pair.mock;
+      mock.onSend = (request) => ModbusResponseCode.requestSucceed;
+
+      wrapper.connect();
+      await Future.delayed(const Duration(milliseconds: 50));
+      expect(wrapper.connectionStatus, ConnectionStatus.connected);
+
+      // Wait for at least one heartbeat tick
+      await Future.delayed(const Duration(milliseconds: 1200));
+      expect(mock.sendCallCount, greaterThan(0),
+          reason: 'Heartbeat should send reads when idle');
+    });
+
+    test('stops heartbeat when subscriptions are added', () async {
+      final pair = createHeartbeatPair();
+      wrapper = pair.wrapper;
+      final mock = pair.mock;
+      mock.onSend = (request) => ModbusResponseCode.requestSucceed;
+
+      wrapper.connect();
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      // Let heartbeat run a bit
+      await Future.delayed(const Duration(milliseconds: 1200));
+      final heartbeatSends = mock.sendCallCount;
+      expect(heartbeatSends, greaterThan(0));
+
+      // Add a subscription — heartbeat should stop, poll takes over
+      mock.sendCallCount = 0;
+      wrapper.addPollGroup('fast', const Duration(milliseconds: 200));
+      wrapper.subscribe(ModbusRegisterSpec(
+        key: 'test_reg',
+        registerType: ModbusElementType.holdingRegister,
+        address: 0,
+        pollGroup: 'fast',
+      ));
+
+      // Wait and check that sends are from poll, not heartbeat
+      await Future.delayed(const Duration(milliseconds: 500));
+      expect(mock.sendCallCount, greaterThan(0),
+          reason: 'Poll should be sending');
+    });
+
+    test('resumes heartbeat when all subscriptions removed', () async {
+      final pair = createHeartbeatPair();
+      wrapper = pair.wrapper;
+      final mock = pair.mock;
+      mock.onSend = (request) => ModbusResponseCode.requestSucceed;
+
+      wrapper.addPollGroup('fast', const Duration(milliseconds: 200));
+      wrapper.subscribe(ModbusRegisterSpec(
+        key: 'test_reg',
+        registerType: ModbusElementType.holdingRegister,
+        address: 0,
+        pollGroup: 'fast',
+      ));
+
+      wrapper.connect();
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      // Polling is active
+      await Future.delayed(const Duration(milliseconds: 500));
+      expect(mock.sendCallCount, greaterThan(0));
+
+      // Remove subscription — heartbeat should resume
+      mock.sendCallCount = 0;
+      wrapper.unsubscribe('test_reg');
+
+      await Future.delayed(const Duration(milliseconds: 1200));
+      expect(mock.sendCallCount, greaterThan(0),
+          reason: 'Heartbeat should resume after all subscriptions removed');
+    });
+
+    test('heartbeat stops on disconnect', () async {
+      final pair = createHeartbeatPair();
+      wrapper = pair.wrapper;
+      final mock = pair.mock;
+      mock.onSend = (request) => ModbusResponseCode.requestSucceed;
+
+      wrapper.connect();
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      // Let heartbeat start
+      await Future.delayed(const Duration(milliseconds: 1200));
+      expect(mock.sendCallCount, greaterThan(0));
+
+      // Disconnect — heartbeat should stop
+      mock.sendCallCount = 0;
+      wrapper.disconnect();
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      mock.sendCallCount = 0;
+      await Future.delayed(const Duration(milliseconds: 1200));
+      expect(mock.sendCallCount, equals(0),
+          reason: 'Heartbeat should not send after disconnect');
+    });
+
+    test('heartbeat tolerates send failures without crashing', () async {
+      final pair = createHeartbeatPair();
+      wrapper = pair.wrapper;
+      final mock = pair.mock;
+      mock.onSend = (request) => ModbusResponseCode.requestTimeout;
+
+      wrapper.connect();
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      // Let heartbeat tick a few times with failures
+      await Future.delayed(const Duration(milliseconds: 1200));
+      expect(mock.sendCallCount, greaterThan(0),
+          reason: 'Heartbeat should keep trying despite failures');
+      expect(wrapper.connectionStatus, ConnectionStatus.connected,
+          reason: 'Failed heartbeat reads should not disconnect');
+    });
+  });
+
+  // ===========================================================================
+  // BUG-01: Address validation
+  // ===========================================================================
+
+  group('Address validation (BUG-01)', () {
+    test('ModbusRegisterSpec with address 0 is accepted', () {
+      wrapper = createWrapper(); // for tearDown
+      final spec = ModbusRegisterSpec(
+        key: 'addr0',
+        registerType: ModbusElementType.holdingRegister,
+        address: 0,
+      );
+      expect(spec.address, 0);
+    });
+
+    test('ModbusRegisterSpec with address 65535 is accepted', () {
+      wrapper = createWrapper(); // for tearDown
+      final spec = ModbusRegisterSpec(
+        key: 'addr65535',
+        registerType: ModbusElementType.holdingRegister,
+        address: 65535,
+      );
+      expect(spec.address, 65535);
+    });
+
+    test('ModbusRegisterSpec with address -1 throws AssertionError', () {
+      wrapper = createWrapper(); // for tearDown
+      expect(
+        () => ModbusRegisterSpec(
+          key: 'neg',
+          registerType: ModbusElementType.holdingRegister,
+          address: -1,
+        ),
+        throwsA(isA<AssertionError>()),
+      );
+    });
+
+    test('ModbusRegisterSpec with address 65536 throws AssertionError', () {
+      wrapper = createWrapper(); // for tearDown
+      expect(
+        () => ModbusRegisterSpec(
+          key: 'overflow',
+          registerType: ModbusElementType.holdingRegister,
+          address: 65536,
+        ),
+        throwsA(isA<AssertionError>()),
+      );
+    });
+  });
+
+  // ===========================================================================
+  // FEAT-03: Rich write error messages
+  // ===========================================================================
+
+  group('Rich write error messages (FEAT-03)', () {
+    late ModbusClientWrapper localWrapper;
+    late MockModbusClient mock;
+
+    setUp(() {
+      final pair = createWrapperWithMock();
+      localWrapper = pair.wrapper;
+      wrapper = localWrapper; // satisfy outer tearDown
+      mock = pair.mock;
+    });
+
+    test('write() failure includes exception code name AND numeric code',
+        () async {
+      wrapper.connect();
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      mock.onSend = (request) => ModbusResponseCode.illegalDataAddress;
+
+      final spec = ModbusRegisterSpec(
+        key: 'coil0',
+        registerType: ModbusElementType.coil,
+        address: 0,
+      );
+      expect(
+        () => wrapper.write(spec, true),
+        throwsA(isA<StateError>().having(
+          (e) => e.message,
+          'message',
+          allOf(
+            contains('illegalDataAddress'),
+            contains('0x02'),
+            contains('Register address does not exist on device'),
+          ),
+        )),
+      );
+    });
+
+    test('writeMultiple() failure includes exception code name AND numeric code',
+        () async {
+      wrapper.connect();
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      mock.onSend = (request) => ModbusResponseCode.illegalFunction;
+
+      final spec = ModbusRegisterSpec(
+        key: 'coil0',
+        registerType: ModbusElementType.coil,
+        address: 0,
+      );
+      expect(
+        () => wrapper.writeMultiple(spec, Uint8List.fromList([0x01]),
+            quantity: 1),
+        throwsA(isA<StateError>().having(
+          (e) => e.message,
+          'message',
+          allOf(
+            contains('illegalFunction'),
+            contains('0x01'),
+            contains('Function code not supported by device'),
+          ),
+        )),
+      );
+    });
+  });
 }
