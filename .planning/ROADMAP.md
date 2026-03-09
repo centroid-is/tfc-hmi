@@ -302,7 +302,7 @@ Plans:
   6. Data type records use corrected field order with classIdentifier
   7. UmasClient.init() succeeds against real Schneider PLC at 10.50.10.123
   8. UmasClient.browse() returns non-empty variable tree from real PLC
-**Plans:** 2 plans
+**Plans:** 1/2 plans executed
 
 Plans:
 - [ ] 17-01-PLAN.md -- Fix UMAS protocol bugs: readPlcId, 13-byte 0x26 payload, pagination, corrected record formats (TDD)

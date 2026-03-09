@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: completed
-stopped_at: Completed 16-03-PLAN.md (byte order config)
-last_updated: "2026-03-09T13:36:24.127Z"
-last_activity: 2026-03-09 -- 16-03 complete, byte order config with ABCD/CDAB/BADC/DCBA dropdown (FEAT-01)
+status: in-progress
+stopped_at: Completed 17-01-PLAN.md (fix UMAS wire format bugs)
+last_updated: "2026-03-09T14:23:04Z"
+last_activity: 2026-03-09 -- 17-01 complete, corrected all 6 UMAS wire format bugs (readPlcId, 13-byte payload, pagination, mspec record parsing)
 progress:
-  total_phases: 16
+  total_phases: 17
   completed_phases: 13
-  total_plans: 24
-  completed_plans: 24
+  total_plans: 25
+  completed_plans: 25
   percent: 100
 ---
 
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-06)
 
 **Core value:** Modbus devices can be read from and written to through the same StateMan interface as OPC UA and M2400, without breaking existing protocol integrations.
-**Current focus:** Phase 16 -- Modbus Protocol Spec Research (find bugs and missing features)
+**Current focus:** Phase 17 -- Fix and Verify UMAS Against Real Schneider PLC
 
 ## Current Position
 
-Phase: 16 (Modbus Protocol Spec Research)
-Plan: 3 of 3 in current phase (16-03 COMPLETE)
-Status: Phase 16 complete. All 3 plans done. Byte order config with per-server endianness dropdown.
-Last activity: 2026-03-09 -- 16-03 complete, byte order config with ABCD/CDAB/BADC/DCBA dropdown (FEAT-01)
+Phase: 17 (Fix and Verify UMAS Against Real Schneider PLC)
+Plan: 1 of 1 in current phase (17-01 COMPLETE)
+Status: Phase 17 Plan 01 complete. All 6 UMAS wire format bugs fixed: readPlcId, 13-byte 0x26 payload, pagination, mspec record parsing.
+Last activity: 2026-03-09 -- 17-01 complete, corrected all 6 UMAS wire format bugs
 
 Progress: [██████████] 100%
 
@@ -71,6 +71,7 @@ Progress: [██████████] 100%
 | Phase 16 P01 | 6min | 2 tasks | 4 files |
 | Phase 16 P02 | 12min | 2 tasks | 5 files |
 | Phase 16 P03 | 12min | 2 tasks | 7 files |
+| Phase 17 P01 | 10min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -160,6 +161,10 @@ Recent decisions affecting current work:
 - [Phase 16-03]: Endianness is per-device (per ModbusConfig), not per-register -- all registers on a device use same byte order
 - [Phase 16-03]: Single-register types (int16/uint16) and bit types unaffected by endianness -- only 32-bit and 64-bit types pass through
 - [Phase 16-03]: buildSpecsFromKeyMappings accepts endianness as optional parameter with ABCD default for backward compatibility
+- [Phase 17-01]: MockUmasSender uses response queues (List per subFunc) for pagination testing instead of single canned response
+- [Phase 17-01]: Data type IDs assigned sequentially as 100+i from DD03 record order -- DD03 format has no type ID field
+- [Phase 17-01]: Null-terminated strings: parse stringLength bytes then strip trailing 0x00 for safe handling
+- [Phase 17-01]: DD02 pagination via offset field (blockNo=0xFFFF); DD03 pagination via blockNo field (offset=0x0000)
 
 ### Pending Todos
 
@@ -171,6 +176,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-09T12:41:06Z
-Stopped at: Completed 16-03-PLAN.md (byte order config)
+Last session: 2026-03-09T14:23:04Z
+Stopped at: Completed 17-01-PLAN.md (fix UMAS wire format bugs)
 Resume file: None
