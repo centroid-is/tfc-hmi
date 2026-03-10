@@ -26,19 +26,22 @@ import 'package:tfc/widgets/umas_browse.dart';
 // Fake UMAS send function — returns canned FC90 responses
 // ---------------------------------------------------------------------------
 
-/// Builds a success PDU: [0x5A, pairingKey, 0xFE, subFunc, ...payload]
+/// Builds a success PDU: [0x5A, pairingKey, subFuncEcho, status=0xFE, ...payload]
 Uint8List _successPdu(int subFunc, List<int> payload,
     {int pairingKey = 0x00}) {
-  return Uint8List.fromList([0x5A, pairingKey, 0xFE, subFunc, ...payload]);
+  return Uint8List.fromList([0x5A, pairingKey, subFunc, 0xFE, ...payload]);
 }
 
 /// Little-endian uint16
 List<int> _le16(int v) => [v & 0xFF, (v >> 8) & 0xFF];
 
-/// Build variable names payload (same data as stub server)
+/// Build variable names response payload with proper header and record format.
+///
+/// Header: range(1) + nextAddress(2 LE) + unknown1(2 LE) + noOfRecords(2 LE)
+/// Record: dataType(2 LE) + block(2 LE) + offset(2 LE) + unknown4(2 LE) +
+///         stringLength(2 LE) + name
 List<int> _variableNamesPayload() {
-  final buf = <int>[];
-  for (final (name, blockNo, offset, typeId) in [
+  const variables = [
     ('Application.GVL.temperature', 1, 0, 5),
     ('Application.GVL.pressure', 1, 4, 5),
     ('Application.GVL.motor_running', 1, 8, 6),
@@ -49,29 +52,51 @@ List<int> _variableNamesPayload() {
     ('Application.Motor.enabled', 2, 8, 6),
     ('Application.Counters.production', 3, 0, 4),
     ('Application.Counters.runtime_ms', 3, 4, 8),
-  ]) {
+  ];
+  final buf = <int>[];
+  // Header: range(1) + nextAddress=0 (2 LE, no more pages) + unknown1(2) + noOfRecords(2 LE)
+  buf.add(0x00); // range
+  buf.addAll(_le16(0)); // nextAddress = 0 (single page)
+  buf.addAll(_le16(0)); // unknown1
+  buf.addAll(_le16(variables.length));
+  // Records
+  for (final (name, blockNo, offset, typeId) in variables) {
     final nameBytes = name.codeUnits;
-    buf.addAll(_le16(nameBytes.length));
-    buf.addAll(nameBytes);
-    buf.addAll(_le16(blockNo));
-    buf.addAll(_le16(offset));
-    buf.addAll(_le16(typeId));
+    buf.addAll(_le16(typeId)); // dataType
+    buf.addAll(_le16(blockNo)); // block
+    buf.addAll(_le16(offset)); // offset
+    buf.addAll(_le16(0)); // unknown4
+    buf.addAll(_le16(nameBytes.length)); // stringLength
+    buf.addAll(nameBytes); // name
   }
   return buf;
 }
 
-/// Build data types payload (custom types from stub server)
+/// Build data types response payload with proper header and record format.
+///
+/// Header: range(1) + nextAddress(2 LE) + unknown1(1) + noOfRecords(2 LE)
+/// Record: dataSize(2 LE) + unknown1(2 LE) + classIdentifier(1) +
+///         dataType(1) + stringLength(1) + name
 List<int> _dataTypesPayload() {
+  const types = [
+    ('MY_STRUCT', 16),
+    ('ALARM_TYPE', 8),
+  ];
   final buf = <int>[];
-  for (final (typeId, name, byteSize) in [
-    (100, 'MY_STRUCT', 16),
-    (101, 'ALARM_TYPE', 8),
-  ]) {
+  // Header: range(1) + nextAddress=0 (2 LE) + unknown1(1) + noOfRecords(2 LE)
+  buf.add(0x00); // range
+  buf.addAll(_le16(0)); // nextAddress = 0 (single page)
+  buf.add(0x00); // unknown1
+  buf.addAll(_le16(types.length));
+  // Records
+  for (final (name, byteSize) in types) {
     final nameBytes = name.codeUnits;
-    buf.addAll(_le16(typeId));
-    buf.addAll(_le16(nameBytes.length));
-    buf.addAll(nameBytes);
-    buf.addAll(_le16(byteSize));
+    buf.addAll(_le16(byteSize)); // dataSize
+    buf.addAll(_le16(0)); // unknown1
+    buf.add(0x00); // classIdentifier
+    buf.add(0x00); // dataType
+    buf.add(nameBytes.length); // stringLength (1 byte)
+    buf.addAll(nameBytes); // name
   }
   return buf;
 }
@@ -85,7 +110,18 @@ Future<ModbusResponseCode> _fakeSend(ModbusRequest request) async {
   final subFunc = request.umasSubFunction;
   Uint8List pdu;
 
-  if (subFunc == 0x01) {
+  if (subFunc == 0x02) {
+    // ReadPlcId: range(2) + hardwareId(4 LE) + numMemBanks(1) + entry(9)
+    pdu = _successPdu(0x02, [
+      0x00, 0x00, // range
+      0x01, 0x00, 0x00, 0x00, // hardwareId = 1
+      0x01, // numberOfMemoryBanks = 1
+      0x00, 0x00, // address = 0 (index)
+      0x01, // blockType
+      0x00, 0x00, // unknown
+      0x00, 0x10, 0x00, 0x00, // memoryLength
+    ]);
+  } else if (subFunc == 0x01) {
     // Init: max frame size = 1024
     pdu = _successPdu(0x01, _le16(1024));
   } else if (subFunc == 0x26) {
@@ -96,10 +132,10 @@ Future<ModbusResponseCode> _fakeSend(ModbusRequest request) async {
     } else if (recordType == 0xDD03) {
       pdu = _successPdu(0x26, _dataTypesPayload());
     } else {
-      pdu = Uint8List.fromList([0x5A, 0x00, 0xFD, 0x03]);
+      pdu = Uint8List.fromList([0x5A, 0x00, 0x26, 0xFD, 0x03]);
     }
   } else {
-    pdu = Uint8List.fromList([0x5A, 0x00, 0xFD, 0x04]);
+    pdu = Uint8List.fromList([0x5A, 0x00, subFunc, 0xFD, 0x04]);
   }
 
   request.internalSetFromPduResponse(pdu);

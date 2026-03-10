@@ -352,7 +352,7 @@ void main() {
 
       await _showPanel(tester, ds);
 
-      expect(find.textContaining('Error:'), findsOneWidget);
+      expect(find.textContaining('Connection refused'), findsOneWidget);
     });
 
     // Additional tests for completeness

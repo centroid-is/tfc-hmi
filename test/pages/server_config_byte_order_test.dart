@@ -26,9 +26,9 @@ void main() {
         200,
         scrollable: find.byType(Scrollable).first,
       );
-      await tester.pumpAndSettle();
+      await settle(tester);
       await tester.tap(find.text('plc_1'));
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       // Scroll to the Byte Order dropdown
       await tester.scrollUntilVisible(
@@ -36,13 +36,13 @@ void main() {
         200,
         scrollable: find.byType(Scrollable).first,
       );
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       // Find and tap the dropdown to open it
       final dropdown = find.byType(DropdownButtonFormField<ModbusEndianness>);
       expect(dropdown, findsOneWidget);
       await tester.tap(dropdown);
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       // All 4 options should be visible in the dropdown menu
       expect(find.text('ABCD (Big-Endian)'), findsWidgets);
@@ -61,9 +61,9 @@ void main() {
         200,
         scrollable: find.byType(Scrollable).first,
       );
-      await tester.pumpAndSettle();
+      await settle(tester);
       await tester.tap(find.text('plc_1'));
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       // Scroll to dropdown
       await tester.scrollUntilVisible(
@@ -71,16 +71,16 @@ void main() {
         200,
         scrollable: find.byType(Scrollable).first,
       );
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       // Open dropdown
       final dropdown = find.byType(DropdownButtonFormField<ModbusEndianness>);
       await tester.tap(dropdown);
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       // Select CDAB (Word Swap)
       await tester.tap(find.text('CDAB (Word Swap)').last);
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       // The dropdown should now show CDAB selected
       // The selected item text should be visible in the dropdown field
@@ -97,9 +97,9 @@ void main() {
         200,
         scrollable: find.byType(Scrollable).first,
       );
-      await tester.pumpAndSettle();
+      await settle(tester);
       await tester.tap(find.text('plc_1'));
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       // Scroll to dropdown
       await tester.scrollUntilVisible(
@@ -107,7 +107,7 @@ void main() {
         200,
         scrollable: find.byType(Scrollable).first,
       );
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       // The default selection should be ABCD
       expect(find.text('ABCD (Big-Endian)'), findsOneWidget);
@@ -138,9 +138,9 @@ void main() {
         200,
         scrollable: find.byType(Scrollable).first,
       );
-      await tester.pumpAndSettle();
+      await settle(tester);
       await tester.tap(find.text('plc_1'));
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       // Scroll to Byte Order dropdown
       await tester.scrollUntilVisible(
@@ -148,7 +148,7 @@ void main() {
         200,
         scrollable: find.byType(Scrollable).first,
       );
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       // The dropdown should show CDAB (Word Swap) as the selected value
       expect(find.text('CDAB (Word Swap)'), findsOneWidget);
@@ -166,9 +166,9 @@ void main() {
         200,
         scrollable: find.byType(Scrollable).first,
       );
-      await tester.pumpAndSettle();
+      await settle(tester);
       await tester.tap(find.text('plc_1'));
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       // Scroll to Byte Order area
       await tester.scrollUntilVisible(
@@ -176,7 +176,7 @@ void main() {
         200,
         scrollable: find.byType(Scrollable).first,
       );
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       // Info icon should be present
       expect(find.byIcon(Icons.info_outline), findsAtLeastNWidgets(1));

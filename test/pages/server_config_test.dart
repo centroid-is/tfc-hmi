@@ -25,7 +25,7 @@ void main() {
         200,
         scrollable: find.byType(Scrollable).first,
       );
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       expect(find.text('Modbus TCP Servers'), findsOneWidget);
     });
@@ -38,7 +38,7 @@ void main() {
         200,
         scrollable: find.byType(Scrollable).first,
       );
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       // Find the networkWired icon within the Modbus section
       final networkWiredIcons = find.byWidgetPredicate(
@@ -55,7 +55,7 @@ void main() {
         200,
         scrollable: find.byType(Scrollable).first,
       );
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       expect(find.text('No Modbus servers configured'), findsOneWidget);
       expect(find.text('Add your first Modbus TCP server to get started'),
@@ -78,13 +78,13 @@ void main() {
         200,
         scrollable: find.byType(Scrollable).first,
       );
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       // Find Add Server buttons -- the Modbus one is the last one
       final addButtons = find.text('Add Server');
       // Tap the last Add Server button (belongs to Modbus section)
       await tester.tap(addButtons.last);
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       // Empty state should be gone
       expect(find.text('No Modbus servers configured'), findsNothing);
@@ -106,11 +106,11 @@ void main() {
         200,
         scrollable: find.byType(Scrollable).first,
       );
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       // Find and expand the server card by tapping its title
       await tester.tap(find.text('plc_1'));
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       // Scroll to make the host field visible
       await tester.scrollUntilVisible(
@@ -118,12 +118,12 @@ void main() {
         200,
         scrollable: find.byType(Scrollable).first,
       );
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       // Change the host field
       final hostField = find.widgetWithText(TextField, 'Host');
       await tester.enterText(hostField, '10.0.0.1');
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       // Unsaved badge should appear
       // Scroll back up to see the badge
@@ -132,7 +132,7 @@ void main() {
         -200,
         scrollable: find.byType(Scrollable).first,
       );
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       // Find "Unsaved" or "Unsaved Changes" text within the Modbus section
       expect(find.textContaining('Unsaved'), findsAtLeastNWidgets(1));
@@ -151,14 +151,14 @@ void main() {
         200,
         scrollable: find.byType(Scrollable).first,
       );
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       // Find trash icon buttons in the Modbus section area.
       // Tap the last trash button (belongs to Modbus card).
       final trashButtons = find.byWidgetPredicate(
           (w) => w is FaIcon && w.icon == FontAwesomeIcons.trash);
       await tester.tap(trashButtons.last);
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       expect(find.text('Remove Server'), findsOneWidget);
       expect(
@@ -177,7 +177,7 @@ void main() {
         200,
         scrollable: find.byType(Scrollable).first,
       );
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       // Server card should be visible
       expect(find.text('plc_1'), findsOneWidget);
@@ -186,11 +186,11 @@ void main() {
       final trashButtons = find.byWidgetPredicate(
           (w) => w is FaIcon && w.icon == FontAwesomeIcons.trash);
       await tester.tap(trashButtons.last);
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       // Confirm removal
       await tester.tap(find.text('Remove'));
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       // Server card should be gone, empty state should show
       expect(find.text('plc_1'), findsNothing);
@@ -210,7 +210,7 @@ void main() {
         200,
         scrollable: find.byType(Scrollable).first,
       );
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       // The connection status chip should show "Not active" (grey)
       // since stateManProvider is not overridden with a real StateMan
@@ -229,11 +229,11 @@ void main() {
         200,
         scrollable: find.byType(Scrollable).first,
       );
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       // Expand the server card
       await tester.tap(find.text('plc_1'));
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       // Scroll to see poll groups header
       await tester.scrollUntilVisible(
@@ -241,7 +241,7 @@ void main() {
         200,
         scrollable: find.byType(Scrollable).first,
       );
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       expect(find.text('Poll Groups (2)'), findsOneWidget);
     });
@@ -256,11 +256,11 @@ void main() {
         200,
         scrollable: find.byType(Scrollable).first,
       );
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       // Expand server card
       await tester.tap(find.text('plc_1'));
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       // Scroll to poll groups and expand
       await tester.scrollUntilVisible(
@@ -268,10 +268,10 @@ void main() {
         200,
         scrollable: find.byType(Scrollable).first,
       );
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       await tester.tap(find.text('Poll Groups (2)'));
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       // Should show name fields with 'default' and 'fast' values
       expect(find.widgetWithText(TextField, 'Name'), findsAtLeastNWidgets(1));
@@ -288,11 +288,11 @@ void main() {
         200,
         scrollable: find.byType(Scrollable).first,
       );
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       // Expand server card
       await tester.tap(find.text('plc_1'));
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       // Scroll to and expand poll groups
       await tester.scrollUntilVisible(
@@ -300,10 +300,10 @@ void main() {
         200,
         scrollable: find.byType(Scrollable).first,
       );
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       await tester.tap(find.text('Poll Groups (1)'));
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       // Scroll to Add Poll Group button
       await tester.scrollUntilVisible(
@@ -311,11 +311,11 @@ void main() {
         200,
         scrollable: find.byType(Scrollable).first,
       );
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       // Tap add
       await tester.tap(find.text('Add Poll Group'));
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       // Count should increase to 2
       expect(find.text('Poll Groups (2)'), findsOneWidget);
@@ -330,11 +330,11 @@ void main() {
         200,
         scrollable: find.byType(Scrollable).first,
       );
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       // Expand server card
       await tester.tap(find.text('plc_1'));
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       // Scroll to and expand poll groups
       await tester.scrollUntilVisible(
@@ -342,10 +342,10 @@ void main() {
         200,
         scrollable: find.byType(Scrollable).first,
       );
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       await tester.tap(find.text('Poll Groups (2)'));
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       // Find trash icons within poll group rows -- the small ones (size 14)
       // The server card trash is size 16, poll group trash is size 14
@@ -355,7 +355,7 @@ void main() {
 
       // Tap first poll group trash icon
       await tester.tap(pollGroupTrashIcons.first);
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       // Count should decrease to 1
       expect(find.text('Poll Groups (1)'), findsOneWidget);
@@ -370,11 +370,11 @@ void main() {
         200,
         scrollable: find.byType(Scrollable).first,
       );
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       // Expand server card
       await tester.tap(find.text('plc_1'));
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       // Scroll to and expand poll groups
       await tester.scrollUntilVisible(
@@ -382,10 +382,10 @@ void main() {
         200,
         scrollable: find.byType(Scrollable).first,
       );
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       await tester.tap(find.text('Poll Groups (1)'));
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       // Scroll to interval field
       await tester.scrollUntilVisible(
@@ -393,12 +393,12 @@ void main() {
         200,
         scrollable: find.byType(Scrollable).first,
       );
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       // Change interval
       final intervalField = find.widgetWithText(TextField, 'Interval (ms)');
       await tester.enterText(intervalField.first, '500');
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       // Scroll back up to see unsaved badge
       await tester.scrollUntilVisible(
@@ -406,7 +406,7 @@ void main() {
         -200,
         scrollable: find.byType(Scrollable).first,
       );
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       expect(find.textContaining('Unsaved'), findsAtLeastNWidgets(1));
     });
@@ -423,7 +423,7 @@ void main() {
         200,
         scrollable: find.byType(Scrollable).first,
       );
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       // Find "All Changes Saved" text (indicates save button is disabled)
       // Need to scroll further to find it
@@ -432,7 +432,7 @@ void main() {
         200,
         scrollable: find.byType(Scrollable).first,
       );
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       // The last "All Changes Saved" belongs to Modbus section
       expect(find.text('All Changes Saved'), findsAtLeastNWidgets(1));
@@ -448,11 +448,11 @@ void main() {
         200,
         scrollable: find.byType(Scrollable).first,
       );
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       // Expand the server card
       await tester.tap(find.text('plc_1'));
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       // Edit host to create unsaved changes
       await tester.scrollUntilVisible(
@@ -460,11 +460,11 @@ void main() {
         200,
         scrollable: find.byType(Scrollable).first,
       );
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       final hostField = find.widgetWithText(TextField, 'Host');
       await tester.enterText(hostField, '10.0.0.1');
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       // Scroll to Save button area
       await tester.scrollUntilVisible(
@@ -472,7 +472,7 @@ void main() {
         200,
         scrollable: find.byType(Scrollable).first,
       );
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       expect(find.text('Save Configuration'), findsAtLeastNWidgets(1));
     });
@@ -490,11 +490,11 @@ void main() {
         200,
         scrollable: find.byType(Scrollable).first,
       );
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       // Expand the server card
       await tester.tap(find.text('plc_1'));
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       // Scroll to UMAS checkbox
       await tester.scrollUntilVisible(
@@ -502,7 +502,7 @@ void main() {
         200,
         scrollable: find.byType(Scrollable).first,
       );
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       expect(find.text('Schneider UMAS'), findsOneWidget);
       expect(find.text('Variable browsing via FC90 (M340/M580 only)'), findsOneWidget);
@@ -518,11 +518,11 @@ void main() {
         200,
         scrollable: find.byType(Scrollable).first,
       );
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       // Expand the server card
       await tester.tap(find.text('plc_1'));
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       // Scroll to UMAS checkbox
       await tester.scrollUntilVisible(
@@ -530,11 +530,11 @@ void main() {
         200,
         scrollable: find.byType(Scrollable).first,
       );
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       // Tap the checkbox
       await tester.tap(find.text('Schneider UMAS'));
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       // Scroll back to top to check for unsaved changes badge
       await tester.scrollUntilVisible(
@@ -542,7 +542,7 @@ void main() {
         -200,
         scrollable: find.byType(Scrollable).first,
       );
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       expect(find.textContaining('Unsaved'), findsAtLeastNWidgets(1));
     });

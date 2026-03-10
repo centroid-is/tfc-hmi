@@ -234,7 +234,7 @@ void main() {
 
       await _showPanel(tester, client);
 
-      expect(find.textContaining('Error:'), findsOneWidget);
+      expect(find.textContaining('Connection refused'), findsOneWidget);
     });
 
     testWidgets('expanding an object node loads and shows children',

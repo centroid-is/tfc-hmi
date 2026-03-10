@@ -225,13 +225,19 @@ StateManConfig sampleStateManConfigWithUmas() {
 ///
 /// ServerConfigBody sections show CircularProgressIndicator during async
 /// _loadConfig(). The indeterminate animation prevents pumpAndSettle from
-/// settling. This helper uses explicit pump() calls to let Futures resolve
-/// before calling pumpAndSettle.
+/// settling. This helper uses explicit pump() calls to let Futures resolve.
 Future<void> pumpAndLoad(WidgetTester tester, Widget widget) async {
   await tester.pumpWidget(widget);
-  // Pump multiple frames to let all async _loadConfig() Futures resolve.
-  // Cannot use pumpAndSettle — DatabaseConfigWidget and other sections show
-  // CircularProgressIndicator (indeterminate animation) that never settles.
+  await settle(tester);
+}
+
+/// Pumps frames to let async operations and animations advance without
+/// requiring all animations to finish (unlike pumpAndSettle).
+///
+/// Use this instead of pumpAndSettle when the widget tree contains
+/// indeterminate animations (e.g. CircularProgressIndicator) that prevent
+/// pumpAndSettle from ever returning.
+Future<void> settle(WidgetTester tester) async {
   for (var i = 0; i < 10; i++) {
     await tester.pump(const Duration(milliseconds: 50));
   }
