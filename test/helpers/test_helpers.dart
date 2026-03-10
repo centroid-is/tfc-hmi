@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_test/flutter_test.dart';
 import 'package:tfc_dart/core/preferences.dart';
 import 'package:tfc_dart/core/secure_storage/interface.dart';
 import 'package:tfc_dart/core/state_man.dart';
@@ -218,6 +219,19 @@ StateManConfig sampleStateManConfigWithUmas() {
       )..serverAlias = 'schneider_plc',
     ],
   );
+}
+
+/// Pumps widget and waits for async config loading to complete.
+///
+/// ServerConfigBody sections show CircularProgressIndicator during async
+/// _loadConfig(). The indeterminate animation prevents pumpAndSettle from
+/// settling. This helper uses explicit pump() calls to let Futures resolve
+/// before calling pumpAndSettle.
+Future<void> pumpAndLoad(WidgetTester tester, Widget widget) async {
+  await tester.pumpWidget(widget);
+  await tester.pump();
+  await tester.pump(const Duration(milliseconds: 50));
+  await tester.pumpAndSettle();
 }
 
 /// Wraps the [ServerConfigPage] body in a testable widget tree.

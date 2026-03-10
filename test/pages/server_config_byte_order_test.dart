@@ -18,10 +18,7 @@ void main() {
   group('Byte order dropdown', () {
     testWidgets('renders with all 4 options (ABCD, CDAB, BADC, DCBA)',
         (tester) async {
-      await tester.pumpWidget(buildTestableServerConfig(
-        stateManConfig: sampleModbusStateManConfig(),
-      ));
-      await tester.pumpAndSettle();
+      await pumpAndLoad(tester, buildTestableServerConfig(stateManConfig: sampleModbusStateManConfig(),));
 
       // Scroll to and expand the Modbus server card
       await tester.scrollUntilVisible(
@@ -56,10 +53,7 @@ void main() {
 
     testWidgets('selecting a byte order option updates the config',
         (tester) async {
-      await tester.pumpWidget(buildTestableServerConfig(
-        stateManConfig: sampleModbusStateManConfig(),
-      ));
-      await tester.pumpAndSettle();
+      await pumpAndLoad(tester, buildTestableServerConfig(stateManConfig: sampleModbusStateManConfig(),));
 
       // Expand the Modbus server card
       await tester.scrollUntilVisible(
@@ -95,10 +89,7 @@ void main() {
 
     testWidgets('ABCD (Big-Endian) is the default selection',
         (tester) async {
-      await tester.pumpWidget(buildTestableServerConfig(
-        stateManConfig: sampleModbusStateManConfig(),
-      ));
-      await tester.pumpAndSettle();
+      await pumpAndLoad(tester, buildTestableServerConfig(stateManConfig: sampleModbusStateManConfig(),));
 
       // Expand the Modbus server card
       await tester.scrollUntilVisible(
@@ -139,10 +130,7 @@ void main() {
           )..serverAlias = 'plc_1',
         ],
       );
-      await tester.pumpWidget(buildTestableServerConfig(
-        stateManConfig: config,
-      ));
-      await tester.pumpAndSettle();
+      await pumpAndLoad(tester, buildTestableServerConfig(stateManConfig: config,));
 
       // Expand the Modbus server card
       await tester.scrollUntilVisible(
@@ -170,10 +158,7 @@ void main() {
 
     testWidgets('info icon is present next to Byte Order label',
         (tester) async {
-      await tester.pumpWidget(buildTestableServerConfig(
-        stateManConfig: sampleModbusStateManConfig(),
-      ));
-      await tester.pumpAndSettle();
+      await pumpAndLoad(tester, buildTestableServerConfig(stateManConfig: sampleModbusStateManConfig(),));
 
       // Expand the Modbus server card
       await tester.scrollUntilVisible(

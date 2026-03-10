@@ -17,8 +17,7 @@ void main() {
   // ==================== Group 1: Modbus Section Rendering ====================
   group('Modbus section rendering', () {
     testWidgets('renders "Modbus TCP Servers" section header', (tester) async {
-      await tester.pumpWidget(buildTestableServerConfig());
-      await tester.pumpAndSettle();
+      await pumpAndLoad(tester, buildTestableServerConfig());
 
       // Scroll to find Modbus section (it's the 4th section on the page)
       await tester.scrollUntilVisible(
@@ -32,8 +31,7 @@ void main() {
     });
 
     testWidgets('renders networkWired icon in section header', (tester) async {
-      await tester.pumpWidget(buildTestableServerConfig());
-      await tester.pumpAndSettle();
+      await pumpAndLoad(tester, buildTestableServerConfig());
 
       await tester.scrollUntilVisible(
         find.text('Modbus TCP Servers'),
@@ -50,8 +48,7 @@ void main() {
 
     testWidgets('shows empty state when config.modbus is empty',
         (tester) async {
-      await tester.pumpWidget(buildTestableServerConfig());
-      await tester.pumpAndSettle();
+      await pumpAndLoad(tester, buildTestableServerConfig());
 
       await tester.scrollUntilVisible(
         find.text('No Modbus servers configured'),
@@ -71,8 +68,7 @@ void main() {
     testWidgets(
         'tapping "Add Server" creates a card with defaults (localhost, 502, unit ID 1)',
         (tester) async {
-      await tester.pumpWidget(buildTestableServerConfig());
-      await tester.pumpAndSettle();
+      await pumpAndLoad(tester, buildTestableServerConfig());
 
       // Scroll to Modbus section and find its Add Server button.
       // There may be multiple "Add Server" buttons (OPC UA, JBTM, Modbus).
@@ -102,10 +98,7 @@ void main() {
   group('Edit Modbus server', () {
     testWidgets('editing host field updates the server config and shows unsaved badge',
         (tester) async {
-      await tester.pumpWidget(buildTestableServerConfig(
-        stateManConfig: sampleModbusStateManConfig(),
-      ));
-      await tester.pumpAndSettle();
+      await pumpAndLoad(tester, buildTestableServerConfig(stateManConfig: sampleModbusStateManConfig(),));
 
       // Scroll to Modbus section
       await tester.scrollUntilVisible(
@@ -150,10 +143,7 @@ void main() {
   group('Remove Modbus server', () {
     testWidgets('tapping delete button shows confirmation dialog',
         (tester) async {
-      await tester.pumpWidget(buildTestableServerConfig(
-        stateManConfig: sampleModbusStateManConfig(),
-      ));
-      await tester.pumpAndSettle();
+      await pumpAndLoad(tester, buildTestableServerConfig(stateManConfig: sampleModbusStateManConfig(),));
 
       // Scroll to Modbus section
       await tester.scrollUntilVisible(
@@ -179,10 +169,7 @@ void main() {
     });
 
     testWidgets('confirming removal removes the server card', (tester) async {
-      await tester.pumpWidget(buildTestableServerConfig(
-        stateManConfig: sampleModbusStateManConfig(),
-      ));
-      await tester.pumpAndSettle();
+      await pumpAndLoad(tester, buildTestableServerConfig(stateManConfig: sampleModbusStateManConfig(),));
 
       // Scroll to Modbus section
       await tester.scrollUntilVisible(
@@ -215,10 +202,7 @@ void main() {
   group('Connection status', () {
     testWidgets('shows grey dot with "Not active" when no StateMan',
         (tester) async {
-      await tester.pumpWidget(buildTestableServerConfig(
-        stateManConfig: sampleModbusStateManConfig(),
-      ));
-      await tester.pumpAndSettle();
+      await pumpAndLoad(tester, buildTestableServerConfig(stateManConfig: sampleModbusStateManConfig(),));
 
       // Scroll to Modbus section
       await tester.scrollUntilVisible(
@@ -237,10 +221,7 @@ void main() {
   // ==================== Group 6: Poll Group Configuration ====================
   group('Poll group configuration', () {
     testWidgets('shows Poll Groups header with count', (tester) async {
-      await tester.pumpWidget(buildTestableServerConfig(
-        stateManConfig: sampleModbusWithTwoPollGroups(),
-      ));
-      await tester.pumpAndSettle();
+      await pumpAndLoad(tester, buildTestableServerConfig(stateManConfig: sampleModbusWithTwoPollGroups(),));
 
       // Scroll to Modbus section
       await tester.scrollUntilVisible(
@@ -267,10 +248,7 @@ void main() {
 
     testWidgets('expanding poll groups shows name and interval fields',
         (tester) async {
-      await tester.pumpWidget(buildTestableServerConfig(
-        stateManConfig: sampleModbusWithTwoPollGroups(),
-      ));
-      await tester.pumpAndSettle();
+      await pumpAndLoad(tester, buildTestableServerConfig(stateManConfig: sampleModbusWithTwoPollGroups(),));
 
       // Scroll to Modbus section
       await tester.scrollUntilVisible(
@@ -302,10 +280,7 @@ void main() {
     });
 
     testWidgets('add poll group creates new row', (tester) async {
-      await tester.pumpWidget(buildTestableServerConfig(
-        stateManConfig: sampleModbusStateManConfig(),
-      ));
-      await tester.pumpAndSettle();
+      await pumpAndLoad(tester, buildTestableServerConfig(stateManConfig: sampleModbusStateManConfig(),));
 
       // Scroll to Modbus section
       await tester.scrollUntilVisible(
@@ -347,10 +322,7 @@ void main() {
     });
 
     testWidgets('delete poll group removes row', (tester) async {
-      await tester.pumpWidget(buildTestableServerConfig(
-        stateManConfig: sampleModbusWithTwoPollGroups(),
-      ));
-      await tester.pumpAndSettle();
+      await pumpAndLoad(tester, buildTestableServerConfig(stateManConfig: sampleModbusWithTwoPollGroups(),));
 
       // Scroll to Modbus section
       await tester.scrollUntilVisible(
@@ -390,10 +362,7 @@ void main() {
     });
 
     testWidgets('editing poll group triggers unsaved changes', (tester) async {
-      await tester.pumpWidget(buildTestableServerConfig(
-        stateManConfig: sampleModbusStateManConfig(),
-      ));
-      await tester.pumpAndSettle();
+      await pumpAndLoad(tester, buildTestableServerConfig(stateManConfig: sampleModbusStateManConfig(),));
 
       // Scroll to Modbus section
       await tester.scrollUntilVisible(
@@ -446,10 +415,7 @@ void main() {
   // ==================== Group 7: Save Button ====================
   group('Save button', () {
     testWidgets('Save button disabled when no changes', (tester) async {
-      await tester.pumpWidget(buildTestableServerConfig(
-        stateManConfig: sampleModbusStateManConfig(),
-      ));
-      await tester.pumpAndSettle();
+      await pumpAndLoad(tester, buildTestableServerConfig(stateManConfig: sampleModbusStateManConfig(),));
 
       // Scroll to Modbus save button area
       await tester.scrollUntilVisible(
@@ -474,10 +440,7 @@ void main() {
 
     testWidgets('Save button text changes to "Save Configuration" when unsaved',
         (tester) async {
-      await tester.pumpWidget(buildTestableServerConfig(
-        stateManConfig: sampleModbusStateManConfig(),
-      ));
-      await tester.pumpAndSettle();
+      await pumpAndLoad(tester, buildTestableServerConfig(stateManConfig: sampleModbusStateManConfig(),));
 
       // Scroll to Modbus section
       await tester.scrollUntilVisible(
@@ -519,10 +482,7 @@ void main() {
   group('UMAS checkbox', () {
     testWidgets('UMAS checkbox appears in Modbus server config card',
         (tester) async {
-      await tester.pumpWidget(buildTestableServerConfig(
-        stateManConfig: sampleModbusStateManConfig(),
-      ));
-      await tester.pumpAndSettle();
+      await pumpAndLoad(tester, buildTestableServerConfig(stateManConfig: sampleModbusStateManConfig(),));
 
       // Scroll to Modbus section
       await tester.scrollUntilVisible(
@@ -550,10 +510,7 @@ void main() {
 
     testWidgets('toggling UMAS checkbox triggers unsaved changes',
         (tester) async {
-      await tester.pumpWidget(buildTestableServerConfig(
-        stateManConfig: sampleModbusStateManConfig(),
-      ));
-      await tester.pumpAndSettle();
+      await pumpAndLoad(tester, buildTestableServerConfig(stateManConfig: sampleModbusStateManConfig(),));
 
       // Scroll to Modbus section
       await tester.scrollUntilVisible(
