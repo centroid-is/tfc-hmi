@@ -78,6 +78,38 @@ class UmasBrowseDataSource implements BrowseDataSource {
   }
 }
 
+/// Maps UMAS exceptions to user-friendly error info.
+BrowseErrorInfo? _umasErrorMapper(Object error) {
+  if (error is UmasException) {
+    final hex = '0x${error.errorCode.toRadixString(16).toUpperCase()}';
+    if (error.errorCode == 0x83) {
+      return (
+        summary: 'UMAS not available on this PLC (status $hex)',
+        detail: 'The PLC responded to FC90 but rejected the request '
+            'with status $hex. This typically means the Data Dictionary '
+            'is not enabled.\n\n'
+            'To fix this in Unity Pro / EcoStruxure Control Expert:\n\n'
+            '1. Open your PLC project\n'
+            '2. Go to Tools \u2192 Project Settings \u2192 PLC embedded data\n'
+            '3. Enable "Data Dictionary"\n'
+            '4. Download the updated project to the PLC\n'
+            '5. Retry browsing\n\n'
+            'Also check that your PLC firmware is v2.60 or newer '
+            '(older firmware has known UMAS issues).',
+      );
+    }
+    return (
+      summary: 'UMAS error ($hex): ${error.message}',
+      detail: 'The PLC returned UMAS error code $hex.\n\n'
+          'If this is unexpected, verify that:\n'
+          '- The PLC supports UMAS (M340/M580 with Unity firmware)\n'
+          '- Data Dictionary is enabled in the PLC project\n'
+          '- The PLC firmware is up to date',
+    );
+  }
+  return null;
+}
+
 /// Convenience function to open UMAS browse dialog for a Modbus server.
 ///
 /// Finds the [ModbusDeviceClientAdapter] matching [serverAlias], creates a
@@ -127,5 +159,6 @@ Future<BrowseNode?> browseUmasNode({
     context: context,
     dataSource: dataSource,
     serverAlias: serverAlias ?? '',
+    errorMapper: _umasErrorMapper,
   );
 }

@@ -614,9 +614,11 @@ class ModbusClientWrapper {
 
       // Pipe all subscription values after all groups have been read.
       // Elements are shared references -- batch reads populated them in-place.
+      // The modbus_client library returns double for all numeric types (due to
+      // multiplier/offset arithmetic). Coerce back to int for integer types.
       for (final sub in group._subscriptions) {
         if (!sub.value$.isClosed) {
-          sub.value$.add(sub.element.value);
+          sub.value$.add(_coerceValue(sub.element.value, sub.spec.dataType));
         }
       }
     } finally {
@@ -768,6 +770,29 @@ class ModbusClientWrapper {
   // ---------------------------------------------------------------------------
   // Helpers
   // ---------------------------------------------------------------------------
+
+  /// Coerces a raw modbus_client value to the correct Dart type.
+  ///
+  /// The modbus_client library's [ModbusNumRegister.setValueFromBytes] applies
+  /// `(rawInt * multiplier) + offset` where multiplier/offset are doubles,
+  /// promoting all results to double — even for int16/uint16 registers.
+  /// This method converts back to int for integer data types.
+  static Object? _coerceValue(Object? value, ModbusDataType dataType) {
+    if (value == null) return null;
+    switch (dataType) {
+      case ModbusDataType.bit:
+      case ModbusDataType.float32:
+      case ModbusDataType.float64:
+        return value; // already correct type (bool or double)
+      case ModbusDataType.int16:
+      case ModbusDataType.uint16:
+      case ModbusDataType.int32:
+      case ModbusDataType.uint32:
+      case ModbusDataType.int64:
+      case ModbusDataType.uint64:
+        return value is num ? value.toInt() : value;
+    }
+  }
 
   static Duration _clampDuration(
       Duration value, Duration min, Duration max) {

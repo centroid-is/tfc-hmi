@@ -1875,62 +1875,64 @@ class _ModbusServerConfigCardState extends State<_ModbusServerConfigCard> {
                 const Divider(height: 24),
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                  child: DropdownButtonFormField<ModbusEndianness>(
-                    value: _endianness,
-                    decoration: InputDecoration(
-                      label: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Text('Byte Order'),
-                          const SizedBox(width: 4),
-                          Tooltip(
-                            message: 'Byte order for 32-bit values (float, int32, etc.).\n'
-                                'Most devices use ABCD (Big-Endian, Modbus standard).\n\n'
-                                'Common vendor defaults:\n'
-                                '\u2022 Schneider/Modicon: CDAB (Word Swap)\n'
-                                '\u2022 Siemens S7: ABCD (Big-Endian)\n'
-                                '\u2022 Allen-Bradley/Rockwell: CDAB or DCBA (varies by model)\n'
-                                '\u2022 ABB: ABCD (Big-Endian)\n'
-                                '\u2022 Omron: CDAB (Word Swap)\n'
-                                '\u2022 Danfoss: ABCD (Big-Endian)\n'
-                                '\u2022 Wago: ABCD (Big-Endian)\n\n'
-                                'If multi-register values read as garbage, try CDAB first.',
-                            child: Icon(Icons.info_outline, size: 16,
-                                color: Theme.of(context).colorScheme.onSurfaceVariant),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: DropdownButtonFormField<ModbusEndianness>(
+                          value: _endianness,
+                          decoration: const InputDecoration(
+                            labelText: 'Byte Order',
                           ),
-                        ],
+                          items: const [
+                            DropdownMenuItem(
+                              value: ModbusEndianness.ABCD,
+                              child: Text('ABCD (Big-Endian)'),
+                            ),
+                            DropdownMenuItem(
+                              value: ModbusEndianness.CDAB,
+                              child: Text('CDAB (Word Swap)'),
+                            ),
+                            DropdownMenuItem(
+                              value: ModbusEndianness.BADC,
+                              child: Text('BADC (Byte Swap)'),
+                            ),
+                            DropdownMenuItem(
+                              value: ModbusEndianness.DCBA,
+                              child: Text('DCBA (Little-Endian)'),
+                            ),
+                          ],
+                          onChanged: (value) {
+                            if (value != null) {
+                              setState(() => _endianness = value);
+                              _updateServer();
+                            }
+                          },
+                        ),
                       ),
-                    ),
-                    items: const [
-                      DropdownMenuItem(
-                        value: ModbusEndianness.ABCD,
-                        child: Text('ABCD (Big-Endian)'),
-                      ),
-                      DropdownMenuItem(
-                        value: ModbusEndianness.CDAB,
-                        child: Text('CDAB (Word Swap)'),
-                      ),
-                      DropdownMenuItem(
-                        value: ModbusEndianness.BADC,
-                        child: Text('BADC (Byte Swap)'),
-                      ),
-                      DropdownMenuItem(
-                        value: ModbusEndianness.DCBA,
-                        child: Text('DCBA (Little-Endian)'),
+                      const SizedBox(width: 8),
+                      IconButton(
+                        icon: const Icon(Icons.info_outline),
+                        tooltip: 'Byte order for 32-bit values (float, int32, etc.).\n'
+                            'Most devices use ABCD (Big-Endian, Modbus standard).\n\n'
+                            'Common vendor defaults:\n'
+                            '\u2022 Schneider/Modicon: CDAB (Word Swap)\n'
+                            '\u2022 Siemens S7: ABCD (Big-Endian)\n'
+                            '\u2022 Allen-Bradley/Rockwell: CDAB or DCBA (varies)\n'
+                            '\u2022 ABB: ABCD (Big-Endian)\n'
+                            '\u2022 Omron: CDAB (Word Swap)\n'
+                            '\u2022 Danfoss: ABCD (Big-Endian)\n'
+                            '\u2022 Wago: ABCD (Big-Endian)\n\n'
+                            'If multi-register values read as garbage, try CDAB first.',
+                        onPressed: null,
                       ),
                     ],
-                    onChanged: (value) {
-                      if (value != null) {
-                        setState(() => _endianness = value);
-                        _updateServer();
-                      }
-                    },
                   ),
                 ),
                 const Divider(height: 24),
                 CheckboxListTile(
                   title: const Text('Schneider UMAS'),
-                  subtitle: const Text('Enable variable browsing via FC90'),
+                  subtitle: const Text(
+                      'Variable browsing via FC90 (M340/M580 only)'),
                   value: _umasEnabled,
                   onChanged: (value) {
                     setState(() => _umasEnabled = value ?? false);

@@ -92,12 +92,20 @@ class BrowseTreeEntry {
 // BrowsePanel widget
 // ---------------------------------------------------------------------------
 
+/// Error info returned by [BrowseErrorMapper] for user-friendly display.
+typedef BrowseErrorInfo = ({String summary, String detail});
+
+/// Maps a caught exception to user-friendly summary + detail text.
+/// Return null to fall back to the default `e.toString()` display.
+typedef BrowseErrorMapper = BrowseErrorInfo? Function(Object error);
+
 /// Shows an address-space browser in a dialog sized at 80% of the screen.
 /// Returns the selected [BrowseNode] or null if cancelled.
 Future<BrowseNode?> showBrowseDialog({
   required BuildContext context,
   required BrowseDataSource dataSource,
   required String serverAlias,
+  BrowseErrorMapper? errorMapper,
 }) {
   return showDialog<BrowseNode>(
     context: context,
@@ -119,6 +127,7 @@ Future<BrowseNode?> showBrowseDialog({
             child: BrowsePanel(
               dataSource: dataSource,
               serverAlias: serverAlias,
+              errorMapper: errorMapper,
               onSelected: (node) => Navigator.of(context).pop(node),
               onCancelled: () => Navigator.of(context).pop(),
             ),
@@ -138,6 +147,7 @@ class BrowsePanel extends StatefulWidget {
   final String serverAlias;
   final ValueChanged<BrowseNode> onSelected;
   final VoidCallback onCancelled;
+  final BrowseErrorMapper? errorMapper;
 
   const BrowsePanel({
     super.key,
@@ -145,6 +155,7 @@ class BrowsePanel extends StatefulWidget {
     required this.serverAlias,
     required this.onSelected,
     required this.onCancelled,
+    this.errorMapper,
   });
 
   @override
@@ -160,6 +171,7 @@ class BrowsePanelState extends State<BrowsePanel> {
   BrowseTreeEntry? _selected;
   bool _rootLoading = true;
   String? _error;
+  String? _errorHelp;
 
   // Detail strip state for selected variable
   String? _detailDescription;
@@ -178,6 +190,36 @@ class BrowsePanelState extends State<BrowsePanel> {
   String? get error => _error;
 
   static const String _rootParentId = '__root__';
+
+  void _showErrorHelpDialog(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: cs.surface,
+        title: Row(
+          children: [
+            Icon(Icons.info_outline, color: cs.primary, size: 20),
+            const SizedBox(width: 8),
+            const Text('Troubleshooting'),
+          ],
+        ),
+        content: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 460),
+          child: SelectableText(
+            _errorHelp!,
+            style: TextStyle(color: cs.onSurface, fontSize: 13, height: 1.5),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+  }
 
   @override
   void initState() {
@@ -204,8 +246,10 @@ class BrowsePanelState extends State<BrowsePanel> {
       _prefetchChildren(roots);
     } catch (e) {
       if (!mounted) return;
+      final info = widget.errorMapper?.call(e);
       setState(() {
-        _error = e.toString();
+        _error = info?.summary ?? e.toString();
+        _errorHelp = info?.detail;
         _rootLoading = false;
       });
     }
@@ -477,11 +521,28 @@ class BrowsePanelState extends State<BrowsePanel> {
               : _error != null
                   ? Center(
                       child: Padding(
-                        padding: const EdgeInsets.all(16),
-                        child: Text(
-                          'Error: $_error',
-                          style:
-                              TextStyle(color: cs.secondary, fontSize: 12),
+                        padding: const EdgeInsets.all(24),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.error_outline,
+                                color: cs.error, size: 32),
+                            const SizedBox(height: 12),
+                            Text(
+                              _error!,
+                              style: TextStyle(
+                                  color: cs.onSurface, fontSize: 13),
+                              textAlign: TextAlign.center,
+                            ),
+                            if (_errorHelp != null) ...[
+                              const SizedBox(height: 12),
+                              TextButton.icon(
+                                onPressed: () => _showErrorHelpDialog(context),
+                                icon: const Icon(Icons.info_outline, size: 16),
+                                label: const Text('How to fix this'),
+                              ),
+                            ],
+                          ],
                         ),
                       ),
                     )
