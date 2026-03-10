@@ -229,9 +229,12 @@ StateManConfig sampleStateManConfigWithUmas() {
 /// before calling pumpAndSettle.
 Future<void> pumpAndLoad(WidgetTester tester, Widget widget) async {
   await tester.pumpWidget(widget);
-  await tester.pump();
-  await tester.pump(const Duration(milliseconds: 50));
-  await tester.pumpAndSettle();
+  // Pump multiple frames to let all async _loadConfig() Futures resolve.
+  // Cannot use pumpAndSettle — DatabaseConfigWidget and other sections show
+  // CircularProgressIndicator (indeterminate animation) that never settles.
+  for (var i = 0; i < 10; i++) {
+    await tester.pump(const Duration(milliseconds: 50));
+  }
 }
 
 /// Wraps the [ServerConfigPage] body in a testable widget tree.
