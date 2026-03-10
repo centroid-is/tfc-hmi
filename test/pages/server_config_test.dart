@@ -545,7 +545,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('Schneider UMAS'), findsOneWidget);
-      expect(find.text('Enable variable browsing via FC90'), findsOneWidget);
+      expect(find.text('Variable browsing via FC90 (M340/M580 only)'), findsOneWidget);
     });
 
     testWidgets('toggling UMAS checkbox triggers unsaved changes',

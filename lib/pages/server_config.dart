@@ -1626,6 +1626,30 @@ class _ModbusServerConfigCardState extends State<_ModbusServerConfigCard> {
         _aliasController.text.isEmpty ? null : _aliasController.text;
   }
 
+  Widget _unitIdInfoButton() {
+    return IconButton(
+      icon: const Icon(Icons.info_outline, size: 20),
+      tooltip: 'Modbus TCP Unit ID (0-255).\n'
+          'Identifies the device when routing through a gateway.\n\n'
+          'Common defaults:\n'
+          '\u2022 Schneider M340/M580: 255 (NOC), 0/1 (data)\n'
+          '\u2022 Schneider M241: any (ignores unit ID)\n'
+          '\u2022 Siemens S7-1200/1500: 255\n'
+          '\u2022 Allen-Bradley/Rockwell: 0 or 1\n'
+          '\u2022 ABB AC800M: 255\n'
+          '\u2022 Omron CJ/NJ: 0\n'
+          '\u2022 Wago 750: 1\n'
+          '\u2022 Beckhoff BC/BK: 1\n'
+          '\u2022 Danfoss VLT: 1\n'
+          '\u2022 Mitsubishi FX/Q: 1\n'
+          '\u2022 Phoenix Contact: 1\n\n'
+          'Most TCP devices ignore unit ID (identified by IP).\n'
+          'For serial gateways, unit ID = slave address (1-247).\n'
+          'Try 1 first, then 0, then 255.',
+      onPressed: null,
+    );
+  }
+
   void _addPollGroup() {
     final pollGroups = List<ModbusPollGroupConfig>.from(widget.server.pollGroups);
     pollGroups.add(ModbusPollGroupConfig(
@@ -1747,11 +1771,13 @@ class _ModbusServerConfigCardState extends State<_ModbusServerConfigCard> {
                           const SizedBox(height: 12),
                           TextField(
                             controller: _unitIdController,
-                            decoration: const InputDecoration(
+                            decoration: InputDecoration(
                               labelText: 'Unit ID',
                               hintText: '0-255',
-                              prefixIcon: FaIcon(FontAwesomeIcons.addressCard,
+                              prefixIcon: const FaIcon(
+                                  FontAwesomeIcons.addressCard,
                                   size: 16),
+                              suffixIcon: _unitIdInfoButton(),
                             ),
                             keyboardType: TextInputType.number,
                             onChanged: (_) => _updateServer(),
@@ -1796,12 +1822,13 @@ class _ModbusServerConfigCardState extends State<_ModbusServerConfigCard> {
                               flex: 1,
                               child: TextField(
                                 controller: _unitIdController,
-                                decoration: const InputDecoration(
+                                decoration: InputDecoration(
                                   labelText: 'Unit ID',
                                   hintText: '0-255',
-                                  prefixIcon: FaIcon(
+                                  prefixIcon: const FaIcon(
                                       FontAwesomeIcons.addressCard,
                                       size: 16),
+                                  suffixIcon: _unitIdInfoButton(),
                                 ),
                                 keyboardType: TextInputType.number,
                                 onChanged: (_) => _updateServer(),
@@ -1920,8 +1947,11 @@ class _ModbusServerConfigCardState extends State<_ModbusServerConfigCard> {
                             '\u2022 Allen-Bradley/Rockwell: CDAB or DCBA (varies)\n'
                             '\u2022 ABB: ABCD (Big-Endian)\n'
                             '\u2022 Omron: CDAB (Word Swap)\n'
-                            '\u2022 Danfoss: ABCD (Big-Endian)\n'
-                            '\u2022 Wago: ABCD (Big-Endian)\n\n'
+                            '\u2022 Wago: ABCD (Big-Endian)\n'
+                            '\u2022 Beckhoff: ABCD (Big-Endian)\n'
+                            '\u2022 Danfoss VLT: ABCD (Big-Endian)\n'
+                            '\u2022 Mitsubishi: CDAB (Word Swap)\n'
+                            '\u2022 Phoenix Contact: ABCD (Big-Endian)\n\n'
                             'If multi-register values read as garbage, try CDAB first.',
                         onPressed: null,
                       ),
