@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: completed
-stopped_at: Completed 18-01-PLAN.md (address base feature)
-last_updated: "2026-03-11T14:34:40.120Z"
-last_activity: 2026-03-11 -- 18-02 complete, multi-protocol KeyMappingEntryDialog with 8 widget tests
+stopped_at: Completed 18-03-PLAN.md (bit masking feature — Phase 18 complete)
+last_updated: "2026-03-11T14:57:47.000Z"
+last_activity: 2026-03-11 -- 18-03 complete, protocol-agnostic bit masking with BitMaskGrid UI
 progress:
   total_phases: 18
-  completed_phases: 14
+  completed_phases: 18
   total_plans: 29
-  completed_plans: 28
-  percent: 96
+  completed_plans: 29
+  percent: 100
 ---
 
 # Project State
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-03-06)
 ## Current Position
 
 Phase: 18 (Modbus Enhancements — Address Base, Bit Masking, Multi-Protocol Key Dialog)
-Plan: 2 of 3 in current phase
-Status: 18-02 complete. Multi-protocol KeyMappingEntryDialog with OPC UA/Modbus/M2400 server dropdown and protocol-specific config fields.
-Last activity: 2026-03-11 -- 18-02 complete, multi-protocol KeyMappingEntryDialog with 8 widget tests
+Plan: 3 of 3 in current phase
+Status: 18-03 complete. Protocol-agnostic bit masking with BitMaskGrid UI for Modbus and OPC UA keys. Phase 18 complete.
+Last activity: 2026-03-11 -- 18-03 complete, bit masking with visual BitMaskGrid and 34+47 tests
 
-Progress: [█████████░] 96%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
@@ -75,6 +75,7 @@ Progress: [█████████░] 96%
 | Phase 17 P02 | 12min | 2 tasks | 4 files |
 | Phase 18 P02 | 6min | 1 task | 2 files |
 | Phase 18 P01 | 12min | 2 tasks | 8 files |
+| Phase 18 P03 | 22min | 2 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -177,6 +178,10 @@ Recent decisions affecting current work:
 - [Phase 18-02]: M2400 dialog shows info redirect to key repository -- complex record type config not suitable for quick dialog
 - [Phase 18]: addressBase applied in _createElement as address-addressBase with debug assert >= 0
 - [Phase 18]: Address Base dropdown positioned between Byte Order and UMAS checkbox
+- [Phase 18-03]: applyBitMask as static method on StateMan for shared use by Modbus adapter and OPC UA paths
+- [Phase 18-03]: Single-bit mask (power-of-two) returns Boolean DynamicValue, multi-bit returns int
+- [Phase 18-03]: Bit mask section hidden for coil/discreteInput/bit types (inherently boolean, masking not applicable)
+- [Phase 18-03]: bitMask/bitShift preserved through all 8 update methods in _KeyMappingCardState
 
 ### Pending Todos
 
@@ -188,6 +193,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-11T14:34:40.117Z
-Stopped at: Completed 18-01-PLAN.md (address base feature)
+Last session: 2026-03-11T14:57:47.000Z
+Stopped at: Completed 18-03-PLAN.md (bit masking — Phase 18 complete)
 Resume file: None

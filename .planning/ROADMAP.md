@@ -219,7 +219,7 @@ Phase 12 is a gap closure phase from the v1.0 audit.
 | 15. Code Review Fixes | 3/3 | Complete | 2026-03-08 |
 | 16. Modbus Protocol Spec | 3/3 | Complete | 2026-03-09 |
 | 17. Fix/Verify UMAS | 2/2 | Complete | 2026-03-09 |
-| 18. Modbus Enhancements | 2/3 | In Progress|  |
+| 18. Modbus Enhancements | 3/3 | Complete   | 2026-03-11 |
 
 ### Phase 13: manual test against a real device
 
@@ -328,7 +328,7 @@ Plans:
   6. Bit masking is protocol-agnostic — shared code path for Modbus and OPC UA
   7. KeyMappingEntryDialog in common.dart shows all servers from all protocols (OPC UA, Modbus, M2400)
   8. Protocol-specific config fields render based on selected server type
-**Plans:** 2/3 plans executed
+**Plans:** 3/3 plans complete
 
 Plans:
 - [ ] 18-01-PLAN.md -- Address Base config field, wire offset application, server config UI dropdown (ADDR-01)
