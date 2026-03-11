@@ -196,7 +196,7 @@ Plans:
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10 -> 11 -> 12
+Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10 -> 11 -> 12 -> ... -> 18
 Note: Phases 1, 2, and 3 have no inter-dependencies and could execute in parallel.
 Phase 12 is a gap closure phase from the v1.0 audit.
 
@@ -219,6 +219,7 @@ Phase 12 is a gap closure phase from the v1.0 audit.
 | 15. Code Review Fixes | 3/3 | Complete | 2026-03-08 |
 | 16. Modbus Protocol Spec | 3/3 | Complete | 2026-03-09 |
 | 17. Fix/Verify UMAS | 2/2 | Complete | 2026-03-09 |
+| 18. Modbus Enhancements | 0/3 | Planned | - |
 
 ### Phase 13: manual test against a real device
 
@@ -312,3 +313,24 @@ Plans:
 Plans:
 - [x] 17-01-PLAN.md -- Fix UMAS protocol bugs: readPlcId, 13-byte 0x26 payload, pagination, corrected record formats (TDD)
 - [x] 17-02-PLAN.md -- Live hardware integration tests against real Schneider PLC + human verification
+
+### Phase 18: Modbus Enhancements — Address Base, Bit Masking, Multi-Protocol Key Dialog
+
+**Goal:** Three usability features: (1) configurable 0-based vs 1-based register addressing per Modbus server with vendor-aware tooltip, (2) visual bit-grid masking on key level for both Modbus and OPC UA with read+write support, (3) KeyMappingEntryDialog in common.dart offers all servers across OPC UA, Modbus, and M2400
+**Depends on:** Phase 17
+**Requirements**: ADDR-01, MASK-01, MASK-02, KDIA-01
+**Success Criteria** (what must be TRUE):
+  1. Modbus server config has an "Address Base" dropdown (0 / 1) with info tooltip listing vendor conventions (Schneider 1-based, Siemens 0-based, etc.)
+  2. Address base offset is applied (subtracted) when sending PDU requests — HR address in UI minus offset = wire address
+  3. Key config (Modbus and OPC UA) has an optional visual bit grid (16 or 32 bits depending on data type)
+  4. Single bit selected → Boolean result; multi-bit → unsigned integer result
+  5. Bit-masked values work for both reading (extraction) and writing (read-modify-write)
+  6. Bit masking is protocol-agnostic — shared code path for Modbus and OPC UA
+  7. KeyMappingEntryDialog in common.dart shows all servers from all protocols (OPC UA, Modbus, M2400)
+  8. Protocol-specific config fields render based on selected server type
+**Plans:** 3 plans
+
+Plans:
+- [ ] 18-01-PLAN.md -- Address Base config field, wire offset application, server config UI dropdown (ADDR-01)
+- [ ] 18-02-PLAN.md -- Multi-protocol KeyMappingEntryDialog in common.dart (KDIA-01)
+- [ ] 18-03-PLAN.md -- Bit masking data model, read/write application, BitMaskGrid UI widget (MASK-01, MASK-02)
