@@ -9,6 +9,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:tfc_dart/core/state_man.dart';
+import 'package:tfc_dart/core/modbus_client_wrapper.dart' show ModbusDataType;
 import '../../widgets/opcua_array_index_field.dart';
 import 'package:tfc_dart/core/collector.dart';
 import 'package:tfc_dart/core/database.dart';
@@ -706,36 +707,76 @@ class KeyMappingEntryDialog extends ConsumerStatefulWidget {
       _KeyMappingEntryDialogState();
 }
 
+/// Protocol type for the dialog's server selection.
+enum _DialogProtocol { opcua, modbus, m2400 }
+
 class _KeyMappingEntryDialogState extends ConsumerState<KeyMappingEntryDialog> {
   late TextEditingController _keyController;
+  // OPC UA fields
   late TextEditingController _namespaceController;
   late TextEditingController _identifierController;
+  int? _selectedArrayIndex;
+  final _arrayIndexFieldKey = GlobalKey<OpcUaArrayIndexFieldState>();
+  // Modbus fields
+  ModbusRegisterType _registerType = ModbusRegisterType.holdingRegister;
+  ModbusDataType _dataType = ModbusDataType.uint16;
+  late TextEditingController _addressController;
+  String _pollGroup = 'default';
+  // Collection fields
   late TextEditingController _collectNameController;
   late TextEditingController _collectIntervalController;
   late TextEditingController _retentionDaysController;
   late TextEditingController _scheduleIntervalController;
+  // Common state
   String? _selectedServerAlias;
+  _DialogProtocol _protocol = _DialogProtocol.opcua;
   bool _isCollecting = false;
   ExpressionConfig? _sampleExpression;
   bool _useSampleExpression = false;
+  // Config loaded from preferences
+  StateManConfig? _config;
+  bool _configLoading = true;
 
-  int? _selectedArrayIndex;
-  final _arrayIndexFieldKey = GlobalKey<OpcUaArrayIndexFieldState>();
+  bool get _isBooleanRegisterType =>
+      _registerType == ModbusRegisterType.coil ||
+      _registerType == ModbusRegisterType.discreteInput;
 
   @override
   void initState() {
     super.initState();
 
+    _addressController = TextEditingController(text: '0');
+
     if (widget.initialKeyMappingEntry != null) {
       final entry = widget.initialKeyMappingEntry!;
 
       _keyController = TextEditingController(text: widget.initialKey ?? '');
-      _namespaceController = TextEditingController(
-          text: entry.opcuaNode?.namespace.toString() ?? '0');
-      _identifierController =
-          TextEditingController(text: entry.opcuaNode?.identifier ?? '');
-      _selectedServerAlias = entry.opcuaNode?.serverAlias;
-      _selectedArrayIndex = entry.opcuaNode?.arrayIndex;
+
+      // Detect protocol from existing entry
+      if (entry.modbusNode != null) {
+        _protocol = _DialogProtocol.modbus;
+        _selectedServerAlias = entry.modbusNode!.serverAlias;
+        _registerType = entry.modbusNode!.registerType;
+        _addressController = TextEditingController(
+            text: entry.modbusNode!.address.toString());
+        _dataType = entry.modbusNode!.dataType;
+        _pollGroup = entry.modbusNode!.pollGroup;
+        _namespaceController = TextEditingController(text: '0');
+        _identifierController = TextEditingController();
+      } else if (entry.m2400Node != null) {
+        _protocol = _DialogProtocol.m2400;
+        _selectedServerAlias = entry.m2400Node!.serverAlias;
+        _namespaceController = TextEditingController(text: '0');
+        _identifierController = TextEditingController();
+      } else {
+        _protocol = _DialogProtocol.opcua;
+        _namespaceController = TextEditingController(
+            text: entry.opcuaNode?.namespace.toString() ?? '0');
+        _identifierController =
+            TextEditingController(text: entry.opcuaNode?.identifier ?? '');
+        _selectedServerAlias = entry.opcuaNode?.serverAlias;
+        _selectedArrayIndex = entry.opcuaNode?.arrayIndex;
+      }
 
       final collect = entry.collect;
       if (collect != null) {
@@ -767,6 +808,25 @@ class _KeyMappingEntryDialogState extends ConsumerState<KeyMappingEntryDialog> {
       _retentionDaysController = TextEditingController(text: '365');
       _scheduleIntervalController = TextEditingController();
     }
+
+    _loadConfig();
+  }
+
+  Future<void> _loadConfig() async {
+    try {
+      final prefs = await ref.read(preferencesProvider.future);
+      final config = await StateManConfig.fromPrefs(prefs);
+      if (mounted) {
+        setState(() {
+          _config = config;
+          _configLoading = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _configLoading = false);
+      }
+    }
   }
 
   @override
@@ -774,6 +834,7 @@ class _KeyMappingEntryDialogState extends ConsumerState<KeyMappingEntryDialog> {
     _keyController.dispose();
     _namespaceController.dispose();
     _identifierController.dispose();
+    _addressController.dispose();
     _collectNameController.dispose();
     _collectIntervalController.dispose();
     _retentionDaysController.dispose();
@@ -781,7 +842,10 @@ class _KeyMappingEntryDialogState extends ConsumerState<KeyMappingEntryDialog> {
     super.dispose();
   }
 
-  Future<void> _openBrowseDialog(BuildContext context, StateMan stateMan) async {
+  Future<void> _openBrowseDialog(BuildContext context) async {
+    final stateManAsync = ref.read(stateManProvider);
+    final stateMan = stateManAsync.valueOrNull;
+    if (stateMan == null) return;
     final result = await browseOpcUaNode(
       context: context,
       stateMan: stateMan,
@@ -800,190 +864,400 @@ class _KeyMappingEntryDialogState extends ConsumerState<KeyMappingEntryDialog> {
     }
   }
 
+  /// Builds the unified server list from all three protocol configs.
+  List<({String alias, _DialogProtocol protocol, String label})> _buildServerList(
+      StateManConfig config) {
+    final servers = <({String alias, _DialogProtocol protocol, String label})>[];
+    for (final c in config.opcua) {
+      final alias = c.serverAlias ?? '__default';
+      servers.add((
+        alias: alias,
+        protocol: _DialogProtocol.opcua,
+        label: '$alias (OPC UA)',
+      ));
+    }
+    for (final c in config.modbus) {
+      final alias = c.serverAlias ?? c.host;
+      servers.add((
+        alias: alias,
+        protocol: _DialogProtocol.modbus,
+        label: '$alias (Modbus)',
+      ));
+    }
+    for (final c in config.jbtm) {
+      final alias = c.serverAlias ?? '__default';
+      servers.add((
+        alias: alias,
+        protocol: _DialogProtocol.m2400,
+        label: '$alias (M2400)',
+      ));
+    }
+    servers.sort((a, b) => a.label.compareTo(b.label));
+    return servers;
+  }
+
+  /// Finds the matching server label for the current selection.
+  String? _findSelectedLabel(
+      List<({String alias, _DialogProtocol protocol, String label})> servers) {
+    for (final s in servers) {
+      if (s.alias == _selectedServerAlias && s.protocol == _protocol) {
+        return s.label;
+      }
+    }
+    return null;
+  }
+
+  CollectEntry? _buildCollectEntry(String key) {
+    if (!_isCollecting) return null;
+    final retentionDays =
+        int.tryParse(_retentionDaysController.text) ?? 365;
+    final sampleIntervalUs =
+        int.tryParse(_collectIntervalController.text);
+    final scheduleIntervalMinutes =
+        int.tryParse(_scheduleIntervalController.text);
+
+    return CollectEntry(
+      key: key,
+      name: _collectNameController.text.isEmpty
+          ? null
+          : _collectNameController.text,
+      sampleInterval: sampleIntervalUs != null
+          ? Duration(microseconds: sampleIntervalUs)
+          : null,
+      sampleExpression:
+          _useSampleExpression ? _sampleExpression : null,
+      retention: RetentionPolicy(
+        dropAfter: Duration(days: retentionDays),
+        scheduleInterval: scheduleIntervalMinutes != null
+            ? Duration(minutes: scheduleIntervalMinutes)
+            : null,
+      ),
+    );
+  }
+
+  Widget _buildOpcUaFields() {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Row(
+          children: [
+            const Text('OPC UA Node Configuration',
+                style: TextStyle(fontWeight: FontWeight.bold)),
+            const Spacer(),
+            TextButton.icon(
+              onPressed: () => _openBrowseDialog(context),
+              icon: const Icon(Icons.account_tree, size: 16),
+              label: const Text('Browse'),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        TextField(
+          controller: _namespaceController,
+          decoration: const InputDecoration(
+            labelText: 'Namespace',
+          ),
+          keyboardType: TextInputType.number,
+        ),
+        const SizedBox(height: 16),
+        TextField(
+          controller: _identifierController,
+          decoration: const InputDecoration(
+            labelText: 'Identifier',
+          ),
+        ),
+        const SizedBox(height: 16),
+        OpcUaArrayIndexField(
+          key: _arrayIndexFieldKey,
+          namespace: int.tryParse(_namespaceController.text) ?? 0,
+          identifier: _identifierController.text,
+          serverAlias: _selectedServerAlias,
+          initialArraySize: widget.arraySize,
+          value: _selectedArrayIndex,
+          onChanged: (v) => setState(() => _selectedArrayIndex = v),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildModbusFields() {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const Row(
+          children: [
+            Text('Modbus Register Configuration',
+                style: TextStyle(fontWeight: FontWeight.bold)),
+          ],
+        ),
+        const SizedBox(height: 8),
+        DropdownButtonFormField<ModbusRegisterType>(
+          initialValue: _registerType,
+          decoration: const InputDecoration(
+            labelText: 'Register Type',
+          ),
+          items: ModbusRegisterType.values
+              .map((rt) => DropdownMenuItem(
+                    value: rt,
+                    child: Text(rt.name),
+                  ))
+              .toList(),
+          onChanged: (value) {
+            if (value == null) return;
+            setState(() {
+              _registerType = value;
+              // Auto-lock data type for boolean register types
+              if (value == ModbusRegisterType.coil ||
+                  value == ModbusRegisterType.discreteInput) {
+                _dataType = ModbusDataType.bit;
+              } else if (_dataType == ModbusDataType.bit) {
+                _dataType = ModbusDataType.uint16;
+              }
+            });
+          },
+        ),
+        const SizedBox(height: 16),
+        TextField(
+          controller: _addressController,
+          decoration: const InputDecoration(
+            labelText: 'Address',
+          ),
+          keyboardType: TextInputType.number,
+        ),
+        const SizedBox(height: 16),
+        DropdownButtonFormField<ModbusDataType>(
+          initialValue: _dataType,
+          decoration: InputDecoration(
+            labelText:
+                _isBooleanRegisterType ? 'Data Type (auto)' : 'Data Type',
+          ),
+          items: _isBooleanRegisterType
+              ? [
+                  const DropdownMenuItem(
+                      value: ModbusDataType.bit, child: Text('bit'))
+                ]
+              : ModbusDataType.values
+                  .map((dt) =>
+                      DropdownMenuItem(value: dt, child: Text(dt.name)))
+                  .toList(),
+          onChanged: _isBooleanRegisterType
+              ? null
+              : (value) {
+                  if (value == null) return;
+                  setState(() => _dataType = value);
+                },
+        ),
+        const SizedBox(height: 16),
+        DropdownButtonFormField<String>(
+          initialValue: _pollGroup,
+          decoration: const InputDecoration(
+            labelText: 'Poll Group',
+          ),
+          items: _getAvailablePollGroups()
+              .map((pg) => DropdownMenuItem(
+                    value: pg.name,
+                    child: Text('${pg.name} (${pg.intervalMs}ms)'),
+                  ))
+              .toList(),
+          onChanged: (value) {
+            if (value == null) return;
+            setState(() => _pollGroup = value);
+          },
+        ),
+      ],
+    );
+  }
+
+  List<ModbusPollGroupConfig> _getAvailablePollGroups() {
+    if (_selectedServerAlias == null || _config == null) {
+      return [ModbusPollGroupConfig(name: 'default', intervalMs: 1000)];
+    }
+    for (final c in _config!.modbus) {
+      if (c.serverAlias == _selectedServerAlias && c.pollGroups.isNotEmpty) {
+        return c.pollGroups;
+      }
+    }
+    return [ModbusPollGroupConfig(name: 'default', intervalMs: 1000)];
+  }
+
+  Widget _buildM2400Fields() {
+    return const Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Row(
+          children: [
+            Text('M2400 Configuration',
+                style: TextStyle(fontWeight: FontWeight.bold)),
+          ],
+        ),
+        SizedBox(height: 8),
+        Text(
+          'M2400 key configuration is managed through the Key Repository page.',
+          style: TextStyle(color: Colors.grey),
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    return FutureBuilder<StateMan>(
-      future: ref.watch(stateManProvider.future),
-      builder: (context, snapshot) {
-        if (!snapshot.hasData) {
-          return const CircularProgressIndicator();
-        }
+    if (_configLoading || _config == null) {
+      return const AlertDialog(
+        content: Center(child: CircularProgressIndicator()),
+      );
+    }
 
-        final stateMan = snapshot.data!;
-        final serverAliases = stateMan.config.opcua
-            .map((config) => config.serverAlias ?? "__default")
-            .toList();
-        serverAliases.sort();
+    final config = _config!;
+    final servers = _buildServerList(config);
+    final selectedLabel = _findSelectedLabel(servers);
 
-        return AlertDialog(
-          title: const Text('Configure Key Mapping'),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
+    return AlertDialog(
+      title: const Text('Configure Key Mapping'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextFormField(
+              controller: _keyController,
+              decoration: const InputDecoration(
+                labelText: 'Key',
+              ),
+            ),
+            const SizedBox(height: 16),
+            DropdownButtonFormField<String>(
+              initialValue: selectedLabel,
+              decoration: const InputDecoration(
+                labelText: 'Server',
+              ),
+              items: servers.map((s) {
+                return DropdownMenuItem(
+                  value: s.label,
+                  child: Text(s.label),
+                );
+              }).toList(),
+              onChanged: (value) {
+                if (value == null) return;
+                final selected = servers.firstWhere((s) => s.label == value);
+                setState(() {
+                  _selectedServerAlias = selected.alias;
+                  _protocol = selected.protocol;
+                  // Reset poll group on server change
+                  if (selected.protocol == _DialogProtocol.modbus) {
+                    _pollGroup = 'default';
+                  }
+                });
+              },
+            ),
+            const SizedBox(height: 16),
+            // Protocol-specific fields
+            if (_protocol == _DialogProtocol.opcua)
+              _buildOpcUaFields()
+            else if (_protocol == _DialogProtocol.modbus)
+              _buildModbusFields()
+            else
+              _buildM2400Fields(),
+            const SizedBox(height: 16),
+            Row(
               children: [
-                TextFormField(
-                  controller: _keyController,
-                  decoration: const InputDecoration(
-                    labelText: 'Key',
-                  ),
-                ),
-                const SizedBox(height: 16),
-                Row(
-                  children: [
-                    const Text('OPC UA Node Configuration',
-                        style: TextStyle(fontWeight: FontWeight.bold)),
-                    const Spacer(),
-                    TextButton.icon(
-                      onPressed: () => _openBrowseDialog(context, stateMan),
-                      icon: const Icon(Icons.account_tree, size: 16),
-                      label: const Text('Browse'),
-                    ),
-                  ],
-                ),
-                DropdownButtonFormField<String>(
-                  value: _selectedServerAlias,
-                  decoration: const InputDecoration(
-                    labelText: 'Server',
-                  ),
-                  items: serverAliases.map((alias) {
-                    return DropdownMenuItem(
-                      value: alias,
-                      child: Text(alias),
-                    );
-                  }).toList(),
+                const Text('Enable Data Collection'),
+                const SizedBox(width: 8),
+                Switch(
+                  value: _isCollecting,
                   onChanged: (value) {
                     setState(() {
-                      if (value == "__default") {
-                        _selectedServerAlias = null;
-                      } else {
-                        _selectedServerAlias = value;
-                      }
+                      _isCollecting = value;
                     });
                   },
                 ),
-                const SizedBox(height: 16),
-                TextField(
-                  controller: _namespaceController,
-                  decoration: const InputDecoration(
-                    labelText: 'Namespace',
-                  ),
-                  keyboardType: TextInputType.number,
-                ),
-                const SizedBox(height: 16),
-                TextField(
-                  controller: _identifierController,
-                  decoration: const InputDecoration(
-                    labelText: 'Identifier',
-                  ),
-                ),
-                const SizedBox(height: 16),
-                OpcUaArrayIndexField(
-                  key: _arrayIndexFieldKey,
-                  namespace: int.tryParse(_namespaceController.text) ?? 0,
-                  identifier: _identifierController.text,
-                  serverAlias: _selectedServerAlias,
-                  initialArraySize: widget.arraySize,
-                  value: _selectedArrayIndex,
-                  onChanged: (v) => setState(() => _selectedArrayIndex = v),
-                ),
-                const SizedBox(height: 16),
-                Row(
-                  children: [
-                    const Text('Enable Data Collection'),
-                    const SizedBox(width: 8),
-                    Switch(
-                      value: _isCollecting,
-                      onChanged: (value) {
-                        setState(() {
-                          _isCollecting = value;
-                        });
-                      },
-                    ),
-                  ],
-                ),
-                if (_isCollecting) ...[
-                  TextField(
-                    controller: _collectNameController,
-                    decoration: const InputDecoration(
-                      labelText: 'Collection Name (optional)',
-                      hintText: 'Leave empty to use key name',
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  TextField(
-                    controller: _collectIntervalController,
-                    decoration: const InputDecoration(
-                      labelText: 'Sample Interval (microseconds)',
-                      hintText: 'Leave empty for no sampling',
-                    ),
-                    keyboardType: TextInputType.number,
-                  ),
-                  const SizedBox(height: 16),
-                  const Text('Retention Policy',
-                      style: TextStyle(fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 8),
-                  TextField(
-                    controller: _retentionDaysController,
-                    decoration: const InputDecoration(
-                      labelText: 'Retention Period (days)',
-                      hintText: 'How long to keep data',
-                    ),
-                    keyboardType: TextInputType.number,
-                  ),
-                  const SizedBox(height: 16),
-                  TextField(
-                    controller: _scheduleIntervalController,
-                    decoration: const InputDecoration(
-                      labelText: 'Schedule Interval (minutes)',
-                      hintText: 'How often to run retention policy (optional)',
-                    ),
-                    keyboardType: TextInputType.number,
-                  ),
-                  const SizedBox(height: 16),
-                  Row(
-                    children: [
-                      const Text('Use Sample Expression'),
-                      const SizedBox(width: 8),
-                      Switch(
-                        value: _useSampleExpression,
-                        onChanged: (value) {
-                          setState(() {
-                            _useSampleExpression = value;
-                            if (!value) {
-                              _sampleExpression = null;
-                            }
-                          });
-                        },
-                      ),
-                    ],
-                  ),
-                  if (_useSampleExpression) ...[
-                    const SizedBox(height: 16),
-                    ExpressionBuilder(
-                      value:
-                          _sampleExpression?.value ?? Expression(formula: ''),
-                      onChanged: (expression) {
-                        setState(() {
-                          _sampleExpression =
-                              ExpressionConfig(value: expression);
-                        });
-                      },
-                    ),
-                  ],
-                ],
               ],
             ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text('Cancel'),
-            ),
-            ElevatedButton(
-              onPressed: () {
-                final key = _keyController.text;
-                if (key.isEmpty) return;
+            if (_isCollecting) ...[
+              TextField(
+                controller: _collectNameController,
+                decoration: const InputDecoration(
+                  labelText: 'Collection Name (optional)',
+                  hintText: 'Leave empty to use key name',
+                ),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: _collectIntervalController,
+                decoration: const InputDecoration(
+                  labelText: 'Sample Interval (microseconds)',
+                  hintText: 'Leave empty for no sampling',
+                ),
+                keyboardType: TextInputType.number,
+              ),
+              const SizedBox(height: 16),
+              const Text('Retention Policy',
+                  style: TextStyle(fontWeight: FontWeight.bold)),
+              const SizedBox(height: 8),
+              TextField(
+                controller: _retentionDaysController,
+                decoration: const InputDecoration(
+                  labelText: 'Retention Period (days)',
+                  hintText: 'How long to keep data',
+                ),
+                keyboardType: TextInputType.number,
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: _scheduleIntervalController,
+                decoration: const InputDecoration(
+                  labelText: 'Schedule Interval (minutes)',
+                  hintText: 'How often to run retention policy (optional)',
+                ),
+                keyboardType: TextInputType.number,
+              ),
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  const Text('Use Sample Expression'),
+                  const SizedBox(width: 8),
+                  Switch(
+                    value: _useSampleExpression,
+                    onChanged: (value) {
+                      setState(() {
+                        _useSampleExpression = value;
+                        if (!value) {
+                          _sampleExpression = null;
+                        }
+                      });
+                    },
+                  ),
+                ],
+              ),
+              if (_useSampleExpression) ...[
+                const SizedBox(height: 16),
+                ExpressionBuilder(
+                  value:
+                      _sampleExpression?.value ?? Expression(formula: ''),
+                  onChanged: (expression) {
+                    setState(() {
+                      _sampleExpression =
+                          ExpressionConfig(value: expression);
+                    });
+                  },
+                ),
+              ],
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        ElevatedButton(
+          onPressed: () {
+            final key = _keyController.text;
+            if (key.isEmpty) return;
 
+            final collectEntry = _buildCollectEntry(key);
+
+            switch (_protocol) {
+              case _DialogProtocol.opcua:
                 final ns = int.tryParse(_namespaceController.text) ?? 0;
                 final id = _identifierController.text;
                 if (id.isEmpty) return;
@@ -995,49 +1269,40 @@ class _KeyMappingEntryDialogState extends ConsumerState<KeyMappingEntryDialog> {
                   ..serverAlias = _selectedServerAlias
                   ..arrayIndex = _selectedArrayIndex;
 
-                CollectEntry? collectEntry;
-                if (_isCollecting) {
-                  final retentionDays =
-                      int.tryParse(_retentionDaysController.text) ?? 365;
-                  final sampleIntervalUs =
-                      int.tryParse(_collectIntervalController.text);
-                  final scheduleIntervalMinutes =
-                      int.tryParse(_scheduleIntervalController.text);
+                Navigator.of(context).pop({
+                  'key': key,
+                  'entry': KeyMappingEntry(
+                    opcuaNode: nodeConfig,
+                    collect: collectEntry,
+                  ),
+                });
 
-                  collectEntry = CollectEntry(
-                    key: key,
-                    name: _collectNameController.text.isEmpty
-                        ? null
-                        : _collectNameController.text,
-                    sampleInterval: sampleIntervalUs != null
-                        ? Duration(microseconds: sampleIntervalUs)
-                        : null,
-                    sampleExpression:
-                        _useSampleExpression ? _sampleExpression : null,
-                    retention: RetentionPolicy(
-                      dropAfter: Duration(days: retentionDays),
-                      scheduleInterval: scheduleIntervalMinutes != null
-                          ? Duration(minutes: scheduleIntervalMinutes)
-                          : null,
-                    ),
-                  );
-                }
-
-                final entry = KeyMappingEntry(
-                  opcuaNode: nodeConfig,
-                  collect: collectEntry,
+              case _DialogProtocol.modbus:
+                final modbusNode = ModbusNodeConfig(
+                  serverAlias: _selectedServerAlias,
+                  registerType: _registerType,
+                  address: (int.tryParse(_addressController.text) ?? 0)
+                      .clamp(0, 65535),
+                  dataType: _dataType,
+                  pollGroup: _pollGroup,
                 );
 
                 Navigator.of(context).pop({
                   'key': key,
-                  'entry': entry,
+                  'entry': KeyMappingEntry(
+                    modbusNode: modbusNode,
+                    collect: collectEntry,
+                  ),
                 });
-              },
-              child: const Text('OK'),
-            ),
-          ],
-        );
-      },
+
+              case _DialogProtocol.m2400:
+                // M2400 config is managed through the key repository
+                Navigator.of(context).pop();
+            }
+          },
+          child: const Text('OK'),
+        ),
+      ],
     );
   }
 }
