@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: in-progress
-stopped_at: Completed 17-02-PLAN.md (live UMAS hardware testing)
-last_updated: "2026-03-09T14:39:44Z"
-last_activity: 2026-03-09 -- 17-02 complete, live UMAS tests against real PLC, fixed response PDU byte order, added unitId threading
+status: completed
+stopped_at: Completed 18-01-PLAN.md (address base feature)
+last_updated: "2026-03-11T14:34:40.120Z"
+last_activity: 2026-03-11 -- 18-02 complete, multi-protocol KeyMappingEntryDialog with 8 widget tests
 progress:
-  total_phases: 17
-  completed_phases: 13
-  total_plans: 28
-  completed_plans: 27
+  total_phases: 18
+  completed_phases: 14
+  total_plans: 29
+  completed_plans: 28
   percent: 96
 ---
 
@@ -74,6 +74,7 @@ Progress: [█████████░] 96%
 | Phase 17 P01 | 10min | 2 tasks | 5 files |
 | Phase 17 P02 | 12min | 2 tasks | 4 files |
 | Phase 18 P02 | 6min | 1 task | 2 files |
+| Phase 18 P01 | 12min | 2 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -174,6 +175,8 @@ Recent decisions affecting current work:
 - [Phase 17-02]: _checkStatus() helper centralizes status checking with clear error messages including hex status codes
 - [Phase 18-02]: KeyMappingEntryDialog loads config from preferencesProvider (not stateManProvider) for testability -- matches ServerConfigBody pattern
 - [Phase 18-02]: M2400 dialog shows info redirect to key repository -- complex record type config not suitable for quick dialog
+- [Phase 18]: addressBase applied in _createElement as address-addressBase with debug assert >= 0
+- [Phase 18]: Address Base dropdown positioned between Byte Order and UMAS checkbox
 
 ### Pending Todos
 
@@ -185,6 +188,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-11
-Stopped at: Completed 18-02-PLAN.md (multi-protocol KeyMappingEntryDialog)
+Last session: 2026-03-11T14:34:40.117Z
+Stopped at: Completed 18-01-PLAN.md (address base feature)
 Resume file: None
