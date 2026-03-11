@@ -92,8 +92,9 @@ void main() {
       await tester.tap(find.text('Add Key'));
       await tester.pumpAndSettle();
 
-      // Verify both keys exist (use byType to check ExpansionTile count)
-      expect(find.byType(ExpansionTile), findsNWidgets(2));
+      // Verify both keys exist: new_key and new_key_1
+      expect(find.text('new_key'), findsAtLeastNWidgets(1));
+      expect(find.text('new_key_1'), findsAtLeastNWidgets(1));
     });
   });
 
@@ -118,8 +119,7 @@ void main() {
       await tester.tap(copyButtons.first);
       await tester.pumpAndSettle();
 
-      // Should now have 2 cards
-      expect(find.byType(ExpansionTile), findsNWidgets(2));
+      // Should now have 2 key cards
       expect(find.text('original_key'), findsOneWidget);
       expect(find.text('original_key_copy'), findsAtLeastNWidgets(1));
     });
@@ -309,8 +309,10 @@ void main() {
         await tester.pumpAndSettle();
       }
 
-      // Should have 3 cards: my_key, my_key_copy, my_key_copy_1
-      expect(find.byType(ExpansionTile), findsNWidgets(3));
+      // Should have 3 keys: my_key, my_key_copy, my_key_copy_1
+      expect(find.text('my_key'), findsAtLeastNWidgets(1));
+      expect(find.text('my_key_copy'), findsAtLeastNWidgets(1));
+      expect(find.text('my_key_copy_1'), findsAtLeastNWidgets(1));
     });
   });
 
@@ -1225,6 +1227,72 @@ void main() {
 
       // No Browse button when no server alias selected
       expect(find.text('Browse'), findsNothing);
+    });
+  });
+
+  // ==================== Bit Mask Section ====================
+  group('Bit mask section', () {
+    testWidgets('shows Bit Mask section for Modbus holding register key', (tester) async {
+      await tester.pumpWidget(buildTestableKeyRepository(
+        keyMappings: KeyMappings(nodes: {
+          'status_word': KeyMappingEntry(
+            modbusNode: ModbusNodeConfig(
+              serverAlias: 'plc_1',
+              registerType: ModbusRegisterType.holdingRegister,
+              address: 100,
+              dataType: ModbusDataType.uint16,
+            ),
+          ),
+        }),
+        stateManConfig: sampleModbusStateManConfig(),
+      ));
+      await tester.pumpAndSettle();
+
+      // Expand the card
+      await tester.tap(find.text('status_word'));
+      await tester.pumpAndSettle();
+
+      // Should show Bit Mask expansion tile
+      expect(find.text('Bit Mask (optional)'), findsOneWidget);
+    });
+
+    testWidgets('hides Bit Mask section for coil keys', (tester) async {
+      await tester.pumpWidget(buildTestableKeyRepository(
+        keyMappings: KeyMappings(nodes: {
+          'coil_key': KeyMappingEntry(
+            modbusNode: ModbusNodeConfig(
+              serverAlias: 'plc_1',
+              registerType: ModbusRegisterType.coil,
+              address: 0,
+              dataType: ModbusDataType.bit,
+            ),
+          ),
+        }),
+        stateManConfig: sampleModbusStateManConfig(),
+      ));
+      await tester.pumpAndSettle();
+
+      // Expand the card
+      await tester.tap(find.text('coil_key'));
+      await tester.pumpAndSettle();
+
+      // Should NOT show Bit Mask section for coil type
+      expect(find.text('Bit Mask (optional)'), findsNothing);
+    });
+
+    testWidgets('shows Bit Mask section for OPC UA key', (tester) async {
+      await tester.pumpWidget(buildTestableKeyRepository(
+        keyMappings: sampleKeyMappings(),
+        stateManConfig: sampleStateManConfig(),
+      ));
+      await tester.pumpAndSettle();
+
+      // Expand the first card
+      await tester.tap(find.text('temperature_sensor'));
+      await tester.pumpAndSettle();
+
+      // Should show Bit Mask section for OPC UA
+      expect(find.text('Bit Mask (optional)'), findsOneWidget);
     });
   });
 }

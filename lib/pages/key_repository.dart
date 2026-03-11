@@ -18,6 +18,7 @@ import '../widgets/opcua_array_index_field.dart';
 import 'package:tfc_dart/core/collector.dart';
 import 'package:tfc_dart/core/database.dart';
 import '../widgets/fuzzy_search_bar.dart';
+import '../widgets/bit_mask_grid.dart';
 import 'package:jbtm/src/m2400.dart' show M2400RecordType;
 import 'package:jbtm/src/m2400_fields.dart'
     show M2400Field, WeigherStatus, expectedFields;
@@ -746,6 +747,8 @@ class _KeyMappingCardState extends State<_KeyMappingCard> {
     final updatedEntry = KeyMappingEntry(
       opcuaNode: config,
       collect: widget.entry.collect,
+      bitMask: widget.entry.bitMask,
+      bitShift: widget.entry.bitShift,
     );
     widget.onUpdate(updatedEntry);
   }
@@ -770,6 +773,8 @@ class _KeyMappingCardState extends State<_KeyMappingCard> {
     final updatedEntry = KeyMappingEntry(
       opcuaNode: OpcUANodeConfig(namespace: 0, identifier: ''),
       collect: widget.entry.collect,
+      bitMask: widget.entry.bitMask,
+      bitShift: widget.entry.bitShift,
     );
     widget.onUpdate(updatedEntry);
   }
@@ -781,6 +786,8 @@ class _KeyMappingCardState extends State<_KeyMappingCard> {
         address: 0,
       ),
       collect: widget.entry.collect,
+      bitMask: widget.entry.bitMask,
+      bitShift: widget.entry.bitShift,
     );
     widget.onUpdate(updatedEntry);
   }
@@ -789,8 +796,54 @@ class _KeyMappingCardState extends State<_KeyMappingCard> {
     final updatedEntry = KeyMappingEntry(
       modbusNode: config,
       collect: widget.entry.collect,
+      bitMask: widget.entry.bitMask,
+      bitShift: widget.entry.bitShift,
     );
     widget.onUpdate(updatedEntry);
+  }
+
+  void _updateBitMask(int? mask, int? shift) {
+    final updatedEntry = KeyMappingEntry(
+      opcuaNode: widget.entry.opcuaNode,
+      m2400Node: widget.entry.m2400Node,
+      modbusNode: widget.entry.modbusNode,
+      collect: widget.entry.collect,
+      bitMask: mask,
+      bitShift: shift,
+    );
+    widget.onUpdate(updatedEntry);
+  }
+
+  /// Returns true if the current key uses a bit/boolean data type
+  /// (coils, discrete inputs, or explicit bit type) where masking
+  /// does not make sense.
+  bool get _isBitType {
+    if (_isModbus) {
+      final node = widget.entry.modbusNode!;
+      if (node.dataType == ModbusDataType.bit) return true;
+      if (node.registerType == ModbusRegisterType.coil ||
+          node.registerType == ModbusRegisterType.discreteInput) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /// Returns the number of bits for the current data type.
+  int get _bitCountForDataType {
+    if (_isModbus) {
+      final dt = widget.entry.modbusNode!.dataType;
+      switch (dt) {
+        case ModbusDataType.int32:
+        case ModbusDataType.uint32:
+        case ModbusDataType.float32:
+          return 32;
+        default:
+          return 16;
+      }
+    }
+    // OPC UA: default to 16 bits
+    return 16;
   }
 
   void _toggleCollect(bool enabled) {
@@ -806,6 +859,8 @@ class _KeyMappingCardState extends State<_KeyMappingCard> {
                   dropAfter: Duration(days: 365), scheduleInterval: null),
             )
           : null,
+      bitMask: widget.entry.bitMask,
+      bitShift: widget.entry.bitShift,
     );
     widget.onUpdate(updatedEntry);
   }
@@ -816,6 +871,8 @@ class _KeyMappingCardState extends State<_KeyMappingCard> {
       m2400Node: widget.entry.m2400Node,
       modbusNode: widget.entry.modbusNode,
       collect: collect,
+      bitMask: widget.entry.bitMask,
+      bitShift: widget.entry.bitShift,
     );
     widget.onUpdate(updatedEntry);
   }
@@ -970,6 +1027,26 @@ class _KeyMappingCardState extends State<_KeyMappingCard> {
                     serverAliases: widget.serverAliases,
                     onChanged: _updateOpcUaConfig,
                   ),
+                // Bit Mask section -- for Modbus and OPC UA numeric keys
+                if (!_isBitType && !_isM2400) ...[
+                  const Divider(),
+                  ExpansionTile(
+                    title: const Text('Bit Mask (optional)'),
+                    initiallyExpanded: widget.entry.bitMask != null,
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: BitMaskGrid(
+                          bitCount: _bitCountForDataType,
+                          currentMask: widget.entry.bitMask,
+                          onChanged: (result) {
+                            _updateBitMask(result.mask, result.shift);
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
                 const SizedBox(height: 16),
                 // Collection Config Section
                 _CollectionConfigSection(
