@@ -9,9 +9,9 @@ last_activity: 2026-03-09 -- 17-02 complete, live UMAS tests against real PLC, f
 progress:
   total_phases: 17
   completed_phases: 13
-  total_plans: 25
-  completed_plans: 25
-  percent: 100
+  total_plans: 28
+  completed_plans: 27
+  percent: 96
 ---
 
 # Project State
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-06)
 
 **Core value:** Modbus devices can be read from and written to through the same StateMan interface as OPC UA and M2400, without breaking existing protocol integrations.
-**Current focus:** Phase 17 -- Fix and Verify UMAS Against Real Schneider PLC
+**Current focus:** Phase 18 -- Modbus Enhancements: Address Base, Bit Masking, Multi-Protocol Key Dialog
 
 ## Current Position
 
-Phase: 17 (Fix and Verify UMAS Against Real Schneider PLC)
-Plan: 2 of 2 in current phase (17-02 COMPLETE)
-Status: Phase 17 complete. All UMAS wire format bugs fixed (Plan 01) and verified against real Schneider PLC (Plan 02). PLC returns 0x83 for all UMAS subfunctions -- needs Data Dictionary enabled.
-Last activity: 2026-03-09 -- 17-02 complete, live UMAS tests against real PLC, corrected response PDU byte order
+Phase: 18 (Modbus Enhancements — Address Base, Bit Masking, Multi-Protocol Key Dialog)
+Plan: 2 of 3 in current phase
+Status: 18-02 complete. Multi-protocol KeyMappingEntryDialog with OPC UA/Modbus/M2400 server dropdown and protocol-specific config fields.
+Last activity: 2026-03-11 -- 18-02 complete, multi-protocol KeyMappingEntryDialog with 8 widget tests
 
-Progress: [██████████] 100%
+Progress: [█████████░] 96%
 
 ## Performance Metrics
 
@@ -73,6 +73,7 @@ Progress: [██████████] 100%
 | Phase 16 P03 | 12min | 2 tasks | 7 files |
 | Phase 17 P01 | 10min | 2 tasks | 5 files |
 | Phase 17 P02 | 12min | 2 tasks | 4 files |
+| Phase 18 P02 | 6min | 1 task | 2 files |
 
 ## Accumulated Context
 
@@ -83,6 +84,7 @@ Progress: [██████████] 100%
 - Phase 15 added: Code review fixes — security, performance, correctness, and duplication
 - Phase 16 added: Modbus protocol spec research — find bugs and missing features
 - Phase 17 added: fix and verify umas against real schneider plc
+- Phase 18 added: modbus enhancements — address base, bit masking, multi-protocol key dialog
 
 ### Decisions
 
@@ -170,6 +172,8 @@ Recent decisions affecting current work:
 - [Phase 17-02]: UmasClient accepts optional unitId parameter threaded to all UmasRequest instances (Schneider PLCs typically use 255)
 - [Phase 17-02]: Live tests catch UmasException and pass with diagnostic output when PLC does not support UMAS
 - [Phase 17-02]: _checkStatus() helper centralizes status checking with clear error messages including hex status codes
+- [Phase 18-02]: KeyMappingEntryDialog loads config from preferencesProvider (not stateManProvider) for testability -- matches ServerConfigBody pattern
+- [Phase 18-02]: M2400 dialog shows info redirect to key repository -- complex record type config not suitable for quick dialog
 
 ### Pending Todos
 
@@ -181,6 +185,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-09T14:39:44Z
-Stopped at: Completed 17-02-PLAN.md (live UMAS hardware testing)
+Last session: 2026-03-11
+Stopped at: Completed 18-02-PLAN.md (multi-protocol KeyMappingEntryDialog)
 Resume file: None
