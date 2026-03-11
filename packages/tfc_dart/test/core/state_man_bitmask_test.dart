@@ -47,10 +47,10 @@ void main() {
     });
 
     test('returns value unchanged when value is not num', () {
-      final dv = DynamicValue(value: 'hello', typeId: NodeId.string);
+      final dv = DynamicValue(value: 'hello', typeId: NodeId.uastring);
       final result = StateMan.applyBitMask(dv, 0xFF, 0);
       expect(result.value, equals('hello'));
-      expect(result.typeId, equals(NodeId.string));
+      expect(result.typeId, equals(NodeId.uastring));
     });
 
     test('handles null bitShift (defaults to 0)', () {

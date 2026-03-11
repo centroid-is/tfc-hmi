@@ -2,7 +2,7 @@ import 'package:open62541/open62541.dart' show DynamicValue, NodeId;
 import 'package:modbus_client/modbus_client.dart' show ModbusEndianness;
 import 'package:tfc_dart/core/modbus_client_wrapper.dart';
 import 'package:tfc_dart/core/state_man.dart'
-    show ConnectionStatus, DeviceClient, KeyMappings, ModbusConfig, ModbusNodeConfig;
+    show ConnectionStatus, DeviceClient, KeyMappings, ModbusConfig, ModbusNodeConfig, StateMan;
 
 /// Adapter that wraps [ModbusClientWrapper] as a [DeviceClient] for use in
 /// [StateMan].
@@ -52,7 +52,32 @@ class ModbusDeviceClientAdapter implements DeviceClient {
   Future<void> write(String key, DynamicValue value) async {
     final spec = _specs[key];
     if (spec == null) throw ArgumentError('Unknown Modbus key: $key');
-    await wrapper.write(spec, value.value);
+
+    if (spec.bitMask != null) {
+      // Read-modify-write: preserve unmasked bits
+      final current = wrapper.read(key);
+      final currentInt = (current is num) ? current.toInt() : 0;
+      final shift = spec.bitShift ?? 0;
+      final isSingle =
+          spec.bitMask! != 0 && (spec.bitMask! & (spec.bitMask! - 1)) == 0;
+      int newValue;
+      if (isSingle) {
+        final boolVal = value.value == true || value.value == 1;
+        if (boolVal) {
+          newValue = currentInt | spec.bitMask!;
+        } else {
+          newValue = currentInt & ~spec.bitMask!;
+        }
+      } else {
+        final writeInt =
+            (value.value is num) ? (value.value as num).toInt() : 0;
+        newValue =
+            (currentInt & ~spec.bitMask!) | ((writeInt << shift) & spec.bitMask!);
+      }
+      await wrapper.write(spec, newValue);
+    } else {
+      await wrapper.write(spec, value.value);
+    }
   }
 
   @override
@@ -72,9 +97,11 @@ class ModbusDeviceClientAdapter implements DeviceClient {
   // ---------------------------------------------------------------------------
 
   /// Wraps a raw Modbus value in a [DynamicValue] with the correct [typeId]
-  /// derived from the register spec's declared data type.
+  /// derived from the register spec's declared data type, then applies
+  /// optional bit masking.
   static DynamicValue _toDynamicValue(Object? value, ModbusRegisterSpec spec) {
-    return DynamicValue(value: value, typeId: _typeIdFromDataType(spec.dataType));
+    final dv = DynamicValue(value: value, typeId: _typeIdFromDataType(spec.dataType));
+    return StateMan.applyBitMask(dv, spec.bitMask, spec.bitShift);
   }
 
   /// Maps [ModbusDataType] to the corresponding OPC UA [NodeId] type identifier.
@@ -134,6 +161,8 @@ Map<String, ModbusRegisterSpec> buildSpecsFromKeyMappings(
       pollGroup: modbusNode.pollGroup,
       endianness: endianness,
       addressBase: addressBase,
+      bitMask: entry.value.bitMask,
+      bitShift: entry.value.bitShift,
     );
   }
   return specs;

@@ -38,6 +38,12 @@ class ModbusRegisterSpec {
   final ModbusEndianness endianness;
   final int addressBase;
 
+  /// Optional bit mask for extracting bits from integer values.
+  final int? bitMask;
+
+  /// Bit shift applied after masking (lowest set bit position).
+  final int? bitShift;
+
   const ModbusRegisterSpec({
     required this.key,
     required this.registerType,
@@ -46,6 +52,8 @@ class ModbusRegisterSpec {
     this.pollGroup = 'default',
     this.endianness = ModbusEndianness.ABCD,
     this.addressBase = 0,
+    this.bitMask,
+    this.bitShift,
   }) : assert(address >= 0 && address <= 65535,
             'Modbus address must be 0-65535, got: $address');
 }

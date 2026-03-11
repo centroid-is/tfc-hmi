@@ -416,10 +416,20 @@ class KeyMappingEntry {
   bool? io; // if true, the key is an IO unit
   CollectEntry? collect;
 
+  /// Optional bit mask for extracting bits from integer values.
+  /// When set, reads extract (value & bitMask) >>> bitShift.
+  /// Single-bit mask produces bool; multi-bit produces int.
+  @JsonKey(name: 'bit_mask')
+  int? bitMask;
+
+  /// Bit shift applied after masking (position of lowest set bit in mask).
+  @JsonKey(name: 'bit_shift')
+  int? bitShift;
+
   String? get server =>
       opcuaNode?.serverAlias ?? m2400Node?.serverAlias ?? modbusNode?.serverAlias;
 
-  KeyMappingEntry({this.opcuaNode, this.m2400Node, this.modbusNode, this.collect});
+  KeyMappingEntry({this.opcuaNode, this.m2400Node, this.modbusNode, this.collect, this.bitMask, this.bitShift});
 
   factory KeyMappingEntry.fromJson(Map<String, dynamic> json) =>
       _$KeyMappingEntryFromJson(json);
@@ -789,6 +799,26 @@ class StateMan {
   final logger = Logger();
   final StateManConfig config;
   KeyMappings keyMappings;
+
+  /// Apply bit mask extraction to a raw [DynamicValue].
+  ///
+  /// Returns the original value unchanged if [bitMask] is null.
+  /// Single-bit mask returns bool; multi-bit returns int.
+  /// Non-numeric values pass through unchanged.
+  static DynamicValue applyBitMask(DynamicValue value, int? bitMask, int? bitShift) {
+    if (bitMask == null) return value;
+    final raw = value.value;
+    if (raw is! num) return value;
+    final intValue = raw.toInt();
+    final masked = (intValue & bitMask) >>> (bitShift ?? 0);
+    // Single-bit: power of two check (exactly one bit set)
+    final isSingle = bitMask != 0 && (bitMask & (bitMask - 1)) == 0;
+    if (isSingle) {
+      return DynamicValue(value: masked != 0, typeId: NodeId.boolean);
+    }
+    return DynamicValue(value: masked, typeId: value.typeId);
+  }
+
   final List<ClientWrapper> clients;
   final List<DeviceClient> deviceClients;
   final Map<String, AutoDisposingStream<DynamicValue>> _subscriptions = {};
@@ -1170,11 +1200,13 @@ class StateMan {
       }
       final (id, idx) = nodeId;
       await client.awaitConnect();
-      final value = await client.read(id);
+      var value = await client.read(id);
       if (idx != null) {
-        return value[idx];
+        value = value[idx];
       }
-      return value;
+      // Apply bit mask if configured on this key
+      final entry = keyMappings.nodes[key];
+      return applyBitMask(value, entry?.bitMask, entry?.bitShift);
     } catch (e) {
       throw StateManException('Failed to read key: \"$key\": $e');
     }
@@ -1461,6 +1493,12 @@ class StateMan {
         var stream = client.monitor(id, wrapper.subscriptionId!);
         if (idx != null) {
           stream = stream.map((value) => value[idx]);
+        }
+        // Apply bit mask if configured on this key
+        final entry = keyMappings.nodes[key];
+        if (entry?.bitMask != null) {
+          stream = stream.map((value) =>
+              applyBitMask(value, entry!.bitMask, entry.bitShift));
         }
 
         // Wait for monitor to deliver first value. No asBroadcastStream()

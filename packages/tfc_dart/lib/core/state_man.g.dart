@@ -263,6 +263,8 @@ KeyMappingEntry _$KeyMappingEntryFromJson(Map<String, dynamic> json) =>
       collect: json['collect'] == null
           ? null
           : CollectEntry.fromJson(json['collect'] as Map<String, dynamic>),
+      bitMask: (json['bit_mask'] as num?)?.toInt(),
+      bitShift: (json['bit_shift'] as num?)?.toInt(),
     )..io = json['io'] as bool?;
 
 Map<String, dynamic> _$KeyMappingEntryToJson(KeyMappingEntry instance) =>
@@ -272,6 +274,8 @@ Map<String, dynamic> _$KeyMappingEntryToJson(KeyMappingEntry instance) =>
       'modbus_node': instance.modbusNode?.toJson(),
       'io': instance.io,
       'collect': instance.collect?.toJson(),
+      'bit_mask': instance.bitMask,
+      'bit_shift': instance.bitShift,
     };
 
 KeyMappings _$KeyMappingsFromJson(Map<String, dynamic> json) => KeyMappings(
