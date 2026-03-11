@@ -1543,6 +1543,7 @@ class _ModbusServerConfigCardState extends State<_ModbusServerConfigCard> {
   StreamSubscription<ConnectionStatus>? _statusSub;
   late bool _umasEnabled;
   late ModbusEndianness _endianness;
+  late int _addressBase;
 
   @override
   void initState() {
@@ -1556,6 +1557,7 @@ class _ModbusServerConfigCardState extends State<_ModbusServerConfigCard> {
         TextEditingController(text: widget.server.serverAlias ?? '');
     _umasEnabled = widget.server.umasEnabled;
     _endianness = widget.server.endianness;
+    _addressBase = widget.server.addressBase;
     _connectionStatus = widget.connectionStatus;
     _subscribeToStatus();
     _initPollGroupControllers();
@@ -1622,6 +1624,7 @@ class _ModbusServerConfigCardState extends State<_ModbusServerConfigCard> {
       pollGroups: pollGroups ?? widget.server.pollGroups,
       umasEnabled: _umasEnabled,
       endianness: _endianness,
+      addressBase: _addressBase,
     )..serverAlias =
         _aliasController.text.isEmpty ? null : _aliasController.text;
   }
@@ -1953,6 +1956,44 @@ class _ModbusServerConfigCardState extends State<_ModbusServerConfigCard> {
                             '\u2022 Mitsubishi: CDAB (Word Swap)\n'
                             '\u2022 Phoenix Contact: ABCD (Big-Endian)\n\n'
                             'If multi-register values read as garbage, try CDAB first.',
+                        onPressed: null,
+                      ),
+                    ],
+                  ),
+                ),
+                const Divider(height: 24),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: DropdownButtonFormField<int>(
+                          value: _addressBase,
+                          decoration: const InputDecoration(
+                            labelText: 'Address Base',
+                          ),
+                          items: const [
+                            DropdownMenuItem(value: 0, child: Text('0 (Protocol Default)')),
+                            DropdownMenuItem(value: 1, child: Text('1 (Modicon/Schneider)')),
+                          ],
+                          onChanged: (value) {
+                            if (value != null) {
+                              setState(() => _addressBase = value);
+                              _updateServer();
+                            }
+                          },
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      IconButton(
+                        icon: const Icon(Icons.info_outline),
+                        tooltip: 'Address base for register numbering.\n\n'
+                            'Base 0: Wire address = configured address (e.g., HR 0 = PDU 0x0000)\n'
+                            'Base 1: Wire address = configured address - 1 (e.g., HR 1 = PDU 0x0000)\n\n'
+                            'Common vendor conventions:\n'
+                            '\u2022 0-based: Siemens, ABB, Beckhoff, Wago, Omron, Allen-Bradley\n'
+                            '\u2022 1-based: Schneider M340/M580, Mitsubishi, Delta, Unitronics\n\n'
+                            'When in doubt, use 0 (protocol default).',
                         onPressed: null,
                       ),
                     ],
