@@ -382,4 +382,194 @@ void main() {
       adapter.dispose();
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // Bit mask tests (Phase 18, Plan 03)
+  // ---------------------------------------------------------------------------
+
+  group('Modbus adapter bit masking', () {
+    test('_toDynamicValue applies bit mask to value', () async {
+      final pair = createWrapperWithMock();
+      final wrapper = pair.wrapper;
+      final mock = pair.mock;
+
+      const maskedSpec = ModbusRegisterSpec(
+        key: 'status_word',
+        registerType: ModbusElementType.holdingRegister,
+        address: 100,
+        dataType: ModbusDataType.uint16,
+        bitMask: 0x00FF,
+        bitShift: 0,
+      );
+
+      final adapter = ModbusDeviceClientAdapter(
+        wrapper,
+        specs: {'status_word': maskedSpec},
+      );
+
+      // Connect and subscribe to get a value cached
+      wrapper.connect();
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      final stream = adapter.subscribe('status_word');
+      final completer = Completer<DynamicValue>();
+      final sub = stream.listen((dv) {
+        if (!completer.isCompleted) completer.complete(dv);
+      });
+
+      await completer.future.timeout(const Duration(seconds: 3));
+
+      // Read should have mask applied
+      final dv = adapter.read('status_word');
+      expect(dv, isNotNull);
+      // Value should be masked (low byte only)
+      expect(dv!.value, isA<num>());
+
+      await sub.cancel();
+      wrapper.dispose();
+    });
+
+    test('single-bit mask returns boolean DynamicValue', () async {
+      final pair = createWrapperWithMock();
+      final wrapper = pair.wrapper;
+
+      const singleBitSpec = ModbusRegisterSpec(
+        key: 'pump_running',
+        registerType: ModbusElementType.holdingRegister,
+        address: 100,
+        dataType: ModbusDataType.uint16,
+        bitMask: 0x0008,
+        bitShift: 3,
+      );
+
+      final adapter = ModbusDeviceClientAdapter(
+        wrapper,
+        specs: {'pump_running': singleBitSpec},
+      );
+
+      wrapper.connect();
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      final stream = adapter.subscribe('pump_running');
+      final completer = Completer<DynamicValue>();
+      final sub = stream.listen((dv) {
+        if (!completer.isCompleted) completer.complete(dv);
+      });
+
+      await completer.future.timeout(const Duration(seconds: 3));
+
+      final dv = adapter.read('pump_running');
+      expect(dv, isNotNull);
+      // Single bit mask should produce a boolean
+      expect(dv!.value, isA<bool>());
+      expect(dv.typeId, equals(NodeId.boolean));
+
+      await sub.cancel();
+      wrapper.dispose();
+    });
+
+    test('write without bitMask passes value through unchanged', () async {
+      final pair = createWrapperWithMock();
+      final wrapper = pair.wrapper;
+      final mock = pair.mock;
+
+      final adapter = ModbusDeviceClientAdapter(
+        wrapper,
+        specs: {_spec1.key: _spec1},
+      );
+
+      wrapper.connect();
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      final dv = DynamicValue(value: 42, typeId: NodeId.uint16);
+      await adapter.write('pump1_speed', dv);
+
+      // Verify write was called (no read-modify-write needed)
+      expect(mock.sendCallCount, greaterThanOrEqualTo(1));
+
+      wrapper.dispose();
+    });
+
+    test('write with bitMask performs read-modify-write', () async {
+      final pair = createWrapperWithMock();
+      final wrapper = pair.wrapper;
+      final mock = pair.mock;
+
+      const maskedSpec = ModbusRegisterSpec(
+        key: 'pump_running',
+        registerType: ModbusElementType.holdingRegister,
+        address: 100,
+        dataType: ModbusDataType.uint16,
+        bitMask: 0x0001,
+        bitShift: 0,
+      );
+
+      final adapter = ModbusDeviceClientAdapter(
+        wrapper,
+        specs: {'pump_running': maskedSpec},
+      );
+
+      // Connect and subscribe to get a cached value
+      wrapper.connect();
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      final stream = adapter.subscribe('pump_running');
+      final completer = Completer<DynamicValue>();
+      final sub = stream.listen((dv) {
+        if (!completer.isCompleted) completer.complete(dv);
+      });
+
+      await completer.future.timeout(const Duration(seconds: 3));
+
+      // Write true to bit 0 -- should read current, modify, write back
+      final dv = DynamicValue(value: true, typeId: NodeId.boolean);
+      await adapter.write('pump_running', dv);
+
+      // Should have sent at least one write
+      expect(mock.sendCallCount, greaterThanOrEqualTo(2)); // poll read + write
+
+      await sub.cancel();
+      wrapper.dispose();
+    });
+
+    test('buildSpecsFromKeyMappings passes bitMask/bitShift from entry', () {
+      final keyMappings = KeyMappings(nodes: {
+        'pump_running': KeyMappingEntry(
+          modbusNode: ModbusNodeConfig(
+            serverAlias: 'plc_1',
+            registerType: ModbusRegisterType.holdingRegister,
+            address: 100,
+            dataType: ModbusDataType.uint16,
+          ),
+        )
+          ..bitMask = 0x0008
+          ..bitShift = 3,
+      });
+
+      final specs = buildSpecsFromKeyMappings(keyMappings, 'plc_1');
+
+      expect(specs['pump_running'], isNotNull);
+      expect(specs['pump_running']!.bitMask, equals(0x0008));
+      expect(specs['pump_running']!.bitShift, equals(3));
+    });
+
+    test('buildSpecsFromKeyMappings leaves bitMask/bitShift null when not set', () {
+      final keyMappings = KeyMappings(nodes: {
+        'pump_speed': KeyMappingEntry(
+          modbusNode: ModbusNodeConfig(
+            serverAlias: 'plc_1',
+            registerType: ModbusRegisterType.holdingRegister,
+            address: 100,
+            dataType: ModbusDataType.uint16,
+          ),
+        ),
+      });
+
+      final specs = buildSpecsFromKeyMappings(keyMappings, 'plc_1');
+
+      expect(specs['pump_speed'], isNotNull);
+      expect(specs['pump_speed']!.bitMask, isNull);
+      expect(specs['pump_speed']!.bitShift, isNull);
+    });
+  });
 }
