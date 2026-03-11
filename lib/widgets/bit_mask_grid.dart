@@ -11,6 +11,10 @@ class BitMaskGrid extends StatefulWidget {
   /// Current mask value (null = no mask configured).
   final int? currentMask;
 
+  /// When true, only a single bit can be selected at a time.
+  /// Used for bit-type registers where you pick which bit to read.
+  final bool singleBit;
+
   /// Called when the mask changes. Returns null mask/shift when cleared.
   final ValueChanged<({int? mask, int? shift})> onChanged;
 
@@ -18,6 +22,7 @@ class BitMaskGrid extends StatefulWidget {
     super.key,
     required this.bitCount,
     this.currentMask,
+    this.singleBit = false,
     required this.onChanged,
   }) : assert(bitCount == 16 || bitCount == 32,
             'bitCount must be 16 or 32');
@@ -73,6 +78,9 @@ class _BitMaskGridState extends State<BitMaskGrid> {
       if (_selectedBits.contains(bit)) {
         _selectedBits.remove(bit);
       } else {
+        if (widget.singleBit) {
+          _selectedBits.clear();
+        }
         _selectedBits.add(bit);
       }
     });
@@ -175,7 +183,9 @@ class _BitMaskGridState extends State<BitMaskGrid> {
               ),
             ] else
               Text(
-                'No bit mask (full value)',
+                widget.singleBit
+                    ? 'No bit selected (tap a bit above)'
+                    : 'No bit mask (full value)',
                 style: theme.textTheme.bodyMedium?.copyWith(
                   color: theme.colorScheme.onSurfaceVariant,
                 ),
