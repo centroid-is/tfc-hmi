@@ -219,7 +219,7 @@ Phase 12 is a gap closure phase from the v1.0 audit.
 | 15. Code Review Fixes | 3/3 | Complete | 2026-03-08 |
 | 16. Modbus Protocol Spec | 3/3 | Complete | 2026-03-09 |
 | 17. Fix/Verify UMAS | 2/2 | Complete | 2026-03-09 |
-| 18. Modbus Enhancements | 3/3 | Complete   | 2026-03-11 |
+| 18. Modbus Enhancements | 3/3 | Complete    | 2026-03-11 |
 
 ### Phase 13: manual test against a real device
 
