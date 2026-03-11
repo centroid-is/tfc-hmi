@@ -109,10 +109,11 @@ class ModbusElementsGroup extends Iterable<ModbusElement> {
     // Before checking each element lets just check the length!
     var maxLength = isRegister ? maxRegistersRange : maxCoilsRange;
     if (length > maxLength) {
+      final actualLength = length; // capture before rollback clears the list
       _rollback(rollbackElements);
       throw ModbusException(
           context: "ModbusElements",
-          msg: "Too many elements! [$length > $maxLength]");
+          msg: "Too many elements! [$actualLength > $maxLength]");
     }
     // Same values?
     if (!_elements.any((e) => e.type == _type)) {

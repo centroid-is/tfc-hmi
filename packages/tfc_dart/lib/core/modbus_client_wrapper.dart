@@ -306,6 +306,11 @@ class ModbusClientWrapper {
   /// If the spec's poll group does not exist, it is lazily created with the
   /// default 1-second interval.
   Stream<Object?> subscribe(ModbusRegisterSpec spec) {
+    // Return existing subscription if already subscribed (prevents duplicate
+    // accumulation in poll group on repeated calls from widget rebuilds).
+    final existing = _subscriptions[spec.key];
+    if (existing != null) return existing.stream;
+
     // Create element for this spec
     final element = _createElement(spec);
     final subscription = _RegisterSubscription(spec: spec, element: element);
