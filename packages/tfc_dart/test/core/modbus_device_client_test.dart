@@ -6,7 +6,7 @@ import 'package:modbus_client_tcp/modbus_client_tcp.dart';
 import 'package:open62541/open62541.dart' show DynamicValue, NodeId;
 import 'package:tfc_dart/core/modbus_client_wrapper.dart';
 import 'package:tfc_dart/core/modbus_device_client.dart';
-import 'package:tfc_dart/core/state_man.dart' show ConnectionStatus;
+import 'package:tfc_dart/core/state_man.dart' show ConnectionStatus, KeyMappings, KeyMappingEntry, ModbusConfig, ModbusNodeConfig, ModbusRegisterType, ModbusPollGroupConfig;
 import 'package:test/test.dart';
 
 // ---------------------------------------------------------------------------
@@ -297,6 +297,89 @@ void main() {
       a.dispose();
       // After dispose, connection status should be disconnected
       // and further operations should be safe
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Address base tests (Phase 18, Plan 01)
+  // ---------------------------------------------------------------------------
+
+  group('buildSpecsFromKeyMappings addressBase', () {
+    test('passes addressBase from parameter into ModbusRegisterSpec', () {
+      final keyMappings = KeyMappings(nodes: {
+        'pump_speed': KeyMappingEntry(
+          modbusNode: ModbusNodeConfig(
+            serverAlias: 'plc_1',
+            registerType: ModbusRegisterType.holdingRegister,
+            address: 100,
+            dataType: ModbusDataType.uint16,
+          ),
+        ),
+      });
+
+      final specs = buildSpecsFromKeyMappings(
+        keyMappings,
+        'plc_1',
+        addressBase: 1,
+      );
+
+      expect(specs['pump_speed'], isNotNull);
+      expect(specs['pump_speed']!.addressBase, 1);
+    });
+
+    test('defaults addressBase to 0 when not specified', () {
+      final keyMappings = KeyMappings(nodes: {
+        'pump_speed': KeyMappingEntry(
+          modbusNode: ModbusNodeConfig(
+            serverAlias: 'plc_1',
+            registerType: ModbusRegisterType.holdingRegister,
+            address: 100,
+            dataType: ModbusDataType.uint16,
+          ),
+        ),
+      });
+
+      final specs = buildSpecsFromKeyMappings(
+        keyMappings,
+        'plc_1',
+      );
+
+      expect(specs['pump_speed'], isNotNull);
+      expect(specs['pump_speed']!.addressBase, 0);
+    });
+  });
+
+  group('buildModbusDeviceClients addressBase', () {
+    test('passes addressBase from ModbusConfig through to wrapper specs', () {
+      final keyMappings = KeyMappings(nodes: {
+        'pump_speed': KeyMappingEntry(
+          modbusNode: ModbusNodeConfig(
+            serverAlias: 'plc_1',
+            registerType: ModbusRegisterType.holdingRegister,
+            address: 100,
+            dataType: ModbusDataType.uint16,
+          ),
+        ),
+      });
+
+      final configs = [
+        ModbusConfig(
+          host: '10.0.0.1',
+          port: 502,
+          unitId: 1,
+          addressBase: 1,
+        )..serverAlias = 'plc_1',
+      ];
+
+      final clients = buildModbusDeviceClients(configs, keyMappings);
+      expect(clients, hasLength(1));
+
+      // The adapter should have specs with addressBase=1
+      final adapter = clients.first as ModbusDeviceClientAdapter;
+      expect(adapter.canSubscribe('pump_speed'), isTrue);
+
+      // Clean up
+      adapter.dispose();
     });
   });
 }

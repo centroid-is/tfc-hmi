@@ -2975,4 +2975,109 @@ void main() {
       expect(capturedElement!.endianness, ModbusEndianness.CDAB);
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // Address base tests (Phase 18, Plan 01)
+  // ---------------------------------------------------------------------------
+
+  group('Address base', () {
+    test('ModbusConfig with addressBase=0 round-trips through JSON with default value', () {
+      wrapper = createWrapper(); // for tearDown
+      final config = ModbusConfig(
+        host: '10.0.0.1',
+        port: 502,
+        unitId: 1,
+        addressBase: 0,
+      );
+      final json = config.toJson();
+      final restored = ModbusConfig.fromJson(json);
+      expect(restored.addressBase, 0);
+    });
+
+    test('ModbusConfig with addressBase=1 round-trips through JSON preserving value', () {
+      wrapper = createWrapper(); // for tearDown
+      final config = ModbusConfig(
+        host: '10.0.0.1',
+        port: 502,
+        unitId: 1,
+        addressBase: 1,
+      );
+      final json = config.toJson();
+      final restored = ModbusConfig.fromJson(json);
+      expect(restored.addressBase, 1);
+    });
+
+    test('Existing JSON without address_base field deserializes with addressBase=0', () {
+      wrapper = createWrapper(); // for tearDown
+      final json = {
+        'host': '10.0.0.1',
+        'port': 502,
+        'unit_id': 1,
+      };
+      final config = ModbusConfig.fromJson(json);
+      expect(config.addressBase, 0);
+    });
+
+    test('ModbusRegisterSpec with addressBase=0 creates element at spec.address (no offset)', () async {
+      final pair = createWrapperWithMock();
+      wrapper = pair.wrapper;
+      final mock = pair.mock;
+
+      ModbusElement? capturedElement;
+      mock.onSend = (request) {
+        if (request is ModbusWriteRequest) {
+          capturedElement = request.element;
+        }
+        return ModbusResponseCode.requestSucceed;
+      };
+
+      wrapper.connect();
+      await wrapper.connectionStream
+          .firstWhere((s) => s == ConnectionStatus.connected)
+          .timeout(const Duration(seconds: 2));
+
+      final spec = ModbusRegisterSpec(
+        key: 'hr_base0',
+        registerType: ModbusElementType.holdingRegister,
+        address: 100,
+        dataType: ModbusDataType.uint16,
+        addressBase: 0,
+      );
+
+      await wrapper.write(spec, 42);
+      expect(capturedElement, isNotNull);
+      expect(capturedElement!.address, 100); // no offset
+    });
+
+    test('ModbusRegisterSpec with addressBase=1 creates element at (spec.address - 1)', () async {
+      final pair = createWrapperWithMock();
+      wrapper = pair.wrapper;
+      final mock = pair.mock;
+
+      ModbusElement? capturedElement;
+      mock.onSend = (request) {
+        if (request is ModbusWriteRequest) {
+          capturedElement = request.element;
+        }
+        return ModbusResponseCode.requestSucceed;
+      };
+
+      wrapper.connect();
+      await wrapper.connectionStream
+          .firstWhere((s) => s == ConnectionStatus.connected)
+          .timeout(const Duration(seconds: 2));
+
+      final spec = ModbusRegisterSpec(
+        key: 'hr_base1',
+        registerType: ModbusElementType.holdingRegister,
+        address: 100,
+        dataType: ModbusDataType.uint16,
+        addressBase: 1,
+      );
+
+      await wrapper.write(spec, 42);
+      expect(capturedElement, isNotNull);
+      expect(capturedElement!.address, 99); // offset by -1
+    });
+  });
 }
