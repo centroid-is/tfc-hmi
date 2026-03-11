@@ -744,74 +744,45 @@ class _KeyMappingCardState extends State<_KeyMappingCard> {
   }
 
   void _updateOpcUaConfig(OpcUANodeConfig config) {
-    final updatedEntry = KeyMappingEntry(
-      opcuaNode: config,
-      collect: widget.entry.collect,
-      bitMask: widget.entry.bitMask,
-      bitShift: widget.entry.bitShift,
-    );
-    widget.onUpdate(updatedEntry);
+    widget.onUpdate(widget.entry.copyWith(opcuaNode: config));
   }
 
   void _updateM2400Config(M2400NodeConfig config) {
-    final updatedEntry = KeyMappingEntry(
-      m2400Node: config,
-      collect: widget.entry.collect,
-    );
-    widget.onUpdate(updatedEntry);
+    widget.onUpdate(widget.entry.copyWith(m2400Node: config));
   }
 
   void _switchToM2400() {
-    final updatedEntry = KeyMappingEntry(
+    widget.onUpdate(KeyMappingEntry(
       m2400Node: M2400NodeConfig(recordType: M2400RecordType.recBatch),
       collect: widget.entry.collect,
-    );
-    widget.onUpdate(updatedEntry);
+    ));
   }
 
   void _switchToOpcUa() {
-    final updatedEntry = KeyMappingEntry(
+    widget.onUpdate(widget.entry.copyWith(
       opcuaNode: OpcUANodeConfig(namespace: 0, identifier: ''),
-      collect: widget.entry.collect,
-      bitMask: widget.entry.bitMask,
-      bitShift: widget.entry.bitShift,
-    );
-    widget.onUpdate(updatedEntry);
+    ));
   }
 
   void _switchToModbus() {
-    final updatedEntry = KeyMappingEntry(
+    widget.onUpdate(widget.entry.copyWith(
       modbusNode: ModbusNodeConfig(
         registerType: ModbusRegisterType.holdingRegister,
         address: 0,
       ),
-      collect: widget.entry.collect,
-      bitMask: widget.entry.bitMask,
-      bitShift: widget.entry.bitShift,
-    );
-    widget.onUpdate(updatedEntry);
+    ));
   }
 
   void _updateModbusConfig(ModbusNodeConfig config) {
-    final updatedEntry = KeyMappingEntry(
-      modbusNode: config,
-      collect: widget.entry.collect,
-      bitMask: widget.entry.bitMask,
-      bitShift: widget.entry.bitShift,
-    );
-    widget.onUpdate(updatedEntry);
+    widget.onUpdate(widget.entry.copyWith(modbusNode: config));
   }
 
   void _updateBitMask(int? mask, int? shift) {
-    final updatedEntry = KeyMappingEntry(
-      opcuaNode: widget.entry.opcuaNode,
-      m2400Node: widget.entry.m2400Node,
-      modbusNode: widget.entry.modbusNode,
-      collect: widget.entry.collect,
-      bitMask: mask,
-      bitShift: shift,
-    );
-    widget.onUpdate(updatedEntry);
+    if (mask == null) {
+      widget.onUpdate(widget.entry.copyWith(clearBitMask: true));
+    } else {
+      widget.onUpdate(widget.entry.copyWith(bitMask: mask, bitShift: shift));
+    }
   }
 
   /// Returns true if the current key uses a bit/boolean data type
@@ -848,10 +819,7 @@ class _KeyMappingCardState extends State<_KeyMappingCard> {
 
   void _toggleCollect(bool enabled) {
     setState(() => _collectEnabled = enabled);
-    final updatedEntry = KeyMappingEntry(
-      opcuaNode: widget.entry.opcuaNode,
-      m2400Node: widget.entry.m2400Node,
-      modbusNode: widget.entry.modbusNode,
+    widget.onUpdate(widget.entry.copyWith(
       collect: enabled
           ? CollectEntry(
               key: widget.keyName,
@@ -859,22 +827,11 @@ class _KeyMappingCardState extends State<_KeyMappingCard> {
                   dropAfter: Duration(days: 365), scheduleInterval: null),
             )
           : null,
-      bitMask: widget.entry.bitMask,
-      bitShift: widget.entry.bitShift,
-    );
-    widget.onUpdate(updatedEntry);
+    ));
   }
 
   void _updateCollectEntry(CollectEntry collect) {
-    final updatedEntry = KeyMappingEntry(
-      opcuaNode: widget.entry.opcuaNode,
-      m2400Node: widget.entry.m2400Node,
-      modbusNode: widget.entry.modbusNode,
-      collect: collect,
-      bitMask: widget.entry.bitMask,
-      bitShift: widget.entry.bitShift,
-    );
-    widget.onUpdate(updatedEntry);
+    widget.onUpdate(widget.entry.copyWith(collect: collect));
   }
 
   Widget _buildTrailing() {

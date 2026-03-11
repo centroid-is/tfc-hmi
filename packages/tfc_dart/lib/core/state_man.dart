@@ -431,6 +431,25 @@ class KeyMappingEntry {
 
   KeyMappingEntry({this.opcuaNode, this.m2400Node, this.modbusNode, this.collect, this.bitMask, this.bitShift});
 
+  KeyMappingEntry copyWith({
+    OpcUANodeConfig? opcuaNode,
+    M2400NodeConfig? m2400Node,
+    ModbusNodeConfig? modbusNode,
+    CollectEntry? collect,
+    int? bitMask,
+    int? bitShift,
+    bool clearBitMask = false,
+  }) {
+    return KeyMappingEntry(
+      opcuaNode: opcuaNode ?? this.opcuaNode,
+      m2400Node: m2400Node ?? this.m2400Node,
+      modbusNode: modbusNode ?? this.modbusNode,
+      collect: collect ?? this.collect,
+      bitMask: clearBitMask ? null : (bitMask ?? this.bitMask),
+      bitShift: clearBitMask ? null : (bitShift ?? this.bitShift),
+    )..io = io;
+  }
+
   factory KeyMappingEntry.fromJson(Map<String, dynamic> json) =>
       _$KeyMappingEntryFromJson(json);
   Map<String, dynamic> toJson() => _$KeyMappingEntryToJson(this);

@@ -54,7 +54,11 @@ class ModbusDeviceClientAdapter implements DeviceClient {
     if (spec == null) throw ArgumentError('Unknown Modbus key: $key');
 
     if (spec.bitMask != null) {
-      // Read-modify-write: preserve unmasked bits
+      // Read-modify-write: preserve unmasked bits.
+      // Note: reads the last-polled cached value, not a fresh device read.
+      // A concurrent write between the last poll and this write could be
+      // overwritten. Modbus has no atomic bit-set instruction, so this is
+      // inherent to the protocol. The race window is bounded by poll interval.
       final current = wrapper.read(key);
       final currentInt = (current is num) ? current.toInt() : 0;
       final shift = spec.bitShift ?? 0;

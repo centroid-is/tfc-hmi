@@ -1296,8 +1296,7 @@ class _KeyMappingEntryDialogState extends ConsumerState<KeyMappingEntryDialog> {
                 });
 
               case _DialogProtocol.m2400:
-                // M2400 config is managed through the key repository
-                Navigator.of(context).pop();
+                break; // M2400 keys are configured in Key Repository
             }
           },
           child: const Text('OK'),
