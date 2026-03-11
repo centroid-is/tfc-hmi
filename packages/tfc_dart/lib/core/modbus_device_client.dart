@@ -119,6 +119,7 @@ Map<String, ModbusRegisterSpec> buildSpecsFromKeyMappings(
   KeyMappings keyMappings,
   String? serverAlias, {
   ModbusEndianness endianness = ModbusEndianness.ABCD,
+  int addressBase = 0,
 }) {
   final specs = <String, ModbusRegisterSpec>{};
   for (final entry in keyMappings.nodes.entries) {
@@ -132,6 +133,7 @@ Map<String, ModbusRegisterSpec> buildSpecsFromKeyMappings(
       dataType: modbusNode.dataType,
       pollGroup: modbusNode.pollGroup,
       endianness: endianness,
+      addressBase: addressBase,
     );
   }
   return specs;
@@ -153,6 +155,7 @@ List<DeviceClient> buildModbusDeviceClients(
     final specs = buildSpecsFromKeyMappings(
       keyMappings, config.serverAlias,
       endianness: config.endianness,
+      addressBase: config.addressBase,
     );
     final wrapper = ModbusClientWrapper(
       config.host,

@@ -146,6 +146,7 @@ ModbusConfig _$ModbusConfigFromJson(Map<String, dynamic> json) => ModbusConfig(
       endianness:
           $enumDecodeNullable(_$ModbusEndiannessEnumMap, json['endianness']) ??
               ModbusEndianness.ABCD,
+      addressBase: (json['address_base'] as num?)?.toInt() ?? 0,
     );
 
 Map<String, dynamic> _$ModbusConfigToJson(ModbusConfig instance) =>
@@ -157,6 +158,7 @@ Map<String, dynamic> _$ModbusConfigToJson(ModbusConfig instance) =>
       'poll_groups': instance.pollGroups.map((e) => e.toJson()).toList(),
       'umas_enabled': instance.umasEnabled,
       'endianness': _$ModbusEndiannessEnumMap[instance.endianness]!,
+      'address_base': instance.addressBase,
     };
 
 const _$ModbusEndiannessEnumMap = {

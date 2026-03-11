@@ -36,6 +36,7 @@ class ModbusRegisterSpec {
   final ModbusDataType dataType;
   final String pollGroup;
   final ModbusEndianness endianness;
+  final int addressBase;
 
   const ModbusRegisterSpec({
     required this.key,
@@ -44,6 +45,7 @@ class ModbusRegisterSpec {
     this.dataType = ModbusDataType.uint16,
     this.pollGroup = 'default',
     this.endianness = ModbusEndianness.ABCD,
+    this.addressBase = 0,
   }) : assert(address >= 0 && address <= 65535,
             'Modbus address must be 0-65535, got: $address');
 }
@@ -704,7 +706,10 @@ class ModbusClientWrapper {
   /// to select the correct numeric element class.
   ModbusElement _createElement(ModbusRegisterSpec spec) {
     final type = spec.registerType;
-    final address = spec.address;
+    final address = spec.address - spec.addressBase;
+    assert(address >= 0,
+        'Wire address must be >= 0 after applying addressBase offset: '
+        'spec.address=${spec.address}, addressBase=${spec.addressBase}');
     final name = spec.key;
 
     // Bit types (coils and discrete inputs)

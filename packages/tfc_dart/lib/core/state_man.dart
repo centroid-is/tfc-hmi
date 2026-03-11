@@ -267,6 +267,8 @@ class ModbusConfig {
   bool umasEnabled;
   @JsonKey(defaultValue: ModbusEndianness.ABCD)
   ModbusEndianness endianness;
+  @JsonKey(name: 'address_base', defaultValue: 0)
+  int addressBase;
 
   ModbusConfig({
     this.host = '',
@@ -276,6 +278,7 @@ class ModbusConfig {
     this.pollGroups = const [],
     this.umasEnabled = false,
     this.endianness = ModbusEndianness.ABCD,
+    this.addressBase = 0,
   }) : unitId = unitId.clamp(0, 255);
 
   factory ModbusConfig.fromJson(Map<String, dynamic> json) =>
