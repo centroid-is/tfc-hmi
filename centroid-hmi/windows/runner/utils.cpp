@@ -1,6 +1,7 @@
 #include "utils.h"
 
 #include <flutter_windows.h>
+#include <fcntl.h>
 #include <io.h>
 #include <stdio.h>
 #include <windows.h>
@@ -19,6 +20,41 @@ void CreateAndAttachConsole() {
     std::ios::sync_with_stdio();
     FlutterDesktopResyncOutputStreams();
   }
+}
+
+void RedirectIOToConsole() {
+  FILE *fp;
+  freopen_s(&fp, "CONOUT$", "w", stdout);
+  freopen_s(&fp, "CONOUT$", "w", stderr);
+  freopen_s(&fp, "CONIN$", "r", stdin);
+  setvbuf(stdout, nullptr, _IONBF, 0);
+  setvbuf(stderr, nullptr, _IONBF, 0);
+  std::ios::sync_with_stdio();
+  FlutterDesktopResyncOutputStreams();
+}
+
+void RedirectIOToFile(const char* path) {
+  FILE *fp = nullptr;
+  if (freopen_s(&fp, path, "w", stdout) != 0 || fp == nullptr) {
+    return;
+  }
+  setvbuf(stdout, nullptr, _IONBF, 0);
+
+  // In MSIX GUI apps, freopen_s may assign stdout to fd 3+ (not fd 1) because
+  // fd 1 starts as -2 (invalid). The Dart VM hard-codes fd 1 for stdout and
+  // fd 2 for stderr (File::OpenStdio), so we must wire those explicitly.
+  int stdout_fd = _fileno(stdout);
+  _dup2(stdout_fd, 1);
+  _dup2(stdout_fd, 2);
+
+  // Sync Win32 standard handles (Dart uses GetStdHandle -> WriteFile).
+  HANDLE hFile = (HANDLE)_get_osfhandle(1);
+  ::SetStdHandle(STD_OUTPUT_HANDLE, hFile);
+  ::SetStdHandle(STD_ERROR_HANDLE, hFile);
+
+  // Force std::cout/cerr to re-associate with the redirected CRT streams.
+  std::ios::sync_with_stdio(false);
+  std::ios::sync_with_stdio(true);
 }
 
 std::vector<std::string> GetCommandLineArguments() {
