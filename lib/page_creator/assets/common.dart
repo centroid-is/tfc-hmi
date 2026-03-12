@@ -909,7 +909,10 @@ class _KeyMappingEntryDialogState extends ConsumerState<KeyMappingEntryDialog> {
                     switch (selected.protocol) {
                       case _DialogProtocol.opcua:
                         _entry = KeyMappingEntry(
-                          opcuaNode: OpcUANodeConfig(namespace: 0, identifier: ''),
+                          opcuaNode: OpcUANodeConfig(
+                            namespace: 0,
+                            identifier: '',
+                          )..serverAlias = selected.alias,
                           collect: _entry.collect,
                           bitMask: _entry.bitMask,
                           bitShift: _entry.bitShift,
