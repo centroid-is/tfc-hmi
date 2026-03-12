@@ -359,6 +359,12 @@ class NumberWidget extends ConsumerWidget {
   void _showGraphDialog(BuildContext context) {
     if (config.graphConfig == null) return;
 
+    // Auto-populate primary series from NumberConfig key if empty
+    final gc = config.graphConfig!;
+    if (gc.primarySeries.isEmpty && config.key.isNotEmpty) {
+      gc.primarySeries = [GraphSeriesConfig(key: config.key, label: '')];
+    }
+
     showDialog(
       context: context,
       builder: (context) {
