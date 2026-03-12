@@ -888,18 +888,24 @@ class _SaveConfigButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ElevatedButton.icon(
-      onPressed: hasUnsavedChanges ? onSave : null,
-      icon: FaIcon(FontAwesomeIcons.floppyDisk,
-          size: 16,
-          color: hasUnsavedChanges ? null : Colors.grey),
-      label: Text(hasUnsavedChanges
-          ? 'Save Configuration'
-          : 'All Changes Saved'),
-      style: ElevatedButton.styleFrom(
-          padding: const EdgeInsets.symmetric(vertical: 16),
-          backgroundColor:
-              hasUnsavedChanges ? null : Colors.grey),
+    return Row(
+      children: [
+        Expanded(
+          child: ElevatedButton.icon(
+            onPressed: hasUnsavedChanges ? onSave : null,
+            icon: FaIcon(FontAwesomeIcons.floppyDisk,
+                size: 16,
+                color: hasUnsavedChanges ? null : Colors.grey),
+            label: Text(hasUnsavedChanges
+                ? 'Save Configuration'
+                : 'All Changes Saved'),
+            style: ElevatedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 16),
+                backgroundColor:
+                    hasUnsavedChanges ? null : Colors.grey),
+          ),
+        ),
+      ],
     );
   }
 }

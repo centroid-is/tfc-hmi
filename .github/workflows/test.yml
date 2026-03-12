@@ -30,6 +30,28 @@ jobs:
     - name: Run pages tests
       run: flutter test test/
 
+  modbus-lib-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+    - uses: actions/checkout@v4
+    - uses: dart-lang/setup-dart@v1
+
+    - name: Test modbus_client
+      working-directory: packages/modbus_client
+      run: |
+        dart pub get
+        dart test
+
+    - name: Test modbus_client_tcp
+      working-directory: packages/modbus_client_tcp
+      run: |
+        dart pub get
+        dart test
+
   tfc-dart-test:
     strategy:
       fail-fast: false
