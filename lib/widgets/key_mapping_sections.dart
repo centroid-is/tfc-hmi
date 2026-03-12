@@ -133,7 +133,7 @@ class _OpcUaConfigSectionState extends ConsumerState<OpcUaConfigSection> {
             const SizedBox(height: 12),
             // Server alias dropdown
             DropdownButtonFormField<String>(
-              value: _selectedAlias,
+              initialValue: _selectedAlias,
               decoration: const InputDecoration(
                 labelText: 'Server Alias',
                 prefixIcon: FaIcon(FontAwesomeIcons.server, size: 16),
@@ -300,7 +300,7 @@ class _M2400ConfigSectionState extends State<M2400ConfigSection> {
             const SizedBox(height: 12),
             // Server alias dropdown (JBTM servers only)
             DropdownButtonFormField<String>(
-              value: _selectedAlias,
+              initialValue: _selectedAlias,
               decoration: const InputDecoration(
                 labelText: 'M2400 Server',
                 prefixIcon: FaIcon(FontAwesomeIcons.scaleBalanced, size: 16),
@@ -319,7 +319,7 @@ class _M2400ConfigSectionState extends State<M2400ConfigSection> {
             const SizedBox(height: 12),
             // REC type dropdown (REQUIRED)
             DropdownButtonFormField<M2400RecordType>(
-              value: _selectedRecordType,
+              initialValue: _selectedRecordType,
               decoration: const InputDecoration(
                 labelText: 'Record Type (REC)',
                 prefixIcon: FaIcon(FontAwesomeIcons.layerGroup, size: 16),
@@ -352,7 +352,8 @@ class _M2400ConfigSectionState extends State<M2400ConfigSection> {
             const SizedBox(height: 12),
             // FLD dropdown (OPTIONAL -- null means subscribe to full record)
             DropdownButtonFormField<M2400Field?>(
-              value: _selectedField,
+              key: ValueKey(_selectedField),
+              initialValue: _selectedField,
               decoration: const InputDecoration(
                 labelText: 'Field (FLD) -- optional',
                 prefixIcon: FaIcon(FontAwesomeIcons.hashtag, size: 16),
@@ -384,7 +385,8 @@ class _M2400ConfigSectionState extends State<M2400ConfigSection> {
             if (_selectedRecordType == M2400RecordType.recBatch) ...[
               const SizedBox(height: 12),
               DropdownButtonFormField<int?>(
-                value: _selectedStatusFilter,
+                key: ValueKey(_selectedStatusFilter),
+                initialValue: _selectedStatusFilter,
                 decoration: const InputDecoration(
                   labelText: 'Status Filter (optional)',
                   prefixIcon: FaIcon(FontAwesomeIcons.filter, size: 16),
@@ -543,7 +545,7 @@ class _ModbusConfigSectionState extends ConsumerState<ModbusConfigSection> {
             const SizedBox(height: 12),
             // Server alias dropdown
             DropdownButtonFormField<String>(
-              value: _selectedAlias,
+              initialValue: _selectedAlias,
               decoration: const InputDecoration(
                 labelText: 'Server Alias',
                 prefixIcon: FaIcon(FontAwesomeIcons.server, size: 16),
@@ -565,7 +567,8 @@ class _ModbusConfigSectionState extends ConsumerState<ModbusConfigSection> {
             const SizedBox(height: 12),
             // Register type dropdown
             DropdownButtonFormField<ModbusRegisterType>(
-              value: _selectedRegisterType,
+              key: ValueKey(_selectedRegisterType),
+              initialValue: _selectedRegisterType,
               decoration: const InputDecoration(
                 labelText: 'Register Type',
                 prefixIcon: FaIcon(FontAwesomeIcons.layerGroup, size: 16),
@@ -606,7 +609,8 @@ class _ModbusConfigSectionState extends ConsumerState<ModbusConfigSection> {
             const SizedBox(height: 12),
             // Data type dropdown (disabled for coil/discrete input)
             DropdownButtonFormField<ModbusDataType>(
-              value: _selectedDataType,
+              key: ValueKey(_selectedDataType),
+              initialValue: _selectedDataType,
               decoration: InputDecoration(
                 labelText:
                     _isBooleanRegisterType ? 'Data Type (auto)' : 'Data Type',
@@ -633,7 +637,8 @@ class _ModbusConfigSectionState extends ConsumerState<ModbusConfigSection> {
             const SizedBox(height: 12),
             // Poll group dropdown
             DropdownButtonFormField<String>(
-              value: _selectedPollGroup,
+              key: ValueKey(_selectedPollGroup),
+              initialValue: _selectedPollGroup,
               decoration: const InputDecoration(
                 labelText: 'Poll Group',
                 prefixIcon:
@@ -701,6 +706,22 @@ class _CollectionConfigSectionState extends State<CollectionConfigSection> {
         text: collect?.retention.dropAfter.inDays.toString() ?? '365');
     _scheduleIntervalController = TextEditingController(
         text: collect?.retention.scheduleInterval?.inMinutes.toString() ?? '');
+  }
+
+  @override
+  void didUpdateWidget(CollectionConfigSection oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Reinitialize controllers when collection is toggled on with new data
+    if (widget.enabled && !oldWidget.enabled) {
+      final collect = widget.collect;
+      _collectionNameController.text = collect?.name ?? '';
+      _sampleIntervalController.text =
+          collect?.sampleInterval?.inMicroseconds.toString() ?? '';
+      _retentionDaysController.text =
+          collect?.retention.dropAfter.inDays.toString() ?? '365';
+      _scheduleIntervalController.text =
+          collect?.retention.scheduleInterval?.inMinutes.toString() ?? '';
+    }
   }
 
   @override

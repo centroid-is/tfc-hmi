@@ -309,7 +309,14 @@ class ModbusClientWrapper {
     // Return existing subscription if already subscribed (prevents duplicate
     // accumulation in poll group on repeated calls from widget rebuilds).
     final existing = _subscriptions[spec.key];
-    if (existing != null) return existing.stream;
+    if (existing != null) {
+      // Verify the existing subscription spec matches — if not, tear down the
+      // stale subscription so we recreate with the updated parameters.
+      if (_specMatches(existing.spec, spec)) {
+        return existing.stream;
+      }
+      unsubscribe(spec.key);
+    }
 
     // Create element for this spec
     final element = _createElement(spec);
@@ -366,6 +373,18 @@ class ModbusClientWrapper {
         connectionStatus == ConnectionStatus.connected) {
       _startHeartbeat();
     }
+  }
+
+  /// Returns true if two specs describe the same register configuration.
+  static bool _specMatches(ModbusRegisterSpec a, ModbusRegisterSpec b) {
+    return a.registerType == b.registerType &&
+        a.address == b.address &&
+        a.dataType == b.dataType &&
+        a.pollGroup == b.pollGroup &&
+        a.endianness == b.endianness &&
+        a.addressBase == b.addressBase &&
+        a.bitMask == b.bitMask &&
+        a.bitShift == b.bitShift;
   }
 
   // ---------------------------------------------------------------------------
