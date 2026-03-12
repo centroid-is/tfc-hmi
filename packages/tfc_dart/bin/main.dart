@@ -7,20 +7,14 @@ import 'package:tfc_dart/core/state_man.dart';
 import 'package:tfc_dart/core/alarm.dart';
 
 import 'package:logger/logger.dart';
+import 'package:tfc_dart/core/log_config.dart';
 import 'data_acquisition_isolate.dart';
-
-class TraceFilter extends LogFilter {
-  @override
-  bool shouldLog(LogEvent event) {
-    return true; // Allow all log levels including trace
-  }
-}
 
 void main() async {
   // Exit cleanly on SIGTERM (Docker stop) even if stuck in a retry loop
   ProcessSignal.sigterm.watch().listen((_) => exit(0));
 
-  Logger.defaultFilter = () => TraceFilter();
+  initLogConfig();
   final logger = Logger();
 
   final dbConfig = await DatabaseConfig.fromEnv();

@@ -13,6 +13,7 @@ import 'package:collection/collection.dart';
 import 'package:jbtm/src/m2400.dart' show M2400RecordType;
 import 'package:jbtm/src/m2400_fields.dart' show M2400Field;
 import 'package:jbtm/src/m2400_client_wrapper.dart' show M2400ClientWrapper;
+import 'package:tfc_dart/core/log_config.dart' show opcuaLogLevelFromEnv;
 import 'package:jbtm/src/msocket.dart' as jbtm show ConnectionStatus;
 
 import 'package:modbus_client/modbus_client.dart' show ModbusElementType, ModbusEndianness;
@@ -1045,7 +1046,7 @@ class StateMan {
                 certificate: cert,
                 privateKey: key,
                 securityMode: securityMode,
-                logLevel: LogLevel.UA_LOGLEVEL_INFO,
+                logLevel: opcuaLogLevelFromEnv(),
                 secureChannelLifeTime: Duration(
                     minutes: 1), // TODO can I reproduce the problem more often
               )
@@ -1055,7 +1056,7 @@ class StateMan {
                 certificate: cert,
                 privateKey: key,
                 securityMode: securityMode,
-                logLevel: LogLevel.UA_LOGLEVEL_INFO,
+                logLevel: opcuaLogLevelFromEnv(),
                 secureChannelLifeTime: Duration(
                     minutes: 1), // TODO can I reproduce the problem more often
               ),
