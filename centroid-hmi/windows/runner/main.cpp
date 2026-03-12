@@ -10,11 +10,11 @@
 int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
                       _In_ wchar_t *command_line, _In_ int show_command) {
   // Debug logging for MSIX/release builds:
-  //   CENTROID_DEBUG=1          → opens a console window with all output
-  //   CENTROID_LOG_FILE=<path>  → writes all output to a file
+  //   CENTROID_STDOUT=1          → opens a console window with all output
+  //   CENTROID_LOG_FILE=<path>   → writes all output to a file
   char* debug_env = nullptr;
   size_t debug_env_len = 0;
-  _dupenv_s(&debug_env, &debug_env_len, "CENTROID_DEBUG");
+  _dupenv_s(&debug_env, &debug_env_len, "CENTROID_STDOUT");
 
   char* log_file_env = nullptr;
   size_t log_file_env_len = 0;
