@@ -50,6 +50,7 @@ ConveyorConfig _$ConveyorConfigFromJson(Map<String, dynamic> json) =>
       augerRpmKey: json['augerRpmKey'] as String?,
       augerOpenEnd:
           $enumDecodeNullable(_$AugerOpenEndEnumMap, json['augerOpenEnd']),
+      gates: _gatesFromJson(json['gates'] as List?),
     )
       ..variant = json['asset_name'] as String
       ..coordinates =
@@ -76,6 +77,7 @@ Map<String, dynamic> _$ConveyorConfigToJson(ConveyorConfig instance) =>
       'showAuger': instance.showAuger,
       'augerRpmKey': instance.augerRpmKey,
       'augerOpenEnd': _$AugerOpenEndEnumMap[instance.augerOpenEnd],
+      'gates': _gatesToJson(instance.gates),
     };
 
 const _$AugerOpenEndEnumMap = {

@@ -14,8 +14,41 @@ import '../../widgets/graph.dart';
 import 'auger_conveyor_painter.dart';
 import 'package:tfc_dart/core/database.dart';
 import 'package:tfc_dart/core/collector.dart';
+import '../page.dart';
+import 'conveyor_gate.dart';
 
 part 'conveyor.g.dart';
+
+/// Deserialize gates list with backward compatibility for old format.
+///
+/// Old format: gate config at root level with "asset_name" key.
+/// New format: ChildGateEntry with "position", "side", and "gate" sub-object.
+List<ChildGateEntry> _gatesFromJson(List<dynamic>? json) {
+  if (json == null) return [];
+  return json.map((item) {
+    final map = item as Map<String, dynamic>;
+    // Old format: gate config at root level with "asset_name" key
+    if (map.containsKey('asset_name') && !map.containsKey('gate')) {
+      final position = (map['position'] as num?)?.toDouble() ?? 0.5;
+      final side = map['side'] != null
+          ? GateSide.values.firstWhere(
+              (e) => e.name == map['side'],
+              orElse: () => GateSide.left,
+            )
+          : GateSide.left;
+      return ChildGateEntry(
+        position: position,
+        side: side,
+        gate: ConveyorGateConfig.fromJson(map),
+      );
+    }
+    // New format: ChildGateEntry with "gate" sub-object
+    return ChildGateEntry.fromJson(map);
+  }).toList();
+}
+
+List<Map<String, dynamic>> _gatesToJson(List<ChildGateEntry> gates) =>
+    gates.map((e) => e.toJson()).toList();
 
 @JsonSerializable(explicitToJson: true)
 class ConveyorColorPaletteConfig extends BaseAsset {
@@ -151,6 +184,9 @@ class ConveyorConfig extends BaseAsset {
   String? augerRpmKey;
   AugerOpenEnd? augerOpenEnd;
 
+  @JsonKey(fromJson: _gatesFromJson, toJson: _gatesToJson)
+  List<ChildGateEntry> gates;
+
   ConveyorConfig(
       {this.key,
       this.batchesKey,
@@ -162,11 +198,15 @@ class ConveyorConfig extends BaseAsset {
       this.showFrequency,
       this.showAuger,
       this.augerRpmKey,
-      this.augerOpenEnd});
+      this.augerOpenEnd,
+      List<ChildGateEntry>? gates})
+      : gates = gates != null ? List<ChildGateEntry>.of(gates) : [];
 
   static const previewStr = 'Conveyor Preview';
 
-  ConveyorConfig.preview() : key = previewStr;
+  ConveyorConfig.preview()
+      : gates = [],
+        key = previewStr;
 
   @override
   Widget build(BuildContext context) => Conveyor(this);
@@ -286,8 +326,7 @@ class _ConveyorConfigContentState extends State<_ConveyorConfigContent> {
           const SizedBox(height: 8),
           KeyField(
             initialValue: widget.config.augerRpmKey,
-            onChanged: (val) =>
-                setState(() => widget.config.augerRpmKey = val),
+            onChanged: (val) => setState(() => widget.config.augerRpmKey = val),
             label: 'Output shaft RPM key',
           ),
           const SizedBox(height: 8),
@@ -304,8 +343,7 @@ class _ConveyorConfigContentState extends State<_ConveyorConfigContent> {
                       value: AugerOpenEnd.right, child: Text('Right')),
                   DropdownMenuItem(
                       value: AugerOpenEnd.left, child: Text('Left')),
-                  DropdownMenuItem(
-                      value: null, child: Text('None')),
+                  DropdownMenuItem(value: null, child: Text('None')),
                 ],
               ),
             ],
@@ -322,6 +360,109 @@ class _ConveyorConfigContentState extends State<_ConveyorConfigContent> {
           onChanged: (c) => setState(() => widget.config.coordinates = c),
           enableAngle: true,
         ),
+        const SizedBox(height: 16),
+        const Divider(),
+        Text('Gates', style: Theme.of(context).textTheme.titleSmall),
+        const SizedBox(height: 8),
+        FilledButton.icon(
+          onPressed: () {
+            setState(() {
+              widget.config.gates
+                  .add(ChildGateEntry(gate: ConveyorGateConfig()));
+            });
+          },
+          icon: const Icon(Icons.add),
+          label: const Text('Add Gate'),
+        ),
+        const SizedBox(height: 8),
+        if (widget.config.gates.isEmpty)
+          Text('No gates configured',
+              style: Theme.of(context).textTheme.bodyMedium)
+        else
+          ...widget.config.gates.asMap().entries.map((mapEntry) {
+            final entry = mapEntry.value;
+            return Card(
+              margin: const EdgeInsets.symmetric(vertical: 4),
+              child: Padding(
+                padding: const EdgeInsets.all(8.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Header: variant name + edit/delete
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            entry.gate.gateVariant.name,
+                            style: Theme.of(context).textTheme.bodyMedium,
+                          ),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.edit, size: 20),
+                          tooltip: 'Edit gate',
+                          onPressed: () => showDialog(
+                            context: context,
+                            builder: (_) => AlertDialog(
+                              title: const Text('Edit Gate'),
+                              content: SizedBox(
+                                width: 300,
+                                child: entry.gate.configure(context),
+                              ),
+                              actions: [
+                                TextButton(
+                                  onPressed: () => Navigator.of(context).pop(),
+                                  child: const Text('Done'),
+                                ),
+                              ],
+                            ),
+                          ).then((_) => setState(() {})),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.delete, size: 20),
+                          tooltip: 'Remove gate',
+                          onPressed: () => setState(() {
+                            widget.config.gates.removeAt(
+                              widget.config.gates.indexOf(entry),
+                            );
+                          }),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    // Side toggle: Top (left) / Bottom (right)
+                    Text('Conveyor Side',
+                        style: Theme.of(context).textTheme.bodySmall),
+                    const SizedBox(height: 4),
+                    SegmentedButton<GateSide>(
+                      segments: const [
+                        ButtonSegment(value: GateSide.left, label: Text('Top')),
+                        ButtonSegment(
+                            value: GateSide.right, label: Text('Bottom')),
+                      ],
+                      selected: {entry.side},
+                      onSelectionChanged: (selection) {
+                        setState(() => entry.side = selection.first);
+                      },
+                    ),
+                    const SizedBox(height: 8),
+                    // Position slider
+                    Text(
+                      'Belt Position: ${(entry.position * 100).round()}%',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                    Slider(
+                      min: 0.0,
+                      max: 1.0,
+                      divisions: 100,
+                      value: entry.position,
+                      label: '${(entry.position * 100).round()}%',
+                      onChanged: (v) => setState(() => entry.position = v),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          }),
       ],
     );
   }
@@ -662,22 +803,100 @@ class _ConveyorState extends ConsumerState<Conveyor>
       );
     }
 
+    final conveyorPaint = CustomPaint(
+      size: paintSize,
+      painter: _ConveyorPainter(
+        color: color,
+        showExclamation: showExclamation ?? false,
+        bidirectional: widget.config.bidirectional ?? false,
+        reverseDirection: widget.config.reverseDirection ?? false,
+        showFrequency: widget.config.showFrequency ?? false,
+        frequency: frequency,
+        batches: _batches,
+        angle: widget.config.coordinates.angle ?? 0.0,
+      ),
+    );
+
+    final gateEntries = widget.config.gates;
+
+    final Widget content;
+    if (gateEntries.isEmpty) {
+      content = conveyorPaint;
+    } else {
+      content = SizedBox(
+        width: paintSize.width,
+        height: paintSize.height,
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            conveyorPaint,
+            for (final entry in gateEntries)
+              _positionedChildGate(entry, paintSize),
+          ],
+        ),
+      );
+    }
+
     return LayoutRotatedBox(
       angle: (widget.config.coordinates.angle ?? 0.0) * pi / 180,
-      child: CustomPaint(
-        size: paintSize,
-        painter: _ConveyorPainter(
-          color: color,
-          showExclamation: showExclamation ?? false,
-          bidirectional: widget.config.bidirectional ?? false,
-          reverseDirection: widget.config.reverseDirection ?? false,
-          showFrequency: widget.config.showFrequency ?? false,
-          frequency: frequency,
-          batches: _batches,
-          angle: widget.config.coordinates.angle ?? 0.0,
+      child: content,
+    );
+  }
+
+  Widget _positionedChildGate(ChildGateEntry entry, Size conveyorSize) {
+    final beltHeight = conveyorSize.height; // cross-belt dimension
+    final gateSize = beltHeight; // square so flap spans belt width
+    final xCenter = entry.position * conveyorSize.width;
+
+    // Overhang: how far the gate extends outside the conveyor border.
+    // Pusher uses pi/2 rotation so content spans full height — less overhang
+    // keeps the actuator closer to the edge. Slider/pneumatic have centered
+    // elements and need more overhang.
+    final outsideOverhang = switch (entry.gate.gateVariant) {
+      GateVariant.pusher => gateSize * 0.4,
+      GateVariant.slider => gateSize * 0.57,
+      GateVariant.pneumatic => gateSize * 0.6,
+    };
+
+    // Same rotation for both sides; bottom gates are mirrored, not rotated 180°.
+    final rotation = switch (entry.gate.gateVariant) {
+      GateVariant.slider => pi,
+      GateVariant.pneumatic => entry.side == GateSide.left ? 0.0 : pi,
+      GateVariant.pusher => pi / 2,
+    };
+
+    final isBottom = entry.side == GateSide.right;
+
+    final child = SizedBox(
+      width: gateSize,
+      height: gateSize,
+      child: Transform.flip(
+        flipX: false,
+        flipY: isBottom && entry.gate.gateVariant != GateVariant.pneumatic,
+        child: Transform.rotate(
+          angle: rotation,
+          child: ConveyorGate(config: entry.gate),
         ),
       ),
     );
+
+    if (entry.side == GateSide.left) {
+      return Positioned(
+        left: xCenter - gateSize / 2,
+        top: -outsideOverhang,
+        width: gateSize,
+        height: gateSize,
+        child: child,
+      );
+    } else {
+      return Positioned(
+        left: xCenter - gateSize / 2,
+        bottom: -outsideOverhang,
+        width: gateSize,
+        height: gateSize,
+        child: child,
+      );
+    }
   }
 
   void _showDetailsDialog(BuildContext context) {

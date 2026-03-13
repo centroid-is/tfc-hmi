@@ -25,6 +25,7 @@ import 'recipes.dart';
 import 'bpm.dart';
 import 'rate_value.dart';
 import 'speedbatcher.dart';
+import 'conveyor_gate.dart';
 
 class AssetRegistry {
   static final Logger _log = Logger();
@@ -34,6 +35,7 @@ class AssetRegistry {
     LEDConfig: LEDConfig.fromJson,
     ButtonConfig: ButtonConfig.fromJson,
     ConveyorConfig: ConveyorConfig.fromJson,
+    ConveyorGateConfig: ConveyorGateConfig.fromJson,
     ConveyorColorPaletteConfig: ConveyorColorPaletteConfig.fromJson,
     ArrowConfig: ArrowConfig.fromJson,
     LEDColumnConfig: LEDColumnConfig.fromJson,
@@ -73,6 +75,7 @@ class AssetRegistry {
     ButtonConfig: ButtonConfig.preview,
     ArrowConfig: ArrowConfig.preview,
     ConveyorConfig: ConveyorConfig.preview,
+    ConveyorGateConfig: ConveyorGateConfig.preview,
     ConveyorColorPaletteConfig: ConveyorColorPaletteConfig.preview,
     NumberConfig: NumberConfig.preview,
     RatioNumberConfig: RatioNumberConfig.preview,
