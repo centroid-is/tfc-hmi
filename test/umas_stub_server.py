@@ -249,7 +249,8 @@ class ReusableTCPServer(socketserver.ThreadingTCPServer):
 
 def main():
     server = ReusableTCPServer(("0.0.0.0", PORT), UmasHandler)
-    signal.signal(signal.SIGTERM, lambda *_: (server.shutdown(), sys.exit(0)))
+    if hasattr(signal, 'SIGTERM'):
+        signal.signal(signal.SIGTERM, lambda *_: (server.shutdown(), sys.exit(0)))
     print(f"[STUB] UMAS stub server listening on port {PORT}", flush=True)
     print(f"[STUB] Variables: {len(VARIABLES)}, Custom types: {len(DATA_TYPES)}", flush=True)
     try:

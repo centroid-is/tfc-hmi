@@ -34,20 +34,22 @@ String get _projectRoot {
 Process? _serverProcess;
 
 Future<void> _startStub() async {
-  // Kill any leftover stub on our port
-  try {
-    final result =
-        await Process.run('lsof', ['-ti', ':$_stubPort']);
-    final pids = (result.stdout as String).trim();
-    if (pids.isNotEmpty) {
-      await Process.run('kill', ['-9', ...pids.split('\n')]);
-      await Future.delayed(const Duration(milliseconds: 500));
-    }
-  } catch (_) {}
+  // Kill any leftover stub on our port (Unix only, skip on Windows)
+  if (!Platform.isWindows) {
+    try {
+      final result = await Process.run('lsof', ['-ti', ':$_stubPort']);
+      final pids = (result.stdout as String).trim();
+      if (pids.isNotEmpty) {
+        await Process.run('kill', ['-9', ...pids.split('\n')]);
+        await Future.delayed(const Duration(milliseconds: 500));
+      }
+    } catch (_) {}
+  }
 
+  final python = Platform.isWindows ? 'python' : 'python3';
   final stubScript = '$_projectRoot/test/umas_stub_server.py';
   _serverProcess = await Process.start(
-    'python3',
+    python,
     ['-u', stubScript, '$_stubPort'], // -u = unbuffered stdout
   );
 
