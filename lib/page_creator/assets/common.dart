@@ -9,14 +9,16 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:tfc_dart/core/state_man.dart';
-import '../../widgets/opcua_array_index_field.dart';
+import 'package:tfc_dart/core/modbus_client_wrapper.dart' show ModbusDataType;
 import 'package:tfc_dart/core/collector.dart';
 import 'package:tfc_dart/core/database.dart';
 import 'package:tfc_dart/core/boolean_expression.dart';
+import 'package:jbtm/src/m2400.dart' show M2400RecordType;
 import '../../providers/state_man.dart';
 import '../../providers/preferences.dart';
 import '../../widgets/boolean_expression.dart';
-import '../../widgets/opcua_browse.dart';
+import '../../widgets/bit_mask_grid.dart';
+import '../../widgets/key_mapping_sections.dart';
 
 part 'common.g.dart';
 
@@ -706,21 +708,22 @@ class KeyMappingEntryDialog extends ConsumerStatefulWidget {
       _KeyMappingEntryDialogState();
 }
 
+/// Protocol type for the dialog's server selection.
+enum _DialogProtocol { opcua, modbus, m2400 }
+
 class _KeyMappingEntryDialogState extends ConsumerState<KeyMappingEntryDialog> {
   late TextEditingController _keyController;
-  late TextEditingController _namespaceController;
-  late TextEditingController _identifierController;
-  late TextEditingController _collectNameController;
-  late TextEditingController _collectIntervalController;
-  late TextEditingController _retentionDaysController;
-  late TextEditingController _scheduleIntervalController;
+  // The current entry being edited — updated by section widget callbacks.
+  late KeyMappingEntry _entry;
+  // Common state
   String? _selectedServerAlias;
+  _DialogProtocol _protocol = _DialogProtocol.opcua;
   bool _isCollecting = false;
   ExpressionConfig? _sampleExpression;
   bool _useSampleExpression = false;
-
-  int? _selectedArrayIndex;
-  final _arrayIndexFieldKey = GlobalKey<OpcUaArrayIndexFieldState>();
+  // Config loaded from preferences
+  StateManConfig? _config;
+  bool _configLoading = true;
 
   @override
   void initState() {
@@ -728,316 +731,457 @@ class _KeyMappingEntryDialogState extends ConsumerState<KeyMappingEntryDialog> {
 
     if (widget.initialKeyMappingEntry != null) {
       final entry = widget.initialKeyMappingEntry!;
+      _entry = entry;
 
       _keyController = TextEditingController(text: widget.initialKey ?? '');
-      _namespaceController = TextEditingController(
-          text: entry.opcuaNode?.namespace.toString() ?? '0');
-      _identifierController =
-          TextEditingController(text: entry.opcuaNode?.identifier ?? '');
-      _selectedServerAlias = entry.opcuaNode?.serverAlias;
-      _selectedArrayIndex = entry.opcuaNode?.arrayIndex;
+
+      // Detect protocol from existing entry
+      if (entry.modbusNode != null) {
+        _protocol = _DialogProtocol.modbus;
+        _selectedServerAlias = entry.modbusNode!.serverAlias;
+      } else if (entry.m2400Node != null) {
+        _protocol = _DialogProtocol.m2400;
+        _selectedServerAlias = entry.m2400Node!.serverAlias;
+      } else {
+        _protocol = _DialogProtocol.opcua;
+        _selectedServerAlias = entry.opcuaNode?.serverAlias;
+      }
 
       final collect = entry.collect;
       if (collect != null) {
         _isCollecting = true;
-        _collectNameController =
-            TextEditingController(text: collect.name ?? '');
-        _collectIntervalController = TextEditingController(
-            text: collect.sampleInterval?.inMicroseconds.toString() ?? '');
-        _retentionDaysController = TextEditingController(
-            text: collect.retention.dropAfter.inDays.toString());
-        _scheduleIntervalController = TextEditingController(
-            text: collect.retention.scheduleInterval?.inMinutes.toString() ?? '');
         if (collect.sampleExpression != null) {
           _useSampleExpression = true;
           _sampleExpression = collect.sampleExpression;
         }
-      } else {
-        _collectNameController = TextEditingController();
-        _collectIntervalController = TextEditingController();
-        _retentionDaysController = TextEditingController(text: '365');
-        _scheduleIntervalController = TextEditingController();
       }
     } else {
       _keyController = TextEditingController(text: widget.initialKey ?? '');
-      _namespaceController = TextEditingController(text: '0');
-      _identifierController = TextEditingController();
-      _collectNameController = TextEditingController();
-      _collectIntervalController = TextEditingController();
-      _retentionDaysController = TextEditingController(text: '365');
-      _scheduleIntervalController = TextEditingController();
+      _entry = KeyMappingEntry(
+        opcuaNode: OpcUANodeConfig(namespace: 0, identifier: ''),
+      );
+    }
+
+    _loadConfig();
+  }
+
+  Future<void> _loadConfig() async {
+    try {
+      final prefs = await ref.read(preferencesProvider.future);
+      final config = await StateManConfig.fromPrefs(prefs);
+      if (mounted) {
+        setState(() {
+          _config = config;
+          _configLoading = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _configLoading = false);
+      }
     }
   }
 
   @override
   void dispose() {
     _keyController.dispose();
-    _namespaceController.dispose();
-    _identifierController.dispose();
-    _collectNameController.dispose();
-    _collectIntervalController.dispose();
-    _retentionDaysController.dispose();
-    _scheduleIntervalController.dispose();
     super.dispose();
   }
 
-  Future<void> _openBrowseDialog(BuildContext context, StateMan stateMan) async {
-    final result = await browseOpcUaNode(
-      context: context,
-      stateMan: stateMan,
-      serverAlias: _selectedServerAlias,
-    );
-    if (result != null) {
-      final nodeId = result.nodeId;
-      setState(() {
-        _namespaceController.text = nodeId.namespace.toString();
-        _identifierController.text =
-            nodeId.isString() ? nodeId.string : nodeId.numeric.toString();
-      });
-      // Auto-detect array size after the widget rebuilds with the new node.
-      WidgetsBinding.instance.addPostFrameCallback(
-          (_) => _arrayIndexFieldKey.currentState?.probe());
+  /// Builds the unified server list from all three protocol configs.
+  List<({String alias, _DialogProtocol protocol, String label})> _buildServerList(
+      StateManConfig config) {
+    final servers = <({String alias, _DialogProtocol protocol, String label})>[];
+    for (final c in config.opcua) {
+      final alias = c.serverAlias ?? '__default';
+      servers.add((
+        alias: alias,
+        protocol: _DialogProtocol.opcua,
+        label: '$alias (OPC UA)',
+      ));
     }
+    for (final c in config.modbus) {
+      final alias = c.serverAlias ?? c.host;
+      servers.add((
+        alias: alias,
+        protocol: _DialogProtocol.modbus,
+        label: '$alias (Modbus)',
+      ));
+    }
+    for (final c in config.jbtm) {
+      final alias = c.serverAlias ?? '__default';
+      servers.add((
+        alias: alias,
+        protocol: _DialogProtocol.m2400,
+        label: '$alias (M2400)',
+      ));
+    }
+    servers.sort((a, b) => a.label.compareTo(b.label));
+    return servers;
+  }
+
+  /// Finds the matching server label for the current selection.
+  String? _findSelectedLabel(
+      List<({String alias, _DialogProtocol protocol, String label})> servers) {
+    for (final s in servers) {
+      if (s.alias == _selectedServerAlias && s.protocol == _protocol) {
+        return s.label;
+      }
+    }
+    return null;
+  }
+
+  /// Whether the current entry uses a bit/boolean data type.
+  /// When true, the bit mask grid restricts to single-bit selection.
+  bool get _isBitType {
+    if (_protocol == _DialogProtocol.modbus && _entry.modbusNode != null) {
+      final node = _entry.modbusNode!;
+      if (node.dataType == ModbusDataType.bit) return true;
+      if (node.registerType == ModbusRegisterType.coil ||
+          node.registerType == ModbusRegisterType.discreteInput) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /// Returns the number of bits for the current data type.
+  int get _bitCountForDataType {
+    if (_protocol == _DialogProtocol.modbus && _entry.modbusNode != null) {
+      final dt = _entry.modbusNode!.dataType;
+      switch (dt) {
+        case ModbusDataType.int32:
+        case ModbusDataType.uint32:
+        case ModbusDataType.float32:
+          return 32;
+        default:
+          return 16;
+      }
+    }
+    return 16;
   }
 
   @override
   Widget build(BuildContext context) {
-    return FutureBuilder<StateMan>(
-      future: ref.watch(stateManProvider.future),
-      builder: (context, snapshot) {
-        if (!snapshot.hasData) {
-          return const CircularProgressIndicator();
-        }
+    if (_configLoading || _config == null) {
+      return const AlertDialog(
+        content: Center(child: CircularProgressIndicator()),
+      );
+    }
 
-        final stateMan = snapshot.data!;
-        final serverAliases = stateMan.config.opcua
-            .map((config) => config.serverAlias ?? "__default")
-            .toList();
-        serverAliases.sort();
+    final config = _config!;
+    final servers = _buildServerList(config);
+    final selectedLabel = _findSelectedLabel(servers);
 
-        return AlertDialog(
-          title: const Text('Configure Key Mapping'),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextFormField(
-                  controller: _keyController,
-                  decoration: const InputDecoration(
-                    labelText: 'Key',
-                  ),
+    return AlertDialog(
+      title: const Text('Configure Key Mapping'),
+      content: SizedBox(
+        width: 500,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextFormField(
+                controller: _keyController,
+                decoration: const InputDecoration(
+                  labelText: 'Key',
                 ),
-                const SizedBox(height: 16),
-                Row(
-                  children: [
-                    const Text('OPC UA Node Configuration',
-                        style: TextStyle(fontWeight: FontWeight.bold)),
-                    const Spacer(),
-                    TextButton.icon(
-                      onPressed: () => _openBrowseDialog(context, stateMan),
-                      icon: const Icon(Icons.account_tree, size: 16),
-                      label: const Text('Browse'),
-                    ),
-                  ],
+              ),
+              const SizedBox(height: 16),
+              DropdownButtonFormField<String>(
+                initialValue: selectedLabel,
+                decoration: const InputDecoration(
+                  labelText: 'Server',
                 ),
-                DropdownButtonFormField<String>(
-                  value: _selectedServerAlias,
-                  decoration: const InputDecoration(
-                    labelText: 'Server',
-                  ),
-                  items: serverAliases.map((alias) {
-                    return DropdownMenuItem(
-                      value: alias,
-                      child: Text(alias),
-                    );
-                  }).toList(),
-                  onChanged: (value) {
+                items: servers.map((s) {
+                  return DropdownMenuItem(
+                    value: s.label,
+                    child: Text(s.label),
+                  );
+                }).toList(),
+                onChanged: (value) {
+                  if (value == null) return;
+                  final selected = servers.firstWhere((s) => s.label == value);
+                  setState(() {
+                    _selectedServerAlias = selected.alias;
+                    _protocol = selected.protocol;
+                    // Switch entry to new protocol
+                    switch (selected.protocol) {
+                      case _DialogProtocol.opcua:
+                        _entry = KeyMappingEntry(
+                          opcuaNode: OpcUANodeConfig(
+                            namespace: 0,
+                            identifier: '',
+                          )..serverAlias = selected.alias,
+                          collect: _entry.collect,
+                          bitMask: _entry.bitMask,
+                          bitShift: _entry.bitShift,
+                        );
+                      case _DialogProtocol.modbus:
+                        _entry = KeyMappingEntry(
+                          modbusNode: ModbusNodeConfig(
+                            serverAlias: selected.alias,
+                            registerType: ModbusRegisterType.holdingRegister,
+                            address: 0,
+                          ),
+                          collect: _entry.collect,
+                          bitMask: _entry.bitMask,
+                          bitShift: _entry.bitShift,
+                        );
+                      case _DialogProtocol.m2400:
+                        _entry = KeyMappingEntry(
+                          m2400Node: M2400NodeConfig(
+                            recordType: M2400RecordType.recBatch,
+                            serverAlias: selected.alias,
+                          ),
+                          collect: _entry.collect,
+                        );
+                    }
+                  });
+                },
+              ),
+              const SizedBox(height: 16),
+              // Protocol-specific section widgets
+              if (_protocol == _DialogProtocol.opcua)
+                OpcUaConfigSection(
+                  key: ValueKey('opcua-$_selectedServerAlias'),
+                  config: _entry.opcuaNode ??
+                      OpcUANodeConfig(namespace: 0, identifier: ''),
+                  serverAliases: config.opcua
+                      .map((c) => c.serverAlias ?? '__default')
+                      .toList(),
+                  onChanged: (nodeConfig) {
                     setState(() {
-                      if (value == "__default") {
-                        _selectedServerAlias = null;
-                      } else {
-                        _selectedServerAlias = value;
-                      }
+                      _entry = _entry.copyWith(opcuaNode: nodeConfig);
+                    });
+                  },
+                )
+              else if (_protocol == _DialogProtocol.modbus)
+                ModbusConfigSection(
+                  key: ValueKey('modbus-$_selectedServerAlias'),
+                  config: _entry.modbusNode ??
+                      ModbusNodeConfig(
+                        registerType: ModbusRegisterType.holdingRegister,
+                        address: 0,
+                      ),
+                  modbusServerAliases: config.modbus
+                      .map((c) => c.serverAlias ?? c.host)
+                      .toList(),
+                  modbusConfigs: config.modbus,
+                  onChanged: (nodeConfig) {
+                    setState(() {
+                      _entry = _entry.copyWith(modbusNode: nodeConfig);
+                    });
+                  },
+                )
+              else
+                M2400ConfigSection(
+                  key: ValueKey('m2400-$_selectedServerAlias'),
+                  config: _entry.m2400Node ??
+                      M2400NodeConfig(recordType: M2400RecordType.recBatch),
+                  jbtmServerAliases: config.jbtm
+                      .map((c) => c.serverAlias ?? '__default')
+                      .toList(),
+                  onChanged: (nodeConfig) {
+                    setState(() {
+                      _entry = _entry.copyWith(m2400Node: nodeConfig);
                     });
                   },
                 ),
-                const SizedBox(height: 16),
-                TextField(
-                  controller: _namespaceController,
-                  decoration: const InputDecoration(
-                    labelText: 'Namespace',
-                  ),
-                  keyboardType: TextInputType.number,
-                ),
-                const SizedBox(height: 16),
-                TextField(
-                  controller: _identifierController,
-                  decoration: const InputDecoration(
-                    labelText: 'Identifier',
-                  ),
-                ),
-                const SizedBox(height: 16),
-                OpcUaArrayIndexField(
-                  key: _arrayIndexFieldKey,
-                  namespace: int.tryParse(_namespaceController.text) ?? 0,
-                  identifier: _identifierController.text,
-                  serverAlias: _selectedServerAlias,
-                  initialArraySize: widget.arraySize,
-                  value: _selectedArrayIndex,
-                  onChanged: (v) => setState(() => _selectedArrayIndex = v),
-                ),
-                const SizedBox(height: 16),
-                Row(
-                  children: [
-                    const Text('Enable Data Collection'),
-                    const SizedBox(width: 8),
-                    Switch(
-                      value: _isCollecting,
-                      onChanged: (value) {
-                        setState(() {
-                          _isCollecting = value;
-                        });
-                      },
-                    ),
-                  ],
-                ),
-                if (_isCollecting) ...[
-                  TextField(
-                    controller: _collectNameController,
-                    decoration: const InputDecoration(
-                      labelText: 'Collection Name (optional)',
-                      hintText: 'Leave empty to use key name',
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  TextField(
-                    controller: _collectIntervalController,
-                    decoration: const InputDecoration(
-                      labelText: 'Sample Interval (microseconds)',
-                      hintText: 'Leave empty for no sampling',
-                    ),
-                    keyboardType: TextInputType.number,
-                  ),
-                  const SizedBox(height: 16),
-                  const Text('Retention Policy',
-                      style: TextStyle(fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 8),
-                  TextField(
-                    controller: _retentionDaysController,
-                    decoration: const InputDecoration(
-                      labelText: 'Retention Period (days)',
-                      hintText: 'How long to keep data',
-                    ),
-                    keyboardType: TextInputType.number,
-                  ),
-                  const SizedBox(height: 16),
-                  TextField(
-                    controller: _scheduleIntervalController,
-                    decoration: const InputDecoration(
-                      labelText: 'Schedule Interval (minutes)',
-                      hintText: 'How often to run retention policy (optional)',
-                    ),
-                    keyboardType: TextInputType.number,
-                  ),
-                  const SizedBox(height: 16),
-                  Row(
+              // Bit selection -- required for bit types, optional mask for others
+              if (_protocol != _DialogProtocol.m2400 && _isBitType) ...[
+                const SizedBox(height: 8),
+                Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Text('Use Sample Expression'),
-                      const SizedBox(width: 8),
-                      Switch(
-                        value: _useSampleExpression,
-                        onChanged: (value) {
+                      Text('Bit Select (required)',
+                          style: Theme.of(context).textTheme.titleSmall),
+                      const SizedBox(height: 8),
+                      BitMaskGrid(
+                        bitCount: _bitCountForDataType,
+                        currentMask: _entry.bitMask,
+                        singleBit: true,
+                        onChanged: (result) {
                           setState(() {
-                            _useSampleExpression = value;
-                            if (!value) {
-                              _sampleExpression = null;
+                            if (result.mask == null) {
+                              _entry = _entry.copyWith(clearBitMask: true);
+                            } else {
+                              _entry = _entry.copyWith(
+                                bitMask: result.mask,
+                                bitShift: result.shift,
+                              );
                             }
                           });
                         },
                       ),
                     ],
                   ),
-                  if (_useSampleExpression) ...[
-                    const SizedBox(height: 16),
-                    ExpressionBuilder(
-                      value:
-                          _sampleExpression?.value ?? Expression(formula: ''),
-                      onChanged: (expression) {
+                ),
+              ] else if (_protocol != _DialogProtocol.m2400) ...[
+                const SizedBox(height: 8),
+                ExpansionTile(
+                  title: const Text('Bit Mask (optional)'),
+                  initiallyExpanded: _entry.bitMask != null,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: BitMaskGrid(
+                        bitCount: _bitCountForDataType,
+                        currentMask: _entry.bitMask,
+                        onChanged: (result) {
+                          setState(() {
+                            if (result.mask == null) {
+                              _entry = _entry.copyWith(clearBitMask: true);
+                            } else {
+                              _entry = _entry.copyWith(
+                                bitMask: result.mask,
+                                bitShift: result.shift,
+                              );
+                            }
+                          });
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+              const SizedBox(height: 16),
+              // Collection config
+              CollectionConfigSection(
+                enabled: _isCollecting,
+                collect: _entry.collect,
+                keyName: _keyController.text.isNotEmpty
+                    ? _keyController.text
+                    : 'key',
+                onToggle: (enabled) {
+                  setState(() {
+                    _isCollecting = enabled;
+                    if (enabled) {
+                      _entry = _entry.copyWith(
+                        collect: CollectEntry(
+                          key: _keyController.text,
+                          retention: RetentionPolicy(
+                            dropAfter: const Duration(days: 365),
+                          ),
+                        ),
+                      );
+                    } else {
+                      _entry = KeyMappingEntry(
+                        opcuaNode: _entry.opcuaNode,
+                        m2400Node: _entry.m2400Node,
+                        modbusNode: _entry.modbusNode,
+                        bitMask: _entry.bitMask,
+                        bitShift: _entry.bitShift,
+                      );
+                    }
+                  });
+                },
+                onChanged: (collect) {
+                  setState(() {
+                    _entry = _entry.copyWith(collect: collect);
+                  });
+                },
+              ),
+              // Sample expression (dialog-specific, not in shared widget)
+              if (_isCollecting) ...[
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    const Text('Use Sample Expression'),
+                    const SizedBox(width: 8),
+                    Switch(
+                      value: _useSampleExpression,
+                      onChanged: (value) {
                         setState(() {
-                          _sampleExpression =
-                              ExpressionConfig(value: expression);
+                          _useSampleExpression = value;
+                          if (!value) {
+                            _sampleExpression = null;
+                          }
                         });
                       },
                     ),
                   ],
+                ),
+                if (_useSampleExpression) ...[
+                  const SizedBox(height: 16),
+                  ExpressionBuilder(
+                    value:
+                        _sampleExpression?.value ?? Expression(formula: ''),
+                    onChanged: (expression) {
+                      setState(() {
+                        _sampleExpression =
+                            ExpressionConfig(value: expression);
+                      });
+                    },
+                  ),
                 ],
               ],
-            ),
+            ],
           ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text('Cancel'),
-            ),
-            ElevatedButton(
-              onPressed: () {
-                final key = _keyController.text;
-                if (key.isEmpty) return;
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        ElevatedButton(
+          onPressed: () {
+            final key = _keyController.text;
+            if (key.isEmpty) return;
 
-                final ns = int.tryParse(_namespaceController.text) ?? 0;
-                final id = _identifierController.text;
-                if (id.isEmpty) return;
+            // Build the final collect entry with sample expression
+            CollectEntry? collectEntry;
+            if (_isCollecting && _entry.collect != null) {
+              collectEntry = CollectEntry(
+                key: key,
+                name: _entry.collect!.name,
+                sampleInterval: _entry.collect!.sampleInterval,
+                sampleExpression:
+                    _useSampleExpression ? _sampleExpression : null,
+                retention: _entry.collect!.retention,
+              );
+            }
 
-                final nodeConfig = OpcUANodeConfig(
-                  namespace: ns,
-                  identifier: id,
-                )
-                  ..serverAlias = _selectedServerAlias
-                  ..arrayIndex = _selectedArrayIndex;
+            final result = KeyMappingEntry(
+              opcuaNode: _protocol == _DialogProtocol.opcua
+                  ? _entry.opcuaNode
+                  : null,
+              modbusNode: _protocol == _DialogProtocol.modbus
+                  ? _entry.modbusNode
+                  : null,
+              m2400Node: _protocol == _DialogProtocol.m2400
+                  ? _entry.m2400Node
+                  : null,
+              collect: collectEntry,
+              bitMask: _protocol != _DialogProtocol.m2400
+                  ? _entry.bitMask
+                  : null,
+              bitShift: _protocol != _DialogProtocol.m2400
+                  ? _entry.bitShift
+                  : null,
+            );
 
-                CollectEntry? collectEntry;
-                if (_isCollecting) {
-                  final retentionDays =
-                      int.tryParse(_retentionDaysController.text) ?? 365;
-                  final sampleIntervalUs =
-                      int.tryParse(_collectIntervalController.text);
-                  final scheduleIntervalMinutes =
-                      int.tryParse(_scheduleIntervalController.text);
+            // Validate required fields
+            if (_protocol == _DialogProtocol.opcua &&
+                (result.opcuaNode?.identifier.isEmpty ?? true)) {
+              return;
+            }
+            // Bit type requires a bit selection
+            if (_isBitType && result.bitMask == null) {
+              return;
+            }
 
-                  collectEntry = CollectEntry(
-                    key: key,
-                    name: _collectNameController.text.isEmpty
-                        ? null
-                        : _collectNameController.text,
-                    sampleInterval: sampleIntervalUs != null
-                        ? Duration(microseconds: sampleIntervalUs)
-                        : null,
-                    sampleExpression:
-                        _useSampleExpression ? _sampleExpression : null,
-                    retention: RetentionPolicy(
-                      dropAfter: Duration(days: retentionDays),
-                      scheduleInterval: scheduleIntervalMinutes != null
-                          ? Duration(minutes: scheduleIntervalMinutes)
-                          : null,
-                    ),
-                  );
-                }
-
-                final entry = KeyMappingEntry(
-                  opcuaNode: nodeConfig,
-                  collect: collectEntry,
-                );
-
-                Navigator.of(context).pop({
-                  'key': key,
-                  'entry': entry,
-                });
-              },
-              child: const Text('OK'),
-            ),
-          ],
-        );
-      },
+            Navigator.of(context).pop({
+              'key': key,
+              'entry': result,
+            });
+          },
+          child: const Text('OK'),
+        ),
+      ],
     );
   }
 }

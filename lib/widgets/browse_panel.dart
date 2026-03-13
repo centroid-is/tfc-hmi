@@ -1,0 +1,846 @@
+import 'package:flutter/material.dart';
+import 'package:font_awesome_flutter/font_awesome_flutter.dart';
+
+import '../theme.dart' show SolarizedColors;
+
+// ---------------------------------------------------------------------------
+// Protocol-agnostic browse types
+// ---------------------------------------------------------------------------
+
+/// The type of a node in the browse tree.
+enum BrowseNodeType { folder, variable, method, other }
+
+/// A protocol-agnostic node in the browse tree.
+///
+/// For OPC UA: [id] is the NodeId string (e.g. "ns=2;s=MyVar").
+/// For UMAS: [id] is the variable path.
+class BrowseNode {
+  final String id;
+  final String displayName;
+  final BrowseNodeType type;
+  final String? dataType;
+  final String? description;
+  final Map<String, String> metadata;
+
+  const BrowseNode({
+    required this.id,
+    required this.displayName,
+    required this.type,
+    this.dataType,
+    this.description,
+    this.metadata = const {},
+  });
+
+  bool get isExpandable =>
+      type == BrowseNodeType.folder || type == BrowseNodeType.variable;
+  bool get isVariable => type == BrowseNodeType.variable;
+  bool get isFolder => type == BrowseNodeType.folder;
+}
+
+/// Detail information about a selected node.
+class BrowseNodeDetail {
+  final String? description;
+  final String? value;
+  final String? dataType;
+  final List<BrowseNode>? structChildren;
+
+  const BrowseNodeDetail({
+    this.description,
+    this.value,
+    this.dataType,
+    this.structChildren,
+  });
+}
+
+/// Protocol-agnostic data source for the browse panel.
+///
+/// Implement this for each protocol (OPC UA, UMAS, etc.).
+abstract class BrowseDataSource {
+  Future<List<BrowseNode>> fetchRoots();
+  Future<List<BrowseNode>> fetchChildren(BrowseNode parent);
+  Future<BrowseNodeDetail> fetchDetail(BrowseNode node);
+}
+
+// ---------------------------------------------------------------------------
+// Internal tree node (adds depth + parentId tracking)
+// ---------------------------------------------------------------------------
+
+/// Internal tree node that decorates [BrowseNode] with depth and parent info.
+///
+/// This is an implementation detail of [BrowsePanel] and [BrowseNodeTile];
+/// external callers should use [BrowseNode] instead.
+@visibleForTesting
+class BrowseTreeEntry {
+  final BrowseNode node;
+  final int depth;
+  final String parentId;
+
+  const BrowseTreeEntry({
+    required this.node,
+    required this.depth,
+    required this.parentId,
+  });
+
+  String get id => node.id;
+  String get displayName => node.displayName;
+  BrowseNodeType get type => node.type;
+  bool get isExpandable => node.isExpandable;
+  bool get isVariable => node.isVariable;
+}
+
+// ---------------------------------------------------------------------------
+// BrowsePanel widget
+// ---------------------------------------------------------------------------
+
+/// Error info returned by [BrowseErrorMapper] for user-friendly display.
+typedef BrowseErrorInfo = ({String summary, String detail});
+
+/// Maps a caught exception to user-friendly summary + detail text.
+/// Return null to fall back to the default `e.toString()` display.
+typedef BrowseErrorMapper = BrowseErrorInfo? Function(Object error);
+
+/// Shows an address-space browser in a dialog sized at 80% of the screen.
+/// Returns the selected [BrowseNode] or null if cancelled.
+Future<BrowseNode?> showBrowseDialog({
+  required BuildContext context,
+  required BrowseDataSource dataSource,
+  required String serverAlias,
+  BrowseErrorMapper? errorMapper,
+}) {
+  return showDialog<BrowseNode>(
+    context: context,
+    builder: (context) {
+      final cs = Theme.of(context).colorScheme;
+      final screenSize = MediaQuery.of(context).size;
+      return Dialog(
+        backgroundColor: cs.surface,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxWidth: screenSize.width * 0.8,
+            maxHeight: screenSize.height * 0.8,
+            minHeight: 300,
+          ),
+          child: SizedBox(
+            width: screenSize.width * 0.8,
+            height: screenSize.height * 0.8,
+            child: BrowsePanel(
+              dataSource: dataSource,
+              serverAlias: serverAlias,
+              errorMapper: errorMapper,
+              onSelected: (node) => Navigator.of(context).pop(node),
+              onCancelled: () => Navigator.of(context).pop(),
+            ),
+          ),
+        ),
+      );
+    },
+  );
+}
+
+/// Protocol-agnostic browse panel that displays a tree of nodes from a
+/// [BrowseDataSource]. This is the panel content -- it does NOT include a
+/// Dialog wrapper. Use [showBrowseDialog] for the dialog version, or embed
+/// this widget directly.
+class BrowsePanel extends StatefulWidget {
+  final BrowseDataSource dataSource;
+  final String serverAlias;
+  final ValueChanged<BrowseNode> onSelected;
+  final VoidCallback onCancelled;
+  final BrowseErrorMapper? errorMapper;
+
+  const BrowsePanel({
+    super.key,
+    required this.dataSource,
+    required this.serverAlias,
+    required this.onSelected,
+    required this.onCancelled,
+    this.errorMapper,
+  });
+
+  @override
+  State<BrowsePanel> createState() => BrowsePanelState();
+}
+
+@visibleForTesting
+class BrowsePanelState extends State<BrowsePanel> {
+  List<BrowseTreeEntry> _roots = [];
+  final Map<String, List<BrowseTreeEntry>> _children = {};
+  final Set<String> _expanded = {};
+  final Set<String> _loading = {};
+  BrowseTreeEntry? _selected;
+  bool _rootLoading = true;
+  String? _error;
+  String? _errorHelp;
+
+  // Detail strip state for selected variable
+  String? _detailDescription;
+  String? _detailValue;
+  String? _detailDataType;
+  bool _detailLoading = false;
+  String? _detailLoadedFor;
+
+  @visibleForTesting
+  BrowseNode? get selected => _selected?.node;
+  @visibleForTesting
+  List<BrowseNode> get roots => _roots.map((t) => t.node).toList();
+  @visibleForTesting
+  bool get rootLoading => _rootLoading;
+  @visibleForTesting
+  String? get error => _error;
+
+  static const String _rootParentId = '__root__';
+
+  void _showErrorHelpDialog(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: cs.surface,
+        title: Row(
+          children: [
+            Icon(Icons.info_outline, color: cs.primary, size: 20),
+            const SizedBox(width: 8),
+            const Text('Troubleshooting'),
+          ],
+        ),
+        content: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 460),
+          child: SelectableText(
+            _errorHelp!,
+            style: TextStyle(color: cs.onSurface, fontSize: 13, height: 1.5),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _loadRoots();
+  }
+
+  Future<void> _loadRoots() async {
+    try {
+      final results = await widget.dataSource.fetchRoots();
+      if (!mounted) return;
+      final roots = results
+          .map((node) => BrowseTreeEntry(
+                node: node,
+                depth: 0,
+                parentId: _rootParentId,
+              ))
+          .toList()
+        ..sort((a, b) => a.displayName.compareTo(b.displayName));
+      setState(() {
+        _roots = roots;
+        _rootLoading = false;
+      });
+      _prefetchChildren(roots);
+    } catch (e) {
+      if (!mounted) return;
+      final info = widget.errorMapper?.call(e);
+      setState(() {
+        _error = info?.summary ?? e.toString();
+        _errorHelp = info?.detail;
+        _rootLoading = false;
+      });
+    }
+  }
+
+  Future<void> _loadChildren(String nodeId, BrowseNode browseNode,
+      int parentDepth) async {
+    if (_loading.contains(nodeId)) return;
+    setState(() => _loading.add(nodeId));
+    try {
+      final results = await widget.dataSource.fetchChildren(browseNode);
+      if (!mounted) return;
+      final nodes = results
+          .map((node) => BrowseTreeEntry(
+                node: node,
+                depth: parentDepth + 1,
+                parentId: nodeId,
+              ))
+          .toList()
+        ..sort((a, b) => a.displayName.compareTo(b.displayName));
+      setState(() {
+        _children[nodeId] = nodes;
+        _expanded.add(nodeId);
+        _loading.remove(nodeId);
+      });
+      _prefetchChildren(nodes);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _loading.remove(nodeId);
+        _children[nodeId] = [];
+      });
+    }
+  }
+
+  void _prefetchChildren(List<BrowseTreeEntry> nodes) {
+    for (final node in nodes) {
+      if (node.isExpandable && !_children.containsKey(node.id)) {
+        _prefetchSingle(node);
+      }
+    }
+  }
+
+  Future<void> _prefetchSingle(BrowseTreeEntry treeNode) async {
+    if (_children.containsKey(treeNode.id)) return;
+    try {
+      final results = await widget.dataSource.fetchChildren(treeNode.node);
+      if (!mounted) return;
+      if (_children.containsKey(treeNode.id)) return;
+      setState(() {
+        _children[treeNode.id] = results
+            .map((node) => BrowseTreeEntry(
+                  node: node,
+                  depth: treeNode.depth + 1,
+                  parentId: treeNode.id,
+                ))
+            .toList()
+          ..sort((a, b) => a.displayName.compareTo(b.displayName));
+      });
+    } catch (_) {}
+  }
+
+  Future<void> _loadVariableDetails(BrowseTreeEntry treeNode) async {
+    final nodeId = treeNode.id;
+    if (_detailLoadedFor == nodeId) return;
+    setState(() {
+      _detailLoading = true;
+      _detailDescription = null;
+      _detailValue = null;
+      _detailDataType = null;
+      _detailLoadedFor = nodeId;
+    });
+    try {
+      final detail = await widget.dataSource.fetchDetail(treeNode.node);
+      if (!mounted || _detailLoadedFor != nodeId) return;
+      setState(() {
+        _detailValue = detail.value;
+        _detailDescription = detail.description;
+        _detailDataType = detail.dataType;
+        _detailLoading = false;
+
+        // Synthesize children from struct fields when the data source provides
+        // them and the browse tree has no children yet.
+        if (detail.structChildren != null &&
+            detail.structChildren!.isNotEmpty &&
+            (!_children.containsKey(nodeId) ||
+                _children[nodeId]!.isEmpty)) {
+          final depth = treeNode.depth;
+          _children[nodeId] = detail.structChildren!
+              .map((child) => BrowseTreeEntry(
+                    node: child,
+                    depth: depth + 1,
+                    parentId: nodeId,
+                  ))
+              .toList();
+          _expanded.add(nodeId);
+        }
+      });
+    } catch (e) {
+      if (!mounted || _detailLoadedFor != nodeId) return;
+      setState(() {
+        _detailValue = 'Error: $e';
+        _detailLoading = false;
+      });
+    }
+  }
+
+  void _toggleExpand(BrowseTreeEntry treeNode) {
+    if (!treeNode.isExpandable) return;
+    final nodeId = treeNode.id;
+    if (_expanded.contains(nodeId)) {
+      setState(() => _expanded.remove(nodeId));
+    } else if (_children.containsKey(nodeId)) {
+      setState(() => _expanded.add(nodeId));
+    } else {
+      _loadChildren(nodeId, treeNode.node, treeNode.depth);
+    }
+  }
+
+  void _onTapNode(BrowseTreeEntry treeNode) {
+    if (treeNode.isVariable) {
+      if (_selected?.id == treeNode.id) {
+        widget.onSelected(treeNode.node);
+      } else {
+        setState(() => _selected = treeNode);
+        _loadVariableDetails(treeNode);
+      }
+    } else if (treeNode.isExpandable) {
+      _toggleExpand(treeNode);
+    }
+  }
+
+  void _onDoubleTapNode(BrowseTreeEntry treeNode) {
+    if (treeNode.isVariable) {
+      widget.onSelected(treeNode.node);
+    }
+  }
+
+  @visibleForTesting
+  List<BrowseTreeEntry> flattenTree() {
+    final flat = <BrowseTreeEntry>[];
+    void walk(List<BrowseTreeEntry> nodes) {
+      for (final node in nodes) {
+        flat.add(node);
+        if (node.isExpandable &&
+            _expanded.contains(node.id) &&
+            _children.containsKey(node.id)) {
+          walk(_children[node.id]!);
+        }
+      }
+    }
+    walk(_roots);
+    return flat;
+  }
+
+  List<String> _buildBreadcrumb() {
+    if (_selected == null) return ['Root'];
+    final path = <String>['Root'];
+    BrowseTreeEntry? current = _selected;
+    final segments = <String>[];
+    while (current != null) {
+      segments.insert(0, current.displayName);
+      final parentId = current.parentId;
+      if (parentId == _rootParentId) break;
+      BrowseTreeEntry? parent;
+      for (final root in _roots) {
+        parent = _findNode(root, parentId);
+        if (parent != null) break;
+      }
+      current = parent;
+    }
+    path.addAll(segments);
+    return path;
+  }
+
+  BrowseTreeEntry? _findNode(BrowseTreeEntry node, String targetId) {
+    if (node.id == targetId) return node;
+    final kids = _children[node.id];
+    if (kids == null) return null;
+    for (final child in kids) {
+      final found = _findNode(child, targetId);
+      if (found != null) return found;
+    }
+    return null;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final flatNodes = flattenTree();
+    final breadcrumb = _buildBreadcrumb();
+    final cs = Theme.of(context).colorScheme;
+
+    return Column(
+      children: [
+        // Header
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            color: cs.surfaceContainerLow,
+            borderRadius:
+                const BorderRadius.vertical(top: Radius.circular(4)),
+          ),
+          child: Row(
+            children: [
+              FaIcon(FontAwesomeIcons.sitemap,
+                  size: 14, color: cs.onSurface),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Browse: ${widget.serverAlias}',
+                  style: TextStyle(
+                    color: cs.onSurface,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              InkWell(
+                onTap: widget.onCancelled,
+                child: Icon(Icons.close, size: 18, color: cs.secondary),
+              ),
+            ],
+          ),
+        ),
+        // Breadcrumb
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          color: cs.surface,
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
+                for (int i = 0; i < breadcrumb.length; i++) ...[
+                  if (i > 0)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 4),
+                      child: Icon(Icons.chevron_right,
+                          size: 14, color: cs.secondary),
+                    ),
+                  Text(
+                    breadcrumb[i],
+                    style: TextStyle(
+                      color: i == breadcrumb.length - 1
+                          ? cs.onSurface
+                          : cs.secondary,
+                      fontSize: 11,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+        Divider(height: 1, color: cs.surfaceContainerLow),
+        // Tree
+        Expanded(
+          child: _rootLoading
+              ? Center(
+                  child: SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: SolarizedColors.cyan,
+                    ),
+                  ),
+                )
+              : _error != null
+                  ? Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(24),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.error_outline,
+                                color: cs.error, size: 32),
+                            const SizedBox(height: 12),
+                            Text(
+                              _error!,
+                              style: TextStyle(
+                                  color: cs.onSurface, fontSize: 13),
+                              textAlign: TextAlign.center,
+                            ),
+                            if (_errorHelp != null) ...[
+                              const SizedBox(height: 12),
+                              TextButton.icon(
+                                onPressed: () => _showErrorHelpDialog(context),
+                                icon: const Icon(Icons.info_outline, size: 16),
+                                label: const Text('How to fix this'),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                    )
+                  : flatNodes.isEmpty
+                      ? Center(
+                          child: Text(
+                            'No nodes found',
+                            style: TextStyle(
+                                color: cs.secondary, fontSize: 12),
+                          ),
+                        )
+                      : ListView.builder(
+                          itemCount: flatNodes.length,
+                          itemBuilder: (context, index) {
+                            final treeNode = flatNodes[index];
+                            final kids = _children[treeNode.id];
+                            return BrowseNodeTile(
+                              node: treeNode,
+                              isSelected:
+                                  _selected?.id == treeNode.id,
+                              isExpanded:
+                                  _expanded.contains(treeNode.id),
+                              isLoading:
+                                  _loading.contains(treeNode.id),
+                              hasChildren:
+                                  kids != null && kids.isNotEmpty,
+                              onTap: () => _onTapNode(treeNode),
+                              onDoubleTap: () =>
+                                  _onDoubleTapNode(treeNode),
+                              onToggleExpand: () =>
+                                  _toggleExpand(treeNode),
+                            );
+                          },
+                        ),
+        ),
+        if (_selected != null && _selected!.isVariable)
+          VariableDetailStrip(
+            displayName: _selected!.displayName,
+            nodeId: _selected!.id,
+            description: _detailDescription,
+            value: _detailValue,
+            dataType: _detailDataType,
+            isLoading: _detailLoading,
+          ),
+        Divider(height: 1, color: cs.surfaceContainerLow),
+        // Actions
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          color: cs.surfaceContainerLow,
+          child: Row(
+            children: [
+              TextButton(
+                onPressed: widget.onCancelled,
+                child:
+                    const Text('Cancel', style: TextStyle(fontSize: 12)),
+              ),
+              const Spacer(),
+              TextButton(
+                onPressed: _selected != null && _selected!.isVariable
+                    ? () => widget.onSelected(_selected!.node)
+                    : null,
+                style: TextButton.styleFrom(
+                  foregroundColor: SolarizedColors.cyan,
+                ),
+                child:
+                    const Text('Select', style: TextStyle(fontSize: 12)),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// BrowseNodeTile
+// ---------------------------------------------------------------------------
+
+class BrowseNodeTile extends StatelessWidget {
+  final BrowseTreeEntry node;
+  final bool isSelected;
+  final bool isExpanded;
+  final bool isLoading;
+  final bool hasChildren;
+  final VoidCallback onTap;
+  final VoidCallback onDoubleTap;
+  final VoidCallback onToggleExpand;
+
+  const BrowseNodeTile({
+    super.key,
+    required this.node,
+    required this.isSelected,
+    required this.isExpanded,
+    required this.isLoading,
+    required this.hasChildren,
+    required this.onTap,
+    required this.onDoubleTap,
+    required this.onToggleExpand,
+  });
+
+  Widget _buildIcon(ColorScheme cs) {
+    switch (node.type) {
+      case BrowseNodeType.folder:
+        return const Icon(Icons.folder_outlined,
+            size: 16, color: SolarizedColors.yellow);
+      case BrowseNodeType.variable:
+        return const FaIcon(FontAwesomeIcons.tag,
+            size: 12, color: SolarizedColors.green);
+      case BrowseNodeType.method:
+        return Icon(Icons.play_arrow,
+            size: 16, color: cs.primary.withAlpha(120));
+      case BrowseNodeType.other:
+        return Icon(Icons.circle, size: 8, color: cs.secondary);
+    }
+  }
+
+  Widget _buildExpandWidget(ColorScheme cs) {
+    if (!node.isExpandable || (node.isVariable && !hasChildren)) {
+      return const SizedBox(width: 18);
+    }
+    if (isLoading) {
+      return const SizedBox(
+        width: 18,
+        height: 18,
+        child: Padding(
+          padding: EdgeInsets.all(3),
+          child: CircularProgressIndicator(
+              strokeWidth: 1.5, color: SolarizedColors.cyan),
+        ),
+      );
+    }
+    return GestureDetector(
+      onTap: onToggleExpand,
+      child: SizedBox(
+        width: 18,
+        child: AnimatedRotation(
+          turns: isExpanded ? 0.25 : 0,
+          duration: Duration.zero,
+          child: Icon(Icons.chevron_right, size: 16, color: cs.secondary),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final isMethod = node.type == BrowseNodeType.method;
+    final textColor = isMethod ? cs.secondary : cs.onSurface;
+
+    return GestureDetector(
+      onTap: onTap,
+      onDoubleTap: onDoubleTap,
+      child: Container(
+        height: 36,
+        padding: EdgeInsets.only(left: node.depth * 20.0 + 4, right: 8),
+        color: isSelected
+            ? SolarizedColors.cyan.withAlpha(25)
+            : Colors.transparent,
+        child: Row(
+          children: [
+            _buildExpandWidget(cs),
+            const SizedBox(width: 4),
+            _buildIcon(cs),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Text(
+                node.displayName,
+                style: TextStyle(
+                  color: textColor,
+                  fontSize: 12,
+                  fontWeight:
+                      node.isVariable ? FontWeight.w500 : FontWeight.normal,
+                ),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Text(
+              node.id,
+              style: TextStyle(
+                color: cs.secondary,
+                fontSize: 11,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// VariableDetailStrip
+// ---------------------------------------------------------------------------
+
+class VariableDetailStrip extends StatelessWidget {
+  final String displayName;
+  final String nodeId;
+  final String? description;
+  final String? value;
+  final String? dataType;
+  final bool isLoading;
+
+  const VariableDetailStrip({
+    super.key,
+    required this.displayName,
+    required this.nodeId,
+    this.description,
+    this.value,
+    this.dataType,
+    required this.isLoading,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: cs.surfaceContainerLow,
+        border:
+            Border(top: BorderSide(color: SolarizedColors.cyan.withAlpha(40))),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            children: [
+              FaIcon(FontAwesomeIcons.tag,
+                  size: 10, color: SolarizedColors.green),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  nodeId,
+                  style: TextStyle(
+                    color: cs.onSurface,
+                    fontSize: 11,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              if (dataType != null) ...[
+                const SizedBox(width: 12),
+                Text(
+                  dataType!,
+                  style: TextStyle(color: cs.secondary, fontSize: 10),
+                ),
+              ],
+              if (isLoading) ...[
+                const SizedBox(width: 8),
+                SizedBox(
+                  width: 10,
+                  height: 10,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 1.5,
+                    color: SolarizedColors.cyan,
+                  ),
+                ),
+              ],
+            ],
+          ),
+          if (description != null) ...[
+            const SizedBox(height: 4),
+            Text(
+              description!,
+              style: TextStyle(color: cs.secondary, fontSize: 11),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ],
+          if (value != null) ...[
+            const SizedBox(height: 4),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('val ',
+                    style: TextStyle(color: cs.secondary, fontSize: 10)),
+                Expanded(
+                  child: Text(
+                    value!,
+                    style: TextStyle(
+                      color: SolarizedColors.cyan,
+                      fontSize: 11,
+                    ),
+                    maxLines: 3,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}

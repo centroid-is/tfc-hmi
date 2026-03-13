@@ -15,7 +15,11 @@ import 'package:jbtm/src/m2400_fields.dart' show M2400Field;
 import 'package:jbtm/src/m2400_client_wrapper.dart' show M2400ClientWrapper;
 import 'package:jbtm/src/msocket.dart' as jbtm show ConnectionStatus;
 
+import 'package:modbus_client/modbus_client.dart' show ModbusElementType, ModbusEndianness;
+
 import 'collector.dart';
+import 'modbus_client_wrapper.dart' show ModbusDataType;
+import 'modbus_device_client.dart' show ModbusDeviceClientAdapter;
 import 'preferences.dart';
 
 part 'state_man.g.dart';
@@ -176,19 +180,163 @@ class M2400NodeConfig {
       'M2400NodeConfig(recordType: $recordType, field: $field, alias: $serverAlias, statusFilter: $statusFilter)';
 }
 
+// =============================================================================
+// Modbus configuration classes (Phase 8)
+// =============================================================================
+
+/// Modbus register type for JSON serialization.
+///
+/// Maps to [ModbusElementType] at runtime via [toModbusElementType] and
+/// [fromModbusElementType]. Kept as a separate enum so json_serializable
+/// generates camelCase string serialization without depending on the
+/// modbus_client package in the serialization layer.
+enum ModbusRegisterType {
+  coil,
+  discreteInput,
+  holdingRegister,
+  inputRegister;
+
+  /// Converts to the modbus_client library's [ModbusElementType].
+  ModbusElementType toModbusElementType() {
+    switch (this) {
+      case ModbusRegisterType.coil:
+        return ModbusElementType.coil;
+      case ModbusRegisterType.discreteInput:
+        return ModbusElementType.discreteInput;
+      case ModbusRegisterType.holdingRegister:
+        return ModbusElementType.holdingRegister;
+      case ModbusRegisterType.inputRegister:
+        return ModbusElementType.inputRegister;
+    }
+  }
+
+  /// Creates from the modbus_client library's [ModbusElementType].
+  static ModbusRegisterType fromModbusElementType(ModbusElementType type) {
+    switch (type) {
+      case ModbusElementType.coil:
+        return ModbusRegisterType.coil;
+      case ModbusElementType.discreteInput:
+        return ModbusRegisterType.discreteInput;
+      case ModbusElementType.holdingRegister:
+        return ModbusRegisterType.holdingRegister;
+      case ModbusElementType.inputRegister:
+        return ModbusRegisterType.inputRegister;
+      default:
+        throw ArgumentError('Unsupported ModbusElementType: $type');
+    }
+  }
+}
+
+/// Configuration for a named Modbus poll group.
+///
+/// Poll groups allow registers to be read at different intervals (e.g. fast
+/// control loop vs slow diagnostics).
+@JsonSerializable(explicitToJson: true)
+class ModbusPollGroupConfig {
+  String name;
+  @JsonKey(name: 'interval_ms')
+  int intervalMs;
+
+  ModbusPollGroupConfig({required this.name, this.intervalMs = 1000});
+
+  /// Convenience getter for use with Timer/Duration APIs.
+  Duration get interval => Duration(milliseconds: intervalMs);
+
+  factory ModbusPollGroupConfig.fromJson(Map<String, dynamic> json) =>
+      _$ModbusPollGroupConfigFromJson(json);
+  Map<String, dynamic> toJson() => _$ModbusPollGroupConfigToJson(this);
+
+  @override
+  String toString() => 'ModbusPollGroupConfig(name: $name, intervalMs: $intervalMs)';
+}
+
+/// Top-level configuration for a single Modbus TCP server connection.
+///
+/// Parallels [M2400Config] and [OpcUAConfig] in the config hierarchy.
+@JsonSerializable(explicitToJson: true)
+class ModbusConfig {
+  String host;
+  int port;
+  @JsonKey(name: 'unit_id')
+  int unitId;
+  @JsonKey(name: 'server_alias')
+  String? serverAlias;
+  @JsonKey(name: 'poll_groups', defaultValue: [])
+  List<ModbusPollGroupConfig> pollGroups;
+  @JsonKey(name: 'umas_enabled', defaultValue: false)
+  bool umasEnabled;
+  @JsonKey(defaultValue: ModbusEndianness.ABCD)
+  ModbusEndianness endianness;
+  @JsonKey(name: 'address_base', defaultValue: 0)
+  int addressBase;
+
+  ModbusConfig({
+    this.host = '',
+    this.port = 502,
+    int unitId = 1,
+    this.serverAlias,
+    this.pollGroups = const [],
+    this.umasEnabled = false,
+    this.endianness = ModbusEndianness.ABCD,
+    this.addressBase = 0,
+  }) : unitId = unitId.clamp(0, 255);
+
+  factory ModbusConfig.fromJson(Map<String, dynamic> json) =>
+      _$ModbusConfigFromJson(json);
+  Map<String, dynamic> toJson() => _$ModbusConfigToJson(this);
+
+  @override
+  String toString() =>
+      'ModbusConfig(host: $host, port: $port, unitId: $unitId, alias: $serverAlias, pollGroups: $pollGroups)';
+}
+
+/// Per-key configuration that describes which Modbus register a key maps to.
+///
+/// Parallels [M2400NodeConfig] and [OpcUANodeConfig] in the keymappings.
+@JsonSerializable(explicitToJson: true)
+class ModbusNodeConfig {
+  @JsonKey(name: 'server_alias')
+  String? serverAlias;
+  @JsonKey(name: 'register_type')
+  ModbusRegisterType registerType;
+  int address;
+  @JsonKey(name: 'data_type')
+  ModbusDataType dataType;
+  @JsonKey(name: 'poll_group')
+  String pollGroup;
+
+  ModbusNodeConfig({
+    this.serverAlias,
+    required this.registerType,
+    required int address,
+    this.dataType = ModbusDataType.uint16,
+    this.pollGroup = 'default',
+  }) : address = address.clamp(0, 65535);
+
+  factory ModbusNodeConfig.fromJson(Map<String, dynamic> json) =>
+      _$ModbusNodeConfigFromJson(json);
+  Map<String, dynamic> toJson() => _$ModbusNodeConfigToJson(this);
+
+  @override
+  String toString() =>
+      'ModbusNodeConfig(alias: $serverAlias, registerType: $registerType, address: $address, dataType: $dataType, pollGroup: $pollGroup)';
+}
+
 @JsonSerializable(explicitToJson: true)
 class StateManConfig {
   List<OpcUAConfig> opcua;
   @JsonKey(defaultValue: [])
   List<M2400Config> jbtm;
+  @JsonKey(defaultValue: [])
+  List<ModbusConfig> modbus;
 
-  StateManConfig({required this.opcua, this.jbtm = const []});
+  StateManConfig({required this.opcua, this.jbtm = const [], this.modbus = const []});
 
   StateManConfig copy() => StateManConfig.fromJson(toJson());
 
   @override
   String toString() {
-    return 'StateManConfig(opcua: ${opcua.toString()}, jbtm: ${jbtm.toString()})';
+    return 'StateManConfig(opcua: ${opcua.toString()}, jbtm: ${jbtm.toString()}, modbus: ${modbus.toString()})';
   }
 
   static Future<StateManConfig> fromFile(String path) async {
@@ -263,12 +411,44 @@ class KeyMappingEntry {
   OpcUANodeConfig? opcuaNode;
   @JsonKey(name: 'm2400_node')
   M2400NodeConfig? m2400Node;
+  @JsonKey(name: 'modbus_node')
+  ModbusNodeConfig? modbusNode;
   bool? io; // if true, the key is an IO unit
   CollectEntry? collect;
 
-  String? get server => opcuaNode?.serverAlias ?? m2400Node?.serverAlias;
+  /// Optional bit mask for extracting bits from integer values.
+  /// When set, reads extract (value & bitMask) >>> bitShift.
+  /// Single-bit mask produces bool; multi-bit produces int.
+  @JsonKey(name: 'bit_mask')
+  int? bitMask;
 
-  KeyMappingEntry({this.opcuaNode, this.m2400Node, this.collect});
+  /// Bit shift applied after masking (position of lowest set bit in mask).
+  @JsonKey(name: 'bit_shift')
+  int? bitShift;
+
+  String? get server =>
+      opcuaNode?.serverAlias ?? m2400Node?.serverAlias ?? modbusNode?.serverAlias;
+
+  KeyMappingEntry({this.opcuaNode, this.m2400Node, this.modbusNode, this.collect, this.bitMask, this.bitShift});
+
+  KeyMappingEntry copyWith({
+    OpcUANodeConfig? opcuaNode,
+    M2400NodeConfig? m2400Node,
+    ModbusNodeConfig? modbusNode,
+    CollectEntry? collect,
+    int? bitMask,
+    int? bitShift,
+    bool clearBitMask = false,
+  }) {
+    return KeyMappingEntry(
+      opcuaNode: opcuaNode ?? this.opcuaNode,
+      m2400Node: m2400Node ?? this.m2400Node,
+      modbusNode: modbusNode ?? this.modbusNode,
+      collect: collect ?? this.collect,
+      bitMask: clearBitMask ? null : (bitMask ?? this.bitMask),
+      bitShift: clearBitMask ? null : (bitShift ?? this.bitShift),
+    )..io = io;
+  }
 
   factory KeyMappingEntry.fromJson(Map<String, dynamic> json) =>
       _$KeyMappingEntryFromJson(json);
@@ -276,7 +456,7 @@ class KeyMappingEntry {
 
   @override
   String toString() {
-    return 'KeyMappingEntry(opcuaNode: ${opcuaNode?.toString()}, collect: $collect, io: $io)';
+    return 'KeyMappingEntry(opcuaNode: ${opcuaNode?.toString()}, m2400Node: ${m2400Node?.toString()}, modbusNode: ${modbusNode?.toString()}, collect: $collect, io: $io)';
   }
 }
 
@@ -292,7 +472,9 @@ class KeyMappings {
 
   String? lookupServerAlias(String key) {
     final entry = nodes[key];
-    return entry?.opcuaNode?.serverAlias ?? entry?.m2400Node?.serverAlias;
+    return entry?.opcuaNode?.serverAlias ??
+        entry?.m2400Node?.serverAlias ??
+        entry?.modbusNode?.serverAlias;
   }
 
   String? lookupKey(NodeId nodeId) {
@@ -553,6 +735,9 @@ abstract class DeviceClient {
   /// Start connecting to the device.
   void connect();
 
+  /// Write a value to the device by key.
+  Future<void> write(String key, DynamicValue value);
+
   /// Dispose resources.
   void dispose();
 }
@@ -594,6 +779,11 @@ class M2400DeviceClientAdapter implements DeviceClient {
       wrapper.statusStream.map(_mapStatus);
 
   @override
+  Future<void> write(String key, DynamicValue value) {
+    throw UnsupportedError('M2400 does not support writes');
+  }
+
+  @override
   void connect() => wrapper.connect();
 
   @override
@@ -628,6 +818,26 @@ class StateMan {
   final logger = Logger();
   final StateManConfig config;
   KeyMappings keyMappings;
+
+  /// Apply bit mask extraction to a raw [DynamicValue].
+  ///
+  /// Returns the original value unchanged if [bitMask] is null.
+  /// Single-bit mask returns bool; multi-bit returns int.
+  /// Non-numeric values pass through unchanged.
+  static DynamicValue applyBitMask(DynamicValue value, int? bitMask, int? bitShift) {
+    if (bitMask == null) return value;
+    final raw = value.value;
+    if (raw is! num) return value;
+    final intValue = raw.toInt();
+    final masked = (intValue & bitMask) >>> (bitShift ?? 0);
+    // Single-bit: power of two check (exactly one bit set)
+    final isSingle = bitMask != 0 && (bitMask & (bitMask - 1)) == 0;
+    if (isSingle) {
+      return DynamicValue(value: masked != 0, typeId: NodeId.boolean);
+    }
+    return DynamicValue(value: masked, typeId: value.typeId);
+  }
+
   final List<ClientWrapper> clients;
   final List<DeviceClient> deviceClients;
   final Map<String, AutoDisposingStream<DynamicValue>> _subscriptions = {};
@@ -953,6 +1163,19 @@ class StateMan {
     return null;
   }
 
+  /// Find the Modbus [DeviceClient] that owns [key], or null if not a Modbus key.
+  DeviceClient? _resolveModbusDeviceClient(String key) {
+    final entry = keyMappings.nodes[key];
+    if (entry?.modbusNode == null) return null;
+    final alias = entry!.modbusNode!.serverAlias;
+    for (final dc in deviceClients) {
+      if (dc is ModbusDeviceClientAdapter && dc.serverAlias == alias) {
+        if (dc.canSubscribe(key)) return dc;
+      }
+    }
+    return null;
+  }
+
   /// Example: read("myKey")
   Future<DynamicValue> read(String key) async {
     key = resolveKey(key);
@@ -977,31 +1200,72 @@ class StateMan {
       return value;
     }
 
+    // Check Modbus key
+    final modbusDc = _resolveModbusDeviceClient(key);
+    if (modbusDc != null) {
+      final value = modbusDc.read(key);
+      if (value == null) {
+        throw StateManException('No cached value for key: "$key" -- not polled yet');
+      }
+      return value;
+    }
+
     // Fall through to OPC UA
     try {
       final client = _getClientWrapper(key).client;
       final nodeId = _lookupNodeId(key);
       if (nodeId == null) {
-        await Future.delayed(const Duration(seconds: 1000));
         throw StateManException("Key: \"$key\" not found");
       }
       final (id, idx) = nodeId;
       await client.awaitConnect();
-      final value = await client.read(id);
+      var value = await client.read(id);
       if (idx != null) {
-        return value[idx];
+        value = value[idx];
       }
-      return value;
+      // Apply bit mask if configured on this key
+      final entry = keyMappings.nodes[key];
+      return applyBitMask(value, entry?.bitMask, entry?.bitShift);
     } catch (e) {
       throw StateManException('Failed to read key: \"$key\": $e');
     }
   }
 
   Future<Map<String, DynamicValue>> readMany(List<String> keys) async {
-    final parameters = <ClientApi, Map<NodeId, List<AttributeId>>>{};
+    final results = <String, DynamicValue>{};
 
+    // Separate DeviceClient keys from OPC UA keys
+    final opcuaKeys = <String>[];
     for (final keyToResolve in keys) {
       final key = resolveKey(keyToResolve);
+
+      // Check Modbus
+      final modbusDc = _resolveModbusDeviceClient(key);
+      if (modbusDc != null) {
+        final value = modbusDc.read(key);
+        if (value != null) results[key] = value;
+        continue;
+      }
+
+      // Check M2400
+      final m2400 = _resolveM2400Key(key);
+      if (m2400 != null) {
+        final value = m2400.dc.read(m2400.subscribeKey);
+        if (value != null) {
+          var result = value;
+          if (m2400.fieldName != null) result = result[m2400.fieldName!];
+          results[key] = result;
+        }
+        continue;
+      }
+
+      opcuaKeys.add(key);
+    }
+
+    // Process remaining OPC UA keys
+    final parameters = <ClientApi, Map<NodeId, List<AttributeId>>>{};
+
+    for (final key in opcuaKeys) {
       final client = _getClientWrapper(key).client;
       final nodeId = _lookupNodeId(key);
       if (nodeId == null) {
@@ -1018,7 +1282,6 @@ class StateMan {
       };
     }
 
-    final results = <String, DynamicValue>{};
     for (final pair in parameters.entries) {
       final client = pair.key;
       final parameters = pair.value;
@@ -1047,11 +1310,18 @@ class StateMan {
   /// Example: write("myKey", DynamicValue(value: 42, typeId: NodeId.int16))
   Future<void> write(String key, DynamicValue value) async {
     key = resolveKey(key);
+
+    // Check Modbus (and other DeviceClient protocols)
+    final modbusDc = _resolveModbusDeviceClient(key);
+    if (modbusDc != null) {
+      await modbusDc.write(key, value);
+      return;
+    }
+
     try {
       final client = _getClientWrapper(key).client;
       final nodeId = _lookupNodeId(key);
       if (nodeId == null) {
-        await Future.delayed(const Duration(seconds: 1000));
         throw StateManException("Key: \"$key\" not found");
       }
       final (id, idx) = nodeId;
@@ -1092,6 +1362,12 @@ class StateMan {
         stream = stream.map((dv) => dv[m2400.fieldName!]);
       }
       return stream;
+    }
+
+    // Check Modbus key
+    final modbusDc = _resolveModbusDeviceClient(key);
+    if (modbusDc != null) {
+      return modbusDc.subscribe(key);
     }
 
     // Fall through to OPC UA
@@ -1236,6 +1512,12 @@ class StateMan {
         var stream = client.monitor(id, wrapper.subscriptionId!);
         if (idx != null) {
           stream = stream.map((value) => value[idx]);
+        }
+        // Apply bit mask if configured on this key
+        final entry = keyMappings.nodes[key];
+        if (entry?.bitMask != null) {
+          stream = stream.map((value) =>
+              applyBitMask(value, entry!.bitMask, entry.bitShift));
         }
 
         // Wait for monitor to deliver first value. No asBroadcastStream()

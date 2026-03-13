@@ -16,8 +16,11 @@ import 'package:cryptography/cryptography.dart' as crypto;
 import 'package:cryptography_flutter/cryptography_flutter.dart' as crypto_fl;
 
 import '../widgets/base_scaffold.dart';
+import '../widgets/connection_status_chip.dart';
 import '../widgets/preferences.dart';
 import 'package:tfc_dart/core/state_man.dart';
+import 'package:tfc_dart/core/modbus_device_client.dart';
+import 'package:modbus_client/modbus_client.dart' show ModbusEndianness;
 import 'package:tfc_dart/core/database.dart';
 import '../providers/state_man.dart';
 import '../providers/preferences.dart';
@@ -501,27 +504,45 @@ class ServerConfigPage extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    return BaseScaffold(
+      title: 'Server Configuration',
+      body: const ServerConfigBody(),
+    );
+  }
+}
+
+/// The body content of [ServerConfigPage], extracted for testability.
+///
+/// Contains all server configuration sections (Database, OPC UA, JBTM, Modbus)
+/// and the Import/Export card. Separated from [ServerConfigPage] so widget
+/// tests can render without the [BaseScaffold] (which requires Beamer routing).
+class ServerConfigBody extends ConsumerWidget {
+  const ServerConfigBody({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
     // Watch a simple counter that gets incremented on import
     final refreshKey = ref.watch(refreshKeyProvider);
 
-    return BaseScaffold(
-      title: 'Server Configuration',
-      body: SingleChildScrollView(
-        child: Column(
-          children: [
-            // Database Configuration Section
-            DatabaseConfigWidget(key: ValueKey('db_$refreshKey')),
-            const SizedBox(height: 16),
+    return SingleChildScrollView(
+      child: Column(
+        children: [
+          // Database Configuration Section
+          DatabaseConfigWidget(key: ValueKey('db_$refreshKey')),
+          const SizedBox(height: 16),
 
-            // OPC-UA Servers Section
-            _OpcUAServersSection(key: ValueKey('opcua_$refreshKey')),
-            const SizedBox(height: 16),
+          // OPC-UA Servers Section
+          _OpcUAServersSection(key: ValueKey('opcua_$refreshKey')),
+          const SizedBox(height: 16),
 
-            // JBTM M2400 Servers Section
-            _JbtmServersSection(key: ValueKey('jbtm_$refreshKey')),
-            const ImportExportCard(),
-          ],
-        ),
+          // JBTM M2400 Servers Section
+          _JbtmServersSection(key: ValueKey('jbtm_$refreshKey')),
+          const SizedBox(height: 16),
+
+          // Modbus TCP Servers Section
+          _ModbusServersSection(key: ValueKey('modbus_$refreshKey')),
+          const ImportExportCard(),
+        ],
       ),
     );
   }
@@ -584,7 +605,7 @@ class _OpcUAServersSectionState extends ConsumerState<_OpcUAServersSection> {
     if (_config == null) return;
 
     try {
-      _config!.toPrefs(await ref.read(preferencesProvider.future));
+      await _config!.toPrefs(await ref.read(preferencesProvider.future));
       _savedConfig = await StateManConfig.fromPrefs(
           await ref.read(preferencesProvider.future));
       ref.invalidate(stateManProvider);
@@ -695,111 +716,29 @@ class _OpcUAServersSectionState extends ConsumerState<_OpcUAServersSection> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            LayoutBuilder(
-              builder: (context, constraints) {
-                final isNarrow = constraints.maxWidth < 500;
-                if (isNarrow) {
-                  return Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Row(
-                        children: [
-                          const FaIcon(FontAwesomeIcons.server, size: 20),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text('OPC-UA Servers',
-                                style: Theme.of(context).textTheme.titleMedium),
-                          ),
-                          if (_hasUnsavedChanges) ...[
-                            const SizedBox(width: 4),
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 6, vertical: 2),
-                              decoration: BoxDecoration(
-                                  color: Colors.orange,
-                                  borderRadius: BorderRadius.circular(12)),
-                              child: const Text('Unsaved',
-                                  style: TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 10,
-                                      fontWeight: FontWeight.bold)),
-                            ),
-                          ],
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      ElevatedButton.icon(
-                        onPressed: _addServer,
-                        icon: const FaIcon(FontAwesomeIcons.plus, size: 16),
-                        label: const Text('Add Server'),
-                      ),
-                    ],
-                  );
-                }
-                return Row(
-                  children: [
-                    const FaIcon(FontAwesomeIcons.server, size: 20),
-                    const SizedBox(width: 8),
-                    Text('OPC-UA Servers',
-                        style: Theme.of(context).textTheme.titleMedium),
-                    if (_hasUnsavedChanges) ...[
-                      const SizedBox(width: 8),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 8, vertical: 4),
-                        decoration: BoxDecoration(
-                            color: Colors.orange,
-                            borderRadius: BorderRadius.circular(12)),
-                        child: const Text('Unsaved Changes',
-                            style: TextStyle(
-                                color: Colors.white,
-                                fontSize: 12,
-                                fontWeight: FontWeight.bold)),
-                      ),
-                    ],
-                    const Spacer(),
-                    // Import/Export Buttons
-                    const SizedBox(width: 8),
-                    ElevatedButton.icon(
-                      onPressed: _addServer,
-                      icon: const FaIcon(FontAwesomeIcons.plus, size: 16),
-                      label: const Text('Add Server'),
-                    ),
-                  ],
-                );
-              },
+            _ServerSectionHeader(
+              title: 'OPC-UA Servers',
+              icon: FontAwesomeIcons.server,
+              hasUnsavedChanges: _hasUnsavedChanges,
+              onAdd: _addServer,
             ),
             const SizedBox(height: 16),
-            // Server list with constrained height
             config.opcua.isEmpty
                 ? const SizedBox(
                     height: 200,
-                    child: _EmptyServersWidget(),
+                    child: _EmptyServersPlaceholder(
+                      icon: FontAwesomeIcons.server,
+                      title: 'No servers configured',
+                      subtitle: 'Add your first OPC-UA server to get started',
+                    ),
                   )
                 : _buildServerList(config),
             const SizedBox(height: 16),
-            // place import and export button in bottom right corner
-            // place save config button in bottom left corner, it should take 60% of the width
-            Row(
-              children: [
-                if (config.opcua.isNotEmpty || _hasUnsavedChanges)
-                  Expanded(
-                    child: ElevatedButton.icon(
-                      onPressed: _hasUnsavedChanges ? _saveConfig : null,
-                      icon: FaIcon(FontAwesomeIcons.floppyDisk,
-                          size: 16,
-                          color: _hasUnsavedChanges ? null : Colors.grey),
-                      label: Text(_hasUnsavedChanges
-                          ? 'Save Configuration'
-                          : 'All Changes Saved'),
-                      style: ElevatedButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(vertical: 16),
-                          backgroundColor:
-                              _hasUnsavedChanges ? null : Colors.grey),
-                    ),
-                  ),
-              ],
-            ),
+            if (config.opcua.isNotEmpty || _hasUnsavedChanges)
+              _SaveConfigButton(
+                hasUnsavedChanges: _hasUnsavedChanges,
+                onSave: _saveConfig,
+              ),
           ],
         ),
       ),
@@ -807,26 +746,166 @@ class _OpcUAServersSectionState extends ConsumerState<_OpcUAServersSection> {
   }
 }
 
-class _EmptyServersWidget extends StatelessWidget {
-  const _EmptyServersWidget();
+class _EmptyServersPlaceholder extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String subtitle;
+
+  const _EmptyServersPlaceholder({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+  });
+
   @override
   Widget build(BuildContext context) {
     return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          const FaIcon(FontAwesomeIcons.server, size: 64, color: Colors.grey),
+          FaIcon(icon, size: 64, color: Colors.grey),
           const SizedBox(height: 16),
-          Text('No servers configured',
+          Text(title,
               style: Theme.of(context)
                   .textTheme
                   .titleLarge
                   ?.copyWith(color: Colors.grey)),
           const SizedBox(height: 8),
-          const Text('Add your first OPC-UA server to get started',
-              style: TextStyle(color: Colors.grey)),
+          Text(subtitle, style: const TextStyle(color: Colors.grey)),
         ],
       ),
+    );
+  }
+}
+
+/// Section header with icon, title, unsaved badge, and add button.
+///
+/// Used by OPC UA, JBTM, and Modbus server config sections to show
+/// a responsive header row that collapses on narrow screens.
+class _ServerSectionHeader extends StatelessWidget {
+  final String title;
+  final IconData icon;
+  final bool hasUnsavedChanges;
+  final VoidCallback onAdd;
+
+  const _ServerSectionHeader({
+    required this.title,
+    required this.icon,
+    required this.hasUnsavedChanges,
+    required this.onAdd,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final isNarrow = constraints.maxWidth < 500;
+        if (isNarrow) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  FaIcon(icon, size: 20),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(title,
+                        style: Theme.of(context).textTheme.titleMedium),
+                  ),
+                  if (hasUnsavedChanges) ...[
+                    const SizedBox(width: 4),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                          color: Colors.orange,
+                          borderRadius: BorderRadius.circular(12)),
+                      child: const Text('Unsaved',
+                          style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold)),
+                    ),
+                  ],
+                ],
+              ),
+              const SizedBox(height: 8),
+              ElevatedButton.icon(
+                onPressed: onAdd,
+                icon: const FaIcon(FontAwesomeIcons.plus, size: 16),
+                label: const Text('Add Server'),
+              ),
+            ],
+          );
+        }
+        return Row(
+          children: [
+            FaIcon(icon, size: 20),
+            const SizedBox(width: 8),
+            Text(title,
+                style: Theme.of(context).textTheme.titleMedium),
+            if (hasUnsavedChanges) ...[
+              const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                    color: Colors.orange,
+                    borderRadius: BorderRadius.circular(12)),
+                child: const Text('Unsaved Changes',
+                    style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold)),
+              ),
+            ],
+            const Spacer(),
+            const SizedBox(width: 8),
+            ElevatedButton.icon(
+              onPressed: onAdd,
+              icon: const FaIcon(FontAwesomeIcons.plus, size: 16),
+              label: const Text('Add Server'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+/// Save/saved-state button for server config sections.
+///
+/// Shows "Save Configuration" (enabled, themed) when there are unsaved changes,
+/// or "All Changes Saved" (disabled, grey) when config matches saved state.
+class _SaveConfigButton extends StatelessWidget {
+  final bool hasUnsavedChanges;
+  final VoidCallback onSave;
+
+  const _SaveConfigButton({
+    required this.hasUnsavedChanges,
+    required this.onSave,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Expanded(
+          child: ElevatedButton.icon(
+            onPressed: hasUnsavedChanges ? onSave : null,
+            icon: FaIcon(FontAwesomeIcons.floppyDisk,
+                size: 16,
+                color: hasUnsavedChanges ? null : Colors.grey),
+            label: Text(hasUnsavedChanges
+                ? 'Save Configuration'
+                : 'All Changes Saved'),
+            style: ElevatedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 16),
+                backgroundColor:
+                    hasUnsavedChanges ? null : Colors.grey),
+          ),
+        ),
+      ],
     );
   }
 }
@@ -882,7 +961,7 @@ class _JbtmServersSectionState extends ConsumerState<_JbtmServersSection> {
     if (_config == null) return;
 
     try {
-      _config!.toPrefs(await ref.read(preferencesProvider.future));
+      await _config!.toPrefs(await ref.read(preferencesProvider.future));
       _savedConfig = await StateManConfig.fromPrefs(
           await ref.read(preferencesProvider.future));
       ref.invalidate(stateManProvider);
@@ -990,107 +1069,29 @@ class _JbtmServersSectionState extends ConsumerState<_JbtmServersSection> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            LayoutBuilder(
-              builder: (context, constraints) {
-                final isNarrow = constraints.maxWidth < 500;
-                if (isNarrow) {
-                  return Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Row(
-                        children: [
-                          const FaIcon(FontAwesomeIcons.scaleBalanced, size: 20),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text('JBTM M2400 Servers',
-                                style: Theme.of(context).textTheme.titleMedium),
-                          ),
-                          if (_hasUnsavedChanges) ...[
-                            const SizedBox(width: 4),
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 6, vertical: 2),
-                              decoration: BoxDecoration(
-                                  color: Colors.orange,
-                                  borderRadius: BorderRadius.circular(12)),
-                              child: const Text('Unsaved',
-                                  style: TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 10,
-                                      fontWeight: FontWeight.bold)),
-                            ),
-                          ],
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      ElevatedButton.icon(
-                        onPressed: _addServer,
-                        icon: const FaIcon(FontAwesomeIcons.plus, size: 16),
-                        label: const Text('Add Server'),
-                      ),
-                    ],
-                  );
-                }
-                return Row(
-                  children: [
-                    const FaIcon(FontAwesomeIcons.scaleBalanced, size: 20),
-                    const SizedBox(width: 8),
-                    Text('JBTM M2400 Servers',
-                        style: Theme.of(context).textTheme.titleMedium),
-                    if (_hasUnsavedChanges) ...[
-                      const SizedBox(width: 8),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 8, vertical: 4),
-                        decoration: BoxDecoration(
-                            color: Colors.orange,
-                            borderRadius: BorderRadius.circular(12)),
-                        child: const Text('Unsaved Changes',
-                            style: TextStyle(
-                                color: Colors.white,
-                                fontSize: 12,
-                                fontWeight: FontWeight.bold)),
-                      ),
-                    ],
-                    const Spacer(),
-                    const SizedBox(width: 8),
-                    ElevatedButton.icon(
-                      onPressed: _addServer,
-                      icon: const FaIcon(FontAwesomeIcons.plus, size: 16),
-                      label: const Text('Add Server'),
-                    ),
-                  ],
-                );
-              },
+            _ServerSectionHeader(
+              title: 'JBTM M2400 Servers',
+              icon: FontAwesomeIcons.scaleBalanced,
+              hasUnsavedChanges: _hasUnsavedChanges,
+              onAdd: _addServer,
             ),
             const SizedBox(height: 16),
             config.jbtm.isEmpty
                 ? const SizedBox(
                     height: 200,
-                    child: _EmptyJbtmServersWidget(),
+                    child: _EmptyServersPlaceholder(
+                      icon: FontAwesomeIcons.scaleBalanced,
+                      title: 'No JBTM servers configured',
+                      subtitle: 'Add your first JBTM M2400 server to get started',
+                    ),
                   )
                 : _buildJbtmServerList(config),
             const SizedBox(height: 16),
-            Row(
-              children: [
-                if (config.jbtm.isNotEmpty || _hasUnsavedChanges)
-                  Expanded(
-                    child: ElevatedButton.icon(
-                      onPressed: _hasUnsavedChanges ? _saveConfig : null,
-                      icon: FaIcon(FontAwesomeIcons.floppyDisk,
-                          size: 16,
-                          color: _hasUnsavedChanges ? null : Colors.grey),
-                      label: Text(_hasUnsavedChanges
-                          ? 'Save Configuration'
-                          : 'All Changes Saved'),
-                      style: ElevatedButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(vertical: 16),
-                          backgroundColor:
-                              _hasUnsavedChanges ? null : Colors.grey),
-                    ),
-                  ),
-              ],
-            ),
+            if (config.jbtm.isNotEmpty || _hasUnsavedChanges)
+              _SaveConfigButton(
+                hasUnsavedChanges: _hasUnsavedChanges,
+                onSave: _saveConfig,
+              ),
           ],
         ),
       ),
@@ -1098,29 +1099,6 @@ class _JbtmServersSectionState extends ConsumerState<_JbtmServersSection> {
   }
 }
 
-class _EmptyJbtmServersWidget extends StatelessWidget {
-  const _EmptyJbtmServersWidget();
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          const FaIcon(FontAwesomeIcons.scaleBalanced, size: 64, color: Colors.grey),
-          const SizedBox(height: 16),
-          Text('No JBTM servers configured',
-              style: Theme.of(context)
-                  .textTheme
-                  .titleLarge
-                  ?.copyWith(color: Colors.grey)),
-          const SizedBox(height: 8),
-          const Text('Add your first JBTM M2400 server to get started',
-              style: TextStyle(color: Colors.grey)),
-        ],
-      ),
-    );
-  }
-}
 
 // ===================== JBTM Server Config Card =====================
 
@@ -1188,46 +1166,6 @@ class _JbtmServerConfigCardState extends State<_JbtmServerConfigCard> {
     super.dispose();
   }
 
-  Color _connectionStatusColor() {
-    if (_connectionStatus == null) {
-      return widget.stateManLoading ? Colors.orange : Colors.grey;
-    }
-    return switch (_connectionStatus!) {
-      ConnectionStatus.connected => Colors.green,
-      ConnectionStatus.connecting => Colors.orange,
-      ConnectionStatus.disconnected => Colors.red,
-    };
-  }
-
-  String _connectionStatusLabel() {
-    if (_connectionStatus == null) {
-      return widget.stateManLoading ? 'Loading...' : 'Not active';
-    }
-    return switch (_connectionStatus!) {
-      ConnectionStatus.connected => 'Connected',
-      ConnectionStatus.connecting => 'Connecting...',
-      ConnectionStatus.disconnected => 'Disconnected',
-    };
-  }
-
-  Widget _buildStatusChip() {
-    final color = _connectionStatusColor();
-    final label = _connectionStatusLabel();
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-      decoration: BoxDecoration(
-        color: color.withAlpha(30),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: color.withAlpha(120)),
-      ),
-      child: Text(
-        label,
-        style:
-            TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w600),
-      ),
-    );
-  }
-
   void _updateServer() {
     final updated = M2400Config(
       host: _hostController.text,
@@ -1258,7 +1196,10 @@ class _JbtmServerConfigCardState extends State<_JbtmServerConfigCard> {
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            _buildStatusChip(),
+            ConnectionStatusChip(
+              status: _connectionStatus,
+              stateManLoading: widget.stateManLoading,
+            ),
             const SizedBox(width: 8),
             IconButton(
               icon: const FaIcon(FontAwesomeIcons.trash, size: 16),
@@ -1368,6 +1309,712 @@ class _JbtmServerConfigCardState extends State<_JbtmServerConfigCard> {
                     prefixIcon: FaIcon(FontAwesomeIcons.tag, size: 16),
                   ),
                   onChanged: (_) => _updateServer(),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ===================== Modbus TCP Servers Section =====================
+
+class _ModbusServersSection extends ConsumerStatefulWidget {
+  const _ModbusServersSection({super.key});
+  @override
+  ConsumerState<_ModbusServersSection> createState() =>
+      _ModbusServersSectionState();
+}
+
+class _ModbusServersSectionState extends ConsumerState<_ModbusServersSection> {
+  StateManConfig? _config;
+  StateManConfig? _savedConfig;
+  bool _isLoading = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadConfig();
+  }
+
+  Future<void> _loadConfig() async {
+    setState(() {
+      _isLoading = true;
+      _error = null;
+    });
+
+    try {
+      _config = await StateManConfig.fromPrefs(
+          await ref.read(preferencesProvider.future));
+      _savedConfig = _config?.copy();
+    } catch (e) {
+      _error = e.toString();
+    } finally {
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
+    }
+  }
+
+  bool get _hasUnsavedChanges {
+    if (_config == null || _savedConfig == null) return false;
+    final currentJson = jsonEncode(_config!.toJson());
+    final savedJson = jsonEncode(_savedConfig!.toJson());
+    return currentJson != savedJson;
+  }
+
+  Future<void> _saveConfig() async {
+    if (_config == null) return;
+
+    try {
+      await _config!.toPrefs(await ref.read(preferencesProvider.future));
+      _savedConfig = await StateManConfig.fromPrefs(
+          await ref.read(preferencesProvider.future));
+      ref.invalidate(stateManProvider);
+      setState(() {});
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content: Text('Modbus configuration saved successfully!'),
+              backgroundColor: Colors.green),
+        );
+      }
+    } catch (e) {
+      if (!context.mounted) return;
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+              content: Text('Failed to save Modbus configuration: $e'),
+              backgroundColor: Theme.of(context).colorScheme.error),
+        );
+      }
+    }
+  }
+
+  void _addServer() {
+    setState(() => _config?.modbus.add(ModbusConfig(
+          host: 'localhost',
+          port: 502,
+          unitId: 1,
+          pollGroups: [ModbusPollGroupConfig(name: 'default', intervalMs: 1000)],
+        )));
+  }
+
+  Widget _buildModbusServerList(StateManConfig config) {
+    final stateManAsync = ref.watch(stateManProvider);
+    final StateMan? stateMan = stateManAsync.valueOrNull;
+
+    return ListView.builder(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      itemCount: config.modbus.length,
+      itemBuilder: (context, index) {
+        ModbusDeviceClientAdapter? adapter;
+        if (stateMan != null) {
+          final server = config.modbus[index];
+          adapter = stateMan.deviceClients
+              .whereType<ModbusDeviceClientAdapter>()
+              .cast<ModbusDeviceClientAdapter?>()
+              .firstWhere(
+                (dc) =>
+                    (server.serverAlias != null &&
+                        server.serverAlias!.isNotEmpty &&
+                        dc!.serverAlias == server.serverAlias) ||
+                    (dc!.wrapper.host == server.host &&
+                        dc.wrapper.port == server.port),
+                orElse: () => null,
+              );
+        }
+        return _ModbusServerConfigCard(
+          server: config.modbus[index],
+          onUpdate: (server) => _updateServer(index, server),
+          onRemove: () => _removeServer(index),
+          connectionStatus: adapter?.connectionStatus,
+          connectionStream: adapter?.connectionStream,
+          stateManLoading: stateManAsync.isLoading,
+        );
+      },
+    );
+  }
+
+  void _updateServer(int index, ModbusConfig server) {
+    setState(() => _config!.modbus[index] = server);
+  }
+
+  void _removeServer(int index) {
+    setState(() => _config!.modbus.removeAt(index));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_isLoading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    if (_error != null) {
+      return Card(
+        child: Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              FaIcon(FontAwesomeIcons.triangleExclamation,
+                  size: 64, color: Theme.of(context).colorScheme.error),
+              const SizedBox(height: 16),
+              Text('Error loading Modbus configuration: $_error'),
+              const SizedBox(height: 16),
+              ElevatedButton(
+                  onPressed: _loadConfig, child: const Text('Retry')),
+            ],
+          ),
+        ),
+      );
+    }
+
+    final config = _config ?? StateManConfig(opcua: []);
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _ServerSectionHeader(
+              title: 'Modbus TCP Servers',
+              icon: FontAwesomeIcons.networkWired,
+              hasUnsavedChanges: _hasUnsavedChanges,
+              onAdd: _addServer,
+            ),
+            const SizedBox(height: 16),
+            config.modbus.isEmpty
+                ? const SizedBox(
+                    height: 200,
+                    child: _EmptyServersPlaceholder(
+                      icon: FontAwesomeIcons.networkWired,
+                      title: 'No Modbus servers configured',
+                      subtitle: 'Add your first Modbus TCP server to get started',
+                    ),
+                  )
+                : _buildModbusServerList(config),
+            const SizedBox(height: 16),
+            if (config.modbus.isNotEmpty || _hasUnsavedChanges)
+              _SaveConfigButton(
+                hasUnsavedChanges: _hasUnsavedChanges,
+                onSave: _saveConfig,
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+
+// ===================== Modbus Server Config Card =====================
+
+class _ModbusServerConfigCard extends StatefulWidget {
+  final ModbusConfig server;
+  final Function(ModbusConfig) onUpdate;
+  final VoidCallback onRemove;
+  final ConnectionStatus? connectionStatus;
+  final Stream<ConnectionStatus>? connectionStream;
+  final bool stateManLoading;
+
+  const _ModbusServerConfigCard({
+    required this.server,
+    required this.onUpdate,
+    required this.onRemove,
+    this.connectionStatus,
+    this.connectionStream,
+    this.stateManLoading = false,
+  });
+
+  @override
+  State<_ModbusServerConfigCard> createState() =>
+      _ModbusServerConfigCardState();
+}
+
+class _ModbusServerConfigCardState extends State<_ModbusServerConfigCard> {
+  late TextEditingController _hostController;
+  late TextEditingController _portController;
+  late TextEditingController _unitIdController;
+  late TextEditingController _aliasController;
+  List<TextEditingController> _pollGroupNameControllers = [];
+  List<TextEditingController> _pollGroupIntervalControllers = [];
+  ConnectionStatus? _connectionStatus;
+  StreamSubscription<ConnectionStatus>? _statusSub;
+  late bool _umasEnabled;
+  late ModbusEndianness _endianness;
+  late int _addressBase;
+
+  @override
+  void initState() {
+    super.initState();
+    _hostController = TextEditingController(text: widget.server.host);
+    _portController =
+        TextEditingController(text: widget.server.port.toString());
+    _unitIdController =
+        TextEditingController(text: widget.server.unitId.toString());
+    _aliasController =
+        TextEditingController(text: widget.server.serverAlias ?? '');
+    _umasEnabled = widget.server.umasEnabled;
+    _endianness = widget.server.endianness;
+    _addressBase = widget.server.addressBase;
+    _connectionStatus = widget.connectionStatus;
+    _subscribeToStatus();
+    _initPollGroupControllers();
+  }
+
+  void _initPollGroupControllers() {
+    // Dispose old controllers
+    for (final c in _pollGroupNameControllers) {
+      c.dispose();
+    }
+    for (final c in _pollGroupIntervalControllers) {
+      c.dispose();
+    }
+    // Create new controllers from current poll groups
+    _pollGroupNameControllers = widget.server.pollGroups
+        .map((pg) => TextEditingController(text: pg.name))
+        .toList();
+    _pollGroupIntervalControllers = widget.server.pollGroups
+        .map((pg) => TextEditingController(text: pg.intervalMs.toString()))
+        .toList();
+  }
+
+  @override
+  void didUpdateWidget(covariant _ModbusServerConfigCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.connectionStream != oldWidget.connectionStream) {
+      _connectionStatus = widget.connectionStatus;
+      _subscribeToStatus();
+    }
+    if (widget.server.pollGroups.length != _pollGroupNameControllers.length) {
+      _initPollGroupControllers();
+    }
+  }
+
+  void _subscribeToStatus() {
+    _statusSub?.cancel();
+    _statusSub = widget.connectionStream?.listen((status) {
+      if (mounted) setState(() => _connectionStatus = status);
+    });
+  }
+
+  @override
+  void dispose() {
+    _statusSub?.cancel();
+    _hostController.dispose();
+    _portController.dispose();
+    _unitIdController.dispose();
+    _aliasController.dispose();
+    for (final c in _pollGroupNameControllers) {
+      c.dispose();
+    }
+    for (final c in _pollGroupIntervalControllers) {
+      c.dispose();
+    }
+    super.dispose();
+  }
+
+  /// Builds a [ModbusConfig] from the current controller/field state.
+  ModbusConfig _buildConfig({List<ModbusPollGroupConfig>? pollGroups}) {
+    return ModbusConfig(
+      host: _hostController.text,
+      port: (int.tryParse(_portController.text) ?? 502).clamp(1, 65535),
+      unitId: (int.tryParse(_unitIdController.text) ?? 1).clamp(0, 255),
+      pollGroups: pollGroups ?? widget.server.pollGroups,
+      umasEnabled: _umasEnabled,
+      endianness: _endianness,
+      addressBase: _addressBase,
+    )..serverAlias =
+        _aliasController.text.isEmpty ? null : _aliasController.text;
+  }
+
+  Widget _unitIdInfoButton() {
+    return IconButton(
+      icon: const Icon(Icons.info_outline, size: 20),
+      tooltip: 'Modbus TCP Unit ID (0-255).\n'
+          'Identifies the device when routing through a gateway.\n\n'
+          'Common defaults:\n'
+          '\u2022 Schneider M340/M580: 255 (NOC), 0/1 (data)\n'
+          '\u2022 Schneider M241: any (ignores unit ID)\n'
+          '\u2022 Siemens S7-1200/1500: 255\n'
+          '\u2022 Allen-Bradley/Rockwell: 0 or 1\n'
+          '\u2022 ABB AC800M: 255\n'
+          '\u2022 Omron CJ/NJ: 0\n'
+          '\u2022 Wago 750: 1\n'
+          '\u2022 Beckhoff BC/BK: 1\n'
+          '\u2022 Danfoss VLT: 1\n'
+          '\u2022 Mitsubishi FX/Q: 1\n'
+          '\u2022 Phoenix Contact: 1\n\n'
+          'Most TCP devices ignore unit ID (identified by IP).\n'
+          'For serial gateways, unit ID = slave address (1-247).\n'
+          'Try 1 first, then 0, then 255.',
+      onPressed: null,
+    );
+  }
+
+  void _addPollGroup() {
+    final pollGroups = List<ModbusPollGroupConfig>.from(widget.server.pollGroups);
+    pollGroups.add(ModbusPollGroupConfig(
+      name: 'group_${widget.server.pollGroups.length}',
+      intervalMs: 1000,
+    ));
+    widget.onUpdate(_buildConfig(pollGroups: pollGroups));
+  }
+
+  void _removePollGroup(int index) {
+    final pollGroups = List<ModbusPollGroupConfig>.from(widget.server.pollGroups);
+    pollGroups.removeAt(index);
+    widget.onUpdate(_buildConfig(pollGroups: pollGroups));
+  }
+
+  void _updatePollGroup(int index) {
+    final pollGroups = List<ModbusPollGroupConfig>.from(widget.server.pollGroups);
+    pollGroups[index] = ModbusPollGroupConfig(
+      name: _pollGroupNameControllers[index].text,
+      intervalMs: (int.tryParse(_pollGroupIntervalControllers[index].text) ?? 1000)
+          .clamp(50, 999999),
+    );
+    widget.onUpdate(_buildConfig(pollGroups: pollGroups));
+  }
+
+  void _updateServer() {
+    widget.onUpdate(_buildConfig());
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      margin: const EdgeInsets.only(bottom: 16),
+      child: ExpansionTile(
+        leading: const FaIcon(FontAwesomeIcons.networkWired, size: 20),
+        title: Text(
+          widget.server.serverAlias ??
+              '${widget.server.host}:${widget.server.port}',
+          style: const TextStyle(fontWeight: FontWeight.bold),
+          overflow: TextOverflow.ellipsis,
+          maxLines: 1,
+        ),
+        subtitle: Text(
+          '${widget.server.host}:${widget.server.port} (Unit ${widget.server.unitId})',
+          style: TextStyle(color: Colors.grey[600]),
+          overflow: TextOverflow.ellipsis,
+          maxLines: 1,
+        ),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ConnectionStatusChip(
+              status: _connectionStatus,
+              stateManLoading: widget.stateManLoading,
+            ),
+            const SizedBox(width: 8),
+            IconButton(
+              icon: const FaIcon(FontAwesomeIcons.trash, size: 16),
+              onPressed: () {
+                showDialog(
+                  context: context,
+                  builder: (context) => AlertDialog(
+                    title: const Text('Remove Server'),
+                    content: const Text(
+                        'Are you sure you want to remove this Modbus server?'),
+                    actions: [
+                      TextButton(
+                          onPressed: () => Navigator.pop(context),
+                          child: const Text('Cancel')),
+                      TextButton(
+                          onPressed: () {
+                            Navigator.pop(context);
+                            widget.onRemove();
+                          },
+                          child: const Text('Remove')),
+                    ],
+                  ),
+                );
+              },
+            ),
+            const SizedBox(width: 8),
+            const FaIcon(FontAwesomeIcons.chevronDown, size: 16),
+          ],
+        ),
+        onExpansionChanged: (expanded) => setState(() {}),
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(16.0),
+            child: Column(
+              children: [
+                LayoutBuilder(
+                  builder: (context, constraints) {
+                    final isNarrow = constraints.maxWidth < 400;
+                    if (isNarrow) {
+                      return Column(
+                        children: [
+                          TextField(
+                            controller: _hostController,
+                            decoration: const InputDecoration(
+                              labelText: 'Host',
+                              hintText: 'localhost',
+                              prefixIcon:
+                                  FaIcon(FontAwesomeIcons.server, size: 16),
+                            ),
+                            onChanged: (_) => _updateServer(),
+                          ),
+                          const SizedBox(height: 12),
+                          TextField(
+                            controller: _portController,
+                            decoration: const InputDecoration(
+                              labelText: 'Port',
+                              hintText: '502',
+                              prefixIcon:
+                                  FaIcon(FontAwesomeIcons.hashtag, size: 16),
+                            ),
+                            keyboardType: TextInputType.number,
+                            onChanged: (_) => _updateServer(),
+                          ),
+                          const SizedBox(height: 12),
+                          TextField(
+                            controller: _unitIdController,
+                            decoration: InputDecoration(
+                              labelText: 'Unit ID',
+                              hintText: '0-255',
+                              prefixIcon: const FaIcon(
+                                  FontAwesomeIcons.addressCard,
+                                  size: 16),
+                              suffixIcon: _unitIdInfoButton(),
+                            ),
+                            keyboardType: TextInputType.number,
+                            onChanged: (_) => _updateServer(),
+                          ),
+                        ],
+                      );
+                    }
+                    return Column(
+                      children: [
+                        Row(
+                          children: [
+                            Expanded(
+                              flex: 3,
+                              child: TextField(
+                                controller: _hostController,
+                                decoration: const InputDecoration(
+                                  labelText: 'Host',
+                                  hintText: 'localhost',
+                                  prefixIcon: FaIcon(FontAwesomeIcons.server,
+                                      size: 16),
+                                ),
+                                onChanged: (_) => _updateServer(),
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              flex: 1,
+                              child: TextField(
+                                controller: _portController,
+                                decoration: const InputDecoration(
+                                  labelText: 'Port',
+                                  hintText: '502',
+                                  prefixIcon: FaIcon(FontAwesomeIcons.hashtag,
+                                      size: 16),
+                                ),
+                                keyboardType: TextInputType.number,
+                                onChanged: (_) => _updateServer(),
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              flex: 1,
+                              child: TextField(
+                                controller: _unitIdController,
+                                decoration: InputDecoration(
+                                  labelText: 'Unit ID',
+                                  hintText: '0-255',
+                                  prefixIcon: const FaIcon(
+                                      FontAwesomeIcons.addressCard,
+                                      size: 16),
+                                  suffixIcon: _unitIdInfoButton(),
+                                ),
+                                keyboardType: TextInputType.number,
+                                onChanged: (_) => _updateServer(),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    );
+                  },
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _aliasController,
+                  decoration: const InputDecoration(
+                    labelText: 'Server Alias (optional)',
+                    hintText: 'My Modbus Server',
+                    prefixIcon: FaIcon(FontAwesomeIcons.tag, size: 16),
+                  ),
+                  onChanged: (_) => _updateServer(),
+                ),
+                const Divider(height: 24),
+                ExpansionTile(
+                  title: Text('Poll Groups (${widget.server.pollGroups.length})'),
+                  leading: const FaIcon(FontAwesomeIcons.clockRotateLeft, size: 16),
+                  initiallyExpanded: false,
+                  children: [
+                    ...widget.server.pollGroups.asMap().entries.map((entry) {
+                      final i = entry.key;
+                      return Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                        child: Row(children: [
+                          Expanded(
+                            flex: 2,
+                            child: TextField(
+                              controller: _pollGroupNameControllers[i],
+                              decoration: const InputDecoration(
+                                  labelText: 'Name', isDense: true),
+                              onChanged: (_) => _updatePollGroup(i),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            flex: 1,
+                            child: TextField(
+                              controller: _pollGroupIntervalControllers[i],
+                              decoration: const InputDecoration(
+                                  labelText: 'Interval (ms)', isDense: true),
+                              keyboardType: TextInputType.number,
+                              onChanged: (_) => _updatePollGroup(i),
+                            ),
+                          ),
+                          IconButton(
+                            icon: const FaIcon(FontAwesomeIcons.trash, size: 14),
+                            onPressed: () => _removePollGroup(i),
+                            tooltip: 'Remove poll group',
+                          ),
+                        ]),
+                      );
+                    }),
+                    Padding(
+                      padding: const EdgeInsets.all(8),
+                      child: TextButton.icon(
+                        icon: const FaIcon(FontAwesomeIcons.plus, size: 14),
+                        label: const Text('Add Poll Group'),
+                        onPressed: _addPollGroup,
+                      ),
+                    ),
+                  ],
+                ),
+                const Divider(height: 24),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: DropdownButtonFormField<ModbusEndianness>(
+                          value: _endianness,
+                          decoration: const InputDecoration(
+                            labelText: 'Byte Order',
+                          ),
+                          items: const [
+                            DropdownMenuItem(
+                              value: ModbusEndianness.ABCD,
+                              child: Text('ABCD (Big-Endian)'),
+                            ),
+                            DropdownMenuItem(
+                              value: ModbusEndianness.CDAB,
+                              child: Text('CDAB (Word Swap)'),
+                            ),
+                            DropdownMenuItem(
+                              value: ModbusEndianness.BADC,
+                              child: Text('BADC (Byte Swap)'),
+                            ),
+                            DropdownMenuItem(
+                              value: ModbusEndianness.DCBA,
+                              child: Text('DCBA (Little-Endian)'),
+                            ),
+                          ],
+                          onChanged: (value) {
+                            if (value != null) {
+                              setState(() => _endianness = value);
+                              _updateServer();
+                            }
+                          },
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      IconButton(
+                        icon: const Icon(Icons.info_outline),
+                        tooltip: 'Byte order for 32-bit values (float, int32, etc.).\n'
+                            'Most devices use ABCD (Big-Endian, Modbus standard).\n\n'
+                            'Common vendor defaults:\n'
+                            '\u2022 Schneider/Modicon: CDAB (Word Swap)\n'
+                            '\u2022 Siemens S7: ABCD (Big-Endian)\n'
+                            '\u2022 Allen-Bradley/Rockwell: CDAB or DCBA (varies)\n'
+                            '\u2022 ABB: ABCD (Big-Endian)\n'
+                            '\u2022 Omron: CDAB (Word Swap)\n'
+                            '\u2022 Wago: ABCD (Big-Endian)\n'
+                            '\u2022 Beckhoff: ABCD (Big-Endian)\n'
+                            '\u2022 Danfoss VLT: ABCD (Big-Endian)\n'
+                            '\u2022 Mitsubishi: CDAB (Word Swap)\n'
+                            '\u2022 Phoenix Contact: ABCD (Big-Endian)\n\n'
+                            'If multi-register values read as garbage, try CDAB first.',
+                        onPressed: null,
+                      ),
+                    ],
+                  ),
+                ),
+                const Divider(height: 24),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: DropdownButtonFormField<int>(
+                          value: _addressBase,
+                          decoration: const InputDecoration(
+                            labelText: 'Address Base',
+                          ),
+                          items: const [
+                            DropdownMenuItem(value: 0, child: Text('0 (Protocol Default)')),
+                            DropdownMenuItem(value: 1, child: Text('1 (Modicon/Schneider)')),
+                          ],
+                          onChanged: (value) {
+                            if (value != null) {
+                              setState(() => _addressBase = value);
+                              _updateServer();
+                            }
+                          },
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      IconButton(
+                        icon: const Icon(Icons.info_outline),
+                        tooltip: 'Address base for register numbering.\n\n'
+                            'Base 0: Wire address = configured address (e.g., HR 0 = PDU 0x0000)\n'
+                            'Base 1: Wire address = configured address - 1 (e.g., HR 1 = PDU 0x0000)\n\n'
+                            'Common vendor conventions:\n'
+                            '\u2022 0-based: Siemens, ABB, Beckhoff, Wago, Omron, Allen-Bradley\n'
+                            '\u2022 1-based: Schneider M340/M580, Mitsubishi, Delta, Unitronics\n\n'
+                            'When in doubt, use 0 (protocol default).',
+                        onPressed: null,
+                      ),
+                    ],
+                  ),
+                ),
+                const Divider(height: 24),
+                CheckboxListTile(
+                  title: const Text('Schneider UMAS'),
+                  subtitle: const Text(
+                      'Variable browsing via FC90 (M340/M580 only)'),
+                  value: _umasEnabled,
+                  onChanged: (value) {
+                    setState(() => _umasEnabled = value ?? false);
+                    _updateServer();
+                  },
                 ),
               ],
             ),
@@ -1560,46 +2207,6 @@ class _ServerConfigCardState extends State<_ServerConfigCard> {
     return ls != null ? String.fromCharCodes(ls) : null;
   }
 
-  Color _connectionStatusColor() {
-    if (_connectionStatus == null) {
-      return widget.stateManLoading ? Colors.orange : Colors.grey;
-    }
-    return switch (_connectionStatus!) {
-      ConnectionStatus.connected => Colors.green,
-      ConnectionStatus.connecting => Colors.orange,
-      ConnectionStatus.disconnected => Colors.red,
-    };
-  }
-
-  String _connectionStatusLabel() {
-    if (_connectionStatus == null) {
-      return widget.stateManLoading ? 'Loading...' : 'Not active';
-    }
-    return switch (_connectionStatus!) {
-      ConnectionStatus.connected => 'Connected',
-      ConnectionStatus.connecting => 'Connecting...',
-      ConnectionStatus.disconnected => 'Disconnected',
-    };
-  }
-
-  Widget _buildStatusChip() {
-    final color = _connectionStatusColor();
-    final label = _connectionStatusLabel();
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-      decoration: BoxDecoration(
-        color: color.withAlpha(30),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: color.withAlpha(120)),
-      ),
-      child: Text(
-        label,
-        style:
-            TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w600),
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final sslCertString = uint8ListToString(widget.server.sslCert);
@@ -1629,7 +2236,10 @@ class _ServerConfigCardState extends State<_ServerConfigCard> {
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            _buildStatusChip(),
+            ConnectionStatusChip(
+              status: _connectionStatus,
+              stateManLoading: widget.stateManLoading,
+            ),
             const SizedBox(width: 8),
             IconButton(
               icon: const FaIcon(FontAwesomeIcons.trash, size: 16),

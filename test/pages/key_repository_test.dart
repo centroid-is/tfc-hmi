@@ -9,6 +9,7 @@ import 'package:tfc_dart/core/state_man.dart';
 import 'package:tfc_dart/core/collector.dart';
 import 'package:tfc_dart/core/database.dart';
 import 'package:tfc_dart/core/preferences.dart';
+import 'package:tfc_dart/core/modbus_client_wrapper.dart' show ModbusDataType;
 
 import 'package:tfc/pages/key_repository.dart';
 import 'package:tfc/providers/preferences.dart';
@@ -91,8 +92,9 @@ void main() {
       await tester.tap(find.text('Add Key'));
       await tester.pumpAndSettle();
 
-      // Verify both keys exist (use byType to check ExpansionTile count)
-      expect(find.byType(ExpansionTile), findsNWidgets(2));
+      // Verify both keys exist: new_key and new_key_1
+      expect(find.text('new_key'), findsAtLeastNWidgets(1));
+      expect(find.text('new_key_1'), findsAtLeastNWidgets(1));
     });
   });
 
@@ -117,8 +119,7 @@ void main() {
       await tester.tap(copyButtons.first);
       await tester.pumpAndSettle();
 
-      // Should now have 2 cards
-      expect(find.byType(ExpansionTile), findsNWidgets(2));
+      // Should now have 2 key cards
       expect(find.text('original_key'), findsOneWidget);
       expect(find.text('original_key_copy'), findsAtLeastNWidgets(1));
     });
@@ -308,8 +309,10 @@ void main() {
         await tester.pumpAndSettle();
       }
 
-      // Should have 3 cards: my_key, my_key_copy, my_key_copy_1
-      expect(find.byType(ExpansionTile), findsNWidgets(3));
+      // Should have 3 keys: my_key, my_key_copy, my_key_copy_1
+      expect(find.text('my_key'), findsAtLeastNWidgets(1));
+      expect(find.text('my_key_copy'), findsAtLeastNWidgets(1));
+      expect(find.text('my_key_copy_1'), findsAtLeastNWidgets(1));
     });
   });
 
@@ -874,6 +877,422 @@ void main() {
         find.textContaining('Database not connected'),
         findsOneWidget,
       );
+    });
+  });
+
+  // ==================== Group 11: Modbus Protocol Configuration ====================
+  group('Modbus protocol configuration', () {
+    testWidgets('Modbus ChoiceChip appears when modbusServerAliases is non-empty',
+        (tester) async {
+      await tester.pumpWidget(buildTestableKeyRepository(
+        keyMappings: sampleModbusKeyMappings(),
+        stateManConfig: sampleStateManConfigWithModbus(),
+      ));
+      await tester.pumpAndSettle();
+
+      // Expand the first card
+      await tester.tap(find.text('modbus_temp'));
+      await tester.pumpAndSettle();
+
+      // Verify Modbus ChoiceChip exists alongside OPC UA
+      expect(find.text('Modbus'), findsOneWidget);
+      expect(find.text('OPC UA'), findsOneWidget);
+    });
+
+    testWidgets('tapping Modbus chip switches protocol and shows config section',
+        (tester) async {
+      // Start with an OPC UA key and Modbus servers configured
+      await tester.pumpWidget(buildTestableKeyRepository(
+        keyMappings: KeyMappings(nodes: {
+          'test_key': KeyMappingEntry(
+            opcuaNode: OpcUANodeConfig(namespace: 0, identifier: ''),
+          ),
+        }),
+        stateManConfig: sampleStateManConfigWithModbus(),
+      ));
+      await tester.pumpAndSettle();
+
+      // Expand the card
+      await tester.tap(find.text('test_key'));
+      await tester.pumpAndSettle();
+
+      // Tap the Modbus chip
+      await tester.tap(find.text('Modbus'));
+      await tester.pumpAndSettle();
+
+      // Verify Modbus config section appears
+      expect(find.text('Modbus Key Configuration'), findsOneWidget);
+
+      // Verify all 5 fields are visible
+      expect(find.text('Server Alias'), findsOneWidget);
+      expect(find.text('Register Type'), findsOneWidget);
+      expect(find.text('Address'), findsOneWidget);
+      // Data type field exists (may be 'Data Type' or 'Data Type (auto)')
+      expect(find.textContaining('Data Type'), findsOneWidget);
+      expect(find.text('Poll Group'), findsOneWidget);
+    });
+
+    testWidgets('data type auto-locks to bit for coil register type',
+        (tester) async {
+      await tester.pumpWidget(buildTestableKeyRepository(
+        keyMappings: KeyMappings(nodes: {
+          'coil_key': KeyMappingEntry(
+            modbusNode: ModbusNodeConfig(
+              serverAlias: 'plc_1',
+              registerType: ModbusRegisterType.coil,
+              address: 0,
+              dataType: ModbusDataType.bit,
+              pollGroup: 'default',
+            ),
+          ),
+        }),
+        stateManConfig: sampleStateManConfigWithModbus(),
+      ));
+      await tester.pumpAndSettle();
+
+      // Expand the card
+      await tester.tap(find.text('coil_key'));
+      await tester.pumpAndSettle();
+
+      // Data type should show 'bit'
+      expect(find.text('bit'), findsOneWidget);
+      // Data type dropdown should be auto-locked (label shows 'Data Type (auto)')
+      expect(find.text('Data Type (auto)'), findsOneWidget);
+    });
+
+    testWidgets('switching from coil to holdingRegister resets data type to uint16',
+        (tester) async {
+      await tester.pumpWidget(buildTestableKeyRepository(
+        keyMappings: KeyMappings(nodes: {
+          'coil_key': KeyMappingEntry(
+            modbusNode: ModbusNodeConfig(
+              serverAlias: 'plc_1',
+              registerType: ModbusRegisterType.coil,
+              address: 0,
+              dataType: ModbusDataType.bit,
+              pollGroup: 'default',
+            ),
+          ),
+        }),
+        stateManConfig: sampleStateManConfigWithModbus(),
+      ));
+      await tester.pumpAndSettle();
+
+      // Expand the card
+      await tester.tap(find.text('coil_key'));
+      await tester.pumpAndSettle();
+
+      // Tap register type dropdown and select holdingRegister
+      final regTypeDropdown =
+          find.byType(DropdownButtonFormField<ModbusRegisterType>);
+      expect(regTypeDropdown, findsOneWidget);
+      await tester.tap(regTypeDropdown);
+      await tester.pumpAndSettle();
+
+      // Select holdingRegister from the dropdown menu
+      await tester.tap(find.text('holdingRegister').last);
+      await tester.pumpAndSettle();
+
+      // Data type should now show uint16 (reset from bit)
+      expect(find.text('uint16'), findsOneWidget);
+      // Data type label should be 'Data Type' (not auto)
+      expect(find.text('Data Type'), findsOneWidget);
+    });
+
+    testWidgets('poll group dropdown populated from selected server config',
+        (tester) async {
+      await tester.pumpWidget(buildTestableKeyRepository(
+        keyMappings: KeyMappings(nodes: {
+          'modbus_key': KeyMappingEntry(
+            modbusNode: ModbusNodeConfig(
+              serverAlias: 'plc_1',
+              registerType: ModbusRegisterType.holdingRegister,
+              address: 100,
+              dataType: ModbusDataType.uint16,
+              pollGroup: 'default',
+            ),
+          ),
+        }),
+        stateManConfig: sampleStateManConfigWithModbus(),
+      ));
+      await tester.pumpAndSettle();
+
+      // Expand the card
+      await tester.tap(find.text('modbus_key'));
+      await tester.pumpAndSettle();
+
+      // Scroll to make poll group dropdown visible
+      await tester.scrollUntilVisible(
+        find.text('Poll Group'),
+        200,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.pumpAndSettle();
+
+      // The selected value 'default (1000ms)' should be visible in the dropdown
+      expect(find.text('default (1000ms)'), findsOneWidget);
+
+      // Tap the poll group dropdown to open it and see all items
+      // Use ancestor to find specifically the poll group dropdown
+      final pollGroupDropdown = find.ancestor(
+        of: find.text('Poll Group'),
+        matching: find.byType(DropdownButtonFormField<String>),
+      );
+      expect(pollGroupDropdown, findsOneWidget);
+      await tester.tap(pollGroupDropdown);
+      await tester.pumpAndSettle();
+
+      // Both poll groups should be available in the menu
+      expect(find.text('default (1000ms)'), findsAtLeastNWidgets(1));
+      expect(find.text('fast (100ms)'), findsAtLeastNWidgets(1));
+    });
+
+    testWidgets('Modbus key subtitle shows compact format',
+        (tester) async {
+      await tester.pumpWidget(buildTestableKeyRepository(
+        keyMappings: sampleModbusKeyMappings(),
+        stateManConfig: sampleStateManConfigWithModbus(),
+      ));
+      await tester.pumpAndSettle();
+
+      // Verify subtitle text for modbus_temp key contains compact format
+      // Both keys have @ plc_1, so check the full subtitle pattern
+      expect(find.textContaining('holdingRegister[100]'), findsOneWidget);
+      expect(find.textContaining('float32'), findsOneWidget);
+      // Both modbus_temp and modbus_coil have @ plc_1
+      expect(find.textContaining('@ plc_1'), findsNWidgets(2));
+    });
+
+    testWidgets('search filter matches Modbus server alias',
+        (tester) async {
+      await tester.pumpWidget(buildTestableKeyRepository(
+        keyMappings: sampleModbusKeyMappings(),
+        stateManConfig: sampleStateManConfigWithModbus(),
+      ));
+      await tester.pumpAndSettle();
+
+      // Both Modbus keys should be visible initially
+      expect(find.text('modbus_temp'), findsOneWidget);
+      expect(find.text('modbus_coil'), findsOneWidget);
+
+      // Type 'plc_1' in the search field
+      final searchField = find.widgetWithText(TextField, 'Search keys...');
+      await tester.enterText(searchField, 'plc_1');
+      await tester.pumpAndSettle();
+
+      // Both Modbus keys should still be visible (they both use plc_1)
+      expect(find.text('modbus_temp'), findsOneWidget);
+      expect(find.text('modbus_coil'), findsOneWidget);
+    });
+
+    testWidgets('toggling collection on Modbus key preserves modbusNode config',
+        (tester) async {
+      late Preferences testPrefs;
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            preferencesProvider.overrideWith((ref) async {
+              testPrefs = await createTestPreferences(
+                keyMappings: sampleModbusKeyMappings(),
+                stateManConfig: sampleStateManConfigWithModbus(),
+              );
+              return testPrefs;
+            }),
+            databaseProvider.overrideWith((ref) async => null),
+          ],
+          child: MaterialApp(
+            home: Scaffold(body: KeyRepositoryContent()),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // Expand 'modbus_temp' card
+      await tester.tap(find.text('modbus_temp'));
+      await tester.pumpAndSettle();
+
+      // Scroll down to make the Switch visible
+      await tester.scrollUntilVisible(
+        find.byType(Switch),
+        200,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.pumpAndSettle();
+
+      // Toggle collection on
+      final switchWidget = find.byType(Switch);
+      expect(switchWidget, findsOneWidget);
+      await tester.tap(switchWidget);
+      await tester.pumpAndSettle();
+
+      // Save
+      await tester.ensureVisible(find.text('Save Key Mappings'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Save Key Mappings'));
+      await tester.pumpAndSettle();
+
+      // Verify modbusNode config is preserved
+      final savedJson = await testPrefs.getString('key_mappings');
+      final saved = KeyMappings.fromJson(jsonDecode(savedJson!));
+      final entry = saved.nodes['modbus_temp']!;
+      expect(entry.modbusNode, isNotNull,
+          reason: 'modbusNode should be preserved after toggling collection');
+      expect(entry.modbusNode!.registerType, ModbusRegisterType.holdingRegister);
+      expect(entry.modbusNode!.address, 100);
+      expect(entry.modbusNode!.dataType, ModbusDataType.float32);
+      expect(entry.collect, isNotNull,
+          reason: 'Collection should be enabled');
+    });
+  });
+
+  // ==================== Group 12: UMAS Browse Button ====================
+  group('UMAS browse button', () {
+    testWidgets('Browse button visible when UMAS enabled on selected server',
+        (tester) async {
+      await tester.pumpWidget(buildTestableKeyRepository(
+        keyMappings: KeyMappings(nodes: {
+          'umas_key': KeyMappingEntry(
+            modbusNode: ModbusNodeConfig(
+              serverAlias: 'schneider_plc',
+              registerType: ModbusRegisterType.holdingRegister,
+              address: 100,
+              dataType: ModbusDataType.uint16,
+              pollGroup: 'default',
+            ),
+          ),
+        }),
+        stateManConfig: sampleStateManConfigWithUmas(),
+      ));
+      await tester.pumpAndSettle();
+
+      // Expand the card
+      await tester.tap(find.text('umas_key'));
+      await tester.pumpAndSettle();
+
+      // The Browse button should be visible in the Modbus config section
+      expect(find.text('Browse'), findsOneWidget);
+    });
+
+    testWidgets('Browse button hidden when UMAS disabled on selected server',
+        (tester) async {
+      await tester.pumpWidget(buildTestableKeyRepository(
+        keyMappings: KeyMappings(nodes: {
+          'modbus_key': KeyMappingEntry(
+            modbusNode: ModbusNodeConfig(
+              serverAlias: 'plc_1',
+              registerType: ModbusRegisterType.holdingRegister,
+              address: 100,
+              dataType: ModbusDataType.uint16,
+              pollGroup: 'default',
+            ),
+          ),
+        }),
+        stateManConfig: sampleStateManConfigWithModbus(),
+      ));
+      await tester.pumpAndSettle();
+
+      // Expand the card
+      await tester.tap(find.text('modbus_key'));
+      await tester.pumpAndSettle();
+
+      // The Browse button should NOT be visible
+      // (we need to check specifically within the Modbus config section)
+      // Since there's no OPC UA Browse button either, just check there's none
+      final browseButtons = find.text('Browse');
+      expect(browseButtons, findsNothing);
+    });
+
+    testWidgets('Browse button hidden when no server alias selected',
+        (tester) async {
+      await tester.pumpWidget(buildTestableKeyRepository(
+        keyMappings: KeyMappings(nodes: {
+          'no_alias_key': KeyMappingEntry(
+            modbusNode: ModbusNodeConfig(
+              serverAlias: null,
+              registerType: ModbusRegisterType.holdingRegister,
+              address: 0,
+              dataType: ModbusDataType.uint16,
+              pollGroup: 'default',
+            ),
+          ),
+        }),
+        stateManConfig: sampleStateManConfigWithUmas(),
+      ));
+      await tester.pumpAndSettle();
+
+      // Expand the card
+      await tester.tap(find.text('no_alias_key'));
+      await tester.pumpAndSettle();
+
+      // No Browse button when no server alias selected
+      expect(find.text('Browse'), findsNothing);
+    });
+  });
+
+  // ==================== Bit Mask Section ====================
+  group('Bit mask section', () {
+    testWidgets('shows Bit Mask section for Modbus holding register key', (tester) async {
+      await tester.pumpWidget(buildTestableKeyRepository(
+        keyMappings: KeyMappings(nodes: {
+          'status_word': KeyMappingEntry(
+            modbusNode: ModbusNodeConfig(
+              serverAlias: 'plc_1',
+              registerType: ModbusRegisterType.holdingRegister,
+              address: 100,
+              dataType: ModbusDataType.uint16,
+            ),
+          ),
+        }),
+        stateManConfig: sampleModbusStateManConfig(),
+      ));
+      await tester.pumpAndSettle();
+
+      // Expand the card
+      await tester.tap(find.text('status_word'));
+      await tester.pumpAndSettle();
+
+      // Should show Bit Mask expansion tile
+      expect(find.text('Bit Mask (optional)'), findsOneWidget);
+    });
+
+    testWidgets('hides Bit Mask section for coil keys', (tester) async {
+      await tester.pumpWidget(buildTestableKeyRepository(
+        keyMappings: KeyMappings(nodes: {
+          'coil_key': KeyMappingEntry(
+            modbusNode: ModbusNodeConfig(
+              serverAlias: 'plc_1',
+              registerType: ModbusRegisterType.coil,
+              address: 0,
+              dataType: ModbusDataType.bit,
+            ),
+          ),
+        }),
+        stateManConfig: sampleModbusStateManConfig(),
+      ));
+      await tester.pumpAndSettle();
+
+      // Expand the card
+      await tester.tap(find.text('coil_key'));
+      await tester.pumpAndSettle();
+
+      // Should NOT show Bit Mask section for coil type
+      expect(find.text('Bit Mask (optional)'), findsNothing);
+    });
+
+    testWidgets('shows Bit Mask section for OPC UA key', (tester) async {
+      await tester.pumpWidget(buildTestableKeyRepository(
+        keyMappings: sampleKeyMappings(),
+        stateManConfig: sampleStateManConfig(),
+      ));
+      await tester.pumpAndSettle();
+
+      // Expand the first card
+      await tester.tap(find.text('temperature_sensor'));
+      await tester.pumpAndSettle();
+
+      // Should show Bit Mask section for OPC UA
+      expect(find.text('Bit Mask (optional)'), findsOneWidget);
     });
   });
 }
