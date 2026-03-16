@@ -12,9 +12,6 @@ import '../widgets/zoomable_canvas.dart';
 import '../page_creator/page.dart';
 import '../models/menu_item.dart';
 import '../providers/current_page_assets.dart';
-import '../plc/plc_code_upload_dialog.dart';
-import '../page_creator/assets/beckhoff.dart';
-import '../providers/plc.dart';
 import '../tech_docs/tech_doc_picker.dart';
 
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -732,43 +729,6 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                               child:
                                   const Icon(Icons.save, color: Colors.white),
                             ),
-                            if (assets
-                                .any((a) => a is BeckhoffCX5010Config)) ...[
-                              const SizedBox(width: 8),
-                              FloatingActionButton(
-                                mini: true,
-                                heroTag: 'upload_plc',
-                                backgroundColor:
-                                    Theme.of(context).colorScheme.primary,
-                                onPressed: () {
-                                  final uploadService =
-                                      ref.read(plcCodeUploadServiceProvider);
-                                  if (uploadService == null) {
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      const SnackBar(
-                                        content: Text(
-                                          'PLC upload not available (no database connection)',
-                                        ),
-                                      ),
-                                    );
-                                    return;
-                                  }
-                                  final serverAliases = ref
-                                          .read(serverAliasesProvider)
-                                          .valueOrNull ??
-                                      [];
-                                  showDialog(
-                                    context: context,
-                                    builder: (ctx) => PlcCodeUploadDialog(
-                                      uploadService: uploadService,
-                                      serverAliases: serverAliases,
-                                    ),
-                                  );
-                                },
-                                child: const Icon(Icons.memory,
-                                    color: Colors.white),
-                              ),
-                            ],
                           ],
                         ),
                       ),
