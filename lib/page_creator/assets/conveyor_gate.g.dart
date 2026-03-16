@@ -50,6 +50,8 @@ ConveyorGateConfig _$ConveyorGateConfigFromJson(Map<String, dynamic> json) =>
       sliderLidAngleDegrees:
           (json['sliderLidAngleDegrees'] as num?)?.toDouble() ?? 0.0,
       sliderLidLength: (json['sliderLidLength'] as num?)?.toDouble() ?? 0.55,
+      sliderActuationLength:
+          (json['sliderActuationLength'] as num?)?.toDouble() ?? 1.0,
       forceOpenKey: json['forceOpenKey'] as String? ?? '',
       forceOpenFeedbackKey: json['forceOpenFeedbackKey'] as String? ?? '',
       forceCloseKey: json['forceCloseKey'] as String? ?? '',
@@ -80,6 +82,7 @@ Map<String, dynamic> _$ConveyorGateConfigToJson(ConveyorGateConfig instance) =>
       'sliderActiveOut': instance.sliderActiveOut,
       'sliderLidAngleDegrees': instance.sliderLidAngleDegrees,
       'sliderLidLength': instance.sliderLidLength,
+      'sliderActuationLength': instance.sliderActuationLength,
       'forceOpenKey': instance.forceOpenKey,
       'forceOpenFeedbackKey': instance.forceOpenFeedbackKey,
       'forceCloseKey': instance.forceCloseKey,

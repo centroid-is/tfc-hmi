@@ -260,9 +260,7 @@ class PneumaticDiverterPainter extends CustomPainter {
 
 /// Paints actuator + rod + blade at the rod tip.
 ///
-/// Used by both [SliderGatePainter] (blade at 90° = horizontal lid) and
-/// [PusherGatePainter] (blade at 0° = vertical pusher). The only visual
-/// difference between slider and pusher is the blade angle.
+/// Used by [PusherGatePainter] (blade at 0° = vertical pusher).
 void _paintLinearGate(
   Canvas canvas,
   Size size, {
@@ -346,6 +344,7 @@ class SliderGatePainter extends CustomPainter {
   final bool activeOut;
   final double lidAngleDegrees;
   final double lidLengthFraction;
+  final double actuationLengthFraction;
 
   SliderGatePainter({
     required this.progress,
@@ -354,6 +353,7 @@ class SliderGatePainter extends CustomPainter {
     this.activeOut = true,
     this.lidAngleDegrees = 0.0,
     this.lidLengthFraction = 0.55,
+    this.actuationLengthFraction = 1.0,
   }) : super(repaint: progress);
 
   @override
@@ -378,7 +378,7 @@ class SliderGatePainter extends CustomPainter {
     // Rod/lid travel calculation
     final minStub = w * 0.05;
     final beltArea = w - actuatorWidth;
-    final lidTravel = beltArea - minStub - lidWidth;
+    final lidTravel = (beltArea - minStub) * actuationLengthFraction;
     // p=0 (closed): lid at far end covering belt
     // p=1 (open): lid pulled toward actuator
     final lidOffset = minStub + lidTravel * p;
@@ -449,7 +449,8 @@ class SliderGatePainter extends CustomPainter {
       side != oldDelegate.side ||
       activeOut != oldDelegate.activeOut ||
       lidAngleDegrees != oldDelegate.lidAngleDegrees ||
-      lidLengthFraction != oldDelegate.lidLengthFraction;
+      lidLengthFraction != oldDelegate.lidLengthFraction ||
+      actuationLengthFraction != oldDelegate.actuationLengthFraction;
 }
 
 // ---------------------------------------------------------------------------

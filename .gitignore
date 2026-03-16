@@ -30,3 +30,5 @@ packages/*/pubspec.lock
 build/
 .direnv
 .planning/
+.flutter-plugins-dependencies
+**/test/**/failures/

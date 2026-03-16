@@ -107,6 +107,9 @@ class ConveyorGateConfig extends BaseAsset {
   /// For slider variant: lid length as fraction of gate width (0.1–1.0).
   double sliderLidLength;
 
+  /// For slider variant: actuation travel as fraction of available range (0.1–1.0).
+  double sliderActuationLength;
+
   /// OPC UA key to write a force-open command (DATA-02).
   String forceOpenKey;
 
@@ -131,6 +134,7 @@ class ConveyorGateConfig extends BaseAsset {
     this.sliderActiveOut = true,
     this.sliderLidAngleDegrees = 0.0,
     this.sliderLidLength = 0.55,
+    this.sliderActuationLength = 1.0,
     this.forceOpenKey = '',
     this.forceOpenFeedbackKey = '',
     this.forceCloseKey = '',
@@ -138,22 +142,7 @@ class ConveyorGateConfig extends BaseAsset {
   });
 
   /// Preview factory with reasonable defaults for the asset palette.
-  ConveyorGateConfig.preview()
-      : gateVariant = GateVariant.pneumatic,
-        side = GateSide.left,
-        stateKey = '',
-        openAngleDegrees = 45.0,
-        openTimeMs = 800,
-        closeTimeMs = null,
-        openColor = Colors.green,
-        closedColor = Colors.white,
-        sliderActiveOut = true,
-        sliderLidAngleDegrees = 0.0,
-        sliderLidLength = 0.55,
-        forceOpenKey = '',
-        forceOpenFeedbackKey = '',
-        forceCloseKey = '',
-        forceCloseFeedbackKey = '';
+  ConveyorGateConfig.preview() : this();
 
   factory ConveyorGateConfig.fromJson(Map<String, dynamic> json) =>
       _$ConveyorGateConfigFromJson(json);
@@ -265,6 +254,7 @@ class _ConveyorGateState extends ConsumerState<ConveyorGate>
           activeOut: widget.config.sliderActiveOut,
           lidAngleDegrees: widget.config.sliderLidAngleDegrees,
           lidLengthFraction: widget.config.sliderLidLength,
+          actuationLengthFraction: widget.config.sliderActuationLength,
         );
       case GateVariant.pusher:
         return PusherGatePainter(
@@ -306,8 +296,8 @@ class _ConveyorGateState extends ConsumerState<ConveyorGate>
         key,
         DynamicValue(value: value, typeId: NodeId.boolean),
       );
-    } catch (_) {
-      // Log error but do not crash UI.
+    } catch (e) {
+      debugPrint('ConveyorGate: failed to write force key "$key": $e');
     }
   }
 
@@ -599,6 +589,7 @@ class _ConveyorGateConfigEditorState extends State<_ConveyorGateConfigEditor>
           activeOut: config.sliderActiveOut,
           lidAngleDegrees: config.sliderLidAngleDegrees,
           lidLengthFraction: config.sliderLidLength,
+          actuationLengthFraction: config.sliderActuationLength,
         );
       case GateVariant.pusher:
         return PusherGatePainter(
@@ -775,6 +766,20 @@ class _ConveyorGateConfigEditorState extends State<_ConveyorGateConfigEditor>
               label: '${(config.sliderLidLength * 100).round()}%',
               onChanged: (v) =>
                   setState(() => config.sliderLidLength = v),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Actuation Length: ${(config.sliderActuationLength * 100).round()}%',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            Slider(
+              min: 0.1,
+              max: 1.0,
+              divisions: 18,
+              value: config.sliderActuationLength,
+              label: '${(config.sliderActuationLength * 100).round()}%',
+              onChanged: (v) =>
+                  setState(() => config.sliderActuationLength = v),
             ),
             const SizedBox(height: 8),
           ],
