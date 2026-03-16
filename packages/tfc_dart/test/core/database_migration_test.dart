@@ -41,10 +41,10 @@ void main() {
       expect(tables, contains('flutter_preferences'));
     });
 
-    test('schema version is 5', () async {
+    test('schema version is 8', () async {
       final db = AppDatabase.inMemoryForTest();
       addTearDown(() => db.close());
-      expect(db.schemaVersion, 5);
+      expect(db.schemaVersion, 8);
     });
 
     test('MCP tables support basic CRUD operations', () async {

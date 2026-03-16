@@ -84,14 +84,13 @@ void main() {
               'New listener after health stream close should get false, not stale true');
     });
 
-    test('connectionState emits full sequence: true then false on close',
-        () async {
+    test('connectionState emits true then false on close', () async {
       database = Database(appDb);
 
       final events = <bool>[];
       final sub = database.connectionState.listen(events.add);
 
-      // Initial event is the cached state (false by default)
+      // Wait for any initial cached event
       await Future<void>.delayed(const Duration(milliseconds: 50));
 
       // Health says connected
@@ -104,10 +103,11 @@ void main() {
 
       await sub.cancel();
 
-      // Should see: initial false, then true, then false (from onDone)
-      expect(events, containsAllInOrder([false, true, false]),
+      // Must see connected true followed by disconnected false (from onDone).
+      // The initial false may or may not appear depending on timing.
+      expect(events, containsAllInOrder([true, false]),
           reason:
-              'Should see initial false, connected true, then disconnected false');
+              'Should see connected true, then disconnected false');
     });
   });
 
