@@ -1944,8 +1944,10 @@ class _PaletteItem extends StatelessWidget {
               child: SizedBox(
                 width: 80,
                 height: 80,
-                child: IgnorePointer(
-                  child: asset.build(context),
+                child: ClipRect(
+                  child: IgnorePointer(
+                    child: asset.build(context),
+                  ),
                 ),
               ),
             ),

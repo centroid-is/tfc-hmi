@@ -30,6 +30,8 @@ packages/*/pubspec.lock
 build/
 .direnv
 .planning/
+.flutter-plugins-dependencies
+**/test/**/failures/
 
 # ST compiler oracle venv
 tools/st-oracle-venv/
@@ -40,7 +42,6 @@ timescale_certs/
 .claude/
 .mcp.json
 page-editor.json
-.flutter-plugins-dependencies
 
 # Local marionette fork (use upstream pub.dev package)
 packages/marionette_flutter/
