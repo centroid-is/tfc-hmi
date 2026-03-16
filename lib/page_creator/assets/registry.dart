@@ -25,6 +25,7 @@ import 'recipes.dart';
 import 'bpm.dart';
 import 'rate_value.dart';
 import 'speedbatcher.dart';
+import 'drawing_viewer.dart';
 
 class AssetRegistry {
   static final Logger _log = Logger();
@@ -65,6 +66,7 @@ class AssetRegistry {
     RecipesConfig: RecipesConfig.fromJson,
     SpeedBatcherConfig: SpeedBatcherConfig.fromJson,
     GateStatusConfig: GateStatusConfig.fromJson,
+    DrawingViewerConfig: DrawingViewerConfig.fromJson,
   };
 
   static final Map<Type, Asset Function()> defaultFactories = {
@@ -102,6 +104,7 @@ class AssetRegistry {
     RecipesConfig: RecipesConfig.preview,
     SpeedBatcherConfig: SpeedBatcherConfig.preview,
     GateStatusConfig: GateStatusConfig.preview,
+    DrawingViewerConfig: DrawingViewerConfig.preview,
   };
 
   static void registerFromJsonFactory<T extends Asset>(
@@ -160,5 +163,20 @@ class AssetRegistry {
       throw Exception('Unknown asset type');
     }
     return factory();
+  }
+
+  /// Creates a default asset by its string name (e.g., "ButtonConfig").
+  ///
+  /// Returns null if no factory matches the given name. This is used by the
+  /// proposal system where asset type names arrive as strings from the MCP
+  /// server, and the full JSON for [parse] is not available (missing required
+  /// fields like colors, sizes, etc.).
+  static Asset? createDefaultAssetByName(String assetName) {
+    for (final entry in defaultFactories.entries) {
+      if (entry.key.toString() == assetName) {
+        return entry.value();
+      }
+    }
+    return null;
   }
 }

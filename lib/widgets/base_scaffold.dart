@@ -66,7 +66,7 @@ class _BaseScaffoldState extends ConsumerState<BaseScaffold> {
     });
   }
 
-  findTopLevelIndexForBeamer(MenuItem node, int? base, String path) {
+  int? findTopLevelIndexForBeamer(MenuItem node, int? base, String path) {
     if (node.path != null) {
       if (node.path! == path) {
         return base ?? RouteRegistry().getNodeIndex(node);
@@ -123,6 +123,8 @@ class _BaseScaffoldState extends ConsumerState<BaseScaffold> {
                       borderRadius: BorderRadius.circular(4),
                     ),
                     child: RichText(
+                      overflow: TextOverflow.ellipsis,
+                      maxLines: 1,
                       text: TextSpan(
                         style: TextStyle(
                           color: textColor,
@@ -185,10 +187,19 @@ class _BaseScaffoldState extends ConsumerState<BaseScaffold> {
               flexibleSpace: SafeArea(
                 child: Stack(
                   children: [
-                    // CENTER: Always centered title widget.
-                    Align(
-                      alignment: Alignment.center,
-                      child: _buildClockOrAlarm(context, ref),
+                    // CENTER: Constrained so alarm text cannot overlap the
+                    // right-aligned logo or left-side controls.
+                    // Right margin calculation: SVG logo rendered at height:50
+                    // with aspect ratio ~4.2 => ~210px wide, plus 16px right
+                    // padding, plus ~48px theme toggle IconButton = ~274px.
+                    // Use 280 for a small safety buffer.
+                    Positioned.fill(
+                      left: 120,
+                      right: 280,
+                      child: Align(
+                        alignment: Alignment.center,
+                        child: _buildClockOrAlarm(context, ref),
+                      ),
                     ),
                     // LEFT SIDE: Back arrow (if available) + injected custom widget + fullscreen button.
                     Align(
@@ -288,7 +299,7 @@ class _BaseScaffoldState extends ConsumerState<BaseScaffold> {
                 RouteRegistry().root,
                 null,
                 (context.currentBeamLocation.state as BeamState).uri.path,
-              ),
+              ) ?? 0,
               labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
               destinations: [
                 ...RouteRegistry().menuItems.map<Widget>((item) {

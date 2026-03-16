@@ -183,6 +183,64 @@ abstract class BaseAsset implements Asset {
   set textPos(TextPos? textPos) {
     _textPos = textPos;
   }
+
+  /// The ID of the linked technical document, or null if none linked.
+  ///
+  /// Many assets can reference the same document (many-to-one).
+  /// Stored in asset JSON and used by the LLM to find relevant
+  /// manufacturer documentation when diagnosing equipment.
+  @JsonKey(name: 'techDocId')
+  int? techDocId;
+
+  /// The asset key of the linked PLC code index entry, or null if none linked.
+  ///
+  /// Many assets can reference the same PLC asset (many-to-one).
+  /// Stored in asset JSON and used by the LLM to find relevant
+  /// PLC code blocks and variables when diagnosing equipment.
+  @JsonKey(name: 'plcAssetKey')
+  String? plcAssetKey;
+
+  /// Returns all PLC/OPC-UA tag keys referenced by this asset.
+  ///
+  /// The default implementation introspects the `toJson()` map and extracts
+  /// string values whose JSON field name matches common key-field patterns:
+  ///   - `key` (exact)
+  ///   - `key1`, `key2`, etc. (numbered)
+  ///   - `*Key` (camelCase suffix, e.g. `batchesKey`, `frequencyKey`)
+  ///   - `*_key` (snake_case suffix, e.g. `analog_key`, `error_key`)
+  ///
+  /// Excludes `plcAssetKey` (a reference ID, not a tag key) and `asset_name`.
+  /// Returns deduplicated, non-empty strings.
+  ///
+  /// Complex asset types with keys in nested structures (lists, sub-objects)
+  /// should override this getter.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  List<String> get allKeys => _extractKeysFromJson(toJson());
+
+  /// JSON key-name pattern for tag-key fields.
+  ///
+  /// Matches:  key | key1 | key2 | fooKey | foo_key
+  static final RegExp _keyFieldPattern =
+      RegExp(r'^key$|^key\d+$|Key$|_key$');
+
+  /// JSON field names that match [_keyFieldPattern] but are NOT tag keys.
+  static const Set<String> _excludedFields = {
+    'plcAssetKey',
+    'asset_name',
+  };
+
+  static List<String> _extractKeysFromJson(Map<String, dynamic> json) {
+    final keys = <String>{};
+    for (final entry in json.entries) {
+      if (_excludedFields.contains(entry.key)) continue;
+      if (!_keyFieldPattern.hasMatch(entry.key)) continue;
+      final value = entry.value;
+      if (value is String && value.isNotEmpty) {
+        keys.add(value);
+      }
+    }
+    return keys.toList();
+  }
 }
 
 class KeyField extends ConsumerStatefulWidget {

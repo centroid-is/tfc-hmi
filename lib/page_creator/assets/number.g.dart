@@ -27,7 +27,9 @@ NumberConfig _$NumberConfigFromJson(Map<String, dynamic> json) => NumberConfig(
           Coordinates.fromJson(json['coordinates'] as Map<String, dynamic>)
       ..size = RelativeSize.fromJson(json['size'] as Map<String, dynamic>)
       ..text = json['text'] as String?
-      ..textPos = $enumDecodeNullable(_$TextPosEnumMap, json['textPos']);
+      ..textPos = $enumDecodeNullable(_$TextPosEnumMap, json['textPos'])
+      ..techDocId = (json['techDocId'] as num?)?.toInt()
+      ..plcAssetKey = json['plcAssetKey'] as String?;
 
 Map<String, dynamic> _$NumberConfigToJson(NumberConfig instance) =>
     <String, dynamic>{
@@ -36,6 +38,8 @@ Map<String, dynamic> _$NumberConfigToJson(NumberConfig instance) =>
       'size': instance.size,
       'text': instance.text,
       'textPos': _$TextPosEnumMap[instance.textPos],
+      'techDocId': instance.techDocId,
+      'plcAssetKey': instance.plcAssetKey,
       'key': instance.key,
       'showDecimalPoint': instance.showDecimalPoint,
       'decimalPlaces': instance.decimalPlaces,

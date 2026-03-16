@@ -540,14 +540,16 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage> {
         ),
         const SizedBox(height: 8),
         // Filter "only collected"
-        Row(
+        Wrap(
+          spacing: 8,
+          runSpacing: 4,
+          crossAxisAlignment: WrapCrossAlignment.center,
           children: [
             FilterChip(
               label: const Text('Only collected'),
               selected: _onlyCollected,
               onSelected: (v) => setState(() => _onlyCollected = v),
             ),
-            const SizedBox(width: 8),
             Chip(label: Text('Selected: ${_selected.length}')),
           ],
         ),
@@ -793,7 +795,10 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage> {
         color: cs.surfaceContainerHighest.withAlpha(100),
         borderRadius: BorderRadius.circular(8),
       ),
-      child: Row(
+      child: Wrap(
+        spacing: 8,
+        runSpacing: 4,
+        crossAxisAlignment: WrapCrossAlignment.center,
         children: [
           // ── View mode: Graph / Table ──
           SegmentedButton<int>(
@@ -822,8 +827,6 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage> {
               constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
             ),
 
-          const SizedBox(width: 12),
-
           // ── Time mode: Realtime / Historical ──
           SegmentedButton<bool>(
             segments: const [
@@ -847,21 +850,13 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage> {
             ),
           ),
 
-          const SizedBox(width: 12),
-
           // ── Time parameters ──
           if (_realtime)
             _buildWindowChip(context, cs),
           if (!_realtime) ...[
-            Flexible(
-              child: _buildDateRangeChip(context, cs),
-            ),
-            if (_activeView != null) ...[
-              const SizedBox(width: 6),
-              Flexible(
-                child: _buildSavedPeriodsSection(context, cs),
-              ),
-            ],
+            _buildDateRangeChip(context, cs),
+            if (_activeView != null)
+              _buildSavedPeriodsSection(context, cs),
           ],
         ],
       ),
@@ -998,89 +993,92 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage> {
             }
           }
 
-          return Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Flexible(
-                child: DropdownButton<SavedPeriod?>(
-                  value: dropdownValue,
-                  hint: Text('Periods…',
-                      style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant)),
-                  underline: const SizedBox.shrink(),
-                  isDense: true,
-                  isExpanded: true,
-                  icon: Icon(Icons.unfold_more, size: 16, color: cs.onSurfaceVariant),
-                  onChanged: (p) {
-                    setState(() {
-                      _activePeriod = p;
-                      if (p != null) {
-                        _realtime = false;
-                        _range = DateTimeRange(
-                            start: p.start, end: p.end);
-                      }
-                    });
-                  },
-                  items: [
-                    DropdownMenuItem<SavedPeriod?>(
-                      value: null,
-                      child: Text('None',
-                          style: TextStyle(
-                              fontSize: 13,
-                              fontStyle: FontStyle.italic,
-                              color: cs.onSurfaceVariant)),
-                    ),
-                    for (final p in periods)
-                      DropdownMenuItem(
-                        value: p,
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            _validityIcon(
-                              context,
-                              validityForRange(
-                                DateTimeRange(
-                                    start: p.start, end: p.end),
-                                horizon,
-                              ),
-                            ),
-                            const SizedBox(width: 6),
-                            Flexible(
-                              child: Text(p.name,
-                                  style: const TextStyle(fontSize: 13),
-                                  overflow: TextOverflow.ellipsis),
-                            ),
-                          ],
-                        ),
+          return ConstrainedBox(
+            constraints: const BoxConstraints(minWidth: 120, maxWidth: 220),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Flexible(
+                  child: DropdownButton<SavedPeriod?>(
+                    value: dropdownValue,
+                    hint: Text('Periods…',
+                        style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant)),
+                    underline: const SizedBox.shrink(),
+                    isDense: true,
+                    isExpanded: true,
+                    icon: Icon(Icons.unfold_more, size: 16, color: cs.onSurfaceVariant),
+                    onChanged: (p) {
+                      setState(() {
+                        _activePeriod = p;
+                        if (p != null) {
+                          _realtime = false;
+                          _range = DateTimeRange(
+                              start: p.start, end: p.end);
+                        }
+                      });
+                    },
+                    items: [
+                      DropdownMenuItem<SavedPeriod?>(
+                        value: null,
+                        child: Text('None',
+                            style: TextStyle(
+                                fontSize: 13,
+                                fontStyle: FontStyle.italic,
+                                color: cs.onSurfaceVariant)),
                       ),
-                  ],
+                      for (final p in periods)
+                        DropdownMenuItem(
+                          value: p,
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              _validityIcon(
+                                context,
+                                validityForRange(
+                                  DateTimeRange(
+                                      start: p.start, end: p.end),
+                                  horizon,
+                                ),
+                              ),
+                              const SizedBox(width: 6),
+                              Flexible(
+                                child: Text(p.name,
+                                    style: const TextStyle(fontSize: 13),
+                                    overflow: TextOverflow.ellipsis),
+                              ),
+                            ],
+                          ),
+                        ),
+                    ],
+                  ),
                 ),
-              ),
-              IconButton(
-                onPressed: (_activeView != null &&
-                        !_realtime &&
-                        _range != null)
-                    ? _saveCurrentRangeAsPeriod
-                    : null,
-                icon: const Icon(Icons.bookmark_add_outlined, size: 18),
-                tooltip: 'Save current range as period',
-                visualDensity: VisualDensity.compact,
-                constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-              ),
-              if (_activePeriod != null)
                 IconButton(
-                  onPressed: () => _deletePeriod(
-                      _activePeriod!,
-                      horizonAsync.when(
-                        data: (data) => data,
-                        loading: () => null,
-                        error: (_, __) => null,
-                      )),
-                  icon: const Icon(Icons.delete_outline, size: 18),
-                  tooltip: 'Delete selected period',
+                  onPressed: (_activeView != null &&
+                          !_realtime &&
+                          _range != null)
+                      ? _saveCurrentRangeAsPeriod
+                      : null,
+                  icon: const Icon(Icons.bookmark_add_outlined, size: 18),
+                  tooltip: 'Save current range as period',
                   visualDensity: VisualDensity.compact,
                   constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
                 ),
-            ],
+                if (_activePeriod != null)
+                  IconButton(
+                    onPressed: () => _deletePeriod(
+                        _activePeriod!,
+                        horizonAsync.when(
+                          data: (data) => data,
+                          loading: () => null,
+                          error: (_, __) => null,
+                        )),
+                    icon: const Icon(Icons.delete_outline, size: 18),
+                    tooltip: 'Delete selected period',
+                    visualDensity: VisualDensity.compact,
+                    constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                  ),
+              ],
+            ),
           );
         },
         loading: () => const SizedBox(

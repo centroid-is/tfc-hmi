@@ -9,6 +9,8 @@ import 'package:file_picker/file_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as path;
 import '../widgets/base_scaffold.dart';
+import '../widgets/proposal_visual.dart';
+import '../providers/proposal_state.dart';
 import 'package:tfc_dart/core/state_man.dart';
 import 'package:tfc_dart/core/modbus_client_wrapper.dart' show ModbusDataType;
 import 'package:tfc_dart/core/collector.dart';
@@ -36,20 +38,26 @@ enum _KeyStatus { ok, error, serverDisconnected }
 
 /// The full page widget with BaseScaffold (used in navigation).
 class KeyRepositoryPage extends ConsumerWidget {
-  const KeyRepositoryPage({super.key});
+  /// Optional proposal JSON passed via Beamer route data.
+  final String? proposalData;
+
+  KeyRepositoryPage({super.key, this.proposalData});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     return BaseScaffold(
       title: 'Key Repository',
-      body: KeyRepositoryContent(),
+      body: KeyRepositoryContent(proposalData: proposalData),
     );
   }
 }
 
 /// The content widget (testable without BaseScaffold).
 class KeyRepositoryContent extends ConsumerWidget {
-  const KeyRepositoryContent({super.key});
+  /// Optional proposal JSON passed down from KeyRepositoryPage.
+  final String? proposalData;
+
+  const KeyRepositoryContent({super.key, this.proposalData});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -67,7 +75,7 @@ class KeyRepositoryContent extends ConsumerWidget {
             loading: () => _DatabaseStatusBanner(connected: false, loading: true),
             error: (_, __) => _DatabaseStatusBanner(connected: false),
           ),
-          _KeyMappingsSection(),
+          _KeyMappingsSection(proposalData: proposalData),
           const SizedBox(height: 16),
           _KeyMappingsImportExportCard(),
         ],
@@ -132,7 +140,8 @@ class _DatabaseStatusBanner extends StatelessWidget {
 // ===================== Key Mappings Section =====================
 
 class _KeyMappingsSection extends ConsumerStatefulWidget {
-  const _KeyMappingsSection();
+  final String? proposalData;
+  const _KeyMappingsSection({this.proposalData});
   @override
   ConsumerState<_KeyMappingsSection> createState() =>
       _KeyMappingsSectionState();
@@ -148,10 +157,48 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
   String? _newlyAddedKey;
   Map<String, _KeyStatus> _keyStatuses = {};
 
+  /// Proposal state
+  Map<String, dynamic>? _proposedMapping;
+  bool _isProposal = false;
+  int? _proposalId;
+
   @override
   void initState() {
     super.initState();
     _loadKeyMappings();
+    _parseKeyMappingProposal(widget.proposalData);
+  }
+
+  /// Parses key mapping proposal JSON.
+  ///
+  /// Sets [_proposedMapping] and [_isProposal] on success.
+  /// Gracefully handles invalid JSON.
+  void _parseKeyMappingProposal(String? json) {
+    if (json == null) return;
+
+    try {
+      final decoded = jsonDecode(json);
+      if (decoded is! Map<String, dynamic>) return;
+
+      final type = decoded['_proposal_type'] as String?;
+      if (type != 'key_mapping') return;
+
+      _proposedMapping = decoded;
+      _isProposal = true;
+
+      // Match against universal proposal state for ID tracking.
+      try {
+        final state = ref.read(proposalStateProvider);
+        for (final p in state.proposals) {
+          if (p.proposalJson == json) {
+            _proposalId = p.id;
+            break;
+          }
+        }
+      } catch (_) {}
+    } catch (_) {
+      // Graceful: malformed JSON ignored.
+    }
   }
 
   Future<void> _loadKeyMappings() async {
@@ -374,6 +421,17 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
 
   @override
   Widget build(BuildContext context) {
+    // Reactively watch for new key mapping proposals arriving via MCP.
+    ref.listen<ProposalState>(proposalStateProvider, (prev, next) {
+      if (_isProposal) return; // Already showing a proposal.
+      final keyProposals = next.proposals.where(
+          (p) => p.proposalType == 'key_mapping');
+      if (keyProposals.isEmpty) return;
+      final proposal = keyProposals.first;
+      _parseKeyMappingProposal(proposal.proposalJson);
+      if (_isProposal) setState(() {});
+    });
+
     if (_isLoading) {
       return const Center(child: CircularProgressIndicator());
     }
@@ -400,7 +458,91 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
 
     final filtered = _filteredEntries;
 
-    return Card(
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        // Proposal banner
+        if (_isProposal && _proposedMapping != null)
+          Container(
+            margin: const EdgeInsets.only(bottom: 8),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            color: Colors.amber.shade50,
+            child: Row(
+              children: [
+                const Icon(Icons.auto_awesome, color: Colors.amber),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    'AI Proposal: Map \'${_proposedMapping!['key']}\' '
+                    'to OPC UA node',
+                  ),
+                ),
+                const SizedBox(width: 8),
+                ElevatedButton(
+                  onPressed: () {
+                    final key = _proposedMapping!['key'] as String?;
+                    if (key != null && _keyMappings != null) {
+                      final opcuaNode = _proposedMapping!['opcua_node'];
+                      final mapping = KeyMappingEntry();
+                      if (opcuaNode is Map<String, dynamic>) {
+                        mapping.opcuaNode = OpcUANodeConfig.fromJson(opcuaNode);
+                      }
+                      _keyMappings!.nodes[key] = mapping;
+                      _saveKeyMappings();
+                    }
+                    if (_proposalId != null) {
+                      try {
+                        ref.read(proposalStateProvider.notifier)
+                            .acceptProposal(_proposalId!);
+                      } catch (_) {}
+                    }
+                    setState(() {
+                      _newlyAddedKey = key;
+                      _isProposal = false;
+                      _proposedMapping = null;
+                    });
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.green,
+                    foregroundColor: Colors.white,
+                  ),
+                  child: const Text('Accept'),
+                ),
+                const SizedBox(width: 8),
+                OutlinedButton(
+                  onPressed: () {
+                    if (_proposalId != null) {
+                      try {
+                        ref.read(proposalStateProvider.notifier)
+                            .rejectProposal(_proposalId!);
+                      } catch (_) {}
+                    }
+                    setState(() {
+                      _isProposal = false;
+                      _proposedMapping = null;
+                    });
+                  },
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.red,
+                    side: const BorderSide(color: Colors.red),
+                  ),
+                  child: const Text('Reject'),
+                ),
+              ],
+            ),
+          ),
+        // Proposed key mapping inline display
+        if (_isProposal && _proposedMapping != null)
+          Container(
+            margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+            decoration: proposalDecoration(),
+            child: ListTile(
+              leading: const ProposalBadge(),
+              title: Text('${_proposedMapping!['key']}'),
+              subtitle: Text('AI Proposed key mapping'),
+            ),
+          ),
+        Card(
       child: Padding(
         padding: const EdgeInsets.all(16.0),
         child: Column(
@@ -569,6 +711,8 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
           ],
         ),
       ),
+    ),
+      ],
     );
   }
 

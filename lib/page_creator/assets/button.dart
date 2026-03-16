@@ -120,13 +120,23 @@ class ButtonConfig extends BaseAsset {
   ButtonConfig.preview()
       : key = previewStr,
         outwardColor = Colors.green,
-        inwardColor = Colors.green,
+        inwardColor = Colors.grey,
         buttonType = ButtonType.circle,
         icon = null,
         feedback = null,
         isToggle = false,
         serverWritesLow = false {
     textPos = TextPos.right;
+  }
+
+  @override
+  List<String> get allKeys {
+    final keys = <String>{};
+    if (key.isNotEmpty) keys.add(key);
+    if (feedback != null && feedback!.key.isNotEmpty) {
+      keys.add(feedback!.key);
+    }
+    return keys.toList();
   }
 
   factory ButtonConfig.fromJson(Map<String, dynamic> json) =>

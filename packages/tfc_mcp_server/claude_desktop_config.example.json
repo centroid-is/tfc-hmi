@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "tfc": {
+      "command": "dart",
+      "args": ["run", "packages/tfc_mcp_server/bin/tfc_mcp_server.dart"],
+      "env": {
+        "TFC_USER": "developer",
+        "CENTROID_PGHOST": "localhost",
+        "CENTROID_PGPORT": "5432",
+        "CENTROID_PGDATABASE": "hmi",
+        "CENTROID_PGUSER": "postgres",
+        "CENTROID_PGPASSWORD": "password"
+      }
+    }
+  }
+}
