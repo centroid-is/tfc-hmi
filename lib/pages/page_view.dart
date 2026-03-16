@@ -9,6 +9,9 @@ import 'package:json_annotation/json_annotation.dart';
 import 'package:tfc/core/preferences.dart';
 import 'package:tfc/page_creator/page.dart';
 
+import '../chat/asset_context_menu.dart';
+import '../widgets/proposal_visual.dart';
+import '../providers/mcp_bridge.dart' show isMcpChatAvailable;
 import '../providers/page_manager.dart';
 import '../providers/state_man.dart';
 import '../page_creator/assets/common.dart'; // your Asset, Coordinates, RelativeSize, TextPos, etc.
@@ -88,6 +91,11 @@ class AssetStack extends ConsumerStatefulWidget {
   final bool absorb;
   final Set<Asset> selectedAssets;
   final bool mirroringDisabled;
+
+  /// Assets that were proposed by AI. When non-empty, these assets are
+  /// rendered with a dashed amber border and AI sparkle badge.
+  final Set<Asset> proposedAssets;
+
   const AssetStack({
     Key? key,
     required this.assets,
@@ -98,6 +106,7 @@ class AssetStack extends ConsumerStatefulWidget {
     this.absorb = false,
     required this.selectedAssets,
     required this.mirroringDisabled,
+    this.proposedAssets = const {},
   }) : super(key: key);
 
   @override
@@ -173,6 +182,8 @@ class _AssetStackState extends ConsumerState<AssetStack> {
             textSize = tp.size;
           }
 
+          final isProposed = widget.proposedAssets.contains(asset);
+
           // A) add the asset widget itself
           positionedChildren.add(
             Positioned(
@@ -206,22 +217,72 @@ class _AssetStackState extends ConsumerState<AssetStack> {
                                 ? (details) =>
                                     widget.onPanStart!(asset, details)
                                 : null,
+                            onSecondaryTapUp: isMcpChatAvailable()
+                                ? (details) {
+                                    showEditorAssetContextMenu(
+                                      context,
+                                      ref,
+                                      details.globalPosition,
+                                      asset,
+                                    );
+                                  }
+                                : null,
                             child: AbsorbPointer(
                               absorbing: widget.absorb,
                               child: asset.build(context),
                             ),
                           ),
                         )
-                      : SizedBox(
-                          width: asset.size.width * W,
-                          height: asset.size.height * H,
-                          child: asset.build(context),
+                      : GestureDetector(
+                          onSecondaryTapUp: isMcpChatAvailable()
+                              ? (details) {
+                                  showAssetContextMenu(
+                                    context,
+                                    details.globalPosition,
+                                    () => debugAsset(ref, asset),
+                                  );
+                                }
+                              : null,
+                          child: SizedBox(
+                            width: asset.size.width * W,
+                            height: asset.size.height * H,
+                            child: asset.build(context),
+                          ),
                         ),
                 ),
                 ),
               ),
             ),
           );
+
+          // Proposal visual indicators: dashed border + AI badge
+          if (isProposed) {
+            positionedChildren.add(
+              Positioned(
+                left: cx - halfW,
+                top: cy - halfH,
+                child: IgnorePointer(
+                  child: SizedBox(
+                    width: assetW,
+                    height: assetH,
+                    child: Stack(
+                      children: [
+                        CustomPaint(
+                          size: Size(assetW, assetH),
+                          painter: DashedBorderPainter(color: Colors.amber),
+                        ),
+                        const Positioned(
+                          top: 2,
+                          right: 2,
+                          child: ProposalBadge(),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            );
+          }
 
           // B) add the label (if any)
           if (asset.text != null && asset.text!.isNotEmpty) {
@@ -237,9 +298,21 @@ class _AssetStackState extends ConsumerState<AssetStack> {
               Positioned(
                 left: labelOff.dx,
                 top: labelOff.dy,
-                child: Text(
-                  asset.text!,
-                  style: labelStyle,
+                child: GestureDetector(
+                  onSecondaryTapUp:
+                      !widget.absorb && isMcpChatAvailable()
+                          ? (details) {
+                              showAssetContextMenu(
+                                context,
+                                details.globalPosition,
+                                () => debugAsset(ref, asset),
+                              );
+                            }
+                          : null,
+                  child: Text(
+                    asset.text!,
+                    style: labelStyle,
+                  ),
                 ),
               ),
             );

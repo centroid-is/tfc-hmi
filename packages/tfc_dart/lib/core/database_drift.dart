@@ -9,6 +9,7 @@ import 'dart:convert';
 
 import 'package:drift/drift.dart';
 import 'package:drift/native.dart';
+import 'package:meta/meta.dart' show visibleForTesting;
 import 'package:drift/isolate.dart';
 import 'package:drift_postgres/drift_postgres.dart';
 import 'package:path/path.dart' as p;
@@ -17,6 +18,8 @@ import 'package:logger/logger.dart';
 
 import 'alarm.dart';
 import 'database.dart';
+import 'mcp_tables.dart';
+import 'mcp_database.dart';
 
 part 'database_drift.g.dart';
 
@@ -108,11 +111,31 @@ class HistoryViewPeriod extends Table {
   HistoryView,
   HistoryViewKey,
   HistoryViewGraph,
-  HistoryViewPeriod, // NEW
+  HistoryViewPeriod,
+  // MCP-owned tables (Phase 16 consolidation):
+  AuditLog,
+  PlcCodeBlockTable,
+  PlcVariableTable,
+  DrawingTable,
+  DrawingComponentTable,
+  TechDocTable,
+  TechDocSectionTable,
+  McpProposalTable,
+  PlcVarRefTable,
+  PlcFbInstanceTable,
+  PlcBlockCallTable,
 ])
-class AppDatabase extends _$AppDatabase {
+class AppDatabase extends _$AppDatabase implements McpDatabase {
   final DatabaseConfig config;
   AppDatabase._(this.config, QueryExecutor executor) : super(executor);
+
+  /// Creates an in-memory SQLite [AppDatabase] for testing.
+  @visibleForTesting
+  factory AppDatabase.inMemoryForTest() => AppDatabase._(
+        DatabaseConfig(),
+        NativeDatabase.memory(logStatements: false),
+      );
+
   final logger = Logger();
   pg.Connection? _notificationConnection;
 
@@ -127,6 +150,12 @@ class AppDatabase extends _$AppDatabase {
   ReceivePort? _healthPort;
   Stream<bool>? _connectionHealthBroadcast;
 
+  /// Inject a custom health stream for testing (bypasses ReceivePort).
+  @visibleForTesting
+  set connectionHealthBroadcastForTest(Stream<bool>? stream) {
+    _connectionHealthBroadcast = stream;
+  }
+
   /// Connection health stream driven by TCP keepalive inside the DriftIsolate.
   /// Broadcast stream — safe for multiple listeners (e.g. multiple StreamBuilders).
   Stream<bool>? get connectionHealth {
@@ -138,7 +167,7 @@ class AppDatabase extends _$AppDatabase {
   }
 
   @override
-  int get schemaVersion => 4;
+  int get schemaVersion => 5;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -183,6 +212,48 @@ class AppDatabase extends _$AppDatabase {
               await m.database.customStatement(
                 'ALTER TABLE history_view_graph ADD COLUMN IF NOT EXISTS name TEXT',
               );
+            }
+          }
+          // Schema v5: Add all MCP tables (consolidated from branch).
+          if (from < 5) {
+            if (native) {
+              // SQLite: m.createTable uses current drift schema which
+              // includes all columns (vendor_type, server_alias, etc.).
+              await m.createTable(auditLog);
+              await m.createTable(plcCodeBlockTable);
+              await m.createTable(plcVariableTable);
+              await m.createTable(drawingTable);
+              await m.createTable(drawingComponentTable);
+              await m.createTable(techDocTable);
+              await m.createTable(techDocSectionTable);
+              await m.createTable(mcpProposalTable);
+              await m.createTable(plcVarRefTable);
+              await m.createTable(plcFbInstanceTable);
+              await m.createTable(plcBlockCallTable);
+            } else {
+              // PostgreSQL: IF NOT EXISTS for idempotency.
+              await m.database.customStatement(
+                  'CREATE TABLE IF NOT EXISTS audit_log (id SERIAL PRIMARY KEY, operator_id TEXT NOT NULL, tool TEXT NOT NULL, arguments TEXT NOT NULL, reasoning TEXT, status TEXT NOT NULL, error TEXT, created_at TEXT NOT NULL, completed_at TEXT)');
+              await m.database.customStatement(
+                  'CREATE TABLE IF NOT EXISTS plc_code_block (id SERIAL PRIMARY KEY, asset_key TEXT NOT NULL, block_name TEXT NOT NULL, block_type TEXT NOT NULL, file_path TEXT NOT NULL, declaration TEXT NOT NULL, implementation TEXT, full_source TEXT NOT NULL, parent_block_id INTEGER, indexed_at TEXT NOT NULL, vendor_type TEXT, server_alias TEXT)');
+              await m.database.customStatement(
+                  'CREATE TABLE IF NOT EXISTS plc_variable (id SERIAL PRIMARY KEY, block_id INTEGER NOT NULL REFERENCES plc_code_block(id), variable_name TEXT NOT NULL, variable_type TEXT NOT NULL, section TEXT NOT NULL, qualified_name TEXT NOT NULL, comment TEXT)');
+              await m.database.customStatement(
+                  'CREATE TABLE IF NOT EXISTS drawing (id SERIAL PRIMARY KEY, asset_key TEXT NOT NULL, drawing_name TEXT NOT NULL, file_path TEXT NOT NULL, page_count INTEGER NOT NULL, uploaded_at TEXT NOT NULL, pdf_bytes BYTEA)');
+              await m.database.customStatement(
+                  'CREATE TABLE IF NOT EXISTS drawing_component (id SERIAL PRIMARY KEY, drawing_id INTEGER NOT NULL REFERENCES drawing(id), page_number INTEGER NOT NULL, full_page_text TEXT NOT NULL)');
+              await m.database.customStatement(
+                  'CREATE TABLE IF NOT EXISTS tech_doc (id SERIAL PRIMARY KEY, name TEXT NOT NULL, pdf_bytes BYTEA NOT NULL, page_count INTEGER NOT NULL, section_count INTEGER NOT NULL, uploaded_at TEXT NOT NULL)');
+              await m.database.customStatement(
+                  'CREATE TABLE IF NOT EXISTS tech_doc_section (id SERIAL PRIMARY KEY, doc_id INTEGER NOT NULL REFERENCES tech_doc(id), parent_id INTEGER, title TEXT NOT NULL, content TEXT NOT NULL, page_start INTEGER NOT NULL, page_end INTEGER NOT NULL, level INTEGER NOT NULL, sort_order INTEGER NOT NULL)');
+              await m.database.customStatement(
+                  'CREATE TABLE IF NOT EXISTS mcp_proposal (id SERIAL PRIMARY KEY, proposal_type TEXT NOT NULL, title TEXT NOT NULL, proposal_json TEXT NOT NULL, operator_id TEXT NOT NULL, status TEXT NOT NULL DEFAULT \'pending\', created_at TEXT NOT NULL)');
+              await m.database.customStatement(
+                  'CREATE TABLE IF NOT EXISTS plc_var_ref (id SERIAL PRIMARY KEY, block_id INTEGER NOT NULL REFERENCES plc_code_block(id), variable_path TEXT NOT NULL, kind TEXT NOT NULL, line_number INTEGER, source_line TEXT)');
+              await m.database.customStatement(
+                  'CREATE TABLE IF NOT EXISTS plc_fb_instance (id SERIAL PRIMARY KEY, declaring_block_id INTEGER NOT NULL REFERENCES plc_code_block(id), instance_name TEXT NOT NULL, fb_type_name TEXT NOT NULL)');
+              await m.database.customStatement(
+                  'CREATE TABLE IF NOT EXISTS plc_block_call (id SERIAL PRIMARY KEY, caller_block_id INTEGER NOT NULL REFERENCES plc_code_block(id), callee_block_name TEXT NOT NULL, line_number INTEGER)');
             }
           }
         },
@@ -273,7 +344,11 @@ class AppDatabase extends _$AppDatabase {
       final healthPort = ReceivePort();
       final healthSendPort = healthPort.sendPort;
 
-      // Spawn a DriftIsolate handling the Postgres connection off the main isolate.
+      // Spawn a DriftIsolate handling the Postgres connection off the main
+      // isolate. We provide a custom `isolateSpawn` that wraps the entry point
+      // in `runZonedGuarded` so that SocketExceptions (e.g. "Connection reset
+      // by peer" from the pg package's _waitForResult) are caught by the zone
+      // error handler instead of crashing the drift isolate.
       final isolate = await DriftIsolate.spawn(() {
         final pool = pg.Pool.withEndpoints([config.postgres!],
             settings: pg.PoolSettings(
@@ -291,7 +366,7 @@ class AppDatabase extends _$AppDatabase {
         _startPoolHealthMonitor(pool, healthSendPort);
 
         return PgDatabase.opened(pool, logStatements: config.debug);
-      });
+      }, isolateSpawn: _spawnGuardedIsolate);
       final executor = await isolate.connect();
       final db = AppDatabase._(config, executor);
       db._driftIsolate = isolate;
@@ -1153,28 +1228,89 @@ class AppDatabase extends _$AppDatabase {
   }
 }
 
+/// Custom isolate spawner that wraps the entry point in [runZonedGuarded].
+///
+/// Drift's default `DriftIsolate.spawn` uses `Isolate.spawn` directly, which
+/// means the drift isolate's root zone has NO error handler. If the `pg`
+/// package throws a [SocketException] (e.g. "Connection reset by peer" from
+/// `_waitForResult`) that escapes drift's query try-catch — for example via
+/// an orphaned Future or native socket callback — it becomes an unhandled
+/// exception that kills the entire isolate:
+///
+/// ```
+/// [ERROR:flutter/runtime/dart_isolate.cc(1402)] Unhandled exception:
+/// SocketException: Connection reset by peer
+/// ```
+///
+/// By wrapping the entry point in `runZonedGuarded`, we catch these stray
+/// exceptions at the zone level, log them, and let the isolate continue.
+/// The pool will evict the dead connection and provide a fresh one on the
+/// next query.
+Future<Isolate> _spawnGuardedIsolate<T>(void Function(T) entryPoint, T arg) {
+  // Isolate.spawn within the same isolate group supports closures, so we
+  // can capture `entryPoint` and `arg` directly. The `_` parameter is
+  // unused — we just need a valid message to satisfy the Isolate.spawn API.
+  return Isolate.spawn<void>((_) {
+    final logger = Logger();
+    runZonedGuarded(
+      () => entryPoint(arg),
+      (error, stack) {
+        // Log but do NOT rethrow — this keeps the isolate alive.
+        logger.w(
+          'Drift isolate caught unhandled exception (isolate stays alive): '
+          '$error',
+        );
+      },
+    );
+  }, null);
+}
+
 /// Holds one pool connection and awaits its [closed] future.
 /// When TCP keepalive kills the connection, [closed] completes and we send
 /// `false` via [port], then re-acquire a new connection from the pool.
-/// This is running inside the drift spawned isolate
+/// This is running inside the drift spawned isolate.
+///
+/// Wrapped in [runZonedGuarded] so that any unhandled exception (e.g.
+/// [SocketException] escaping the inner try-catch via native socket layer
+/// or Future chaining) is caught by the zone handler instead of killing
+/// the entire isolate.
 void _startPoolHealthMonitor(pg.Pool pool, SendPort port) {
-  Future<void> monitor() async {
-    while (pool.isOpen) {
-      try {
-        await pool.withConnection((conn) async {
-          port.send(true);
-          await conn.closed;
+  runZonedGuarded(() {
+    Future<void> monitor() async {
+      while (pool.isOpen) {
+        try {
+          await pool.withConnection((conn) async {
+            port.send(true);
+            // Send periodic heartbeats to keep the health timeout timer fed.
+            // Without this, a healthy connection that stays open indefinitely
+            // would cause the 30-second health timeout to fire `false`.
+            while (pool.isOpen) {
+              port.send(true);
+              // Wait 15 seconds or until connection closes, whichever first
+              final closed = conn.closed.then((_) => true);
+              final timeout = Future.delayed(
+                  const Duration(seconds: 15), () => false);
+              final didClose = await Future.any([closed, timeout]);
+              if (didClose) break;
+            }
+            port.send(false);
+          });
+        } catch (e) {
           port.send(false);
-        });
-      } catch (_) {
-        port.send(false);
+          // Log but continue — pool will provide a new connection
+        }
+        // Wait before retrying after a disconnection
+        await Future.delayed(const Duration(seconds: 5));
       }
-      // Wait before retrying after a disconnection
-      await Future.delayed(const Duration(seconds: 5));
     }
-  }
 
-  unawaited(monitor());
+    unawaited(monitor());
+  }, (error, stack) {
+    // Last-resort handler — catches ANYTHING that escapes the try-catch
+    // (e.g. SocketException from native layer, Future chain edge cases).
+    // This prevents the isolate from being killed.
+    port.send(false);
+  });
 }
 
 enum NotificationAction {

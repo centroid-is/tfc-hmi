@@ -9,37 +9,55 @@ import 'package:file_picker/file_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as path;
 import '../widgets/base_scaffold.dart';
-import '../widgets/opcua_browse.dart';
+import '../widgets/proposal_visual.dart';
+import '../providers/proposal_state.dart';
 import 'package:tfc_dart/core/state_man.dart';
-import '../widgets/opcua_array_index_field.dart';
+import 'package:tfc_dart/core/modbus_client_wrapper.dart' show ModbusDataType;
 import 'package:tfc_dart/core/collector.dart';
 import 'package:tfc_dart/core/database.dart';
-import '../widgets/fuzzy_search_bar.dart';
 import 'package:jbtm/src/m2400.dart' show M2400RecordType;
-import 'package:jbtm/src/m2400_fields.dart'
-    show M2400Field, WeigherStatus, expectedFields;
+import '../widgets/fuzzy_search_bar.dart';
+import '../widgets/bit_mask_grid.dart';
+import '../widgets/key_mapping_sections.dart';
 import '../providers/preferences.dart';
 import '../providers/state_man.dart';
 import '../providers/database.dart';
+
+/// Extension to find a [ModbusConfig] by server alias without nullable cast.
+extension ModbusConfigListExt on List<ModbusConfig> {
+  ModbusConfig? findByAlias(String? alias) {
+    if (alias == null) return null;
+    for (final c in this) {
+      if (c.serverAlias == alias) return c;
+    }
+    return null;
+  }
+}
 
 enum _KeyStatus { ok, error, serverDisconnected }
 
 /// The full page widget with BaseScaffold (used in navigation).
 class KeyRepositoryPage extends ConsumerWidget {
-  const KeyRepositoryPage({super.key});
+  /// Optional proposal JSON passed via Beamer route data.
+  final String? proposalData;
+
+  KeyRepositoryPage({super.key, this.proposalData});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     return BaseScaffold(
       title: 'Key Repository',
-      body: KeyRepositoryContent(),
+      body: KeyRepositoryContent(proposalData: proposalData),
     );
   }
 }
 
 /// The content widget (testable without BaseScaffold).
 class KeyRepositoryContent extends ConsumerWidget {
-  const KeyRepositoryContent({super.key});
+  /// Optional proposal JSON passed down from KeyRepositoryPage.
+  final String? proposalData;
+
+  const KeyRepositoryContent({super.key, this.proposalData});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -57,7 +75,7 @@ class KeyRepositoryContent extends ConsumerWidget {
             loading: () => _DatabaseStatusBanner(connected: false, loading: true),
             error: (_, __) => _DatabaseStatusBanner(connected: false),
           ),
-          _KeyMappingsSection(),
+          _KeyMappingsSection(proposalData: proposalData),
           const SizedBox(height: 16),
           _KeyMappingsImportExportCard(),
         ],
@@ -122,7 +140,8 @@ class _DatabaseStatusBanner extends StatelessWidget {
 // ===================== Key Mappings Section =====================
 
 class _KeyMappingsSection extends ConsumerStatefulWidget {
-  const _KeyMappingsSection();
+  final String? proposalData;
+  const _KeyMappingsSection({this.proposalData});
   @override
   ConsumerState<_KeyMappingsSection> createState() =>
       _KeyMappingsSectionState();
@@ -138,10 +157,48 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
   String? _newlyAddedKey;
   Map<String, _KeyStatus> _keyStatuses = {};
 
+  /// Proposal state
+  Map<String, dynamic>? _proposedMapping;
+  bool _isProposal = false;
+  int? _proposalId;
+
   @override
   void initState() {
     super.initState();
     _loadKeyMappings();
+    _parseKeyMappingProposal(widget.proposalData);
+  }
+
+  /// Parses key mapping proposal JSON.
+  ///
+  /// Sets [_proposedMapping] and [_isProposal] on success.
+  /// Gracefully handles invalid JSON.
+  void _parseKeyMappingProposal(String? json) {
+    if (json == null) return;
+
+    try {
+      final decoded = jsonDecode(json);
+      if (decoded is! Map<String, dynamic>) return;
+
+      final type = decoded['_proposal_type'] as String?;
+      if (type != 'key_mapping') return;
+
+      _proposedMapping = decoded;
+      _isProposal = true;
+
+      // Match against universal proposal state for ID tracking.
+      try {
+        final state = ref.read(proposalStateProvider);
+        for (final p in state.proposals) {
+          if (p.proposalJson == json) {
+            _proposalId = p.id;
+            break;
+          }
+        }
+      } catch (_) {}
+    } catch (_) {
+      // Graceful: malformed JSON ignored.
+    }
   }
 
   Future<void> _loadKeyMappings() async {
@@ -334,7 +391,7 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
     return fuzzyFilter(entries, _searchQuery, [
       (e) => e.key,
       (e) => e.value.opcuaNode?.identifier ?? '',
-      (e) => e.value.opcuaNode?.serverAlias ?? e.value.m2400Node?.serverAlias ?? '',
+      (e) => e.value.opcuaNode?.serverAlias ?? e.value.m2400Node?.serverAlias ?? e.value.modbusNode?.serverAlias ?? '',
     ]);
   }
 
@@ -354,8 +411,27 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
         .toList();
   }
 
+  List<String> get _modbusServerAliases {
+    if (_stateManConfig == null) return [];
+    return _stateManConfig!.modbus
+        .where((c) => c.serverAlias != null && c.serverAlias!.isNotEmpty)
+        .map((c) => c.serverAlias!)
+        .toList();
+  }
+
   @override
   Widget build(BuildContext context) {
+    // Reactively watch for new key mapping proposals arriving via MCP.
+    ref.listen<ProposalState>(proposalStateProvider, (prev, next) {
+      if (_isProposal) return; // Already showing a proposal.
+      final keyProposals = next.proposals.where(
+          (p) => p.proposalType == 'key_mapping');
+      if (keyProposals.isEmpty) return;
+      final proposal = keyProposals.first;
+      _parseKeyMappingProposal(proposal.proposalJson);
+      if (_isProposal) setState(() {});
+    });
+
     if (_isLoading) {
       return const Center(child: CircularProgressIndicator());
     }
@@ -382,7 +458,91 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
 
     final filtered = _filteredEntries;
 
-    return Card(
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        // Proposal banner
+        if (_isProposal && _proposedMapping != null)
+          Container(
+            margin: const EdgeInsets.only(bottom: 8),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            color: Colors.amber.shade50,
+            child: Row(
+              children: [
+                const Icon(Icons.auto_awesome, color: Colors.amber),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    'AI Proposal: Map \'${_proposedMapping!['key']}\' '
+                    'to OPC UA node',
+                  ),
+                ),
+                const SizedBox(width: 8),
+                ElevatedButton(
+                  onPressed: () {
+                    final key = _proposedMapping!['key'] as String?;
+                    if (key != null && _keyMappings != null) {
+                      final opcuaNode = _proposedMapping!['opcua_node'];
+                      final mapping = KeyMappingEntry();
+                      if (opcuaNode is Map<String, dynamic>) {
+                        mapping.opcuaNode = OpcUANodeConfig.fromJson(opcuaNode);
+                      }
+                      _keyMappings!.nodes[key] = mapping;
+                      _saveKeyMappings();
+                    }
+                    if (_proposalId != null) {
+                      try {
+                        ref.read(proposalStateProvider.notifier)
+                            .acceptProposal(_proposalId!);
+                      } catch (_) {}
+                    }
+                    setState(() {
+                      _newlyAddedKey = key;
+                      _isProposal = false;
+                      _proposedMapping = null;
+                    });
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.green,
+                    foregroundColor: Colors.white,
+                  ),
+                  child: const Text('Accept'),
+                ),
+                const SizedBox(width: 8),
+                OutlinedButton(
+                  onPressed: () {
+                    if (_proposalId != null) {
+                      try {
+                        ref.read(proposalStateProvider.notifier)
+                            .rejectProposal(_proposalId!);
+                      } catch (_) {}
+                    }
+                    setState(() {
+                      _isProposal = false;
+                      _proposedMapping = null;
+                    });
+                  },
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.red,
+                    side: const BorderSide(color: Colors.red),
+                  ),
+                  child: const Text('Reject'),
+                ),
+              ],
+            ),
+          ),
+        // Proposed key mapping inline display
+        if (_isProposal && _proposedMapping != null)
+          Container(
+            margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+            decoration: proposalDecoration(),
+            child: ListTile(
+              leading: const ProposalBadge(),
+              title: Text('${_proposedMapping!['key']}'),
+              subtitle: Text('AI Proposed key mapping'),
+            ),
+          ),
+        Card(
       child: Padding(
         padding: const EdgeInsets.all(16.0),
         child: Column(
@@ -515,6 +675,8 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
                         entry: entry.value,
                         serverAliases: _serverAliases,
                         jbtmServerAliases: _jbtmServerAliases,
+                        modbusServerAliases: _modbusServerAliases,
+                        modbusConfigs: _stateManConfig?.modbus ?? [],
                         onUpdate: (updated) => _updateEntry(entry.key, updated),
                         onRename: (newName) => _renameKey(entry.key, newName),
                         onCopy: () => _duplicateKey(entry.key),
@@ -549,6 +711,8 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
           ],
         ),
       ),
+    ),
+      ],
     );
   }
 
@@ -607,6 +771,8 @@ class _KeyMappingCard extends StatefulWidget {
   final KeyMappingEntry entry;
   final List<String> serverAliases;
   final List<String> jbtmServerAliases;
+  final List<String> modbusServerAliases;
+  final List<ModbusConfig> modbusConfigs;
   final Function(KeyMappingEntry) onUpdate;
   final Function(String) onRename;
   final VoidCallback onCopy;
@@ -620,6 +786,8 @@ class _KeyMappingCard extends StatefulWidget {
     required this.entry,
     required this.serverAliases,
     required this.jbtmServerAliases,
+    required this.modbusServerAliases,
+    required this.modbusConfigs,
     required this.onUpdate,
     required this.onRename,
     required this.onCopy,
@@ -679,8 +847,18 @@ class _KeyMappingCardState extends State<_KeyMappingCard> {
   }
 
   bool get _isM2400 => widget.entry.m2400Node != null;
+  bool get _isModbus => widget.entry.modbusNode != null;
 
   String _buildSubtitle() {
+    if (_isModbus) {
+      final node = widget.entry.modbusNode!;
+      var subtitle = '${node.registerType.name}[${node.address}]';
+      subtitle += ' ${node.dataType.name}';
+      if (node.serverAlias != null && node.serverAlias!.isNotEmpty) {
+        subtitle += ' @ ${node.serverAlias}';
+      }
+      return subtitle;
+    }
     if (_isM2400) {
       final node = widget.entry.m2400Node!;
       var subtitle = 'REC=${node.recordType.name}(${node.recordType.id})';
@@ -705,42 +883,88 @@ class _KeyMappingCardState extends State<_KeyMappingCard> {
   }
 
   void _updateOpcUaConfig(OpcUANodeConfig config) {
-    final updatedEntry = KeyMappingEntry(
-      opcuaNode: config,
-      collect: widget.entry.collect,
-    );
-    widget.onUpdate(updatedEntry);
+    widget.onUpdate(widget.entry.copyWith(opcuaNode: config));
   }
 
   void _updateM2400Config(M2400NodeConfig config) {
-    final updatedEntry = KeyMappingEntry(
-      m2400Node: config,
-      collect: widget.entry.collect,
-    );
-    widget.onUpdate(updatedEntry);
+    widget.onUpdate(widget.entry.copyWith(m2400Node: config));
   }
 
   void _switchToM2400() {
-    final updatedEntry = KeyMappingEntry(
+    widget.onUpdate(KeyMappingEntry(
       m2400Node: M2400NodeConfig(recordType: M2400RecordType.recBatch),
       collect: widget.entry.collect,
-    );
-    widget.onUpdate(updatedEntry);
+    ));
   }
 
   void _switchToOpcUa() {
-    final updatedEntry = KeyMappingEntry(
+    widget.onUpdate(KeyMappingEntry(
       opcuaNode: OpcUANodeConfig(namespace: 0, identifier: ''),
       collect: widget.entry.collect,
-    );
-    widget.onUpdate(updatedEntry);
+      bitMask: widget.entry.bitMask,
+      bitShift: widget.entry.bitShift,
+    ));
+  }
+
+  void _switchToModbus() {
+    widget.onUpdate(KeyMappingEntry(
+      modbusNode: ModbusNodeConfig(
+        registerType: ModbusRegisterType.holdingRegister,
+        address: 0,
+      ),
+      collect: widget.entry.collect,
+      bitMask: widget.entry.bitMask,
+      bitShift: widget.entry.bitShift,
+    ));
+  }
+
+  void _updateModbusConfig(ModbusNodeConfig config) {
+    widget.onUpdate(widget.entry.copyWith(modbusNode: config));
+  }
+
+  void _updateBitMask(int? mask, int? shift) {
+    if (mask == null) {
+      widget.onUpdate(widget.entry.copyWith(clearBitMask: true));
+    } else {
+      widget.onUpdate(widget.entry.copyWith(bitMask: mask, bitShift: shift));
+    }
+  }
+
+  /// Returns true if the current key uses a bit/boolean data type
+  /// (coils, discrete inputs, or explicit bit type).
+  /// When true, the bit mask grid restricts to single-bit selection.
+  bool get _isBitType {
+    if (_isModbus) {
+      final node = widget.entry.modbusNode!;
+      if (node.dataType == ModbusDataType.bit) return true;
+      if (node.registerType == ModbusRegisterType.coil ||
+          node.registerType == ModbusRegisterType.discreteInput) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /// Returns the number of bits for the current data type.
+  int get _bitCountForDataType {
+    if (_isModbus) {
+      final dt = widget.entry.modbusNode!.dataType;
+      switch (dt) {
+        case ModbusDataType.int32:
+        case ModbusDataType.uint32:
+        case ModbusDataType.float32:
+          return 32;
+        default:
+          return 16;
+      }
+    }
+    // OPC UA: default to 16 bits
+    return 16;
   }
 
   void _toggleCollect(bool enabled) {
     setState(() => _collectEnabled = enabled);
-    final updatedEntry = KeyMappingEntry(
-      opcuaNode: widget.entry.opcuaNode,
-      m2400Node: widget.entry.m2400Node,
+    widget.onUpdate(widget.entry.copyWith(
       collect: enabled
           ? CollectEntry(
               key: widget.keyName,
@@ -748,17 +972,11 @@ class _KeyMappingCardState extends State<_KeyMappingCard> {
                   dropAfter: Duration(days: 365), scheduleInterval: null),
             )
           : null,
-    );
-    widget.onUpdate(updatedEntry);
+    ));
   }
 
   void _updateCollectEntry(CollectEntry collect) {
-    final updatedEntry = KeyMappingEntry(
-      opcuaNode: widget.entry.opcuaNode,
-      m2400Node: widget.entry.m2400Node,
-      collect: collect,
-    );
-    widget.onUpdate(updatedEntry);
+    widget.onUpdate(widget.entry.copyWith(collect: collect));
   }
 
   Widget _buildTrailing() {
@@ -848,7 +1066,7 @@ class _KeyMappingCardState extends State<_KeyMappingCard> {
                 ),
                 const SizedBox(height: 12),
                 // Device type selector
-                if (widget.jbtmServerAliases.isNotEmpty)
+                if (widget.jbtmServerAliases.isNotEmpty || widget.modbusServerAliases.isNotEmpty)
                   Padding(
                     padding: const EdgeInsets.only(bottom: 4.0),
                     child: Row(
@@ -860,41 +1078,101 @@ class _KeyMappingCardState extends State<_KeyMappingCard> {
                         const SizedBox(width: 12),
                         ChoiceChip(
                           label: const Text('OPC UA'),
-                          selected: !_isM2400,
+                          selected: !_isM2400 && !_isModbus,
                           onSelected: (selected) {
-                            if (selected && _isM2400) _switchToOpcUa();
+                            if (selected && (_isM2400 || _isModbus)) _switchToOpcUa();
                           },
                         ),
-                        const SizedBox(width: 8),
-                        ChoiceChip(
-                          label: const Text('M2400'),
-                          selected: _isM2400,
-                          onSelected: (selected) {
-                            if (selected && !_isM2400) _switchToM2400();
-                          },
-                        ),
+                        if (widget.jbtmServerAliases.isNotEmpty) ...[
+                          const SizedBox(width: 8),
+                          ChoiceChip(
+                            label: const Text('M2400'),
+                            selected: _isM2400,
+                            onSelected: (selected) {
+                              if (selected && !_isM2400) _switchToM2400();
+                            },
+                          ),
+                        ],
+                        if (widget.modbusServerAliases.isNotEmpty) ...[
+                          const SizedBox(width: 8),
+                          ChoiceChip(
+                            label: const Text('Modbus'),
+                            selected: _isModbus,
+                            onSelected: (selected) {
+                              if (selected && !_isModbus) _switchToModbus();
+                            },
+                          ),
+                        ],
                       ],
                     ),
                   ),
                 const SizedBox(height: 4),
                 // Protocol-specific config section
-                if (_isM2400)
-                  _M2400ConfigSection(
+                if (_isModbus)
+                  ModbusConfigSection(
+                    config: widget.entry.modbusNode!,
+                    modbusServerAliases: widget.modbusServerAliases,
+                    modbusConfigs: widget.modbusConfigs,
+                    onChanged: _updateModbusConfig,
+                  )
+                else if (_isM2400)
+                  M2400ConfigSection(
                     config: widget.entry.m2400Node ??
                         M2400NodeConfig(recordType: M2400RecordType.recBatch),
                     jbtmServerAliases: widget.jbtmServerAliases,
                     onChanged: _updateM2400Config,
                   )
                 else
-                  _OpcUaConfigSection(
+                  OpcUaConfigSection(
                     config: widget.entry.opcuaNode ??
                         OpcUANodeConfig(namespace: 0, identifier: ''),
                     serverAliases: widget.serverAliases,
                     onChanged: _updateOpcUaConfig,
                   ),
+                // Bit selection -- required for bit types, optional mask for others
+                if (!_isM2400 && _isBitType) ...[
+                  const Divider(),
+                  Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('Bit Select (required)',
+                            style: Theme.of(context).textTheme.titleSmall),
+                        const SizedBox(height: 8),
+                        BitMaskGrid(
+                          bitCount: _bitCountForDataType,
+                          currentMask: widget.entry.bitMask,
+                          singleBit: true,
+                          onChanged: (result) {
+                            _updateBitMask(result.mask, result.shift);
+                          },
+                        ),
+                      ],
+                    ),
+                  ),
+                ] else if (!_isM2400) ...[
+                  const Divider(),
+                  ExpansionTile(
+                    title: const Text('Bit Mask (optional)'),
+                    initiallyExpanded: widget.entry.bitMask != null,
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: BitMaskGrid(
+                          bitCount: _bitCountForDataType,
+                          currentMask: widget.entry.bitMask,
+                          onChanged: (result) {
+                            _updateBitMask(result.mask, result.shift);
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
                 const SizedBox(height: 16),
                 // Collection Config Section
-                _CollectionConfigSection(
+                CollectionConfigSection(
                   enabled: _collectEnabled,
                   collect: widget.entry.collect,
                   keyName: widget.keyName,
@@ -910,574 +1188,6 @@ class _KeyMappingCardState extends State<_KeyMappingCard> {
   }
 }
 
-// ===================== OPC UA Config Section (extensible for Modbus) =====================
-
-class _OpcUaConfigSection extends ConsumerStatefulWidget {
-  final OpcUANodeConfig config;
-  final List<String> serverAliases;
-  final Function(OpcUANodeConfig) onChanged;
-
-  const _OpcUaConfigSection({
-    required this.config,
-    required this.serverAliases,
-    required this.onChanged,
-  });
-
-  @override
-  ConsumerState<_OpcUaConfigSection> createState() => _OpcUaConfigSectionState();
-}
-
-class _OpcUaConfigSectionState extends ConsumerState<_OpcUaConfigSection> {
-  late TextEditingController _namespaceController;
-  late TextEditingController _identifierController;
-  String? _selectedAlias;
-  int? _selectedArrayIndex;
-
-  @override
-  void initState() {
-    super.initState();
-    _namespaceController =
-        TextEditingController(text: widget.config.namespace.toString());
-    _identifierController =
-        TextEditingController(text: widget.config.identifier);
-    _selectedAlias = widget.config.serverAlias;
-    _selectedArrayIndex = widget.config.arrayIndex;
-  }
-
-  @override
-  void dispose() {
-    _namespaceController.dispose();
-    _identifierController.dispose();
-    super.dispose();
-  }
-
-  void _notifyChanged() {
-    final config = OpcUANodeConfig(
-      namespace: int.tryParse(_namespaceController.text) ?? 0,
-      identifier: _identifierController.text,
-    )
-      ..arrayIndex = _selectedArrayIndex
-      ..serverAlias = (_selectedAlias != null && _selectedAlias!.isNotEmpty)
-          ? _selectedAlias
-          : null;
-    widget.onChanged(config);
-  }
-
-  /// Called when namespace or identifier changes — clears the stale array index.
-  void _onNodeIdentityChanged() {
-    _selectedArrayIndex = null;
-    _notifyChanged();
-  }
-
-  Future<void> _openBrowseDialog(BuildContext context) async {
-    final stateManAsync = ref.read(stateManProvider);
-    final stateMan = stateManAsync.valueOrNull;
-    if (stateMan == null) {
-      if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Server connections not ready yet')),
-      );
-      return;
-    }
-
-    final result = await browseOpcUaNode(
-      context: context,
-      stateMan: stateMan,
-      serverAlias: _selectedAlias,
-    );
-
-    if (result != null) {
-      final nodeId = result.nodeId;
-      setState(() {
-        _namespaceController.text = nodeId.namespace.toString();
-        _identifierController.text =
-            nodeId.isString() ? nodeId.string : nodeId.numeric.toString();
-      });
-      _notifyChanged();
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(12.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                const FaIcon(FontAwesomeIcons.server, size: 16),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text('OPC UA Node Configuration',
-                      style: Theme.of(context).textTheme.titleSmall),
-                ),
-                TextButton.icon(
-                  onPressed: () => _openBrowseDialog(context),
-                  icon: const FaIcon(FontAwesomeIcons.sitemap, size: 14),
-                  label: const Text('Browse'),
-                  style: TextButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                    textStyle: const TextStyle(fontSize: 12),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            // Server alias dropdown
-            DropdownButtonFormField<String>(
-              value: _selectedAlias,
-              decoration: const InputDecoration(
-                labelText: 'Server Alias',
-                prefixIcon: FaIcon(FontAwesomeIcons.server, size: 16),
-              ),
-              items: [
-                const DropdownMenuItem<String>(
-                    value: null, child: Text('(none)')),
-                ...widget.serverAliases.map((alias) =>
-                    DropdownMenuItem(value: alias, child: Text(alias))),
-              ],
-              onChanged: (value) {
-                setState(() => _selectedAlias = value);
-                _notifyChanged();
-              },
-            ),
-            const SizedBox(height: 12),
-            LayoutBuilder(
-              builder: (context, constraints) {
-                final isNarrow = constraints.maxWidth < 400;
-                if (isNarrow) {
-                  return Column(
-                    children: [
-                      TextField(
-                        controller: _namespaceController,
-                        decoration: const InputDecoration(
-                          labelText: 'Namespace',
-                        ),
-                        keyboardType: TextInputType.number,
-                        onChanged: (_) => _onNodeIdentityChanged(),
-                      ),
-                      const SizedBox(height: 12),
-                      TextField(
-                        controller: _identifierController,
-                        decoration: const InputDecoration(
-                          labelText: 'Identifier',
-                        ),
-                        onChanged: (_) => _onNodeIdentityChanged(),
-                      ),
-                    ],
-                  );
-                }
-                return Row(
-                  children: [
-                    SizedBox(
-                      width: 100,
-                      child: TextField(
-                        controller: _namespaceController,
-                        decoration: const InputDecoration(
-                          labelText: 'Namespace',
-                        ),
-                        keyboardType: TextInputType.number,
-                        onChanged: (_) => _onNodeIdentityChanged(),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: TextField(
-                        controller: _identifierController,
-                        decoration: const InputDecoration(
-                          labelText: 'Identifier',
-                        ),
-                        onChanged: (_) => _onNodeIdentityChanged(),
-                      ),
-                    ),
-                  ],
-                );
-              },
-            ),
-            const SizedBox(height: 12),
-            OpcUaArrayIndexField(
-              namespace: int.tryParse(_namespaceController.text) ?? 0,
-              identifier: _identifierController.text,
-              serverAlias: _selectedAlias,
-              value: _selectedArrayIndex,
-              onChanged: (v) {
-                setState(() => _selectedArrayIndex = v);
-                _notifyChanged();
-              },
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-// ===================== M2400 Config Section =====================
-
-class _M2400ConfigSection extends StatefulWidget {
-  final M2400NodeConfig config;
-  final List<String> jbtmServerAliases;
-  final Function(M2400NodeConfig) onChanged;
-
-  const _M2400ConfigSection({
-    required this.config,
-    required this.jbtmServerAliases,
-    required this.onChanged,
-  });
-
-  @override
-  State<_M2400ConfigSection> createState() => _M2400ConfigSectionState();
-}
-
-class _M2400ConfigSectionState extends State<_M2400ConfigSection> {
-  String? _selectedAlias;
-  M2400RecordType? _selectedRecordType;
-  M2400Field? _selectedField;
-  int? _selectedStatusFilter;
-
-  @override
-  void initState() {
-    super.initState();
-    _selectedAlias = widget.config.serverAlias;
-    _selectedRecordType = widget.config.recordType;
-    _selectedField = widget.config.field;
-    _selectedStatusFilter = widget.config.statusFilter;
-  }
-
-  void _notifyChanged() {
-    final config = M2400NodeConfig(
-      recordType: _selectedRecordType ?? M2400RecordType.recBatch,
-      field: _selectedField,
-      serverAlias: (_selectedAlias != null && _selectedAlias!.isNotEmpty)
-          ? _selectedAlias
-          : null,
-      statusFilter: _selectedStatusFilter,
-    );
-    widget.onChanged(config);
-  }
-
-  List<M2400Field> _getExpectedFields(M2400RecordType? recType) {
-    if (recType == null) return [];
-    final expected = expectedFields[recType];
-    if (expected != null) return expected.toList();
-    return [];
-  }
-
-  List<M2400Field> _getOtherFields(M2400RecordType? recType) {
-    if (recType == null) return M2400Field.values.toList();
-    final expected = expectedFields[recType];
-    if (expected == null) return M2400Field.values.toList();
-    return M2400Field.values.where((f) => !expected.contains(f)).toList();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(12.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                const FaIcon(FontAwesomeIcons.scaleBalanced, size: 16),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text('M2400 Key Configuration',
-                      style: Theme.of(context).textTheme.titleSmall),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            // Server alias dropdown (JBTM servers only)
-            DropdownButtonFormField<String>(
-              value: _selectedAlias,
-              decoration: const InputDecoration(
-                labelText: 'M2400 Server',
-                prefixIcon: FaIcon(FontAwesomeIcons.scaleBalanced, size: 16),
-              ),
-              items: [
-                const DropdownMenuItem<String>(
-                    value: null, child: Text('(none)')),
-                ...widget.jbtmServerAliases.map((alias) =>
-                    DropdownMenuItem(value: alias, child: Text(alias))),
-              ],
-              onChanged: (value) {
-                setState(() => _selectedAlias = value);
-                _notifyChanged();
-              },
-            ),
-            const SizedBox(height: 12),
-            // REC type dropdown (REQUIRED)
-            DropdownButtonFormField<M2400RecordType>(
-              value: _selectedRecordType,
-              decoration: const InputDecoration(
-                labelText: 'Record Type (REC)',
-                prefixIcon: FaIcon(FontAwesomeIcons.layerGroup, size: 16),
-              ),
-              items: M2400RecordType.values
-                  .where((t) => t != M2400RecordType.unknown)
-                  .map((recType) => DropdownMenuItem(
-                        value: recType,
-                        child: Text('${recType.name} (${recType.id})'),
-                      ))
-                  .toList(),
-              onChanged: (value) {
-                setState(() {
-                  _selectedRecordType = value;
-                  // Reset field if it's not in the expected set for the new REC type
-                  if (_selectedField != null && value != null) {
-                    final expected = expectedFields[value];
-                    if (expected != null && !expected.contains(_selectedField)) {
-                      _selectedField = null;
-                    }
-                  }
-                  // Clear status filter when switching away from BATCH
-                  if (value != M2400RecordType.recBatch) {
-                    _selectedStatusFilter = null;
-                  }
-                });
-                _notifyChanged();
-              },
-            ),
-            const SizedBox(height: 12),
-            // FLD dropdown (OPTIONAL -- null means subscribe to full record)
-            DropdownButtonFormField<M2400Field?>(
-              value: _selectedField,
-              decoration: const InputDecoration(
-                labelText: 'Field (FLD) -- optional',
-                prefixIcon: FaIcon(FontAwesomeIcons.hashtag, size: 16),
-              ),
-              isExpanded: true,
-              items: [
-                const DropdownMenuItem<M2400Field?>(
-                    value: null,
-                    child: Text('(Full record -- all fields)')),
-                // Expected fields for this REC type (shown first)
-                ..._getExpectedFields(_selectedRecordType).map((field) =>
-                    DropdownMenuItem(
-                      value: field,
-                      child: Text('${field.displayName} (${field.id})'),
-                    )),
-                // Other fields
-                ..._getOtherFields(_selectedRecordType).map((field) =>
-                    DropdownMenuItem(
-                      value: field,
-                      child: Text('${field.displayName} (${field.id})'),
-                    )),
-              ],
-              onChanged: (value) {
-                setState(() => _selectedField = value);
-                _notifyChanged();
-              },
-            ),
-            // Status filter dropdown (BATCH only)
-            if (_selectedRecordType == M2400RecordType.recBatch) ...[
-              const SizedBox(height: 12),
-              DropdownButtonFormField<int?>(
-                value: _selectedStatusFilter,
-                decoration: const InputDecoration(
-                  labelText: 'Status Filter (optional)',
-                  prefixIcon: FaIcon(FontAwesomeIcons.filter, size: 16),
-                ),
-                isExpanded: true,
-                items: [
-                  const DropdownMenuItem<int?>(
-                      value: null, child: Text('(No filter -- all records)')),
-                  ...WeigherStatus.values
-                      .where((s) => s != WeigherStatus.unknown)
-                      .map((s) => DropdownMenuItem<int?>(
-                            value: s.code,
-                            child: Text('${s.displayName} (${s.code})'),
-                          )),
-                ],
-                onChanged: (value) {
-                  setState(() => _selectedStatusFilter = value);
-                  _notifyChanged();
-                },
-              ),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-// ===================== Collection Config Section =====================
-
-class _CollectionConfigSection extends StatefulWidget {
-  final bool enabled;
-  final CollectEntry? collect;
-  final String keyName;
-  final Function(bool) onToggle;
-  final Function(CollectEntry) onChanged;
-
-  const _CollectionConfigSection({
-    required this.enabled,
-    required this.collect,
-    required this.keyName,
-    required this.onToggle,
-    required this.onChanged,
-  });
-
-  @override
-  State<_CollectionConfigSection> createState() =>
-      _CollectionConfigSectionState();
-}
-
-class _CollectionConfigSectionState extends State<_CollectionConfigSection> {
-  late TextEditingController _collectionNameController;
-  late TextEditingController _sampleIntervalController;
-  late TextEditingController _retentionDaysController;
-  late TextEditingController _scheduleIntervalController;
-
-  @override
-  void initState() {
-    super.initState();
-    final collect = widget.collect;
-    _collectionNameController =
-        TextEditingController(text: collect?.name ?? '');
-    _sampleIntervalController = TextEditingController(
-        text: collect?.sampleInterval?.inMicroseconds.toString() ?? '');
-    _retentionDaysController = TextEditingController(
-        text: collect?.retention.dropAfter.inDays.toString() ?? '365');
-    _scheduleIntervalController = TextEditingController(
-        text: collect?.retention.scheduleInterval?.inMinutes.toString() ?? '');
-  }
-
-  @override
-  void dispose() {
-    _collectionNameController.dispose();
-    _sampleIntervalController.dispose();
-    _retentionDaysController.dispose();
-    _scheduleIntervalController.dispose();
-    super.dispose();
-  }
-
-  void _notifyChanged() {
-    final sampleUs = int.tryParse(_sampleIntervalController.text);
-    final retDays = int.tryParse(_retentionDaysController.text) ?? 365;
-    final schedMins = int.tryParse(_scheduleIntervalController.text);
-
-    final collect = CollectEntry(
-      key: widget.keyName,
-      name: _collectionNameController.text.isNotEmpty
-          ? _collectionNameController.text
-          : null,
-      sampleInterval:
-          sampleUs != null ? Duration(microseconds: sampleUs) : null,
-      retention: RetentionPolicy(
-        dropAfter: Duration(days: retDays),
-        scheduleInterval:
-            schedMins != null ? Duration(minutes: schedMins) : null,
-      ),
-    );
-    widget.onChanged(collect);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(12.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                const FaIcon(FontAwesomeIcons.database, size: 16),
-                const SizedBox(width: 8),
-                Text('Data Collection',
-                    style: Theme.of(context).textTheme.titleSmall),
-                const Spacer(),
-                Switch(
-                  value: widget.enabled,
-                  onChanged: widget.onToggle,
-                ),
-              ],
-            ),
-            if (widget.enabled) ...[
-              const SizedBox(height: 12),
-              TextField(
-                controller: _collectionNameController,
-                decoration: const InputDecoration(
-                  labelText: 'Collection Name (optional)',
-                ),
-                onChanged: (_) => _notifyChanged(),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: _sampleIntervalController,
-                decoration: const InputDecoration(
-                  labelText: 'Sample Interval (microseconds)',
-                ),
-                keyboardType: TextInputType.number,
-                onChanged: (_) => _notifyChanged(),
-              ),
-              const SizedBox(height: 12),
-              LayoutBuilder(
-                builder: (context, constraints) {
-                  final isNarrow = constraints.maxWidth < 400;
-                  if (isNarrow) {
-                    return Column(
-                      children: [
-                        TextField(
-                          controller: _retentionDaysController,
-                          decoration: const InputDecoration(
-                            labelText: 'Retention (days)',
-                          ),
-                          keyboardType: TextInputType.number,
-                          onChanged: (_) => _notifyChanged(),
-                        ),
-                        const SizedBox(height: 12),
-                        TextField(
-                          controller: _scheduleIntervalController,
-                          decoration: const InputDecoration(
-                            labelText: 'Schedule Interval (minutes, optional)',
-                          ),
-                          keyboardType: TextInputType.number,
-                          onChanged: (_) => _notifyChanged(),
-                        ),
-                      ],
-                    );
-                  }
-                  return Row(
-                    children: [
-                      Expanded(
-                        child: TextField(
-                          controller: _retentionDaysController,
-                          decoration: const InputDecoration(
-                            labelText: 'Retention (days)',
-                          ),
-                          keyboardType: TextInputType.number,
-                          onChanged: (_) => _notifyChanged(),
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: TextField(
-                          controller: _scheduleIntervalController,
-                          decoration: const InputDecoration(
-                            labelText: 'Schedule Interval (minutes, optional)',
-                          ),
-                          keyboardType: TextInputType.number,
-                          onChanged: (_) => _notifyChanged(),
-                        ),
-                      ),
-                    ],
-                  );
-                },
-              ),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-}
 
 // ===================== Import/Export Card =====================
 

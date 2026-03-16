@@ -358,44 +358,9 @@ class NumberWidget extends ConsumerWidget {
 
   void _showGraphDialog(BuildContext context) {
     if (config.graphConfig == null) return;
-
     showDialog(
       context: context,
-      builder: (context) {
-        final size = MediaQuery.of(context).size;
-        return Dialog(
-          child: Container(
-            width: size.width * 0.8,
-            height: size.height * 0.8,
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(
-                      config.graphConfig?.headerText ??
-                          config.text ??
-                          config.key,
-                      style: Theme.of(context).textTheme.titleLarge,
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.close),
-                      onPressed: () => Navigator.of(context).pop(),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 16),
-                Expanded(
-                  child: GraphAsset(
-                    config.graphConfig!,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
+      builder: (_) => _NumberGraphDialog(config: config),
     );
   }
 
@@ -658,6 +623,63 @@ class _NumberWriteDialogState extends ConsumerState<_NumberWriteDialog> {
           },
         ),
       ],
+    );
+  }
+}
+
+class _NumberGraphDialog extends StatefulWidget {
+  final NumberConfig config;
+  const _NumberGraphDialog({required this.config});
+
+  @override
+  State<_NumberGraphDialog> createState() => _NumberGraphDialogState();
+}
+
+class _NumberGraphDialogState extends State<_NumberGraphDialog> {
+  Widget? _cachedGraph;
+
+  Widget _buildGraph() {
+    if (_cachedGraph != null) return _cachedGraph!;
+    final gc = widget.config.graphConfig!;
+    if (gc.primarySeries.isEmpty && widget.config.key.isNotEmpty) {
+      gc.primarySeries = [
+        GraphSeriesConfig(key: widget.config.key, label: ''),
+      ];
+    }
+    _cachedGraph = GraphAsset(gc);
+    return _cachedGraph!;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final size = MediaQuery.of(context).size;
+    return Dialog(
+      child: Container(
+        width: size.width * 0.8,
+        height: size.height * 0.8,
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  widget.config.graphConfig?.headerText ??
+                      widget.config.text ??
+                      widget.config.key,
+                  style: Theme.of(context).textTheme.titleLarge,
+                ),
+                IconButton(
+                  icon: const Icon(Icons.close),
+                  onPressed: () => Navigator.of(context).pop(),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            Expanded(child: _buildGraph()),
+          ],
+        ),
+      ),
     );
   }
 }

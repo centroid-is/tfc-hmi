@@ -13,9 +13,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Mirror the packages/ layout so path deps resolve (tfc_dart → ../jbtm)
 WORKDIR /app/packages/tfc_dart
 
-# Copy both pubspecs so path dependency resolves during pub get
+# Copy all pubspecs so path dependencies resolve during pub get
 COPY packages/tfc_dart/pubspec.yaml ./
 COPY packages/jbtm/pubspec.yaml ../jbtm/
+COPY packages/modbus_client_tcp/pubspec.yaml ../modbus_client_tcp/
+COPY packages/modbus_client/pubspec.yaml ../modbus_client/
 
 # Get dependencies fresh
 RUN dart pub get
@@ -23,6 +25,8 @@ RUN dart pub get
 # Copy source code
 COPY packages/tfc_dart/ .
 COPY packages/jbtm/ ../jbtm/
+COPY packages/modbus_client_tcp/ ../modbus_client_tcp/
+COPY packages/modbus_client/ ../modbus_client/
 
 # Build executables (dart build cli triggers build hooks for native assets)
 RUN dart build cli -t bin/main.dart -o build/main && \

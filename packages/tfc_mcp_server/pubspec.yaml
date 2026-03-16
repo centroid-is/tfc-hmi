@@ -1,0 +1,40 @@
+name: tfc_mcp_server
+description: MCP server for TFC HMI AI copilot
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ^3.5.1
+
+dependencies:
+  archive: ^4.0.0
+  xml: ^6.5.0
+  mcp_dart: ^2.0.0
+  drift: ^2.28.0
+  drift_postgres: ^1.3.1
+  postgres:
+    git:
+      url: https://github.com/centroid-is/postgresql-dart.git
+      ref: add-keepalive-test
+  logger: ^2.4.0
+  json_annotation: ^4.9.0
+  args: ^2.4.2
+  tfc_dart:
+    path: ../tfc_dart
+  rxdart: ^0.28.0
+  uuid: ^4.5.1
+  petitparser: ^7.0.0
+
+dependency_overrides:
+  postgres:
+    git:
+      url: https://github.com/centroid-is/postgresql-dart.git
+      ref: add-keepalive-test
+  archive: 4.0.2
+
+dev_dependencies:
+  lints: ^5.0.0
+  build_runner: ^2.4.15
+  json_serializable: ^6.9.4
+  drift_dev: ^2.28.0
+  test: ^1.25.0

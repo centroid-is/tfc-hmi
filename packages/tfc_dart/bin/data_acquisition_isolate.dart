@@ -4,6 +4,7 @@ import 'dart:isolate';
 import 'package:logger/logger.dart';
 import 'package:tfc_dart/core/collector.dart';
 import 'package:tfc_dart/core/database.dart';
+import 'package:tfc_dart/core/modbus_device_client.dart';
 import 'package:tfc_dart/core/state_man.dart';
 
 class _TraceFilter extends LogFilter {
@@ -17,6 +18,7 @@ class DataAcquisitionIsolateConfig {
   final Map<String, dynamic> dbConfigJson;
   final Map<String, dynamic> keyMappingsJson;
   final List<Map<String, dynamic>> jbtmJson;
+  final List<Map<String, dynamic>> modbusJson;
   final bool enableStatsLogging;
 
   DataAcquisitionIsolateConfig({
@@ -24,6 +26,7 @@ class DataAcquisitionIsolateConfig {
     required this.dbConfigJson,
     required this.keyMappingsJson,
     this.jbtmJson = const [],
+    this.modbusJson = const [],
     this.enableStatsLogging = false,
   });
 }
@@ -48,22 +51,35 @@ Future<void> dataAcquisitionIsolateEntry(
     final server = OpcUAConfig.fromJson(config.serverJson!);
     opcuaServers.add(server);
     isolateName = server.serverAlias ?? server.endpoint;
-  } else {
+  } else if (config.jbtmJson.isNotEmpty) {
     isolateName = 'jbtm';
+  } else {
+    isolateName = 'modbus';
   }
 
   // Build M2400 configs
   final jbtmConfigs =
       config.jbtmJson.map((j) => M2400Config.fromJson(j)).toList();
 
+  // Build Modbus configs
+  final modbusConfigs =
+      config.modbusJson.map((j) => ModbusConfig.fromJson(j)).toList();
+
   logger.i('Starting DataAcquisition isolate "$isolateName" '
-      '(opcua: ${opcuaServers.length}, m2400: ${jbtmConfigs.length})');
+      '(opcua: ${opcuaServers.length}, m2400: ${jbtmConfigs.length}, modbus: ${modbusConfigs.length})');
 
   final db = await Database.connectWithRetry(dbConfig, useIsolate: false);
-  final smConfig = StateManConfig(opcua: opcuaServers, jbtm: jbtmConfigs);
+  final smConfig = StateManConfig(
+      opcua: opcuaServers, jbtm: jbtmConfigs, modbus: modbusConfigs);
 
   // Create M2400 device clients
-  final deviceClients = createM2400DeviceClients(jbtmConfigs);
+  final m2400Clients = createM2400DeviceClients(jbtmConfigs);
+
+  // Build Modbus device clients
+  final modbusClients = buildModbusDeviceClients(modbusConfigs, keyMappings);
+
+  // Combine all device clients
+  final deviceClients = [...m2400Clients, ...modbusClients];
 
   final stateMan = await StateMan.create(
     config: smConfig,
@@ -122,6 +138,25 @@ Future<void> spawnM2400DataAcquisitionIsolate({
 
   final aliases = servers.map((s) => s.serverAlias ?? s.host).join(', ');
   await _spawnWithRespawn(config, 'jbtm[$aliases]');
+}
+
+/// Spawn a single DataAcquisition isolate for all Modbus servers.
+/// Automatically respawns on failure with exponential backoff.
+Future<void> spawnModbusDataAcquisitionIsolate({
+  required List<ModbusConfig> servers,
+  required DatabaseConfig dbConfig,
+  required KeyMappings keyMappings,
+  bool enableStatsLogging = false,
+}) async {
+  final config = DataAcquisitionIsolateConfig(
+    dbConfigJson: dbConfig.toJson(),
+    keyMappingsJson: keyMappings.toJson(),
+    modbusJson: servers.map((s) => s.toJson()).toList(),
+    enableStatsLogging: enableStatsLogging,
+  );
+
+  final aliases = servers.map((s) => s.serverAlias ?? s.host).join(', ');
+  await _spawnWithRespawn(config, 'modbus[$aliases]');
 }
 
 Future<void> _spawnWithRespawn(

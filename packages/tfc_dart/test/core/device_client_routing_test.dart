@@ -41,6 +41,11 @@ class MockDeviceClient implements DeviceClient {
   }
 
   @override
+  Future<void> write(String key, DynamicValue value) async {
+    if (!canSubscribe(key)) throw ArgumentError('Unknown key: $key');
+  }
+
+  @override
   void dispose() {
     for (final c in _controllers.values) {
       c.close();

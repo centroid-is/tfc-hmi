@@ -19,6 +19,15 @@ class LEDColumnConfig extends BaseAsset {
 
   LEDColumnConfig({required this.leds});
 
+  @override
+  List<String> get allKeys {
+    final keys = <String>{};
+    for (final led in leds) {
+      if (led.key.isNotEmpty) keys.add(led.key);
+    }
+    return keys.toList();
+  }
+
   factory LEDColumnConfig.fromJson(Map<String, dynamic> json) =>
       _$LEDColumnConfigFromJson(json);
 

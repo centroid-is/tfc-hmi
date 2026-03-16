@@ -3,10 +3,14 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:tfc_dart/core/alarm.dart';
 import 'package:tfc_dart/core/boolean_expression.dart';
+import '../chat/ai_context_action.dart';
+import '../chat/asset_context_menu.dart' show buildAlarmContextBlock;
+import '../chat/chat_overlay.dart' show ChatContextType;
 import '../providers/alarm.dart';
 import 'base_scaffold.dart';
 import 'boolean_expression.dart';
 import 'fuzzy_search_bar.dart';
+import 'proposal_visual.dart';
 
 extension AlarmNotificationColors on AlarmNotification {
   /// Returns the background and text colors for this alarm level
@@ -37,12 +41,16 @@ class ListAlarms extends ConsumerStatefulWidget {
   final void Function(AlarmConfig)? onDelete;
   final void Function(AlarmConfig?)? onCreate;
 
+  /// Optional AI-proposed alarm to display at the top of the list.
+  final AlarmConfig? proposedAlarm;
+
   const ListAlarms({
     super.key,
     this.onEdit,
     this.onShow,
     this.onDelete,
     this.onCreate,
+    this.proposedAlarm,
   });
 
   @override
@@ -58,9 +66,11 @@ class _ListAlarmsState extends ConsumerState<ListAlarms> {
       future: ref.watch(alarmManProvider.future),
       builder: (context, snapshot) {
         if (snapshot.hasData) {
-          final alarms = fuzzyFilter<Alarm>(snapshot.data!.alarms.toList(), _searchQuery, [
+          final alarms =
+              fuzzyFilter<Alarm>(snapshot.data!.alarms.toList(), _searchQuery, [
             (a) => a.config.title,
-            (a) => a.config.rules.map((r) => r.expression.value.formula).join(' '),
+            (a) =>
+                a.config.rules.map((r) => r.expression.value.formula).join(' '),
           ]);
 
           return Column(
@@ -69,11 +79,23 @@ class _ListAlarmsState extends ConsumerState<ListAlarms> {
                 padding: const EdgeInsets.all(16.0),
                 child: Row(
                   children: [
-                    IconButton(
-                      icon: const Icon(Icons.add),
-                      onPressed: () {
-                        widget.onCreate?.call(null);
-                      },
+                    AiContextMenuWrapper(
+                      menuItems: const [
+                        AiMenuItem(
+                          label: 'Create alarm with AI',
+                          prefillText:
+                              'Create an alarm that [describe what should trigger '
+                              "the alarm, e.g. 'activates when pump pressure "
+                              "exceeds 50 bar']",
+                        ),
+                      ],
+                      child: IconButton(
+                        key: const ValueKey('alarm-editor-add'),
+                        icon: const Icon(Icons.add),
+                        onPressed: () {
+                          widget.onCreate?.call(null);
+                        },
+                      ),
                     ),
                     Expanded(
                       child: FuzzySearchBar(
@@ -88,6 +110,18 @@ class _ListAlarmsState extends ConsumerState<ListAlarms> {
                   ],
                 ),
               ),
+              // Show proposed alarm at top if present
+              if (widget.proposedAlarm != null)
+                Container(
+                  margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                  decoration: proposalDecoration(),
+                  child: ListTile(
+                    leading: const ProposalBadge(),
+                    title: Text(widget.proposedAlarm!.title),
+                    subtitle: Text('AI Proposed: ${widget.proposedAlarm!.description}'),
+                    onTap: () => widget.onShow?.call(widget.proposedAlarm!),
+                  ),
+                ),
               Expanded(
                 child: ListView.builder(
                   itemCount: alarms.length,
@@ -101,17 +135,43 @@ class _ListAlarmsState extends ConsumerState<ListAlarms> {
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            IconButton(
-                              icon: const Icon(Icons.copy),
-                              onPressed: () {
-                                widget.onCreate?.call(alarm.config);
-                              },
+                            AiContextMenuWrapper(
+                              menuItems: [
+                                AiMenuItem(
+                                  label: 'Duplicate alarm with AI',
+                                  prefillText:
+                                      'Create a new alarm similar to "${alarm.config.title}" '
+                                      'but [describe what should be different]',
+                                  contextBlock: buildAlarmContextBlock(alarm.config),
+                                  contextLabel: alarm.config.title,
+                                  contextType: ChatContextType.alarm,
+                                ),
+                              ],
+                              child: IconButton(
+                                icon: const Icon(Icons.copy),
+                                onPressed: () {
+                                  widget.onCreate?.call(alarm.config);
+                                },
+                              ),
                             ),
-                            IconButton(
-                              icon: const Icon(Icons.edit),
-                              onPressed: () {
-                                widget.onEdit?.call(alarm.config);
-                              },
+                            AiContextMenuWrapper(
+                              menuItems: [
+                                AiMenuItem(
+                                  label: 'Edit alarm with AI',
+                                  prefillText:
+                                      'Edit alarm "${alarm.config.title}" - '
+                                      '[describe what you want to change]',
+                                  contextBlock: buildAlarmContextBlock(alarm.config),
+                                  contextLabel: alarm.config.title,
+                                  contextType: ChatContextType.alarm,
+                                ),
+                              ],
+                              child: IconButton(
+                                icon: const Icon(Icons.edit),
+                                onPressed: () {
+                                  widget.onEdit?.call(alarm.config);
+                                },
+                              ),
                             ),
                             IconButton(
                               icon: const Icon(Icons.delete),
@@ -228,6 +288,7 @@ class _AlarmFormState extends ConsumerState<AlarmForm> {
         child: Column(
           children: [
             TextFormField(
+              key: const ValueKey('alarm-form-title'),
               decoration: const InputDecoration(labelText: 'Title'),
               initialValue: _title,
               onChanged: (v) => _title = v,
@@ -236,6 +297,7 @@ class _AlarmFormState extends ConsumerState<AlarmForm> {
             ),
             const SizedBox(height: 16),
             TextFormField(
+              key: const ValueKey('alarm-form-description'),
               decoration: const InputDecoration(labelText: 'Description'),
               initialValue: _description,
               onChanged: (v) => _description = v,

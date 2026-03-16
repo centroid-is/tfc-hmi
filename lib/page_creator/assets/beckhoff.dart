@@ -1,4 +1,3 @@
-import 'dart:math' as math;
 import 'dart:collection' show LinkedHashMap;
 
 import 'package:json_annotation/json_annotation.dart';
@@ -38,6 +37,17 @@ class BeckhoffCX5010Config extends BaseAsset {
   @AssetListConverter()
   List<Asset> subdevices = [];
   BeckhoffCX5010Config();
+
+  @override
+  List<String> get allKeys {
+    final keys = <String>{};
+    for (final sub in subdevices) {
+      if (sub is BaseAsset) {
+        keys.addAll(sub.allKeys);
+      }
+    }
+    return keys.toList();
+  }
 
   /// Native painter size for the CX5010 drawing (keeps 105.5:100 aspect).
   static const Size _cxNativeSize = Size(1055, 1000);
@@ -83,30 +93,10 @@ class BeckhoffCX5010Config extends BaseAsset {
 
   @override
   Widget configure(BuildContext context) {
-    final media = MediaQuery.of(context).size;
-    final maxWidth = media.width * 0.9;
-    final maxHeight = media.height * 0.8;
-
-    final dialogW = math.min(maxWidth, 960.0);
-    final dialogH = math.min(maxHeight, 600.0);
-
-    return Dialog(
-      insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      child: ConstrainedBox(
-        constraints: BoxConstraints(
-          minWidth: 560,
-          minHeight: 360,
-          maxWidth: maxWidth,
-          maxHeight: maxHeight,
-        ),
-        child: SizedBox(
-          width: dialogW,
-          height: dialogH,
-          child: _CXxxxxConfigContent(
-              config: this), // unchanged name, refactored below
-        ),
-      ),
+    return SizedBox(
+      width: 800,
+      height: 500,
+      child: _CXxxxxConfigContent(config: this),
     );
   }
 
@@ -347,29 +337,10 @@ class BeckhoffEK1100Config extends BaseAsset {
 
   @override
   Widget configure(BuildContext context) {
-    final media = MediaQuery.of(context).size;
-    final maxWidth = media.width * 0.9;
-    final maxHeight = media.height * 0.8;
-
-    final dialogW = math.min(maxWidth, 960.0);
-    final dialogH = math.min(maxHeight, 600.0);
-
-    return Dialog(
-      insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      child: ConstrainedBox(
-        constraints: BoxConstraints(
-          minWidth: 560,
-          minHeight: 360,
-          maxWidth: maxWidth,
-          maxHeight: maxHeight,
-        ),
-        child: SizedBox(
-          width: dialogW,
-          height: dialogH,
-          child: _EK1100ConfigContent(config: this),
-        ),
-      ),
+    return SizedBox(
+      width: 800,
+      height: 500,
+      child: _EK1100ConfigContent(config: this),
     );
   }
 

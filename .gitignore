@@ -32,3 +32,20 @@ build/
 .planning/
 .flutter-plugins-dependencies
 **/test/**/failures/
+
+# ST compiler oracle venv
+tools/st-oracle-venv/
+
+# Local data / secrets
+timescale_data/
+timescale_certs/
+.claude/
+.mcp.json
+page-editor.json
+
+# Local marionette fork (use upstream pub.dev package)
+packages/marionette_flutter/
+
+# Binary artifacts
+*.zip
+ATV320_Installation_manual_EN_NVE41289_09.pdf

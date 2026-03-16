@@ -91,7 +91,7 @@ class KeyCache {
 }
 
 /// In-memory cache that mimics the SharedPreferences API.
-class InMemoryPreferences {
+class InMemoryPreferences implements PreferencesApi {
   final Map<String, Object> _cache = {};
 
   Future<Set<String>> getKeys({Set<String>? allowList}) async {
@@ -281,10 +281,12 @@ class Preferences implements PreferencesApi {
       {bool saveToDb = true, bool secret = false}) async {
     if (secret) {
       await secureStorage.write(key: key, value: value.toString());
-    } else {
-      await _memoryCache.setBool(key, value);
-      await localCache?.setBool(key, value);
+      // Secret values are never persisted to Postgres in plaintext.
+      _onPreferencesChanged.add(key);
+      return;
     }
+    await _memoryCache.setBool(key, value);
+    await localCache?.setBool(key, value);
     if (saveToDb) {
       await _upsertToPostgres(key, value, 'bool');
     }
@@ -296,10 +298,12 @@ class Preferences implements PreferencesApi {
       {bool saveToDb = true, bool secret = false}) async {
     if (secret) {
       await secureStorage.write(key: key, value: value.toString());
-    } else {
-      await _memoryCache.setInt(key, value);
-      await localCache?.setInt(key, value);
+      // Secret values are never persisted to Postgres in plaintext.
+      _onPreferencesChanged.add(key);
+      return;
     }
+    await _memoryCache.setInt(key, value);
+    await localCache?.setInt(key, value);
     if (saveToDb) {
       await _upsertToPostgres(key, value, 'int');
     }
@@ -311,10 +315,12 @@ class Preferences implements PreferencesApi {
       {bool saveToDb = true, bool secret = false}) async {
     if (secret) {
       await secureStorage.write(key: key, value: value.toString());
-    } else {
-      await _memoryCache.setDouble(key, value);
-      await localCache?.setDouble(key, value);
+      // Secret values are never persisted to Postgres in plaintext.
+      _onPreferencesChanged.add(key);
+      return;
     }
+    await _memoryCache.setDouble(key, value);
+    await localCache?.setDouble(key, value);
     if (saveToDb) {
       await _upsertToPostgres(key, value, 'double');
     }
@@ -326,10 +332,12 @@ class Preferences implements PreferencesApi {
       {bool saveToDb = true, bool secret = false}) async {
     if (secret) {
       await secureStorage.write(key: key, value: value);
-    } else {
-      await _memoryCache.setString(key, value);
-      await localCache?.setString(key, value);
+      // Secret values are never persisted to Postgres in plaintext.
+      _onPreferencesChanged.add(key);
+      return;
     }
+    await _memoryCache.setString(key, value);
+    await localCache?.setString(key, value);
     if (saveToDb) {
       await _upsertToPostgres(key, value, 'String');
     }
@@ -341,10 +349,12 @@ class Preferences implements PreferencesApi {
       {bool saveToDb = true, bool secret = false}) async {
     if (secret) {
       await secureStorage.write(key: key, value: value.join(','));
-    } else {
-      await _memoryCache.setStringList(key, value);
-      await localCache?.setStringList(key, value);
+      // Secret values are never persisted to Postgres in plaintext.
+      _onPreferencesChanged.add(key);
+      return;
     }
+    await _memoryCache.setStringList(key, value);
+    await localCache?.setStringList(key, value);
     if (saveToDb) {
       await _upsertToPostgres(key, value, 'List<String>');
     }
