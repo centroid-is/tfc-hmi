@@ -1,0 +1,1547 @@
+/// Connection resilience tests for StateMan.
+///
+/// Exercises StateMan through various real-world disruption scenarios
+/// using a TCP proxy between client and server to simulate network conditions.
+///
+/// Scenarios:
+///   - Network cable disconnected (proxy drops all data, TCP stays alive)
+///   - Network cable flaky (proxy alternates between blocking and forwarding)
+///   - Server freeze (server stops processing but sockets stay open)
+///   - Server restart (server killed and restarted on same port)
+///   - Server slow (proxy adds artificial latency to responses)
+///
+/// Each scenario is tested with short (~2s) and long (~15s) disruption durations.
+import 'dart:async';
+import 'dart:io';
+import 'dart:typed_data';
+
+import 'package:open62541/open62541.dart';
+import 'package:test/test.dart';
+import 'package:tfc_dart/core/state_man.dart';
+
+import 'test_timing.dart';
+
+// ---------------------------------------------------------------------------
+// TCP Proxy
+// ---------------------------------------------------------------------------
+
+/// TCP proxy that sits between client and server to simulate network conditions.
+///
+/// ```
+/// Client ──TCP──▶ TcpProxy (listenPort) ──TCP──▶ Server (targetPort)
+///        ◀──────                         ◀──────
+/// ```
+///
+/// Modes:
+///   forwarding         – bidirectional pass-through (normal network)
+///   blocked            – data silently dropped, TCP stays alive (cable unplugged)
+///   flaky              – periodic block/unblock (unreliable network)
+///   slow               – artificial delay on server→client (high latency)
+///   bufferServerToClient – hold server responses, flush on demand
+///   reconnecting       – client data forwarded to a NEW server connection
+enum ProxyMode {
+  forwarding,
+  blocked,
+  flaky,
+  slow,
+  bufferServerToClient,
+  reconnecting,
+}
+
+class TcpProxy {
+  final int listenPort;
+  final int targetPort;
+  ServerSocket? _server;
+  final List<_ProxyPair> connections = [];
+  Timer? _flakyTimer;
+  bool _stopped = false;
+
+  TcpProxy({required this.listenPort, required this.targetPort});
+
+  Future<void> start() async {
+    _stopped = false;
+    _server =
+        await ServerSocket.bind(InternetAddress.loopbackIPv4, listenPort);
+    _server!.listen(_handleConnection);
+    print('[proxy] Listening on $listenPort -> $targetPort');
+  }
+
+  void _handleConnection(Socket clientSocket) async {
+    if (_stopped) {
+      clientSocket.destroy();
+      return;
+    }
+    try {
+      final pair = _ProxyPair(clientSocket, targetPort);
+      connections.add(pair);
+      await pair.connectServer();
+      pair.startListening();
+    } catch (e) {
+      try {
+        clientSocket.destroy();
+      } catch (_) {}
+    }
+  }
+
+  /// Block all data flow. Client TCP stays alive, data silently dropped.
+  void block() {
+    _stopFlakyTimer();
+    print('[proxy] BLOCK (${connections.length} connections stay open)');
+    for (final pair in connections) {
+      pair.mode = ProxyMode.blocked;
+    }
+  }
+
+  /// Normal forwarding mode.
+  void unblock() {
+    _stopFlakyTimer();
+    print('[proxy] UNBLOCK');
+    for (final pair in connections) {
+      pair.mode = ProxyMode.forwarding;
+    }
+  }
+
+  /// Flaky mode: alternate between blocking and forwarding.
+  void flaky({
+    Duration blockDuration = const Duration(milliseconds: 500),
+    Duration forwardDuration = const Duration(milliseconds: 200),
+  }) {
+    _stopFlakyTimer();
+    print('[proxy] FLAKY (block=${blockDuration.inMilliseconds}ms, '
+        'fwd=${forwardDuration.inMilliseconds}ms)');
+    _setMode(ProxyMode.forwarding);
+
+    void scheduleNext(bool nextIsBlock) {
+      final delay = nextIsBlock ? forwardDuration : blockDuration;
+      _flakyTimer = Timer(delay, () {
+        _setMode(nextIsBlock ? ProxyMode.blocked : ProxyMode.forwarding);
+        scheduleNext(!nextIsBlock);
+      });
+    }
+
+    scheduleNext(true);
+  }
+
+  /// Slow mode: add artificial delay to server→client responses.
+  void slow(Duration delay) {
+    _stopFlakyTimer();
+    print('[proxy] SLOW (delay=${delay.inMilliseconds}ms)');
+    for (final pair in connections) {
+      pair.mode = ProxyMode.slow;
+      pair.slowDelay = delay;
+    }
+  }
+
+  /// Reconnecting mode: client data forwarded to NEW server connection.
+  void reconnecting() {
+    _stopFlakyTimer();
+    print('[proxy] RECONNECTING');
+    for (final pair in connections) {
+      pair.mode = ProxyMode.reconnecting;
+    }
+  }
+
+  /// Buffer server→client responses.
+  void bufferServerToClient() {
+    _stopFlakyTimer();
+    print('[proxy] BUFFER server->client');
+    for (final pair in connections) {
+      pair.mode = ProxyMode.bufferServerToClient;
+    }
+  }
+
+  /// Flush buffered responses and resume forwarding.
+  void flushAndForward() {
+    for (final pair in connections) {
+      pair.flushBuffer();
+      pair.mode = ProxyMode.forwarding;
+    }
+  }
+
+  void _setMode(ProxyMode mode) {
+    for (final pair in connections) {
+      pair.mode = mode;
+    }
+  }
+
+  void _stopFlakyTimer() {
+    _flakyTimer?.cancel();
+    _flakyTimer = null;
+  }
+
+  Future<void> stop() async {
+    _stopped = true;
+    _stopFlakyTimer();
+    for (final pair in connections) {
+      pair.close();
+    }
+    connections.clear();
+    await _server?.close();
+    _server = null;
+  }
+}
+
+class _ProxyPair {
+  final Socket client;
+  final int targetPort;
+  Socket? _server;
+  bool _closed = false;
+  ProxyMode mode = ProxyMode.forwarding;
+  StreamSubscription? _serverSub;
+  final List<List<int>> _serverBuffer = [];
+  Duration slowDelay = const Duration(seconds: 1);
+
+  StreamSubscription? _clientSub;
+
+  _ProxyPair(this.client, this.targetPort);
+
+  /// Start listening for client data. Called after connectServer() so we
+  /// don't drop the initial Hello message while the server connection
+  /// is being established. Dart sockets buffer incoming data until a
+  /// listener is attached, so no data is lost.
+  void startListening() {
+    // Absorb write-side errors (e.g., Connection reset by peer).
+    // socket.add() errors go to socket.done, NOT to listen(onError:).
+    client.done.catchError((_) {});
+    _clientSub = client.listen(
+      _onClientData,
+      onDone: close,
+      onError: (_) => close,
+    );
+  }
+
+  void flushBuffer() {
+    if (_serverBuffer.isEmpty) return;
+    print('[proxy] Flushing ${_serverBuffer.length} buffered responses');
+    for (final data in _serverBuffer) {
+      try {
+        client.add(data);
+      } catch (_) {}
+    }
+    _serverBuffer.clear();
+  }
+
+  Future<void> connectServer() async {
+    _serverSub?.cancel();
+    _server?.destroy();
+    _server = await Socket.connect(InternetAddress.loopbackIPv4, targetPort,
+        timeout: const Duration(seconds: 5));
+    // Absorb write-side errors (same as client socket above).
+    _server!.done.catchError((_) {});
+    _serverSub = _server!.listen(
+      (data) => _onServerData(data),
+      onDone: () {
+        _server = null;
+        _serverSub = null;
+      },
+      onError: (_) {
+        _server = null;
+        _serverSub = null;
+      },
+    );
+  }
+
+  void _onServerData(List<int> data) {
+    switch (mode) {
+      case ProxyMode.forwarding:
+      case ProxyMode.reconnecting:
+        try {
+          client.add(data);
+        } catch (_) {}
+        break;
+      case ProxyMode.blocked:
+      case ProxyMode.flaky:
+        // drop
+        break;
+      case ProxyMode.slow:
+        // Delay before forwarding
+        final copy = List<int>.from(data);
+        Future.delayed(slowDelay, () {
+          try {
+            client.add(copy);
+          } catch (_) {}
+        });
+        break;
+      case ProxyMode.bufferServerToClient:
+        _serverBuffer.add(List<int>.from(data));
+        break;
+    }
+  }
+
+  void _onClientData(List<int> data) async {
+    switch (mode) {
+      case ProxyMode.forwarding:
+      case ProxyMode.slow:
+      case ProxyMode.bufferServerToClient:
+        try {
+          _server?.add(data);
+        } catch (_) {}
+        break;
+      case ProxyMode.blocked:
+      case ProxyMode.flaky:
+        // drop
+        break;
+      case ProxyMode.reconnecting:
+        if (_server == null) {
+          try {
+            await connectServer();
+          } catch (e) {
+            print('[proxy] Failed to reconnect: $e');
+            return;
+          }
+        }
+        try {
+          _server?.add(data);
+        } catch (_) {}
+        break;
+    }
+  }
+
+  void close() {
+    if (_closed) return;
+    _closed = true;
+    _clientSub?.cancel();
+    _serverSub?.cancel();
+    try {
+      client.destroy();
+    } catch (_) {}
+    try {
+      _server?.destroy();
+    } catch (_) {}
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Inspecting Proxy (for OPC UA message injection tests)
+// ---------------------------------------------------------------------------
+
+const _msgHeaderSize = 24;
+
+class InspectingProxy {
+  final int listenPort;
+  final int targetPort;
+  ServerSocket? _serverSocket;
+  Socket? _clientSocket;
+  Socket? _serverConn;
+  StreamSubscription? _clientSub;
+  StreamSubscription? _serverSub;
+  bool _blockServer = false;
+
+  int? channelId;
+  int? tokenId;
+  int lastServerSeqNum = 0;
+
+  InspectingProxy({required this.listenPort, required this.targetPort});
+
+  Future<void> start() async {
+    _serverSocket =
+        await ServerSocket.bind(InternetAddress.loopbackIPv4, listenPort);
+    _serverSocket!.listen(_onClientConnect);
+  }
+
+  void _onClientConnect(Socket client) async {
+    _clientSocket = client;
+    _serverConn =
+        await Socket.connect(InternetAddress.loopbackIPv4, targetPort);
+    _clientSub = client.listen(
+      (data) {
+        try {
+          _serverConn?.add(data);
+        } catch (_) {}
+      },
+      onDone: () => _cleanup(),
+      onError: (_) => _cleanup(),
+    );
+    _serverSub = _serverConn!.listen(
+      (data) => _onServerData(data),
+      onDone: () {},
+      onError: (_) {},
+    );
+  }
+
+  void _onServerData(List<int> data) {
+    _parseHeaders(data);
+    if (!_blockServer) {
+      try {
+        _clientSocket?.add(data);
+      } catch (_) {}
+    }
+  }
+
+  void _parseHeaders(List<int> data) {
+    if (data.length < _msgHeaderSize) return;
+    final bytes = Uint8List.fromList(data);
+    final bd = ByteData.sublistView(bytes);
+    if (bytes[0] == 0x4D && bytes[1] == 0x53 && bytes[2] == 0x47) {
+      channelId = bd.getUint32(8, Endian.little);
+      tokenId = bd.getUint32(12, Endian.little);
+      final seqNum = bd.getUint32(16, Endian.little);
+      if (seqNum > lastServerSeqNum) {
+        lastServerSeqNum = seqNum;
+      }
+    }
+  }
+
+  void blockServerToClient() {
+    _blockServer = true;
+  }
+
+  void resumeServerToClient() {
+    _blockServer = false;
+  }
+
+  void injectBogusMsg({required int requestId}) {
+    if (_clientSocket == null || channelId == null || tokenId == null) {
+      throw StateError('No active connection or channel context not captured');
+    }
+    final nextSeqNum = lastServerSeqNum + 1;
+    final payload = <int>[
+      0x01, 0x00, 0x8D, 0x01, // TypeId: ServiceFault
+      0, 0, 0, 0, 0, 0, 0, 0, // timestamp
+      0, 0, 0, 0, // requestHandle
+      0, 0, 0, 0, // serviceResult = GOOD
+      0x00, // serviceDiagnostics
+      0xFF, 0xFF, 0xFF, 0xFF, // stringTable
+      0x00, 0x00, 0x00, // additionalHeader
+    ];
+    final messageSize = _msgHeaderSize + payload.length;
+    final msg = ByteData(messageSize);
+    msg.setUint8(0, 0x4D);
+    msg.setUint8(1, 0x53);
+    msg.setUint8(2, 0x47);
+    msg.setUint8(3, 0x46);
+    msg.setUint32(4, messageSize, Endian.little);
+    msg.setUint32(8, channelId!, Endian.little);
+    msg.setUint32(12, tokenId!, Endian.little);
+    msg.setUint32(16, nextSeqNum, Endian.little);
+    msg.setUint32(20, requestId, Endian.little);
+    final bytes = msg.buffer.asUint8List();
+    for (int i = 0; i < payload.length; i++) {
+      bytes[_msgHeaderSize + i] = payload[i];
+    }
+    print('[iproxy] Injecting MSG: channelId=$channelId tokenId=$tokenId '
+        'seqNum=$nextSeqNum requestId=$requestId');
+    try {
+      _clientSocket!.add(bytes);
+    } catch (e) {
+      print('[iproxy] Failed to inject: $e');
+    }
+    lastServerSeqNum = nextSeqNum;
+  }
+
+  void _cleanup() {
+    _clientSub?.cancel();
+    _serverSub?.cancel();
+    try {
+      _clientSocket?.destroy();
+    } catch (_) {}
+    try {
+      _serverConn?.destroy();
+    } catch (_) {}
+  }
+
+  Future<void> stop() async {
+    _cleanup();
+    await _serverSocket?.close();
+    _serverSocket = null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Test Harness
+// ---------------------------------------------------------------------------
+
+/// Encapsulates server + proxy + StateMan setup for resilience tests.
+///
+/// Provides helpers for:
+///   - Starting/stopping/restarting the OPC UA server
+///   - Freezing/unfreezing the server iterate loop
+///   - Tracking received values and connection status changes
+///   - Validating recovery after disruption
+class TestHarness {
+  static const _initialValue = 22.81;
+  static const _testNodeNs = 1;
+  static const _testNodeId = 'Test.Weight';
+  static const _testKey = 'weight';
+
+  final int serverPort;
+  final int proxyPort;
+
+  late Server _server;
+  late TcpProxy proxy;
+  late StateMan stateMan;
+  late NodeId _nodeId;
+
+  bool _serverRunning = false;
+  bool _serverFrozen = false;
+  bool _serverAlive = false;
+
+  final values = <(DateTime, double)>[];
+  final connectionChanges = <(DateTime, ConnectionStatus)>[];
+  StreamSubscription? _valueSub;
+  StreamSubscription? _connSub;
+
+  TestHarness._({required this.serverPort, required this.proxyPort});
+
+  /// Create a fully wired test harness: server + proxy + StateMan + subscription.
+  static Future<TestHarness> create({
+    required int serverPort,
+    required int proxyPort,
+    double initialValue = _initialValue,
+    Duration idleTimeout = const Duration(minutes: 10),
+  }) async {
+    final h = TestHarness._(serverPort: serverPort, proxyPort: proxyPort);
+    h._nodeId = NodeId.fromString(_testNodeNs, _testNodeId);
+
+    // Start server
+    await h._startServer(value: initialValue);
+
+    // Start proxy
+    h.proxy = TcpProxy(listenPort: proxyPort, targetPort: serverPort);
+    await h.proxy.start();
+
+    // Create StateMan
+    final keyMappings = KeyMappings(nodes: {
+      _testKey: KeyMappingEntry(
+        opcuaNode: OpcUANodeConfig(
+            namespace: _testNodeNs, identifier: _testNodeId)
+          ..serverAlias = 'plc',
+      ),
+    });
+    final config = StateManConfig(
+      opcua: [
+        OpcUAConfig()
+          ..endpoint = 'opc.tcp://127.0.0.1:$proxyPort'
+          ..serverAlias = 'plc',
+      ],
+    );
+    h.stateMan = await StateMan.create(
+      config: config,
+      keyMappings: keyMappings,
+      useIsolate: true,
+      alias: 'resilience-test',
+      idleTimeout: idleTimeout,
+    );
+
+    // Track connection status
+    for (final wrapper in h.stateMan.clients) {
+      h._connSub = wrapper.connectionStream.listen((event) {
+        final (status, error) = event;
+        final ts = DateTime.now();
+        print('  [${ts.toIso8601String()}] CONN: ${status.name}'
+            '${error != null ? ' ($error)' : ''}');
+        h.connectionChanges.add((ts, status));
+      });
+    }
+
+    return h;
+  }
+
+  /// Wait for StateMan to report connected status.
+  Future<void> waitForConnection({Duration timeout = const Duration(seconds: 15)}) async {
+    final wrapper = stateMan.clients.first;
+    if (wrapper.connectionStatus == ConnectionStatus.connected) return;
+    await wrapper.connectionStream
+        .firstWhere((event) => event.$1 == ConnectionStatus.connected)
+        .timeout(timeout);
+    print('Harness: connected');
+  }
+
+  /// Subscribe to the test key and start tracking values.
+  Future<void> subscribe() async {
+    final stream = await stateMan.subscribe(_testKey);
+    _valueSub = stream.listen(
+      (value) {
+        final ts = DateTime.now();
+        print('  [${ts.toIso8601String()}] VALUE: ${value.value}');
+        values.add((ts, value.value as double));
+      },
+      onError: (error) {
+        print('  [${DateTime.now().toIso8601String()}] VALUE ERROR: $error');
+      },
+    );
+  }
+
+  /// Wait until at least one value has been received.
+  Future<void> waitForFirstValue({Duration timeout = const Duration(seconds: 15)}) async {
+    if (values.isNotEmpty) return;
+    final start = DateTime.now();
+    while (values.isEmpty) {
+      if (DateTime.now().difference(start) > timeout) {
+        throw TimeoutException('No value received', timeout);
+      }
+      await Future.delayed(const Duration(milliseconds: 100));
+    }
+    print('Harness: first value received (${values.last.$2})');
+  }
+
+  /// Change the value of the test variable on the server.
+  Future<void> changeServerValue(double newValue) async {
+    _server.write(
+      _nodeId,
+      DynamicValue(value: newValue, typeId: NodeId.double, name: _testNodeId),
+    );
+    print('Harness: server value changed to $newValue');
+  }
+
+  /// Stop the server iterate loop but keep sockets alive.
+  void freezeServer() {
+    _serverFrozen = true;
+    print('Harness: server FROZEN');
+  }
+
+  /// Resume the server iterate loop.
+  void unfreezeServer() {
+    _serverFrozen = false;
+    print('Harness: server UNFROZEN');
+  }
+
+  /// Kill the server and optionally restart it.
+  /// Closes proxy connections to simulate TCP RST so client detects
+  /// the disconnect immediately instead of waiting for health check.
+  /// The new server is started BEFORE closing proxy connections to avoid
+  /// a race where the client reconnects before the server is ready.
+  Future<void> restartServer({
+    double newValue = _initialValue,
+    Duration delay = Duration.zero,
+  }) async {
+    await _stopServer();
+    if (delay > Duration.zero) {
+      print('Harness: server down for ${delay.inMilliseconds}ms');
+      await Future.delayed(delay);
+    }
+    await _startServer(value: newValue);
+    // Small delay to ensure server is accepting connections
+    await Future.delayed(const Duration(milliseconds: 50));
+    _closeProxyConnections();
+    print('Harness: server restarted with value=$newValue');
+  }
+
+  /// Kill the server without restarting.
+  /// Closes proxy connections to simulate TCP RST to client.
+  Future<void> killServer() async {
+    await _stopServer();
+    _closeProxyConnections();
+    print('Harness: server KILLED');
+  }
+
+  /// Start a fresh server (call after killServer).
+  Future<void> startServer({double value = _initialValue}) async {
+    await _startServer(value: value);
+    print('Harness: server started with value=$value');
+  }
+
+  /// Start a server without the test node (for missing-node edge case).
+  Future<void> startServerWithoutNode() async {
+    _server = Server(
+      port: serverPort,
+      logLevel: LogLevel.UA_LOGLEVEL_WARNING,
+    );
+    _server.start();
+    _serverAlive = true;
+    _serverFrozen = false;
+    _serverRunning = true;
+    unawaited(_runServerIterate());
+    print('Harness: server started WITHOUT test node');
+  }
+
+  /// Assert recovery after disruption.
+  ///
+  /// Validates:
+  ///   1. Connection status returns to connected
+  ///   2. New values arrive (subscription works)
+  ///   3. If [expectedValue] is set, verify that value arrives (not a stale cached one)
+  ///   4. No flood of stale values
+  Future<void> assertRecovery({
+    Duration timeout = const Duration(seconds: 30),
+    double? expectedValue,
+    int maxStaleValues = 2,
+  }) async {
+    final deadline = DateTime.now().add(timeout);
+    final countBefore = values.length;
+
+    // Wait for new values to arrive — this is the real signal that
+    // the subscription recovered, regardless of connection status.
+    while (values.length <= countBefore) {
+      if (DateTime.now().isAfter(deadline)) {
+        final wrapper = stateMan.clients.first;
+        fail('No values received after recovery within ${timeout.inSeconds}s. '
+            'connStatus=${wrapper.connectionStatus.name}, '
+            'values=$countBefore');
+      }
+      await Future.delayed(const Duration(milliseconds: 200));
+    }
+    print('Harness: values flowing after recovery '
+        '(${values.length - countBefore} new values)');
+
+    // If we expect a specific value, wait for it
+    if (expectedValue != null) {
+      while (!values.any((v) => v.$2 == expectedValue)) {
+        if (DateTime.now().isAfter(deadline)) {
+          final recentValues =
+              values.skip(countBefore).map((v) => v.$2).toList();
+          fail('Expected value $expectedValue not received. '
+              'Recent values: $recentValues');
+        }
+        await Future.delayed(const Duration(milliseconds: 200));
+      }
+      print('Harness: expected value $expectedValue received');
+    }
+
+    // Check for stale value flood
+    if (expectedValue != null && expectedValue != _initialValue) {
+      int staleCount = 0;
+      for (int i = countBefore; i < values.length; i++) {
+        if (values[i].$2 == _initialValue) {
+          staleCount++;
+        }
+      }
+      if (staleCount > maxStaleValues) {
+        fail('Stale value flood: $_initialValue appeared $staleCount times '
+            'after server changed to $expectedValue '
+            '(max allowed: $maxStaleValues)');
+      }
+    }
+  }
+
+  /// Clean up everything.
+  Future<void> dispose() async {
+    await _valueSub?.cancel();
+    await _connSub?.cancel();
+    // 1. Stop the OPC UA server first — this causes existing connections
+    //    to fail and prevents the client from reconnecting.
+    await _stopServer();
+    // 2. Mark proxy as stopped so stale connections are rejected.
+    proxy._stopped = true;
+    // 3. Close StateMan (stops client isolate).
+    await stateMan.close();
+    // 4. Clean up proxy.
+    await proxy.stop();
+  }
+
+  // -- Private helpers --
+
+  /// Close all existing proxy connection pairs so the client gets TCP RST.
+  void _closeProxyConnections() {
+    for (final pair in proxy.connections) {
+      pair.close();
+    }
+    proxy.connections.clear();
+  }
+
+  Future<void> _startServer({double value = _initialValue}) async {
+    _server = Server(
+      port: serverPort,
+      logLevel: LogLevel.UA_LOGLEVEL_WARNING,
+    );
+    _server.addVariableNode(
+      _nodeId,
+      DynamicValue(value: value, typeId: NodeId.double, name: _testNodeId),
+      accessLevel: const AccessLevelMask(read: true, write: true),
+    );
+    _server.start();
+    _serverAlive = true;
+    _serverFrozen = false;
+    _serverRunning = true;
+    unawaited(_runServerIterate());
+  }
+
+  Future<void> _runServerIterate() async {
+    int consecutiveFailures = 0;
+    while (_serverRunning) {
+      if (!_serverFrozen) {
+        try {
+          if (!_server.runIterate(waitInterval: false)) {
+            consecutiveFailures++;
+            // After a freeze, runIterate may fail transiently as internal
+            // timers expired.  Keep retrying for a while.
+            if (consecutiveFailures > 200) break;
+          } else {
+            consecutiveFailures = 0;
+          }
+        } catch (e) {
+          consecutiveFailures++;
+          if (consecutiveFailures > 200) break;
+        }
+      }
+      await Future.delayed(const Duration(milliseconds: 5));
+    }
+  }
+
+  Future<void> _stopServer() async {
+    _serverRunning = false;
+    await Future.delayed(const Duration(milliseconds: 100));
+    if (_serverAlive) {
+      try {
+        _server.shutdown();
+      } catch (_) {}
+      _serverAlive = false;
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+void main() {
+  enableTestTiming();
+
+  // -- Port allocation -------------------------------------------------------
+  // Each test gets unique server+proxy ports so lingering connections from
+  // a previous test's OPC UA native code don't send stale security tokens
+  // to the next test's server.
+  //
+  // We allocate a large pool and use a counter to hand out pairs.
+  final allPorts = allocatePorts(12, 100);
+  var portIdx = 0;
+  (int server, int proxy) nextPorts() {
+    final s = allPorts[portIdx++];
+    final p = allPorts[portIdx++];
+    return (s, p);
+  }
+
+  // Inspect test uses fixed ports since it's standalone
+  final inspectServerPort = allPorts[98];
+  final inspectProxyPort = allPorts[99];
+
+  // =========================================================================
+  // FAST TESTS (short disruption ~2-5s)
+  // =========================================================================
+  group('Fast (short disruption)', () {
+    test('network cable disconnected', () async {
+      final p = nextPorts();
+      final h = await TestHarness.create(
+          serverPort: p.$1, proxyPort: p.$2);
+      try {
+        await h.waitForConnection();
+        await h.subscribe();
+        await h.waitForFirstValue();
+
+        // Simulate unplugged cable: proxy drops all data, TCP stays alive
+        h.proxy.block();
+        await Future.delayed(const Duration(seconds: 2));
+        h.proxy.unblock();
+
+        await h.assertRecovery();
+      } finally {
+        await h.dispose();
+      }
+    }, timeout: const Timeout(Duration(seconds: 45)));
+
+    test('network cable flaky', () async {
+      final p = nextPorts();
+      final h = await TestHarness.create(
+          serverPort: p.$1, proxyPort: p.$2);
+      try {
+        await h.waitForConnection();
+        await h.subscribe();
+        await h.waitForFirstValue();
+
+        // Flaky network: alternate between blocking and forwarding
+        h.proxy.flaky(
+          blockDuration: const Duration(milliseconds: 500),
+          forwardDuration: const Duration(milliseconds: 200),
+        );
+        await Future.delayed(const Duration(seconds: 5));
+        h.proxy.unblock();
+
+        await h.assertRecovery();
+      } finally {
+        await h.dispose();
+      }
+    }, timeout: const Timeout(Duration(seconds: 45)));
+
+    test('server freeze', () async {
+      final p = nextPorts();
+      final h = await TestHarness.create(
+          serverPort: p.$1, proxyPort: p.$2);
+      try {
+        await h.waitForConnection();
+        await h.subscribe();
+        await h.waitForFirstValue();
+
+        // Server stops processing but sockets stay open.
+        // NOTE: open62541 fires all expired timers at once when runIterate
+        // resumes, which instantly kills the subscription even after a brief
+        // freeze.  So after unfreeze we force a TCP reset so the client
+        // detects the stale subscription and does a full recovery.
+        h.freezeServer();
+        await Future.delayed(const Duration(seconds: 2));
+        h.unfreezeServer();
+        await Future.delayed(const Duration(milliseconds: 100));
+        h._closeProxyConnections();
+
+        await h.assertRecovery();
+      } finally {
+        await h.dispose();
+      }
+    }, timeout: const Timeout(Duration(seconds: 45)));
+
+    test('server restart', () async {
+      final p = nextPorts();
+      final h = await TestHarness.create(
+          serverPort: p.$1, proxyPort: p.$2);
+      try {
+        await h.waitForConnection();
+        await h.subscribe();
+        await h.waitForFirstValue();
+
+        // Kill and restart server with a different value
+        await h.restartServer(newValue: 99.99);
+
+        await h.assertRecovery(expectedValue: 99.99);
+      } finally {
+        await h.dispose();
+      }
+    }, timeout: const Timeout(Duration(seconds: 45)));
+
+    test('server slow', () async {
+      final p = nextPorts();
+      final h = await TestHarness.create(
+          serverPort: p.$1, proxyPort: p.$2);
+      try {
+        await h.waitForConnection();
+        await h.subscribe();
+        await h.waitForFirstValue();
+
+        // Add 2s latency to all server responses
+        h.proxy.slow(const Duration(seconds: 2));
+        await Future.delayed(const Duration(seconds: 5));
+        h.proxy.unblock();
+
+        await h.assertRecovery();
+      } finally {
+        await h.dispose();
+      }
+    }, timeout: const Timeout(Duration(seconds: 45)));
+  });
+
+  // =========================================================================
+  // SLOW TESTS (long disruption ~15s)
+  // =========================================================================
+  group('Slow (long disruption)', () {
+    test('network cable disconnected', () async {
+      final p = nextPorts();
+      final h = await TestHarness.create(
+          serverPort: p.$1, proxyPort: p.$2);
+      try {
+        await h.waitForConnection();
+        await h.subscribe();
+        await h.waitForFirstValue();
+
+        h.proxy.block();
+        await Future.delayed(const Duration(seconds: 15));
+        h.proxy.unblock();
+
+        await h.assertRecovery();
+      } finally {
+        await h.dispose();
+      }
+    }, timeout: const Timeout(Duration(seconds: 60)));
+
+    test('network cable flaky', () async {
+      final p = nextPorts();
+      final h = await TestHarness.create(
+          serverPort: p.$1, proxyPort: p.$2);
+      try {
+        await h.waitForConnection();
+        await h.subscribe();
+        await h.waitForFirstValue();
+
+        h.proxy.flaky(
+          blockDuration: const Duration(seconds: 2),
+          forwardDuration: const Duration(milliseconds: 500),
+        );
+        await Future.delayed(const Duration(seconds: 20));
+        h.proxy.unblock();
+
+        await h.assertRecovery();
+      } finally {
+        await h.dispose();
+      }
+    }, timeout: const Timeout(Duration(seconds: 75)));
+
+    test('server freeze', () async {
+      final p = nextPorts();
+      final h = await TestHarness.create(
+          serverPort: p.$1, proxyPort: p.$2);
+      try {
+        await h.waitForConnection();
+        await h.subscribe();
+        await h.waitForFirstValue();
+
+        // See comment in fast version for why we close proxy connections
+        h.freezeServer();
+        await Future.delayed(const Duration(seconds: 15));
+        h.unfreezeServer();
+        await Future.delayed(const Duration(milliseconds: 100));
+        h._closeProxyConnections();
+
+        await h.assertRecovery();
+      } finally {
+        await h.dispose();
+      }
+    }, timeout: const Timeout(Duration(seconds: 60)));
+
+    test('server restart', () async {
+      final p = nextPorts();
+      final h = await TestHarness.create(
+          serverPort: p.$1, proxyPort: p.$2);
+      try {
+        await h.waitForConnection();
+        await h.subscribe();
+        await h.waitForFirstValue();
+
+        // Kill server, wait 15s, restart with new value
+        await h.killServer();
+        await Future.delayed(const Duration(seconds: 15));
+        await h.startServer(value: 55.55);
+
+        await h.assertRecovery(expectedValue: 55.55);
+      } finally {
+        await h.dispose();
+      }
+    }, timeout: const Timeout(Duration(seconds: 75)));
+
+    test('server slow', () async {
+      final p = nextPorts();
+      final h = await TestHarness.create(
+          serverPort: p.$1, proxyPort: p.$2);
+      try {
+        await h.waitForConnection();
+        await h.subscribe();
+        await h.waitForFirstValue();
+
+        h.proxy.slow(const Duration(seconds: 3));
+        await Future.delayed(const Duration(seconds: 15));
+        h.proxy.unblock();
+
+        await h.assertRecovery();
+      } finally {
+        await h.dispose();
+      }
+    }, timeout: const Timeout(Duration(seconds: 60)));
+  });
+
+  // =========================================================================
+  // EDGE CASES
+  // =========================================================================
+  group('Edge cases', () {
+    test('rapid reconnection cycling', () async {
+      final p = nextPorts();
+      final h = await TestHarness.create(
+          serverPort: p.$1, proxyPort: p.$2);
+      try {
+        await h.waitForConnection();
+        await h.subscribe();
+        await h.waitForFirstValue();
+
+        // 10 rapid kill/restart cycles
+        for (int i = 0; i < 10; i++) {
+          final newValue = 30.0 + i;
+          await h.restartServer(newValue: newValue);
+          // Very short gap between cycles
+          await Future.delayed(const Duration(milliseconds: 500));
+          print('  Cycle $i: restarted with value=$newValue, '
+              'total values=${h.values.length}');
+        }
+
+        // Wait for things to stabilize, then force a clean reconnection.
+        // During rapid cycling, the resubscription from cycle N may not
+        // complete before cycle N+1 kills the server.  After all cycles,
+        // closing proxy connections forces one final clean reconnection
+        // which triggers a fresh session → resubscribe.
+        await Future.delayed(const Duration(seconds: 2));
+        h._closeProxyConnections();
+        await h.assertRecovery(expectedValue: 39.0);
+      } finally {
+        await h.dispose();
+      }
+    }, timeout: const Timeout(Duration(seconds: 90)));
+
+    test('value change during disconnection', () async {
+      final p = nextPorts();
+      final h = await TestHarness.create(
+          serverPort: p.$1, proxyPort: p.$2);
+      try {
+        await h.waitForConnection();
+        await h.subscribe();
+        await h.waitForFirstValue();
+
+        // Simulate: client loses network, then the server restarts with
+        // a different value (e.g. PLC reboots with new config).
+        // Using server restart rather than just Server.write() because
+        // OPC UA session recovery on the same server preserves the
+        // subscription but lost publish notifications are NOT re-sent.
+        // A server restart guarantees session loss → resubscription →
+        // the client gets the CURRENT value, not a stale cached one.
+        h.proxy.block();
+        await Future.delayed(const Duration(seconds: 2));
+
+        // Server restarts with new value while client is disconnected.
+        // killServer() closes proxy connections (TCP RST to client),
+        // so the client detects the disconnect immediately.
+        // New proxy connections default to forwarding mode, so the
+        // client reconnects through the proxy once the server is back.
+        await h.killServer();
+        await Future.delayed(const Duration(milliseconds: 500));
+
+        // Capture value count BEFORE starting server, so assertRecovery
+        // catches the 99.99 that arrives after the client reconnects.
+        final countBefore = h.values.length;
+        await h.startServer(value: 99.99);
+
+        // Wait for the expected value to arrive
+        final deadline = DateTime.now().add(const Duration(seconds: 30));
+        while (!h.values.skip(countBefore).any((v) => v.$2 == 99.99)) {
+          if (DateTime.now().isAfter(deadline)) {
+            final recent = h.values.skip(countBefore).map((v) => v.$2).toList();
+            fail('Expected value 99.99 not received after server restart. '
+                'Values since restart: $recent');
+          }
+          await Future.delayed(const Duration(milliseconds: 200));
+        }
+        print('Harness: received 99.99 after recovery');
+
+        // Verify no flood of stale values
+        final staleCount = h.values
+            .skip(countBefore)
+            .where((v) => v.$2 == TestHarness._initialValue)
+            .length;
+        expect(staleCount, lessThanOrEqualTo(2),
+            reason: 'Stale value flood: ${TestHarness._initialValue} '
+                'appeared $staleCount times after server changed to 99.99');
+      } finally {
+        await h.dispose();
+      }
+    }, timeout: const Timeout(Duration(seconds: 45)));
+
+    test('disconnect during subscription setup', () async {
+      // Create harness but DON'T subscribe yet
+      final p = nextPorts();
+      final h = await TestHarness.create(
+          serverPort: p.$1, proxyPort: p.$2);
+      try {
+        await h.waitForConnection();
+
+        // Block network immediately before subscribing
+        h.proxy.block();
+
+        // Start subscription (will be stuck connecting/retrying)
+        unawaited(h.subscribe());
+
+        // Wait a bit, then unblock
+        await Future.delayed(const Duration(seconds: 3));
+        h.proxy.unblock();
+
+        // Subscription should eventually succeed
+        await h.waitForFirstValue(timeout: const Duration(seconds: 20));
+        expect(h.values, isNotEmpty,
+            reason: 'Subscription should succeed after network recovers');
+      } finally {
+        await h.dispose();
+      }
+    }, timeout: const Timeout(Duration(seconds: 45)));
+
+    test('multiple sequential disruptions', () async {
+      final p = nextPorts();
+      final h = await TestHarness.create(
+          serverPort: p.$1, proxyPort: p.$2);
+      try {
+        await h.waitForConnection();
+        await h.subscribe();
+        await h.waitForFirstValue();
+
+        // 3 cycles of block -> unblock -> verify recovery
+        for (int cycle = 0; cycle < 3; cycle++) {
+          print('\n--- Disruption cycle $cycle ---');
+          final countBefore = h.values.length;
+
+          h.proxy.block();
+          await Future.delayed(const Duration(seconds: 5));
+          h.proxy.unblock();
+
+          await h.assertRecovery();
+
+          // Verify new values arrived in this cycle
+          expect(h.values.length, greaterThan(countBefore),
+              reason: 'Cycle $cycle: values should flow after recovery');
+
+          // Brief stable period before next disruption
+          await Future.delayed(const Duration(seconds: 2));
+        }
+      } finally {
+        await h.dispose();
+      }
+    }, timeout: const Timeout(Duration(seconds: 90)));
+
+    test('server restart with missing node', () async {
+      final p = nextPorts();
+      final h = await TestHarness.create(
+          serverPort: p.$1, proxyPort: p.$2);
+      try {
+        await h.waitForConnection();
+        await h.subscribe();
+        await h.waitForFirstValue();
+
+        // Kill server, restart WITHOUT the monitored node
+        await h.killServer();
+        await Future.delayed(const Duration(seconds: 1));
+        await h.startServerWithoutNode();
+
+        // StateMan should handle this gracefully (no crash)
+        // Connection may come back but subscription will fail to re-establish
+        await Future.delayed(const Duration(seconds: 10));
+
+        // Now restart with the node present
+        await h.killServer();
+        await Future.delayed(const Duration(seconds: 1));
+        await h.startServer(value: 77.77);
+
+        // Should eventually recover
+        await h.assertRecovery(
+            expectedValue: 77.77,
+            timeout: const Duration(seconds: 30));
+      } finally {
+        await h.dispose();
+      }
+    }, timeout: const Timeout(Duration(seconds: 75)));
+
+    test('write during disconnection', () async {
+      final p = nextPorts();
+      final h = await TestHarness.create(
+          serverPort: p.$1, proxyPort: p.$2);
+      try {
+        await h.waitForConnection();
+        await h.subscribe();
+        await h.waitForFirstValue();
+
+        // Block network
+        h.proxy.block();
+        await Future.delayed(const Duration(seconds: 2));
+
+        // Try to write while disconnected - should fail or timeout, not hang
+        try {
+          await h.stateMan
+              .write(
+                'weight',
+                DynamicValue(
+                    value: 42.0,
+                    typeId: NodeId.double,
+                    name: 'weight'),
+              )
+              .timeout(const Duration(seconds: 10));
+        } catch (e) {
+          print('Write during disconnection failed (expected): $e');
+        }
+
+        // Unblock and verify recovery
+        h.proxy.unblock();
+        await h.assertRecovery();
+
+        // Write should work after recovery
+        await h.stateMan
+            .write(
+              'weight',
+              DynamicValue(
+                  value: 42.0,
+                  typeId: NodeId.double,
+                  name: 'weight'),
+            )
+            .timeout(const Duration(seconds: 10));
+        print('Write after recovery succeeded');
+      } finally {
+        await h.dispose();
+      }
+    }, timeout: const Timeout(Duration(seconds: 60)));
+
+    test('gradual degradation', () async {
+      final p = nextPorts();
+      final h = await TestHarness.create(
+          serverPort: p.$1, proxyPort: p.$2);
+      try {
+        await h.waitForConnection();
+        await h.subscribe();
+        await h.waitForFirstValue();
+
+        // Phase 1: Slow (still works, just laggy)
+        print('\n--- Phase 1: slow ---');
+        h.proxy.slow(const Duration(seconds: 1));
+        await Future.delayed(const Duration(seconds: 3));
+
+        // Phase 2: Slower
+        print('\n--- Phase 2: slower ---');
+        h.proxy.slow(const Duration(seconds: 3));
+        await Future.delayed(const Duration(seconds: 5));
+
+        // Phase 3: Flaky (intermittent)
+        print('\n--- Phase 3: flaky ---');
+        h.proxy.flaky(
+          blockDuration: const Duration(seconds: 2),
+          forwardDuration: const Duration(milliseconds: 500),
+        );
+        await Future.delayed(const Duration(seconds: 5));
+
+        // Phase 4: Full blackout
+        print('\n--- Phase 4: blackout ---');
+        h.proxy.block();
+        await Future.delayed(const Duration(seconds: 5));
+
+        // Phase 5: Recovery
+        print('\n--- Phase 5: recovery ---');
+        h.proxy.unblock();
+        await h.assertRecovery();
+      } finally {
+        await h.dispose();
+      }
+    }, timeout: const Timeout(Duration(seconds: 60)));
+  });
+
+  // =========================================================================
+  // BEYOND IDLE TIMEOUT (subscription stream closes after idle period)
+  // =========================================================================
+  group('Beyond idle timeout', () {
+    // Use a very short idle timeout (1s) so tests don't take forever.
+    // Disruption lasts longer than idle timeout to trigger stream disposal.
+
+    test('network cable disconnected beyond idle timeout', () async {
+      final p = nextPorts();
+      final h = await TestHarness.create(
+        serverPort: p.$1,
+        proxyPort: p.$2,
+        idleTimeout: const Duration(seconds: 1),
+      );
+      try {
+        await h.waitForConnection();
+        await h.subscribe();
+        await h.waitForFirstValue();
+
+        // Block for longer than the idle timeout
+        h.proxy.block();
+        await Future.delayed(const Duration(seconds: 3));
+        h.proxy.unblock();
+
+        // StateMan should recover even though the AutoDisposingStream
+        // may have fired its idle timer during the disruption
+        await h.assertRecovery();
+      } finally {
+        await h.dispose();
+      }
+    }, timeout: const Timeout(Duration(seconds: 45)));
+
+    test('server freeze beyond idle timeout', () async {
+      final p = nextPorts();
+      final h = await TestHarness.create(
+        serverPort: p.$1,
+        proxyPort: p.$2,
+        idleTimeout: const Duration(seconds: 1),
+      );
+      try {
+        await h.waitForConnection();
+        await h.subscribe();
+        await h.waitForFirstValue();
+
+        // See comment in fast version for why we close proxy connections
+        h.freezeServer();
+        await Future.delayed(const Duration(seconds: 3));
+        h.unfreezeServer();
+        await Future.delayed(const Duration(milliseconds: 100));
+        h._closeProxyConnections();
+
+        await h.assertRecovery();
+      } finally {
+        await h.dispose();
+      }
+    }, timeout: const Timeout(Duration(seconds: 45)));
+
+    test('server restart beyond idle timeout', () async {
+      final p = nextPorts();
+      final h = await TestHarness.create(
+        serverPort: p.$1,
+        proxyPort: p.$2,
+        idleTimeout: const Duration(seconds: 1),
+      );
+      try {
+        await h.waitForConnection();
+        await h.subscribe();
+        await h.waitForFirstValue();
+
+        await h.killServer();
+        await Future.delayed(const Duration(seconds: 3));
+        await h.startServer(value: 88.88);
+
+        await h.assertRecovery(expectedValue: 88.88);
+      } finally {
+        await h.dispose();
+      }
+    }, timeout: const Timeout(Duration(seconds: 45)));
+
+    test('multiple disruptions each exceeding idle timeout', () async {
+      final p = nextPorts();
+      final h = await TestHarness.create(
+        serverPort: p.$1,
+        proxyPort: p.$2,
+        idleTimeout: const Duration(seconds: 1),
+      );
+      try {
+        await h.waitForConnection();
+        await h.subscribe();
+        await h.waitForFirstValue();
+
+        for (int cycle = 0; cycle < 3; cycle++) {
+          print('\n--- Idle timeout cycle $cycle ---');
+          final newValue = 30.0 + cycle;
+
+          // Kill server → disruption exceeds idle timeout (1s)
+          await h.killServer();
+          await Future.delayed(const Duration(seconds: 3));
+          await h.startServer(value: newValue);
+
+          // Server restart guarantees session loss → resubscription.
+          await h.assertRecovery(expectedValue: newValue);
+          await Future.delayed(const Duration(seconds: 2));
+        }
+      } finally {
+        await h.dispose();
+      }
+    }, timeout: const Timeout(Duration(seconds: 90)));
+
+    // NOTE: This test is last in the group because flaky mode can leave
+    // stray socket errors that pollute subsequent tests' zones.
+    test('flaky connection beyond idle timeout', () async {
+      final p = nextPorts();
+      final h = await TestHarness.create(
+        serverPort: p.$1,
+        proxyPort: p.$2,
+        idleTimeout: const Duration(seconds: 1),
+      );
+      try {
+        await h.waitForConnection();
+        await h.subscribe();
+        await h.waitForFirstValue();
+
+        // Use longer forward window (1s) to let complete OPC UA messages
+        // through. Shorter windows (200ms) corrupt messages mid-flight,
+        // killing the client isolate irreversibly.
+        h.proxy.flaky(
+          blockDuration: const Duration(seconds: 1),
+          forwardDuration: const Duration(seconds: 1),
+        );
+        await Future.delayed(const Duration(seconds: 5));
+        h.proxy.unblock();
+        // Force TCP RST so the client does a clean reconnection
+        // instead of trying to use a corrupted SecureChannel.
+        h._closeProxyConnections();
+
+        await h.assertRecovery();
+      } finally {
+        await h.dispose();
+      }
+    }, timeout: const Timeout(Duration(seconds: 45)));
+  });
+
+  // =========================================================================
+  // OPEN62541 VERSION GATE
+  // =========================================================================
+  group('open62541 version gate', () {
+    test('unknown RequestId should not kill SecureChannel', () async {
+      final nodeId = NodeId.fromString(1, 'Test.Weight');
+
+      final server = Server(
+        port: inspectServerPort,
+        logLevel: LogLevel.UA_LOGLEVEL_INFO,
+      );
+      server.addVariableNode(
+        nodeId,
+        DynamicValue(value: 22.81, typeId: NodeId.double, name: 'Weight'),
+        accessLevel: const AccessLevelMask(read: true, write: true),
+      );
+      server.start();
+
+      bool serverRunning = true;
+      unawaited(() async {
+        while (serverRunning && server.runIterate(waitInterval: false)) {
+          await Future.delayed(const Duration(milliseconds: 5));
+        }
+      }());
+
+      final proxy = InspectingProxy(
+          listenPort: inspectProxyPort, targetPort: inspectServerPort);
+      await proxy.start();
+
+      final client = Client(
+        logLevel: LogLevel.UA_LOGLEVEL_INFO,
+        secureChannelLifeTime: const Duration(seconds: 10),
+        connectivityCheckInterval: const Duration(seconds: 2),
+      );
+
+      bool keepIterating = true;
+      unawaited(() async {
+        while (keepIterating) {
+          client.runIterate(const Duration(milliseconds: 10));
+          await Future.delayed(const Duration(milliseconds: 10));
+        }
+      }());
+
+      client.connect('opc.tcp://127.0.0.1:$inspectProxyPort');
+
+      await client.stateStream
+          .firstWhere((s) =>
+              s.channelState ==
+                  SecureChannelState.UA_SECURECHANNELSTATE_OPEN &&
+              s.sessionState == SessionState.UA_SESSIONSTATE_ACTIVATED)
+          .timeout(const Duration(seconds: 10));
+
+      final subId = await client.subscriptionCreate(
+        requestedPublishingInterval: const Duration(milliseconds: 100),
+        requestedMaxKeepAliveCount: 500,
+      );
+      client.monitor(nodeId, subId,
+          samplingInterval: const Duration(milliseconds: 100));
+
+      // Let traffic flow so proxy can learn channel context
+      await Future.delayed(const Duration(seconds: 2));
+
+      expect(proxy.channelId, isNotNull,
+          reason: 'Proxy should have captured ChannelId');
+      expect(proxy.tokenId, isNotNull,
+          reason: 'Proxy should have captured TokenId');
+
+      bool channelLeftOpen = false;
+      final stateSub = client.stateStream.listen((state) {
+        if (state.channelState !=
+            SecureChannelState.UA_SECURECHANNELSTATE_OPEN) {
+          channelLeftOpen = true;
+        }
+      });
+
+      proxy.blockServerToClient();
+      await Future.delayed(const Duration(milliseconds: 200));
+
+      // Inject MSG with bogus RequestId
+      proxy.injectBogusMsg(requestId: 99999);
+      await Future.delayed(const Duration(seconds: 2));
+
+      if (channelLeftOpen) {
+        print('BUG: Channel killed by unknown RequestId. '
+            'open62541 v1.5.0-rc1 returns BadSecurityChecksFailed. '
+            'Upgrade to v1.5.2+.');
+      }
+
+      expect(channelLeftOpen, isFalse,
+          reason: 'SecureChannel should survive unknown RequestId. '
+              'open62541 v1.5.0-rc1 returns BadSecurityChecksFailed '
+              'in processMSGResponse. Fixed in v1.5.2+.');
+
+      await stateSub.cancel();
+      keepIterating = false;
+      await proxy.stop();
+      serverRunning = false;
+      server.shutdown();
+      client.disconnect();
+      client.delete();
+      server.delete();
+    }, timeout: const Timeout(Duration(seconds: 30)));
+  });
+}

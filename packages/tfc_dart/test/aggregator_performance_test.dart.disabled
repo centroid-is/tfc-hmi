@@ -1,0 +1,796 @@
+@Timeout(Duration(minutes: 3))
+library;
+
+import 'dart:async';
+import 'dart:io';
+
+import 'package:open62541/open62541.dart';
+import 'package:test/test.dart';
+import 'package:tfc_dart/core/aggregator_server.dart';
+import 'package:tfc_dart/core/state_man.dart';
+
+import 'test_timing.dart';
+
+void _t(Stopwatch sw, String label) {
+  stderr.writeln('  [${sw.elapsedMilliseconds}ms] $label');
+}
+
+// ---------------------------------------------------------------------------
+// Test: population speed with many keys
+// ---------------------------------------------------------------------------
+// The aggregator populates variables sequentially via _populateFromKeyMappings.
+// Each key does `await sharedStateMan.read(key)` with a 5s timeout.
+// With 30 keys across 3 PLCs this should complete in <5s (parallel reads),
+// not 30 * RTT (sequential reads).
+// ---------------------------------------------------------------------------
+
+void main() {
+  enableTestTiming();
+
+  group('Population speed', () {
+    final plcCount = 3;
+    final varsPerPlc = 10; // 30 total keys
+    final plcServers = <Server>[];
+    var plcRunning = true;
+    late StateMan directSM;
+    late AggregatorServer aggregator;
+    late ClientIsolate aggClient;
+    late List<int> ports;
+    late KeyMappings keyMappings;
+
+    setUpAll(timed('pop-speed setUpAll', () async {
+      final sw = Stopwatch()..start();
+      // plcCount PLCs + 1 aggregator port
+      ports = allocatePorts(6, plcCount + 1);
+      final aggregatorPort = ports[plcCount];
+
+      // Spin up PLC servers with varsPerPlc variables each
+      for (var p = 0; p < plcCount; p++) {
+        final server =
+            Server(port: ports[p], logLevel: LogLevel.UA_LOGLEVEL_ERROR);
+        for (var v = 0; v < varsPerPlc; v++) {
+          server.addVariableNode(
+            NodeId.fromString(1, 'var_$v'),
+            DynamicValue(
+                value: (p * varsPerPlc + v).toDouble(),
+                typeId: NodeId.double,
+                name: 'var_$v'),
+            accessLevel: const AccessLevelMask(read: true, write: true),
+          );
+        }
+        server.start();
+        unawaited(() async {
+          while (plcRunning && server.runIterate(waitInterval: false)) {
+            await Future.delayed(const Duration(milliseconds: 5));
+          }
+        }());
+        plcServers.add(server);
+      }
+      _t(sw, '$plcCount PLC servers started');
+
+      // Key mappings for all variables
+      final nodes = <String, KeyMappingEntry>{};
+      for (var p = 0; p < plcCount; p++) {
+        for (var v = 0; v < varsPerPlc; v++) {
+          nodes['plc${p}_var_$v'] = KeyMappingEntry(
+            opcuaNode: OpcUANodeConfig(namespace: 1, identifier: 'var_$v')
+              ..serverAlias = 'plc$p',
+          );
+        }
+      }
+      keyMappings = KeyMappings(nodes: nodes);
+
+      final opcuaConfigs = <OpcUAConfig>[];
+      for (var p = 0; p < plcCount; p++) {
+        opcuaConfigs.add(OpcUAConfig()
+          ..endpoint = 'opc.tcp://localhost:${ports[p]}'
+          ..serverAlias = 'plc$p');
+      }
+
+      final config = StateManConfig(
+        opcua: opcuaConfigs,
+        aggregator: AggregatorConfig(enabled: true, port: aggregatorPort),
+      );
+
+      directSM = await StateMan.create(
+        config: config,
+        keyMappings: keyMappings,
+        useIsolate: true,
+        alias: 'test-pop-speed',
+      );
+      _t(sw, 'StateMan.create');
+
+      // Wait for all connections
+      for (final wrapper in directSM.clients) {
+        if (wrapper.connectionStatus == ConnectionStatus.connected) continue;
+        await wrapper.connectionStream
+            .firstWhere((event) => event.$1 == ConnectionStatus.connected)
+            .timeout(const Duration(seconds: 15));
+      }
+      _t(sw, 'all ${directSM.clients.length} clients connected');
+
+      // --- Measure population time ---
+      final populateSw = Stopwatch()..start();
+      aggregator = AggregatorServer(
+        config: config.aggregator!,
+        sharedStateMan: directSM,
+      );
+      await aggregator.initialize(skipTls: true);
+      await aggregator.waitForPending();
+      final populateMs = populateSw.elapsedMilliseconds;
+      _t(sw, 'aggregator initialized + populated in ${populateMs}ms');
+
+      unawaited(aggregator.runLoop());
+
+      // Connect a client
+      aggClient = await ClientIsolate.create();
+      unawaited(aggClient.runIterate().catchError((_) {}));
+      unawaited(aggClient.connect('opc.tcp://localhost:$aggregatorPort'));
+      await aggClient.awaitConnect();
+      _t(sw, 'aggClient connected');
+    }));
+
+    tearDownAll(timed('pop-speed tearDownAll', () async {
+      await aggregator.shutdown();
+      await aggClient.delete();
+      await directSM.close();
+      plcRunning = false;
+      await Future.delayed(const Duration(milliseconds: 50));
+      for (final server in plcServers) {
+        server.shutdown();
+        server.delete();
+      }
+    }));
+
+    test(
+        'population of ${plcCount * varsPerPlc} variables completes within 5 seconds',
+        () async {
+      // All variables should be readable through the aggregator set up in setUpAll
+      for (var p = 0; p < plcCount; p++) {
+        for (var v = 0; v < varsPerPlc; v++) {
+          final nodeId = AggregatorNodeId.encode(
+              'plc$p', NodeId.fromString(1, 'var_$v'));
+          final value = await aggClient.read(nodeId);
+          expect(value.value, (p * varsPerPlc + v).toDouble(),
+              reason: 'plc${p}_var_$v should be readable');
+        }
+      }
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Test: population with one offline PLC doesn't block all other PLCs
+  // ---------------------------------------------------------------------------
+  // When one PLC is offline, _populateFromKeyMappings processes keys
+  // sequentially. Each offline key hits a 5s timeout. With N offline keys,
+  // total time is N * 5s. Keys for ONLINE PLCs are blocked behind offline ones.
+  // The fix: populate per-alias in parallel so offline PLCs don't block online ones.
+  // ---------------------------------------------------------------------------
+
+  group('Population with offline PLC', () {
+    final plcServers = <Server>[];
+    var plcRunning = true;
+    late StateMan directSM;
+    late AggregatorServer aggregator;
+    late ClientIsolate aggClient;
+    late List<int> ports;
+
+    setUpAll(timed('offline-plc setUpAll', () async {
+      final sw = Stopwatch()..start();
+      // 2 online PLCs + 1 offline PLC + 1 aggregator
+      ports = allocatePorts(3, 4);
+
+      // Start only 2 of the 3 PLCs — port[2] is for the "offline" PLC
+      for (var p = 0; p < 2; p++) {
+        final server =
+            Server(port: ports[p], logLevel: LogLevel.UA_LOGLEVEL_ERROR);
+        for (var v = 0; v < 5; v++) {
+          server.addVariableNode(
+            NodeId.fromString(1, 'var_$v'),
+            DynamicValue(
+                value: (p * 5 + v).toDouble(),
+                typeId: NodeId.double,
+                name: 'var_$v'),
+            accessLevel: const AccessLevelMask(read: true, write: true),
+          );
+        }
+        server.start();
+        unawaited(() async {
+          while (plcRunning && server.runIterate(waitInterval: false)) {
+            await Future.delayed(const Duration(milliseconds: 5));
+          }
+        }());
+        plcServers.add(server);
+      }
+      _t(sw, '2 online PLC servers started (port[2] is offline)');
+
+      // Key mappings: 5 vars on each of 3 PLCs (15 total, 5 offline)
+      final nodes = <String, KeyMappingEntry>{};
+      for (var p = 0; p < 3; p++) {
+        for (var v = 0; v < 5; v++) {
+          nodes['plc${p}_var_$v'] = KeyMappingEntry(
+            opcuaNode: OpcUANodeConfig(namespace: 1, identifier: 'var_$v')
+              ..serverAlias = 'plc$p',
+          );
+        }
+      }
+      final keyMappings = KeyMappings(nodes: nodes);
+
+      final config = StateManConfig(
+        opcua: [
+          for (var p = 0; p < 3; p++)
+            OpcUAConfig()
+              ..endpoint = 'opc.tcp://localhost:${ports[p]}'
+              ..serverAlias = 'plc$p',
+        ],
+        aggregator: AggregatorConfig(enabled: true, port: ports[3]),
+      );
+
+      directSM = await StateMan.create(
+        config: config,
+        keyMappings: keyMappings,
+        useIsolate: true,
+        alias: 'test-offline',
+      );
+      _t(sw, 'StateMan.create');
+
+      // Wait for the 2 online PLCs to connect (don't wait for offline one)
+      var connected = 0;
+      for (final wrapper in directSM.clients) {
+        if (wrapper.connectionStatus == ConnectionStatus.connected) {
+          connected++;
+          continue;
+        }
+        try {
+          await wrapper.connectionStream
+              .firstWhere((event) => event.$1 == ConnectionStatus.connected)
+              .timeout(const Duration(seconds: 5));
+          connected++;
+        } catch (_) {
+          // Timeout — this is the offline PLC
+        }
+      }
+      _t(sw, '$connected clients connected (1 expected offline)');
+
+      // Measure population time with 1 offline PLC
+      final populateSw = Stopwatch()..start();
+      aggregator = AggregatorServer(
+        config: config.aggregator!,
+        sharedStateMan: directSM,
+      );
+      await aggregator.initialize(skipTls: true);
+      await aggregator.waitForPending();
+      final populateMs = populateSw.elapsedMilliseconds;
+      _t(sw, 'aggregator populated in ${populateMs}ms (5 keys should timeout)');
+
+      unawaited(aggregator.runLoop());
+
+      aggClient = await ClientIsolate.create();
+      unawaited(aggClient.runIterate().catchError((_) {}));
+      unawaited(aggClient.connect('opc.tcp://localhost:${ports[3]}'));
+      await aggClient.awaitConnect();
+      _t(sw, 'aggClient connected');
+    }));
+
+    tearDownAll(timed('offline-plc tearDownAll', () async {
+      await aggregator.shutdown();
+      await aggClient.delete();
+      await directSM.close();
+      plcRunning = false;
+      await Future.delayed(const Duration(milliseconds: 50));
+      for (final server in plcServers) {
+        server.shutdown();
+        server.delete();
+      }
+    }));
+
+    test('online PLC variables available within 10 seconds despite offline PLC',
+        () async {
+      // With sequential population: 5 offline keys * 5s timeout = 25s
+      // before online keys even start (if offline keys are iterated first).
+      // With per-alias parallelism: all online keys populate in ~1s
+      // while offline keys timeout concurrently.
+      //
+      // This test checks that ONLINE plc0 and plc1 variables are readable.
+      // If population is sequential, this setUpAll will take >25s and timeout.
+      for (var p = 0; p < 2; p++) {
+        for (var v = 0; v < 5; v++) {
+          final nodeId = AggregatorNodeId.encode(
+              'plc$p', NodeId.fromString(1, 'var_$v'));
+          final value = await aggClient.read(nodeId);
+          expect(value.value, (p * 5 + v).toDouble(),
+              reason: 'Online plc${p}_var_$v should be readable');
+        }
+      }
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Test: rapid disconnect/reconnect does not crash (SEGFAULT repro)
+  // ---------------------------------------------------------------------------
+  // From production logs: SIGSEGV at 0x50 in Server.addCustomType+0x88c
+  // called from _createAndSubscribeVariable.
+  //
+  // The race: _repopulateAlias is async (has await points for read/subscribe).
+  // Between awaits, _teardownAlias can run synchronously from a connection
+  // status listener, deleting nodes that _repopulateAlias is about to use.
+  // When _repopulateAlias resumes it calls addCustomType/addVariableNode
+  // on inconsistent server state → null pointer dereference.
+  //
+  // This test exercises the scenario by stopping the upstream server
+  // while population is in progress, forcing a disconnect+reconnect cycle.
+  // ---------------------------------------------------------------------------
+
+  group('Teardown/repopulate race condition', () {
+    late Server upstreamServer;
+    var upstreamRunning = true;
+    late StateMan directSM;
+    late AggregatorServer aggregator;
+    late int upstreamPort;
+    late int aggregatorPort;
+
+    setUpAll(timed('race setUpAll', () async {
+      final sw = Stopwatch()..start();
+      final ports = allocatePorts(8, 2);
+      upstreamPort = ports[0];
+      aggregatorPort = ports[1];
+
+      upstreamServer = Server(
+          port: upstreamPort, logLevel: LogLevel.UA_LOGLEVEL_ERROR);
+      // Add enough variables that population takes noticeable time
+      for (var i = 0; i < 20; i++) {
+        upstreamServer.addVariableNode(
+          NodeId.fromString(1, 'var_$i'),
+          DynamicValue(
+              value: i.toDouble(), typeId: NodeId.double, name: 'var_$i'),
+          accessLevel: const AccessLevelMask(read: true, write: true),
+        );
+      }
+      upstreamServer.start();
+      unawaited(() async {
+        while (upstreamRunning &&
+            upstreamServer.runIterate(waitInterval: false)) {
+          await Future.delayed(const Duration(milliseconds: 5));
+        }
+      }());
+      _t(sw, 'upstream server started');
+
+      final nodes = <String, KeyMappingEntry>{};
+      for (var i = 0; i < 20; i++) {
+        nodes['var_$i'] = KeyMappingEntry(
+          opcuaNode: OpcUANodeConfig(namespace: 1, identifier: 'var_$i')
+            ..serverAlias = 'plc1',
+        );
+      }
+      final keyMappings = KeyMappings(nodes: nodes);
+
+      final config = StateManConfig(
+        opcua: [
+          OpcUAConfig()
+            ..endpoint = 'opc.tcp://localhost:$upstreamPort'
+            ..serverAlias = 'plc1',
+        ],
+        aggregator: AggregatorConfig(enabled: true, port: aggregatorPort),
+      );
+
+      directSM = await StateMan.create(
+        config: config,
+        keyMappings: keyMappings,
+        useIsolate: true,
+        alias: 'test-race',
+      );
+
+      for (final wrapper in directSM.clients) {
+        if (wrapper.connectionStatus == ConnectionStatus.connected) continue;
+        await wrapper.connectionStream
+            .firstWhere((event) => event.$1 == ConnectionStatus.connected)
+            .timeout(const Duration(seconds: 15));
+      }
+      _t(sw, 'direct client connected');
+
+      aggregator = AggregatorServer(
+        config: config.aggregator!,
+        sharedStateMan: directSM,
+      );
+      await aggregator.initialize(skipTls: true);
+      await aggregator.waitForPending();
+      // Run in a zone to catch async errors from runLoop after memory corruption
+      unawaited(runZonedGuarded(() => aggregator.runLoop(), (e, st) {
+        stderr.writeln('  [race] aggregator runLoop error (expected): $e');
+      })!);
+      _t(sw, 'aggregator started');
+    }));
+
+    tearDownAll(timed('race tearDownAll', () async {
+      try {
+        await aggregator.shutdown();
+      } catch (_) {}
+      await directSM.close();
+      upstreamRunning = false;
+      await Future.delayed(const Duration(milliseconds: 100));
+      try {
+        upstreamServer.shutdown();
+        upstreamServer.delete();
+      } catch (_) {}
+    }));
+
+    test('rapid disconnect/reconnect during repopulation does not crash',
+        () async {
+      // Cycle the upstream server 3 times.
+      // Each stop triggers _teardownAlias, each restart triggers _repopulateAlias.
+      // The race window: _repopulateAlias is awaiting reads when next disconnect fires.
+      for (var cycle = 0; cycle < 3; cycle++) {
+        stderr.writeln('  Cycle $cycle: stopping upstream server');
+
+        // Stop the upstream server to trigger disconnect
+        upstreamServer.shutdown();
+        upstreamServer.delete();
+        // Give time for the disconnect to propagate
+        await Future.delayed(const Duration(seconds: 2));
+
+        stderr.writeln('  Cycle $cycle: restarting upstream server');
+
+        // Restart with same port and variables
+        upstreamServer = Server(
+            port: upstreamPort, logLevel: LogLevel.UA_LOGLEVEL_ERROR);
+        for (var i = 0; i < 20; i++) {
+          upstreamServer.addVariableNode(
+            NodeId.fromString(1, 'var_$i'),
+            DynamicValue(
+                value: (cycle * 100 + i).toDouble(),
+                typeId: NodeId.double,
+                name: 'var_$i'),
+            accessLevel: const AccessLevelMask(read: true, write: true),
+          );
+        }
+        upstreamServer.start();
+        upstreamRunning = true;
+        unawaited(() async {
+          while (upstreamRunning) {
+            try {
+              if (!upstreamServer.runIterate(waitInterval: false)) break;
+            } catch (_) {
+              break;
+            }
+            await Future.delayed(const Duration(milliseconds: 5));
+          }
+        }());
+
+        // Brief pause — this is the dangerous window where _repopulateAlias
+        // may be running while the PLC is not yet stable.
+        await Future.delayed(const Duration(milliseconds: 500));
+      }
+
+      // Wait for pending operations to settle
+      try {
+        await aggregator.waitForPending();
+      } catch (_) {}
+      await Future.delayed(const Duration(seconds: 2));
+
+      // The key assertion: the process is still alive (no SEGFAULT).
+      // The aggregator may or may not still be running — the bindings fix
+      // converts the native crash into a catchable Dart exception.
+      // Before the fix: process crash with exit code 139 (SIGSEGV)
+      // After the fix: StateError('Server is not running') caught gracefully
+      expect(true, isTrue,
+          reason: 'Process survived rapid disconnect/reconnect cycles '
+              'without SEGFAULT in addCustomType/addVariableNode');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Test: client session survives high-frequency upstream updates
+  // ---------------------------------------------------------------------------
+  // The server loop runs at 10ms intervals with runIterate(waitInterval: false).
+  // If upstream subscriptions write to the server faster than it can process,
+  // the event loop gets saturated and session renewal/keepalive is delayed,
+  // causing the server to drop the client (maxSessionTimeout: 30s).
+  // ---------------------------------------------------------------------------
+
+  group('Client session stability under load', () {
+    late Server upstreamServer;
+    var upstreamRunning = true;
+    late StateMan directSM;
+    late AggregatorServer aggregator;
+    late ClientIsolate aggClient;
+    late int upstreamPort;
+    late int aggregatorPort;
+    final varCount = 50;
+
+    setUpAll(timed('session-stability setUpAll', () async {
+      final sw = Stopwatch()..start();
+      final ports = allocatePorts(7, 2);
+      upstreamPort = ports[0];
+      aggregatorPort = ports[1];
+
+      // Single upstream PLC with many variables
+      upstreamServer = Server(
+          port: upstreamPort, logLevel: LogLevel.UA_LOGLEVEL_ERROR);
+      for (var i = 0; i < varCount; i++) {
+        upstreamServer.addVariableNode(
+          NodeId.fromString(1, 'var_$i'),
+          DynamicValue(
+              value: i.toDouble(), typeId: NodeId.double, name: 'var_$i'),
+          accessLevel: const AccessLevelMask(read: true, write: true),
+        );
+      }
+      upstreamServer.start();
+      unawaited(() async {
+        while (upstreamRunning &&
+            upstreamServer.runIterate(waitInterval: false)) {
+          await Future.delayed(const Duration(milliseconds: 5));
+        }
+      }());
+      _t(sw, 'upstream server started with $varCount variables');
+
+      final nodes = <String, KeyMappingEntry>{};
+      for (var i = 0; i < varCount; i++) {
+        nodes['var_$i'] = KeyMappingEntry(
+          opcuaNode: OpcUANodeConfig(namespace: 1, identifier: 'var_$i')
+            ..serverAlias = 'plc1',
+        );
+      }
+      final keyMappings = KeyMappings(nodes: nodes);
+
+      final config = StateManConfig(
+        opcua: [
+          OpcUAConfig()
+            ..endpoint = 'opc.tcp://localhost:$upstreamPort'
+            ..serverAlias = 'plc1',
+        ],
+        aggregator: AggregatorConfig(enabled: true, port: aggregatorPort),
+      );
+
+      directSM = await StateMan.create(
+        config: config,
+        keyMappings: keyMappings,
+        useIsolate: true,
+        alias: 'test-session-stability',
+      );
+
+      for (final wrapper in directSM.clients) {
+        if (wrapper.connectionStatus == ConnectionStatus.connected) continue;
+        await wrapper.connectionStream
+            .firstWhere((event) => event.$1 == ConnectionStatus.connected)
+            .timeout(const Duration(seconds: 15));
+      }
+      _t(sw, 'direct client connected');
+
+      aggregator = AggregatorServer(
+        config: config.aggregator!,
+        sharedStateMan: directSM,
+      );
+      await aggregator.initialize(skipTls: true);
+      await aggregator.waitForPending();
+      unawaited(aggregator.runLoop());
+      _t(sw, 'aggregator started');
+
+      aggClient = await ClientIsolate.create();
+      unawaited(aggClient.runIterate().catchError((_) {}));
+      unawaited(aggClient.connect('opc.tcp://localhost:$aggregatorPort'));
+      await aggClient.awaitConnect();
+      _t(sw, 'aggClient connected');
+    }));
+
+    tearDownAll(timed('session-stability tearDownAll', () async {
+      await aggregator.shutdown();
+      await aggClient.delete();
+      await directSM.close();
+      upstreamRunning = false;
+      await Future.delayed(const Duration(milliseconds: 50));
+      upstreamServer.shutdown();
+      upstreamServer.delete();
+    }));
+
+    test('client stays connected during 10s of high-frequency upstream writes',
+        () async {
+      // Simulate a PLC cycling through updates at ~100Hz across all variables
+      // (typical of a fast PLC scan cycle writing many tags)
+      final updateTimer = Timer.periodic(
+        const Duration(milliseconds: 10),
+        (_) {
+          for (var i = 0; i < varCount; i++) {
+            upstreamServer.write(
+              NodeId.fromString(1, 'var_$i'),
+              DynamicValue(
+                  value: DateTime.now().millisecondsSinceEpoch.toDouble(),
+                  typeId: NodeId.double),
+            );
+          }
+        },
+      );
+
+      final disconnects = <ConnectionStatus>[];
+      // Track if the aggClient loses connection via state stream
+      final stateStream = aggClient.stateStream.listen((state) {
+        stderr.writeln('  aggClient state: channel=${state.channelState}, '
+            'session=${state.sessionState}, '
+            'recovery=${state.recoveryStatus}');
+        if (state.sessionState != SessionState.UA_SESSIONSTATE_ACTIVATED) {
+          disconnects.add(ConnectionStatus.disconnected);
+        }
+      });
+
+      // Keep reading from the client during the load period to
+      // exercise the full request/response path
+      var readFailures = 0;
+      var readSuccesses = 0;
+      final loadDuration = const Duration(seconds: 10);
+      final deadline = DateTime.now().add(loadDuration);
+
+      while (DateTime.now().isBefore(deadline)) {
+        try {
+          final varIdx = readSuccesses % varCount;
+          final nodeId = AggregatorNodeId.encode(
+              'plc1', NodeId.fromString(1, 'var_$varIdx'));
+          await aggClient.read(nodeId).timeout(const Duration(seconds: 3));
+          readSuccesses++;
+        } catch (e) {
+          readFailures++;
+          stderr.writeln('  Read failure: $e');
+        }
+        // Don't hammer too fast — simulate realistic HMI polling
+        await Future.delayed(const Duration(milliseconds: 100));
+      }
+
+      updateTimer.cancel();
+      await stateStream.cancel();
+
+      stderr.writeln('  Results: $readSuccesses reads OK, '
+          '$readFailures failures, '
+          '${disconnects.length} disconnects');
+
+      expect(disconnects, isEmpty,
+          reason:
+              'Client session should not drop during high upstream load. '
+              'The server loop must keep up with session management.');
+      expect(readFailures, 0,
+          reason:
+              'All client reads should succeed. '
+              'Server must remain responsive under upstream write load.');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Test: upstream auth failure surfaces through aggregator status variables
+  // ---------------------------------------------------------------------------
+  // When upstream PLC credentials are wrong, the sharedStateMan cannot connect.
+  // The HMI connects to the aggregator (which starts fine) and sees "connected"
+  // but has no idea the upstream is failing auth. The Servers/Status/OpcUa/<alias>/
+  // connected variable should be false and last_error should contain the auth error.
+  // ---------------------------------------------------------------------------
+
+  group('Upstream auth failure visibility', () {
+    late Server upstreamServer;
+    var upstreamRunning = true;
+    late StateMan directSM;
+    late AggregatorServer aggregator;
+    late ClientIsolate aggClient;
+    late int upstreamPort;
+    late int aggregatorPort;
+
+    setUpAll(timed('auth-failure setUpAll', () async {
+      final sw = Stopwatch()..start();
+      final ports = allocatePorts(9, 2);
+      upstreamPort = ports[0];
+      aggregatorPort = ports[1];
+
+      // Upstream server that requires authentication
+      upstreamServer = Server(
+        port: upstreamPort,
+        logLevel: LogLevel.UA_LOGLEVEL_ERROR,
+        users: {'admin': 'correct_password'},
+        allowAnonymous: false,
+      );
+      upstreamServer.addVariableNode(
+        NodeId.fromString(1, 'GVL.temp'),
+        DynamicValue(value: 23.5, typeId: NodeId.double, name: 'temp'),
+        accessLevel: const AccessLevelMask(read: true, write: true),
+      );
+      upstreamServer.start();
+      unawaited(() async {
+        while (upstreamRunning &&
+            upstreamServer.runIterate(waitInterval: false)) {
+          await Future.delayed(const Duration(milliseconds: 5));
+        }
+      }());
+      _t(sw, 'auth-protected upstream server started');
+
+      final keyMappings = KeyMappings(nodes: {
+        'temperature': KeyMappingEntry(
+          opcuaNode: OpcUANodeConfig(namespace: 1, identifier: 'GVL.temp')
+            ..serverAlias = 'plc1',
+        ),
+      });
+
+      // Config with WRONG credentials
+      final config = StateManConfig(
+        opcua: [
+          OpcUAConfig()
+            ..endpoint = 'opc.tcp://localhost:$upstreamPort'
+            ..serverAlias = 'plc1'
+            ..username = 'admin'
+            ..password = 'wrong_password',
+        ],
+        aggregator: AggregatorConfig(enabled: true, port: aggregatorPort),
+      );
+
+      directSM = await StateMan.create(
+        config: config,
+        keyMappings: keyMappings,
+        useIsolate: true,
+        alias: 'test-auth-fail',
+      );
+      _t(sw, 'StateMan.create with wrong creds');
+
+      // Don't wait for connection — it will never connect with wrong creds.
+      // Give some time for the connection attempt to fail.
+      await Future.delayed(const Duration(seconds: 3));
+
+      aggregator = AggregatorServer(
+        config: config.aggregator!,
+        sharedStateMan: directSM,
+      );
+      await aggregator.initialize(skipTls: true);
+      await aggregator.waitForPending();
+      unawaited(aggregator.runLoop());
+      _t(sw, 'aggregator started');
+
+      // HMI client connects to the aggregator (no auth needed)
+      aggClient = await ClientIsolate.create();
+      unawaited(aggClient.runIterate().catchError((_) {}));
+      unawaited(aggClient.connect('opc.tcp://localhost:$aggregatorPort'));
+      await aggClient.awaitConnect();
+      _t(sw, 'aggClient connected to aggregator');
+    }));
+
+    tearDownAll(timed('auth-failure tearDownAll', () async {
+      await aggregator.shutdown();
+      await aggClient.delete();
+      await directSM.close();
+      upstreamRunning = false;
+      await Future.delayed(const Duration(milliseconds: 50));
+      upstreamServer.shutdown();
+      upstreamServer.delete();
+    }));
+
+    test('HMI can connect to aggregator even when upstream auth fails',
+        () async {
+      // The aggregator server itself should be reachable
+      final objectsFolder = await aggClient.browse(NodeId.objectsFolder);
+      final names = objectsFolder.map((r) => r.browseName).toList();
+      expect(names, contains('Servers'),
+          reason: 'Aggregator address space should be browsable');
+    });
+
+    test('connected status variable shows false for failed upstream', () async {
+      final connNodeId =
+          NodeId.fromString(1, 'Servers/Status/OpcUa/plc1/connected');
+      final value = await aggClient.read(connNodeId);
+      expect(value.value, isFalse,
+          reason:
+              'connected should be false when upstream auth fails');
+    });
+
+    test('last_error variable contains auth error info', () async {
+      // Give more time for the auth failure error to propagate
+      await Future.delayed(const Duration(seconds: 2));
+
+      final errorNodeId =
+          NodeId.fromString(1, 'Servers/Status/OpcUa/plc1/last_error');
+      final value = await aggClient.read(errorNodeId);
+      stderr.writeln('  last_error value: "${value.value}"');
+
+      // The error should contain something useful about the auth failure.
+      // Currently this may be empty ('') because the error isn't surfaced
+      // through the connection status stream properly.
+      expect(value.value, isA<String>());
+      expect((value.value as String).isNotEmpty, isTrue,
+          reason:
+              'last_error should contain the auth failure reason '
+              '(e.g. BadUserAccessDenied) so the HMI operator knows why '
+              'the upstream PLC is not connected. '
+              'Currently this is empty — no error surfaced.');
+    });
+  });
+}

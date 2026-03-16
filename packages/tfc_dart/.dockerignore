@@ -1,0 +1,17 @@
+# Exclude local dart artifacts that would conflict with container build
+.dart_tool/
+.packages
+pubspec.lock
+build/
+
+# Exclude docker folder itself
+docker/
+
+# Exclude IDE and OS files
+.idea/
+.vscode/
+*.iml
+.DS_Store
+
+# Exclude test artifacts
+coverage/

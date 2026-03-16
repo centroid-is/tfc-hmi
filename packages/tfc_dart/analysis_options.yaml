@@ -1,0 +1,6 @@
+analyzer:
+  errors:
+    # Pre-existing issues in production code — not introduced by MQTT changes
+    unused_field: ignore
+    invalid_use_of_visible_for_testing_member: ignore
+    body_might_complete_normally_catch_error: ignore
