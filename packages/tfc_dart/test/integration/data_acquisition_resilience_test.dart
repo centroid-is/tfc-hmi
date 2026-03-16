@@ -1,3 +1,6 @@
+@Tags(['integration'])
+library;
+
 // TDD Tests for Data Acquisition Resilience (Issue #60)
 //
 // These tests verify that the data acquisition system properly handles:

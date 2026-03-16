@@ -6,7 +6,7 @@ import 'package:modbus_client_tcp/modbus_client_tcp.dart';
 import 'package:open62541/open62541.dart' show DynamicValue, NodeId;
 import 'package:tfc_dart/core/modbus_client_wrapper.dart';
 import 'package:tfc_dart/core/modbus_device_client.dart';
-import 'package:tfc_dart/core/state_man.dart' show ConnectionStatus, KeyMappings, KeyMappingEntry, ModbusConfig, ModbusNodeConfig, ModbusRegisterType, ModbusPollGroupConfig;
+import 'package:tfc_dart/core/state_man.dart' show ConnectionStatus, KeyMappings, KeyMappingEntry, ModbusConfig, ModbusNodeConfig, ModbusRegisterType;
 import 'package:test/test.dart';
 
 // ---------------------------------------------------------------------------
@@ -391,7 +391,6 @@ void main() {
     test('_toDynamicValue applies bit mask to value', () async {
       final pair = createWrapperWithMock();
       final wrapper = pair.wrapper;
-      final mock = pair.mock;
 
       const maskedSpec = ModbusRegisterSpec(
         key: 'status_word',

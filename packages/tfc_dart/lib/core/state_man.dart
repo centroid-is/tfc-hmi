@@ -323,6 +323,88 @@ class ModbusNodeConfig {
       'ModbusNodeConfig(alias: $serverAlias, registerType: $registerType, address: $address, dataType: $dataType, pollGroup: $pollGroup)';
 }
 
+// =============================================================================
+// MQTT configuration classes
+// =============================================================================
+
+/// Payload interpretation strategy for MQTT messages.
+enum MqttPayloadType { json, raw, string }
+
+/// Top-level configuration for a single MQTT broker connection.
+///
+/// Parallels [OpcUAConfig], [M2400Config], and [ModbusConfig] in the config
+/// hierarchy.
+@JsonSerializable(explicitToJson: true)
+class MqttConfig {
+  String host;
+  int port;
+  @JsonKey(name: 'server_alias')
+  String? serverAlias;
+  @JsonKey(name: 'use_tls')
+  bool useTls;
+  @JsonKey(name: 'use_web_socket')
+  bool useWebSocket;
+  @JsonKey(name: 'ws_path')
+  String wsPath;
+  String? username;
+  String? password;
+  @JsonKey(name: 'client_id')
+  String? clientId;
+  @JsonKey(name: 'keep_alive_period')
+  int keepAlivePeriod;
+
+  MqttConfig({
+    this.host = '',
+    this.port = 1883,
+    this.serverAlias,
+    this.useTls = false,
+    this.useWebSocket = false,
+    this.wsPath = '/mqtt',
+    this.username,
+    this.password,
+    this.clientId,
+    this.keepAlivePeriod = 60,
+  });
+
+  factory MqttConfig.fromJson(Map<String, dynamic> json) =>
+      _$MqttConfigFromJson(json);
+  Map<String, dynamic> toJson() => _$MqttConfigToJson(this);
+
+  @override
+  String toString() =>
+      'MqttConfig(host: $host, port: $port, alias: $serverAlias, useTls: $useTls, useWebSocket: $useWebSocket)';
+}
+
+/// Per-key configuration that describes which MQTT topic a key maps to.
+///
+/// Parallels [OpcUANodeConfig], [M2400NodeConfig], and [ModbusNodeConfig] in
+/// the keymappings.
+@JsonSerializable(explicitToJson: true)
+class MqttNodeConfig {
+  String topic;
+  @JsonKey(defaultValue: 0)
+  int qos;
+  @JsonKey(name: 'server_alias')
+  String? serverAlias;
+  @JsonKey(name: 'payload_type', defaultValue: MqttPayloadType.json)
+  MqttPayloadType payloadType;
+
+  MqttNodeConfig({
+    required this.topic,
+    this.qos = 0,
+    this.serverAlias,
+    this.payloadType = MqttPayloadType.json,
+  });
+
+  factory MqttNodeConfig.fromJson(Map<String, dynamic> json) =>
+      _$MqttNodeConfigFromJson(json);
+  Map<String, dynamic> toJson() => _$MqttNodeConfigToJson(this);
+
+  @override
+  String toString() =>
+      'MqttNodeConfig(topic: $topic, qos: $qos, alias: $serverAlias, payloadType: $payloadType)';
+}
+
 @JsonSerializable(explicitToJson: true)
 class StateManConfig {
   List<OpcUAConfig> opcua;
@@ -330,14 +412,16 @@ class StateManConfig {
   List<M2400Config> jbtm;
   @JsonKey(defaultValue: [])
   List<ModbusConfig> modbus;
+  @JsonKey(defaultValue: [])
+  List<MqttConfig> mqtt;
 
-  StateManConfig({required this.opcua, this.jbtm = const [], this.modbus = const []});
+  StateManConfig({required this.opcua, this.jbtm = const [], this.modbus = const [], this.mqtt = const []});
 
   StateManConfig copy() => StateManConfig.fromJson(toJson());
 
   @override
   String toString() {
-    return 'StateManConfig(opcua: ${opcua.toString()}, jbtm: ${jbtm.toString()}, modbus: ${modbus.toString()})';
+    return 'StateManConfig(opcua: ${opcua.toString()}, jbtm: ${jbtm.toString()}, modbus: ${modbus.toString()}, mqtt: ${mqtt.toString()})';
   }
 
   static Future<StateManConfig> fromFile(String path) async {
@@ -414,6 +498,8 @@ class KeyMappingEntry {
   M2400NodeConfig? m2400Node;
   @JsonKey(name: 'modbus_node')
   ModbusNodeConfig? modbusNode;
+  @JsonKey(name: 'mqtt_node')
+  MqttNodeConfig? mqttNode;
   bool? io; // if true, the key is an IO unit
   CollectEntry? collect;
 
@@ -428,14 +514,15 @@ class KeyMappingEntry {
   int? bitShift;
 
   String? get server =>
-      opcuaNode?.serverAlias ?? m2400Node?.serverAlias ?? modbusNode?.serverAlias;
+      opcuaNode?.serverAlias ?? m2400Node?.serverAlias ?? modbusNode?.serverAlias ?? mqttNode?.serverAlias;
 
-  KeyMappingEntry({this.opcuaNode, this.m2400Node, this.modbusNode, this.collect, this.bitMask, this.bitShift});
+  KeyMappingEntry({this.opcuaNode, this.m2400Node, this.modbusNode, this.mqttNode, this.collect, this.bitMask, this.bitShift});
 
   KeyMappingEntry copyWith({
     OpcUANodeConfig? opcuaNode,
     M2400NodeConfig? m2400Node,
     ModbusNodeConfig? modbusNode,
+    MqttNodeConfig? mqttNode,
     CollectEntry? collect,
     int? bitMask,
     int? bitShift,
@@ -445,6 +532,7 @@ class KeyMappingEntry {
       opcuaNode: opcuaNode ?? this.opcuaNode,
       m2400Node: m2400Node ?? this.m2400Node,
       modbusNode: modbusNode ?? this.modbusNode,
+      mqttNode: mqttNode ?? this.mqttNode,
       collect: collect ?? this.collect,
       bitMask: clearBitMask ? null : (bitMask ?? this.bitMask),
       bitShift: clearBitMask ? null : (bitShift ?? this.bitShift),
@@ -457,7 +545,7 @@ class KeyMappingEntry {
 
   @override
   String toString() {
-    return 'KeyMappingEntry(opcuaNode: ${opcuaNode?.toString()}, m2400Node: ${m2400Node?.toString()}, modbusNode: ${modbusNode?.toString()}, collect: $collect, io: $io)';
+    return 'KeyMappingEntry(opcuaNode: ${opcuaNode?.toString()}, m2400Node: ${m2400Node?.toString()}, modbusNode: ${modbusNode?.toString()}, mqttNode: ${mqttNode?.toString()}, collect: $collect, io: $io)';
   }
 }
 
@@ -475,7 +563,8 @@ class KeyMappings {
     final entry = nodes[key];
     return entry?.opcuaNode?.serverAlias ??
         entry?.m2400Node?.serverAlias ??
-        entry?.modbusNode?.serverAlias;
+        entry?.modbusNode?.serverAlias ??
+        entry?.mqttNode?.serverAlias;
   }
 
   String? lookupKey(NodeId nodeId) {
