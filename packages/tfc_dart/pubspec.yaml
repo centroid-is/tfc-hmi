@@ -41,6 +41,9 @@ dependencies:
   modbus_client_tcp:
     path: ../modbus_client_tcp
 
+  # MQTT
+  mqtt_client: ^10.0.0
+
   # Utilities
   collection: ^1.18.0
   path: ^1.9.1
