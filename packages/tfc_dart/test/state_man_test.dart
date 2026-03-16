@@ -811,4 +811,95 @@ void main() {
       });
     });
   });
+
+  group('StateMan — no PLC connected (no OPC-UA clients)', () {
+    test('subscribe() returns error stream instead of crashing when no client matches', () async {
+      // Create StateMan with no OPC-UA clients but a key mapping that
+      // references an OPC-UA node — simulates startup without PLC.
+      final stateMan = await StateMan.create(
+        config: StateManConfig(opcua: []),
+        keyMappings: KeyMappings(nodes: {
+          'pump.speed': KeyMappingEntry(
+            opcuaNode: OpcUANodeConfig(namespace: 2, identifier: '1001'),
+          ),
+        }),
+      );
+
+      // subscribe() calls _monitor() which calls _getClientWrapper().
+      // Before the fix, this would throw an uncaught StateError.
+      // After the fix, it should return a Stream that emits an error.
+      final stream = await stateMan.subscribe('pump.speed');
+
+      // The stream should emit a StateManException error, not crash.
+      final errors = <Object>[];
+      final sub = stream.listen(
+        (_) {},
+        onError: (e) => errors.add(e),
+      );
+      await Future.delayed(Duration.zero);
+
+      expect(errors, isNotEmpty);
+      expect(errors.first, isA<StateManException>());
+
+      await sub.cancel();
+      await stateMan.close();
+    });
+
+    test('read() throws StateManException (not StateError) when no client matches', () async {
+      final stateMan = await StateMan.create(
+        config: StateManConfig(opcua: []),
+        keyMappings: KeyMappings(nodes: {
+          'pump.speed': KeyMappingEntry(
+            opcuaNode: OpcUANodeConfig(namespace: 2, identifier: '1001'),
+          ),
+        }),
+      );
+
+      expect(
+        () => stateMan.read('pump.speed'),
+        throwsA(isA<StateManException>()),
+      );
+
+      await stateMan.close();
+    });
+
+    test('write() throws StateManException (not StateError) when no client matches', () async {
+      final stateMan = await StateMan.create(
+        config: StateManConfig(opcua: []),
+        keyMappings: KeyMappings(nodes: {
+          'pump.speed': KeyMappingEntry(
+            opcuaNode: OpcUANodeConfig(namespace: 2, identifier: '1001'),
+          ),
+        }),
+      );
+
+      expect(
+        () => stateMan.write('pump.speed', DynamicValue(value: 42)),
+        throwsA(isA<StateManException>()),
+      );
+
+      await stateMan.close();
+    });
+
+    test('_getClientWrapper throws StateManException with helpful message', () async {
+      final stateMan = await StateMan.create(
+        config: StateManConfig(opcua: []),
+        keyMappings: KeyMappings(nodes: {
+          'pump.speed': KeyMappingEntry(
+            opcuaNode: OpcUANodeConfig(namespace: 2, identifier: '1001'),
+          ),
+        }),
+      );
+
+      // Verify the error message includes the key name
+      try {
+        await stateMan.read('pump.speed');
+        fail('Expected StateManException');
+      } on StateManException catch (e) {
+        expect(e.message, contains('pump.speed'));
+      }
+
+      await stateMan.close();
+    });
+  });
 }

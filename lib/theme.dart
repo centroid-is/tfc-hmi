@@ -57,6 +57,10 @@ abstract final class SolarizedColors {
         colorScheme: scheme,
         fontFamily: 'roboto-mono',
         textTheme: const TextTheme(),
+        textSelectionTheme: TextSelectionThemeData(
+          selectionColor: scheme.primary.withAlpha(100),
+          selectionHandleColor: scheme.primary,
+        ),
         scrollbarTheme: const ScrollbarThemeData(
             thumbVisibility: WidgetStatePropertyAll(true)),
         useMaterial3: true,

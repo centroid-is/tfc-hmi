@@ -223,10 +223,13 @@ class _PendingWrite {
 }
 
 class Database {
-  Database(this.db) {
+  Database(this.db, {this.healthTimeout = const Duration(seconds: 30)}) {
     _startBatchFlushTimer();
     _initConnectionHealth();
   }
+
+  /// How long to wait without a health event before assuming the isolate is dead.
+  final Duration healthTimeout;
 
   /// Lightweight check if the database is reachable.
   /// Opens and immediately closes a single connection. Throws on failure.
@@ -269,15 +272,45 @@ class Database {
   Map<String, RetentionPolicy> retentionPolicies = {};
   static final Logger logger = Logger();
   final Map<String, Completer<void>> _tableCreationLocks = {};
-  bool _lastConnectionState = false;
+  bool _lastConnectionState = true;
   final _connectionStateController = StreamController<bool>.broadcast();
   StreamSubscription<bool>? _healthSub;
+  Timer? _healthTimeoutTimer;
 
   void _initConnectionHealth() {
-    _healthSub = db.connectionHealth?.listen((state) {
-      _lastConnectionState = state;
-      _connectionStateController.add(state);
-    });
+    void resetTimeout() {
+      _healthTimeoutTimer?.cancel();
+      _healthTimeoutTimer = Timer(healthTimeout, () {
+        // No health event received within the timeout window — assume dead.
+        _lastConnectionState = false;
+        _connectionStateController.add(false);
+      });
+    }
+
+    _healthSub = db.connectionHealth?.listen(
+      (state) {
+        _lastConnectionState = state;
+        _connectionStateController.add(state);
+        resetTimeout();
+      },
+      onDone: () {
+        // Health stream closed — isolate likely died.
+        _healthTimeoutTimer?.cancel();
+        _lastConnectionState = false;
+        _connectionStateController.add(false);
+      },
+      onError: (error) {
+        // Health stream errored — treat as disconnected.
+        _healthTimeoutTimer?.cancel();
+        _lastConnectionState = false;
+        _connectionStateController.add(false);
+      },
+    );
+
+    // Start initial timeout (if there IS a health stream to listen to).
+    if (_healthSub != null) {
+      resetTimeout();
+    }
   }
 
   /// Multi-subscription stream of connection health.
@@ -296,6 +329,9 @@ class Database {
   /// Retry a database operation with exponential backoff.
   /// Permanent PostgreSQL errors (schema mismatch, syntax errors, etc.) are
   /// re-thrown immediately without retrying, so they don't block the flush loop.
+  /// Connection errors (SocketException, connection refused/reset) are also
+  /// re-thrown immediately — retrying on a dead pool is pointless; the health
+  /// monitor will handle pool recreation.
   Future<T> _withRetry<T>(Future<T> Function() operation,
       {int maxRetries = 5,
       Duration initialDelay = const Duration(seconds: 1)}) async {
@@ -310,6 +346,16 @@ class Database {
         // pg.ServerException in DriftRemoteException, so we check by type first
         // then fall back to parsing the message string for the SQLSTATE code.
         if (_isPermanentDbError(e)) rethrow;
+
+        // Don't retry connection errors — the pool is dead and retrying will
+        // just burn through attempts on a broken socket. The health monitor
+        // will detect this and recreate the pool/provider.
+        if (_isConnectionError(e)) {
+          logger.w('Connection error detected, not retrying (health monitor '
+              'will handle recovery): $e');
+          rethrow;
+        }
+
         if (attempt == maxRetries - 1) rethrow;
         logger.w(
             'Database operation failed (attempt ${attempt + 1}/$maxRetries): $e');
@@ -336,6 +382,21 @@ class Database {
     }
     // DriftRemoteException message format: "Severity.error 42703: …"
     return RegExp(r'\b(42|23)[0-9A-Z]{3}\b').hasMatch(e.toString());
+  }
+
+  /// Returns true if [e] indicates a broken network connection to the database.
+  ///
+  /// These errors mean the connection pool is dead and retrying on the same
+  /// pool is pointless. The health monitor will detect the outage and trigger
+  /// provider recreation with a fresh pool.
+  static bool _isConnectionError(Object e) {
+    if (e is SocketException) return true;
+    final msg = e.toString();
+    return msg.contains('SocketException') ||
+        msg.contains('Connection reset by peer') ||
+        msg.contains('Connection refused') ||
+        msg.contains('Connection closed') ||
+        msg.contains('broken pipe');
   }
 
   /// Returns true if [e] is specifically a "column does not exist" error (42703).
@@ -631,6 +692,7 @@ class Database {
   /// Dispose resources - flushes pending data before shutdown
   Future<void> dispose() async {
     _flushTimer?.cancel();
+    _healthTimeoutTimer?.cancel();
     await _healthSub?.cancel();
     await _connectionStateController.close();
     // Attempt to flush any remaining data
@@ -1108,6 +1170,7 @@ ORDER BY at.time;
   }
 
   Future<void> close() async {
+    _healthTimeoutTimer?.cancel();
     await db.close();
   }
 }

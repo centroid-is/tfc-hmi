@@ -45,7 +45,19 @@
             "request": "launch",
             "type": "dart",
             "env": {
-                "TFC_GOD": "true"
+                "TFC_GOD": "true",
+                "TFC_USER": "jonb"
+            }
+        },
+        {
+            "name": "centroid-hmi (marionette)",
+            "cwd": "centroid-hmi",
+            "request": "launch",
+            "type": "dart",
+            "args": ["--dart-define=MARIONETTE=true"],
+            "env": {
+                "TFC_GOD": "true",
+                "TFC_USER": "jonb"
             }
         },
         {

@@ -15,6 +15,8 @@ ConveyorColorPaletteConfig _$ConveyorColorPaletteConfigFromJson(
       ..size = RelativeSize.fromJson(json['size'] as Map<String, dynamic>)
       ..text = json['text'] as String?
       ..textPos = $enumDecodeNullable(_$TextPosEnumMap, json['textPos'])
+      ..techDocId = (json['techDocId'] as num?)?.toInt()
+      ..plcAssetKey = json['plcAssetKey'] as String?
       ..preview = json['preview'] as bool?;
 
 Map<String, dynamic> _$ConveyorColorPaletteConfigToJson(
@@ -25,6 +27,8 @@ Map<String, dynamic> _$ConveyorColorPaletteConfigToJson(
       'size': instance.size.toJson(),
       'text': instance.text,
       'textPos': _$TextPosEnumMap[instance.textPos],
+      'techDocId': instance.techDocId,
+      'plcAssetKey': instance.plcAssetKey,
       'preview': instance.preview,
     };
 
@@ -56,7 +60,9 @@ ConveyorConfig _$ConveyorConfigFromJson(Map<String, dynamic> json) =>
           Coordinates.fromJson(json['coordinates'] as Map<String, dynamic>)
       ..size = RelativeSize.fromJson(json['size'] as Map<String, dynamic>)
       ..text = json['text'] as String?
-      ..textPos = $enumDecodeNullable(_$TextPosEnumMap, json['textPos']);
+      ..textPos = $enumDecodeNullable(_$TextPosEnumMap, json['textPos'])
+      ..techDocId = (json['techDocId'] as num?)?.toInt()
+      ..plcAssetKey = json['plcAssetKey'] as String?;
 
 Map<String, dynamic> _$ConveyorConfigToJson(ConveyorConfig instance) =>
     <String, dynamic>{
@@ -65,6 +71,8 @@ Map<String, dynamic> _$ConveyorConfigToJson(ConveyorConfig instance) =>
       'size': instance.size.toJson(),
       'text': instance.text,
       'textPos': _$TextPosEnumMap[instance.textPos],
+      'techDocId': instance.techDocId,
+      'plcAssetKey': instance.plcAssetKey,
       'key': instance.key,
       'batchesKey': instance.batchesKey,
       'frequencyKey': instance.frequencyKey,

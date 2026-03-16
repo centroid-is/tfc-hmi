@@ -24,7 +24,9 @@ TableAssetConfig _$TableAssetConfigFromJson(Map<String, dynamic> json) =>
           Coordinates.fromJson(json['coordinates'] as Map<String, dynamic>)
       ..size = RelativeSize.fromJson(json['size'] as Map<String, dynamic>)
       ..text = json['text'] as String?
-      ..textPos = $enumDecodeNullable(_$TextPosEnumMap, json['textPos']);
+      ..textPos = $enumDecodeNullable(_$TextPosEnumMap, json['textPos'])
+      ..techDocId = (json['techDocId'] as num?)?.toInt()
+      ..plcAssetKey = json['plcAssetKey'] as String?;
 
 Map<String, dynamic> _$TableAssetConfigToJson(TableAssetConfig instance) =>
     <String, dynamic>{
@@ -33,6 +35,8 @@ Map<String, dynamic> _$TableAssetConfigToJson(TableAssetConfig instance) =>
       'size': instance.size,
       'text': instance.text,
       'textPos': _$TextPosEnumMap[instance.textPos],
+      'techDocId': instance.techDocId,
+      'plcAssetKey': instance.plcAssetKey,
       'entryKey': instance.entryKey,
       'entryCount': instance.entryCount,
       'headerText': instance.headerText,

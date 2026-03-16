@@ -148,7 +148,8 @@ class M2400Config {
   Map<String, dynamic> toJson() => _$M2400ConfigToJson(this);
 
   @override
-  String toString() => 'M2400Config(type: $type, host: $host, port: $port, alias: $serverAlias)';
+  String toString() =>
+      'M2400Config(type: $type, host: $host, port: $port, alias: $serverAlias)';
 }
 
 @JsonSerializable(explicitToJson: true)
@@ -620,7 +621,9 @@ class ClientWrapper {
     final gen = ++_heartbeatGeneration;
     _logger.i('[${config.endpoint}] Starting heartbeat on sub=$subId');
     _heartbeatSub = client.monitoredItems(
-      {serverTimeNode: [AttributeId.UA_ATTRIBUTEID_VALUE]},
+      {
+        serverTimeNode: [AttributeId.UA_ATTRIBUTEID_VALUE]
+      },
       subId,
     ).listen(
       (_) {
@@ -771,8 +774,7 @@ class M2400DeviceClientAdapter implements DeviceClient {
   DynamicValue? read(String key) => wrapper.lastValue(key);
 
   @override
-  ConnectionStatus get connectionStatus =>
-      _mapStatus(wrapper.status);
+  ConnectionStatus get connectionStatus => _mapStatus(wrapper.status);
 
   @override
   Stream<ConnectionStatus> get connectionStream =>
@@ -862,21 +864,28 @@ class StateMan {
           final stats =
               RunIterateStats("${wrapper.config.endpoint} \"$alias\"");
           while (_shouldRun) {
-            clientref.connect(wrapper.config.endpoint).onError(
-                (e, stacktrace) => logger
-                    .e('Failed to connect to ${wrapper.config.endpoint}: $e'));
-            while (_shouldRun) {
-              final startTime = DateTime.now();
-              final continueRunning =
-                  clientref.runIterate(const Duration(milliseconds: 10));
-              final execTime = DateTime.now().difference(startTime);
-              stats.recordCall(execTime);
-              if (!continueRunning) break;
-              await Future.delayed(const Duration(milliseconds: 10));
+            try {
+              clientref.connect(wrapper.config.endpoint).onError(
+                  (e, stacktrace) => logger.e(
+                      'Failed to connect to ${wrapper.config.endpoint}: $e'));
+              while (_shouldRun) {
+                final startTime = DateTime.now();
+                final continueRunning =
+                    clientref.runIterate(const Duration(milliseconds: 10));
+                final execTime = DateTime.now().difference(startTime);
+                stats.recordCall(execTime);
+                if (!continueRunning) break;
+                await Future.delayed(const Duration(milliseconds: 10));
+              }
+              stats.logFinal();
+              logger.e('Disconnecting client');
+              clientref.disconnect();
+            } catch (error) {
+              logger.e("Client run iterate error: $error");
+              try {
+                clientref.disconnect();
+              } catch (_) {}
             }
-            stats.logFinal();
-            logger.e('Disconnecting client');
-            clientref.disconnect();
             await Future.delayed(const Duration(milliseconds: 1000));
           }
           logger.e('StateMan background run iterate task exited');
@@ -989,18 +998,17 @@ class StateMan {
             // already queued and will be sent before any creates because
             // runIterate hasn't had a chance to run yet (no await above).
             for (final key in keysToResub) {
-              _monitor(key, resub: true);
+              _monitor(key, resub: true).catchError((e, s) {
+                logger.e('[$alias] Failed to resubscribe key "$key": $e\n$s');
+              });
             }
           }
         }
-      }).onError((e, s) {
+      }, onError: (e, s) {
         logger.e('[$alias] Failed to listen to state stream: $e, $s');
       });
     }
-
   }
-
-
 
   static Future<StateMan> create({
     required StateManConfig config,
@@ -1029,31 +1037,30 @@ class StateMan {
         username = opcuaConfig.username;
         password = opcuaConfig.password;
       }
-      clients.add(ClientWrapper(useIsolate
-              ? await ClientIsolate.create(
-                  username: username,
-                  password: password,
-                  certificate: cert,
-                  privateKey: key,
-                  securityMode: securityMode,
-                  logLevel: LogLevel.UA_LOGLEVEL_INFO,
-                  secureChannelLifeTime: Duration(
-                      minutes:
-                          1), // TODO can I reproduce the problem more often
-                )
-              : Client(
-                  username: username,
-                  password: password,
-                  certificate: cert,
-                  privateKey: key,
-                  securityMode: securityMode,
-                  logLevel: LogLevel.UA_LOGLEVEL_INFO,
-                  secureChannelLifeTime: Duration(
-                      minutes:
-                          1), // TODO can I reproduce the problem more often
-                ),
-          opcuaConfig,
-          resendOnRecovery: resendOnRecovery,
+      clients.add(ClientWrapper(
+        useIsolate
+            ? await ClientIsolate.create(
+                username: username,
+                password: password,
+                certificate: cert,
+                privateKey: key,
+                securityMode: securityMode,
+                logLevel: LogLevel.UA_LOGLEVEL_INFO,
+                secureChannelLifeTime: Duration(
+                    minutes: 1), // TODO can I reproduce the problem more often
+              )
+            : Client(
+                username: username,
+                password: password,
+                certificate: cert,
+                privateKey: key,
+                securityMode: securityMode,
+                logLevel: LogLevel.UA_LOGLEVEL_INFO,
+                secureChannelLifeTime: Duration(
+                    minutes: 1), // TODO can I reproduce the problem more often
+              ),
+        opcuaConfig,
+        resendOnRecovery: resendOnRecovery,
       ));
     }
     final stateMan = StateMan._(
@@ -1072,10 +1079,14 @@ class StateMan {
   }
 
   ClientWrapper _getClientWrapper(String key) {
-    // This throws if the key is not found
-    // Be mindful that null == null is true
-    return clients.firstWhere((wrapper) =>
-        wrapper.config.serverAlias == keyMappings.lookupServerAlias(key));
+    final alias = keyMappings.lookupServerAlias(key);
+    final wrapper = clients.firstWhereOrNull(
+        (wrapper) => wrapper.config.serverAlias == alias);
+    if (wrapper == null) {
+      throw StateManException(
+          'No OPC-UA client found for key "$key" (server alias: $alias)');
+    }
+    return wrapper;
   }
 
   void setSubstitution(String key, String value) {
@@ -1086,6 +1097,9 @@ class StateMan {
   }
 
   Stream<Map<String, String>> get substitutionsChanged => _subsMap$.stream;
+
+  /// Returns an unmodifiable view of the current variable substitutions.
+  Map<String, String> get substitutions => Map.unmodifiable(_substitutions);
 
   String? getSubstitution(String key) {
     return _substitutions[key];
@@ -1117,8 +1131,12 @@ class StateMan {
   ///
   /// Returns resolved subscribe key, device client, optional status filter,
   /// and optional field name for post-filter extraction. Null if not M2400.
-  ({String subscribeKey, DeviceClient dc, int? statusFilter, String? fieldName})?
-      _resolveM2400Key(String key) {
+  ({
+    String subscribeKey,
+    DeviceClient dc,
+    int? statusFilter,
+    String? fieldName
+  })? _resolveM2400Key(String key) {
     final entry = keyMappings.nodes[key];
     if (entry?.m2400Node == null) return null;
     final node = entry!.m2400Node!;
@@ -1145,9 +1163,8 @@ class StateMan {
     // check the status field before extracting the target field.
     final hasFilter = node.statusFilter != null;
     final fieldName = node.field?.name;
-    final subscribeKey = (!hasFilter && fieldName != null)
-        ? '$recordKey.$fieldName'
-        : recordKey;
+    final subscribeKey =
+        (!hasFilter && fieldName != null) ? '$recordKey.$fieldName' : recordKey;
 
     final alias = node.serverAlias;
     for (final dc in deviceClients) {
@@ -1266,7 +1283,12 @@ class StateMan {
     final parameters = <ClientApi, Map<NodeId, List<AttributeId>>>{};
 
     for (final key in opcuaKeys) {
-      final client = _getClientWrapper(key).client;
+      final ClientApi client;
+      try {
+        client = _getClientWrapper(key).client;
+      } catch (e) {
+        throw StateManException('No client for key: "$key": $e');
+      }
       final nodeId = _lookupNodeId(key);
       if (nodeId == null) {
         throw StateManException("Key: \"$key\" not found");
@@ -1355,8 +1377,7 @@ class StateMan {
     if (m2400 != null) {
       Stream<DynamicValue> stream = m2400.dc.subscribe(m2400.subscribeKey);
       if (m2400.statusFilter != null) {
-        stream = stream.where(
-            (dv) => dv['status'].asInt == m2400.statusFilter);
+        stream = stream.where((dv) => dv['status'].asInt == m2400.statusFilter);
       }
       if (m2400.fieldName != null) {
         stream = stream.map((dv) => dv[m2400.fieldName!]);
@@ -1398,7 +1419,7 @@ class StateMan {
           (wrapper.client as Client).disconnect();
         }
       } catch (_) {}
-      wrapper.client.delete();
+      await wrapper.client.delete();
       wrapper.dispose();
     }
     // Clean up subscriptions
@@ -1457,25 +1478,26 @@ class StateMan {
     }
 
     late ClientApi client;
+    late (NodeId, int?) nodeId;
     try {
       client = _getClientWrapper(key).client;
       await client.awaitConnect();
+      final lookup = _lookupNodeId(key);
+      if (lookup == null) {
+        throw StateManException('Key: "$key" not found');
+      }
+      nodeId = lookup;
     } catch (e) {
       logger.e('Failed to connect to client for key: "$key": $e');
       return Stream.error(
           StateManException('Failed to connect to client for key: "$key": $e'));
     }
-
-    final nodeId = _lookupNodeId(key);
-    if (nodeId == null) {
-      throw StateManException('Key: "$key" not found');
-    }
     final (id, idx) = nodeId;
 
     int retries = 0;
     while (_shouldRun) {
-      final wrapper = _getClientWrapper(key);
       try {
+        final wrapper = _getClientWrapper(key);
         // Cancel any leftover subscription from a previous failed attempt
         // so we don't leak monitored items while retrying.
         _subscriptions[key]?._rawSub?.cancel();
@@ -1507,7 +1529,8 @@ class StateMan {
         final ads = _subscriptions[key]!;
         final hadPrevious = ads._rawSub != null;
 
-        logger.d('[$alias] Creating monitored items for $key on sub=${wrapper.subscriptionId}');
+        logger.d(
+            '[$alias] Creating monitored items for $key on sub=${wrapper.subscriptionId}');
 
         var stream = client.monitor(id, wrapper.subscriptionId!);
         if (idx != null) {

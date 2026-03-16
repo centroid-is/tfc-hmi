@@ -39,7 +39,9 @@ RatioNumberConfig _$RatioNumberConfigFromJson(Map<String, dynamic> json) =>
           Coordinates.fromJson(json['coordinates'] as Map<String, dynamic>)
       ..size = RelativeSize.fromJson(json['size'] as Map<String, dynamic>)
       ..text = json['text'] as String?
-      ..textPos = $enumDecodeNullable(_$TextPosEnumMap, json['textPos']);
+      ..textPos = $enumDecodeNullable(_$TextPosEnumMap, json['textPos'])
+      ..techDocId = (json['techDocId'] as num?)?.toInt()
+      ..plcAssetKey = json['plcAssetKey'] as String?;
 
 Map<String, dynamic> _$RatioNumberConfigToJson(RatioNumberConfig instance) =>
     <String, dynamic>{
@@ -48,6 +50,8 @@ Map<String, dynamic> _$RatioNumberConfigToJson(RatioNumberConfig instance) =>
       'size': instance.size,
       'text': instance.text,
       'textPos': _$TextPosEnumMap[instance.textPos],
+      'techDocId': instance.techDocId,
+      'plcAssetKey': instance.plcAssetKey,
       'key1': instance.key1,
       'key2': instance.key2,
       'key1_label': instance.key1Label,

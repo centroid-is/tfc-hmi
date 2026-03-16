@@ -19,6 +19,8 @@ LEDConfig _$LEDConfigFromJson(Map<String, dynamic> json) => LEDConfig(
       ..size = RelativeSize.fromJson(json['size'] as Map<String, dynamic>)
       ..text = json['text'] as String?
       ..textPos = $enumDecodeNullable(_$TextPosEnumMap, json['textPos'])
+      ..techDocId = (json['techDocId'] as num?)?.toInt()
+      ..plcAssetKey = json['plcAssetKey'] as String?
       ..ledType = $enumDecode(_$LEDTypeEnumMap, json['led_type']);
 
 Map<String, dynamic> _$LEDConfigToJson(LEDConfig instance) => <String, dynamic>{
@@ -27,6 +29,8 @@ Map<String, dynamic> _$LEDConfigToJson(LEDConfig instance) => <String, dynamic>{
       'size': instance.size.toJson(),
       'text': instance.text,
       'textPos': _$TextPosEnumMap[instance.textPos],
+      'techDocId': instance.techDocId,
+      'plcAssetKey': instance.plcAssetKey,
       'key': instance.key,
       'on_color': const ColorConverter().toJson(instance.onColor),
       'off_color': const ColorConverter().toJson(instance.offColor),

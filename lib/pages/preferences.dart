@@ -9,11 +9,14 @@ class PreferencesPage extends StatelessWidget {
   Widget build(BuildContext context) {
     return BaseScaffold(
         title: 'Preferences',
-        body: Column(
+        body: ListView(
+          padding: const EdgeInsets.all(0),
           children: [
             const DatabaseConfigWidget(),
             const SizedBox(height: 16),
-            Expanded(child: const PreferencesKeysWidget()),
+            const McpServerSection(),
+            const SizedBox(height: 16),
+            SizedBox(height: 600, child: const PreferencesKeysWidget()),
           ],
         ));
   }

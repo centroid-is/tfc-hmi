@@ -29,7 +29,10 @@ Future<KeyMappings> fetchKeyMappings(PreferencesApi prefs) async {
 
 @Riverpod(keepAlive: true)
 Future<StateMan> stateMan(Ref ref) async {
-  final prefs = await ref.watch(preferencesProvider.future);
+  // Use ref.read instead of ref.watch to break the reactive dependency chain.
+  // StateMan reads config once at init; DB reconnects should NOT cascade here
+  // and destroy all OPC-UA connections/isolates.
+  final prefs = await ref.read(preferencesProvider.future);
   final config = await StateManConfig.fromPrefs(prefs);
 
   final keyMappings = await fetchKeyMappings(prefs);

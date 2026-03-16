@@ -87,6 +87,18 @@ class GraphAssetConfig extends BaseAsset {
         xAxis = xAxis ?? GraphAxisConfig(unit: 's'),
         yAxis = yAxis ?? GraphAxisConfig(unit: '');
 
+  @override
+  List<String> get allKeys {
+    final keys = <String>{};
+    for (final series in primarySeries) {
+      if (series.key.isNotEmpty) keys.add(series.key);
+    }
+    for (final series in secondarySeries) {
+      if (series.key.isNotEmpty) keys.add(series.key);
+    }
+    return keys.toList();
+  }
+
   factory GraphAssetConfig.fromJson(Map<String, dynamic> json) =>
       _$GraphAssetConfigFromJson(json);
   @override
