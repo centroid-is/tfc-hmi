@@ -208,11 +208,14 @@ class _ChatWidgetState extends ConsumerState<ChatWidget> {
           children: [
             Icon(Icons.vpn_key_off, size: 16, color: theme.colorScheme.outline),
             const SizedBox(width: 8),
-            Text(
-              'Select a provider above',
-              style: TextStyle(
-                fontSize: 12,
-                color: theme.colorScheme.outline,
+            Flexible(
+              child: Text(
+                'Select a provider above',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: theme.colorScheme.outline,
+                ),
+                overflow: TextOverflow.ellipsis,
               ),
             ),
           ],
@@ -268,7 +271,9 @@ class _ChatWidgetState extends ConsumerState<ChatWidget> {
               child: CircularProgressIndicator(strokeWidth: 1.5),
             ),
             SizedBox(width: 8),
-            Text('Loading...', style: TextStyle(fontSize: 12)),
+            Flexible(
+              child: Text('Loading...', style: TextStyle(fontSize: 12)),
+            ),
           ],
         ),
       ),
@@ -279,9 +284,12 @@ class _ChatWidgetState extends ConsumerState<ChatWidget> {
           children: [
             Icon(Icons.error_outline, size: 16, color: Colors.red),
             SizedBox(width: 8),
-            Text(
-              'Error loading credentials',
-              style: TextStyle(fontSize: 12, color: Colors.red),
+            Flexible(
+              child: Text(
+                'Error loading credentials',
+                style: TextStyle(fontSize: 12, color: Colors.red),
+                overflow: TextOverflow.ellipsis,
+              ),
             ),
           ],
         ),

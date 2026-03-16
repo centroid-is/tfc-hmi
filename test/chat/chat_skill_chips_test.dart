@@ -274,7 +274,22 @@ void main() {
   });
 
   group('ChatSkillChips in ChatOverlay empty state', () {
+    // ChatOverlay computes 30% width × 60% height — use a large surface
+    // so skill chips are fully visible and tappable.
+    void setLargeTestSurface(WidgetTester tester) {
+      tester.view.physicalSize = const Size(1200, 1000);
+      tester.view.devicePixelRatio = 1.0;
+    }
+
+    void resetTestSurface(WidgetTester tester) {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    }
+
     testWidgets('skill chips appear in empty chat state', (tester) async {
+      setLargeTestSurface(tester);
+      addTearDown(() => resetTestSurface(tester));
+
       await tester.pumpWidget(_wrapInStackWithPrefs(const ChatOverlay()));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 100));
@@ -291,6 +306,9 @@ void main() {
 
     testWidgets('tapping a skill chip pre-fills the message input',
         (tester) async {
+      setLargeTestSurface(tester);
+      addTearDown(() => resetTestSurface(tester));
+
       await tester.pumpWidget(_wrapInStackWithPrefs(const ChatOverlay()));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 100));
@@ -310,6 +328,9 @@ void main() {
 
     testWidgets('skill chips have correct semantic keys in overlay',
         (tester) async {
+      setLargeTestSurface(tester);
+      addTearDown(() => resetTestSurface(tester));
+
       await tester.pumpWidget(_wrapInStackWithPrefs(const ChatOverlay()));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 100));
@@ -334,6 +355,9 @@ void main() {
 
     testWidgets('chip tap places cursor at end of prompt text',
         (tester) async {
+      setLargeTestSurface(tester);
+      addTearDown(() => resetTestSurface(tester));
+
       await tester.pumpWidget(_wrapInStackWithPrefs(const ChatOverlay()));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 100));
@@ -358,6 +382,9 @@ void main() {
 
     testWidgets('tapping a second chip replaces the first prompt',
         (tester) async {
+      setLargeTestSurface(tester);
+      addTearDown(() => resetTestSurface(tester));
+
       await tester.pumpWidget(_wrapInStackWithPrefs(const ChatOverlay()));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 100));

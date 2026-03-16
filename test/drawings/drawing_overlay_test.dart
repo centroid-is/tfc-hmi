@@ -10,9 +10,9 @@ import 'package:tfc/drawings/drawing_overlay.dart';
 import 'package:tfc/widgets/searchable_pdf_viewer.dart';
 
 void main() {
-  // The overlay default size is 600x700 with 80px margin, so we need
-  // at least 680x780 viewport. Set to 1024x900 for comfortable testing.
-  const testSize = Size(1024, 900);
+  // The overlay computes size as 50% width × 70% height of the viewport.
+  // Use 1200x1000 so the overlay gets exactly 600x700.
+  const testSize = Size(1200, 1000);
 
   Widget buildOverlayTestable() {
     return ProviderScope(
