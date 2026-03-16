@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:tfc_dart/core/modbus_device_client.dart';
+import 'package:tfc_dart/core/mqtt_device_client.dart';
 import 'package:tfc_dart/core/state_man.dart';
 import 'package:tfc_dart/core/preferences.dart';
 import 'preferences.dart';
@@ -56,7 +57,10 @@ Future<StateMan> stateMan(Ref ref) async {
   try {
     final m2400Clients = createM2400DeviceClients(config.jbtm);
     final modbusClients = buildModbusDeviceClients(config.modbus, keyMappings);
-    final deviceClients = [...m2400Clients, ...modbusClients];
+    final mqttClients = config.mqtt
+        .map((mqttConfig) => MqttDeviceClientAdapter(mqttConfig, keyMappings))
+        .toList();
+    final deviceClients = [...m2400Clients, ...modbusClients, ...mqttClients];
     final stateMan = await StateMan.create(
         config: config,
         keyMappings: keyMappings,

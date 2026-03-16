@@ -1282,6 +1282,20 @@ class StateMan {
     return null;
   }
 
+  /// Find a [DeviceClient] (e.g. MQTT) that can handle [key], excluding
+  /// M2400 and Modbus adapters which are resolved by their own methods.
+  /// Returns null if no device client claims the key or if keyMappings has
+  /// no mqttNode for this key.
+  DeviceClient? _resolveOtherDeviceClient(String key) {
+    if (keyMappings.nodes[key]?.mqttNode == null) return null;
+    for (final dc in deviceClients) {
+      if (dc is M2400DeviceClientAdapter) continue;
+      if (dc is ModbusDeviceClientAdapter) continue;
+      if (dc.canSubscribe(key)) return dc;
+    }
+    return null;
+  }
+
   /// Example: read("myKey")
   Future<DynamicValue> read(String key) async {
     key = resolveKey(key);
@@ -1316,6 +1330,16 @@ class StateMan {
       return value;
     }
 
+    // Check MQTT key
+    final mqttDc = _resolveOtherDeviceClient(key);
+    if (mqttDc != null) {
+      final value = mqttDc.read(key);
+      if (value == null) {
+        throw StateManException('No cached value for key: "$key" -- not received yet');
+      }
+      return value;
+    }
+
     // Fall through to OPC UA
     try {
       final client = _getClientWrapper(key).client;
@@ -1345,15 +1369,7 @@ class StateMan {
     for (final keyToResolve in keys) {
       final key = resolveKey(keyToResolve);
 
-      // Check Modbus
-      final modbusDc = _resolveModbusDeviceClient(key);
-      if (modbusDc != null) {
-        final value = modbusDc.read(key);
-        if (value != null) results[key] = value;
-        continue;
-      }
-
-      // Check M2400
+      // Check M2400 key mappings first
       final m2400 = _resolveM2400Key(key);
       if (m2400 != null) {
         final value = m2400.dc.read(m2400.subscribeKey);
@@ -1362,6 +1378,22 @@ class StateMan {
           if (m2400.fieldName != null) result = result[m2400.fieldName!];
           results[key] = result;
         }
+        continue;
+      }
+
+      // Check Modbus
+      final modbusDc = _resolveModbusDeviceClient(key);
+      if (modbusDc != null) {
+        final value = modbusDc.read(key);
+        if (value != null) results[key] = value;
+        continue;
+      }
+
+      // Check MQTT
+      final mqttDc = _resolveOtherDeviceClient(key);
+      if (mqttDc != null) {
+        final value = mqttDc.read(key);
+        if (value != null) results[key] = value;
         continue;
       }
 
@@ -1429,6 +1461,13 @@ class StateMan {
       return;
     }
 
+    // Check MQTT
+    final mqttDc = _resolveOtherDeviceClient(key);
+    if (mqttDc != null) {
+      await mqttDc.write(key, value);
+      return;
+    }
+
     try {
       final client = _getClientWrapper(key).client;
       final nodeId = _lookupNodeId(key);
@@ -1478,6 +1517,12 @@ class StateMan {
     final modbusDc = _resolveModbusDeviceClient(key);
     if (modbusDc != null) {
       return modbusDc.subscribe(key);
+    }
+
+    // Check MQTT key
+    final mqttDc = _resolveOtherDeviceClient(key);
+    if (mqttDc != null) {
+      return mqttDc.subscribe(key);
     }
 
     // Fall through to OPC UA
