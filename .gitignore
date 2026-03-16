@@ -42,6 +42,9 @@ timescale_certs/
 page-editor.json
 .flutter-plugins-dependencies
 
+# Local marionette fork (use upstream pub.dev package)
+packages/marionette_flutter/
+
 # Binary artifacts
 *.zip
 ATV320_Installation_manual_EN_NVE41289_09.pdf

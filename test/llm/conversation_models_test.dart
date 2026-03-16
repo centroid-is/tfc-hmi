@@ -13,37 +13,21 @@ void main() {
         expect(id, matches(RegExp(r'^[0-9a-z]+$')));
       });
 
-      test('ID is derived from microsecondsSinceEpoch.toRadixString(36)', () {
-        // Capture time window around generation
-        final before = DateTime.now().microsecondsSinceEpoch;
-        final id = ConversationMeta.generateId();
-        final after = DateTime.now().microsecondsSinceEpoch;
-
-        // Parse the base-36 ID back to an integer
-        final parsed = int.parse(id, radix: 36);
-
-        // The parsed value should fall within the time window
-        expect(parsed, greaterThanOrEqualTo(before));
-        expect(parsed, lessThanOrEqualTo(after));
-      });
-
-      test('produces unique IDs', () {
+      test('produces unique IDs even in tight loops', () {
         final ids = <String>{};
         for (var i = 0; i < 100; i++) {
           ids.add(ConversationMeta.generateId());
         }
-        // At least some should be unique. Windows has ~15ms timer resolution
-        // so tight loops produce many duplicates — threshold is intentionally
-        // low to avoid flaky failures.
-        expect(ids.length, greaterThan(1));
+        // Counter suffix guarantees all 100 are unique regardless of timer
+        // resolution.
+        expect(ids.length, 100);
       });
 
-      test('IDs are monotonically increasing when parsed back', () {
+      test('IDs are lexicographically ordered when generated sequentially', () {
         final id1 = ConversationMeta.generateId();
         final id2 = ConversationMeta.generateId();
-        final val1 = int.parse(id1, radix: 36);
-        final val2 = int.parse(id2, radix: 36);
-        expect(val2, greaterThanOrEqualTo(val1));
+        // Second ID should be >= first (same timestamp, higher counter)
+        expect(id2.compareTo(id1), greaterThanOrEqualTo(0));
       });
     });
 

@@ -54,8 +54,7 @@ dependencies:
     git:
       url: https://github.com/centroid-is/microsoft-store-upgrader.git
       ref: main
-  marionette_flutter:
-    path: ../packages/marionette_flutter
+  marionette_flutter: ^0.4.0
 
 dev_dependencies:
   flutter_native_splash: ^2.4.6

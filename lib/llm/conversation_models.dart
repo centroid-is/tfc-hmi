@@ -3,7 +3,7 @@ library;
 
 /// Metadata for a single conversation (lightweight, no messages).
 class ConversationMeta {
-  /// Unique conversation identifier (base-36 microsecond timestamp).
+  /// Unique conversation identifier (base-36 microsecond timestamp + counter).
   final String id;
 
   /// Display title (first user message, truncated to 40 chars).
@@ -18,9 +18,16 @@ class ConversationMeta {
     required this.createdAt,
   });
 
+  static int _counter = 0;
+
   /// Generates a unique ID from the current microsecond timestamp.
-  static String generateId() =>
-      DateTime.now().microsecondsSinceEpoch.toRadixString(36);
+  /// Appends an incrementing counter to guarantee uniqueness even on
+  /// platforms with coarse timer resolution (e.g. Windows ~15ms).
+  static String generateId() {
+    final ts = DateTime.now().microsecondsSinceEpoch.toRadixString(36);
+    final c = (_counter++).toRadixString(36);
+    return '$ts$c';
+  }
 
   /// Extracts a title from a user message.
   ///

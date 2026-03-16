@@ -4,6 +4,7 @@ import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:shared_preferences_platform_interface/in_memory_shared_preferences_async.dart';
 import 'package:shared_preferences_platform_interface/shared_preferences_async_platform_interface.dart';
+import 'package:tfc_dart/core/secure_storage/secure_storage.dart';
 
 import '../helpers/test_helpers.dart';
 
@@ -13,6 +14,7 @@ void main() {
     SharedPreferences.setMockInitialValues({});
     SharedPreferencesAsyncPlatform.instance =
         InMemorySharedPreferencesAsync.empty();
+    SecureStorage.setInstance(FakeSecureStorage());
   });
   // ==================== Group 1: Modbus Section Rendering ====================
   group('Modbus section rendering', () {
