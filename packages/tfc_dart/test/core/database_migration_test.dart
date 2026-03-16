@@ -10,7 +10,7 @@ Future<Set<String>> _tableNames(GeneratedDatabase db) async {
   return rows.map((r) => r.read<String>('name')).toSet();
 }
 
-/// The 7 MCP tables added in the v4→v5 migration (Phase 16 consolidation).
+/// All MCP tables added in the v4→v5 migration.
 const _mcpTables = [
   'audit_log',
   'plc_code_block',
@@ -19,6 +19,10 @@ const _mcpTables = [
   'drawing_component',
   'tech_doc',
   'tech_doc_section',
+  'mcp_proposal',
+  'plc_var_ref',
+  'plc_fb_instance',
+  'plc_block_call',
 ];
 
 void main() {
@@ -41,10 +45,10 @@ void main() {
       expect(tables, contains('flutter_preferences'));
     });
 
-    test('schema version is 8', () async {
+    test('schema version is 5', () async {
       final db = AppDatabase.inMemoryForTest();
       addTearDown(() => db.close());
-      expect(db.schemaVersion, 8);
+      expect(db.schemaVersion, 5);
     });
 
     test('MCP tables support basic CRUD operations', () async {

@@ -167,7 +167,7 @@ class AppDatabase extends _$AppDatabase implements McpDatabase {
   }
 
   @override
-  int get schemaVersion => 8;
+  int get schemaVersion => 5;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -214,10 +214,11 @@ class AppDatabase extends _$AppDatabase implements McpDatabase {
               );
             }
           }
-          // Schema v5: Add MCP-owned tables (Phase 16 consolidation).
+          // Schema v5: Add all MCP tables (consolidated from branch).
           if (from < 5) {
             if (native) {
-              // SQLite: tables never existed from ServerDatabase, safe to create
+              // SQLite: m.createTable uses current drift schema which
+              // includes all columns (vendor_type, server_alias, etc.).
               await m.createTable(auditLog);
               await m.createTable(plcCodeBlockTable);
               await m.createTable(plcVariableTable);
@@ -225,13 +226,16 @@ class AppDatabase extends _$AppDatabase implements McpDatabase {
               await m.createTable(drawingComponentTable);
               await m.createTable(techDocTable);
               await m.createTable(techDocSectionTable);
+              await m.createTable(mcpProposalTable);
+              await m.createTable(plcVarRefTable);
+              await m.createTable(plcFbInstanceTable);
+              await m.createTable(plcBlockCallTable);
             } else {
-              // PostgreSQL: tables may already exist from ServerDatabase migrations.
-              // Use raw SQL with IF NOT EXISTS for idempotency.
+              // PostgreSQL: IF NOT EXISTS for idempotency.
               await m.database.customStatement(
                   'CREATE TABLE IF NOT EXISTS audit_log (id SERIAL PRIMARY KEY, operator_id TEXT NOT NULL, tool TEXT NOT NULL, arguments TEXT NOT NULL, reasoning TEXT, status TEXT NOT NULL, error TEXT, created_at TEXT NOT NULL, completed_at TEXT)');
               await m.database.customStatement(
-                  'CREATE TABLE IF NOT EXISTS plc_code_block (id SERIAL PRIMARY KEY, asset_key TEXT NOT NULL, block_name TEXT NOT NULL, block_type TEXT NOT NULL, file_path TEXT NOT NULL, declaration TEXT NOT NULL, implementation TEXT, full_source TEXT NOT NULL, parent_block_id INTEGER, indexed_at TEXT NOT NULL)');
+                  'CREATE TABLE IF NOT EXISTS plc_code_block (id SERIAL PRIMARY KEY, asset_key TEXT NOT NULL, block_name TEXT NOT NULL, block_type TEXT NOT NULL, file_path TEXT NOT NULL, declaration TEXT NOT NULL, implementation TEXT, full_source TEXT NOT NULL, parent_block_id INTEGER, indexed_at TEXT NOT NULL, vendor_type TEXT, server_alias TEXT)');
               await m.database.customStatement(
                   'CREATE TABLE IF NOT EXISTS plc_variable (id SERIAL PRIMARY KEY, block_id INTEGER NOT NULL REFERENCES plc_code_block(id), variable_name TEXT NOT NULL, variable_type TEXT NOT NULL, section TEXT NOT NULL, qualified_name TEXT NOT NULL, comment TEXT)');
               await m.database.customStatement(
@@ -242,38 +246,8 @@ class AppDatabase extends _$AppDatabase implements McpDatabase {
                   'CREATE TABLE IF NOT EXISTS tech_doc (id SERIAL PRIMARY KEY, name TEXT NOT NULL, pdf_bytes BYTEA NOT NULL, page_count INTEGER NOT NULL, section_count INTEGER NOT NULL, uploaded_at TEXT NOT NULL)');
               await m.database.customStatement(
                   'CREATE TABLE IF NOT EXISTS tech_doc_section (id SERIAL PRIMARY KEY, doc_id INTEGER NOT NULL REFERENCES tech_doc(id), parent_id INTEGER, title TEXT NOT NULL, content TEXT NOT NULL, page_start INTEGER NOT NULL, page_end INTEGER NOT NULL, level INTEGER NOT NULL, sort_order INTEGER NOT NULL)');
-            }
-          }
-          // Schema v6: Add MCP proposal notification table.
-          if (from < 6) {
-            if (native) {
-              await m.createTable(mcpProposalTable);
-            } else {
               await m.database.customStatement(
                   'CREATE TABLE IF NOT EXISTS mcp_proposal (id SERIAL PRIMARY KEY, proposal_type TEXT NOT NULL, title TEXT NOT NULL, proposal_json TEXT NOT NULL, operator_id TEXT NOT NULL, status TEXT NOT NULL DEFAULT \'pending\', created_at TEXT NOT NULL)');
-            }
-          }
-          // Schema v7: Add vendorType and serverAlias columns to plc_code_block.
-          if (from < 7) {
-            if (native) {
-              await m.database.customStatement(
-                  'ALTER TABLE plc_code_block ADD COLUMN vendor_type TEXT');
-              await m.database.customStatement(
-                  'ALTER TABLE plc_code_block ADD COLUMN server_alias TEXT');
-            } else {
-              await m.database.customStatement(
-                  'ALTER TABLE plc_code_block ADD COLUMN IF NOT EXISTS vendor_type TEXT');
-              await m.database.customStatement(
-                  'ALTER TABLE plc_code_block ADD COLUMN IF NOT EXISTS server_alias TEXT');
-            }
-          }
-          // Schema v8: Add pre-computed call graph tables.
-          if (from < 8) {
-            if (native) {
-              await m.createTable(plcVarRefTable);
-              await m.createTable(plcFbInstanceTable);
-              await m.createTable(plcBlockCallTable);
-            } else {
               await m.database.customStatement(
                   'CREATE TABLE IF NOT EXISTS plc_var_ref (id SERIAL PRIMARY KEY, block_id INTEGER NOT NULL REFERENCES plc_code_block(id), variable_path TEXT NOT NULL, kind TEXT NOT NULL, line_number INTEGER, source_line TEXT)');
               await m.database.customStatement(
