@@ -118,7 +118,7 @@ def execute_story(
             text=True,
             start_new_session=True,  # own process group for clean cleanup
         )
-        proc.wait(timeout=1800)
+        proc.wait(timeout=story.timeout)
         stdout_log.close()
         stderr_log.close()
         stdout = Path(stdout_path).read_text()

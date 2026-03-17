@@ -78,6 +78,7 @@ phases:
       - id: 6
         name: "Web conditional imports + compilation"
         depends_on: [5]
+        timeout: 5400  # 90 min — large story, many stubs to create
       - id: 7
         name: "Provider integration — static config + page hiding"
         depends_on: [5, 6]

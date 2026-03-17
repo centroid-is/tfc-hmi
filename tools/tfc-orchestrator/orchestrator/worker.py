@@ -694,14 +694,15 @@ class WorkerPool:
                 daemon=True,
             )
             reader.start()
-            proc.wait(timeout=1800)
+            timeout = story.timeout
+            proc.wait(timeout=timeout)
             reader.join(timeout=5)
 
             stderr = Path(stderr_path).read_text()
             return proc.returncode, stderr if proc.returncode != 0 else ''
         except subprocess.TimeoutExpired:
             _kill_process_tree(proc)
-            return 124, 'Timeout after 1800s'
+            return 124, f'Timeout after {timeout}s'
         except KeyboardInterrupt:
             _kill_process_tree(proc)
             raise

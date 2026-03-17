@@ -59,6 +59,7 @@ class Story:
     prompt: str
     depends_on: list[int] = field(default_factory=list)
     acceptance_checks: list[str] = field(default_factory=list)
+    timeout: int = 3600  # seconds, default 1 hour
 
 
 @dataclass
@@ -140,6 +141,7 @@ class Plan:
                     prompt=prompt,
                     depends_on=story_data.get('depends_on', []),
                     acceptance_checks=story_data.get('acceptance_checks', []),
+                    timeout=story_data.get('timeout', 3600),
                 ))
             phases.append(Phase(
                 name=phase_data['name'],
