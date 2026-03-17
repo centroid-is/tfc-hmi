@@ -208,36 +208,35 @@ void main() {
       adapter.connect();
       await connected1.future.timeout(const Duration(seconds: 10));
       expect(adapter.connectionStatus, equals(ConnectionStatus.connected));
-
-      // Dispose and create a new adapter to simulate disconnect/reconnect
       await sub.cancel();
-      adapter.dispose();
-      expect(adapter.connectionStatus, equals(ConnectionStatus.disconnected));
 
-      // Reconnect with a new adapter
-      final adapter2 = MqttDeviceClientAdapter(
-        MqttConfig(
-          host: 'localhost',
-          port: 1883,
-          serverAlias: 'test-broker',
-          clientId: 'integration_reconnect_test_2',
-          keepAlivePeriod: 10,
-        ),
-        keyMappings,
-      );
-
-      final connected2 = Completer<void>();
-      final sub2 = adapter2.connectionStream.listen((status) {
-        if (status == ConnectionStatus.connected && !connected2.isCompleted) {
-          connected2.complete();
+      // Reconnect the same adapter — connect() internally disconnects first
+      final disconnected = Completer<void>();
+      final reconnected = Completer<void>();
+      final sub2 = adapter.connectionStream
+          .skip(1) // skip current BehaviorSubject value
+          .listen((status) {
+        if (status == ConnectionStatus.disconnected &&
+            !disconnected.isCompleted) {
+          disconnected.complete();
+        }
+        if (status == ConnectionStatus.connected &&
+            !reconnected.isCompleted) {
+          reconnected.complete();
         }
       });
-      adapter2.connect();
-      await connected2.future.timeout(const Duration(seconds: 10));
-      expect(adapter2.connectionStatus, equals(ConnectionStatus.connected));
+
+      adapter.connect();
+
+      // Verify disconnected status occurs during reconnection
+      await disconnected.future.timeout(const Duration(seconds: 10));
+
+      // Then verify reconnected
+      await reconnected.future.timeout(const Duration(seconds: 10));
+      expect(adapter.connectionStatus, equals(ConnectionStatus.connected));
 
       await sub2.cancel();
-      adapter2.dispose();
+      adapter.dispose();
     });
 
     // ---- Test: WebSocket connect ----

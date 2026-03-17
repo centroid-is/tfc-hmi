@@ -40,7 +40,7 @@ Future<void> stopMosquitto() async {
   try {
     final result = await Process.run(
       'docker',
-      ['compose', 'down'],
+      ['compose', 'rm', '-sf', 'mosquitto'],
       workingDirectory: _dockerComposePath,
     );
 
