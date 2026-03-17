@@ -1,4 +1,4 @@
-import 'dart:io';
+import 'dart:io' if (dart.library.js_interop) '../core/io_stub.dart';
 import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';

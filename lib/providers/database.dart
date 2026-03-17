@@ -5,8 +5,10 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:riverpod/riverpod.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
-import 'package:tfc_dart/core/database.dart';
-import 'package:tfc_dart/core/database_drift.dart';
+import 'package:tfc_dart/core/database.dart'
+    if (dart.library.js_interop) 'package:tfc_dart/core/web_stubs/database_stub.dart';
+import 'package:tfc_dart/core/database_drift.dart'
+    if (dart.library.js_interop) 'package:tfc_dart/core/web_stubs/database_drift_stub.dart';
 
 part 'database.g.dart';
 

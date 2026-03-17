@@ -7,7 +7,8 @@ import 'package:rxdart/rxdart.dart';
 import 'common.dart';
 import 'package:tfc/converter/icon.dart';
 import 'package:tfc/converter/color_converter.dart';
-import 'package:tfc_dart/core/boolean_expression.dart';
+import 'package:tfc_dart/core/boolean_expression.dart'
+    if (dart.library.js_interop) 'package:tfc_dart/core/web_stubs/boolean_expression_stub.dart';
 import '../../widgets/boolean_expression.dart';
 import '../../providers/state_man.dart';
 

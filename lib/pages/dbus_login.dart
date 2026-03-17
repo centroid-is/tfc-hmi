@@ -6,7 +6,7 @@ import 'package:flutter_svg/flutter_svg.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'dart:async';
-import 'dart:io' show Platform;
+import 'dart:io' if (dart.library.js_interop) '../core/io_stub.dart' show Platform;
 import 'package:path/path.dart' as path;
 import '../dbus/remote.dart';
 import '../theme.dart';

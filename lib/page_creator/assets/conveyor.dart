@@ -9,11 +9,15 @@ import 'package:logger/logger.dart';
 import '../../providers/state_man.dart';
 import 'package:tfc_dart/core/state_man.dart';
 import 'package:rxdart/rxdart.dart';
-import 'package:open62541/open62541.dart' show DynamicValue;
+import 'package:open62541/open62541.dart'
+    if (dart.library.js_interop) 'package:tfc_dart/core/web_stubs/open62541_stub.dart'
+    show DynamicValue;
 import '../../widgets/graph.dart';
 import 'auger_conveyor_painter.dart';
-import 'package:tfc_dart/core/database.dart';
-import 'package:tfc_dart/core/collector.dart';
+import 'package:tfc_dart/core/database.dart'
+    if (dart.library.js_interop) 'package:tfc_dart/core/web_stubs/database_stub.dart';
+import 'package:tfc_dart/core/collector.dart'
+    if (dart.library.js_interop) 'package:tfc_dart/core/web_stubs/collector_stub.dart';
 import 'conveyor_gate.dart';
 
 part 'conveyor.g.dart';

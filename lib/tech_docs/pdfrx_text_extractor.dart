@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 
-import 'package:pdfrx/pdfrx.dart';
+import 'package:pdfrx/pdfrx.dart'
+    if (dart.library.js_interop) '../core/pdfrx_stub.dart';
 
 import 'section_detector.dart' show SizedFragment;
 import 'tech_doc_upload_service.dart' show PdfPageFragments, PdfTextExtractor;

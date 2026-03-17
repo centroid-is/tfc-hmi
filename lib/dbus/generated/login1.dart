@@ -1,7 +1,7 @@
 // This file was generated using the following command and may be overwritten.
 // dart-dbus generate-remote-object login1.xml
 
-import 'dart:io';
+import 'dart:io' if (dart.library.js_interop) '../../core/io_stub.dart';
 import 'package:dbus/dbus.dart';
 
 /// Signal data for org.freedesktop.DBus.Properties.PropertiesChanged.
