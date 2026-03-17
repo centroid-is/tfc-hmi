@@ -429,7 +429,8 @@ def main():
         'command',
         choices=['run', 'status', 'dry-run', 'dashboard', 'reset'],
     )
-    parser.add_argument('plan', help='Path to plan YAML file')
+    parser.add_argument('plan', nargs='?', default=None,
+                        help='Path to plan YAML file or plans directory (optional for dashboard)')
     parser.add_argument(
         '--max-parallel', type=int, default=3,
         help='Max parallel stories (default: 3)',
@@ -458,7 +459,21 @@ def main():
     args = parser.parse_args()
 
     try:
-        if args.command == 'dry-run':
+        if args.command == 'dashboard':
+            from .dashboard import run_dashboard
+            if args.plan:
+                plan_arg = Path(args.plan)
+                if plan_arg.is_file():
+                    plans_dir = str(plan_arg.parent)
+                else:
+                    plans_dir = str(plan_arg)
+            else:
+                # Default: plans/ directory relative to this package
+                plans_dir = str(Path(__file__).parent.parent / 'plans')
+            run_dashboard(plans_dir, host=args.host, port=args.port)
+        elif not args.plan:
+            parser.error('plan argument is required for this command')
+        elif args.command == 'dry-run':
             result = run_plan(
                 args.plan, dry_run=True,
                 no_review=args.no_review, no_gsd=args.no_gsd,
@@ -474,14 +489,6 @@ def main():
             sys.exit(0 if result.success else 1)
         elif args.command == 'status':
             show_status(args.plan)
-        elif args.command == 'dashboard':
-            from .dashboard import run_dashboard
-            plan_arg = Path(args.plan)
-            if plan_arg.is_file():
-                plans_dir = str(plan_arg.parent)
-            else:
-                plans_dir = str(plan_arg)
-            run_dashboard(plans_dir, host=args.host, port=args.port)
         elif args.command == 'reset':
             plan = Plan.from_yaml(args.plan)
             state_path = Path(plan.project_dir) / '.orchestrator' / f'{plan.name}.state.json'
