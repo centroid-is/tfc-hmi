@@ -1,0 +1,194 @@
+{
+  "comments": [
+    {
+      "id": "readmany-order",
+      "severity": "should_fix",
+      "file": "packages/tfc_dart/lib/core/state_man.dart",
+      "line": 1378,
+      "message": "readMany() routing order is Modbus\u2192MQTT\u2192M2400\u2192OPC_UA, but read()/subscribe() use M2400\u2192Modbus\u2192MQTT\u2192OPC_UA. The MQTT block was inserted between Modbus and M2400 checks instead of after both. While _resolveOtherDeviceClient skips M2400DeviceClientAdapter instances, the inconsistent ordering is confusing and fragile. Move the MQTT check after the M2400 check to match read()/subscribe().",
+      "status": "fixed",
+      "fix_attempts": 1
+    },
+    {
+      "id": "no-readmany-test",
+      "severity": "should_fix",
+      "file": "packages/tfc_dart/test/core/mqtt_stateman_routing_test.dart",
+      "line": 0,
+      "message": "No test for readMany() with MQTT keys. The diff modifies readMany() to add MQTT routing (state_man.dart:1378-1384) but there is zero test coverage for this path. Add a test that calls stateMan.readMany(['sensor_temp', 'sensor_pressure']) and verifies both values are returned from the MQTT mock.",
+      "status": "fixed",
+      "fix_attempts": 1
+    },
+    {
+      "id": "no-read-null-test",
+      "severity": "should_fix",
+      "file": "packages/tfc_dart/test/core/mqtt_stateman_routing_test.dart",
+      "line": 0,
+      "message": "No test for read() when MQTT device client has no cached value (null). The implementation throws StateManException('No cached value for key: ... not received yet') at state_man.dart:1336, but this error path has no test coverage. Add a test that reads an MQTT key before any value is published and expects the exception.",
+      "status": "fixed",
+      "fix_attempts": 1
+    },
+    {
+      "id": "weak-regression-opc",
+      "severity": "note",
+      "file": "packages/tfc_dart/test/core/mqtt_stateman_routing_test.dart",
+      "line": 252,
+      "message": "The OPC UA 'no regression' test only asserts mqttMock.canSubscribe('opc_key') is false \u2014 it does not verify that stateMan.read('opc_key') actually falls through to OPC UA. The test proves the mock won't claim the key, but doesn't prove StateMan routes it correctly. Consider verifying stateMan.read('opc_key') throws a StateManException (no OPC UA client configured), which would confirm the MQTT path was skipped.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "weak-regression-modbus",
+      "severity": "note",
+      "file": "packages/tfc_dart/test/core/mqtt_stateman_routing_test.dart",
+      "line": 282,
+      "message": "Same as the OPC UA regression test: the Modbus 'no regression' test only checks canSubscribe on the mock. It doesn't verify StateMan routing for 'modbus_key' actually reaches the Modbus path. Consider adding a ModbusDeviceClientAdapter mock and verifying the key routes to it.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "ac-lookupserveralias",
+      "severity": "note",
+      "file": "packages/tfc_dart/test/core/mqtt_stateman_routing_test.dart",
+      "line": 0,
+      "message": "Story 3 acceptance criteria states: 'Verify KeyMappings.lookupServerAlias already returns mqttNode alias (via KeyMappingEntry.server getter update from Story 1)'. No test explicitly validates this. Consider adding a test that verifies KeyMappingEntry(mqttNode: ...).server returns the mqtt serverAlias.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "readmany_order",
+      "severity": "should_fix",
+      "file": "packages/tfc_dart/lib/core/state_man.dart",
+      "line": 1378,
+      "message": "Resolution order inconsistency in readMany(). Here the order is Modbus \u2192 MQTT \u2192 M2400, but read() (line 1298) and subscribe() (line 1498) both use M2400 \u2192 Modbus \u2192 MQTT. For a key with both mqttNode and m2400Node, readMany would route to MQTT while read/subscribe route to M2400. Move the MQTT block after the M2400 block to match the canonical order.",
+      "status": "fixed",
+      "fix_attempts": 1
+    },
+    {
+      "id": "var_name_mqttDc",
+      "severity": "note",
+      "file": "packages/tfc_dart/lib/core/state_man.dart",
+      "line": 1332,
+      "message": "Variable named `mqttDc` but _resolveOtherDeviceClient returns ANY non-M2400/non-Modbus DeviceClient. Consider naming it `otherDc` or `genericDc` to match the method name and avoid confusion when future protocols are added.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "missing_null_read_test",
+      "severity": "note",
+      "file": "packages/tfc_dart/test/core/mqtt_stateman_routing_test.dart",
+      "line": 199,
+      "message": "No test covers the error path where stateMan.read() throws StateManException('No cached value for key ... not received yet') when the MQTT DeviceClient returns null. Consider adding a test that calls read() on an MQTT key without setting a cached value.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "coexistence-no-stateman",
+      "severity": "note",
+      "file": "packages/tfc_dart/test/core/mqtt_stateman_routing_test.dart",
+      "line": 378,
+      "message": "The 'Coexistence' test group (lines 377-442) only asserts on mock canSubscribe() calls directly \u2014 no StateMan instance is created. These tests prove mock isolation but do not verify that StateMan.read/write/subscribe correctly routes when MQTT, Modbus, and M2400 DeviceClients are all present. Consider adding a coexistence test that wires multiple DeviceClients into a single StateMan and reads keys from each protocol.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "missing-null-dup",
+      "severity": "note",
+      "file": "packages/tfc_dart/test/core/mqtt_stateman_routing_test.dart",
+      "line": 263,
+      "message": "Existing review comment 'missing_null_read_test' is marked open but the test now exists at line 263. This appears to duplicate the already-fixed 'no-read-null-test' finding. Mark 'missing_null_read_test' as fixed.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "resolve-no-keymappings-guard",
+      "severity": "should_fix",
+      "file": "packages/tfc_dart/lib/core/state_man.dart",
+      "line": 1288,
+      "message": "_resolveOtherDeviceClient does not consult keyMappings before trusting canSubscribe(). Compare with _resolveModbusDeviceClient (line 1273) which checks entry?.modbusNode != null AND matches serverAlias before falling through to canSubscribe(). The MQTT resolver skips both guards \u2014 any non-M2400/non-Modbus DeviceClient that returns true from canSubscribe() will capture the key, even if keyMappings has no mqttNode for it. Add a keyMappings.nodes[key]?.mqttNode != null guard (or at minimum a keyMappings.nodes.containsKey(key) check) to match the defensive pattern used by the other resolvers.",
+      "status": "fixed",
+      "fix_attempts": 1
+    },
+    {
+      "id": "dual-key-priority-incomplete",
+      "severity": "note",
+      "file": "packages/tfc_dart/test/core/mqtt_stateman_routing_test.dart",
+      "line": 344,
+      "message": "The 'MQTT + OPC UA priority' test only verifies read() for a dual-key (mqtt_node + opcua_node). The same priority applies to subscribe() and write() but neither is tested. Consider adding subscribe/write assertions in the same test to fully document the priority contract.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "readmany-null-mqtt-untested",
+      "severity": "note",
+      "file": "packages/tfc_dart/test/core/mqtt_stateman_routing_test.dart",
+      "line": 250,
+      "message": "readMany() silently skips MQTT keys when read() returns null (state_man.dart:1393-1394), unlike read() which throws StateManException. No test verifies this silent-skip behavior. Consider adding a test calling readMany with an MQTT key that has no cached value and asserting it is absent from the result map (not that it throws).",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "coexistence-no-stateman-routing",
+      "severity": "note",
+      "file": "packages/tfc_dart/test/core/mqtt_stateman_routing_test.dart",
+      "line": 377,
+      "message": "The 'Coexistence' group (lines 377-443) tests mock-level canSubscribe() isolation and stream independence, but never wires the mocks through StateMan. These tests prove the mocks don't interfere with each other, not that StateMan routes correctly when multiple protocol adapters coexist. Consider creating a StateMan with both an MQTT mock and a Modbus-like mock and verifying each key routes to the correct adapter via read/write/subscribe.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "no-serveralias-match",
+      "severity": "should_fix",
+      "file": "packages/tfc_dart/lib/core/state_man.dart",
+      "line": 1289,
+      "message": "_resolveOtherDeviceClient does not match mqttNode.serverAlias against the DeviceClient. Compare with _resolveModbusDeviceClient (line 1273) which extracts `entry!.modbusNode!.serverAlias` and filters with `dc.serverAlias == alias`. With multiple MQTT brokers, the current code returns the first non-M2400/non-Modbus DeviceClient where canSubscribe() is true \u2014 regardless of whether the key's configured broker matches the client. Extract `keyMappings.nodes[key]!.mqttNode!.serverAlias` and add a type check + alias comparison (e.g. `if (dc is MqttDeviceClientAdapter && dc.serverAlias == alias)`) to match the defensive pattern of the other resolvers.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "no-multi-broker-test",
+      "severity": "note",
+      "file": "packages/tfc_dart/test/core/mqtt_stateman_routing_test.dart",
+      "line": 165,
+      "message": "All tests use a single MockMqttDeviceClient. No test verifies correct routing when two MQTT DeviceClients are present for different brokers (e.g., mqtt1 handles 'sensor_temp', mqtt2 handles 'sensor_pressure'). This would catch the missing serverAlias matching in _resolveOtherDeviceClient and document multi-broker behavior.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "resolve-no-serveralias-match",
+      "severity": "should_fix",
+      "file": "packages/tfc_dart/lib/core/state_man.dart",
+      "line": 1291,
+      "message": "_resolveOtherDeviceClient does not explicitly match serverAlias from keyMappings against the DeviceClient, unlike _resolveModbusDeviceClient (line 1278) which checks `dc is ModbusDeviceClientAdapter && dc.serverAlias == alias`. The MQTT resolver relies on the adapter's canSubscribe() to internally filter by serverAlias. This works today because MqttDeviceClientAdapter.canSubscribe performs the check, but it violates the defensive pattern established by the Modbus resolver. If a second non-M2400/non-Modbus adapter is added (or an MQTT adapter has a canSubscribe bug), keys could route to the wrong adapter. Extract `final alias = keyMappings.nodes[key]!.mqttNode!.serverAlias` and add `dc is MqttDeviceClientAdapter && dc.config.serverAlias == alias` to match the Modbus resolver pattern.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "method-name-vs-guard-mismatch",
+      "severity": "note",
+      "file": "packages/tfc_dart/lib/core/state_man.dart",
+      "line": 1289,
+      "message": "_resolveOtherDeviceClient has a generic name implying it handles any non-M2400/non-Modbus DeviceClient, but the guard `keyMappings.nodes[key]?.mqttNode == null` makes it MQTT-specific. A future protocol (e.g., BACnet) with its own DeviceClient and KeyMappingEntry field would NOT be found by this method. Consider renaming to `_resolveMqttDeviceClient` to match its actual behavior, or restructure to iterate a protocol-agnostic resolver chain.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "no-multi-broker-test",
+      "severity": "note",
+      "file": "packages/tfc_dart/test/core/mqtt_stateman_routing_test.dart",
+      "line": 0,
+      "message": "No test verifies correct routing when multiple MQTT brokers are configured. If StateMan has two MqttDeviceClientAdapters (e.g., serverAlias 'broker1' and 'broker2'), keys mapped to broker2 must not route to broker1. Add a test with two MockMqttDeviceClients with different serverAliases and verify each key routes to the correct adapter.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "stale-write-comment",
+      "severity": "note",
+      "file": "packages/tfc_dart/lib/core/state_man.dart",
+      "line": 1457,
+      "message": "Comment says `// Check Modbus (and other DeviceClient protocols)` but the MQTT check is now a separate block below (line 1464). The parenthetical '(and other DeviceClient protocols)' is misleading post-diff. Update to just `// Check Modbus`.",
+      "status": "open",
+      "fix_attempts": 0
+    }
+  ],
+  "fixed_then_reopened": []
+}

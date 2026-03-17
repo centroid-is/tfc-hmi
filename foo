@@ -1,0 +1,78 @@
+WITH filtered_b1 AS (
+  SELECT *
+  FROM stackers
+  WHERE "stacker1_newPallet" IN ('f', 't')
+     AND $__timeFilter("time")
+),
+filtered_b2 AS (
+  SELECT *
+  FROM stackers
+  WHERE "stacker2_newPallet" IN ('f', 't')
+     AND $__timeFilter("time")
+),
+filtered_b3 AS (
+  SELECT *
+  FROM stackers
+  WHERE "stacker3_newPallet" IN ('f', 't')
+     AND $__timeFilter("time")
+),
+filtered_b4 AS (
+  SELECT *
+  FROM stackers
+  WHERE "stacker4_newPallet" IN ('f', 't')
+     AND $__timeFilter("time")
+),
+filtered_b5 AS (
+  SELECT *
+  FROM stackers
+  WHERE "stacker5_newPallet" IN ('f', 't')
+     AND $__timeFilter("time")
+),
+subq_b1 AS (
+  SELECT
+    "time",
+    "stacker1_newPallet",
+    LAG("stacker1_newPallet") OVER (ORDER BY "time") AS b1_prev
+  FROM filtered_b1
+),
+subq_b2 AS (
+  SELECT
+    "time",
+    "stacker2_newPallet",
+    LAG("stacker2_newPallet") OVER (ORDER BY "time") AS b2_prev
+  FROM filtered_b2
+),
+subq_b3 AS (
+  SELECT
+    "time",
+    "stacker3_newPallet",
+    LAG("stacker3_newPallet") OVER (ORDER BY "time") AS b3_prev
+  FROM filtered_b3
+),
+subq_b4 AS (
+  SELECT
+    "time",
+    "stacker4_newPallet",
+    LAG("stacker4_newPallet") OVER (ORDER BY "time") AS b4_prev
+  FROM filtered_b4
+),
+subq_b5 AS (
+  SELECT
+    "time",
+    "stacker5_newPallet",
+    LAG("stacker5_newPallet") OVER (ORDER BY "time") AS b5_prev
+  FROM filtered_b5
+)
+SELECT 
+  (SELECT COUNT(*) FROM subq_b1 WHERE b1_prev = 'f' AND "stacker1_newPallet" = 't') AS "Stacker 1",
+  (SELECT COUNT(*) FROM subq_b2 WHERE b2_prev = 'f' AND "stacker2_newPallet" = 't') AS "Stacker 2",
+  (SELECT COUNT(*) FROM subq_b3 WHERE b3_prev = 'f' AND "stacker3_newPallet" = 't') AS "Stacker 3",
+  (SELECT COUNT(*) FROM subq_b4 WHERE b4_prev = 'f' AND "stacker4_newPallet" = 't') AS "Stacker 4",
+  (SELECT COUNT(*) FROM subq_b5 WHERE b5_prev = 'f' AND "stacker5_newPallet" = 't') AS "Stacker 5",
+  (
+    (SELECT COUNT(*) FROM subq_b1 WHERE b1_prev = 'f' AND "stacker1_newPallet" = 't') +
+    (SELECT COUNT(*) FROM subq_b2 WHERE b2_prev = 'f' AND "stacker2_newPallet" = 't') +
+    (SELECT COUNT(*) FROM subq_b3 WHERE b3_prev = 'f' AND "stacker3_newPallet" = 't') +
+    (SELECT COUNT(*) FROM subq_b4 WHERE b4_prev = 'f' AND "stacker4_newPallet" = 't') +
+    (SELECT COUNT(*) FROM subq_b5 WHERE b5_prev = 'f' AND "stacker5_newPallet" = 't')
+  ) AS "Total";

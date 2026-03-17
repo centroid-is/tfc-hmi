@@ -8,7 +8,13 @@ MqttClient createMqttClient(MqttConfig config) {
   final clientId =
       config.clientId ?? 'tfc_${DateTime.now().millisecondsSinceEpoch}';
 
-  final client = MqttServerClient.withPort(config.host, clientId, config.port);
+  // For WebSocket mode, MqttServerClient expects a full ws:// URI as the host
+  // so the connection handler can parse the scheme and path correctly.
+  final host = config.useWebSocket
+      ? '${config.useTls ? 'wss' : 'ws'}://${config.host}${config.wsPath}'
+      : config.host;
+
+  final client = MqttServerClient.withPort(host, clientId, config.port);
 
   if (config.useWebSocket) {
     client.useWebSocket = true;

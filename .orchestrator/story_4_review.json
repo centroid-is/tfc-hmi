@@ -1,0 +1,50 @@
+{
+  "comments": [
+    {
+      "id": "a1b2c3d4",
+      "severity": "should_fix",
+      "file": "packages/tfc_dart/test/integration/mosquitto_helpers.dart",
+      "line": 43,
+      "message": "stopMosquitto() runs `docker compose down` which tears down ALL services (including timescaledb if running from other integration tests). Should use `['compose', 'stop', 'mosquitto']` or `['compose', 'rm', '-sf', 'mosquitto']` to only stop the mosquitto service, matching how startMosquitto() only starts mosquitto via `['compose', 'up', '-d', 'mosquitto']`.",
+      "status": "fixed",
+      "fix_attempts": 1
+    },
+    {
+      "id": "e5f6g7h8",
+      "severity": "should_fix",
+      "file": "packages/tfc_dart/test/integration/mqtt_integration_test.dart",
+      "line": 189,
+      "message": "Disconnect/reconnect test creates a new adapter instead of reconnecting the same one. Story 4 AC says 'Disconnect client, verify disconnected status, reconnect, verify reconnected' \u2014 this should test the adapter's ability to reconnect (e.g., call connect() again on the same adapter after disconnection) rather than creating a fresh adapter, which only tests initial connection twice.",
+      "status": "fixed",
+      "fix_attempts": 1
+    },
+    {
+      "id": "i9j0k1l2",
+      "severity": "note",
+      "file": "packages/tfc_dart/test/integration/mqtt_integration_test.dart",
+      "line": 3,
+      "message": "File-level @Timeout is 60s but Story 4 AC says 'Each test should have a 10-second timeout'. The individual .timeout() calls on Futures use 10s which is correct, but the test framework timeout is 60s. This is arguably fine since the 10s timeouts on the Futures are the effective constraint, and 60s gives headroom for Docker startup.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "m3n4o5p6",
+      "severity": "note",
+      "file": "packages/tfc_dart/test/integration/mqtt_integration_test.dart",
+      "line": 117,
+      "message": "Publisher client is not disconnected in error/timeout paths. If the test fails mid-execution (e.g., timeout on line 112), the publisher client on line 104 leaks. Consider using addTearDown() or a try/finally to ensure cleanup.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "q7r8s9t0",
+      "severity": "note",
+      "file": "packages/tfc_dart/test/integration/mqtt_integration_test.dart",
+      "line": 54,
+      "message": "Connection stream subscription on line 43 is cancelled but the connectionStream.listen on line 85 (subscribe test) is never cancelled \u2014 the adapter.dispose() likely closes it, but explicit cleanup would be more robust and consistent with the first test.",
+      "status": "open",
+      "fix_attempts": 0
+    }
+  ],
+  "fixed_then_reopened": []
+}

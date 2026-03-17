@@ -1,0 +1,5972 @@
+{
+  "nodes": {
+    "Line1.Motor1": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Drives_Line1[1].HMI",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "Line1.Motor1",
+        "name": "Line1.Motor1",
+        "retention": {
+          "drop_after_min": 525600,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": 5000000,
+        "sample_expression": null
+      }
+    },
+    "Line1.Motor1.Error": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Drives_Line1[1].HMI.p_stat_Error",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Line1.Motor1.LastFault": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Drives_Line1[1].HMI.p_stat_LastFault",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Line1.Motor2": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Drives_Line1[2].HMI",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "Line1.Motor2",
+        "name": "Line1.Motor2",
+        "retention": {
+          "drop_after_min": 525600,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": 5000000,
+        "sample_expression": null
+      }
+    },
+    "Line1.Motor2.Error": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Drives_Line1[2].HMI.p_stat_Error",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Line1.Motor2.LastFault": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Drives_Line1[2].HMI.p_stat_LastFault",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Line2.Motor1": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Drives_Line2[1].HMI",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "Line2.Motor1",
+        "name": "Line2.Motor1",
+        "retention": {
+          "drop_after_min": 525600,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": 5000000,
+        "sample_expression": null
+      }
+    },
+    "Line2.Motor1.Error": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Drives_Line2[1].HMI.p_stat_Error",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Line2.Motor1.LastFault": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Drives_Line2[1].HMI.p_stat_LastFault",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Line2.Motor2": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Drives_Line2[2].HMI",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "Line2.Motor2",
+        "name": "Line2.Motor2",
+        "retention": {
+          "drop_after_min": 525600,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": 5000000,
+        "sample_expression": null
+      }
+    },
+    "Line2.Motor2.Error": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Drives_Line2[2].HMI.p_stat_Error",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Line2.Motor2.LastFault": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Drives_Line2[2].HMI.p_stat_LastFault",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Line2.Motor3": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Drives_Line2[3].HMI",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "Line2.Motor3",
+        "name": "Line2.Motor3",
+        "retention": {
+          "drop_after_min": 525600,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": 5000000,
+        "sample_expression": null
+      }
+    },
+    "Line2.Motor3.Error": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Drives_Line2[3].HMI.p_stat_Error",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Line2.Motor3.LastFault": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Drives_Line2[3].HMI.p_stat_LastFault",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Line3.Motor1": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Drives_Line3[1].HMI",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "Line3.Motor1",
+        "name": "Line3.Motor1",
+        "retention": {
+          "drop_after_min": 525600,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": 5000000,
+        "sample_expression": null
+      }
+    },
+    "Line3.Motor1.Error": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Drives_Line3[1].HMI.p_stat_Error",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Line3.Motor1.LastFault": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Drives_Line3[1].HMI.p_stat_LastFault",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Line3.Motor2": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Drives_Line3[2].HMI",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "Line3.Motor2",
+        "name": "Line3.Motor2",
+        "retention": {
+          "drop_after_min": 525600,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": 5000000,
+        "sample_expression": null
+      }
+    },
+    "Line3.Motor2.Error": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Drives_Line3[2].HMI.p_stat_Error",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Line3.Motor2.LastFault": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Drives_Line3[2].HMI.p_stat_LastFault",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Line3.Motor3": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Drives_Line3[3].HMI",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "Line3.Motor3",
+        "name": "Line3.Motor3",
+        "retention": {
+          "drop_after_min": 525600,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": 5000000,
+        "sample_expression": null
+      }
+    },
+    "Line3.Motor3.Error": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Drives_Line3[3].HMI.p_stat_Error",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Line3.Motor3.LastFault": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Drives_Line3[3].HMI.p_stat_LastFault",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "SB1": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.speedBatchers[1].hmi",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "SB1.EmgGateTripped": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.speedBatchers[1].hmi.p_stat_EmgGateTripped",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "SB1.Running": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.speedBatchers[1].hmi.p_stat_Running",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "SB1.Emergency": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.SpeedBatcher1EmgStop",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Line1.Motor1.Actuator": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.conv_1_09_1.p_stat_State",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Line1.Conveyor1.InPlace": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.line1Conveyor1InPlace",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Line1.Motor2.Actuator": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.conv_1_02.p_stat_State",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Line1.Conveyor2.InPlace": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.line1Conveyor2InPlace",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Line2.Motor1.Actuator": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.conv_1_09_2.p_stat_State",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Line2.Conveyor1.InPlace": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.line2Conveyor1InPlace",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Line2.Motor2.Mover": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.conv_1_04.p_stat_State",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Line2.Conveyor2.InPlace": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.line2Conveyor2InPlace",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Line3.Motor1.Actuator": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.conv_1_09_3.p_stat_State",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Line3.Conveyor1.InPlace": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.line3Conveyor1InPlace",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Line3.Motor2.Actuator": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.conv_1_06.p_stat_State",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Line3.Conveyor2.InPlace": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.line3Conveyor2InPlace",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "SB2": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.speedBatchers[2].hmi",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "SB2.EmgGateTripped": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.speedBatchers[2].hmi.p_stat_EmgGateTripped",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "SB2.Running": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.speedBatchers[2].hmi.p_stat_Running",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "SB2.Emergency": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.SpeedBatcher2EmgStop",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "SB3": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.speedBatchers[3].hmi",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "SB3.EmgGateTripped": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.speedBatchers[3].hmi.p_stat_EmgGateTripped",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "SB3.Running": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.speedBatchers[3].hmi.p_stat_Running",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "SB3.Emergency": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.SpeedBatcher3EmgStop",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "LineRecipes": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.recipes",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "+UH1.71.pressure": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.air_1_71.p_stat_pressure",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "+UH1.71.pressureMissing": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.air_1_71.p_stat_pressure_missing",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "+UH1.71.softStart": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.air_1_71.p_stat_softStart",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "+UH1.71.button": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.air_1_71.p_cmd_button",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "+UH1.71.buttonFeedback": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.air_1_71.p_stat_button",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "+UH1.72.pressure": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.air_1_72.p_stat_pressure",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "+UH1.72.pressureMissing": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.air_1_72.p_stat_pressure_missing",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "+UH1.72.softStart": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.air_1_72.p_stat_softStart",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "+UH1.72.button": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.air_1_72.p_cmd_button",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "+UH1.72.buttonFeedback": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.air_1_72.p_stat_button",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Packing.1.dropOk": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.packing[1].hmi.p_stat_DropOk",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Packing.1.running": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.packing[1].hmi.p_stat_Run",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Packing.2.dropOk": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.packing[2].hmi.p_stat_DropOk",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Packing.2.running": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.packing[2].hmi.p_stat_Run",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Packing.3.dropOk": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.packing[3].hmi.p_stat_DropOk",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Packing.3.running": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.packing[3].hmi.p_stat_Run",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Line1.running": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.line1Run",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Line1.cleaning": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.line1Clean",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Line2.running": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.line2Run",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Line2.cleaning": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.line2Clean",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Line3.running": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.line3Run",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Line3.cleaning": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.line3Clean",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Subdevice.3": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Internal_Bus_3.hmi",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": true,
+      "collect": null
+    },
+    "Subdevice.4": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Internal_Bus_4.hmi",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": true,
+      "collect": null
+    },
+    "Subdevice.5": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Internal_Bus_5.hmi",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": true,
+      "collect": null
+    },
+    "Subdevice.6": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Internal_Bus_6.hmi",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": true,
+      "collect": null
+    },
+    "Subdevice.7": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Internal_Bus_7.hmi",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": true,
+      "collect": null
+    },
+    "Subdevice.8": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Internal_Bus_8.hmi",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": true,
+      "collect": null
+    },
+    "Subdevice.9": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Internal_Bus_9.hmi",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": true,
+      "collect": null
+    },
+    "Subdevice.10": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Internal_Bus_10.hmi",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": true,
+      "collect": null
+    },
+    "Subdevice.11": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Internal_Bus_11.hmi",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": true,
+      "collect": null
+    },
+    "Subdevice.12": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Internal_Bus_12.hmi",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": true,
+      "collect": null
+    },
+    "Subdevice.13": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Internal_Bus_13.hmi",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": true,
+      "collect": null
+    },
+    "BatchLines.cabinetDoor": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.cabinetDoorOpen",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Domelight.green": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.domeLightGreen",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Domelight.yellow": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.domeLightYellow",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Domelight.red": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.domeLightRed",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Line1.Conveyor2": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Line1_Conveyor2",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Line2.Conveyor2": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Line2_Conveyor2",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Line2.Conveyor2.MoverTimeout": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.conv_1_04.p_stat_SafetyTimeout",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Line2.Conveyor3": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Line2_Conveyor3",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Line3.Conveyor2": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Line3_Conveyor2",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Line3.Conveyor3": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Line3_Conveyor3",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Ethercat.AtLeastOneDeviceInInit": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_GLOBAL.at_least_one_device_in_init",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Ethercat.AtLeastOneDeviceInPreOp": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_GLOBAL.at_least_one_device_in_pre_op",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Ethercat.AtLeastOneDriveInSafeOp": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_GLOBAL.at_least_one_device_in_safe_op",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Ethercat.AtLeastOneDriveIndicatesError": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_GLOBAL.at_least_one_device_indicates_error",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Ethercat.DcNotInSync": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_GLOBAL.dc_not_in_sync",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Ethercat.IoLocked": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_GLOBAL.io_locked",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Ethercat.IoResetActive": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_GLOBAL.io_reset_active",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Ethercat.LinkError": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_GLOBAL.link_error",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Ethercat.LinkErrorRedundancy": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_GLOBAL.link_error_redundancy",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Ethercat.MiniPortNotFound": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_GLOBAL.miniport_not_found",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Ethercat.MissingOneFrame": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_GLOBAL.missing_one_frame",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Ethercat.OutOfSendResources": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_GLOBAL.out_of_send_resources",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Ethercat.WatchdogTriggered": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_GLOBAL.watchdog_triggered",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Line2.Motor2.ResetMover": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.conv_1_04.p_cmd_ResetSafety",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Line2.Motor2.ResetMoverFeedback": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.conv_1_04.p_stat_SafetyReactionActive",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Server.State": {
+      "opcua_node": {
+        "namespace": 0,
+        "identifier": "2259",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "+UH1.01.Schneider24VFuseOk": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Schneider24vFuseOk",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "+UH1.01.MoverTripped": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.conv_1_04.p_stat_Tripped",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Line1.avgBPM1Minute": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Line1BPM.hmi.avgBPM1Minute",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "Line1.avgBPM1Minute",
+        "name": "Line1.avgBPM1Minute",
+        "retention": {
+          "drop_after_min": 525600,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "Line1.avgBPM5Minute": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Line1BPM.hmi.avgBPM5Minute",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "Line1.avgBPM5Minute",
+        "name": "Line1.avgBPM5Minute",
+        "retention": {
+          "drop_after_min": 525600,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "Line1.avgBPM10Minute": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Line1BPM.hmi.avgBPM10Minute",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "Line1.avgBPM10Minute",
+        "name": "Line1.avgBPM10Minute",
+        "retention": {
+          "drop_after_min": 525600,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "Line1.avgBPM30Minute": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Line1BPM.hmi.avgBPM30Minute",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "Line1.avgBPM30Minute",
+        "name": "Line1.avgBPM30Minute",
+        "retention": {
+          "drop_after_min": 525600,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "Line1.avgBPM60Minute": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Line1BPM.hmi.avgBPM60Minute",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "Line1.avgBPM60Minute",
+        "name": "Line1.avgBPM60Minute",
+        "retention": {
+          "drop_after_min": 525600,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "Line1.avgBPM": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Line1BPM.hmi",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "Line1.avgBPM",
+        "name": "Line1.avgBPM",
+        "retention": {
+          "drop_after_min": 525600,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "Line2.avgBPM1Minute": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Line2BPM.hmi.avgBPM1Minute",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "Line2.avgBPM1Minute",
+        "name": "Line2.avgBPM1Minute",
+        "retention": {
+          "drop_after_min": 525600,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "Line2.avgBPM5Minute": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Line2BPM.hmi.avgBPM5Minute",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "Line2.avgBPM5Minute",
+        "name": "Line2.avgBPM5Minute",
+        "retention": {
+          "drop_after_min": 525600,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "Line2.avgBPM10Minute": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Line2BPM.hmi.avgBPM10Minute",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "Line2.avgBPM10Minute",
+        "name": "Line2.avgBPM10Minute",
+        "retention": {
+          "drop_after_min": 525600,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "Line2.avgBPM30Minute": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Line2BPM.hmi.avgBPM30Minute",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "Line2.avgBPM30Minute",
+        "name": "Line2.avgBPM30Minute",
+        "retention": {
+          "drop_after_min": 525600,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "Line2.avgBPM60Minute": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Line2BPM.hmi.avgBPM60Minute",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "Line2.avgBPM60Minute",
+        "name": "Line2.avgBPM60Minute",
+        "retention": {
+          "drop_after_min": 525600,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "Line3.avgBPM1Minute": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Line3BPM.hmi.avgBPM1Minute",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "Line3.avgBPM1Minute",
+        "name": "Line3.avgBPM1Minute",
+        "retention": {
+          "drop_after_min": 525600,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "Line3.avgBPM5Minute": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Line3BPM.hmi.avgBPM5Minute",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "Line3.avgBPM5Minute",
+        "name": "Line3.avgBPM5Minute",
+        "retention": {
+          "drop_after_min": 525600,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "Line3.avgBPM10Minute": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Line3BPM.hmi.avgBPM10Minute",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "Line3.avgBPM10Minute",
+        "name": "Line3.avgBPM10Minute",
+        "retention": {
+          "drop_after_min": 525600,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "Line3.avgBPM30Minute": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Line3BPM.hmi.avgBPM30Minute",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "Line3.avgBPM30Minute",
+        "name": "Line3.avgBPM30Minute",
+        "retention": {
+          "drop_after_min": 525600,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "Line3.avgBPM60Minute": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Line3BPM.hmi.avgBPM60Minute",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "Line3.avgBPM60Minute",
+        "name": "Line3.avgBPM60Minute",
+        "retention": {
+          "drop_after_min": 525600,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "SB1.Checkweigher1.CurrentWeight": {
+      "opcua_node": {
+        "namespace": 2,
+        "identifier": "Checkweigher1.CurrentWeight",
+        "array_index": null,
+        "server_alias": "speedbatcher1"
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "SB1.Checkweigher1.CurrentWeight",
+        "name": "SB1.Checkweigher1.CurrentWeight",
+        "retention": {
+          "drop_after_min": 525600,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "SB1.Checkweigher2.CurrentWeight": {
+      "opcua_node": {
+        "namespace": 2,
+        "identifier": "Checkweigher2.CurrentWeight",
+        "array_index": null,
+        "server_alias": "speedbatcher1"
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "SB1.Checkweigher2.CurrentWeight",
+        "name": "SB1.Checkweigher2.CurrentWeight",
+        "retention": {
+          "drop_after_min": 525600,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "SB2.Checkweigher1.CurrentWeight": {
+      "opcua_node": {
+        "namespace": 2,
+        "identifier": "Checkweigher1.CurrentWeight",
+        "array_index": null,
+        "server_alias": "speedbatcher2"
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "SB2.Checkweigher1.CurrentWeight",
+        "name": "SB2.Checkweigher1.CurrentWeight",
+        "retention": {
+          "drop_after_min": 525600,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "SB2.Checkweigher2.CurrentWeight": {
+      "opcua_node": {
+        "namespace": 2,
+        "identifier": "Checkweigher2.CurrentWeight",
+        "array_index": null,
+        "server_alias": "speedbatcher2"
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "SB2.Checkweigher2.CurrentWeight",
+        "name": "SB2.Checkweigher2.CurrentWeight",
+        "retention": {
+          "drop_after_min": 525600,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "SB3.Checkweigher1.CurrentWeight": {
+      "opcua_node": {
+        "namespace": 2,
+        "identifier": "Checkweigher1.CurrentWeight",
+        "array_index": null,
+        "server_alias": "speedbatcher3"
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "SB3.Checkweigher1.CurrentWeight",
+        "name": "SB3.Checkweigher1.CurrentWeight",
+        "retention": {
+          "drop_after_min": 525600,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "SB3.Checkweigher2.CurrentWeight": {
+      "opcua_node": {
+        "namespace": 2,
+        "identifier": "Checkweigher2.CurrentWeight",
+        "array_index": null,
+        "server_alias": "speedbatcher3"
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "SB3.Checkweigher2.CurrentWeight",
+        "name": "SB3.Checkweigher2.CurrentWeight",
+        "retention": {
+          "drop_after_min": 525600,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "SB1.BatchLid1": {
+      "opcua_node": {
+        "namespace": 2,
+        "identifier": "BatchLid1",
+        "array_index": null,
+        "server_alias": "speedbatcher1"
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "SB2.BatchLid1": {
+      "opcua_node": {
+        "namespace": 2,
+        "identifier": "BatchLid1",
+        "array_index": null,
+        "server_alias": "speedbatcher2"
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "SB3.BatchLid1": {
+      "opcua_node": {
+        "namespace": 2,
+        "identifier": "BatchLid1",
+        "array_index": null,
+        "server_alias": "speedbatcher3"
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "SB1.BatchLid2": {
+      "opcua_node": {
+        "namespace": 2,
+        "identifier": "BatchLid2",
+        "array_index": null,
+        "server_alias": "speedbatcher1"
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "SB2.BatchLid2": {
+      "opcua_node": {
+        "namespace": 2,
+        "identifier": "BatchLid2",
+        "array_index": null,
+        "server_alias": "speedbatcher2"
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "SB3.BatchLid2": {
+      "opcua_node": {
+        "namespace": 2,
+        "identifier": "BatchLid2",
+        "array_index": null,
+        "server_alias": "speedbatcher3"
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "SB1.RejectLid1": {
+      "opcua_node": {
+        "namespace": 2,
+        "identifier": "RejectLid1",
+        "array_index": null,
+        "server_alias": "speedbatcher1"
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "SB2.RejectLid1": {
+      "opcua_node": {
+        "namespace": 2,
+        "identifier": "RejectLid1",
+        "array_index": null,
+        "server_alias": "speedbatcher2"
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "SB3.RejectLid1": {
+      "opcua_node": {
+        "namespace": 2,
+        "identifier": "RejectLid1",
+        "array_index": null,
+        "server_alias": "speedbatcher3"
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "SB1.RejectLid2": {
+      "opcua_node": {
+        "namespace": 2,
+        "identifier": "RejectLid2",
+        "array_index": null,
+        "server_alias": "speedbatcher1"
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "SB2.RejectLid2": {
+      "opcua_node": {
+        "namespace": 2,
+        "identifier": "RejectLid2",
+        "array_index": null,
+        "server_alias": "speedbatcher2"
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "SB3.RejectLid2": {
+      "opcua_node": {
+        "namespace": 2,
+        "identifier": "RejectLid2",
+        "array_index": null,
+        "server_alias": "speedbatcher3"
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "SB1.Checkweigher1.LastRejectWeight": {
+      "opcua_node": {
+        "namespace": 2,
+        "identifier": "Checkweigher1.LastRejectWeight",
+        "array_index": null,
+        "server_alias": "speedbatcher1"
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "SB1.Checkweigher1.LastRejectWeight",
+        "name": "SB1.Checkweigher1.LastRejectWeight",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "SB1.Checkweigher2.LastRejectWeight": {
+      "opcua_node": {
+        "namespace": 2,
+        "identifier": "Checkweigher2.LastRejectWeight",
+        "array_index": null,
+        "server_alias": "speedbatcher1"
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "SB1.Checkweigher2.LastRejectWeight",
+        "name": "SB1.Checkweigher2.LastRejectWeight",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "SB2.Checkweigher1.LastRejectWeight": {
+      "opcua_node": {
+        "namespace": 2,
+        "identifier": "Checkweigher1.LastRejectWeight",
+        "array_index": null,
+        "server_alias": "speedbatcher2"
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "SB2.Checkweigher1.LastRejectWeight",
+        "name": "SB2.Checkweigher1.LastRejectWeight",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "SB2.Checkweigher2.LastRejectWeight": {
+      "opcua_node": {
+        "namespace": 2,
+        "identifier": "Checkweigher2.LastRejectWeight",
+        "array_index": null,
+        "server_alias": "speedbatcher2"
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "SB2.Checkweigher2.LastRejectWeight",
+        "name": "SB2.Checkweigher2.LastRejectWeight",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "SB3.Checkweigher1.LastRejectWeight": {
+      "opcua_node": {
+        "namespace": 2,
+        "identifier": "Checkweigher1.LastRejectWeight",
+        "array_index": null,
+        "server_alias": "speedbatcher3"
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "SB3.Checkweigher1.LastRejectWeight",
+        "name": "SB3.Checkweigher1.LastRejectWeight",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "SB3.Checkweigher2.LastRejectWeight": {
+      "opcua_node": {
+        "namespace": 2,
+        "identifier": "Checkweigher2.LastRejectWeight",
+        "array_index": null,
+        "server_alias": "speedbatcher3"
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "SB3.Checkweigher2.LastRejectWeight",
+        "name": "SB3.Checkweigher2.LastRejectWeight",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "SB1.Checkweigher1.LastAcceptWeight": {
+      "opcua_node": {
+        "namespace": 2,
+        "identifier": "Checkweigher1.LastAcceptWeight",
+        "array_index": null,
+        "server_alias": "speedbatcher1"
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "SB1.Checkweigher1.LastAcceptWeight",
+        "name": "SB1.Checkweigher1.LastAcceptWeight",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "SB1.Checkweigher2.LastAcceptWeight": {
+      "opcua_node": {
+        "namespace": 2,
+        "identifier": "Checkweigher2.LastAcceptWeight",
+        "array_index": null,
+        "server_alias": "speedbatcher1"
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "SB1.Checkweigher2.LastAcceptWeight",
+        "name": "SB1.Checkweigher2.LastAcceptWeight",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "SB2.Checkweigher1.LastAcceptWeight": {
+      "opcua_node": {
+        "namespace": 2,
+        "identifier": "Checkweigher1.LastAcceptWeight",
+        "array_index": null,
+        "server_alias": "speedbatcher2"
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "SB2.Checkweigher1.LastAcceptWeight",
+        "name": "SB2.Checkweigher1.LastAcceptWeight",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "SB2.Checkweigher2.LastAcceptWeight": {
+      "opcua_node": {
+        "namespace": 2,
+        "identifier": "Checkweigher2.LastAcceptWeight",
+        "array_index": null,
+        "server_alias": "speedbatcher2"
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "SB2.Checkweigher2.LastAcceptWeight",
+        "name": "SB2.Checkweigher2.LastAcceptWeight",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "SB3.Checkweigher1.LastAcceptWeight": {
+      "opcua_node": {
+        "namespace": 2,
+        "identifier": "Checkweigher1.LastAcceptWeight",
+        "array_index": null,
+        "server_alias": "speedbatcher3"
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "SB3.Checkweigher1.LastAcceptWeight",
+        "name": "SB3.Checkweigher1.LastAcceptWeight",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "SB3.Checkweigher2.LastAcceptWeight": {
+      "opcua_node": {
+        "namespace": 2,
+        "identifier": "Checkweigher2.LastAcceptWeight",
+        "array_index": null,
+        "server_alias": "speedbatcher3"
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "SB3.Checkweigher2.LastAcceptWeight",
+        "name": "SB3.Checkweigher2.LastAcceptWeight",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "SB1.Checkweigher1Conv.Frequency": {
+      "opcua_node": {
+        "namespace": 2,
+        "identifier": "Checkweigher1Conv.Frequency",
+        "array_index": null,
+        "server_alias": "speedbatcher1"
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "SB1.Checkweigher1Conv.Frequency",
+        "name": "SB1.Checkweigher1Conv.Frequency",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "SB1.Checkweigher2Conv.Frequency": {
+      "opcua_node": {
+        "namespace": 2,
+        "identifier": "Checkweigher2Conv.Frequency",
+        "array_index": null,
+        "server_alias": "speedbatcher1"
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "SB1.Checkweigher2Conv.Frequency",
+        "name": "SB1.Checkweigher2Conv.Frequency",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "SB2.Checkweigher1Conv.Frequency": {
+      "opcua_node": {
+        "namespace": 2,
+        "identifier": "Checkweigher1Conv.Frequency",
+        "array_index": null,
+        "server_alias": "speedbatcher2"
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "SB2.Checkweigher1Conv.Frequency",
+        "name": "SB2.Checkweigher1Conv.Frequency",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": 5000000,
+        "sample_expression": null
+      }
+    },
+    "SB2.Checkweigher2Conv.Frequency": {
+      "opcua_node": {
+        "namespace": 2,
+        "identifier": "Checkweigher2Conv.Frequency",
+        "array_index": null,
+        "server_alias": "speedbatcher2"
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "SB2.Checkweigher2Conv.Frequency",
+        "name": "SB2.Checkweigher2Conv.Frequency",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": 5000000,
+        "sample_expression": null
+      }
+    },
+    "SB3.Checkweigher1Conv.Frequency": {
+      "opcua_node": {
+        "namespace": 2,
+        "identifier": "Checkweigher1Conv.Frequency",
+        "array_index": null,
+        "server_alias": "speedbatcher3"
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "SB3.Checkweigher1Conv.Frequency",
+        "name": "SB3.Checkweigher1Conv.Frequency",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": 5000000,
+        "sample_expression": null
+      }
+    },
+    "SB3.Checkweigher2Conv.Frequency": {
+      "opcua_node": {
+        "namespace": 2,
+        "identifier": "Checkweigher2Conv.Frequency",
+        "array_index": null,
+        "server_alias": "speedbatcher3"
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "SB3.Checkweigher2Conv.Frequency",
+        "name": "SB3.Checkweigher2Conv.Frequency",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": 5000000,
+        "sample_expression": null
+      }
+    },
+    "SB1.Checkweigher1.Tripped": {
+      "opcua_node": {
+        "namespace": 2,
+        "identifier": "Checkweigher1.Tripped",
+        "array_index": null,
+        "server_alias": "speedbatcher1"
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "SB1.Checkweigher2.Tripped": {
+      "opcua_node": {
+        "namespace": 2,
+        "identifier": "Checkweigher2.Tripped",
+        "array_index": null,
+        "server_alias": "speedbatcher1"
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "SB2.Checkweigher1.Tripped": {
+      "opcua_node": {
+        "namespace": 2,
+        "identifier": "Checkweigher1.Tripped",
+        "array_index": null,
+        "server_alias": "speedbatcher2"
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "SB2.Checkweigher2.Tripped": {
+      "opcua_node": {
+        "namespace": 2,
+        "identifier": "Checkweigher2.Tripped",
+        "array_index": null,
+        "server_alias": "speedbatcher2"
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "SB3.Checkweigher1.Tripped": {
+      "opcua_node": {
+        "namespace": 2,
+        "identifier": "Checkweigher1.Tripped",
+        "array_index": null,
+        "server_alias": "speedbatcher3"
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "SB3.Checkweigher2.Tripped": {
+      "opcua_node": {
+        "namespace": 2,
+        "identifier": "Checkweigher2.Tripped",
+        "array_index": null,
+        "server_alias": "speedbatcher3"
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Baader9.FillMinute1Ratio": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Baader.baaderCounters[9].fill_hmi.Minute1Ratio",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "Baader9.FillMinute1Ratio",
+        "name": "Baader9.FillMinute1Ratio",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "Baader9.SlotMinute1": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Baader.baaderCounters[9].slot_counter.Minute1",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "Baader9.SlotMinute1",
+        "name": "Baader9.SlotMinute1",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "Baader9.RejectMinute1": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Baader.baaderCounters[9].reject_hmi.Minute1Ratio",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "Baader9.RejectMinute1",
+        "name": "Baader9.RejectMinute1",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "Baader9.ReturnMinute1": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Baader.baaderCounters[9].return_hmi.Minute1Ratio",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "Baader9.ReturnMinute1",
+        "name": "Baader9.ReturnMinute1",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "Baader9.BufferHeight": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Baader.BaaderInfeedSensors[9].p_stat_height",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "Baader9.BufferHeight",
+        "name": "Baader9.BufferHeight",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "Baader9.BufferRequestProduct": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Baader.BaaderInfeedSensors[9].p_stat_allowInfeed",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "Baader9.BufferRequestProduct",
+        "name": "Baader9.BufferRequestProduct",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "Baader9.BufferRequestSetpoint": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Baader.BaaderInfeedSensors[9].p_cfg_request",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "Baader9.BufferRequestSetpoint",
+        "name": "Baader9.BufferRequestSetpoint",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "Baader9.ConveyorBufferHeight": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Baader.FingerConveyorSensors[9].p_stat_height",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "Baader9.ConveyorBufferHeight",
+        "name": "Baader9.ConveyorBufferHeight",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "Baader9.ConveyorBufferRequestProduct": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Baader.FingerConveyorSensors[9].p_stat_allowInfeed",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "Baader9.ConveyorBufferRequestProduct",
+        "name": "Baader9.ConveyorBufferRequestProduct",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "Baader9.ConveyorBufferRequestSetpoint": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Baader.FingerConveyorSensors[9].p_cfg_request",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "Baader9.ConveyorBufferRequestSetpoint",
+        "name": "Baader9.ConveyorBufferRequestSetpoint",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "Baader9.BufferSensorRangeMin": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Baader.Baader9_2.hmi.min_values",
+        "array_index": 1,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Baader9.BufferSensorRangeMax": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Baader.Baader9_2.hmi.max_values",
+        "array_index": 1,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Baader9.ConveyorBufferSensorRangeMin": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Baader.Baader9_2.hmi.min_values",
+        "array_index": 0,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Baader9.ConveyorBufferSensorRangeMax": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Baader.Baader9_2.hmi.max_values",
+        "array_index": 0,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Baader10.FillMinute1Ratio": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Baader.baaderCounters[10].fill_hmi.Minute1Ratio",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "Baader10.FillMinute1Ratio",
+        "name": "Baader10.FillMinute1Ratio",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "Baader10.SlotMinute1": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Baader.baaderCounters[10].slot_counter.Minute1",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "Baader10.SlotMinute1",
+        "name": "Baader10.SlotMinute1",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "Baader10.RejectMinute1": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Baader.baaderCounters[10].reject_hmi.Minute1Ratio",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "Baader10.RejectMinute1",
+        "name": "Baader10.RejectMinute1",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "Baader10.ReturnMinute1": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Baader.baaderCounters[10].return_hmi.Minute1Ratio",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "Baader10.ReturnMinute1",
+        "name": "Baader10.ReturnMinute1",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "Baader10.BufferHeight": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Baader.BaaderInfeedSensors[10].p_stat_height",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "Baader10.BufferHeight",
+        "name": "Baader10.BufferHeight",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "Baader10.BufferRequestProduct": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Baader.BaaderInfeedSensors[10].p_stat_allowInfeed",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "Baader10.BufferRequestProduct",
+        "name": "Baader10.BufferRequestProduct",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "Baader10.BufferRequestSetpoint": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Baader.BaaderInfeedSensors[10].p_cfg_request",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "Baader10.BufferRequestSetpoint",
+        "name": "Baader10.BufferRequestSetpoint",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "Baader10.ConveyorBufferHeight": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Baader.FingerConveyorSensors[10].p_stat_height",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "Baader10.ConveyorBufferHeight",
+        "name": "Baader10.ConveyorBufferHeight",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "Baader10.ConveyorBufferRequestProduct": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Baader.FingerConveyorSensors[10].p_stat_allowInfeed",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "Baader10.ConveyorBufferRequestProduct",
+        "name": "Baader10.ConveyorBufferRequestProduct",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "Baader10.ConveyorBufferRequestSetpoint": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Baader.FingerConveyorSensors[10].p_cfg_request",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "Baader10.ConveyorBufferRequestSetpoint",
+        "name": "Baader10.ConveyorBufferRequestSetpoint",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "Baader10.BufferSensorRangeMin": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Baader.Baader10_2.hmi.min_values",
+        "array_index": 1,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Baader10.BufferSensorRangeMax": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Baader.Baader10_2.hmi.max_values",
+        "array_index": 1,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Baader10.ConveyorBufferSensorRangeMin": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Baader.Baader10_2.hmi.min_values",
+        "array_index": 0,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Baader10.ConveyorBufferSensorRangeMax": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Baader.Baader10_2.hmi.max_values",
+        "array_index": 0,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "testme": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Drives_Line1[1].HMI.p_cfg_AutoFreq",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "BatchLines.Internal.Subdevice3.Descriptions": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Internal_Bus_3.hmi.descriptions",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "BatchLines.Internal.Subdevice3.RawState": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Internal_Bus_3.raw_state",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "BatchLines.Internal.Subdevice3.ProcessedState": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Internal_Bus_3.processed_state",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "BatchLines.Internal.Subdevice3.ForceValues": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Internal_Bus_3.hmi.force_values",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "BatchLines.Internal.Subdevice3.OnFilters": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Internal_Bus_3.hmi.on_filters",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "BatchLines.Internal.Subdevice3.OffFilters": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Internal_Bus_3.hmi.off_filters",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "BatchLines.Internal.Subdevice4.Descriptions": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Internal_Bus_4.hmi.descriptions",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "BatchLines.Internal.Subdevice4.RawState": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Internal_Bus_4.raw_state",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "BatchLines.Internal.Subdevice4.ProcessedState": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Internal_Bus_4.processed_state",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "BatchLines.Internal.Subdevice4.ForceValues": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Internal_Bus_4.hmi.force_values",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "BatchLines.Internal.Subdevice4.OnFilters": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Internal_Bus_4.hmi.on_filters",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "BatchLines.Internal.Subdevice4.OffFilters": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Internal_Bus_4.hmi.off_filters",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "BatchLines.Internal.Subdevice5.Descriptions": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Internal_Bus_5.hmi.descriptions",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "BatchLines.Internal.Subdevice5.RawState": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Internal_Bus_5.raw_state",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "BatchLines.Internal.Subdevice5.ProcessedState": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Internal_Bus_5.processed_state",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "BatchLines.Internal.Subdevice5.ForceValues": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Internal_Bus_5.hmi.force_values",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "BatchLines.Internal.Subdevice5.OnFilters": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Internal_Bus_5.hmi.on_filters",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "BatchLines.Internal.Subdevice5.OffFilters": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Internal_Bus_5.hmi.off_filters",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "BatchLines.Internal.Subdevice6.Descriptions": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Internal_Bus_6.hmi.descriptions",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "BatchLines.Internal.Subdevice6.RawState": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Internal_Bus_6.raw_state",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "BatchLines.Internal.Subdevice6.ProcessedState": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Internal_Bus_6.processed_state",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "BatchLines.Internal.Subdevice6.ForceValues": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Internal_Bus_6.hmi.force_values",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "BatchLines.Internal.Subdevice6.OnFilters": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Internal_Bus_6.hmi.on_filters",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "BatchLines.Internal.Subdevice6.OffFilters": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Internal_Bus_6.hmi.off_filters",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "BatchLines.Internal.Subdevice7.Descriptions": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Internal_Bus_7.hmi.descriptions",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "BatchLines.Internal.Subdevice7.RawState": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Internal_Bus_7.raw_state",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "BatchLines.Internal.Subdevice7.ProcessedState": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Internal_Bus_7.processed_state",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "BatchLines.Internal.Subdevice7.ForceValues": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Internal_Bus_7.hmi.force_values",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "BatchLines.Internal.Subdevice7.OnFilters": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Internal_Bus_7.hmi.on_filters",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "BatchLines.Internal.Subdevice7.OffFilters": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Internal_Bus_7.hmi.off_filters",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "BatchLines.Internal.Subdevice8.Descriptions": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Internal_Bus_8.hmi.descriptions",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "BatchLines.Internal.Subdevice8.RawState": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Internal_Bus_8.raw_state",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "BatchLines.Internal.Subdevice8.ProcessedState": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Internal_Bus_8.processed_state",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "BatchLines.Internal.Subdevice8.ForceValues": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Internal_Bus_8.hmi.force_values",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "BatchLines.Internal.Subdevice8.OnFilters": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Internal_Bus_8.hmi.on_filters",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "BatchLines.Internal.Subdevice8.OffFilters": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Internal_Bus_8.hmi.off_filters",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "BatchLines.Internal.Subdevice9.Descriptions": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Internal_Bus_9.hmi.descriptions",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "BatchLines.Internal.Subdevice9.RawState": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Internal_Bus_9.raw_state",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "BatchLines.Internal.Subdevice9.ForceValues": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Internal_Bus_9.hmi.force_values",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "BatchLines.Internal.Subdevice10.Descriptions": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Internal_Bus_10.hmi.descriptions",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "BatchLines.Internal.Subdevice10.RawState": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Internal_Bus_10.raw_state",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "BatchLines.Internal.Subdevice10.ForceValues": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Internal_Bus_10.hmi.force_values",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "BatchLines.Internal.Subdevice11.Descriptions": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Internal_Bus_11.hmi.descriptions",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "BatchLines.Internal.Subdevice11.RawState": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Internal_Bus_11.raw_state",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "BatchLines.Internal.Subdevice11.ForceValues": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Internal_Bus_11.hmi.force_values",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "BatchLines.Internal.Subdevice12.Descriptions": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Internal_Bus_12.hmi.descriptions",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "BatchLines.Internal.Subdevice12.RawState": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Internal_Bus_12.raw_state",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "BatchLines.Internal.Subdevice12.ForceValues": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Internal_Bus_12.hmi.force_values",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "BatchLines.Internal.Subdevice13.Descriptions": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Internal_Bus_13.hmi.descriptions",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "BatchLines.Internal.Subdevice13.RawState": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Internal_Bus_13.raw_state",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "BatchLines.Internal.Subdevice13.ForceValues": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Internal_Bus_13.hmi.force_values",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Line1.Return.hmis": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Drives_Line2[1].HMI.p_stat_State",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Line1.Return.freq": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Drives_Line1[1].HMI.p_stat_Frequency",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Line1.Return.Config": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Drives_Line1[1].param",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Line1.Conveyor.hmis": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Drives_Line1[2].HMI.p_stat_State",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Line1.Conveyor.freq": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Drives_Line1[2].HMI.p_stat_Frequency",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Line1.Conveyor.Config": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Drives_Line1[2].param",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Line2.Return.hmis": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Drives_Line2[2].HMI.p_stat_State",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Line2.Return.freq": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Drives_Line2[2].HMI.p_stat_Frequency",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Line2.Return.Config": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Drives_Line2[2].param",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Line2.Conveyor1.hmis": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Drives_Line2[2].HMI.p_stat_State",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Line2.Conveyor1.freq": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Drives_Line2[2].HMI.p_stat_Frequency",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Line2.Conveyor1.Config": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Drives_Line2[2].param",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Line2.Conveyor2.hmis": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Drives_Line2[3].HMI.p_stat_State",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Line2.Conveyor2.freq": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Drives_Line2[3].HMI.p_stat_Frequency",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Line2.Conveyor2.Config": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Drives_Line2[3].param",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Line3.Return.hmis": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Drives_Line3[1].HMI.p_stat_State",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Line3.Return.freq": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Drives_Line3[1].HMI.p_stat_Frequency",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Line3.Return.Config": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Drives_Line3[1].param",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Line3.Conveyor1.hmis": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Drives_Line3[2].HMI.p_stat_State",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Line3.Conveyor1.freq": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Drives_Line3[2].HMI.p_stat_Frequency",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Line3.Conveyor1.Config": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Drives_Line3[2].param",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Line3.Conveyor2.hmis": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Drives_Line3[3].HMI.p_stat_State",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Line3.Conveyor2.freq": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Drives_Line3[3].HMI.p_stat_Frequency",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Line3.Conveyor2.Config": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.Drives_Line3[3].param",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Baader9.External.Subdevice1.Descriptions": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Baader.Baader9_1.hmi.descriptions",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Baader9.External.Subdevice1.RawState": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Baader.Baader9_1.raw_state",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Baader9.External.Subdevice1.ProcessedState": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Baader.Baader9_1.processed_state",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Baader9.External.Subdevice1.ForceValues": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Baader.Baader9_1.hmi.force_values",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Baader9.External.Subdevice1.OnFilters": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Baader.Baader9_1.hmi.on_filters",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Baader9.External.Subdevice1.OffFilters": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Baader.Baader9_1.hmi.off_filters",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Baader9.External.Subdevice2.Descriptions": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Baader.Baader9_2.hmi.descriptions",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Baader9.External.Subdevice2.Errors": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Baader.Baader9_2.hmi.errors",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Baader9.External.Subdevice3.Descriptions": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Baader.Baader9_3.hmi.descriptions",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Baader9.External.Subdevice3.RawState": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Baader.Baader9_3.raw_state",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Baader9.External.Subdevice3.ForceValues": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Baader.Baader9_3.hmi.force_values",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Baader9.External.Subdevice2.State": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Baader.Baader9_2.hmi.raw_values",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "Baader9.External.Subdevice2.State",
+        "name": "Baader9.External.Subdevice2.State",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "Baader10.External.Subdevice1.Descriptions": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Baader.Baader10_1.hmi.descriptions",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Baader10.External.Subdevice1.RawState": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Baader.Baader10_1.raw_state",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Baader10.External.Subdevice1.ProcessedState": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Baader.Baader10_1.processed_state",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Baader10.External.Subdevice1.ForceValues": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Baader.Baader10_1.hmi.force_values",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Baader10.External.Subdevice1.OnFilters": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Baader.Baader10_1.hmi.on_filters",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Baader10.External.Subdevice1.OffFilters": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Baader.Baader10_1.hmi.off_filters",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Baader10.External.Subdevice2.Descriptions": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Baader.Baader10_2.hmi.descriptions",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Baader10.External.Subdevice2.Errors": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Baader.Baader10_2.hmi.errors",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Baader10.External.Subdevice3.Descriptions": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Baader.Baader10_3.hmi.descriptions",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Baader10.External.Subdevice3.RawState": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Baader.Baader10_3.raw_state",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Baader10.External.Subdevice3.ForceValues": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Baader.Baader10_3.hmi.force_values",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Baader10.External.Subdevice2.State": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Baader.Baader10_2.hmi.raw_values",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "Baader10.External.Subdevice2.State",
+        "name": "Baader10.External.Subdevice2.State",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "Baader9.BufferHeightPercent": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Baader.BaaderInfeedSensors[9].p_stat_percent_fullness",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "Baader9.BufferHeightPercent",
+        "name": "Baader9.BufferHeightPercent",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": 5000000,
+        "sample_expression": null
+      }
+    },
+    "Baader10.BufferHeightPercent": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Baader.BaaderInfeedSensors[10].p_stat_percent_fullness",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "Baader10.BufferHeightPercent",
+        "name": "Baader10.BufferHeightPercent",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": 5000000,
+        "sample_expression": null
+      }
+    },
+    "Baader10.ConveyorBufferHeightPercent": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Baader.FingerConveyorSensors[10].p_stat_percent_fullness",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "Baader10.ConveyorBufferHeightPercent",
+        "name": "Baader10.ConveyorBufferHeightPercent",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "Baader9.ConveyorBufferHeightPercent": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Baader.FingerConveyorSensors[9].p_stat_percent_fullness",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "Baader9.ConveyorBufferHeightPercent",
+        "name": "Baader9.ConveyorBufferHeightPercent",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "Baader9.EmptyMinute1Ratio": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Baader.baaderCounters[9].infeed_empty_hmi.Minute1Ratio",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "Baader9.EmptyMinute1Ratio",
+        "name": "Baader9.EmptyMinute1Ratio",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "Baader10.EmptyMinute1Ratio": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Baader.baaderCounters[10].infeed_empty_hmi.Minute1Ratio",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "Baader10.EmptyMinute1Ratio",
+        "name": "Baader10.EmptyMinute1Ratio",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "SB1.dropOk": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.speedBatchers[1].hmi.p_stat_DropOk",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "SB2.dropOk": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.speedBatchers[2].hmi.p_stat_DropOk",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "SB3.dropOk": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_BatchLines.speedBatchers[3].hmi.p_stat_DropOk",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "SB1.CheckWeigher.Accepted.1": {
+      "opcua_node": {
+        "namespace": 2,
+        "identifier": "Checkweigher1.LastAcceptWeight",
+        "array_index": null,
+        "server_alias": "speedbatcher1"
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "SB1.CheckWeigher.Accepted.1",
+        "name": "SB1.CheckWeigher.Accepted",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "SB1.CheckWeigher.Accepted.2": {
+      "opcua_node": {
+        "namespace": 2,
+        "identifier": "Checkweigher2.LastAcceptWeight",
+        "array_index": null,
+        "server_alias": "speedbatcher1"
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "SB1.CheckWeigher.Accepted.2",
+        "name": "SB1.CheckWeigher.Accepted",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "SB2.CheckWeigher.Accepted.1": {
+      "opcua_node": {
+        "namespace": 2,
+        "identifier": "Checkweigher1.LastAcceptWeight",
+        "array_index": null,
+        "server_alias": "speedbatcher2"
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "SB2.CheckWeigher.Accepted.1",
+        "name": "SB2.CheckWeigher.Accepted",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "SB2.CheckWeigher.Accepted.2": {
+      "opcua_node": {
+        "namespace": 2,
+        "identifier": "Checkweigher2.LastAcceptWeight",
+        "array_index": null,
+        "server_alias": "speedbatcher2"
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "SB2.CheckWeigher.Accepted.2",
+        "name": "SB2.CheckWeigher.Accepted",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "SB3.CheckWeigher.Accepted.1": {
+      "opcua_node": {
+        "namespace": 2,
+        "identifier": "Checkweigher1.LastAcceptWeight",
+        "array_index": null,
+        "server_alias": "speedbatcher3"
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "SB3.CheckWeigher.Accepted.1",
+        "name": "SB3.CheckWeigher.Accepted",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "SB3.CheckWeigher.Accepted.2": {
+      "opcua_node": {
+        "namespace": 2,
+        "identifier": "Checkweigher2.LastAcceptWeight",
+        "array_index": null,
+        "server_alias": "speedbatcher3"
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "SB3.CheckWeigher.Accepted.2",
+        "name": "SB3.CheckWeigher.Accepted",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "SB1.CheckWeigher.Rejected.1": {
+      "opcua_node": {
+        "namespace": 2,
+        "identifier": "Checkweigher1.LastRejectWeight",
+        "array_index": null,
+        "server_alias": "speedbatcher1"
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "SB1.CheckWeigher.Rejected.1",
+        "name": "SB1.CheckWeigher.Rejected",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "SB1.CheckWeigher.Rejected.2": {
+      "opcua_node": {
+        "namespace": 2,
+        "identifier": "Checkweigher2.LastRejectWeight",
+        "array_index": null,
+        "server_alias": "speedbatcher1"
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "SB1.CheckWeigher.Rejected.2",
+        "name": "SB1.CheckWeigher.Rejected",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "SB2.CheckWeigher.Rejected.1": {
+      "opcua_node": {
+        "namespace": 2,
+        "identifier": "Checkweigher1.LastRejectWeight",
+        "array_index": null,
+        "server_alias": "speedbatcher2"
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "SB2.CheckWeigher.Rejected.1",
+        "name": "SB2.CheckWeigher.Rejected",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "SB2.CheckWeigher.Rejected.2": {
+      "opcua_node": {
+        "namespace": 2,
+        "identifier": "Checkweigher2.LastRejectWeight",
+        "array_index": null,
+        "server_alias": "speedbatcher2"
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "SB2.CheckWeigher.Rejected.2",
+        "name": "SB2.CheckWeigher.Rejected",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "SB3.CheckWeigher.Rejected.1": {
+      "opcua_node": {
+        "namespace": 2,
+        "identifier": "Checkweigher1.LastRejectWeight",
+        "array_index": null,
+        "server_alias": "speedbatcher3"
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "SB3.CheckWeigher.Rejected.1",
+        "name": "SB3.CheckWeigher.Rejected",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "SB3.CheckWeigher.Rejected.2": {
+      "opcua_node": {
+        "namespace": 2,
+        "identifier": "Checkweigher2.LastRejectWeight",
+        "array_index": null,
+        "server_alias": "speedbatcher3"
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "SB3.CheckWeigher.Rejected.2",
+        "name": "SB3.CheckWeigher.Rejected",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "SB1.Uppdrag.Freq": {
+      "opcua_node": {
+        "namespace": 2,
+        "identifier": "Uppdrag.Frequency",
+        "array_index": null,
+        "server_alias": "speedbatcher1"
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "SB1.Uppdrag.Tripped": {
+      "opcua_node": {
+        "namespace": 2,
+        "identifier": "Uppdrag.Tripped",
+        "array_index": null,
+        "server_alias": "speedbatcher1"
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "SB2.Uppdrag.Freq": {
+      "opcua_node": {
+        "namespace": 2,
+        "identifier": "Uppdrag.Frequency",
+        "array_index": null,
+        "server_alias": "speedbatcher2"
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "SB2.Uppdrag.Tripped": {
+      "opcua_node": {
+        "namespace": 2,
+        "identifier": "Uppdrag.Tripped",
+        "array_index": null,
+        "server_alias": "speedbatcher2"
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "SB3.Uppdrag.Freq": {
+      "opcua_node": {
+        "namespace": 2,
+        "identifier": "Uppdrag.Frequency",
+        "array_index": null,
+        "server_alias": "speedbatcher3"
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "SB3.Uppdrag.Tripped": {
+      "opcua_node": {
+        "namespace": 2,
+        "identifier": "Uppdrag.Tripped",
+        "array_index": null,
+        "server_alias": "speedbatcher3"
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "__agg_default_connected": {
+      "opcua_node": {
+        "namespace": 1,
+        "identifier": "Servers/Status/OpcUa/default/connected",
+        "array_index": null,
+        "server_alias": "__aggregate"
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "__agg_default_last_error": {
+      "opcua_node": {
+        "namespace": 1,
+        "identifier": "Servers/Status/OpcUa/default/last_error",
+        "array_index": null,
+        "server_alias": "__aggregate"
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "__agg_speedbatcher1_connected": {
+      "opcua_node": {
+        "namespace": 1,
+        "identifier": "Servers/Status/OpcUa/speedbatcher1/connected",
+        "array_index": null,
+        "server_alias": "__aggregate"
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "__agg_speedbatcher1_last_error": {
+      "opcua_node": {
+        "namespace": 1,
+        "identifier": "Servers/Status/OpcUa/speedbatcher1/last_error",
+        "array_index": null,
+        "server_alias": "__aggregate"
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "__agg_speedbatcher2_connected": {
+      "opcua_node": {
+        "namespace": 1,
+        "identifier": "Servers/Status/OpcUa/speedbatcher2/connected",
+        "array_index": null,
+        "server_alias": "__aggregate"
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "__agg_speedbatcher2_last_error": {
+      "opcua_node": {
+        "namespace": 1,
+        "identifier": "Servers/Status/OpcUa/speedbatcher2/last_error",
+        "array_index": null,
+        "server_alias": "__aggregate"
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "__agg_speedbatcher3_connected": {
+      "opcua_node": {
+        "namespace": 1,
+        "identifier": "Servers/Status/OpcUa/speedbatcher3/connected",
+        "array_index": null,
+        "server_alias": "__aggregate"
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "__agg_speedbatcher3_last_error": {
+      "opcua_node": {
+        "namespace": 1,
+        "identifier": "Servers/Status/OpcUa/speedbatcher3/last_error",
+        "array_index": null,
+        "server_alias": "__aggregate"
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Roe.Buffer.Motor": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Roe.bufferAuger.HMI",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "Roe.Buffer.Motor",
+        "name": "Roe.Buffer.Motor",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": 500000,
+        "sample_expression": null
+      }
+    },
+    "Roe.Buffer.Rpm": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Roe.bufferAugerRpm.q_rRPM",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Roe.Distribution.Motor": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Roe.distributionAuger.HMI",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "Roe.Distribution.Motor",
+        "name": "Roe.Distribution.Motor",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": 500000,
+        "sample_expression": null
+      }
+    },
+    "Roe.Distribution.Rpm": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Roe.distributionAugerRpm.q_rRPM",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Roe.Input.1.descriptions": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Roe.roe_1.hmi.descriptions",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Roe.Input.1.raw_state": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Roe.roe_1.raw_state",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Roe.Input.1.processed_state": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Roe.roe_1.processed_state",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Roe.Input.1.force": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Roe.roe_1.hmi.force_values",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Roe.Input.1.on_filters": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Roe.roe_1.hmi.on_filters",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Roe.Input.1.off_filters": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Roe.roe_1.hmi.off_filters",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Roe.Output.4.descriptions": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Roe.roe_4.hmi.descriptions",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Roe.Output.4.raw_state": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Roe.roe_4.raw_state",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Roe.Output.4.force": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Roe.roe_4.hmi.force_values",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Roe.Analog.2.descriptions": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Roe.roe_2.hmi.descriptions",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Roe.Buffer.Motor.config": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Roe.bufferAuger.param",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Roe.Distribution.Motor.config": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Roe.distributionAuger.param",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Roe.Analog.2.state": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Roe.roe_2.hmi.raw_values",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "Roe.Analog.2.state",
+        "name": "Roe.Analog.2.state",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": 500000,
+        "sample_expression": null
+      }
+    },
+    "Roe.Analog.2.errors": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Roe.roe_2.hmi.errors",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Roe.Analog.3.descriptions": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Roe.roe_3.hmi.descriptions",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Roe.Analog.3.state": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Roe.roe_3.hmi.raw_values",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "Roe.Analog.3.state",
+        "name": "Roe.Analog.3.state",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": 500000,
+        "sample_expression": null
+      }
+    },
+    "Roe.Analog.3.errors": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Roe.roe_3.hmi.errors",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Roe.Buffer.Motor.Hmis": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Roe.bufferAuger.HMI.p_stat_State",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Roe.Buffer.Motor.freq": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Roe.bufferAuger.HMI.p_stat_Frequency",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Roe.Distribution.Motor.Hmis": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Roe.distributionAuger.HMI.p_stat_State",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Roe.Distribution.Motor.freq": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Roe.distributionAuger.HMI.p_stat_Frequency",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Roe.Distribution.Gate4": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Roe.gate[4].p_stat_xOpen",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Roe.Distribution.Gate3": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Roe.gate[3].p_stat_xOpen",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Roe.Distribution.Gate2": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Roe.gate[2].p_stat_xOpen",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Roe.Analog.Sensor.Min.4": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Roe.roe_2.hmi.min_values",
+        "array_index": 3,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Roe.Analog.Sensor.Max.4": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Roe.roe_2.hmi.max_values",
+        "array_index": 3,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Roe.Analog.Sensor.Raw.4": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Roe.roe_2.hmi.raw_values",
+        "array_index": 3,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "Roe.Analog.Sensor.Raw.4",
+        "name": "Roe.Analog.Sensor.Raw.4",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": 500000,
+        "sample_expression": null
+      }
+    },
+    "Roe.Analog.Sensor.Min.3": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Roe.roe_2.hmi.min_values",
+        "array_index": 2,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Roe.Analog.Sensor.Max.3": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Roe.roe_2.hmi.max_values",
+        "array_index": 2,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Roe.Analog.Sensor.Raw.3": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Roe.roe_2.hmi.raw_values",
+        "array_index": 2,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "Roe.Analog.Sensor.Raw.3",
+        "name": "Roe.Analog.Sensor.Raw.3",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": 500000,
+        "sample_expression": null
+      }
+    },
+    "Roe.Analog.Sensor.Min.2": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Roe.roe_2.hmi.min_values",
+        "array_index": 1,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Roe.Analog.Sensor.Max.2": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Roe.roe_2.hmi.max_values",
+        "array_index": 1,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Roe.Analog.Sensor.Raw.2": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Roe.roe_2.hmi.raw_values",
+        "array_index": 1,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "Roe.Analog.Sensor.Raw.2",
+        "name": "Roe.Analog.Sensor.Raw.2",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": 500000,
+        "sample_expression": null
+      }
+    },
+    "Roe.Analog.Sensor.Min.1": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Roe.roe_2.hmi.min_values",
+        "array_index": 0,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Roe.Analog.Sensor.Max.1": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Roe.roe_2.hmi.max_values",
+        "array_index": 0,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Roe.Analog.Sensor.Raw.1": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Roe.roe_2.hmi.raw_values",
+        "array_index": 0,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "Roe.Analog.Sensor.Raw.1",
+        "name": "Roe.Analog.Sensor.Raw.1",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": 500000,
+        "sample_expression": null
+      }
+    },
+    "Roe.Analog.Sensor.Fullness.4": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Roe.fullness",
+        "array_index": 3,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "Roe.Analog.Sensor.Fullness.4",
+        "name": "Roe.Analog.Sensor.Fullness.4",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": 500000,
+        "sample_expression": null
+      }
+    },
+    "Roe.Analog.Sensor.Fullness.3": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Roe.fullness",
+        "array_index": 2,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "Roe.Analog.Sensor.Fullness.3",
+        "name": "Roe.Analog.Sensor.Fullness.3",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": 500000,
+        "sample_expression": null
+      }
+    },
+    "Roe.Analog.Sensor.Fullness.2": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Roe.fullness",
+        "array_index": 1,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "Roe.Analog.Sensor.Fullness.2",
+        "name": "Roe.Analog.Sensor.Fullness.2",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": 500000,
+        "sample_expression": null
+      }
+    },
+    "Roe.Analog.Sensor.Fullness.1": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Roe.fullness",
+        "array_index": 0,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": {
+        "key": "Roe.Analog.Sensor.Fullness.1",
+        "name": "Roe.Analog.Sensor.Fullness.1",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": 500000,
+        "sample_expression": null
+      }
+    },
+    "Roe.Analog.2.errors.0": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Roe.roe_2.hmi.errors",
+        "array_index": 0,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Roe.Analog.2.errors.1": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Roe.roe_2.hmi.errors",
+        "array_index": 1,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Roe.Analog.2.errors.2": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Roe.roe_2.hmi.errors",
+        "array_index": 2,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Roe.Analog.2.errors.3": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Roe.roe_2.hmi.errors",
+        "array_index": 3,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Roe.Enable.Gate4": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Roe.feed.p_cmd_xEnable",
+        "array_index": 3,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Roe.Enabled.Gate4": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Roe.feed.p_stat_xEnabled",
+        "array_index": 3,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Roe.Enable.Gate3": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Roe.feed.p_cmd_xEnable",
+        "array_index": 2,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Roe.Enabled.Gate3": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Roe.feed.p_stat_xEnabled",
+        "array_index": 2,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Roe.Enable.Gate2": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Roe.feed.p_cmd_xEnable",
+        "array_index": 1,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Roe.Enabled.Gate2": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Roe.feed.p_stat_xEnabled",
+        "array_index": 1,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Roe.Enable.Gate1": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Roe.feed.p_cmd_xEnable",
+        "array_index": 0,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Roe.Enabled.Gate1": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Roe.feed.p_stat_xEnabled",
+        "array_index": 0,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "Roe.Running": {
+      "opcua_node": {
+        "namespace": 4,
+        "identifier": "GVL_Roe.feed.i_xRoeSwitchEnabled",
+        "array_index": null,
+        "server_alias": null
+      },
+      "m2400_node": null,
+      "io": null,
+      "collect": null
+    },
+    "weigher1v.weight": {
+      "opcua_node": null,
+      "m2400_node": {
+        "record_type": "recStat",
+        "field": "weight",
+        "server_alias": "weigher1v",
+        "status_filter": null
+      },
+      "io": null,
+      "collect": {
+        "key": "weigher1v.weight",
+        "name": "weigher1v.weight",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "weigher1h.weight": {
+      "opcua_node": null,
+      "m2400_node": {
+        "record_type": "recStat",
+        "field": "weight",
+        "server_alias": "weigher1h",
+        "status_filter": null
+      },
+      "io": null,
+      "collect": {
+        "key": "weigher1h.weight",
+        "name": "weigher1h.weight",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "weigher2v.weight": {
+      "opcua_node": null,
+      "m2400_node": {
+        "record_type": "recStat",
+        "field": "weight",
+        "server_alias": "weigher2v",
+        "status_filter": null
+      },
+      "io": null,
+      "collect": {
+        "key": "weigher2v.weight",
+        "name": "weigher2v.weight",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "weigher2h.weight": {
+      "opcua_node": null,
+      "m2400_node": {
+        "record_type": "recStat",
+        "field": "weight",
+        "server_alias": "weigher2h",
+        "status_filter": null
+      },
+      "io": null,
+      "collect": {
+        "key": "weigher2h.weight",
+        "name": "weigher2h.weight",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "weigher3v.weight": {
+      "opcua_node": null,
+      "m2400_node": {
+        "record_type": "recStat",
+        "field": "weight",
+        "server_alias": "weigher3v",
+        "status_filter": null
+      },
+      "io": null,
+      "collect": {
+        "key": "weigher3v.weight",
+        "name": "weigher3v.weight",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "weigher3h.weight": {
+      "opcua_node": null,
+      "m2400_node": {
+        "record_type": "recStat",
+        "field": "weight",
+        "server_alias": "weigher3h",
+        "status_filter": null
+      },
+      "io": null,
+      "collect": {
+        "key": "weigher3h.weight",
+        "name": "weigher3h.weight",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "weigher4v.weight": {
+      "opcua_node": null,
+      "m2400_node": {
+        "record_type": "recStat",
+        "field": "weight",
+        "server_alias": "weigher4v",
+        "status_filter": null
+      },
+      "io": null,
+      "collect": {
+        "key": "weigher4v.weight",
+        "name": "weigher4v.weight",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "weigher4h.weight": {
+      "opcua_node": null,
+      "m2400_node": {
+        "record_type": "recStat",
+        "field": "weight",
+        "server_alias": "weigher4h",
+        "status_filter": null
+      },
+      "io": null,
+      "collect": {
+        "key": "weigher4h.weight",
+        "name": "weigher4h.weight",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "weigher1v.acceptWeight": {
+      "opcua_node": null,
+      "m2400_node": {
+        "record_type": "recBatch",
+        "field": "weight",
+        "server_alias": "weigher1v",
+        "status_filter": 0
+      },
+      "io": null,
+      "collect": {
+        "key": "weigher1v.acceptWeight",
+        "name": "weigher1v.acceptWeight",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "weigher1h.acceptWeight": {
+      "opcua_node": null,
+      "m2400_node": {
+        "record_type": "recBatch",
+        "field": "weight",
+        "server_alias": "weigher1h",
+        "status_filter": 0
+      },
+      "io": null,
+      "collect": {
+        "key": "weigher1h.acceptWeight",
+        "name": "weigher1h.acceptWeight",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "weigher1v.acceptWeight_batcher1": {
+      "opcua_node": null,
+      "m2400_node": {
+        "record_type": "recBatch",
+        "field": "weight",
+        "server_alias": "weigher1v",
+        "status_filter": 0
+      },
+      "io": null,
+      "collect": {
+        "key": "weigher1v.acceptWeight_batcher1",
+        "name": "batcher1.acceptWeight",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "weigher1h.acceptWeight_batcher1": {
+      "opcua_node": null,
+      "m2400_node": {
+        "record_type": "recBatch",
+        "field": "weight",
+        "server_alias": "weigher1h",
+        "status_filter": 0
+      },
+      "io": null,
+      "collect": {
+        "key": "weigher1h.acceptWeight_batcher1",
+        "name": "batcher1.acceptWeight",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "weigher2v.acceptWeight": {
+      "opcua_node": null,
+      "m2400_node": {
+        "record_type": "recBatch",
+        "field": "weight",
+        "server_alias": "weigher2v",
+        "status_filter": 0
+      },
+      "io": null,
+      "collect": {
+        "key": "weigher2v.acceptWeight",
+        "name": "weigher2v.acceptWeight",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "weigher2h.acceptWeight": {
+      "opcua_node": null,
+      "m2400_node": {
+        "record_type": "recBatch",
+        "field": "weight",
+        "server_alias": "weigher2h",
+        "status_filter": 0
+      },
+      "io": null,
+      "collect": {
+        "key": "weigher2h.acceptWeight",
+        "name": "weigher2h.acceptWeight",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "weigher2v.acceptWeight_batcher2": {
+      "opcua_node": null,
+      "m2400_node": {
+        "record_type": "recBatch",
+        "field": "weight",
+        "server_alias": "weigher2v",
+        "status_filter": 0
+      },
+      "io": null,
+      "collect": {
+        "key": "weigher2v.acceptWeight_batcher2",
+        "name": "batcher2.acceptWeight",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "weigher2h.acceptWeight_batcher2": {
+      "opcua_node": null,
+      "m2400_node": {
+        "record_type": "recBatch",
+        "field": "weight",
+        "server_alias": "weigher2h",
+        "status_filter": 0
+      },
+      "io": null,
+      "collect": {
+        "key": "weigher2h.acceptWeight_batcher2",
+        "name": "batcher2.acceptWeight",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "weigher3v.acceptWeight": {
+      "opcua_node": null,
+      "m2400_node": {
+        "record_type": "recBatch",
+        "field": "weight",
+        "server_alias": "weigher3v",
+        "status_filter": 0
+      },
+      "io": null,
+      "collect": {
+        "key": "weigher3v.acceptWeight",
+        "name": "weigher3v.acceptWeight",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "weigher3h.acceptWeight": {
+      "opcua_node": null,
+      "m2400_node": {
+        "record_type": "recBatch",
+        "field": "weight",
+        "server_alias": "weigher3h",
+        "status_filter": 0
+      },
+      "io": null,
+      "collect": {
+        "key": "weigher3h.acceptWeight",
+        "name": "weigher3h.acceptWeight",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "weigher3v.acceptWeight_batcher3": {
+      "opcua_node": null,
+      "m2400_node": {
+        "record_type": "recBatch",
+        "field": "weight",
+        "server_alias": "weigher3v",
+        "status_filter": 0
+      },
+      "io": null,
+      "collect": {
+        "key": "weigher3v.acceptWeight_batcher3",
+        "name": "batcher3.acceptWeight",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "weigher3h.acceptWeight_batcher3": {
+      "opcua_node": null,
+      "m2400_node": {
+        "record_type": "recBatch",
+        "field": "weight",
+        "server_alias": "weigher3h",
+        "status_filter": 0
+      },
+      "io": null,
+      "collect": {
+        "key": "weigher3h.acceptWeight_batcher3",
+        "name": "batcher3.acceptWeight",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "weigher4v.acceptWeight": {
+      "opcua_node": null,
+      "m2400_node": {
+        "record_type": "recBatch",
+        "field": "weight",
+        "server_alias": "weigher4v",
+        "status_filter": 0
+      },
+      "io": null,
+      "collect": {
+        "key": "weigher4v.acceptWeight",
+        "name": "weigher4v.acceptWeight",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "weigher4h.acceptWeight": {
+      "opcua_node": null,
+      "m2400_node": {
+        "record_type": "recBatch",
+        "field": "weight",
+        "server_alias": "weigher4h",
+        "status_filter": 0
+      },
+      "io": null,
+      "collect": {
+        "key": "weigher4h.acceptWeight",
+        "name": "weigher4h.acceptWeight",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "weigher4v.acceptWeight_batcher4": {
+      "opcua_node": null,
+      "m2400_node": {
+        "record_type": "recBatch",
+        "field": "weight",
+        "server_alias": "weigher4v",
+        "status_filter": 0
+      },
+      "io": null,
+      "collect": {
+        "key": "weigher4v.acceptWeight_batcher4",
+        "name": "batcher4.acceptWeight",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "weigher4h.acceptWeight_batcher4": {
+      "opcua_node": null,
+      "m2400_node": {
+        "record_type": "recBatch",
+        "field": "weight",
+        "server_alias": "weigher4h",
+        "status_filter": 0
+      },
+      "io": null,
+      "collect": {
+        "key": "weigher4h.acceptWeight_batcher4",
+        "name": "batcher4.acceptWeight",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "weigher1v.rejectWeight": {
+      "opcua_node": null,
+      "m2400_node": {
+        "record_type": "recBatch",
+        "field": "weight",
+        "server_alias": "weigher1v",
+        "status_filter": 15
+      },
+      "io": null,
+      "collect": {
+        "key": "weigher1v.rejectWeight",
+        "name": "weigher1v.rejectWeight",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "weigher1h.rejectWeight": {
+      "opcua_node": null,
+      "m2400_node": {
+        "record_type": "recBatch",
+        "field": "weight",
+        "server_alias": "weigher1h",
+        "status_filter": 15
+      },
+      "io": null,
+      "collect": {
+        "key": "weigher1h.rejectWeight",
+        "name": "weigher1h.rejectWeight",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "weigher1v.rejectWeight_batcher1": {
+      "opcua_node": null,
+      "m2400_node": {
+        "record_type": "recBatch",
+        "field": "weight",
+        "server_alias": "weigher1v",
+        "status_filter": 15
+      },
+      "io": null,
+      "collect": {
+        "key": "weigher1v.rejectWeight_batcher1",
+        "name": "batcher1.rejectWeight",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "weigher1h.rejectWeight_batcher1": {
+      "opcua_node": null,
+      "m2400_node": {
+        "record_type": "recBatch",
+        "field": "weight",
+        "server_alias": "weigher1h",
+        "status_filter": 15
+      },
+      "io": null,
+      "collect": {
+        "key": "weigher1h.rejectWeight_batcher1",
+        "name": "batcher1.rejectWeight",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "weigher2v.rejectWeight": {
+      "opcua_node": null,
+      "m2400_node": {
+        "record_type": "recBatch",
+        "field": "weight",
+        "server_alias": "weigher2v",
+        "status_filter": 15
+      },
+      "io": null,
+      "collect": {
+        "key": "weigher2v.rejectWeight",
+        "name": "weigher2v.rejectWeight",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "weigher2h.rejectWeight": {
+      "opcua_node": null,
+      "m2400_node": {
+        "record_type": "recBatch",
+        "field": "weight",
+        "server_alias": "weigher2h",
+        "status_filter": 15
+      },
+      "io": null,
+      "collect": {
+        "key": "weigher2h.rejectWeight",
+        "name": "weigher2h.rejectWeight",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "weigher2v.rejectWeight_batcher2": {
+      "opcua_node": null,
+      "m2400_node": {
+        "record_type": "recBatch",
+        "field": "weight",
+        "server_alias": "weigher2v",
+        "status_filter": 15
+      },
+      "io": null,
+      "collect": {
+        "key": "weigher2v.rejectWeight_batcher2",
+        "name": "batcher2.rejectWeight",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "weigher2h.rejectWeight_batcher2": {
+      "opcua_node": null,
+      "m2400_node": {
+        "record_type": "recBatch",
+        "field": "weight",
+        "server_alias": "weigher2h",
+        "status_filter": 15
+      },
+      "io": null,
+      "collect": {
+        "key": "weigher2h.rejectWeight_batcher2",
+        "name": "batcher2.rejectWeight",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "weigher3v.rejectWeight": {
+      "opcua_node": null,
+      "m2400_node": {
+        "record_type": "recBatch",
+        "field": "weight",
+        "server_alias": "weigher3v",
+        "status_filter": 15
+      },
+      "io": null,
+      "collect": {
+        "key": "weigher3v.rejectWeight",
+        "name": "weigher3v.rejectWeight",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "weigher3h.rejectWeight": {
+      "opcua_node": null,
+      "m2400_node": {
+        "record_type": "recBatch",
+        "field": "weight",
+        "server_alias": "weigher3h",
+        "status_filter": 15
+      },
+      "io": null,
+      "collect": {
+        "key": "weigher3h.rejectWeight",
+        "name": "weigher3h.rejectWeight",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "weigher3v.rejectWeight_batcher3": {
+      "opcua_node": null,
+      "m2400_node": {
+        "record_type": "recBatch",
+        "field": "weight",
+        "server_alias": "weigher3v",
+        "status_filter": 15
+      },
+      "io": null,
+      "collect": {
+        "key": "weigher3v.rejectWeight_batcher3",
+        "name": "batcher3.rejectWeight",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "weigher3h.rejectWeight_batcher3": {
+      "opcua_node": null,
+      "m2400_node": {
+        "record_type": "recBatch",
+        "field": "weight",
+        "server_alias": "weigher3h",
+        "status_filter": 15
+      },
+      "io": null,
+      "collect": {
+        "key": "weigher3h.rejectWeight_batcher3",
+        "name": "batcher3.rejectWeight",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "weigher4v.rejectWeight": {
+      "opcua_node": null,
+      "m2400_node": {
+        "record_type": "recBatch",
+        "field": "weight",
+        "server_alias": "weigher4v",
+        "status_filter": 1
+      },
+      "io": null,
+      "collect": {
+        "key": "weigher4v.rejectWeight",
+        "name": "weigher4v.rejectWeight",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "weigher4h.rejectWeight": {
+      "opcua_node": null,
+      "m2400_node": {
+        "record_type": "recBatch",
+        "field": "weight",
+        "server_alias": "weigher4h",
+        "status_filter": 1
+      },
+      "io": null,
+      "collect": {
+        "key": "weigher4h.rejectWeight",
+        "name": "weigher4h.rejectWeight",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "weigher4v.rejectWeight_batcher4": {
+      "opcua_node": null,
+      "m2400_node": {
+        "record_type": "recBatch",
+        "field": "weight",
+        "server_alias": "weigher4v",
+        "status_filter": 1
+      },
+      "io": null,
+      "collect": {
+        "key": "weigher4v.rejectWeight_batcher4",
+        "name": "batcher4.rejectWeight",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    },
+    "weigher4h.rejectWeight_batcher4": {
+      "opcua_node": null,
+      "m2400_node": {
+        "record_type": "recBatch",
+        "field": "weight",
+        "server_alias": "weigher4h",
+        "status_filter": 1
+      },
+      "io": null,
+      "collect": {
+        "key": "weigher4h.rejectWeight_batcher4",
+        "name": "batcher4.rejectWeight",
+        "retention": {
+          "drop_after_min": 31536000000000,
+          "schedule_interval_min": null
+        },
+        "sample_interval_us": null,
+        "sample_expression": null
+      }
+    }
+  }
+}

@@ -1,0 +1,5550 @@
+{
+  "/": {
+    "menu_item": {
+      "label": "Home",
+      "path": "/",
+      "icon": "home",
+      "children": []
+    },
+    "assets": [
+      {
+        "asset_name": "SpeedBatcherConfig",
+        "coordinates": {
+          "x": 0.8377990796399748,
+          "y": 0.12461643826212983,
+          "angle": null
+        },
+        "size": {
+          "width": 0.1,
+          "height": 0.1167
+        },
+        "text": null,
+        "textPos": null,
+        "label": "SpeedBatcher 1",
+        "key": "SB1"
+      },
+      {
+        "asset_name": "SpeedBatcherConfig",
+        "coordinates": {
+          "x": 0.8417415314337587,
+          "y": 0.4835378438356369,
+          "angle": null
+        },
+        "size": {
+          "width": 0.1,
+          "height": 0.1167
+        },
+        "text": null,
+        "textPos": null,
+        "label": "SpeedBatcher 2",
+        "key": "SB2"
+      },
+      {
+        "asset_name": "SpeedBatcherConfig",
+        "coordinates": {
+          "x": 0.8444862278183719,
+          "y": 0.7737141382509858,
+          "angle": null
+        },
+        "size": {
+          "width": 0.1,
+          "height": 0.1167
+        },
+        "text": null,
+        "textPos": null,
+        "label": "SpeedBatcher 3",
+        "key": "SB3"
+      },
+      {
+        "asset_name": "ConveyorConfig",
+        "coordinates": {
+          "x": 0.7718677350189382,
+          "y": 0.02428980293666584,
+          "angle": null
+        },
+        "size": {
+          "width": 0.18945900000000002,
+          "height": 0.04050000000000001
+        },
+        "text": null,
+        "textPos": null,
+        "key": "Line1.Motor1",
+        "batchesKey": null,
+        "frequencyKey": null,
+        "tripKey": null,
+        "simulateBatches": false,
+        "bidirectional": null,
+        "reverseDirection": null,
+        "showFrequency": null,
+        "showAuger": null,
+        "augerRpmKey": null,
+        "augerOpenEnd": null
+      },
+      {
+        "asset_name": "ConveyorConfig",
+        "coordinates": {
+          "x": 0.7772001961396003,
+          "y": 0.3644021322953389,
+          "angle": null
+        },
+        "size": {
+          "width": 0.1895,
+          "height": 0.0405
+        },
+        "text": null,
+        "textPos": null,
+        "key": "Line2.Motor1",
+        "batchesKey": null,
+        "frequencyKey": null,
+        "tripKey": null,
+        "simulateBatches": false,
+        "bidirectional": null,
+        "reverseDirection": null,
+        "showFrequency": null,
+        "showAuger": null,
+        "augerRpmKey": null,
+        "augerOpenEnd": null
+      },
+      {
+        "asset_name": "ConveyorConfig",
+        "coordinates": {
+          "x": 0.7759061909094852,
+          "y": 0.6550531581521156,
+          "angle": null
+        },
+        "size": {
+          "width": 0.1895,
+          "height": 0.0405
+        },
+        "text": null,
+        "textPos": null,
+        "key": "Line3.Motor1",
+        "batchesKey": null,
+        "frequencyKey": null,
+        "tripKey": null,
+        "simulateBatches": false,
+        "bidirectional": null,
+        "reverseDirection": null,
+        "showFrequency": null,
+        "showAuger": null,
+        "augerRpmKey": null,
+        "augerOpenEnd": null
+      },
+      {
+        "asset_name": "ConveyorConfig",
+        "coordinates": {
+          "x": 0.6775,
+          "y": 0.2152,
+          "angle": 180.0
+        },
+        "size": {
+          "width": 0.0978,
+          "height": 0.0405
+        },
+        "text": null,
+        "textPos": null,
+        "key": "Line1.Motor2",
+        "batchesKey": "Line1.Conveyor2",
+        "frequencyKey": null,
+        "tripKey": null,
+        "simulateBatches": false,
+        "bidirectional": null,
+        "reverseDirection": null,
+        "showFrequency": null,
+        "showAuger": null,
+        "augerRpmKey": null,
+        "augerOpenEnd": null
+      },
+      {
+        "asset_name": "ConveyorConfig",
+        "coordinates": {
+          "x": 0.3607265323777968,
+          "y": 0.6648287407803564,
+          "angle": 110.0
+        },
+        "size": {
+          "width": 0.1407,
+          "height": 0.0405
+        },
+        "text": null,
+        "textPos": null,
+        "key": "Line2.Motor3",
+        "batchesKey": "Line2.Conveyor3",
+        "frequencyKey": null,
+        "tripKey": null,
+        "simulateBatches": false,
+        "bidirectional": null,
+        "reverseDirection": null,
+        "showFrequency": null,
+        "showAuger": null,
+        "augerRpmKey": null,
+        "augerOpenEnd": null
+      },
+      {
+        "asset_name": "ConveyorConfig",
+        "coordinates": {
+          "x": 0.5552,
+          "y": 0.5538000000000001,
+          "angle": 180.0
+        },
+        "size": {
+          "width": 0.3507,
+          "height": 0.0405
+        },
+        "text": null,
+        "textPos": null,
+        "key": "Line2.Motor2",
+        "batchesKey": "Line2.Conveyor2",
+        "frequencyKey": null,
+        "tripKey": null,
+        "simulateBatches": false,
+        "bidirectional": null,
+        "reverseDirection": null,
+        "showFrequency": null,
+        "showAuger": null,
+        "augerRpmKey": null,
+        "augerOpenEnd": null
+      },
+      {
+        "asset_name": "ConveyorConfig",
+        "coordinates": {
+          "x": 0.599024730774429,
+          "y": 0.9084137350693249,
+          "angle": 110.0
+        },
+        "size": {
+          "width": 0.087,
+          "height": 0.0405
+        },
+        "text": null,
+        "textPos": null,
+        "key": "Line3.Motor3",
+        "batchesKey": "Line3.Conveyor3",
+        "frequencyKey": null,
+        "tripKey": null,
+        "simulateBatches": false,
+        "bidirectional": null,
+        "reverseDirection": null,
+        "showFrequency": null,
+        "showAuger": null,
+        "augerRpmKey": null,
+        "augerOpenEnd": null
+      },
+      {
+        "asset_name": "ConveyorConfig",
+        "coordinates": {
+          "x": 0.6714,
+          "y": 0.8461,
+          "angle": 180.0
+        },
+        "size": {
+          "width": 0.12210000000000001,
+          "height": 0.0405
+        },
+        "text": null,
+        "textPos": null,
+        "key": "Line3.Motor2",
+        "batchesKey": "Line3.Conveyor2",
+        "frequencyKey": null,
+        "tripKey": null,
+        "simulateBatches": false,
+        "bidirectional": null,
+        "reverseDirection": null,
+        "showFrequency": null,
+        "showAuger": null,
+        "augerRpmKey": null,
+        "augerOpenEnd": null
+      },
+      {
+        "asset_name": "AirCabConfig",
+        "coordinates": {
+          "x": 0.5365001237767433,
+          "y": 0.6312900229123275,
+          "angle": null
+        },
+        "size": {
+          "width": 0.08,
+          "height": 0.08
+        },
+        "text": null,
+        "textPos": null,
+        "label": "+UH1.72",
+        "pressureKey": "+UH1.72.pressure",
+        "softStartKey": "+UH1.72.softStart",
+        "buttonKey": "+UH1.72.button",
+        "buttonFeedbackKey": "+UH1.72.buttonFeedback"
+      },
+      {
+        "asset_name": "AirCabConfig",
+        "coordinates": {
+          "x": 0.6784400187970339,
+          "y": 0.2931473033243392,
+          "angle": null
+        },
+        "size": {
+          "width": 0.08,
+          "height": 0.08
+        },
+        "text": null,
+        "textPos": null,
+        "label": "+UH1.71",
+        "pressureKey": "+UH1.71.pressure",
+        "softStartKey": "+UH1.71.softStart",
+        "buttonKey": "+UH1.71.button",
+        "buttonFeedbackKey": "+UH1.71.buttonFeedback"
+      },
+      {
+        "asset_name": "ElCabConfig",
+        "coordinates": {
+          "x": 0.9471692787414321,
+          "y": 0.9346281172256917,
+          "angle": null
+        },
+        "size": {
+          "width": 0.05,
+          "height": 0.1
+        },
+        "text": null,
+        "textPos": null,
+        "key": "BatchLines.cabinetDoor"
+      },
+      {
+        "asset_name": "ChecklistsConfig",
+        "coordinates": {
+          "x": 0.039449433281227915,
+          "y": 0.08630794454492509,
+          "angle": null
+        },
+        "size": {
+          "width": 0.055,
+          "height": 0.05
+        },
+        "text": null,
+        "textPos": null,
+        "line1": [
+          {
+            "asset_name": "LEDConfig",
+            "coordinates": {
+              "x": 0.0,
+              "y": 0.0,
+              "angle": null
+            },
+            "size": {
+              "width": 0.03,
+              "height": 0.03
+            },
+            "text": "Running",
+            "textPos": null,
+            "key": "Line1.running",
+            "on_color": {
+              "red": 0.2980392156862745,
+              "green": 0.6862745098039216,
+              "blue": 0.3137254901960784,
+              "alpha": 1.0
+            },
+            "off_color": {
+              "red": 0.3764705882352941,
+              "green": 0.49019607843137253,
+              "blue": 0.5450980392156862,
+              "alpha": 1.0
+            },
+            "led_type": "circle"
+          },
+          {
+            "asset_name": "LEDConfig",
+            "coordinates": {
+              "x": 0.0,
+              "y": 0.0,
+              "angle": null
+            },
+            "size": {
+              "width": 0.03,
+              "height": 0.03
+            },
+            "text": "Conveyor in place",
+            "textPos": null,
+            "key": "Line1.Conveyor2.InPlace",
+            "on_color": {
+              "red": 0.2980392156862745,
+              "green": 0.6862745098039216,
+              "blue": 0.3137254901960784,
+              "alpha": 1.0
+            },
+            "off_color": {
+              "red": 0.3764705882352941,
+              "green": 0.49019607843137253,
+              "blue": 0.5450980392156862,
+              "alpha": 1.0
+            },
+            "led_type": "circle"
+          },
+          {
+            "asset_name": "LEDConfig",
+            "coordinates": {
+              "x": 0.0,
+              "y": 0.0,
+              "angle": null
+            },
+            "size": {
+              "width": 0.03,
+              "height": 0.03
+            },
+            "text": "Reject conv. in place",
+            "textPos": null,
+            "key": "Line1.Conveyor1.InPlace",
+            "on_color": {
+              "red": 0.2980392156862745,
+              "green": 0.6862745098039216,
+              "blue": 0.3137254901960784,
+              "alpha": 1.0
+            },
+            "off_color": {
+              "red": 0.3764705882352941,
+              "green": 0.49019607843137253,
+              "blue": 0.5450980392156862,
+              "alpha": 1.0
+            },
+            "led_type": "circle"
+          },
+          {
+            "asset_name": "LEDConfig",
+            "coordinates": {
+              "x": 0.0,
+              "y": 0.0,
+              "angle": null
+            },
+            "size": {
+              "width": 0.03,
+              "height": 0.03
+            },
+            "text": "Speedbatcher running",
+            "textPos": null,
+            "key": "SB1.Running",
+            "on_color": {
+              "red": 0.2980392156862745,
+              "green": 0.6862745098039216,
+              "blue": 0.3137254901960784,
+              "alpha": 1.0
+            },
+            "off_color": {
+              "red": 0.3764705882352941,
+              "green": 0.49019607843137253,
+              "blue": 0.5450980392156862,
+              "alpha": 1.0
+            },
+            "led_type": "circle"
+          },
+          {
+            "asset_name": "LEDConfig",
+            "coordinates": {
+              "x": 0.0,
+              "y": 0.0,
+              "angle": null
+            },
+            "size": {
+              "width": 0.03,
+              "height": 0.03
+            },
+            "text": "Packing running",
+            "textPos": null,
+            "key": "Packing.1.running",
+            "on_color": {
+              "red": 0.2980392156862745,
+              "green": 0.6862745098039216,
+              "blue": 0.3137254901960784,
+              "alpha": 1.0
+            },
+            "off_color": {
+              "red": 0.3764705882352941,
+              "green": 0.49019607843137253,
+              "blue": 0.5450980392156862,
+              "alpha": 1.0
+            },
+            "led_type": "circle"
+          }
+        ],
+        "line2": [
+          {
+            "asset_name": "LEDConfig",
+            "coordinates": {
+              "x": 0.0,
+              "y": 0.0,
+              "angle": null
+            },
+            "size": {
+              "width": 0.03,
+              "height": 0.03
+            },
+            "text": "Running",
+            "textPos": null,
+            "key": "Line2.running",
+            "on_color": {
+              "red": 0.2980392156862745,
+              "green": 0.6862745098039216,
+              "blue": 0.3137254901960784,
+              "alpha": 1.0
+            },
+            "off_color": {
+              "red": 0.3764705882352941,
+              "green": 0.49019607843137253,
+              "blue": 0.5450980392156862,
+              "alpha": 1.0
+            },
+            "led_type": "circle"
+          },
+          {
+            "asset_name": "LEDConfig",
+            "coordinates": {
+              "x": 0.0,
+              "y": 0.0,
+              "angle": null
+            },
+            "size": {
+              "width": 0.03,
+              "height": 0.03
+            },
+            "text": "Conveyor in place",
+            "textPos": null,
+            "key": "Line2.Conveyor2.InPlace",
+            "on_color": {
+              "red": 0.2980392156862745,
+              "green": 0.6862745098039216,
+              "blue": 0.3137254901960784,
+              "alpha": 1.0
+            },
+            "off_color": {
+              "red": 0.3764705882352941,
+              "green": 0.49019607843137253,
+              "blue": 0.5450980392156862,
+              "alpha": 1.0
+            },
+            "led_type": "circle"
+          },
+          {
+            "asset_name": "LEDConfig",
+            "coordinates": {
+              "x": 0.0,
+              "y": 0.0,
+              "angle": null
+            },
+            "size": {
+              "width": 0.03,
+              "height": 0.03
+            },
+            "text": "Reject conv. in place",
+            "textPos": null,
+            "key": "Line2.Conveyor1.InPlace",
+            "on_color": {
+              "red": 0.2980392156862745,
+              "green": 0.6862745098039216,
+              "blue": 0.3137254901960784,
+              "alpha": 1.0
+            },
+            "off_color": {
+              "red": 0.3764705882352941,
+              "green": 0.49019607843137253,
+              "blue": 0.5450980392156862,
+              "alpha": 1.0
+            },
+            "led_type": "circle"
+          },
+          {
+            "asset_name": "LEDConfig",
+            "coordinates": {
+              "x": 0.0,
+              "y": 0.0,
+              "angle": null
+            },
+            "size": {
+              "width": 0.03,
+              "height": 0.03
+            },
+            "text": "Speedbatcher running",
+            "textPos": null,
+            "key": "SB2.Running",
+            "on_color": {
+              "red": 0.2980392156862745,
+              "green": 0.6862745098039216,
+              "blue": 0.3137254901960784,
+              "alpha": 1.0
+            },
+            "off_color": {
+              "red": 0.3764705882352941,
+              "green": 0.49019607843137253,
+              "blue": 0.5450980392156862,
+              "alpha": 1.0
+            },
+            "led_type": "circle"
+          },
+          {
+            "asset_name": "LEDConfig",
+            "coordinates": {
+              "x": 0.0,
+              "y": 0.0,
+              "angle": null
+            },
+            "size": {
+              "width": 0.03,
+              "height": 0.03
+            },
+            "text": "Packing running",
+            "textPos": null,
+            "key": "Packing.2.running",
+            "on_color": {
+              "red": 0.2980392156862745,
+              "green": 0.6862745098039216,
+              "blue": 0.3137254901960784,
+              "alpha": 1.0
+            },
+            "off_color": {
+              "red": 0.3764705882352941,
+              "green": 0.49019607843137253,
+              "blue": 0.5450980392156862,
+              "alpha": 1.0
+            },
+            "led_type": "circle"
+          }
+        ],
+        "line3": [
+          {
+            "asset_name": "LEDConfig",
+            "coordinates": {
+              "x": 0.0,
+              "y": 0.0,
+              "angle": null
+            },
+            "size": {
+              "width": 0.03,
+              "height": 0.03
+            },
+            "text": "Running",
+            "textPos": null,
+            "key": "Line3.running",
+            "on_color": {
+              "red": 0.2980392156862745,
+              "green": 0.6862745098039216,
+              "blue": 0.3137254901960784,
+              "alpha": 1.0
+            },
+            "off_color": {
+              "red": 0.3764705882352941,
+              "green": 0.49019607843137253,
+              "blue": 0.5450980392156862,
+              "alpha": 1.0
+            },
+            "led_type": "circle"
+          },
+          {
+            "asset_name": "LEDConfig",
+            "coordinates": {
+              "x": 0.0,
+              "y": 0.0,
+              "angle": null
+            },
+            "size": {
+              "width": 0.03,
+              "height": 0.03
+            },
+            "text": "Conveyor in place",
+            "textPos": null,
+            "key": "Line3.Conveyor2.InPlace",
+            "on_color": {
+              "red": 0.2980392156862745,
+              "green": 0.6862745098039216,
+              "blue": 0.3137254901960784,
+              "alpha": 1.0
+            },
+            "off_color": {
+              "red": 0.3764705882352941,
+              "green": 0.49019607843137253,
+              "blue": 0.5450980392156862,
+              "alpha": 1.0
+            },
+            "led_type": "circle"
+          },
+          {
+            "asset_name": "LEDConfig",
+            "coordinates": {
+              "x": 0.0,
+              "y": 0.0,
+              "angle": null
+            },
+            "size": {
+              "width": 0.03,
+              "height": 0.03
+            },
+            "text": "Reject conv. in place",
+            "textPos": null,
+            "key": "Line3.Conveyor1.InPlace",
+            "on_color": {
+              "red": 0.2980392156862745,
+              "green": 0.6862745098039216,
+              "blue": 0.3137254901960784,
+              "alpha": 1.0
+            },
+            "off_color": {
+              "red": 0.3764705882352941,
+              "green": 0.49019607843137253,
+              "blue": 0.5450980392156862,
+              "alpha": 1.0
+            },
+            "led_type": "circle"
+          },
+          {
+            "asset_name": "LEDConfig",
+            "coordinates": {
+              "x": 0.0,
+              "y": 0.0,
+              "angle": null
+            },
+            "size": {
+              "width": 0.03,
+              "height": 0.03
+            },
+            "text": "Speedbatcher running",
+            "textPos": null,
+            "key": "SB3.Running",
+            "on_color": {
+              "red": 0.2980392156862745,
+              "green": 0.6862745098039216,
+              "blue": 0.3137254901960784,
+              "alpha": 1.0
+            },
+            "off_color": {
+              "red": 0.3764705882352941,
+              "green": 0.49019607843137253,
+              "blue": 0.5450980392156862,
+              "alpha": 1.0
+            },
+            "led_type": "circle"
+          },
+          {
+            "asset_name": "LEDConfig",
+            "coordinates": {
+              "x": 0.0,
+              "y": 0.0,
+              "angle": null
+            },
+            "size": {
+              "width": 0.03,
+              "height": 0.03
+            },
+            "text": "Packing running",
+            "textPos": null,
+            "key": "Packing.3.running",
+            "on_color": {
+              "red": 0.2980392156862745,
+              "green": 0.6862745098039216,
+              "blue": 0.3137254901960784,
+              "alpha": 1.0
+            },
+            "off_color": {
+              "red": 0.3764705882352941,
+              "green": 0.49019607843137253,
+              "blue": 0.5450980392156862,
+              "alpha": 1.0
+            },
+            "led_type": "circle"
+          }
+        ]
+      },
+      {
+        "asset_name": "ArrowConfig",
+        "coordinates": {
+          "x": 0.6694557891733073,
+          "y": 0.02310884682384226,
+          "angle": null
+        },
+        "size": {
+          "width": 0.02334248304300001,
+          "height": 0.02334248304300001
+        },
+        "text": null,
+        "textPos": null,
+        "key": "Line1.Motor1.Actuator",
+        "label": ""
+      },
+      {
+        "asset_name": "RecipesConfig",
+        "coordinates": {
+          "x": 0.1235663297704834,
+          "y": 0.08615322242804893,
+          "angle": null
+        },
+        "size": {
+          "width": 0.055,
+          "height": 0.05
+        },
+        "text": null,
+        "textPos": null,
+        "key": "LineRecipes",
+        "label": "Line"
+      },
+      {
+        "asset_name": "ArrowConfig",
+        "coordinates": {
+          "x": 0.6736080015877204,
+          "y": 0.36447495870110874,
+          "angle": null
+        },
+        "size": {
+          "width": 0.0233,
+          "height": 0.0233
+        },
+        "text": null,
+        "textPos": null,
+        "key": "Line2.Motor1.Actuator",
+        "label": ""
+      },
+      {
+        "asset_name": "ArrowConfig",
+        "coordinates": {
+          "x": 0.7419642253054942,
+          "y": 0.5543704102954978,
+          "angle": null
+        },
+        "size": {
+          "width": 0.0233,
+          "height": 0.0233
+        },
+        "text": null,
+        "textPos": null,
+        "key": "Line3.Motor1.Actuator",
+        "label": ""
+      },
+      {
+        "asset_name": "ArrowConfig",
+        "coordinates": {
+          "x": 0.7419296466839909,
+          "y": 0.8480440464570784,
+          "angle": null
+        },
+        "size": {
+          "width": 0.03,
+          "height": 0.03
+        },
+        "text": null,
+        "textPos": null,
+        "key": "Line3.Motor2.Actuator",
+        "label": ""
+      },
+      {
+        "asset_name": "ArrowConfig",
+        "coordinates": {
+          "x": 0.7351597939173196,
+          "y": 0.21601471418444027,
+          "angle": null
+        },
+        "size": {
+          "width": 0.02334248304300001,
+          "height": 0.02334248304300001
+        },
+        "text": null,
+        "textPos": null,
+        "key": "Line1.Motor2.Actuator",
+        "label": ""
+      },
+      {
+        "asset_name": "ArrowConfig",
+        "coordinates": {
+          "x": 0.5827688385193194,
+          "y": 0.5111468323508985,
+          "angle": null
+        },
+        "size": {
+          "width": 0.0233,
+          "height": 0.0233
+        },
+        "text": null,
+        "textPos": null,
+        "key": "Line2.Motor2.Mover",
+        "label": ""
+      },
+      {
+        "asset_name": "ButtonConfig",
+        "coordinates": {
+          "x": 0.5571010881136322,
+          "y": 0.5106269229976989,
+          "angle": null
+        },
+        "size": {
+          "width": 0.0243,
+          "height": 0.0243
+        },
+        "text": "Reset Mover",
+        "textPos": "left",
+        "key": "Line2.Motor2.ResetMover",
+        "feedback": {
+          "key": "Line2.Motor2.ResetMoverFeedback",
+          "color": {
+            "red": 0.9568627450980393,
+            "green": 0.2627450980392157,
+            "blue": 0.21176470588235294,
+            "alpha": 1.0
+          }
+        },
+        "icon": null,
+        "outward_color": {
+          "red": 0.6196078431372549,
+          "green": 0.6196078431372549,
+          "blue": 0.6196078431372549,
+          "alpha": 1.0
+        },
+        "inward_color": {
+          "red": 0.6196078431372549,
+          "green": 0.6196078431372549,
+          "blue": 0.6196078431372549,
+          "alpha": 1.0
+        },
+        "button_type": "circle",
+        "is_toggle": false,
+        "server_writes_low": false
+      },
+      {
+        "asset_name": "ConveyorColorPaletteConfig",
+        "coordinates": {
+          "x": 0.13199703027174414,
+          "y": 0.6991828032591897,
+          "angle": null
+        },
+        "size": {
+          "width": 0.07,
+          "height": 0.3
+        },
+        "text": null,
+        "textPos": null,
+        "preview": null
+      },
+      {
+        "asset_name": "LEDColumnConfig",
+        "coordinates": {
+          "x": 0.5649000000000001,
+          "y": 0.4249,
+          "angle": null
+        },
+        "size": {
+          "width": 0.0934,
+          "height": 0.0934
+        },
+        "text": null,
+        "textPos": null,
+        "leds": [
+          {
+            "asset_name": "LEDConfig",
+            "coordinates": {
+              "x": 0.0,
+              "y": 0.0,
+              "angle": null
+            },
+            "size": {
+              "width": 0.03,
+              "height": 0.03
+            },
+            "text": "Running",
+            "textPos": "right",
+            "key": "Line2.running",
+            "on_color": {
+              "red": 0.2980392156862745,
+              "green": 0.6862745098039216,
+              "blue": 0.3137254901960784,
+              "alpha": 1.0
+            },
+            "off_color": {
+              "red": 0.6196078431372549,
+              "green": 0.6196078431372549,
+              "blue": 0.6196078431372549,
+              "alpha": 1.0
+            },
+            "led_type": "circle"
+          },
+          {
+            "asset_name": "LEDConfig",
+            "coordinates": {
+              "x": 0.0,
+              "y": 0.0,
+              "angle": null
+            },
+            "size": {
+              "width": 0.03,
+              "height": 0.03
+            },
+            "text": "Cleaning",
+            "textPos": "right",
+            "key": "Line2.cleaning",
+            "on_color": {
+              "red": 0.011764705882352941,
+              "green": 0.6627450980392157,
+              "blue": 0.9568627450980393,
+              "alpha": 1.0
+            },
+            "off_color": {
+              "red": 0.6196078431372549,
+              "green": 0.6196078431372549,
+              "blue": 0.6196078431372549,
+              "alpha": 1.0
+            },
+            "led_type": "circle"
+          }
+        ],
+        "spacing": 10.0
+      },
+      {
+        "asset_name": "LEDColumnConfig",
+        "coordinates": {
+          "x": 0.5649242434104448,
+          "y": 0.11137780450294152,
+          "angle": null
+        },
+        "size": {
+          "width": 0.09336993217200004,
+          "height": 0.09336993217200004
+        },
+        "text": null,
+        "textPos": null,
+        "leds": [
+          {
+            "asset_name": "LEDConfig",
+            "coordinates": {
+              "x": 0.0,
+              "y": 0.0,
+              "angle": null
+            },
+            "size": {
+              "width": 0.03,
+              "height": 0.03
+            },
+            "text": "Running",
+            "textPos": "right",
+            "key": "Line1.running",
+            "on_color": {
+              "red": 0.2980392156862745,
+              "green": 0.6862745098039216,
+              "blue": 0.3137254901960784,
+              "alpha": 1.0
+            },
+            "off_color": {
+              "red": 0.6196078431372549,
+              "green": 0.6196078431372549,
+              "blue": 0.6196078431372549,
+              "alpha": 1.0
+            },
+            "led_type": "circle"
+          },
+          {
+            "asset_name": "LEDConfig",
+            "coordinates": {
+              "x": 0.0,
+              "y": 0.0,
+              "angle": null
+            },
+            "size": {
+              "width": 0.03,
+              "height": 0.03
+            },
+            "text": "Cleaning",
+            "textPos": "right",
+            "key": "Line1.cleaning",
+            "on_color": {
+              "red": 0.011764705882352941,
+              "green": 0.6627450980392157,
+              "blue": 0.9568627450980393,
+              "alpha": 1.0
+            },
+            "off_color": {
+              "red": 0.6196078431372549,
+              "green": 0.6196078431372549,
+              "blue": 0.6196078431372549,
+              "alpha": 1.0
+            },
+            "led_type": "circle"
+          }
+        ],
+        "spacing": 10.0
+      },
+      {
+        "asset_name": "ConveyorConfig",
+        "coordinates": {
+          "x": 0.6885757470007607,
+          "y": 0.12160929653444646,
+          "angle": 90.0
+        },
+        "size": {
+          "width": 0.077841,
+          "height": 0.04050000000000001
+        },
+        "text": null,
+        "textPos": null,
+        "key": "",
+        "batchesKey": null,
+        "frequencyKey": "SB1.Checkweigher2Conv.Frequency",
+        "tripKey": "SB1.Checkweigher2.Tripped",
+        "simulateBatches": null,
+        "bidirectional": true,
+        "reverseDirection": null,
+        "showFrequency": null,
+        "showAuger": null,
+        "augerRpmKey": null,
+        "augerOpenEnd": null
+      },
+      {
+        "asset_name": "ConveyorConfig",
+        "coordinates": {
+          "x": 0.713927414997865,
+          "y": 0.12143419004029449,
+          "angle": 90.0
+        },
+        "size": {
+          "width": 0.077841,
+          "height": 0.04050000000000001
+        },
+        "text": null,
+        "textPos": null,
+        "key": "",
+        "batchesKey": null,
+        "frequencyKey": "SB1.Checkweigher1Conv.Frequency",
+        "tripKey": "SB1.Checkweigher1.Tripped",
+        "simulateBatches": null,
+        "bidirectional": true,
+        "reverseDirection": null,
+        "showFrequency": null,
+        "showAuger": null,
+        "augerRpmKey": null,
+        "augerOpenEnd": null
+      },
+      {
+        "asset_name": "LEDColumnConfig",
+        "coordinates": {
+          "x": 0.5755861811587896,
+          "y": 0.21002801715175112,
+          "angle": null
+        },
+        "size": {
+          "width": 0.09336993217200004,
+          "height": 0.05446579376700004
+        },
+        "text": null,
+        "textPos": null,
+        "leds": [
+          {
+            "asset_name": "LEDConfig",
+            "coordinates": {
+              "x": 0.0,
+              "y": 0.0,
+              "angle": null
+            },
+            "size": {
+              "width": 0.03,
+              "height": 0.03
+            },
+            "text": "Outfeed Running",
+            "textPos": "left",
+            "key": "Packing.1.running",
+            "on_color": {
+              "red": 0.2980392156862745,
+              "green": 0.6862745098039216,
+              "blue": 0.3137254901960784,
+              "alpha": 1.0
+            },
+            "off_color": {
+              "red": 0.6196078431372549,
+              "green": 0.6196078431372549,
+              "blue": 0.6196078431372549,
+              "alpha": 1.0
+            },
+            "led_type": "circle"
+          },
+          {
+            "asset_name": "LEDConfig",
+            "coordinates": {
+              "x": 0.0,
+              "y": 0.0,
+              "angle": null
+            },
+            "size": {
+              "width": 0.03,
+              "height": 0.03
+            },
+            "text": "Drop Allowed",
+            "textPos": "left",
+            "key": "Packing.1.dropOk",
+            "on_color": {
+              "red": 0.2980392156862745,
+              "green": 0.6862745098039216,
+              "blue": 0.3137254901960784,
+              "alpha": 1.0
+            },
+            "off_color": {
+              "red": 0.6196078431372549,
+              "green": 0.6196078431372549,
+              "blue": 0.6196078431372549,
+              "alpha": 1.0
+            },
+            "led_type": "circle"
+          }
+        ],
+        "spacing": 10.0
+      },
+      {
+        "asset_name": "ConveyorConfig",
+        "coordinates": {
+          "x": 0.6955843200912942,
+          "y": 0.46051860433064534,
+          "angle": 90.0
+        },
+        "size": {
+          "width": 0.07780000000000001,
+          "height": 0.0405
+        },
+        "text": null,
+        "textPos": null,
+        "key": "",
+        "batchesKey": null,
+        "frequencyKey": "SB2.Checkweigher2Conv.Frequency",
+        "tripKey": "SB2.Checkweigher2.Tripped",
+        "simulateBatches": null,
+        "bidirectional": true,
+        "reverseDirection": null,
+        "showFrequency": null,
+        "showAuger": null,
+        "augerRpmKey": null,
+        "augerOpenEnd": null
+      },
+      {
+        "asset_name": "ConveyorConfig",
+        "coordinates": {
+          "x": 0.7211413559019775,
+          "y": 0.4604238781070622,
+          "angle": 90.0
+        },
+        "size": {
+          "width": 0.07780000000000001,
+          "height": 0.0405
+        },
+        "text": null,
+        "textPos": null,
+        "key": "",
+        "batchesKey": null,
+        "frequencyKey": "SB2.Checkweigher1Conv.Frequency",
+        "tripKey": "SB2.Checkweigher1.Tripped",
+        "simulateBatches": null,
+        "bidirectional": true,
+        "reverseDirection": null,
+        "showFrequency": null,
+        "showAuger": null,
+        "augerRpmKey": null,
+        "augerOpenEnd": null
+      },
+      {
+        "asset_name": "LEDColumnConfig",
+        "coordinates": {
+          "x": 0.5649000000000001,
+          "y": 0.7395,
+          "angle": null
+        },
+        "size": {
+          "width": 0.0934,
+          "height": 0.0934
+        },
+        "text": null,
+        "textPos": null,
+        "leds": [
+          {
+            "asset_name": "LEDConfig",
+            "coordinates": {
+              "x": 0.0,
+              "y": 0.0,
+              "angle": null
+            },
+            "size": {
+              "width": 0.03,
+              "height": 0.03
+            },
+            "text": "Running",
+            "textPos": "right",
+            "key": "Line3.running",
+            "on_color": {
+              "red": 0.2980392156862745,
+              "green": 0.6862745098039216,
+              "blue": 0.3137254901960784,
+              "alpha": 1.0
+            },
+            "off_color": {
+              "red": 0.6196078431372549,
+              "green": 0.6196078431372549,
+              "blue": 0.6196078431372549,
+              "alpha": 1.0
+            },
+            "led_type": "circle"
+          },
+          {
+            "asset_name": "LEDConfig",
+            "coordinates": {
+              "x": 0.0,
+              "y": 0.0,
+              "angle": null
+            },
+            "size": {
+              "width": 0.03,
+              "height": 0.03
+            },
+            "text": "Cleaning",
+            "textPos": "right",
+            "key": "Line3.cleaning",
+            "on_color": {
+              "red": 0.011764705882352941,
+              "green": 0.6627450980392157,
+              "blue": 0.9568627450980393,
+              "alpha": 1.0
+            },
+            "off_color": {
+              "red": 0.6196078431372549,
+              "green": 0.6196078431372549,
+              "blue": 0.6196078431372549,
+              "alpha": 1.0
+            },
+            "led_type": "circle"
+          }
+        ],
+        "spacing": 10.0
+      },
+      {
+        "asset_name": "LEDColumnConfig",
+        "coordinates": {
+          "x": 0.27234005843864084,
+          "y": 0.757901091851758,
+          "angle": null
+        },
+        "size": {
+          "width": 0.09336993217200004,
+          "height": 0.05446579376700004
+        },
+        "text": null,
+        "textPos": null,
+        "leds": [
+          {
+            "asset_name": "LEDConfig",
+            "coordinates": {
+              "x": 0.0,
+              "y": 0.0,
+              "angle": null
+            },
+            "size": {
+              "width": 0.03,
+              "height": 0.03
+            },
+            "text": "Outfeed Running",
+            "textPos": "left",
+            "key": "Packing.2.running",
+            "on_color": {
+              "red": 0.2980392156862745,
+              "green": 0.6862745098039216,
+              "blue": 0.3137254901960784,
+              "alpha": 1.0
+            },
+            "off_color": {
+              "red": 0.6196078431372549,
+              "green": 0.6196078431372549,
+              "blue": 0.6196078431372549,
+              "alpha": 1.0
+            },
+            "led_type": "circle"
+          },
+          {
+            "asset_name": "LEDConfig",
+            "coordinates": {
+              "x": 0.0,
+              "y": 0.0,
+              "angle": null
+            },
+            "size": {
+              "width": 0.03,
+              "height": 0.03
+            },
+            "text": "Drop Allowed",
+            "textPos": "left",
+            "key": "Packing.2.dropOk",
+            "on_color": {
+              "red": 0.2980392156862745,
+              "green": 0.6862745098039216,
+              "blue": 0.3137254901960784,
+              "alpha": 1.0
+            },
+            "off_color": {
+              "red": 0.6196078431372549,
+              "green": 0.6196078431372549,
+              "blue": 0.6196078431372549,
+              "alpha": 1.0
+            },
+            "led_type": "circle"
+          }
+        ],
+        "spacing": 10.0
+      },
+      {
+        "asset_name": "LEDColumnConfig",
+        "coordinates": {
+          "x": 0.5237382240782604,
+          "y": 0.9607234881816407,
+          "angle": null
+        },
+        "size": {
+          "width": 0.09336993217200004,
+          "height": 0.05446579376700004
+        },
+        "text": null,
+        "textPos": null,
+        "leds": [
+          {
+            "asset_name": "LEDConfig",
+            "coordinates": {
+              "x": 0.0,
+              "y": 0.0,
+              "angle": null
+            },
+            "size": {
+              "width": 0.03,
+              "height": 0.03
+            },
+            "text": "Outfeed Running",
+            "textPos": "left",
+            "key": "Packing.3.running",
+            "on_color": {
+              "red": 0.2980392156862745,
+              "green": 0.6862745098039216,
+              "blue": 0.3137254901960784,
+              "alpha": 1.0
+            },
+            "off_color": {
+              "red": 0.6196078431372549,
+              "green": 0.6196078431372549,
+              "blue": 0.6196078431372549,
+              "alpha": 1.0
+            },
+            "led_type": "circle"
+          },
+          {
+            "asset_name": "LEDConfig",
+            "coordinates": {
+              "x": 0.0,
+              "y": 0.0,
+              "angle": null
+            },
+            "size": {
+              "width": 0.03,
+              "height": 0.03
+            },
+            "text": "Drop Allowed",
+            "textPos": "left",
+            "key": "Packing.3.dropOk",
+            "on_color": {
+              "red": 0.2980392156862745,
+              "green": 0.6862745098039216,
+              "blue": 0.3137254901960784,
+              "alpha": 1.0
+            },
+            "off_color": {
+              "red": 0.6196078431372549,
+              "green": 0.6196078431372549,
+              "blue": 0.6196078431372549,
+              "alpha": 1.0
+            },
+            "led_type": "circle"
+          }
+        ],
+        "spacing": 10.0
+      },
+      {
+        "asset_name": "ConveyorConfig",
+        "coordinates": {
+          "x": 0.6928858403615646,
+          "y": 0.7509316804502423,
+          "angle": 90.0
+        },
+        "size": {
+          "width": 0.07780000000000001,
+          "height": 0.0405
+        },
+        "text": null,
+        "textPos": null,
+        "key": "",
+        "batchesKey": null,
+        "frequencyKey": "SB3.Checkweigher2Conv.Frequency",
+        "tripKey": "SB3.Checkweigher2.Tripped",
+        "simulateBatches": null,
+        "bidirectional": true,
+        "reverseDirection": null,
+        "showFrequency": null,
+        "showAuger": null,
+        "augerRpmKey": null,
+        "augerOpenEnd": null
+      },
+      {
+        "asset_name": "ConveyorConfig",
+        "coordinates": {
+          "x": 0.7190235349560317,
+          "y": 0.7510246419143473,
+          "angle": 90.0
+        },
+        "size": {
+          "width": 0.07780000000000001,
+          "height": 0.0405
+        },
+        "text": null,
+        "textPos": null,
+        "key": "",
+        "batchesKey": null,
+        "frequencyKey": "SB3.Checkweigher1Conv.Frequency",
+        "tripKey": "SB3.Checkweigher2.Tripped",
+        "simulateBatches": null,
+        "bidirectional": true,
+        "reverseDirection": null,
+        "showFrequency": null,
+        "showAuger": null,
+        "augerRpmKey": null,
+        "augerOpenEnd": null
+      },
+      {
+        "asset_name": "LEDColumnConfig",
+        "coordinates": {
+          "x": 0.12377900998824916,
+          "y": 0.3228513839926879,
+          "angle": null
+        },
+        "size": {
+          "width": 0.03,
+          "height": 0.09
+        },
+        "text": null,
+        "textPos": null,
+        "leds": [
+          {
+            "asset_name": "LEDConfig",
+            "coordinates": {
+              "x": 0.0,
+              "y": 0.0,
+              "angle": null
+            },
+            "size": {
+              "width": 0.03,
+              "height": 0.03
+            },
+            "text": null,
+            "textPos": "inside",
+            "key": "Domelight.red",
+            "on_color": {
+              "red": 0.9568627450980393,
+              "green": 0.2627450980392157,
+              "blue": 0.21176470588235294,
+              "alpha": 1.0
+            },
+            "off_color": {
+              "red": 0.6196078431372549,
+              "green": 0.6196078431372549,
+              "blue": 0.6196078431372549,
+              "alpha": 1.0
+            },
+            "led_type": "square"
+          },
+          {
+            "asset_name": "LEDConfig",
+            "coordinates": {
+              "x": 0.0,
+              "y": 0.0,
+              "angle": null
+            },
+            "size": {
+              "width": 0.03,
+              "height": 0.03
+            },
+            "text": null,
+            "textPos": "inside",
+            "key": "Domelight.yellow",
+            "on_color": {
+              "red": 1.0,
+              "green": 0.9215686274509803,
+              "blue": 0.23137254901960785,
+              "alpha": 1.0
+            },
+            "off_color": {
+              "red": 0.6196078431372549,
+              "green": 0.6196078431372549,
+              "blue": 0.6196078431372549,
+              "alpha": 1.0
+            },
+            "led_type": "square"
+          },
+          {
+            "asset_name": "LEDConfig",
+            "coordinates": {
+              "x": 0.0,
+              "y": 0.0,
+              "angle": null
+            },
+            "size": {
+              "width": 0.03,
+              "height": 0.03
+            },
+            "text": null,
+            "textPos": "inside",
+            "key": "Domelight.green",
+            "on_color": {
+              "red": 0.2980392156862745,
+              "green": 0.6862745098039216,
+              "blue": 0.3137254901960784,
+              "alpha": 1.0
+            },
+            "off_color": {
+              "red": 0.6196078431372549,
+              "green": 0.6196078431372549,
+              "blue": 0.6196078431372549,
+              "alpha": 1.0
+            },
+            "led_type": "square"
+          }
+        ],
+        "spacing": null
+      },
+      {
+        "asset_name": "ArrowConfig",
+        "coordinates": {
+          "x": 0.6720787639954322,
+          "y": 0.6543202468471302,
+          "angle": null
+        },
+        "size": {
+          "width": 0.0233,
+          "height": 0.0233
+        },
+        "text": null,
+        "textPos": null,
+        "key": "Line3.Motor1.Actuator",
+        "label": ""
+      },
+      {
+        "asset_name": "NumberConfig",
+        "coordinates": {
+          "x": 0.30521172690262727,
+          "y": 0.1028871553574377,
+          "angle": null
+        },
+        "size": {
+          "width": 0.12100000000000002,
+          "height": 0.036300000000000006
+        },
+        "text": "Throughput line 1",
+        "textPos": "above",
+        "key": "Line1.$sb_line_stats_period",
+        "showDecimalPoint": true,
+        "decimalPlaces": 2,
+        "scale": null,
+        "units": "Batches/min",
+        "textColor": {
+          "red": 0.0,
+          "green": 0.0,
+          "blue": 0.0,
+          "alpha": 1.0
+        },
+        "graph_config": {
+          "asset_name": "GraphAssetConfig",
+          "coordinates": {
+            "x": 0.0,
+            "y": 0.0,
+            "angle": null
+          },
+          "size": {
+            "width": 0.03,
+            "height": 0.03
+          },
+          "text": null,
+          "textPos": null,
+          "graph_type": "timeseries",
+          "primary_series": [
+            {
+              "key": "Line1.$sb_line_stats_period",
+              "label": "Line 1",
+              "color": null
+            },
+            {
+              "key": "Line2.$sb_line_stats_period",
+              "label": "Line 2",
+              "color": null
+            },
+            {
+              "key": "Line3.$sb_line_stats_period",
+              "label": "Line 3",
+              "color": null
+            }
+          ],
+          "secondary_series": [],
+          "x_axis": {
+            "title": null,
+            "unit": "s",
+            "min": null,
+            "max": null,
+            "boolean": false,
+            "integersOnly": false
+          },
+          "y_axis": {
+            "title": null,
+            "unit": "Batches/min",
+            "min": 0.0,
+            "max": null,
+            "boolean": false,
+            "integersOnly": true
+          },
+          "y_axis2": null,
+          "time_window_min": 3600000000,
+          "header_text": "Batches/min last 30 minutes",
+          "aggregation": "none",
+          "tooltip": true
+        },
+        "writable": false
+      },
+      {
+        "asset_name": "NumberConfig",
+        "coordinates": {
+          "x": 0.30519999999999997,
+          "y": 0.18030000000000002,
+          "angle": null
+        },
+        "size": {
+          "width": 0.12100000000000002,
+          "height": 0.036300000000000006
+        },
+        "text": "Througput line 2",
+        "textPos": "above",
+        "key": "Line2.$sb_line_stats_period",
+        "showDecimalPoint": true,
+        "decimalPlaces": 2,
+        "scale": null,
+        "units": "Batches/min",
+        "textColor": {
+          "red": 0.0,
+          "green": 0.0,
+          "blue": 0.0,
+          "alpha": 1.0
+        },
+        "graph_config": {
+          "asset_name": "GraphAssetConfig",
+          "coordinates": {
+            "x": 0.0,
+            "y": 0.0,
+            "angle": null
+          },
+          "size": {
+            "width": 0.03,
+            "height": 0.03
+          },
+          "text": null,
+          "textPos": null,
+          "graph_type": "timeseries",
+          "primary_series": [
+            {
+              "key": "Line1.$sb_line_stats_period",
+              "label": "Line 1",
+              "color": null
+            },
+            {
+              "key": "Line2.$sb_line_stats_period",
+              "label": "Line 2",
+              "color": null
+            },
+            {
+              "key": "Line3.$sb_line_stats_period",
+              "label": "Line 3",
+              "color": null
+            }
+          ],
+          "secondary_series": [],
+          "x_axis": {
+            "title": null,
+            "unit": "s",
+            "min": null,
+            "max": null,
+            "boolean": false,
+            "integersOnly": false
+          },
+          "y_axis": {
+            "title": null,
+            "unit": "Batches/min",
+            "min": null,
+            "max": null,
+            "boolean": false,
+            "integersOnly": true
+          },
+          "y_axis2": null,
+          "time_window_min": 3600000000,
+          "header_text": "Batches/min last configured minutes",
+          "aggregation": "none",
+          "tooltip": true
+        },
+        "writable": false
+      },
+      {
+        "asset_name": "NumberConfig",
+        "coordinates": {
+          "x": 0.30519999999999997,
+          "y": 0.256,
+          "angle": null
+        },
+        "size": {
+          "width": 0.12100000000000002,
+          "height": 0.036300000000000006
+        },
+        "text": "Througput line 3",
+        "textPos": "above",
+        "key": "Line3.$sb_line_stats_period",
+        "showDecimalPoint": true,
+        "decimalPlaces": 2,
+        "scale": null,
+        "units": "Batches/min",
+        "textColor": {
+          "red": 0.0,
+          "green": 0.0,
+          "blue": 0.0,
+          "alpha": 1.0
+        },
+        "graph_config": {
+          "asset_name": "GraphAssetConfig",
+          "coordinates": {
+            "x": 0.0,
+            "y": 0.0,
+            "angle": null
+          },
+          "size": {
+            "width": 0.03,
+            "height": 0.03
+          },
+          "text": null,
+          "textPos": null,
+          "graph_type": "timeseries",
+          "primary_series": [
+            {
+              "key": "Line1.$sb_line_stats_period",
+              "label": "Line 1",
+              "color": null
+            },
+            {
+              "key": "Line2.$sb_line_stats_period",
+              "label": "Line 2",
+              "color": null
+            },
+            {
+              "key": "Line3.$sb_line_stats_period",
+              "label": "Line 3",
+              "color": null
+            }
+          ],
+          "secondary_series": [],
+          "x_axis": {
+            "title": null,
+            "unit": "s",
+            "min": null,
+            "max": null,
+            "boolean": false,
+            "integersOnly": false
+          },
+          "y_axis": {
+            "title": null,
+            "unit": "Batches/min",
+            "min": null,
+            "max": null,
+            "boolean": false,
+            "integersOnly": true
+          },
+          "y_axis2": null,
+          "time_window_min": 3600000000,
+          "header_text": "Batches/min last 30 minutes",
+          "aggregation": "none",
+          "tooltip": true
+        },
+        "writable": false
+      },
+      {
+        "asset_name": "RatioNumberConfig",
+        "coordinates": {
+          "x": 0.6491559321769849,
+          "y": 0.11237114289947045,
+          "angle": null
+        },
+        "size": {
+          "width": 0.03,
+          "height": 0.03
+        },
+        "text": "Accept%",
+        "textPos": "above",
+        "key1": "SB1.Checkweigher2.LastAcceptWeight",
+        "key2": "SB1.Checkweigher2.LastRejectWeight",
+        "key1_label": "Accepted batches",
+        "key2_label": "Rejected batches",
+        "text_color": {
+          "red": 0.0,
+          "green": 0.0,
+          "blue": 0.0,
+          "alpha": 1.0
+        },
+        "since_minutes": 1800000000,
+        "how_many": 10,
+        "poll_interval": 1000000,
+        "graph_header": "Speedbatcher 1 Checkweigher 2",
+        "bars_clock_aligned": true,
+        "integers_only": true,
+        "bars_interactive": true,
+        "interval_presets": [
+          10,
+          30,
+          60,
+          240
+        ]
+      },
+      {
+        "asset_name": "RatioNumberConfig",
+        "coordinates": {
+          "x": 0.7540621951219512,
+          "y": 0.112419783197832,
+          "angle": null
+        },
+        "size": {
+          "width": 0.03,
+          "height": 0.03
+        },
+        "text": "Accept%",
+        "textPos": "above",
+        "key1": "SB1.Checkweigher1.LastAcceptWeight",
+        "key2": "SB1.Checkweigher1.LastRejectWeight",
+        "key1_label": "Accepted batches",
+        "key2_label": "Rejected batches",
+        "text_color": {
+          "red": 0.0,
+          "green": 0.0,
+          "blue": 0.0,
+          "alpha": 1.0
+        },
+        "since_minutes": 1800000000,
+        "how_many": 10,
+        "poll_interval": 1000000,
+        "graph_header": "Speedbatcher 1 Checkweigher 1",
+        "bars_clock_aligned": true,
+        "integers_only": true,
+        "bars_interactive": true,
+        "interval_presets": [
+          10,
+          30,
+          60,
+          240
+        ]
+      },
+      {
+        "asset_name": "RatioNumberConfig",
+        "coordinates": {
+          "x": 0.6577353658536583,
+          "y": 0.44538455284552825,
+          "angle": null
+        },
+        "size": {
+          "width": 0.03,
+          "height": 0.03
+        },
+        "text": "Accept%",
+        "textPos": "above",
+        "key1": "SB2.Checkweigher2.LastAcceptWeight",
+        "key2": "SB2.Checkweigher2.LastRejectWeight",
+        "key1_label": "Accepted batches",
+        "key2_label": "Rejected batches",
+        "text_color": {
+          "red": 0.0,
+          "green": 0.0,
+          "blue": 0.0,
+          "alpha": 1.0
+        },
+        "since_minutes": 1800000000,
+        "how_many": 10,
+        "poll_interval": 1000000,
+        "graph_header": "Speedbatcher 2 Checkweigher 2",
+        "bars_clock_aligned": true,
+        "integers_only": true,
+        "bars_interactive": true,
+        "interval_presets": [
+          10,
+          30,
+          60,
+          240
+        ]
+      },
+      {
+        "asset_name": "RatioNumberConfig",
+        "coordinates": {
+          "x": 0.7581009328987595,
+          "y": 0.44538632732573513,
+          "angle": null
+        },
+        "size": {
+          "width": 0.03,
+          "height": 0.03
+        },
+        "text": "Accept%",
+        "textPos": "above",
+        "key1": "SB2.Checkweigher1.LastAcceptWeight",
+        "key2": "SB2.Checkweigher1.LastRejectWeight",
+        "key1_label": "Accepted batches",
+        "key2_label": "Rejected batches",
+        "text_color": {
+          "red": 0.0,
+          "green": 0.0,
+          "blue": 0.0,
+          "alpha": 1.0
+        },
+        "since_minutes": 1800000000,
+        "how_many": 10,
+        "poll_interval": 1000000,
+        "graph_header": "Speedbatcher 2 Checkweigher 1",
+        "bars_clock_aligned": true,
+        "integers_only": true,
+        "bars_interactive": true,
+        "interval_presets": [
+          10,
+          30,
+          60,
+          240
+        ]
+      },
+      {
+        "asset_name": "RatioNumberConfig",
+        "coordinates": {
+          "x": 0.6560562455333835,
+          "y": 0.7366666567565303,
+          "angle": null
+        },
+        "size": {
+          "width": 0.03,
+          "height": 0.03
+        },
+        "text": "Accept%",
+        "textPos": "above",
+        "key1": "SB3.Checkweigher2.LastAcceptWeight",
+        "key2": "SB3.Checkweigher2.LastRejectWeight",
+        "key1_label": "Accepted batches",
+        "key2_label": "Rejected batches",
+        "text_color": {
+          "red": 0.0,
+          "green": 0.0,
+          "blue": 0.0,
+          "alpha": 1.0
+        },
+        "since_minutes": 1800000000,
+        "how_many": 10,
+        "poll_interval": 1000000,
+        "graph_header": "Speedbatcher 3 Checkweigher 2",
+        "bars_clock_aligned": true,
+        "integers_only": true,
+        "bars_interactive": true,
+        "interval_presets": [
+          10,
+          30,
+          60,
+          240
+        ]
+      },
+      {
+        "asset_name": "RatioNumberConfig",
+        "coordinates": {
+          "x": 0.7592,
+          "y": 0.7393495934959363,
+          "angle": null
+        },
+        "size": {
+          "width": 0.03,
+          "height": 0.03
+        },
+        "text": "Accept%",
+        "textPos": "above",
+        "key1": "SB3.Checkweigher1.LastAcceptWeight",
+        "key2": "SB3.Checkweigher1.LastRejectWeight",
+        "key1_label": "Accepted batches",
+        "key2_label": "Rejected batches",
+        "text_color": {
+          "red": 0.0,
+          "green": 0.0,
+          "blue": 0.0,
+          "alpha": 1.0
+        },
+        "since_minutes": 1800000000,
+        "how_many": 10,
+        "poll_interval": 1000000,
+        "graph_header": "Speedbatcher 3 Checkweigher 1",
+        "bars_clock_aligned": true,
+        "integers_only": true,
+        "bars_interactive": true,
+        "interval_presets": [
+          10,
+          30,
+          60,
+          240
+        ]
+      },
+      {
+        "asset_name": "NumberConfig",
+        "coordinates": {
+          "x": 0.6887241593832995,
+          "y": 0.12172426065963854,
+          "angle": null
+        },
+        "size": {
+          "width": 0.02,
+          "height": 0.03
+        },
+        "text": "",
+        "textPos": "above",
+        "key": "SB1.Checkweigher2.CurrentWeight",
+        "showDecimalPoint": true,
+        "decimalPlaces": 2,
+        "scale": null,
+        "units": "",
+        "textColor": {
+          "red": 0.0,
+          "green": 0.0,
+          "blue": 0.0,
+          "alpha": 1.0
+        },
+        "graph_config": {
+          "asset_name": "GraphAssetConfig",
+          "coordinates": {
+            "x": 0.0,
+            "y": 0.0,
+            "angle": null
+          },
+          "size": {
+            "width": 0.03,
+            "height": 0.03
+          },
+          "text": null,
+          "textPos": null,
+          "graph_type": "timeseries",
+          "primary_series": [
+            {
+              "key": "SB1.Checkweigher1.CurrentWeight",
+              "label": "Checkweigher 1",
+              "color": null
+            },
+            {
+              "key": "SB1.Checkweigher2.CurrentWeight",
+              "label": "Checkweigher 2",
+              "color": null
+            }
+          ],
+          "secondary_series": [],
+          "x_axis": {
+            "title": null,
+            "unit": "s",
+            "min": null,
+            "max": null,
+            "boolean": false,
+            "integersOnly": false
+          },
+          "y_axis": {
+            "title": null,
+            "unit": "kg",
+            "min": null,
+            "max": null,
+            "boolean": false,
+            "integersOnly": false
+          },
+          "y_axis2": null,
+          "time_window_min": 600000000,
+          "header_text": "Current weights of speedbatcher 1",
+          "aggregation": "none",
+          "tooltip": false
+        },
+        "writable": false
+      },
+      {
+        "asset_name": "NumberConfig",
+        "coordinates": {
+          "x": 0.714876673612017,
+          "y": 0.12112316106742771,
+          "angle": null
+        },
+        "size": {
+          "width": 0.02,
+          "height": 0.03
+        },
+        "text": "",
+        "textPos": "above",
+        "key": "SB1.Checkweigher1.CurrentWeight",
+        "showDecimalPoint": true,
+        "decimalPlaces": 2,
+        "scale": null,
+        "units": "",
+        "textColor": {
+          "red": 0.0,
+          "green": 0.0,
+          "blue": 0.0,
+          "alpha": 1.0
+        },
+        "graph_config": {
+          "asset_name": "GraphAssetConfig",
+          "coordinates": {
+            "x": 0.0,
+            "y": 0.0,
+            "angle": null
+          },
+          "size": {
+            "width": 0.03,
+            "height": 0.03
+          },
+          "text": null,
+          "textPos": null,
+          "graph_type": "timeseries",
+          "primary_series": [
+            {
+              "key": "SB1.Checkweigher1.CurrentWeight",
+              "label": "Checkweigher 1",
+              "color": null
+            },
+            {
+              "key": "SB1.Checkweigher2.CurrentWeight",
+              "label": "Checkweigher 2",
+              "color": null
+            }
+          ],
+          "secondary_series": [],
+          "x_axis": {
+            "title": null,
+            "unit": "s",
+            "min": null,
+            "max": null,
+            "boolean": false,
+            "integersOnly": false
+          },
+          "y_axis": {
+            "title": null,
+            "unit": "kg",
+            "min": null,
+            "max": null,
+            "boolean": false,
+            "integersOnly": false
+          },
+          "y_axis2": null,
+          "time_window_min": 600000000,
+          "header_text": "Current weights of speedbatcher 1",
+          "aggregation": "none",
+          "tooltip": false
+        },
+        "writable": false
+      },
+      {
+        "asset_name": "NumberConfig",
+        "coordinates": {
+          "x": 0.6953433497404945,
+          "y": 0.43006872981569544,
+          "angle": null
+        },
+        "size": {
+          "width": 0.02,
+          "height": 0.03
+        },
+        "text": "",
+        "textPos": "above",
+        "key": "SB2.Checkweigher2.CurrentWeight",
+        "showDecimalPoint": true,
+        "decimalPlaces": 2,
+        "scale": null,
+        "units": "",
+        "textColor": {
+          "red": 0.0,
+          "green": 0.0,
+          "blue": 0.0,
+          "alpha": 1.0
+        },
+        "graph_config": {
+          "asset_name": "GraphAssetConfig",
+          "coordinates": {
+            "x": 0.0,
+            "y": 0.0,
+            "angle": null
+          },
+          "size": {
+            "width": 0.03,
+            "height": 0.03
+          },
+          "text": null,
+          "textPos": null,
+          "graph_type": "timeseries",
+          "primary_series": [
+            {
+              "key": "SB2.Checkweigher1.CurrentWeight",
+              "label": "Checkweigher 1",
+              "color": null
+            },
+            {
+              "key": "SB2.Checkweigher2.CurrentWeight",
+              "label": "Checkweigher 2",
+              "color": null
+            }
+          ],
+          "secondary_series": [],
+          "x_axis": {
+            "title": null,
+            "unit": "s",
+            "min": null,
+            "max": null,
+            "boolean": false,
+            "integersOnly": false
+          },
+          "y_axis": {
+            "title": null,
+            "unit": "kg",
+            "min": null,
+            "max": null,
+            "boolean": false,
+            "integersOnly": false
+          },
+          "y_axis2": null,
+          "time_window_min": 600000000,
+          "header_text": "Current weights of speedbatcher 2",
+          "aggregation": "none",
+          "tooltip": false
+        },
+        "writable": false
+      },
+      {
+        "asset_name": "NumberConfig",
+        "coordinates": {
+          "x": 0.7204646962958182,
+          "y": 0.4300798931188734,
+          "angle": null
+        },
+        "size": {
+          "width": 0.02,
+          "height": 0.03
+        },
+        "text": "",
+        "textPos": "above",
+        "key": "SB2.Checkweigher1.CurrentWeight",
+        "showDecimalPoint": true,
+        "decimalPlaces": 2,
+        "scale": null,
+        "units": "",
+        "textColor": {
+          "red": 0.0,
+          "green": 0.0,
+          "blue": 0.0,
+          "alpha": 1.0
+        },
+        "graph_config": {
+          "asset_name": "GraphAssetConfig",
+          "coordinates": {
+            "x": 0.0,
+            "y": 0.0,
+            "angle": null
+          },
+          "size": {
+            "width": 0.03,
+            "height": 0.03
+          },
+          "text": null,
+          "textPos": null,
+          "graph_type": "timeseries",
+          "primary_series": [
+            {
+              "key": "SB2.Checkweigher1.CurrentWeight",
+              "label": "Checkweigher 1",
+              "color": null
+            },
+            {
+              "key": "SB2.Checkweigher2.CurrentWeight",
+              "label": "Checkweigher 2",
+              "color": null
+            }
+          ],
+          "secondary_series": [],
+          "x_axis": {
+            "title": null,
+            "unit": "s",
+            "min": null,
+            "max": null,
+            "boolean": false,
+            "integersOnly": false
+          },
+          "y_axis": {
+            "title": null,
+            "unit": "kg",
+            "min": null,
+            "max": null,
+            "boolean": false,
+            "integersOnly": false
+          },
+          "y_axis2": null,
+          "time_window_min": 600000000,
+          "header_text": "Current weights of speedbatcher 2",
+          "aggregation": "none",
+          "tooltip": false
+        },
+        "writable": false
+      },
+      {
+        "asset_name": "NumberConfig",
+        "coordinates": {
+          "x": 0.6930619855703485,
+          "y": 0.7219093700383812,
+          "angle": null
+        },
+        "size": {
+          "width": 0.02,
+          "height": 0.03
+        },
+        "text": "",
+        "textPos": "above",
+        "key": "SB3.Checkweigher2.CurrentWeight",
+        "showDecimalPoint": true,
+        "decimalPlaces": 2,
+        "scale": null,
+        "units": "",
+        "textColor": {
+          "red": 0.0,
+          "green": 0.0,
+          "blue": 0.0,
+          "alpha": 1.0
+        },
+        "graph_config": {
+          "asset_name": "GraphAssetConfig",
+          "coordinates": {
+            "x": 0.0,
+            "y": 0.0,
+            "angle": null
+          },
+          "size": {
+            "width": 0.03,
+            "height": 0.03
+          },
+          "text": null,
+          "textPos": null,
+          "graph_type": "timeseries",
+          "primary_series": [
+            {
+              "key": "SB3.Checkweigher1.CurrentWeight",
+              "label": "Checkweigher 1",
+              "color": null
+            },
+            {
+              "key": "SB3.Checkweigher2.CurrentWeight",
+              "label": "Checkweigher 2",
+              "color": null
+            }
+          ],
+          "secondary_series": [],
+          "x_axis": {
+            "title": null,
+            "unit": "s",
+            "min": null,
+            "max": null,
+            "boolean": false,
+            "integersOnly": false
+          },
+          "y_axis": {
+            "title": null,
+            "unit": "kg",
+            "min": null,
+            "max": null,
+            "boolean": false,
+            "integersOnly": false
+          },
+          "y_axis2": null,
+          "time_window_min": 600000000,
+          "header_text": "Current weights of speedbatcher 3",
+          "aggregation": "none",
+          "tooltip": false
+        },
+        "writable": false
+      },
+      {
+        "asset_name": "NumberConfig",
+        "coordinates": {
+          "x": 0.7185611462682672,
+          "y": 0.7218998260264439,
+          "angle": null
+        },
+        "size": {
+          "width": 0.02,
+          "height": 0.03
+        },
+        "text": "",
+        "textPos": "above",
+        "key": "SB3.Checkweigher1.CurrentWeight",
+        "showDecimalPoint": true,
+        "decimalPlaces": 2,
+        "scale": null,
+        "units": "",
+        "textColor": {
+          "red": 0.0,
+          "green": 0.0,
+          "blue": 0.0,
+          "alpha": 1.0
+        },
+        "graph_config": {
+          "asset_name": "GraphAssetConfig",
+          "coordinates": {
+            "x": 0.0,
+            "y": 0.0,
+            "angle": null
+          },
+          "size": {
+            "width": 0.03,
+            "height": 0.03
+          },
+          "text": null,
+          "textPos": null,
+          "graph_type": "timeseries",
+          "primary_series": [
+            {
+              "key": "SB3.Checkweigher1.CurrentWeight",
+              "label": "Checkweigher 1",
+              "color": null
+            },
+            {
+              "key": "SB3.Checkweigher2.CurrentWeight",
+              "label": "Checkweigher 2",
+              "color": null
+            }
+          ],
+          "secondary_series": [],
+          "x_axis": {
+            "title": null,
+            "unit": "s",
+            "min": null,
+            "max": null,
+            "boolean": false,
+            "integersOnly": false
+          },
+          "y_axis": {
+            "title": null,
+            "unit": "kg",
+            "min": null,
+            "max": null,
+            "boolean": false,
+            "integersOnly": false
+          },
+          "y_axis2": null,
+          "time_window_min": 600000000,
+          "header_text": "Current weights of speedbatcher 3",
+          "aggregation": "none",
+          "tooltip": false
+        },
+        "writable": false
+      },
+      {
+        "asset_name": "OptionVariableConfig",
+        "coordinates": {
+          "x": 0.3063883860890649,
+          "y": 0.3085634389962029,
+          "angle": null
+        },
+        "size": {
+          "width": 0.10890000000000001,
+          "height": 0.036300000000000006
+        },
+        "text": "Throughput period",
+        "textPos": "below",
+        "variableName": "sb_line_stats_period",
+        "options": [
+          {
+            "value": "avgBPM1Minute",
+            "label": "1 Minute",
+            "description": null
+          },
+          {
+            "value": "avgBPM5Minute",
+            "label": "5 minutes",
+            "description": null
+          },
+          {
+            "value": "avgBPM10Minute",
+            "label": "10 minutes",
+            "description": null
+          },
+          {
+            "value": "avgBPM30Minute",
+            "label": "30 minutes",
+            "description": null
+          },
+          {
+            "value": "avgBPM60Minute",
+            "label": "60 minutes",
+            "description": null
+          }
+        ],
+        "selectedValue": "avgBPM30Minute",
+        "defaultValue": null,
+        "showSearch": true,
+        "customLabel": "Select statistics period"
+      },
+      {
+        "asset_name": "TextAssetConfig",
+        "coordinates": {
+          "x": 0.7578048780487814,
+          "y": 0.16137308039747558,
+          "angle": null
+        },
+        "size": {
+          "width": 0.04,
+          "height": 0.05
+        },
+        "text": null,
+        "textPos": "inside",
+        "textContent": "Last 30 \nminutes",
+        "textColor": {
+          "red": 0.0,
+          "green": 0.0,
+          "blue": 0.0,
+          "alpha": 1.0
+        },
+        "enableVariableSubstitution": false,
+        "decimalPlaces": 2
+      },
+      {
+        "asset_name": "TextAssetConfig",
+        "coordinates": {
+          "x": 0.6512804878048801,
+          "y": 0.15698283649503658,
+          "angle": null
+        },
+        "size": {
+          "width": 0.04,
+          "height": 0.05
+        },
+        "text": null,
+        "textPos": "inside",
+        "textContent": "Last 30 \nminutes",
+        "textColor": {
+          "red": 0.0,
+          "green": 0.0,
+          "blue": 0.0,
+          "alpha": 1.0
+        },
+        "enableVariableSubstitution": false,
+        "decimalPlaces": 2
+      },
+      {
+        "asset_name": "TextAssetConfig",
+        "coordinates": {
+          "x": 0.6596646341463435,
+          "y": 0.49031616982837023,
+          "angle": null
+        },
+        "size": {
+          "width": 0.04,
+          "height": 0.05
+        },
+        "text": null,
+        "textPos": "inside",
+        "textContent": "Last 30 \nminutes",
+        "textColor": {
+          "red": 0.0,
+          "green": 0.0,
+          "blue": 0.0,
+          "alpha": 1.0
+        },
+        "enableVariableSubstitution": false,
+        "decimalPlaces": 2
+      },
+      {
+        "asset_name": "TextAssetConfig",
+        "coordinates": {
+          "x": 0.7602743902439032,
+          "y": 0.4876061427280989,
+          "angle": null
+        },
+        "size": {
+          "width": 0.04,
+          "height": 0.05
+        },
+        "text": null,
+        "textPos": "inside",
+        "textContent": "Last 30 \nminutes",
+        "textColor": {
+          "red": 0.0,
+          "green": 0.0,
+          "blue": 0.0,
+          "alpha": 1.0
+        },
+        "enableVariableSubstitution": false,
+        "decimalPlaces": 2
+      },
+      {
+        "asset_name": "TextAssetConfig",
+        "coordinates": {
+          "x": 0.6581402439024416,
+          "y": 0.7762240289069567,
+          "angle": null
+        },
+        "size": {
+          "width": 0.04,
+          "height": 0.05
+        },
+        "text": null,
+        "textPos": "inside",
+        "textContent": "Last 30 \nminutes",
+        "textColor": {
+          "red": 0.0,
+          "green": 0.0,
+          "blue": 0.0,
+          "alpha": 1.0
+        },
+        "enableVariableSubstitution": false,
+        "decimalPlaces": 2
+      },
+      {
+        "asset_name": "TextAssetConfig",
+        "coordinates": {
+          "x": 0.7610365853658546,
+          "y": 0.782999096657637,
+          "angle": null
+        },
+        "size": {
+          "width": 0.04,
+          "height": 0.05
+        },
+        "text": null,
+        "textPos": "inside",
+        "textContent": "Last 30 \nminutes",
+        "textColor": {
+          "red": 0.0,
+          "green": 0.0,
+          "blue": 0.0,
+          "alpha": 1.0
+        },
+        "enableVariableSubstitution": false,
+        "decimalPlaces": 2
+      },
+      {
+        "asset_name": "GateStatusConfig",
+        "coordinates": {
+          "x": 0.8387985566870185,
+          "y": 0.19582709204583437,
+          "angle": 90.0
+        },
+        "size": {
+          "width": 0.03,
+          "height": 0.25
+        },
+        "text": null,
+        "textPos": null,
+        "key": "SB1.EmgGateTripped"
+      },
+      {
+        "asset_name": "RatioNumberConfig",
+        "coordinates": {
+          "x": 0.8612284164077457,
+          "y": 0.2204953579024747,
+          "angle": null
+        },
+        "size": {
+          "width": 0.03,
+          "height": 0.03
+        },
+        "text": "Accept%",
+        "textPos": "left",
+        "key1": "SB1.CheckWeigher.Accepted",
+        "key2": "SB1.CheckWeigher.Rejected",
+        "key1_label": "Accepted batches",
+        "key2_label": "Rejected batches",
+        "text_color": {
+          "red": 0.0,
+          "green": 0.0,
+          "blue": 0.0,
+          "alpha": 1.0
+        },
+        "since_minutes": 1800000000,
+        "how_many": 10,
+        "poll_interval": 1000000,
+        "graph_header": "Speedbatcher 1",
+        "bars_clock_aligned": true,
+        "integers_only": true,
+        "bars_interactive": true,
+        "interval_presets": [
+          10,
+          30,
+          60,
+          240
+        ]
+      },
+      {
+        "asset_name": "GateStatusConfig",
+        "coordinates": {
+          "x": 0.8422894246299493,
+          "y": 0.4123943730339465,
+          "angle": 90.0
+        },
+        "size": {
+          "width": 0.03,
+          "height": 0.25
+        },
+        "text": null,
+        "textPos": null,
+        "key": "SB2.EmgGateTripped"
+      },
+      {
+        "asset_name": "GateStatusConfig",
+        "coordinates": {
+          "x": 0.8419596593464495,
+          "y": 0.5547376111477459,
+          "angle": 90.0
+        },
+        "size": {
+          "width": 0.03,
+          "height": 0.25
+        },
+        "text": null,
+        "textPos": null,
+        "key": "SB2.EmgGateTripped"
+      },
+      {
+        "asset_name": "GateStatusConfig",
+        "coordinates": {
+          "x": 0.8437071289900014,
+          "y": 0.6993999286668408,
+          "angle": 90.0
+        },
+        "size": {
+          "width": 0.03,
+          "height": 0.25
+        },
+        "text": null,
+        "textPos": null,
+        "key": "SB3.EmgGateTripped"
+      },
+      {
+        "asset_name": "RatioNumberConfig",
+        "coordinates": {
+          "x": 0.8643145058966194,
+          "y": 0.5835085462951587,
+          "angle": null
+        },
+        "size": {
+          "width": 0.03,
+          "height": 0.03
+        },
+        "text": "Accept%",
+        "textPos": "left",
+        "key1": "SB2.CheckWeigher.Accepted",
+        "key2": "SB2.CheckWeigher.Rejected",
+        "key1_label": "Accepted batches",
+        "key2_label": "Rejected batches",
+        "text_color": {
+          "red": 0.0,
+          "green": 0.0,
+          "blue": 0.0,
+          "alpha": 1.0
+        },
+        "since_minutes": 1800000000,
+        "how_many": 10,
+        "poll_interval": 1000000,
+        "graph_header": "Speedbatcher 2",
+        "bars_clock_aligned": true,
+        "integers_only": true,
+        "bars_interactive": true,
+        "interval_presets": [
+          10,
+          30,
+          60,
+          240
+        ]
+      },
+      {
+        "asset_name": "RatioNumberConfig",
+        "coordinates": {
+          "x": 0.8659043285476282,
+          "y": 0.8514203362669447,
+          "angle": null
+        },
+        "size": {
+          "width": 0.03,
+          "height": 0.03
+        },
+        "text": "Accept%",
+        "textPos": "left",
+        "key1": "SB3.CheckWeigher.Accepted",
+        "key2": "SB3.CheckWeigher.Rejected",
+        "key1_label": "Accepted batches",
+        "key2_label": "Rejected batches",
+        "text_color": {
+          "red": 0.0,
+          "green": 0.0,
+          "blue": 0.0,
+          "alpha": 1.0
+        },
+        "since_minutes": 1800000000,
+        "how_many": 10,
+        "poll_interval": 1000000,
+        "graph_header": "Speedbatcher 3",
+        "bars_clock_aligned": true,
+        "integers_only": true,
+        "bars_interactive": true,
+        "interval_presets": [
+          10,
+          30,
+          60,
+          240
+        ]
+      },
+      {
+        "asset_name": "ConveyorConfig",
+        "coordinates": {
+          "x": 0.9426688058035717,
+          "y": 0.1255305247098839,
+          "angle": null
+        },
+        "size": {
+          "width": 0.1,
+          "height": 0.0405
+        },
+        "text": null,
+        "textPos": null,
+        "key": "",
+        "batchesKey": null,
+        "frequencyKey": "SB1.Uppdrag.Freq",
+        "tripKey": "SB1.Uppdrag.Tripped",
+        "simulateBatches": null,
+        "bidirectional": null,
+        "reverseDirection": null,
+        "showFrequency": true,
+        "showAuger": null,
+        "augerRpmKey": null,
+        "augerOpenEnd": null
+      },
+      {
+        "asset_name": "ConveyorConfig",
+        "coordinates": {
+          "x": 0.9451654177295924,
+          "y": 0.48450267607042846,
+          "angle": null
+        },
+        "size": {
+          "width": 0.1,
+          "height": 0.0405
+        },
+        "text": null,
+        "textPos": null,
+        "key": "",
+        "batchesKey": null,
+        "frequencyKey": "SB2.Uppdrag.Freq",
+        "tripKey": "SB2.Uppdrag.Tripped",
+        "simulateBatches": null,
+        "bidirectional": null,
+        "reverseDirection": null,
+        "showFrequency": true,
+        "showAuger": null,
+        "augerRpmKey": null,
+        "augerOpenEnd": null
+      },
+      {
+        "asset_name": "ConveyorConfig",
+        "coordinates": {
+          "x": 0.9471235251913273,
+          "y": 0.7748778886554623,
+          "angle": null
+        },
+        "size": {
+          "width": 0.1,
+          "height": 0.0405
+        },
+        "text": null,
+        "textPos": null,
+        "key": "",
+        "batchesKey": null,
+        "frequencyKey": "SB3.Uppdrag.Freq",
+        "tripKey": "SB3.Uppdrag.Tripped",
+        "simulateBatches": null,
+        "bidirectional": null,
+        "reverseDirection": null,
+        "showFrequency": true,
+        "showAuger": null,
+        "augerRpmKey": null,
+        "augerOpenEnd": null
+      }
+    ],
+    "mirroring_disabled": false,
+    "navigation_priority": null
+  },
+  "/roe": {
+    "menu_item": {
+      "label": "Roe",
+      "path": "/roe",
+      "icon": "show_chart",
+      "children": []
+    },
+    "assets": [
+      {
+        "asset_name": "DrawnBoxConfig",
+        "coordinates": {
+          "x": 0.0461,
+          "y": 0.8,
+          "angle": -30.0
+        },
+        "size": {
+          "width": 0.03,
+          "height": 0.2
+        },
+        "text": null,
+        "textPos": null,
+        "color": {
+          "red": 0.0,
+          "green": 0.0,
+          "blue": 0.0,
+          "alpha": 1.0
+        },
+        "lineWidth": 2.0,
+        "isDashed": false,
+        "showTop": false,
+        "showRight": false,
+        "showBottom": false,
+        "showLeft": true,
+        "dashLength": 5.0,
+        "dashSpacing": 5.0
+      },
+      {
+        "asset_name": "DrawnBoxConfig",
+        "coordinates": {
+          "x": 0.20140500010614812,
+          "y": 0.826908542798913,
+          "angle": 30.0
+        },
+        "size": {
+          "width": 0.03,
+          "height": 0.2
+        },
+        "text": null,
+        "textPos": null,
+        "color": {
+          "red": 0.0,
+          "green": 0.0,
+          "blue": 0.0,
+          "alpha": 1.0
+        },
+        "lineWidth": 2.0,
+        "isDashed": false,
+        "showTop": false,
+        "showRight": false,
+        "showBottom": false,
+        "showLeft": true,
+        "dashLength": 5.0,
+        "dashSpacing": 5.0
+      },
+      {
+        "asset_name": "DrawnBoxConfig",
+        "coordinates": {
+          "x": 0.11043299029806397,
+          "y": 0.8839020380434772,
+          "angle": null
+        },
+        "size": {
+          "width": 0.1,
+          "height": 0.03
+        },
+        "text": null,
+        "textPos": null,
+        "color": {
+          "red": 0.0,
+          "green": 0.0,
+          "blue": 0.0,
+          "alpha": 1.0
+        },
+        "lineWidth": 2.0,
+        "isDashed": false,
+        "showTop": false,
+        "showRight": false,
+        "showBottom": true,
+        "showLeft": false,
+        "dashLength": 5.0,
+        "dashSpacing": 5.0
+      },
+      {
+        "asset_name": "ConveyorConfig",
+        "coordinates": {
+          "x": 0.25,
+          "y": 0.5664,
+          "angle": 120.0
+        },
+        "size": {
+          "width": 0.4,
+          "height": 0.04
+        },
+        "text": null,
+        "textPos": null,
+        "key": "Roe.Buffer.Motor",
+        "batchesKey": null,
+        "frequencyKey": null,
+        "tripKey": null,
+        "simulateBatches": null,
+        "bidirectional": null,
+        "reverseDirection": null,
+        "showFrequency": null,
+        "showAuger": true,
+        "augerRpmKey": "Roe.Buffer.Rpm",
+        "augerOpenEnd": "right"
+      },
+      {
+        "asset_name": "ConveyorConfig",
+        "coordinates": {
+          "x": 0.63,
+          "y": 0.255,
+          "angle": 180.0
+        },
+        "size": {
+          "width": 0.55,
+          "height": 0.04
+        },
+        "text": null,
+        "textPos": null,
+        "key": "Roe.Distribution.Motor",
+        "batchesKey": null,
+        "frequencyKey": null,
+        "tripKey": null,
+        "simulateBatches": null,
+        "bidirectional": null,
+        "reverseDirection": null,
+        "showFrequency": null,
+        "showAuger": true,
+        "augerRpmKey": "Roe.Distribution.Rpm",
+        "augerOpenEnd": "right"
+      },
+      {
+        "asset_name": "ConveyorColorPaletteConfig",
+        "coordinates": {
+          "x": 0.05129839026409649,
+          "y": 0.1890859774616367,
+          "angle": null
+        },
+        "size": {
+          "width": 0.1,
+          "height": 0.3
+        },
+        "text": null,
+        "textPos": null,
+        "preview": true
+      },
+      {
+        "asset_name": "AnalogBoxConfig",
+        "coordinates": {
+          "x": 0.45,
+          "y": 0.45,
+          "angle": null
+        },
+        "size": {
+          "width": 0.1,
+          "height": 0.1
+        },
+        "text": null,
+        "textPos": null,
+        "analog_key": "AnalogBox preview",
+        "analog_sensor_range_min_key": null,
+        "analog_sensor_range_max_key": null,
+        "setpoint1_key": null,
+        "setpoint1_hysteresis_key": null,
+        "setpoint2_key": null,
+        "min_value": 0.0,
+        "max_value": 100.0,
+        "units": "mm",
+        "range_units": null,
+        "border_radius_pct": 0.18,
+        "vertical": true,
+        "reverse_fill": false,
+        "bg_color": {
+          "red": 0.9372549019607843,
+          "green": 0.9372549019607843,
+          "blue": 0.9372549019607843,
+          "alpha": 1.0
+        },
+        "fill_color": {
+          "red": 0.43137254901960786,
+          "green": 0.7568627450980392,
+          "blue": 0.8941176470588236,
+          "alpha": 1.0
+        },
+        "sp1_color": {
+          "red": 0.9568627450980393,
+          "green": 0.2627450980392157,
+          "blue": 0.21176470588235294,
+          "alpha": 1.0
+        },
+        "sp2_color": {
+          "red": 1.0,
+          "green": 0.596078431372549,
+          "blue": 0.0,
+          "alpha": 1.0
+        },
+        "hyst_color": {
+          "red": 1.0,
+          "green": 0.0,
+          "blue": 0.0,
+          "alpha": 0.26666666666666666
+        },
+        "graph_config": {
+          "asset_name": "GraphAssetConfig",
+          "coordinates": {
+            "x": 0.0,
+            "y": 0.0,
+            "angle": null
+          },
+          "size": {
+            "width": 0.03,
+            "height": 0.03
+          },
+          "text": null,
+          "textPos": null,
+          "graph_type": "line",
+          "primary_series": [],
+          "secondary_series": [],
+          "x_axis": {
+            "title": null,
+            "unit": "s",
+            "min": null,
+            "max": null,
+            "boolean": false,
+            "integersOnly": false
+          },
+          "y_axis": {
+            "title": null,
+            "unit": "",
+            "min": null,
+            "max": null,
+            "boolean": false,
+            "integersOnly": false
+          },
+          "y_axis2": null,
+          "time_window_min": 600000000,
+          "header_text": null,
+          "aggregation": "none",
+          "tooltip": false
+        }
+      },
+      {
+        "asset_name": "AnalogBoxConfig",
+        "coordinates": {
+          "x": 0.6,
+          "y": 0.45,
+          "angle": null
+        },
+        "size": {
+          "width": 0.1,
+          "height": 0.1
+        },
+        "text": null,
+        "textPos": null,
+        "analog_key": "AnalogBox preview",
+        "analog_sensor_range_min_key": null,
+        "analog_sensor_range_max_key": null,
+        "setpoint1_key": null,
+        "setpoint1_hysteresis_key": null,
+        "setpoint2_key": null,
+        "min_value": 0.0,
+        "max_value": 100.0,
+        "units": "mm",
+        "range_units": null,
+        "border_radius_pct": 0.18,
+        "vertical": true,
+        "reverse_fill": false,
+        "bg_color": {
+          "red": 0.9372549019607843,
+          "green": 0.9372549019607843,
+          "blue": 0.9372549019607843,
+          "alpha": 1.0
+        },
+        "fill_color": {
+          "red": 0.43137254901960786,
+          "green": 0.7568627450980392,
+          "blue": 0.8941176470588236,
+          "alpha": 1.0
+        },
+        "sp1_color": {
+          "red": 0.9568627450980393,
+          "green": 0.2627450980392157,
+          "blue": 0.21176470588235294,
+          "alpha": 1.0
+        },
+        "sp2_color": {
+          "red": 1.0,
+          "green": 0.596078431372549,
+          "blue": 0.0,
+          "alpha": 1.0
+        },
+        "hyst_color": {
+          "red": 1.0,
+          "green": 0.0,
+          "blue": 0.0,
+          "alpha": 0.26666666666666666
+        },
+        "graph_config": {
+          "asset_name": "GraphAssetConfig",
+          "coordinates": {
+            "x": 0.0,
+            "y": 0.0,
+            "angle": null
+          },
+          "size": {
+            "width": 0.03,
+            "height": 0.03
+          },
+          "text": null,
+          "textPos": null,
+          "graph_type": "line",
+          "primary_series": [],
+          "secondary_series": [],
+          "x_axis": {
+            "title": null,
+            "unit": "s",
+            "min": null,
+            "max": null,
+            "boolean": false,
+            "integersOnly": false
+          },
+          "y_axis": {
+            "title": null,
+            "unit": "",
+            "min": null,
+            "max": null,
+            "boolean": false,
+            "integersOnly": false
+          },
+          "y_axis2": null,
+          "time_window_min": 600000000,
+          "header_text": null,
+          "aggregation": "none",
+          "tooltip": false
+        }
+      },
+      {
+        "asset_name": "AnalogBoxConfig",
+        "coordinates": {
+          "x": 0.75,
+          "y": 0.45,
+          "angle": null
+        },
+        "size": {
+          "width": 0.1,
+          "height": 0.1
+        },
+        "text": null,
+        "textPos": null,
+        "analog_key": "AnalogBox preview",
+        "analog_sensor_range_min_key": null,
+        "analog_sensor_range_max_key": null,
+        "setpoint1_key": null,
+        "setpoint1_hysteresis_key": null,
+        "setpoint2_key": null,
+        "min_value": 0.0,
+        "max_value": 100.0,
+        "units": "mm",
+        "range_units": null,
+        "border_radius_pct": 0.18,
+        "vertical": true,
+        "reverse_fill": false,
+        "bg_color": {
+          "red": 0.9372549019607843,
+          "green": 0.9372549019607843,
+          "blue": 0.9372549019607843,
+          "alpha": 1.0
+        },
+        "fill_color": {
+          "red": 0.43137254901960786,
+          "green": 0.7568627450980392,
+          "blue": 0.8941176470588236,
+          "alpha": 1.0
+        },
+        "sp1_color": {
+          "red": 0.9568627450980393,
+          "green": 0.2627450980392157,
+          "blue": 0.21176470588235294,
+          "alpha": 1.0
+        },
+        "sp2_color": {
+          "red": 1.0,
+          "green": 0.596078431372549,
+          "blue": 0.0,
+          "alpha": 1.0
+        },
+        "hyst_color": {
+          "red": 1.0,
+          "green": 0.0,
+          "blue": 0.0,
+          "alpha": 0.26666666666666666
+        },
+        "graph_config": {
+          "asset_name": "GraphAssetConfig",
+          "coordinates": {
+            "x": 0.0,
+            "y": 0.0,
+            "angle": null
+          },
+          "size": {
+            "width": 0.03,
+            "height": 0.03
+          },
+          "text": null,
+          "textPos": null,
+          "graph_type": "line",
+          "primary_series": [],
+          "secondary_series": [],
+          "x_axis": {
+            "title": null,
+            "unit": "s",
+            "min": null,
+            "max": null,
+            "boolean": false,
+            "integersOnly": false
+          },
+          "y_axis": {
+            "title": null,
+            "unit": "",
+            "min": null,
+            "max": null,
+            "boolean": false,
+            "integersOnly": false
+          },
+          "y_axis2": null,
+          "time_window_min": 600000000,
+          "header_text": null,
+          "aggregation": "none",
+          "tooltip": false
+        }
+      },
+      {
+        "asset_name": "AnalogBoxConfig",
+        "coordinates": {
+          "x": 0.9,
+          "y": 0.45,
+          "angle": null
+        },
+        "size": {
+          "width": 0.1,
+          "height": 0.1
+        },
+        "text": null,
+        "textPos": null,
+        "analog_key": "AnalogBox preview",
+        "analog_sensor_range_min_key": null,
+        "analog_sensor_range_max_key": null,
+        "setpoint1_key": null,
+        "setpoint1_hysteresis_key": null,
+        "setpoint2_key": null,
+        "min_value": 0.0,
+        "max_value": 100.0,
+        "units": "mm",
+        "range_units": null,
+        "border_radius_pct": 0.18,
+        "vertical": true,
+        "reverse_fill": false,
+        "bg_color": {
+          "red": 0.9372549019607843,
+          "green": 0.9372549019607843,
+          "blue": 0.9372549019607843,
+          "alpha": 1.0
+        },
+        "fill_color": {
+          "red": 0.43137254901960786,
+          "green": 0.7568627450980392,
+          "blue": 0.8941176470588236,
+          "alpha": 1.0
+        },
+        "sp1_color": {
+          "red": 0.9568627450980393,
+          "green": 0.2627450980392157,
+          "blue": 0.21176470588235294,
+          "alpha": 1.0
+        },
+        "sp2_color": {
+          "red": 1.0,
+          "green": 0.596078431372549,
+          "blue": 0.0,
+          "alpha": 1.0
+        },
+        "hyst_color": {
+          "red": 1.0,
+          "green": 0.0,
+          "blue": 0.0,
+          "alpha": 0.26666666666666666
+        },
+        "graph_config": {
+          "asset_name": "GraphAssetConfig",
+          "coordinates": {
+            "x": 0.0,
+            "y": 0.0,
+            "angle": null
+          },
+          "size": {
+            "width": 0.03,
+            "height": 0.03
+          },
+          "text": null,
+          "textPos": null,
+          "graph_type": "line",
+          "primary_series": [],
+          "secondary_series": [],
+          "x_axis": {
+            "title": null,
+            "unit": "s",
+            "min": null,
+            "max": null,
+            "boolean": false,
+            "integersOnly": false
+          },
+          "y_axis": {
+            "title": null,
+            "unit": "",
+            "min": null,
+            "max": null,
+            "boolean": false,
+            "integersOnly": false
+          },
+          "y_axis2": null,
+          "time_window_min": 600000000,
+          "header_text": null,
+          "aggregation": "none",
+          "tooltip": false
+        }
+      },
+      {
+        "asset_name": "TextAssetConfig",
+        "coordinates": {
+          "x": 0.9,
+          "y": 0.1,
+          "angle": null
+        },
+        "size": {
+          "width": 0.1,
+          "height": 0.06
+        },
+        "text": null,
+        "textPos": "inside",
+        "textContent": "Batcher 1",
+        "textColor": {
+          "red": 0.0,
+          "green": 0.0,
+          "blue": 0.0,
+          "alpha": 1.0
+        },
+        "enableVariableSubstitution": false,
+        "decimalPlaces": 2
+      },
+      {
+        "asset_name": "TextAssetConfig",
+        "coordinates": {
+          "x": 0.75,
+          "y": 0.1,
+          "angle": null
+        },
+        "size": {
+          "width": 0.1,
+          "height": 0.06
+        },
+        "text": null,
+        "textPos": "inside",
+        "textContent": "Batcher 2",
+        "textColor": {
+          "red": 0.0,
+          "green": 0.0,
+          "blue": 0.0,
+          "alpha": 1.0
+        },
+        "enableVariableSubstitution": false,
+        "decimalPlaces": 2
+      },
+      {
+        "asset_name": "TextAssetConfig",
+        "coordinates": {
+          "x": 0.6,
+          "y": 0.1,
+          "angle": null
+        },
+        "size": {
+          "width": 0.1,
+          "height": 0.06
+        },
+        "text": null,
+        "textPos": "inside",
+        "textContent": "Batcher 3",
+        "textColor": {
+          "red": 0.0,
+          "green": 0.0,
+          "blue": 0.0,
+          "alpha": 1.0
+        },
+        "enableVariableSubstitution": false,
+        "decimalPlaces": 2
+      },
+      {
+        "asset_name": "TextAssetConfig",
+        "coordinates": {
+          "x": 0.45,
+          "y": 0.1,
+          "angle": null
+        },
+        "size": {
+          "width": 0.1,
+          "height": 0.06
+        },
+        "text": null,
+        "textPos": "inside",
+        "textContent": "Batcher 4",
+        "textColor": {
+          "red": 0.0,
+          "green": 0.0,
+          "blue": 0.0,
+          "alpha": 1.0
+        },
+        "enableVariableSubstitution": false,
+        "decimalPlaces": 2
+      },
+      {
+        "asset_name": "LEDConfig",
+        "coordinates": {
+          "x": 0.45,
+          "y": 0.28,
+          "angle": null
+        },
+        "size": {
+          "width": 0.1,
+          "height": 0.01
+        },
+        "text": null,
+        "textPos": "right",
+        "key": "Led preview",
+        "on_color": {
+          "red": 0.2980392156862745,
+          "green": 0.6862745098039216,
+          "blue": 0.3137254901960784,
+          "alpha": 1.0
+        },
+        "off_color": {
+          "red": 0.6196078431372549,
+          "green": 0.6196078431372549,
+          "blue": 0.6196078431372549,
+          "alpha": 1.0
+        },
+        "led_type": "square"
+      },
+      {
+        "asset_name": "LEDConfig",
+        "coordinates": {
+          "x": 0.75,
+          "y": 0.28,
+          "angle": null
+        },
+        "size": {
+          "width": 0.1,
+          "height": 0.01
+        },
+        "text": null,
+        "textPos": "right",
+        "key": "Led preview",
+        "on_color": {
+          "red": 0.2980392156862745,
+          "green": 0.6862745098039216,
+          "blue": 0.3137254901960784,
+          "alpha": 1.0
+        },
+        "off_color": {
+          "red": 0.6196078431372549,
+          "green": 0.6196078431372549,
+          "blue": 0.6196078431372549,
+          "alpha": 1.0
+        },
+        "led_type": "square"
+      },
+      {
+        "asset_name": "LEDConfig",
+        "coordinates": {
+          "x": 0.6,
+          "y": 0.28,
+          "angle": null
+        },
+        "size": {
+          "width": 0.1,
+          "height": 0.01
+        },
+        "text": null,
+        "textPos": "right",
+        "key": "Led preview",
+        "on_color": {
+          "red": 0.2980392156862745,
+          "green": 0.6862745098039216,
+          "blue": 0.3137254901960784,
+          "alpha": 1.0
+        },
+        "off_color": {
+          "red": 0.6196078431372549,
+          "green": 0.6196078431372549,
+          "blue": 0.6196078431372549,
+          "alpha": 1.0
+        },
+        "led_type": "square"
+      },
+      {
+        "asset_name": "ButtonConfig",
+        "coordinates": {
+          "x": 0.45,
+          "y": 0.18,
+          "angle": null
+        },
+        "size": {
+          "width": 0.05,
+          "height": 0.05
+        },
+        "text": "Delivery Enabled",
+        "textPos": "left",
+        "key": "Button preview",
+        "feedback": null,
+        "icon": null,
+        "outward_color": {
+          "red": 0.2980392156862745,
+          "green": 0.6862745098039216,
+          "blue": 0.3137254901960784,
+          "alpha": 1.0
+        },
+        "inward_color": {
+          "red": 0.9568627450980393,
+          "green": 0.2627450980392157,
+          "blue": 0.21176470588235294,
+          "alpha": 1.0
+        },
+        "button_type": "circle",
+        "is_toggle": false,
+        "server_writes_low": false
+      },
+      {
+        "asset_name": "ButtonConfig",
+        "coordinates": {
+          "x": 0.6,
+          "y": 0.18,
+          "angle": null
+        },
+        "size": {
+          "width": 0.05,
+          "height": 0.05
+        },
+        "text": "",
+        "textPos": "left",
+        "key": "Button preview",
+        "feedback": null,
+        "icon": null,
+        "outward_color": {
+          "red": 0.2980392156862745,
+          "green": 0.6862745098039216,
+          "blue": 0.3137254901960784,
+          "alpha": 1.0
+        },
+        "inward_color": {
+          "red": 0.9568627450980393,
+          "green": 0.2627450980392157,
+          "blue": 0.21176470588235294,
+          "alpha": 1.0
+        },
+        "button_type": "circle",
+        "is_toggle": false,
+        "server_writes_low": false
+      },
+      {
+        "asset_name": "ButtonConfig",
+        "coordinates": {
+          "x": 0.75,
+          "y": 0.18,
+          "angle": null
+        },
+        "size": {
+          "width": 0.05,
+          "height": 0.05
+        },
+        "text": "",
+        "textPos": "left",
+        "key": "Button preview",
+        "feedback": null,
+        "icon": null,
+        "outward_color": {
+          "red": 0.2980392156862745,
+          "green": 0.6862745098039216,
+          "blue": 0.3137254901960784,
+          "alpha": 1.0
+        },
+        "inward_color": {
+          "red": 0.9568627450980393,
+          "green": 0.2627450980392157,
+          "blue": 0.21176470588235294,
+          "alpha": 1.0
+        },
+        "button_type": "circle",
+        "is_toggle": false,
+        "server_writes_low": false
+      },
+      {
+        "asset_name": "ButtonConfig",
+        "coordinates": {
+          "x": 0.9,
+          "y": 0.18,
+          "angle": null
+        },
+        "size": {
+          "width": 0.05,
+          "height": 0.05
+        },
+        "text": "",
+        "textPos": "left",
+        "key": "Button preview",
+        "feedback": null,
+        "icon": null,
+        "outward_color": {
+          "red": 0.2980392156862745,
+          "green": 0.6862745098039216,
+          "blue": 0.3137254901960784,
+          "alpha": 1.0
+        },
+        "inward_color": {
+          "red": 0.9568627450980393,
+          "green": 0.2627450980392157,
+          "blue": 0.21176470588235294,
+          "alpha": 1.0
+        },
+        "button_type": "circle",
+        "is_toggle": false,
+        "server_writes_low": false
+      }
+    ],
+    "mirroring_disabled": true,
+    "navigation_priority": 0
+  },
+  "/baader": {
+    "menu_item": {
+      "label": "Baader",
+      "path": "/baader",
+      "icon": "baader",
+      "children": [
+        {
+          "label": "Overview",
+          "path": "/baader/overview",
+          "icon": "pie_chart",
+          "children": []
+        },
+        {
+          "label": "Details",
+          "path": "/baader/details",
+          "icon": "assessment",
+          "children": []
+        }
+      ]
+    },
+    "assets": [],
+    "mirroring_disabled": false,
+    "navigation_priority": 1
+  },
+  "/baader/overview": {
+    "menu_item": {
+      "label": "Overview",
+      "path": "/baader/overview",
+      "icon": "pie_chart",
+      "children": []
+    },
+    "assets": [
+      {
+        "asset_name": "DrawnBoxConfig",
+        "coordinates": {
+          "x": 0.118036739380023,
+          "y": 0.25,
+          "angle": null
+        },
+        "size": {
+          "width": 0.19,
+          "height": 0.45
+        },
+        "text": null,
+        "textPos": null,
+        "color": {
+          "red": 0.0,
+          "green": 0.0,
+          "blue": 0.0,
+          "alpha": 1.0
+        },
+        "lineWidth": 2.0,
+        "isDashed": false,
+        "showTop": true,
+        "showRight": true,
+        "showBottom": true,
+        "showLeft": true,
+        "dashLength": 5.0,
+        "dashSpacing": 5.0
+      },
+      {
+        "asset_name": "DrawnBoxConfig",
+        "coordinates": {
+          "x": 0.3080367393800228,
+          "y": 0.25,
+          "angle": null
+        },
+        "size": {
+          "width": 0.19,
+          "height": 0.45
+        },
+        "text": null,
+        "textPos": null,
+        "color": {
+          "red": 0.0,
+          "green": 0.0,
+          "blue": 0.0,
+          "alpha": 1.0
+        },
+        "lineWidth": 2.0,
+        "isDashed": false,
+        "showTop": true,
+        "showRight": true,
+        "showBottom": true,
+        "showLeft": true,
+        "dashLength": 5.0,
+        "dashSpacing": 5.0
+      },
+      {
+        "asset_name": "DrawnBoxConfig",
+        "coordinates": {
+          "x": 0.4980367393800228,
+          "y": 0.25,
+          "angle": null
+        },
+        "size": {
+          "width": 0.19,
+          "height": 0.45
+        },
+        "text": null,
+        "textPos": null,
+        "color": {
+          "red": 0.0,
+          "green": 0.0,
+          "blue": 0.0,
+          "alpha": 1.0
+        },
+        "lineWidth": 2.0,
+        "isDashed": false,
+        "showTop": true,
+        "showRight": true,
+        "showBottom": true,
+        "showLeft": true,
+        "dashLength": 5.0,
+        "dashSpacing": 5.0
+      },
+      {
+        "asset_name": "DrawnBoxConfig",
+        "coordinates": {
+          "x": 0.688036739380023,
+          "y": 0.25,
+          "angle": null
+        },
+        "size": {
+          "width": 0.19,
+          "height": 0.45
+        },
+        "text": null,
+        "textPos": null,
+        "color": {
+          "red": 0.0,
+          "green": 0.0,
+          "blue": 0.0,
+          "alpha": 1.0
+        },
+        "lineWidth": 2.0,
+        "isDashed": false,
+        "showTop": true,
+        "showRight": true,
+        "showBottom": true,
+        "showLeft": true,
+        "dashLength": 5.0,
+        "dashSpacing": 5.0
+      },
+      {
+        "asset_name": "DrawnBoxConfig",
+        "coordinates": {
+          "x": 0.8780367393800229,
+          "y": 0.25,
+          "angle": null
+        },
+        "size": {
+          "width": 0.19,
+          "height": 0.45
+        },
+        "text": null,
+        "textPos": null,
+        "color": {
+          "red": 0.0,
+          "green": 0.0,
+          "blue": 0.0,
+          "alpha": 1.0
+        },
+        "lineWidth": 2.0,
+        "isDashed": false,
+        "showTop": true,
+        "showRight": true,
+        "showBottom": true,
+        "showLeft": true,
+        "dashLength": 5.0,
+        "dashSpacing": 5.0
+      },
+      {
+        "asset_name": "DrawnBoxConfig",
+        "coordinates": {
+          "x": 0.1179852727155691,
+          "y": 0.7001197361013992,
+          "angle": null
+        },
+        "size": {
+          "width": 0.19,
+          "height": 0.45
+        },
+        "text": null,
+        "textPos": null,
+        "color": {
+          "red": 0.0,
+          "green": 0.0,
+          "blue": 0.0,
+          "alpha": 1.0
+        },
+        "lineWidth": 2.0,
+        "isDashed": false,
+        "showTop": true,
+        "showRight": true,
+        "showBottom": true,
+        "showLeft": true,
+        "dashLength": 5.0,
+        "dashSpacing": 5.0
+      },
+      {
+        "asset_name": "DrawnBoxConfig",
+        "coordinates": {
+          "x": 0.30798527271556886,
+          "y": 0.7001197361013992,
+          "angle": null
+        },
+        "size": {
+          "width": 0.19,
+          "height": 0.45
+        },
+        "text": null,
+        "textPos": null,
+        "color": {
+          "red": 0.0,
+          "green": 0.0,
+          "blue": 0.0,
+          "alpha": 1.0
+        },
+        "lineWidth": 2.0,
+        "isDashed": false,
+        "showTop": true,
+        "showRight": true,
+        "showBottom": true,
+        "showLeft": true,
+        "dashLength": 5.0,
+        "dashSpacing": 5.0
+      },
+      {
+        "asset_name": "DrawnBoxConfig",
+        "coordinates": {
+          "x": 0.49798527271556814,
+          "y": 0.7001197361013992,
+          "angle": null
+        },
+        "size": {
+          "width": 0.19,
+          "height": 0.45
+        },
+        "text": null,
+        "textPos": null,
+        "color": {
+          "red": 0.0,
+          "green": 0.0,
+          "blue": 0.0,
+          "alpha": 1.0
+        },
+        "lineWidth": 2.0,
+        "isDashed": false,
+        "showTop": true,
+        "showRight": true,
+        "showBottom": true,
+        "showLeft": true,
+        "dashLength": 5.0,
+        "dashSpacing": 5.0
+      },
+      {
+        "asset_name": "DrawnBoxConfig",
+        "coordinates": {
+          "x": 0.6879852727155691,
+          "y": 0.7001197361013992,
+          "angle": null
+        },
+        "size": {
+          "width": 0.19,
+          "height": 0.45
+        },
+        "text": null,
+        "textPos": null,
+        "color": {
+          "red": 0.0,
+          "green": 0.0,
+          "blue": 0.0,
+          "alpha": 1.0
+        },
+        "lineWidth": 2.0,
+        "isDashed": false,
+        "showTop": true,
+        "showRight": true,
+        "showBottom": true,
+        "showLeft": true,
+        "dashLength": 5.0,
+        "dashSpacing": 5.0
+      },
+      {
+        "asset_name": "DrawnBoxConfig",
+        "coordinates": {
+          "x": 0.877985272715569,
+          "y": 0.7001197361013992,
+          "angle": null
+        },
+        "size": {
+          "width": 0.19,
+          "height": 0.45
+        },
+        "text": null,
+        "textPos": null,
+        "color": {
+          "red": 0.0,
+          "green": 0.0,
+          "blue": 0.0,
+          "alpha": 1.0
+        },
+        "lineWidth": 2.0,
+        "isDashed": false,
+        "showTop": true,
+        "showRight": true,
+        "showBottom": true,
+        "showLeft": true,
+        "dashLength": 5.0,
+        "dashSpacing": 5.0
+      },
+      {
+        "asset_name": "Baader221Config",
+        "coordinates": {
+          "x": 0.7417867077550884,
+          "y": 0.8036300830920102,
+          "angle": null
+        },
+        "size": {
+          "width": 0.08,
+          "height": 0.25
+        },
+        "text": null,
+        "textPos": null,
+        "color": {
+          "red": 0.12941176470588237,
+          "green": 0.5882352941176471,
+          "blue": 0.9529411764705882,
+          "alpha": 1.0
+        },
+        "stroke_width": 1.0,
+        "beam_url": "/baader/details?current_baader_machine=Baader9"
+      },
+      {
+        "asset_name": "TextAssetConfig",
+        "coordinates": {
+          "x": 0.6928434540655136,
+          "y": 0.6002204641805778,
+          "angle": null
+        },
+        "size": {
+          "width": 0.19,
+          "height": 0.24
+        },
+        "text": null,
+        "textPos": "inside",
+        "textContent": "Baader 9\nConveyor Hopper height \nMeasured: $Baader9.ConveyorBufferHeightPercent % Setpoint: $Baader9.ConveyorBufferRequestSetpoint %\nHopper height\nMeasured: $Baader9.BufferHeightPercent % Setpoint: $Baader9.BufferRequestSetpoint %\nSpeed: $Baader9.SlotMinute1 slots/min\nFill: $Baader9.FillMinute1Ratio %\nReject: $Baader9.RejectMinute1 %\nReturn: $Baader9.ReturnMinute1 %\nEmpty: $Baader9.EmptyMinute1Ratio %",
+        "textColor": null,
+        "enableVariableSubstitution": true,
+        "decimalPlaces": 2
+      },
+      {
+        "asset_name": "AnalogBoxConfig",
+        "coordinates": {
+          "x": 0.7567912354211129,
+          "y": 0.6572466744995582,
+          "angle": null
+        },
+        "size": {
+          "width": 0.03,
+          "height": 0.04
+        },
+        "text": null,
+        "textPos": null,
+        "analog_key": "Baader9.BufferHeightPercent",
+        "analog_sensor_range_min_key": "Baader9.BufferSensorRangeMin",
+        "analog_sensor_range_max_key": "Baader9.BufferSensorRangeMax",
+        "setpoint1_key": "Baader9.BufferRequestSetpoint",
+        "setpoint1_hysteresis_key": null,
+        "setpoint2_key": null,
+        "min_value": 0.0,
+        "max_value": 100.0,
+        "units": "%",
+        "range_units": "mm",
+        "border_radius_pct": 0.18,
+        "vertical": true,
+        "reverse_fill": false,
+        "bg_color": {
+          "red": 0.9372549019607843,
+          "green": 0.9372549019607843,
+          "blue": 0.9372549019607843,
+          "alpha": 1.0
+        },
+        "fill_color": {
+          "red": 0.43137254901960786,
+          "green": 0.7568627450980392,
+          "blue": 0.8941176470588236,
+          "alpha": 1.0
+        },
+        "sp1_color": {
+          "red": 0.9568627450980393,
+          "green": 0.2627450980392157,
+          "blue": 0.21176470588235294,
+          "alpha": 1.0
+        },
+        "sp2_color": {
+          "red": 1.0,
+          "green": 0.596078431372549,
+          "blue": 0.0,
+          "alpha": 1.0
+        },
+        "hyst_color": {
+          "red": 1.0,
+          "green": 0.0,
+          "blue": 0.0,
+          "alpha": 0.26666666666666666
+        },
+        "graph_config": {
+          "asset_name": "GraphAssetConfig",
+          "coordinates": {
+            "x": 0.0,
+            "y": 0.0,
+            "angle": null
+          },
+          "size": {
+            "width": 0.03,
+            "height": 0.03
+          },
+          "text": null,
+          "textPos": null,
+          "graph_type": "line",
+          "primary_series": [],
+          "secondary_series": [],
+          "x_axis": {
+            "title": null,
+            "unit": "s",
+            "min": null,
+            "max": null,
+            "boolean": false,
+            "integersOnly": false
+          },
+          "y_axis": {
+            "title": null,
+            "unit": "",
+            "min": null,
+            "max": null,
+            "boolean": false,
+            "integersOnly": false
+          },
+          "y_axis2": null,
+          "time_window_min": 600000000,
+          "header_text": null,
+          "aggregation": "none",
+          "tooltip": false
+        }
+      },
+      {
+        "asset_name": "TextAssetConfig",
+        "coordinates": {
+          "x": 0.8825563331541597,
+          "y": 0.5991730001263681,
+          "angle": null
+        },
+        "size": {
+          "width": 0.19,
+          "height": 0.24
+        },
+        "text": null,
+        "textPos": "inside",
+        "textContent": "Baader 10\nConveyor Hopper height \nMeasured: $Baader10.ConveyorBufferHeightPercent % Setpoint: $Baader10.ConveyorBufferRequestSetpoint %\nHopper height\nMeasured: $Baader10.BufferHeightPercent % Setpoint: $Baader10.BufferRequestSetpoint %\nSpeed: $Baader10.SlotMinute1 slots/min\nFill: $Baader10.FillMinute1Ratio %\nReject: $Baader10.RejectMinute1 %\nReturn: $Baader10.ReturnMinute1 %\nEmpty: $Baader10.EmptyMinute1Ratio %",
+        "textColor": null,
+        "enableVariableSubstitution": true,
+        "decimalPlaces": 2
+      },
+      {
+        "asset_name": "Baader221Config",
+        "coordinates": {
+          "x": 0.9316297220134903,
+          "y": 0.8074932432593883,
+          "angle": null
+        },
+        "size": {
+          "width": 0.08,
+          "height": 0.25
+        },
+        "text": null,
+        "textPos": null,
+        "color": {
+          "red": 0.12941176470588237,
+          "green": 0.5882352941176471,
+          "blue": 0.9529411764705882,
+          "alpha": 1.0
+        },
+        "stroke_width": 1.0,
+        "beam_url": "/baader/details?current_baader_machine=Baader10"
+      },
+      {
+        "asset_name": "AnalogBoxConfig",
+        "coordinates": {
+          "x": 0.9461641066631713,
+          "y": 0.6636121047676462,
+          "angle": null
+        },
+        "size": {
+          "width": 0.03,
+          "height": 0.04
+        },
+        "text": null,
+        "textPos": null,
+        "analog_key": "Baader10.BufferHeightPercent",
+        "analog_sensor_range_min_key": "Baader10.BufferSensorRangeMin",
+        "analog_sensor_range_max_key": "Baader10.BufferSensorRangeMax",
+        "setpoint1_key": "Baader10.BufferRequestSetpoint",
+        "setpoint1_hysteresis_key": null,
+        "setpoint2_key": null,
+        "min_value": 0.0,
+        "max_value": 100.0,
+        "units": "%",
+        "range_units": "mm",
+        "border_radius_pct": 0.18,
+        "vertical": true,
+        "reverse_fill": false,
+        "bg_color": {
+          "red": 0.9372549019607843,
+          "green": 0.9372549019607843,
+          "blue": 0.9372549019607843,
+          "alpha": 1.0
+        },
+        "fill_color": {
+          "red": 0.43137254901960786,
+          "green": 0.7568627450980392,
+          "blue": 0.8941176470588236,
+          "alpha": 1.0
+        },
+        "sp1_color": {
+          "red": 0.9568627450980393,
+          "green": 0.2627450980392157,
+          "blue": 0.21176470588235294,
+          "alpha": 1.0
+        },
+        "sp2_color": {
+          "red": 1.0,
+          "green": 0.596078431372549,
+          "blue": 0.0,
+          "alpha": 1.0
+        },
+        "hyst_color": {
+          "red": 1.0,
+          "green": 0.0,
+          "blue": 0.0,
+          "alpha": 0.26666666666666666
+        },
+        "graph_config": {
+          "asset_name": "GraphAssetConfig",
+          "coordinates": {
+            "x": 0.0,
+            "y": 0.0,
+            "angle": null
+          },
+          "size": {
+            "width": 0.03,
+            "height": 0.03
+          },
+          "text": null,
+          "textPos": null,
+          "graph_type": "line",
+          "primary_series": [],
+          "secondary_series": [],
+          "x_axis": {
+            "title": null,
+            "unit": "s",
+            "min": null,
+            "max": null,
+            "boolean": false,
+            "integersOnly": false
+          },
+          "y_axis": {
+            "title": null,
+            "unit": "",
+            "min": null,
+            "max": null,
+            "boolean": false,
+            "integersOnly": false
+          },
+          "y_axis2": null,
+          "time_window_min": 600000000,
+          "header_text": null,
+          "aggregation": "none",
+          "tooltip": false
+        }
+      }
+    ],
+    "mirroring_disabled": true,
+    "navigation_priority": 0
+  },
+  "/baader/details": {
+    "menu_item": {
+      "label": "Details",
+      "path": "/baader/details",
+      "icon": "assessment",
+      "children": []
+    },
+    "assets": [
+      {
+        "asset_name": "Baader221Config",
+        "coordinates": {
+          "x": 0.9102954107931018,
+          "y": 0.7877848748135226,
+          "angle": null
+        },
+        "size": {
+          "width": 0.18150000000000002,
+          "height": 0.42350000000000004
+        },
+        "text": null,
+        "textPos": null,
+        "color": {
+          "red": 0.12941176470588237,
+          "green": 0.5882352941176471,
+          "blue": 0.9529411764705882,
+          "alpha": 1.0
+        },
+        "stroke_width": 1.0,
+        "beam_url": null
+      },
+      {
+        "asset_name": "OptionVariableConfig",
+        "coordinates": {
+          "x": 0.1974589958873842,
+          "y": 0.05068350250183436,
+          "angle": null
+        },
+        "size": {
+          "width": 0.25,
+          "height": 0.1
+        },
+        "text": null,
+        "textPos": "below",
+        "variableName": "current_baader_machine",
+        "options": [
+          {
+            "value": "Baader9",
+            "label": "Baader 9",
+            "description": "Baader machine 9"
+          },
+          {
+            "value": "Baader10",
+            "label": "Baader 10",
+            "description": "Baader machine 10"
+          }
+        ],
+        "selectedValue": "Baader10",
+        "defaultValue": null,
+        "showSearch": true,
+        "customLabel": "Select Baader Machine"
+      },
+      {
+        "asset_name": "GraphAssetConfig",
+        "coordinates": {
+          "x": 0.42575000581287176,
+          "y": 0.5668485449735399,
+          "angle": null
+        },
+        "size": {
+          "width": 0.85,
+          "height": 0.85
+        },
+        "text": null,
+        "textPos": null,
+        "graph_type": "timeseries",
+        "primary_series": [
+          {
+            "key": "$current_baader_machine.FillMinute1Ratio",
+            "label": "Fill %",
+            "color": {
+              "red": 0.06274509803921569,
+              "green": 0.8470588235294118,
+              "blue": 0.07058823529411765,
+              "alpha": 1.0
+            }
+          },
+          {
+            "key": "$current_baader_machine.ReturnMinute1",
+            "label": "Return %",
+            "color": {
+              "red": 0.9529411764705882,
+              "green": 0.7490196078431373,
+              "blue": 0.12941176470588237,
+              "alpha": 1.0
+            }
+          },
+          {
+            "key": "$current_baader_machine.RejectMinute1",
+            "label": "Reject %",
+            "color": {
+              "red": 0.9529411764705882,
+              "green": 0.12941176470588237,
+              "blue": 0.12941176470588237,
+              "alpha": 1.0
+            }
+          },
+          {
+            "key": "$current_baader_machine.BufferHeightPercent",
+            "label": "Buffer height %",
+            "color": {
+              "red": 0.12941176470588237,
+              "green": 0.5372549019607843,
+              "blue": 0.9529411764705882,
+              "alpha": 1.0
+            }
+          },
+          {
+            "key": "$current_baader_machine.EmptyMinute1Ratio",
+            "label": "Empty %",
+            "color": {
+              "red": 0.8980392156862745,
+              "green": 0.12941176470588237,
+              "blue": 0.9529411764705882,
+              "alpha": 1.0
+            }
+          }
+        ],
+        "secondary_series": [
+          {
+            "key": "$current_baader_machine.SlotMinute1",
+            "label": "Speed #",
+            "color": {
+              "red": 0.5843137254901961,
+              "green": 0.12941176470588237,
+              "blue": 0.9529411764705882,
+              "alpha": 1.0
+            }
+          }
+        ],
+        "x_axis": {
+          "title": null,
+          "unit": "",
+          "min": null,
+          "max": null,
+          "boolean": false,
+          "integersOnly": false
+        },
+        "y_axis": {
+          "title": "Percentage",
+          "unit": "%",
+          "min": 0.0,
+          "max": 100.0,
+          "boolean": false,
+          "integersOnly": false
+        },
+        "y_axis2": {
+          "title": "Speed",
+          "unit": "#",
+          "min": 0.0,
+          "max": 330.0,
+          "boolean": false,
+          "integersOnly": false
+        },
+        "time_window_min": 1800000000,
+        "header_text": null,
+        "aggregation": "none",
+        "tooltip": false
+      },
+      {
+        "asset_name": "AnalogBoxConfig",
+        "coordinates": {
+          "x": 0.9311377104602333,
+          "y": 0.5420942437972422,
+          "angle": null
+        },
+        "size": {
+          "width": 0.08470000000000003,
+          "height": 0.08470000000000003
+        },
+        "text": null,
+        "textPos": null,
+        "analog_key": "$current_baader_machine.BufferHeightPercent",
+        "analog_sensor_range_min_key": "$current_baader_machine.BufferSensorRangeMin",
+        "analog_sensor_range_max_key": "$current_baader_machine.BufferSensorRangeMax",
+        "setpoint1_key": "$current_baader_machine.BufferRequestSetpoint",
+        "setpoint1_hysteresis_key": null,
+        "setpoint2_key": null,
+        "min_value": 0.0,
+        "max_value": 100.0,
+        "units": "%",
+        "range_units": "mm",
+        "border_radius_pct": 0.18,
+        "vertical": true,
+        "reverse_fill": false,
+        "bg_color": {
+          "red": 0.9372549019607843,
+          "green": 0.9372549019607843,
+          "blue": 0.9372549019607843,
+          "alpha": 1.0
+        },
+        "fill_color": {
+          "red": 0.43137254901960786,
+          "green": 0.7568627450980392,
+          "blue": 0.8941176470588236,
+          "alpha": 1.0
+        },
+        "sp1_color": {
+          "red": 0.9568627450980393,
+          "green": 0.2627450980392157,
+          "blue": 0.21176470588235294,
+          "alpha": 1.0
+        },
+        "sp2_color": {
+          "red": 1.0,
+          "green": 0.596078431372549,
+          "blue": 0.0,
+          "alpha": 1.0
+        },
+        "hyst_color": {
+          "red": 1.0,
+          "green": 0.0,
+          "blue": 0.0,
+          "alpha": 0.26666666666666666
+        },
+        "graph_config": {
+          "asset_name": "GraphAssetConfig",
+          "coordinates": {
+            "x": 0.0,
+            "y": 0.0,
+            "angle": null
+          },
+          "size": {
+            "width": 0.03,
+            "height": 0.03
+          },
+          "text": null,
+          "textPos": null,
+          "graph_type": "timeseries",
+          "primary_series": [],
+          "secondary_series": [],
+          "x_axis": {
+            "title": null,
+            "unit": "s",
+            "min": null,
+            "max": null,
+            "boolean": false,
+            "integersOnly": false
+          },
+          "y_axis": {
+            "title": null,
+            "unit": "",
+            "min": null,
+            "max": null,
+            "boolean": false,
+            "integersOnly": false
+          },
+          "y_axis2": null,
+          "time_window_min": 600000000,
+          "header_text": null,
+          "aggregation": "none",
+          "tooltip": false
+        }
+      }
+    ],
+    "mirroring_disabled": true,
+    "navigation_priority": 1
+  },
+  "/diagnostics": {
+    "menu_item": {
+      "label": "Diagnostics",
+      "path": "/diagnostics",
+      "icon": "import_export",
+      "children": [
+        {
+          "label": "+UH1.01",
+          "path": "/diagnostics/uh1-01",
+          "icon": "monitor_heart",
+          "children": []
+        },
+        {
+          "label": "Baader IO",
+          "path": "/diagnostics/baader-io",
+          "icon": "query_stats",
+          "children": []
+        },
+        {
+          "label": "Roe IO",
+          "path": "/diagnostics/roe-io",
+          "icon": "show_chart",
+          "children": []
+        }
+      ]
+    },
+    "assets": [],
+    "mirroring_disabled": false,
+    "navigation_priority": 0
+  },
+  "/diagnostics/uh1-01": {
+    "menu_item": {
+      "label": "+UH1.01",
+      "path": "/diagnostics/uh1-01",
+      "icon": "monitor_heart",
+      "children": []
+    },
+    "assets": [
+      {
+        "asset_name": "BeckhoffCX5010Config",
+        "coordinates": {
+          "x": 0.44351787937308496,
+          "y": 0.22651876276813074,
+          "angle": null
+        },
+        "size": {
+          "width": 0.9,
+          "height": 0.3
+        },
+        "text": null,
+        "textPos": null,
+        "subdevices": [
+          {
+            "asset_name": "BeckhoffEL9222Config",
+            "coordinates": {
+              "x": 0.0,
+              "y": 0.0,
+              "angle": null
+            },
+            "size": {
+              "width": 0.03,
+              "height": 0.03
+            },
+            "text": null,
+            "textPos": null,
+            "nameOrId": "2",
+            "descriptionsKey": null
+          },
+          {
+            "asset_name": "BeckhoffEL1008Config",
+            "coordinates": {
+              "x": 0.0,
+              "y": 0.0,
+              "angle": null
+            },
+            "size": {
+              "width": 0.1,
+              "height": 0.03
+            },
+            "text": null,
+            "textPos": null,
+            "nameOrId": "3",
+            "descriptionsKey": "BatchLines.Internal.Subdevice3.Descriptions",
+            "rawStateKey": "BatchLines.Internal.Subdevice3.RawState",
+            "processedStateKey": "BatchLines.Internal.Subdevice3.ProcessedState",
+            "forceValuesKey": "BatchLines.Internal.Subdevice3.ForceValues",
+            "onFiltersKey": "BatchLines.Internal.Subdevice3.OnFilters",
+            "offFiltersKey": "BatchLines.Internal.Subdevice3.OffFilters"
+          },
+          {
+            "asset_name": "BeckhoffEL1008Config",
+            "coordinates": {
+              "x": 0.0,
+              "y": 0.0,
+              "angle": null
+            },
+            "size": {
+              "width": 0.03,
+              "height": 0.03
+            },
+            "text": null,
+            "textPos": null,
+            "nameOrId": "4",
+            "descriptionsKey": "BatchLines.Internal.Subdevice4.Descriptions",
+            "rawStateKey": "BatchLines.Internal.Subdevice4.RawState",
+            "processedStateKey": "BatchLines.Internal.Subdevice4.ProcessedState",
+            "forceValuesKey": "BatchLines.Internal.Subdevice4.ForceValues",
+            "onFiltersKey": "BatchLines.Internal.Subdevice4.OnFilters",
+            "offFiltersKey": "BatchLines.Internal.Subdevice4.OffFilters"
+          },
+          {
+            "asset_name": "BeckhoffEL1008Config",
+            "coordinates": {
+              "x": 0.0,
+              "y": 0.0,
+              "angle": null
+            },
+            "size": {
+              "width": 0.03,
+              "height": 0.03
+            },
+            "text": null,
+            "textPos": null,
+            "nameOrId": "5",
+            "descriptionsKey": "BatchLines.Internal.Subdevice5.Descriptions",
+            "rawStateKey": "BatchLines.Internal.Subdevice5.RawState",
+            "processedStateKey": "BatchLines.Internal.Subdevice5.ProcessedState",
+            "forceValuesKey": "BatchLines.Internal.Subdevice5.ForceValues",
+            "onFiltersKey": "BatchLines.Internal.Subdevice5.OnFilters",
+            "offFiltersKey": "BatchLines.Internal.Subdevice5.OffFilters"
+          },
+          {
+            "asset_name": "BeckhoffEL1008Config",
+            "coordinates": {
+              "x": 0.0,
+              "y": 0.0,
+              "angle": null
+            },
+            "size": {
+              "width": 0.03,
+              "height": 0.03
+            },
+            "text": null,
+            "textPos": null,
+            "nameOrId": "6",
+            "descriptionsKey": "BatchLines.Internal.Subdevice6.Descriptions",
+            "rawStateKey": "BatchLines.Internal.Subdevice6.RawState",
+            "processedStateKey": "BatchLines.Internal.Subdevice6.ProcessedState",
+            "forceValuesKey": "BatchLines.Internal.Subdevice6.ForceValues",
+            "onFiltersKey": "BatchLines.Internal.Subdevice6.OnFilters",
+            "offFiltersKey": "BatchLines.Internal.Subdevice6.OffFilters"
+          },
+          {
+            "asset_name": "BeckhoffEL1008Config",
+            "coordinates": {
+              "x": 0.0,
+              "y": 0.0,
+              "angle": null
+            },
+            "size": {
+              "width": 0.03,
+              "height": 0.03
+            },
+            "text": null,
+            "textPos": null,
+            "nameOrId": "7",
+            "descriptionsKey": "BatchLines.Internal.Subdevice7.Descriptions",
+            "rawStateKey": "BatchLines.Internal.Subdevice7.RawState",
+            "processedStateKey": "BatchLines.Internal.Subdevice7.ProcessedState",
+            "forceValuesKey": "BatchLines.Internal.Subdevice7.ForceValues",
+            "onFiltersKey": "BatchLines.Internal.Subdevice7.OnFilters",
+            "offFiltersKey": "BatchLines.Internal.Subdevice7.OffFilters"
+          },
+          {
+            "asset_name": "BeckhoffEL1008Config",
+            "coordinates": {
+              "x": 0.0,
+              "y": 0.0,
+              "angle": null
+            },
+            "size": {
+              "width": 0.03,
+              "height": 0.03
+            },
+            "text": null,
+            "textPos": null,
+            "nameOrId": "8",
+            "descriptionsKey": "BatchLines.Internal.Subdevice8.Descriptions",
+            "rawStateKey": "BatchLines.Internal.Subdevice8.RawState",
+            "processedStateKey": "BatchLines.Internal.Subdevice8.ProcessedState",
+            "forceValuesKey": "BatchLines.Internal.Subdevice8.ForceValues",
+            "onFiltersKey": "BatchLines.Internal.Subdevice8.OnFilters",
+            "offFiltersKey": "BatchLines.Internal.Subdevice8.OffFilters"
+          },
+          {
+            "asset_name": "BeckhoffEL9186Config",
+            "coordinates": {
+              "x": 0.0,
+              "y": 0.0,
+              "angle": null
+            },
+            "size": {
+              "width": 0.03,
+              "height": 0.03
+            },
+            "text": null,
+            "textPos": null
+          },
+          {
+            "asset_name": "BeckhoffEL9187Config",
+            "coordinates": {
+              "x": 0.0,
+              "y": 0.0,
+              "angle": null
+            },
+            "size": {
+              "width": 0.03,
+              "height": 0.03
+            },
+            "text": null,
+            "textPos": null
+          },
+          {
+            "asset_name": "BeckhoffEL2008Config",
+            "coordinates": {
+              "x": 0.0,
+              "y": 0.0,
+              "angle": null
+            },
+            "size": {
+              "width": 0.03,
+              "height": 0.03
+            },
+            "text": null,
+            "textPos": null,
+            "nameOrId": "9",
+            "descriptionsKey": "BatchLines.Internal.Subdevice9.Descriptions",
+            "rawStateKey": "BatchLines.Internal.Subdevice9.RawState",
+            "forceValuesKey": "BatchLines.Internal.Subdevice9.ForceValues"
+          },
+          {
+            "asset_name": "BeckhoffEL2008Config",
+            "coordinates": {
+              "x": 0.0,
+              "y": 0.0,
+              "angle": null
+            },
+            "size": {
+              "width": 0.03,
+              "height": 0.03
+            },
+            "text": null,
+            "textPos": null,
+            "nameOrId": "10",
+            "descriptionsKey": "BatchLines.Internal.Subdevice10.Descriptions",
+            "rawStateKey": "BatchLines.Internal.Subdevice10.RawState",
+            "forceValuesKey": "BatchLines.Internal.Subdevice10.ForceValues"
+          },
+          {
+            "asset_name": "BeckhoffEL2008Config",
+            "coordinates": {
+              "x": 0.0,
+              "y": 0.0,
+              "angle": null
+            },
+            "size": {
+              "width": 0.03,
+              "height": 0.03
+            },
+            "text": null,
+            "textPos": null,
+            "nameOrId": "11",
+            "descriptionsKey": "BatchLines.Internal.Subdevice11.Descriptions",
+            "rawStateKey": "BatchLines.Internal.Subdevice11.RawState",
+            "forceValuesKey": "BatchLines.Internal.Subdevice11.ForceValues"
+          },
+          {
+            "asset_name": "BeckhoffEL2008Config",
+            "coordinates": {
+              "x": 0.0,
+              "y": 0.0,
+              "angle": null
+            },
+            "size": {
+              "width": 0.03,
+              "height": 0.03
+            },
+            "text": null,
+            "textPos": null,
+            "nameOrId": "12",
+            "descriptionsKey": "BatchLines.Internal.Subdevice12.Descriptions",
+            "rawStateKey": "BatchLines.Internal.Subdevice12.RawState",
+            "forceValuesKey": "BatchLines.Internal.Subdevice12.ForceValues"
+          },
+          {
+            "asset_name": "BeckhoffEL2008Config",
+            "coordinates": {
+              "x": 0.0,
+              "y": 0.0,
+              "angle": null
+            },
+            "size": {
+              "width": 0.03,
+              "height": 0.03
+            },
+            "text": null,
+            "textPos": null,
+            "nameOrId": "13",
+            "descriptionsKey": "BatchLines.Internal.Subdevice13.Descriptions",
+            "rawStateKey": "BatchLines.Internal.Subdevice13.RawState",
+            "forceValuesKey": "BatchLines.Internal.Subdevice13.ForceValues"
+          },
+          {
+            "asset_name": "BeckhoffEL9222Config",
+            "coordinates": {
+              "x": 0.0,
+              "y": 0.0,
+              "angle": null
+            },
+            "size": {
+              "width": 0.03,
+              "height": 0.03
+            },
+            "text": null,
+            "textPos": null,
+            "nameOrId": "15",
+            "descriptionsKey": null
+          },
+          {
+            "asset_name": "BeckhoffEL9222Config",
+            "coordinates": {
+              "x": 0.0,
+              "y": 0.0,
+              "angle": null
+            },
+            "size": {
+              "width": 0.03,
+              "height": 0.03
+            },
+            "text": null,
+            "textPos": null,
+            "nameOrId": "16",
+            "descriptionsKey": null
+          }
+        ]
+      },
+      {
+        "asset_name": "SchneiderATV320Config",
+        "coordinates": {
+          "x": 0.15,
+          "y": 0.6,
+          "angle": null
+        },
+        "size": {
+          "width": 0.035,
+          "height": 0.3
+        },
+        "text": null,
+        "textPos": null,
+        "label": "Line 1 Return",
+        "hmisKey": "Line1.Return.hmis",
+        "freqKey": "Line1.Return.freq",
+        "configKey": "Line1.Return.Config"
+      },
+      {
+        "asset_name": "SchneiderATV320Config",
+        "coordinates": {
+          "x": 0.185,
+          "y": 0.6,
+          "angle": null
+        },
+        "size": {
+          "width": 0.035,
+          "height": 0.3
+        },
+        "text": null,
+        "textPos": null,
+        "label": "Line 1 Conveyor",
+        "hmisKey": "Line1.Conveyor.hmis",
+        "freqKey": "Line1.Conveyor.freq",
+        "configKey": "Line1.Conveyor.Config"
+      },
+      {
+        "asset_name": "SchneiderATV320Config",
+        "coordinates": {
+          "x": 0.22,
+          "y": 0.6,
+          "angle": null
+        },
+        "size": {
+          "width": 0.035,
+          "height": 0.3
+        },
+        "text": null,
+        "textPos": null,
+        "label": "Line 2 Return",
+        "hmisKey": "Line1.Return.hmis",
+        "freqKey": "Line1.Return.freq",
+        "configKey": "Line1.Return.Config"
+      },
+      {
+        "asset_name": "SchneiderATV320Config",
+        "coordinates": {
+          "x": 0.255,
+          "y": 0.6,
+          "angle": null
+        },
+        "size": {
+          "width": 0.035,
+          "height": 0.3
+        },
+        "text": null,
+        "textPos": null,
+        "label": "Line 2 Conveyor 1",
+        "hmisKey": "Line2.Conveyor1.hmis",
+        "freqKey": "Line2.Conveyor1.freq",
+        "configKey": "Line2.Conveyor1.Config"
+      },
+      {
+        "asset_name": "SchneiderATV320Config",
+        "coordinates": {
+          "x": 0.29,
+          "y": 0.6,
+          "angle": null
+        },
+        "size": {
+          "width": 0.035,
+          "height": 0.3
+        },
+        "text": null,
+        "textPos": null,
+        "label": "Line 2 Conveyor 2",
+        "hmisKey": "Line2.Conveyor2.hmis",
+        "freqKey": "Line2.Conveyor2.freq",
+        "configKey": "Line2.Conveyor2.Config"
+      },
+      {
+        "asset_name": "SchneiderATV320Config",
+        "coordinates": {
+          "x": 0.325,
+          "y": 0.6,
+          "angle": null
+        },
+        "size": {
+          "width": 0.035,
+          "height": 0.3
+        },
+        "text": null,
+        "textPos": null,
+        "label": "Line 3 Return",
+        "hmisKey": "Line3.Return.hmis",
+        "freqKey": "Line3.Return.freq",
+        "configKey": "Line3.Return.Config"
+      },
+      {
+        "asset_name": "SchneiderATV320Config",
+        "coordinates": {
+          "x": 0.36,
+          "y": 0.6,
+          "angle": null
+        },
+        "size": {
+          "width": 0.035,
+          "height": 0.3
+        },
+        "text": null,
+        "textPos": null,
+        "label": "Line 3 Conveyor 1",
+        "hmisKey": "Line3.Conveyor1.hmis",
+        "freqKey": "Line3.Conveyor1.freq",
+        "configKey": "Line3.Conveyor1.Config"
+      },
+      {
+        "asset_name": "SchneiderATV320Config",
+        "coordinates": {
+          "x": 0.395,
+          "y": 0.6,
+          "angle": null
+        },
+        "size": {
+          "width": 0.035,
+          "height": 0.3
+        },
+        "text": null,
+        "textPos": null,
+        "label": "Line 3 Conveyor 2",
+        "hmisKey": "Line3.Conveyor2.hmis",
+        "freqKey": "Line3.Conveyor2.freq",
+        "configKey": "Line3.Conveyor2.Config"
+      }
+    ],
+    "mirroring_disabled": true,
+    "navigation_priority": 0
+  },
+  "/diagnostics/baader-io": {
+    "menu_item": {
+      "label": "Baader IO",
+      "path": "/diagnostics/baader-io",
+      "icon": "query_stats",
+      "children": []
+    },
+    "assets": [
+      {
+        "asset_name": "TextAssetConfig",
+        "coordinates": {
+          "x": 0.9098999999999999,
+          "y": 0.65,
+          "angle": null
+        },
+        "size": {
+          "width": 0.15,
+          "height": 0.08
+        },
+        "text": null,
+        "textPos": "inside",
+        "textContent": "Baader 10",
+        "textColor": {
+          "red": 0.0,
+          "green": 0.0,
+          "blue": 0.0,
+          "alpha": 1.0
+        },
+        "enableVariableSubstitution": false,
+        "decimalPlaces": 2
+      },
+      {
+        "asset_name": "BeckhoffEK1100Config",
+        "coordinates": {
+          "x": 0.6769,
+          "y": 0.85,
+          "angle": null
+        },
+        "size": {
+          "width": 0.16,
+          "height": 0.3
+        },
+        "text": null,
+        "textPos": null,
+        "subdevices": [
+          {
+            "asset_name": "BeckhoffEL1008Config",
+            "coordinates": {
+              "x": 0.0,
+              "y": 0.0,
+              "angle": null
+            },
+            "size": {
+              "width": 0.03,
+              "height": 0.03
+            },
+            "text": null,
+            "textPos": null,
+            "nameOrId": "1",
+            "descriptionsKey": "Baader9.External.Subdevice1.Descriptions",
+            "rawStateKey": "Baader9.External.Subdevice1.RawState",
+            "processedStateKey": "Baader9.External.Subdevice1.ProcessedState",
+            "forceValuesKey": "Baader9.External.Subdevice1.ForceValues",
+            "onFiltersKey": "Baader9.External.Subdevice1.OnFilters",
+            "offFiltersKey": "Baader9.External.Subdevice1.OffFilters"
+          },
+          {
+            "asset_name": "BeckhoffEL3054Config",
+            "coordinates": {
+              "x": 0.0,
+              "y": 0.0,
+              "angle": null
+            },
+            "size": {
+              "width": 0.03,
+              "height": 0.03
+            },
+            "text": null,
+            "textPos": null,
+            "nameOrId": "2",
+            "descriptionsKey": "Baader9.External.Subdevice2.Descriptions",
+            "stateKey": "Baader9.External.Subdevice2.State",
+            "errorsKey": "Baader9.External.Subdevice2.Errors"
+          },
+          {
+            "asset_name": "BeckhoffEL2008Config",
+            "coordinates": {
+              "x": 0.0,
+              "y": 0.0,
+              "angle": null
+            },
+            "size": {
+              "width": 0.03,
+              "height": 0.03
+            },
+            "text": null,
+            "textPos": null,
+            "nameOrId": "3",
+            "descriptionsKey": "Baader9.External.Subdevice3.Descriptions",
+            "rawStateKey": "Baader9.External.Subdevice3.RawState",
+            "forceValuesKey": "Baader9.External.Subdevice3.ForceValues"
+          }
+        ]
+      },
+      {
+        "asset_name": "TextAssetConfig",
+        "coordinates": {
+          "x": 0.6733,
+          "y": 0.65,
+          "angle": null
+        },
+        "size": {
+          "width": 0.15,
+          "height": 0.08
+        },
+        "text": null,
+        "textPos": "inside",
+        "textContent": "Baader 9",
+        "textColor": {
+          "red": 0.0,
+          "green": 0.0,
+          "blue": 0.0,
+          "alpha": 1.0
+        },
+        "enableVariableSubstitution": false,
+        "decimalPlaces": 2
+      },
+      {
+        "asset_name": "BeckhoffEK1100Config",
+        "coordinates": {
+          "x": 0.9004000000000001,
+          "y": 0.85,
+          "angle": null
+        },
+        "size": {
+          "width": 0.16,
+          "height": 0.3
+        },
+        "text": null,
+        "textPos": null,
+        "subdevices": [
+          {
+            "asset_name": "BeckhoffEL1008Config",
+            "coordinates": {
+              "x": 0.0,
+              "y": 0.0,
+              "angle": null
+            },
+            "size": {
+              "width": 0.03,
+              "height": 0.03
+            },
+            "text": null,
+            "textPos": null,
+            "nameOrId": "1",
+            "descriptionsKey": "Baader10.External.Subdevice1.Descriptions",
+            "rawStateKey": "Baader10.External.Subdevice1.RawState",
+            "processedStateKey": "Baader10.External.Subdevice1.ProcessedState",
+            "forceValuesKey": "Baader10.External.Subdevice1.ForceValues",
+            "onFiltersKey": "Baader10.External.Subdevice1.OnFilters",
+            "offFiltersKey": "Baader10.External.Subdevice1.OffFilters"
+          },
+          {
+            "asset_name": "BeckhoffEL3054Config",
+            "coordinates": {
+              "x": 0.0,
+              "y": 0.0,
+              "angle": null
+            },
+            "size": {
+              "width": 0.03,
+              "height": 0.03
+            },
+            "text": null,
+            "textPos": null,
+            "nameOrId": "2",
+            "descriptionsKey": "Baader10.External.Subdevice2.Descriptions",
+            "stateKey": "Baader10.External.Subdevice2.State",
+            "errorsKey": "Baader10.External.Subdevice2.Errors"
+          },
+          {
+            "asset_name": "BeckhoffEL2008Config",
+            "coordinates": {
+              "x": 0.0,
+              "y": 0.0,
+              "angle": null
+            },
+            "size": {
+              "width": 0.03,
+              "height": 0.03
+            },
+            "text": null,
+            "textPos": null,
+            "nameOrId": "3",
+            "descriptionsKey": "Baader10.External.Subdevice3.Descriptions",
+            "rawStateKey": "Baader10.External.Subdevice3.RawState",
+            "forceValuesKey": "Baader10.External.Subdevice3.ForceValues"
+          }
+        ]
+      }
+    ],
+    "mirroring_disabled": true,
+    "navigation_priority": 1
+  },
+  "/diagnostics/roe-io": {
+    "menu_item": {
+      "label": "Roe IO",
+      "path": "/diagnostics/roe-io",
+      "icon": "show_chart",
+      "children": []
+    },
+    "assets": [
+      {
+        "asset_name": "SchneiderATV320Config",
+        "coordinates": {
+          "x": 0.25828263566300697,
+          "y": 0.7060915065122829,
+          "angle": null
+        },
+        "size": {
+          "width": 0.06,
+          "height": 0.4
+        },
+        "text": null,
+        "textPos": null,
+        "label": "Distribution",
+        "hmisKey": "Roe.Distribution.Motor.Hmis",
+        "freqKey": "Roe.Distribution.Motor.freq",
+        "configKey": "Roe.Distribution.Motor.config"
+      },
+      {
+        "asset_name": "SchneiderATV320Config",
+        "coordinates": {
+          "x": 0.2112967826224662,
+          "y": 0.7055108477284985,
+          "angle": null
+        },
+        "size": {
+          "width": 0.06,
+          "height": 0.4
+        },
+        "text": null,
+        "textPos": null,
+        "label": "Buffer",
+        "hmisKey": "Roe.Buffer.Motor.Hmis",
+        "freqKey": "Roe.Buffer.Motor.freq",
+        "configKey": "Roe.Buffer.Motor.config"
+      },
+      {
+        "asset_name": "BeckhoffEK1100Config",
+        "coordinates": {
+          "x": 0.2813598632812498,
+          "y": 0.26351648663946836,
+          "angle": null
+        },
+        "size": {
+          "width": 0.3,
+          "height": 0.3
+        },
+        "text": null,
+        "textPos": null,
+        "subdevices": [
+          {
+            "asset_name": "BeckhoffEL1008Config",
+            "coordinates": {
+              "x": 0.0,
+              "y": 0.0,
+              "angle": null
+            },
+            "size": {
+              "width": 0.03,
+              "height": 0.03
+            },
+            "text": null,
+            "textPos": null,
+            "nameOrId": "Inputs Id: 1",
+            "descriptionsKey": "Roe.Input.1.descriptions",
+            "rawStateKey": "Roe.Input.1.raw_state",
+            "processedStateKey": "Roe.Input.1.processed_state",
+            "forceValuesKey": "Roe.Input.1.force",
+            "onFiltersKey": "Roe.Input.1.on_filters",
+            "offFiltersKey": "Roe.Input.1.off_filters"
+          },
+          {
+            "asset_name": "BeckhoffEL3054Config",
+            "coordinates": {
+              "x": 0.0,
+              "y": 0.0,
+              "angle": null
+            },
+            "size": {
+              "width": 0.03,
+              "height": 0.03
+            },
+            "text": null,
+            "textPos": null,
+            "nameOrId": "AIN Id: 2",
+            "descriptionsKey": "Roe.Analog.2.descriptions",
+            "stateKey": "Roe.Analog.2.state",
+            "errorsKey": "Roe.Analog.2.errors"
+          },
+          {
+            "asset_name": "BeckhoffEL3054Config",
+            "coordinates": {
+              "x": 0.0,
+              "y": 0.0,
+              "angle": null
+            },
+            "size": {
+              "width": 0.03,
+              "height": 0.03
+            },
+            "text": null,
+            "textPos": null,
+            "nameOrId": "AIN Id: 3",
+            "descriptionsKey": "Roe.Analog.3.descriptions",
+            "stateKey": "Roe.Analog.3.state",
+            "errorsKey": "Roe.Analog.3.errors"
+          },
+          {
+            "asset_name": "BeckhoffEL2008Config",
+            "coordinates": {
+              "x": 0.0,
+              "y": 0.0,
+              "angle": null
+            },
+            "size": {
+              "width": 0.03,
+              "height": 0.03
+            },
+            "text": null,
+            "textPos": null,
+            "nameOrId": "Outputs Id: 4",
+            "descriptionsKey": "Roe.Output.4.descriptions",
+            "rawStateKey": "Roe.Output.4.raw_state",
+            "forceValuesKey": "Roe.Output.4.force"
+          }
+        ]
+      },
+      {
+        "asset_name": "TextAssetConfig",
+        "coordinates": {
+          "x": 0.09400733741554067,
+          "y": 0.25028390770799275,
+          "angle": null
+        },
+        "size": {
+          "width": 0.1,
+          "height": 0.1
+        },
+        "text": null,
+        "textPos": "inside",
+        "textContent": "Speedbatcher\nCabinet\n+UH1.01",
+        "textColor": {
+          "red": 0.0,
+          "green": 0.0,
+          "blue": 0.0,
+          "alpha": 1.0
+        },
+        "enableVariableSubstitution": false,
+        "decimalPlaces": 2
+      },
+      {
+        "asset_name": "TextAssetConfig",
+        "coordinates": {
+          "x": 0.09976371146537169,
+          "y": 0.6811105546674521,
+          "angle": null
+        },
+        "size": {
+          "width": 0.1,
+          "height": 0.1
+        },
+        "text": null,
+        "textPos": "inside",
+        "textContent": "Roe\nCabinet\n",
+        "textColor": {
+          "red": 0.0,
+          "green": 0.0,
+          "blue": 0.0,
+          "alpha": 1.0
+        },
+        "enableVariableSubstitution": false,
+        "decimalPlaces": 2
+      }
+    ],
+    "mirroring_disabled": true,
+    "navigation_priority": 1
+  }
+}

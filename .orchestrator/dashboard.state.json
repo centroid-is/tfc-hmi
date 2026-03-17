@@ -1,0 +1,42 @@
+{
+  "version": 3,
+  "plan_name": "dashboard",
+  "current_phase": 0,
+  "started_at": "2026-03-17T09:59:53.740611",
+  "results": [
+    {
+      "story_id": 1,
+      "story_name": "Python aiohttp backend + tests",
+      "status": "pass",
+      "duration_seconds": 4050.7784898281097,
+      "error": "",
+      "timestamp": "2026-03-17T11:07:24.520204",
+      "retry_count": 0,
+      "review_iterations": 0,
+      "review_findings": 0,
+      "worktree_branch": "orchestrator/dashboard/story-1",
+      "merge_commit": "e7beb1145f13f85cbad33961f09f8cb5bb8b4624",
+      "verification_passed": null,
+      "verification_details": "",
+      "started_at": "",
+      "worker_slot": -1
+    },
+    {
+      "story_id": 2,
+      "story_name": "Svelte scaffold + SSE stores",
+      "status": "pass",
+      "duration_seconds": 153.13446283340454,
+      "error": "",
+      "timestamp": "2026-03-17T11:13:30.639394",
+      "retry_count": 0,
+      "review_iterations": 0,
+      "review_findings": 0,
+      "worktree_branch": "orchestrator/dashboard/story-2",
+      "merge_commit": "e7beb1145f13f85cbad33961f09f8cb5bb8b4624",
+      "verification_passed": null,
+      "verification_details": "",
+      "started_at": "",
+      "worker_slot": -1
+    }
+  ]
+}

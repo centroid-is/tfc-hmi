@@ -1,11 +1,10 @@
 import 'dart:async';
-import 'dart:io';
+import 'dart:io' if (dart.library.js_interop) 'package:tfc/core/io_stub.dart';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:beamer/beamer.dart';
-import 'package:dbus/dbus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:amplify_secure_storage_dart/amplify_secure_storage_dart.dart';
@@ -21,12 +20,15 @@ import 'package:tfc/pages/not_found.dart';
 import 'package:tfc/pages/preferences.dart';
 import 'package:tfc/pages/alarm_editor.dart';
 import 'package:tfc/pages/alarm_view.dart';
-import 'package:tfc/pages/ip_settings.dart';
-import 'package:tfc/pages/dbus_login.dart';
+import 'package:tfc/pages/ip_settings.dart'
+    if (dart.library.js_interop) 'package:tfc/pages/ip_settings_stub.dart';
+import 'package:tfc/pages/dbus_login.dart'
+    if (dart.library.js_interop) 'package:tfc/pages/dbus_login_stub.dart';
 import 'package:tfc/pages/history_view.dart';
 import 'package:tfc/pages/server_config.dart';
 import 'package:tfc/pages/key_repository.dart';
-import 'package:tfc/pages/about_linux.dart';
+import 'package:tfc/pages/about_linux.dart'
+    if (dart.library.js_interop) 'package:tfc/pages/about_linux_stub.dart';
 import 'package:tfc/pages/tech_doc_library.dart';
 import 'package:tfc/transition_delegate.dart';
 import 'package:tfc/providers/theme.dart';
@@ -34,7 +36,6 @@ import 'package:tfc/core/preferences.dart';
 import 'package:tfc/page_creator/page.dart';
 
 import 'package:tfc/theme.dart';
-import 'package:tfc/page_creator/assets/registry.dart';
 import 'package:tfc/widgets/base_scaffold.dart';
 import 'package:tfc/widgets/nav_dropdown.dart';
 import 'package:mcp_dart/mcp_dart.dart' show ElicitResult;
@@ -65,6 +66,10 @@ void main() {
     // Marionette binding must be in the same zone as runApp — skip runZonedGuarded.
     initMarionette();
     _startApp();
+  } else if (kIsWeb) {
+    // On web, runZonedGuarded + stderr are unavailable.
+    WidgetsFlutterBinding.ensureInitialized();
+    _startApp();
   } else {
     // WidgetsFlutterBinding.ensureInitialized() and runApp() must execute in
     // the SAME zone.  Wrapping everything inside runZonedGuarded ensures both
@@ -83,10 +88,12 @@ void main() {
 /// through to [runApp].  Called from the same zone that initialised the
 /// binding so that Flutter's zone-check in [runApp] is satisfied.
 Future<void> _startApp() async {
-  pdfrxFlutterInitialize();
-  AmplifySecureStorageDart.registerWith();
-  if (Platform.isWindows) {
-    SecureStorage.setInstance(OtherSecureStorage());
+  if (!kIsWeb) {
+    pdfrxFlutterInitialize();
+    AmplifySecureStorageDart.registerWith();
+    if (Platform.isWindows) {
+      SecureStorage.setInstance(OtherSecureStorage());
+    }
   }
 
   // Register your custom asset type
@@ -110,7 +117,8 @@ Future<void> _startApp() async {
 
   final registry = RouteRegistry();
 
-  final environmentVariableIsGod = Platform.environment['TFC_GOD'] == 'true';
+  final environmentVariableIsGod =
+      !kIsWeb && Platform.environment['TFC_GOD'] == 'true';
 
   registry.addMenuItem(const MenuItem(label: 'Home', path: '/', icon: Icons.home));
 
@@ -133,9 +141,10 @@ Future<void> _startApp() async {
       path: '/advanced',
       icon: Icons.settings,
       children: [
-        if (Platform.isLinux)
+        if (!kIsWeb && Platform.isLinux)
           MenuItem(label: 'IP Settings', path: '/advanced/ip-settings', icon: Icons.settings_ethernet),
-        if (Platform.isLinux) MenuItem(label: 'About Linux', path: '/advanced/about-linux', icon: Icons.info),
+        if (!kIsWeb && Platform.isLinux)
+          MenuItem(label: 'About Linux', path: '/advanced/about-linux', icon: Icons.info),
         if (environmentVariableIsGod) MenuItem(label: 'Page Editor', path: '/advanced/page-editor', icon: Icons.edit),
         if (environmentVariableIsGod)
           MenuItem(label: 'Preferences', path: '/advanced/preferences', icon: Icons.settings),
@@ -151,28 +160,35 @@ Future<void> _startApp() async {
 
   final locationBuilder = createLocationBuilder(extraMenuItems);
 
-  final upgrader = Upgrader(
-    storeController: UpgraderStoreController(
-      onWindows: () => UpgraderWindowsStore(productId: '9NH89T11ZZ59'),
-    ),
-    debugLogging: true,
-  );
+  Widget app;
+  if (kIsWeb) {
+    app = ProviderScope(
+      child: MyApp(locationBuilder: locationBuilder),
+    );
+  } else {
+    final upgrader = Upgrader(
+      storeController: UpgraderStoreController(
+        onWindows: () => UpgraderWindowsStore(productId: '9NH89T11ZZ59'),
+      ),
+      debugLogging: true,
+    );
 
-  final app = ProviderScope(
-      child: UpgradeAlert(
-    child: MyApp(locationBuilder: locationBuilder),
-    upgrader: upgrader,
-    onUpdate: () {
-      stderr.writeln("Updating software from store");
-      UpgraderWindowsStore.installUpdate();
-      return false;
-    },
-  ));
+    app = ProviderScope(
+        child: UpgradeAlert(
+      child: MyApp(locationBuilder: locationBuilder),
+      upgrader: upgrader,
+      onUpdate: () {
+        stderr.writeln("Updating software from store");
+        UpgraderWindowsStore.installUpdate();
+        return false;
+      },
+    ));
+  }
 
   runApp(app);
 }
 
-Completer<DBusClient> dbusCompleter = Completer();
+Completer<dynamic> dbusCompleter = Completer();
 
 RoutesLocationBuilder createLocationBuilder(List<MenuItem> extraMenuItems) {
   final routes = {
@@ -194,7 +210,7 @@ RoutesLocationBuilder createLocationBuilder(List<MenuItem> extraMenuItems) {
           child: Consumer(
             builder: (context, ref, _) {
               // I dont like this but lets continue
-              return FutureBuilder<DBusClient>(
+              return FutureBuilder<dynamic>(
                 future: dbusCompleter.future,
                 builder: (context, snapshot) {
                   if (!snapshot.hasData) {
@@ -225,7 +241,7 @@ RoutesLocationBuilder createLocationBuilder(List<MenuItem> extraMenuItems) {
           child: Consumer(
             builder: (context, ref, _) {
               // I dont like this but lets continue
-              return FutureBuilder<DBusClient>(
+              return FutureBuilder<dynamic>(
                 future: dbusCompleter.future,
                 builder: (context, snapshot) {
                   if (!snapshot.hasData) {

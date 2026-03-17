@@ -1,8 +1,9 @@
 import 'dart:async';
-import 'dart:io';
+import 'dart:io' if (dart.library.js_interop) '../core/io_stub.dart';
 import 'dart:convert';
 import 'dart:math';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
@@ -167,8 +168,8 @@ class _CertificateGeneratorState extends State<CertificateGenerator> {
   }
 
   void _initializeControllers() {
-    final locale = Platform.localeName;
-    final countryCode = locale.split('_').last;
+    final locale = kIsWeb ? '' : Platform.localeName;
+    final countryCode = locale.contains('_') ? locale.split('_').last : 'US';
 
     _commonNameController = TextEditingController(text: 'example.com');
     _organizationController =
@@ -1915,7 +1916,7 @@ class _ModbusServerConfigCardState extends State<_ModbusServerConfigCard> {
                     children: [
                       Expanded(
                         child: DropdownButtonFormField<ModbusEndianness>(
-                          value: _endianness,
+                          initialValue: _endianness,
                           decoration: const InputDecoration(
                             labelText: 'Byte Order',
                           ),
@@ -1974,7 +1975,7 @@ class _ModbusServerConfigCardState extends State<_ModbusServerConfigCard> {
                     children: [
                       Expanded(
                         child: DropdownButtonFormField<int>(
-                          value: _addressBase,
+                          initialValue: _addressBase,
                           decoration: const InputDecoration(
                             labelText: 'Address Base',
                           ),
@@ -2111,6 +2112,7 @@ class _ServerConfigCardState extends State<_ServerConfigCard> {
   }
 
   Future<void> _selectCertificate() async {
+    if (kIsWeb) return; // File I/O not available on web
     try {
       FilePickerResult? result = await FilePicker.platform.pickFiles(
         type: FileType.custom,
@@ -2139,6 +2141,7 @@ class _ServerConfigCardState extends State<_ServerConfigCard> {
   }
 
   Future<void> _selectPrivateKey() async {
+    if (kIsWeb) return; // File I/O not available on web
     try {
       FilePickerResult? result = await FilePicker.platform.pickFiles(
         type: FileType.custom,
@@ -2551,6 +2554,7 @@ class _ImportExportCardState extends ConsumerState<ImportExportCard> {
 
   // -------------------- EXPORT --------------------
   Future<void> _onExport(BuildContext context, WidgetRef ref) async {
+    if (kIsWeb) return; // File I/O not available on web
     try {
       // Load current/saved config from prefs
       final prefs = await ref.read(preferencesProvider.future);
@@ -2569,7 +2573,8 @@ class _ImportExportCardState extends ConsumerState<ImportExportCard> {
       );
 
       String? savePath;
-      if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+      if (!kIsWeb &&
+          (Platform.isWindows || Platform.isLinux || Platform.isMacOS)) {
         savePath = await FilePicker.platform.saveFile(
           dialogTitle: 'Save Encrypted Config',
           fileName: 'server_config.enc',
@@ -2658,6 +2663,7 @@ class _ImportExportCardState extends ConsumerState<ImportExportCard> {
 
   // -------------------- IMPORT --------------------
   Future<void> _onImport(BuildContext context, WidgetRef ref) async {
+    if (kIsWeb) return; // File I/O not available on web
     try {
       final pick = await FilePicker.platform.pickFiles(
         type: FileType.custom,

@@ -1,0 +1,11 @@
+{
+  "name": "CentroidX",
+  "short_name": "CentroidX",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#ffffff",
+  "description": "CentroidX HMI web interface",
+  "orientation": "portrait-primary",
+  "prefer_related_applications": false
+}

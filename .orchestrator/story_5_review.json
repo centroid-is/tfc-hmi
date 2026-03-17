@@ -1,0 +1,185 @@
+{
+  "comments": [
+    {
+      "id": "scope01",
+      "severity": "should_fix",
+      "file": "packages/tfc_dart/lib/core/mqtt_device_client.dart",
+      "line": 191,
+      "message": "Scope creep: retry logic with exponential backoff, pending topic queuing, and _disposed guard are not part of Story 5 (Static config loading). These belong to a separate story/commit. Mixing stories in one diff breaks TDD traceability \u2014 cannot verify RED\u2192GREEN\u2192REFACTOR for Story 5 in isolation.",
+      "status": "fixed",
+      "fix_attempts": 2
+    },
+    {
+      "id": "scope02",
+      "severity": "should_fix",
+      "file": "packages/tfc_dart/lib/core/mqtt_client_factory_native.dart",
+      "line": 11,
+      "message": "Scope creep: WebSocket URL construction fix (wss:// scheme, wsPath appended) is not part of Story 5. Should be a separate commit tied to its own story.",
+      "status": "fixed",
+      "fix_attempts": 2
+    },
+    {
+      "id": "scope03",
+      "severity": "should_fix",
+      "file": "packages/tfc_dart/lib/core/state_man.dart",
+      "line": 1302,
+      "message": "Scope creep: Renaming _resolveOtherDeviceClient \u2192 _resolveMqttDeviceClient plus comment rewrite is not in Story 5's acceptance criteria. This is a valid improvement but belongs in the story that introduced it (Story 3) or its own refactor commit.",
+      "status": "fixed",
+      "fix_attempts": 2
+    },
+    {
+      "id": "retry01",
+      "severity": "should_fix",
+      "file": "packages/tfc_dart/test/core/mqtt_device_client_test.dart",
+      "line": 460,
+      "message": "Missing retry tests: The new retry/backoff logic in _connectAsync/_scheduleRetry has no dedicated unit tests. Need tests for: (1) retry fires after connection failure, (2) exponential backoff doubles delay, (3) delay caps at _maxRetryDelay (30s), (4) retry stops after dispose, (5) retry resets on manual connect(). This is significant untested code.",
+      "status": "fixed",
+      "fix_attempts": 1
+    },
+    {
+      "id": "pending01",
+      "severity": "should_fix",
+      "file": "packages/tfc_dart/test/core/mqtt_device_client_test.dart",
+      "line": 128,
+      "message": "Missing test for pending topic subscription: subscribe() before connect() queues topics in _pendingTopics, and _subscribePendingTopics() drains them after connect succeeds. No test verifies this flow \u2014 subscribe pre-connect, then connect, then confirm topic was actually subscribed on the client.",
+      "status": "fixed",
+      "fix_attempts": 1
+    },
+    {
+      "id": "dispose01",
+      "severity": "note",
+      "file": "packages/tfc_dart/test/core/mqtt_device_client_test.dart",
+      "line": 475,
+      "message": "Test calls adapter.dispose() BEFORE asserting statuses. While needed to stop the retry timer, dispose also pushes state changes (disconnects client). Consider using fake timers or cancelling just the retry timer to avoid dispose side-effects influencing assertions.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "errtest01",
+      "severity": "note",
+      "file": "packages/tfc_dart/test/core/config_source_test.dart",
+      "line": 0,
+      "message": "No error-handling tests for fromString methods: Missing tests for StateManConfig.fromString and KeyMappings.fromString with malformed/invalid JSON (should throw FormatException). Story 5 acceptance criteria REFACTOR step says 'Review for consistent error handling across fromFile/fromString methods'.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "errtest02",
+      "severity": "note",
+      "file": "packages/tfc_dart/test/core/config_source_test.dart",
+      "line": 0,
+      "message": "No test for StaticConfig.fromDirectory when required files (config.json, keymappings.json) are missing. Only page-editor.json optional case is tested. fromFile already throws on missing file, but an integration-level test through fromDirectory would confirm the error propagates correctly.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "pending02",
+      "severity": "note",
+      "file": "packages/tfc_dart/lib/core/mqtt_device_client.dart",
+      "line": 254,
+      "message": "_subscribePendingTopics adds topics to _subscribedTopics unconditionally but uses null-aware _client?.subscribe. If subscribe throws for one topic, _pendingTopics.clear() at line 261 drops remaining entries. Consider try/catch per-topic or iterating a copy.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "scope01",
+      "severity": "should_fix",
+      "file": "packages/tfc_dart/lib/core/mqtt_device_client.dart",
+      "line": 0,
+      "message": "Scope creep: This diff bundles retry logic, pending-topic queuing, disposed guard, and auto-reconnect callbacks \u2014 none of which are Story 5 acceptance criteria. Story 5 is strictly 'fromString + ConfigSource'. These MqttDeviceClientAdapter changes should be in a separate commit/story (likely Story 2/4).",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "scope02",
+      "severity": "should_fix",
+      "file": "packages/tfc_dart/lib/core/mqtt_client_factory_native.dart",
+      "line": 0,
+      "message": "Scope creep: WebSocket URL construction fix is not part of Story 5. Should be committed with the story that introduced MqttClientFactory (Story 2).",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "scope03",
+      "severity": "should_fix",
+      "file": "packages/tfc_dart/lib/core/state_man.dart",
+      "line": 1299,
+      "message": "Scope creep: Renaming _resolveOtherDeviceClient \u2192 _resolveMqttDeviceClient is a valid refactor but not a Story 5 deliverable. Should be its own commit or part of the story that introduced the method.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "dartio1",
+      "severity": "should_fix",
+      "file": "packages/tfc_dart/lib/core/config_source.dart",
+      "line": 1,
+      "message": "Top-level `import 'dart:io'` will break web compilation when Story 6/7 imports this file for StaticConfig.fromStrings(). Split into config_source.dart (pure Dart, fromStrings only) and config_source_native.dart (dart:io, fromDirectory), or use conditional import. Story 7's config_loader_web.dart calls StaticConfig.fromStrings but transitively imports dart:io through this file.",
+      "status": "fixed",
+      "fix_attempts": 1
+    },
+    {
+      "id": "stale1",
+      "severity": "should_fix",
+      "file": "packages/tfc_dart/lib/core/mqtt_device_client.dart",
+      "line": 197,
+      "message": "_subscribedTopics is not cleared when _connectAsync creates a new client on retry. If connect() is ever called again after a prior successful session (e.g., manual reconnect), topics in _subscribedTopics won't be re-subscribed on the new client because _subscribePendingTopics skips them. Clear _subscribedTopics when disposing the old client, or move their entries back into _pendingTopics.",
+      "status": "fixed",
+      "fix_attempts": 1
+    },
+    {
+      "id": "reconnect1",
+      "severity": "note",
+      "file": "packages/tfc_dart/lib/core/mqtt_device_client.dart",
+      "line": 227,
+      "message": "startClean() means the broker discards prior session state. On auto-reconnect, mqtt_client re-subscribes automatically, but verify this holds when the broker restarts (new session). If not, onAutoReconnected should call _subscribePendingTopics or re-subscribe _subscribedTopics.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "retry1",
+      "severity": "note",
+      "file": "packages/tfc_dart/lib/core/mqtt_device_client.dart",
+      "line": 250,
+      "message": "Minor: `delay * 2 > _maxRetryDelay ? _maxRetryDelay : delay * 2` computes the multiplication twice. Could use `final doubled = delay * 2; final nextDelay = doubled > _maxRetryDelay ? _maxRetryDelay : doubled;` or simply `min(delay * 2, _maxRetryDelay)` with dart:math.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "docker1",
+      "severity": "note",
+      "file": "packages/tfc_dart/test/integration/docker-compose.yml",
+      "line": 12,
+      "message": "Mosquitto service added to docker-compose \u2014 this belongs to Story 8 (Integration tests), not Story 5 (Static config loading).",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "errhandle01",
+      "severity": "should_fix",
+      "file": "packages/tfc_dart/lib/core/state_man.dart",
+      "line": 615,
+      "message": "Inconsistent error handling: KeyMappings.fromFile delegates to fromString which calls raw jsonDecode \u2014 a malformed keymappings.json produces a bare FormatException with no file path context. Compare with StateManConfig.fromFile (line 437-442) which wraps jsonDecode in try/catch and includes the path in the error message. Story 5 REFACTOR criterion: 'Review for consistent error handling across fromFile/fromString methods'. Add the same try/catch pattern.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "errimpl01",
+      "severity": "should_fix",
+      "file": "packages/tfc_dart/lib/core/state_man.dart",
+      "line": 620,
+      "message": "KeyMappings.fromFile does not wrap jsonDecode in try-catch for FormatException, unlike StateManConfig.fromFile (line 438-442) which catches FormatException and re-throws with contextual message ('Invalid JSON in config file: $path'). Invalid JSON in a keymappings file will produce a raw FormatException with no file path context. Add matching try-catch: `on FormatException catch (e) { throw Exception('Invalid JSON in key mappings file: $path - ${e.message}'); }`",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "errimpl02",
+      "severity": "note",
+      "file": "packages/tfc_dart/lib/core/state_man.dart",
+      "line": 427,
+      "message": "StateManConfig.fromString delegates directly to jsonDecode + fromJson without try-catch, so invalid JSON throws a raw FormatException. This is arguably fine for an in-memory API (caller controls input), but inconsistent with fromFile which wraps the error. Same applies to KeyMappings.fromString (line 611). Consider whether callers (StaticConfig.fromStrings) should get a contextual error or if raw FormatException is acceptable.",
+      "status": "open",
+      "fix_attempts": 0
+    }
+  ],
+  "fixed_then_reopened": []
+}

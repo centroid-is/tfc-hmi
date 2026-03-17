@@ -1,0 +1,261 @@
+
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: var(--font-mono); background: transparent; }
+.dash { padding: 1rem 0; }
+.top-bar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.25rem; }
+.logo { font-size: 13px; font-weight: 500; color: var(--color-text-secondary); letter-spacing: 0.08em; text-transform: uppercase; }
+.live-pill { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--color-text-success); background: var(--color-background-success); border: 0.5px solid var(--color-border-success); border-radius: 20px; padding: 3px 10px; }
+.live-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; animation: blink 1.1s infinite; }
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.2} }
+.metrics { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 10px; margin-bottom: 1.25rem; }
+.metric { background: var(--color-background-secondary); border-radius: var(--border-radius-md); padding: 0.8rem 1rem; }
+.metric-label { font-size: 11px; color: var(--color-text-secondary); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 4px; }
+.metric-value { font-size: 22px; font-weight: 500; color: var(--color-text-primary); font-family: var(--font-mono); }
+.metric-delta { font-size: 11px; color: var(--color-text-success); margin-top: 2px; }
+.main { display: grid; grid-template-columns: 1fr 380px; gap: 12px; align-items: start; }
+.panel { background: var(--color-background-primary); border: 0.5px solid var(--color-border-tertiary); border-radius: var(--border-radius-lg); overflow: hidden; }
+.panel-header { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; border-bottom: 0.5px solid var(--color-border-tertiary); }
+.panel-title { font-size: 12px; font-weight: 500; color: var(--color-text-secondary); text-transform: uppercase; letter-spacing: 0.07em; }
+.image-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; padding: 12px; }
+.img-card { position: relative; border-radius: var(--border-radius-md); overflow: hidden; border: 0.5px solid var(--color-border-tertiary); aspect-ratio: 1; background: var(--color-background-secondary); }
+.img-canvas { width: 100%; height: 100%; display: block; }
+.img-overlay { position: absolute; bottom: 0; left: 0; right: 0; padding: 4px 6px; background: rgba(0,0,0,0.55); }
+.img-label { font-size: 11px; font-weight: 500; color: #fff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.img-conf { font-size: 10px; color: rgba(255,255,255,0.75); }
+.new-badge { position: absolute; top: 5px; right: 5px; background: #16a34a; color: #fff; font-size: 9px; font-weight: 500; border-radius: 3px; padding: 1px 5px; opacity: 0; transition: opacity 0.3s; }
+.new-badge.show { opacity: 1; }
+.feed { max-height: 420px; overflow-y: auto; }
+.feed-row { display: flex; align-items: center; gap: 10px; padding: 8px 14px; border-bottom: 0.5px solid var(--color-border-tertiary); animation: slideIn 0.3s ease; }
+@keyframes slideIn { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: translateY(0); } }
+.feed-row:last-child { border-bottom: none; }
+.feed-thumb { width: 32px; height: 32px; border-radius: 4px; flex-shrink: 0; }
+.feed-meta { flex: 1; min-width: 0; }
+.feed-class { font-size: 12px; font-weight: 500; color: var(--color-text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.feed-sub { font-size: 11px; color: var(--color-text-secondary); margin-top: 1px; }
+.conf-bar-wrap { width: 60px; flex-shrink: 0; }
+.conf-bar-bg { height: 4px; background: var(--color-background-secondary); border-radius: 2px; overflow: hidden; }
+.conf-bar-fill { height: 100%; border-radius: 2px; transition: width 0.4s; }
+.conf-num { font-size: 10px; color: var(--color-text-secondary); margin-top: 2px; text-align: right; font-family: var(--font-mono); }
+.badge { font-size: 10px; padding: 2px 7px; border-radius: 3px; font-weight: 500; flex-shrink: 0; }
+.badge-ok { background: var(--color-background-success); color: var(--color-text-success); }
+.badge-warn { background: var(--color-background-warning); color: var(--color-text-warning); }
+.badge-err { background: var(--color-background-danger); color: var(--color-text-danger); }
+.throughput-row { display: flex; gap: 8px; padding: 10px 12px; border-top: 0.5px solid var(--color-border-tertiary); }
+.tput-box { flex: 1; background: var(--color-background-secondary); border-radius: var(--border-radius-md); padding: 6px 10px; text-align: center; }
+.tput-val { font-size: 14px; font-weight: 500; font-family: var(--font-mono); }
+.tput-lbl { font-size: 10px; color: var(--color-text-secondary); margin-top: 1px; }
+</style>
+
+<div class="dash">
+  <div class="top-bar">
+    <span class="logo">inference monitor</span>
+    <span class="live-pill"><span class="live-dot"></span>live</span>
+  </div>
+
+  <div class="metrics">
+    <div class="metric">
+      <div class="metric-label">processed</div>
+      <div class="metric-value" id="m-total">0</div>
+      <div class="metric-delta" id="m-rate">0 img/s</div>
+    </div>
+    <div class="metric">
+      <div class="metric-label">avg confidence</div>
+      <div class="metric-value" id="m-conf">—</div>
+      <div class="metric-delta" id="m-conf-d">&nbsp;</div>
+    </div>
+    <div class="metric">
+      <div class="metric-label">latency (ms)</div>
+      <div class="metric-value" id="m-lat">—</div>
+      <div class="metric-delta" id="m-lat-d">&nbsp;</div>
+    </div>
+    <div class="metric">
+      <div class="metric-label">errors</div>
+      <div class="metric-value" id="m-err">0</div>
+      <div class="metric-delta" style="color:var(--color-text-secondary)" id="m-err-r">0%</div>
+    </div>
+  </div>
+
+  <div class="main">
+    <div class="panel">
+      <div class="panel-header">
+        <span class="panel-title">image feed</span>
+        <span id="grid-count" style="font-size:11px;color:var(--color-text-secondary);">0 images</span>
+      </div>
+      <div class="image-grid" id="img-grid"></div>
+      <div class="throughput-row">
+        <div class="tput-box"><div class="tput-val" id="tp-1m">—</div><div class="tput-lbl">last 1 min</div></div>
+        <div class="tput-box"><div class="tput-val" id="tp-cls">—</div><div class="tput-lbl">top class</div></div>
+        <div class="tput-box"><div class="tput-val" id="tp-gpu">—</div><div class="tput-lbl">util %</div></div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-header">
+        <span class="panel-title">inference log</span>
+        <span id="feed-fps" style="font-size:11px;color:var(--color-text-secondary);">0 fps</span>
+      </div>
+      <div class="feed" id="feed"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const CLASSES = [
+  {label:'cat', color:'#7c3aed', emoji:'🐱'},
+  {label:'dog', color:'#0284c7', emoji:'🐶'},
+  {label:'car', color:'#b45309', emoji:'🚗'},
+  {label:'person', color:'#0d9488', emoji:'🧍'},
+  {label:'bird', color:'#db2777', emoji:'🐦'},
+  {label:'bicycle', color:'#15803d', emoji:'🚲'},
+  {label:'traffic light', color:'#d97706', emoji:'🚦'},
+  {label:'truck', color:'#dc2626', emoji:'🚚'},
+  {label:'airplane', color:'#4f46e5', emoji:'✈️'},
+  {label:'laptop', color:'#0891b2', emoji:'💻'},
+];
+
+let total = 0, errors = 0, confs = [], lats = [], imgs = [], classCounts = {}, fps = 0, fpsCount = 0;
+const MAX_IMGS = 9, MAX_FEED = 30;
+const grid = document.getElementById('img-grid');
+const feed = document.getElementById('feed');
+
+function rnd(a,b){ return Math.random()*(b-a)+a; }
+function pick(arr){ return arr[Math.floor(Math.random()*arr.length)]; }
+
+function hslFromClass(cls){
+  const c = CLASSES.find(x=>x.label===cls);
+  return c ? c.color : '#888';
+}
+
+function drawSyntheticImg(canvas, cls, conf) {
+  const ctx = canvas.getContext('2d');
+  const w = canvas.width = 80, h = canvas.height = 80;
+  const c = CLASSES.find(x=>x.label===cls);
+  const color = c ? c.color : '#888';
+
+  ctx.fillStyle = color + '22';
+  ctx.fillRect(0,0,w,h);
+
+  const shapes = Math.floor(rnd(2,5));
+  for(let i=0;i<shapes;i++){
+    ctx.globalAlpha = rnd(0.15,0.4);
+    ctx.fillStyle = color;
+    const x=rnd(5,60), y=rnd(5,60), s=rnd(10,30);
+    if(i%2===0){
+      ctx.beginPath();
+      ctx.arc(x,y,s/2,0,Math.PI*2);
+      ctx.fill();
+    } else {
+      ctx.fillRect(x,y,s,s*rnd(0.5,1.5));
+    }
+  }
+  ctx.globalAlpha = 1;
+
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1.5;
+  const bx=rnd(8,30), by=rnd(8,30), bw=rnd(20,45), bh=rnd(20,45);
+  ctx.strokeRect(bx, by, bw, bh);
+
+  ctx.fillStyle = color;
+  ctx.globalAlpha = 0.7;
+  ctx.fillRect(bx, by-12, bw, 12);
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = '#fff';
+  ctx.font = '8px monospace';
+  ctx.fillText(cls.slice(0,8), bx+2, by-3);
+}
+
+function confColor(c) {
+  if(c>=0.8) return '#16a34a';
+  if(c>=0.5) return '#ca8a04';
+  return '#dc2626';
+}
+
+function addToGrid(cls, conf, id) {
+  const card = document.createElement('div');
+  card.className = 'img-card';
+  const canvas = document.createElement('canvas');
+  canvas.className = 'img-canvas';
+  const overlay = document.createElement('div');
+  overlay.className = 'img-overlay';
+  overlay.innerHTML = `<div class="img-label">${cls}</div><div class="img-conf">${(conf*100).toFixed(1)}%</div>`;
+  const badge = document.createElement('div');
+  badge.className = 'new-badge show';
+  badge.textContent = 'new';
+  card.appendChild(canvas);
+  card.appendChild(overlay);
+  card.appendChild(badge);
+  drawSyntheticImg(canvas, cls, conf);
+  setTimeout(()=>badge.classList.remove('show'), 1200);
+
+  if(imgs.length >= MAX_IMGS) {
+    imgs.shift();
+    grid.removeChild(grid.firstChild);
+  }
+  imgs.push(card);
+  grid.appendChild(card);
+  document.getElementById('grid-count').textContent = imgs.length + ' images';
+}
+
+function addToFeed(cls, conf, lat, isErr) {
+  const row = document.createElement('div');
+  row.className = 'feed-row';
+  const c = CLASSES.find(x=>x.label===cls);
+  const color = c ? c.color : '#888';
+  const statusClass = isErr ? 'badge-err' : conf>=0.75 ? 'badge-ok' : 'badge-warn';
+  const statusText = isErr ? 'error' : conf>=0.75 ? 'ok' : 'low';
+  const fill = confColor(conf);
+  row.innerHTML = `
+    <canvas class="feed-thumb" width="32" height="32"></canvas>
+    <div class="feed-meta">
+      <div class="feed-class">${isErr ? '[error] ' : ''}${cls}</div>
+      <div class="feed-sub">${lat.toFixed(0)}ms · id:${total}</div>
+    </div>
+    <div class="conf-bar-wrap">
+      <div class="conf-bar-bg"><div class="conf-bar-fill" style="width:${(conf*100).toFixed(0)}%;background:${fill}"></div></div>
+      <div class="conf-num">${(conf*100).toFixed(1)}%</div>
+    </div>
+    <span class="badge ${statusClass}">${statusText}</span>
+  `;
+  drawSyntheticImg(row.querySelector('canvas'), cls, conf);
+  feed.insertBefore(row, feed.firstChild);
+  while(feed.children.length > MAX_FEED) feed.removeChild(feed.lastChild);
+}
+
+function updateMetrics() {
+  document.getElementById('m-total').textContent = total.toLocaleString();
+  const avgConf = confs.length ? confs.reduce((a,b)=>a+b,0)/confs.length : null;
+  document.getElementById('m-conf').textContent = avgConf ? (avgConf*100).toFixed(1)+'%' : '—';
+  const avgLat = lats.length ? lats.reduce((a,b)=>a+b,0)/lats.length : null;
+  document.getElementById('m-lat').textContent = avgLat ? avgLat.toFixed(0) : '—';
+  document.getElementById('m-err').textContent = errors;
+  document.getElementById('m-err-r').textContent = total ? ((errors/total)*100).toFixed(1)+'%' : '0%';
+  document.getElementById('m-rate').textContent = fps.toFixed(1) + ' img/s';
+  document.getElementById('feed-fps').textContent = fps.toFixed(1) + ' fps';
+  const top = Object.entries(classCounts).sort((a,b)=>b[1]-a[1])[0];
+  document.getElementById('tp-cls').textContent = top ? top[0] : '—';
+  document.getElementById('tp-1m').textContent = total > 0 ? total + ' imgs' : '—';
+  document.getElementById('tp-gpu').textContent = Math.round(rnd(60,95))+'%';
+}
+
+function tick() {
+  const cls = pick(CLASSES).label;
+  const isErr = Math.random() < 0.04;
+  const conf = isErr ? rnd(0.05,0.3) : rnd(0.55,0.99);
+  const lat = isErr ? rnd(200,600) : rnd(18,95);
+  total++;
+  fpsCount++;
+  if(isErr) errors++;
+  confs.push(conf); if(confs.length>100) confs.shift();
+  lats.push(lat); if(lats.length>100) lats.shift();
+  classCounts[cls] = (classCounts[cls]||0)+1;
+  addToGrid(cls, conf, total);
+  addToFeed(cls, conf, lat, isErr);
+  updateMetrics();
+}
+
+setInterval(()=>{ fps = fpsCount; fpsCount = 0; }, 1000);
+
+let interval = setInterval(tick, 600);
+tick();
+</script>

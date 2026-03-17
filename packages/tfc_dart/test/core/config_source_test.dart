@@ -109,6 +109,38 @@ void main() {
     });
   });
 
+  group('StateManConfig.fromString — malformed JSON', () {
+    test('throws FormatException on invalid JSON', () {
+      expect(
+        () => StateManConfig.fromString('not valid json'),
+        throwsA(isA<FormatException>()),
+      );
+    });
+
+    test('throws FormatException on truncated JSON', () {
+      expect(
+        () => StateManConfig.fromString('{"opcua": ['),
+        throwsA(isA<FormatException>()),
+      );
+    });
+  });
+
+  group('KeyMappings.fromString — malformed JSON', () {
+    test('throws FormatException on invalid JSON', () {
+      expect(
+        () => KeyMappings.fromString('not valid json'),
+        throwsA(isA<FormatException>()),
+      );
+    });
+
+    test('throws FormatException on truncated JSON', () {
+      expect(
+        () => KeyMappings.fromString('{"nodes": {'),
+        throwsA(isA<FormatException>()),
+      );
+    });
+  });
+
   group('KeyMappings.fromFile', () {
     test('reads JSON from temp file and parses correctly', () async {
       final tempDir = Directory.systemTemp.createTempSync('km_fromfile_test_');
@@ -143,6 +175,26 @@ void main() {
           contains('not found'),
         )),
       );
+    });
+
+    test('throws with file path context on malformed JSON', () async {
+      final tempDir =
+          Directory.systemTemp.createTempSync('km_malformed_test_');
+      try {
+        final file = File('${tempDir.path}/keymappings.json');
+        await file.writeAsString('not valid json');
+
+        await expectLater(
+          KeyMappings.fromFile(file.path),
+          throwsA(isA<Exception>().having(
+            (e) => e.toString(),
+            'message',
+            allOf(contains('Invalid JSON'), contains(file.path)),
+          )),
+        );
+      } finally {
+        tempDir.deleteSync(recursive: true);
+      }
     });
   });
 
@@ -321,6 +373,48 @@ void main() {
         expect(staticConfig.stateManConfig.mqtt[1].host, 'broker2.local');
         expect(staticConfig.stateManConfig.mqtt[1].useWebSocket, true);
         expect(staticConfig.stateManConfig.mqtt[1].wsPath, '/mqtt');
+      } finally {
+        tempDir.deleteSync(recursive: true);
+      }
+    });
+
+    test('throws when config.json is missing', () async {
+      final tempDir =
+          Directory.systemTemp.createTempSync('static_cfg_noconf_test_');
+      try {
+        // Only create keymappings.json, not config.json
+        await File('${tempDir.path}/keymappings.json')
+            .writeAsString(jsonEncode({'nodes': {}}));
+
+        await expectLater(
+          staticConfigFromDirectory(tempDir.path),
+          throwsA(isA<Exception>().having(
+            (e) => e.toString(),
+            'message',
+            contains('not found'),
+          )),
+        );
+      } finally {
+        tempDir.deleteSync(recursive: true);
+      }
+    });
+
+    test('throws when keymappings.json is missing', () async {
+      final tempDir =
+          Directory.systemTemp.createTempSync('static_cfg_nokm_test_');
+      try {
+        // Only create config.json, not keymappings.json
+        await File('${tempDir.path}/config.json')
+            .writeAsString(jsonEncode({'opcua': []}));
+
+        await expectLater(
+          staticConfigFromDirectory(tempDir.path),
+          throwsA(isA<Exception>().having(
+            (e) => e.toString(),
+            'message',
+            contains('not found'),
+          )),
+        );
       } finally {
         tempDir.deleteSync(recursive: true);
       }

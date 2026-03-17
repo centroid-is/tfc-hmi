@@ -1,10 +1,11 @@
 import 'dart:convert';
-import 'dart:io';
+import 'dart:io'
+    if (dart.library.js_interop) 'package:tfc/core/io_stub.dart';
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:tfc_dart/core/modbus_device_client.dart';
 import 'package:tfc_dart/core/mqtt_device_client.dart';
@@ -50,13 +51,18 @@ Future<StateMan> stateMan(Ref ref) async {
       }
     },
     onError: (error) {
-      stderr.writeln('Error in preferences listener: $error');
+      if (!kIsWeb) stderr.writeln('Error in preferences listener: $error');
     },
   );
 
   try {
-    final m2400Clients = createM2400DeviceClients(config.jbtm);
-    final modbusClients = buildModbusDeviceClients(config.modbus, keyMappings);
+    final m2400Clients = kIsWeb
+        ? <DeviceClient>[]
+        : createM2400DeviceClients(config.jbtm);
+    final modbusClients = kIsWeb
+        ? <DeviceClient>[]
+        : buildModbusDeviceClients(config.modbus, keyMappings);
+    // MQTT clients always created (work on all platforms)
     final mqttClients = config.mqtt
         .map((mqttConfig) => MqttDeviceClientAdapter(mqttConfig, keyMappings))
         .toList();
@@ -76,7 +82,7 @@ Future<StateMan> stateMan(Ref ref) async {
     return stateMan;
   } catch (e) {
     listener.cancel();
-    stderr.writeln('Error parsing key mappings: $e');
+    if (!kIsWeb) stderr.writeln('Error parsing key mappings: $e');
     rethrow;
   }
 }

@@ -1,0 +1,449 @@
+name: dashboard
+project_dir: /Users/jonb/Projects/tfc-hmi
+model: opus
+max_turns: 200
+allowed_tools: "Bash,Read,Edit,Write,Glob,Grep,Agent"
+
+execution_mode: dag
+
+workers:
+  max_parallel: 2
+  worktree_isolation: true
+
+retry:
+  max_attempts: 2
+  circuit_breaker: true
+
+review:
+  enabled: false
+
+gsd:
+  enabled: false
+
+phases:
+  - name: "Backend + Frontend Scaffold"
+    stories:
+      - id: 1
+        name: "Python aiohttp backend + tests"
+        acceptance_checks:
+          - "cd tools/tfc-orchestrator && /Users/jonb/Projects/tfc-hmi/tools/tfc-orchestrator/.venv/bin/python -m pip install -e . -q && /Users/jonb/Projects/tfc-hmi/tools/tfc-orchestrator/.venv/bin/python -m pytest tests/test_dashboard.py -v"
+        prompt: |
+          You are building a web dashboard for the tfc-orchestrator (tools/tfc-orchestrator/).
+
+          ## Context
+          The orchestrator runs multi-story DAG-based builds. During execution it writes:
+          - State: `.orchestrator/{plan_name}.state.json` (JSON, atomic writes after each story)
+          - Logs: `.orchestrator/logs/{plan_name}/story_{id}.{stdout,stderr}.log`
+
+          Read these files to understand the data model:
+          - tools/tfc-orchestrator/orchestrator/state.py (OrchestratorState, StoryResult)
+          - tools/tfc-orchestrator/orchestrator/models.py (Plan, Phase, Story)
+          - tools/tfc-orchestrator/orchestrator/dag.py (DAGScheduler, NodeStatus)
+
+          ## Task: Create Python backend
+
+          ### 1. Add aiohttp dependency
+          Edit `tools/tfc-orchestrator/pyproject.toml` — add `"aiohttp>=3.9"` to the dependencies list.
+
+          ### 2. Create `tools/tfc-orchestrator/orchestrator/dashboard.py` (~200 lines)
+
+          Pure functions (no aiohttp needed):
+          - `read_state(state_path: Path) -> dict` — reads state JSON, returns `{"results": []}` if missing
+          - `build_dag_info(plan: Plan) -> dict` — returns `{"nodes": [...], "edges": [[from, to], ...]}` from plan
+          - `derive_node_statuses(plan: Plan, state_data: dict, log_dir: Path) -> dict[int, str]` — maps to "pending"/"running"/"passed"/"failed"/"skipped". Running = has no result but log file mtime < 120s ago. Skipped = dependency failed (use DAGScheduler logic).
+
+          aiohttp app:
+          - `create_app(plan_path: str, state_dir: str | None = None, poll_interval: float = 2.0) -> web.Application`
+          - Routes:
+            - GET `/` → serve `index.html` from `dashboard/dist/` (static files)
+            - GET `/assets/{path}` → serve built Svelte assets
+            - GET `/api/state` → JSON with `{plan, dag, state, statuses}`
+            - GET `/api/events` → SSE stream polling state file every `poll_interval` seconds. Use `web.StreamResponse` with `text/event-stream`. Send keepalive comment every 15s. Detect changes via result count + last timestamp.
+            - GET `/api/logs/{story_id}/{stream}` → last N lines of log file (query `?lines=200`). 404 if missing.
+            - GET `/api/logs/{story_id}/{stream}/tail` → SSE stream tailing log file (poll every 1s, track byte offset)
+          - `run_dashboard(plan_path, host='127.0.0.1', port=8080)` — entry point
+
+          The static file serving should look for `dashboard/dist/` relative to the dashboard.py file location:
+          ```python
+          _DIST_DIR = Path(__file__).parent.parent / 'dashboard' / 'dist'
+          ```
+
+          ### 3. Add CLI subcommand
+          Edit `tools/tfc-orchestrator/orchestrator/cli.py`:
+          - Add `'dashboard'` to the `choices` list (line ~407)
+          - Add `--host` (default `127.0.0.1`) and `--port` (default `8080`) arguments
+          - Add handler: `elif args.command == 'dashboard': from .dashboard import run_dashboard; run_dashboard(args.plan, host=args.host, port=args.port)`
+
+          ### 4. Create tests: `tools/tfc-orchestrator/tests/test_dashboard.py`
+
+          Follow TDD. Test the pure functions and route handlers:
+
+          Pure function tests (no aiohttp needed):
+          - test_read_state_file_not_found_returns_empty
+          - test_read_state_valid_file
+          - test_build_dag_from_plan (verify nodes and edges)
+          - test_derive_statuses_all_pending
+          - test_derive_statuses_with_completed
+          - test_derive_statuses_with_failed_cascade
+
+          Route tests using `aiohttp.test_utils.TestClient` and `aiohttp.test_utils.TestServer`:
+          - test_api_state_returns_json
+          - test_api_state_includes_dag
+          - test_api_logs_returns_content
+          - test_api_logs_missing_returns_404
+          - test_events_stream_content_type
+
+          Use `tempfile.TemporaryDirectory` for state/log files. Create minimal plan YAML inline.
+
+          ### 5. Validate
+          ```bash
+          cd tools/tfc-orchestrator
+          /Users/jonb/Projects/tfc-hmi/tools/tfc-orchestrator/.venv/bin/python -m pip install -e .
+          /Users/jonb/Projects/tfc-hmi/tools/tfc-orchestrator/.venv/bin/python -m pytest tests/test_dashboard.py -v
+          /Users/jonb/Projects/tfc-hmi/tools/tfc-orchestrator/.venv/bin/python -m pytest tests/ -v  # all existing tests still pass
+          ```
+
+      - id: 2
+        name: "Svelte scaffold + SSE stores"
+        acceptance_checks:
+          - "cd tools/tfc-orchestrator/dashboard && npm run build"
+        prompt: |
+          You are building a Svelte frontend for the tfc-orchestrator web dashboard.
+
+          ## Task: Create Svelte project scaffold at `tools/tfc-orchestrator/dashboard/`
+
+          ### 1. Initialize project
+          ```bash
+          cd tools/tfc-orchestrator
+          npm create vite@latest dashboard -- --template svelte
+          cd dashboard
+          npm install
+          ```
+
+          ### 2. Configure Vite (`vite.config.js`)
+          - Set base to `./` for relative asset paths
+          - Proxy `/api` to `http://127.0.0.1:8080` for dev mode:
+          ```js
+          import { defineConfig } from 'vite'
+          import { svelte } from '@sveltejs/vite-plugin-svelte'
+
+          export default defineConfig({
+            plugins: [svelte()],
+            base: './',
+            server: {
+              proxy: {
+                '/api': 'http://127.0.0.1:8080'
+              }
+            }
+          })
+          ```
+
+          ### 3. Create `src/lib/stores.js`
+          Svelte stores for dashboard state:
+          ```js
+          import { writable, derived } from 'svelte/store';
+
+          export const dashboardData = writable(null);  // full /api/state response
+          export const selectedStory = writable(null);   // story ID for log viewer
+
+          export const stories = derived(dashboardData, $d => {
+            if (!$d) return [];
+            return $d.dag?.nodes || [];
+          });
+
+          export const statuses = derived(dashboardData, $d => {
+            if (!$d) return {};
+            return $d.statuses || {};
+          });
+
+          export const planInfo = derived(dashboardData, $d => {
+            if (!$d) return null;
+            return $d.plan || null;
+          });
+          ```
+
+          ### 4. Create `src/lib/sse.js`
+          SSE connection manager:
+          ```js
+          import { dashboardData } from './stores.js';
+
+          let eventSource = null;
+
+          export function connectSSE() {
+            // Initial fetch
+            fetch('/api/state')
+              .then(r => r.json())
+              .then(data => dashboardData.set(data));
+
+            // SSE stream
+            eventSource = new EventSource('/api/events');
+            eventSource.onmessage = (event) => {
+              const data = JSON.parse(event.data);
+              dashboardData.update(current => ({
+                ...current,
+                ...data,
+              }));
+            };
+            eventSource.onerror = () => {
+              // Auto-reconnect is built into EventSource
+              console.warn('SSE connection lost, reconnecting...');
+            };
+          }
+
+          export function disconnectSSE() {
+            if (eventSource) eventSource.close();
+          }
+          ```
+
+          ### 5. Create `src/App.svelte`
+          Main layout shell (components will be added in Story 3):
+          ```svelte
+          <script>
+            import { onMount, onDestroy } from 'svelte';
+            import { connectSSE, disconnectSSE } from './lib/sse.js';
+            import { dashboardData, planInfo } from './lib/stores.js';
+
+            onMount(() => connectSSE());
+            onDestroy(() => disconnectSSE());
+          </script>
+
+          <main>
+            {#if $dashboardData}
+              <h1>tfc-orchestrator: {$planInfo?.name || 'loading...'}</h1>
+              <p>Connected — waiting for components...</p>
+              <pre>{JSON.stringify($dashboardData?.statuses, null, 2)}</pre>
+            {:else}
+              <p>Connecting to orchestrator...</p>
+            {/if}
+          </main>
+
+          <style>
+            :global(body) {
+              margin: 0;
+              padding: 0;
+              background: #1a1a2e;
+              color: #e0e0e0;
+              font-family: 'SF Mono', 'Fira Code', monospace;
+            }
+            main {
+              max-width: 1400px;
+              margin: 0 auto;
+              padding: 1rem;
+            }
+          </style>
+          ```
+
+          ### 6. Update `src/main.js`
+          ```js
+          import App from './App.svelte'
+
+          const app = new App({
+            target: document.getElementById('app'),
+          })
+
+          export default app
+          ```
+
+          ### 7. Build and verify
+          ```bash
+          cd tools/tfc-orchestrator/dashboard
+          npm run build
+          ls dist/  # Should have index.html + assets/
+          ```
+
+          The build output in `dist/` will be served by the Python backend.
+
+  - name: "UI Components"
+    validate:
+      - "cd tools/tfc-orchestrator/dashboard && npm run build"
+    stories:
+      - id: 3
+        name: "Svelte dashboard components"
+        depends_on: [2]
+        prompt: |
+          You are building Svelte UI components for the tfc-orchestrator web dashboard.
+
+          Read these existing files first:
+          - tools/tfc-orchestrator/dashboard/src/App.svelte
+          - tools/tfc-orchestrator/dashboard/src/lib/stores.js
+          - tools/tfc-orchestrator/dashboard/src/lib/sse.js
+
+          ## Data shape from `/api/state`
+          ```json
+          {
+            "plan": {"name": "mqtt-web", "execution_mode": "dag", "max_parallel": 4, "model": "opus", "total_stories": 11},
+            "dag": {
+              "nodes": [{"id": 1, "name": "Story name", "depends_on": [], "phase": "Phase name"}],
+              "edges": [[1, 2], [2, 3]]
+            },
+            "state": {"started_at": "2026-03-17T08:33:01", "results": [...]},
+            "statuses": {"1": "passed", "2": "running", "3": "pending"}
+          }
+          ```
+
+          ## Task: Create 5 components + update App.svelte
+
+          ### 1. `src/lib/Header.svelte`
+          - Plan name (large)
+          - Status badge: "Running" (blue pulse), "Complete" (green), "Failed" (red)
+          - Elapsed time: live counter from `state.started_at` (update every second with setInterval)
+          - Summary counters: passed/failed/skipped/pending/running (derived from statuses)
+          - Layout: horizontal flexbox, items centered
+
+          ### 2. `src/lib/WorkerSlots.svelte`
+          - Show `plan.max_parallel` worker slots as boxes
+          - Active slots show story ID + name (running stories from statuses)
+          - Idle slots show "idle" in gray
+          - Color: blue for active, dark gray for idle
+
+          ### 3. `src/lib/DagGraph.svelte`
+          - SVG-based DAG visualization
+          - Layout: topological layers (left to right). Assign each node to layer = 1 + max(layer of dependencies). Space nodes vertically within each layer.
+          - Nodes: rounded rectangles, 120x40px, with story ID + short name
+          - Node colors by status: passed=#4caf50, failed=#f44336, running=#2196f3 (with CSS pulse animation), skipped=#ff9800, pending=#555
+          - Edges: SVG paths with arrowheads between nodes
+          - Clickable nodes: set selectedStory store on click
+          - SVG should be responsive (viewBox based)
+
+          ### 4. `src/lib/StoryTable.svelte`
+          - Table with columns: ID, Name, Status, Duration, Retries, Review, Verify
+          - Rows from dag.nodes, data from state.results
+          - Status cells color-coded (same colors as DAG)
+          - Duration: format as "Xm Ys" for completed stories, live counter for running
+          - Clickable rows: set selectedStory store on click
+          - Highlight selected row
+
+          ### 5. `src/lib/LogViewer.svelte`
+          - Only visible when selectedStory is set
+          - Header bar: "Story N: Name" + close button (clears selectedStory)
+          - Two tabs: stdout / stderr
+          - Content area: monospace, dark background, auto-scroll to bottom
+          - On mount (when story selected): fetch `/api/logs/{id}/stdout` for initial content
+          - Then connect to `/api/logs/{id}/stdout/tail` SSE for live updates
+          - On tab switch: disconnect old SSE, fetch + connect new stream
+          - On close: disconnect SSE
+
+          ### 6. Update `src/App.svelte`
+          Replace the placeholder content with the actual components:
+          ```svelte
+          <script>
+            import { onMount, onDestroy } from 'svelte';
+            import { connectSSE, disconnectSSE } from './lib/sse.js';
+            import { dashboardData } from './lib/stores.js';
+            import Header from './lib/Header.svelte';
+            import WorkerSlots from './lib/WorkerSlots.svelte';
+            import DagGraph from './lib/DagGraph.svelte';
+            import StoryTable from './lib/StoryTable.svelte';
+            import LogViewer from './lib/LogViewer.svelte';
+
+            onMount(() => connectSSE());
+            onDestroy(() => disconnectSSE());
+          </script>
+
+          <main>
+            {#if $dashboardData}
+              <Header />
+              <WorkerSlots />
+              <div class="content">
+                <DagGraph />
+                <StoryTable />
+              </div>
+              <LogViewer />
+            {:else}
+              <div class="loading">Connecting to orchestrator...</div>
+            {/if}
+          </main>
+          ```
+
+          ### 7. Global CSS (in App.svelte `<style>`)
+          Dark theme:
+          - Background: #1a1a2e
+          - Surface: #16213e
+          - Text: #e0e0e0
+          - Muted: #888
+          - Font: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace
+          - Status colors: passed=#4caf50, failed=#f44336, running=#2196f3, skipped=#ff9800, pending=#555
+
+          Layout:
+          - `.content`: CSS grid, 2 columns (DAG 40%, Table 60%) on wide screens, 1 column on narrow
+          - Components have consistent padding and border-radius
+
+          ### 8. Build
+          ```bash
+          cd tools/tfc-orchestrator/dashboard && npm run build
+          ```
+
+  - name: "Integration"
+    validate:
+      - "cd tools/tfc-orchestrator && /Users/jonb/Projects/tfc-hmi/tools/tfc-orchestrator/.venv/bin/python -m pytest tests/ -v"
+      - "cd tools/tfc-orchestrator/dashboard && npm run build"
+    stories:
+      - id: 4
+        name: "Wire static serving + integration test"
+        depends_on: [1, 3]
+        prompt: |
+          You are doing final integration for the tfc-orchestrator web dashboard.
+
+          Read these files first:
+          - tools/tfc-orchestrator/orchestrator/dashboard.py
+          - tools/tfc-orchestrator/dashboard/src/App.svelte
+          - tools/tfc-orchestrator/tests/test_dashboard.py
+
+          ## Task: Wire everything together and verify end-to-end
+
+          ### 1. Verify static file serving
+          Read `dashboard.py` and ensure the `/` route serves `dashboard/dist/index.html` and
+          `/assets/*` serves the built Svelte assets. The dist directory should be resolved relative to
+          the dashboard.py file:
+          ```python
+          _DIST_DIR = Path(__file__).parent.parent / 'dashboard' / 'dist'
+          ```
+
+          If the static serving isn't wired up yet, add it:
+          ```python
+          async def handle_index(request):
+              return web.FileResponse(_DIST_DIR / 'index.html')
+
+          # In create_app():
+          app.router.add_get('/', handle_index)
+          app.router.add_static('/assets', _DIST_DIR / 'assets')
+          ```
+
+          ### 2. Rebuild Svelte
+          ```bash
+          cd tools/tfc-orchestrator/dashboard && npm run build
+          ```
+
+          ### 3. Integration test
+          Add a test in `tests/test_dashboard.py`:
+          ```python
+          class TestDashboardIntegration:
+              def test_index_serves_svelte_app(self):
+                  """GET / should return the built Svelte index.html."""
+                  # Only run if dist exists
+                  dist_dir = Path(__file__).parent.parent / 'dashboard' / 'dist'
+                  if not dist_dir.exists():
+                      pytest.skip("dashboard not built")
+                  # Create app and test client, verify GET / returns HTML with <div id="app">
+
+              def test_full_api_state_with_real_plan(self):
+                  """Test /api/state with the actual mqtt_web.yaml plan."""
+                  plan_path = Path(__file__).parent.parent / 'plans' / 'mqtt_web.yaml'
+                  if not plan_path.exists():
+                      pytest.skip("mqtt_web.yaml not found")
+                  # Create app with real plan, verify response structure
+          ```
+
+          ### 4. Run all tests
+          ```bash
+          cd tools/tfc-orchestrator
+          /Users/jonb/Projects/tfc-hmi/tools/tfc-orchestrator/.venv/bin/python -m pytest tests/ -v
+          ```
+
+          ### 5. Manual smoke test instructions
+          Print clear instructions at the end of your output:
+          ```
+          Dashboard ready! To test:
+            Terminal 1: cd tools/tfc-orchestrator && source .venv/bin/activate && python -m orchestrator.cli dashboard plans/mqtt_web.yaml
+            Terminal 2: open http://127.0.0.1:8080
+          ```

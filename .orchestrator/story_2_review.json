@@ -1,0 +1,203 @@
+{
+  "comments": [
+    {
+      "id": "a1b2c3",
+      "severity": "should_fix",
+      "file": "packages/tfc_dart/test/core/mqtt_device_client_test.dart",
+      "line": 183,
+      "message": "Missing test for raw payload type. Acceptance criteria require all three payload types (JSON, string, raw) be tested. MqttPayloadType.raw is exercised in code (parseMqttPayload handles it) but has no dedicated test case. Add: test('raw payload produces DynamicValue bytes', () { ... parseMqttPayload([0x01, 0x02], MqttPayloadType.raw) ... })",
+      "status": "fixed",
+      "fix_attempts": 2
+    },
+    {
+      "id": "d4e5f6",
+      "severity": "should_fix",
+      "file": "packages/tfc_dart/test/core/mqtt_device_client_test.dart",
+      "line": 137,
+      "message": "Missing test for subscribableKeys when both config.serverAlias and mqttNode.serverAlias are null. Acceptance criteria specify: collect keys where mqttNode.serverAlias == config.serverAlias OR both are null. While Dart null == null is true so the impl works, this edge case should have an explicit test to guard against regressions.",
+      "status": "fixed",
+      "fix_attempts": 2
+    },
+    {
+      "id": "g7h8i9",
+      "severity": "should_fix",
+      "file": "packages/tfc_dart/test/core/mqtt_device_client_test.dart",
+      "line": 297,
+      "message": "Missing test for connection failure path. FakeMqttClient has shouldFailConnect flag (line 26) but no test exercises it. Acceptance criteria require: 'On failure: emit ConnectionStatus.disconnected'. Add a test that sets shouldFailConnect=true and verifies disconnected status is emitted.",
+      "status": "fixed",
+      "fix_attempts": 2
+    },
+    {
+      "id": "j1k2l3",
+      "severity": "should_fix",
+      "file": "packages/tfc_dart/test/core/mqtt_device_client_test.dart",
+      "line": 165,
+      "message": "Missing test for dot-notation subscribe stream navigation. canSubscribe('temperature.value') is tested, but subscribe('temperature.value') is never called in tests. The subscribe() method has non-trivial path navigation logic (_navigatePath) that deserves a test: subscribe to 'temperature.value', simulate a JSON object message {\"value\": 42, \"unit\": \"C\"}, and verify the stream emits DynamicValue(42).",
+      "status": "fixed",
+      "fix_attempts": 1
+    },
+    {
+      "id": "m4n5o6",
+      "severity": "note",
+      "file": "packages/tfc_dart/lib/core/mqtt_device_client.dart",
+      "line": 141,
+      "message": "read() only resolves root keys from _lastValues, so read('temperature.value') returns null even after subscribe('temperature.value') receives data. This is inconsistent with subscribe() which supports dot-notation. Consider adding _resolveRootKey + _navigatePath in read(), or document this as intentional.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "p7q8r9",
+      "severity": "note",
+      "file": "packages/tfc_dart/lib/core/mqtt_client_factory_native.dart",
+      "line": 11,
+      "message": "Native factory always uses MqttServerClient.withPort regardless of useWebSocket flag. Spec says plain MqttServerClient(host, clientId) for TCP. This is functionally fine since withPort just adds the port parameter, but diverges from spec wording.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "a1b2c3",
+      "severity": "should_fix",
+      "file": "packages/tfc_dart/lib/core/mqtt_device_client.dart",
+      "line": 165,
+      "message": "connect() has no guard against double invocation. Calling connect() twice overwrites _client and _updatesSubscription without disposing the previous ones, leaking resources. Add an early return if _client != null or dispose the old client first.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "d4e5f6",
+      "severity": "should_fix",
+      "file": "packages/tfc_dart/lib/core/mqtt_device_client.dart",
+      "line": 207,
+      "message": "_updatesSubscription is assigned AFTER await _client!.connect(), but only if connect succeeds. If connect throws, line 207 still executes because the catch only adds to _connectionController. If _client!.updates is null after a failed connect, this is harmless, but the subscription setup should be inside the success branch (status?.state == connected) for clarity.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "g7h8i9",
+      "severity": "should_fix",
+      "file": "packages/tfc_dart/lib/core/mqtt_device_client.dart",
+      "line": 144,
+      "message": "write() always serializes via JSON (jsonEncode) regardless of payloadType. For MqttPayloadType.string or .raw payloads, the write path doesn't match the read path \u2014 parseMqttPayload handles all three types but write only produces JSON. Should respect payloadType or document that writes are always JSON.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "j0k1l2",
+      "severity": "note",
+      "file": "packages/tfc_dart/lib/core/mqtt_client_factory_native.dart",
+      "line": 7,
+      "message": "Native factory ignores config.useTls. MqttServerClient supports client.secure = true for TLS connections. Web factory handles it correctly (wss:// vs ws://). Not blocking for Story 2 but should be addressed before production use.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "m3n4o5",
+      "severity": "note",
+      "file": "packages/tfc_dart/test/core/mqtt_device_client_test.dart",
+      "line": 27,
+      "message": "FakeMqttClient has shouldFailConnect capability but no test exercises the connection failure path. Story 2 acceptance criteria specifies 'On failure: emit ConnectionStatus.disconnected'. Adding a test for failed connect would improve coverage.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "p6q7r8",
+      "severity": "note",
+      "file": "packages/tfc_dart/lib/core/mqtt_device_client.dart",
+      "line": 99,
+      "message": "subscribableKeys is recomputed on every access (iterates all keyMappings.nodes). Called transitively from canSubscribe and _resolveRootKey. For typical key counts this is fine, but consider caching if key mappings don't change after construction.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "r1s2t3",
+      "severity": "should_fix",
+      "file": "packages/tfc_dart/lib/core/mqtt_device_client.dart",
+      "line": 222,
+      "message": "Missing retry-with-backoff on initial connect failure. Spec (ralph-plan.md line 276) says: 'On failure: emit ConnectionStatus.disconnected, schedule retry with backoff'. Current catch block only emits disconnected and stops. autoReconnect (line 193) only handles reconnection after a successful initial connection followed by disconnect \u2014 it does NOT retry a failed initial connect(). Add a delayed recursive call to _connectAsync() with exponential backoff on failure, or document that initial connect retry is the caller's responsibility.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "u4v5w6",
+      "severity": "should_fix",
+      "file": "packages/tfc_dart/lib/core/mqtt_device_client.dart",
+      "line": 123,
+      "message": "subscribe() before connect() silently loses MQTT topic subscriptions. _client?.subscribe() (null-aware) is a no-op when _client is null, but the topic is still added to _subscribedTopics (line 125). When connect() later succeeds, these pre-registered topics are never re-subscribed on the broker. Either: (a) queue topics and subscribe them in _connectAsync after successful connect, or (b) throw/assert if _client is null, or (c) document that subscribe() must be called after connect().",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "x7y8z9",
+      "severity": "should_fix",
+      "file": "packages/tfc_dart/test/core/mqtt_device_client_test.dart",
+      "line": 462,
+      "message": "Connection failure test first assertion is trivially true. `expect(statuses, contains(ConnectionStatus.disconnected))` passes regardless of shouldFailConnect because BehaviorSubject is seeded with disconnected. Strengthen by checking the status sequence: expect(statuses, equals([ConnectionStatus.disconnected, ConnectionStatus.connecting, ConnectionStatus.disconnected])) or at minimum verify that connecting appeared before the final disconnected.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "a2b3c4",
+      "severity": "note",
+      "file": "packages/tfc_dart/test/core/mqtt_device_client_test.dart",
+      "line": 0,
+      "message": "No test for auto-reconnect status transitions. Implementation sets onAutoReconnect (\u2192connecting) and onAutoReconnected (\u2192connected) callbacks at lines 200-205, but no test exercises this path. FakeMqttClient could expose simulateAutoReconnect() to trigger these callbacks and verify the connectionStream emits connecting\u2192connected.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "d5e6f7",
+      "severity": "note",
+      "file": "packages/tfc_dart/test/core/mqtt_device_client_test.dart",
+      "line": 0,
+      "message": "No test for dispose() stream lifecycle. All tests call adapter.dispose() in teardown but no test verifies behavior: e.g., that _topicStreams emit done after dispose(), that connectionStream emits done, or that calling subscribe/read/write after dispose throws or returns gracefully.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "g8h9i0",
+      "severity": "note",
+      "file": "packages/tfc_dart/test/core/mqtt_device_client_test.dart",
+      "line": 0,
+      "message": "No test for idempotent subscribe() calls. Calling subscribe('temperature') twice should return streams backed by the same BehaviorSubject and should NOT call _client.subscribe() on the MQTT broker a second time. Implementation uses _subscribedTopics guard (line 123), but this is untested.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "s2t3u4",
+      "severity": "should_fix",
+      "file": "packages/tfc_dart/lib/core/mqtt_device_client.dart",
+      "line": 123,
+      "message": "subscribe() called before connect() completes silently loses MQTT topic subscriptions. Line 124 `_client?.subscribe(...)` does nothing when _client is null (pre-connect) or not yet connected (mid-connect), but line 125 still adds the topic to _subscribedTopics. When connect() later succeeds, it never re-subscribes these queued topics. Fix: either (a) don't add to _subscribedTopics until _client?.subscribe returns non-null, and re-subscribe pending topics in _connectAsync after successful connect, or (b) throw/assert if _client is null to enforce connect-before-subscribe ordering.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "v5w6x7",
+      "severity": "should_fix",
+      "file": "packages/tfc_dart/lib/core/mqtt_device_client.dart",
+      "line": 222,
+      "message": "Story 2 acceptance criteria require 'On failure: emit ConnectionStatus.disconnected, schedule retry with backoff'. The implementation emits disconnected (line 223) but never schedules a retry. autoReconnect=true only works after a successful initial connection. If the first connect() fails (broker down at startup), the adapter stays disconnected permanently with no recovery path. Add a retry loop with exponential backoff (e.g., 1s\u21922s\u21924s\u2026\u219230s cap) in the catch block.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "y8z9a0",
+      "severity": "note",
+      "file": "packages/tfc_dart/test/core/mqtt_device_client_test.dart",
+      "line": 480,
+      "message": "No test for auto-reconnect status transitions. The implementation wires onAutoReconnect\u2192connecting and onAutoReconnected\u2192connected (lines 200-204), but FakeMqttClient doesn't simulate reconnect and no test verifies these transitions. Consider adding a test: trigger onAutoReconnect callback, verify connectionStream emits connecting, then trigger onAutoReconnected, verify connected.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "b1c2d3",
+      "severity": "note",
+      "file": "packages/tfc_dart/test/core/mqtt_device_client_test.dart",
+      "line": 480,
+      "message": "No test for dispose() resource cleanup. Spec requires: 'disconnect client, close all BehaviorSubjects, close connection controller'. Add a test that calls dispose() and verifies: connectionStream is done, topic streams are closed, and FakeMqttClient.disconnect() was called.",
+      "status": "open",
+      "fix_attempts": 0
+    }
+  ],
+  "fixed_then_reopened": []
+}

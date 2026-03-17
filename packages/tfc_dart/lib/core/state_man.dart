@@ -1,26 +1,44 @@
 import 'dart:async';
-import 'dart:io';
+import 'dart:io'
+    if (dart.library.js_interop) 'web_stubs/io_stub.dart';
 import 'dart:typed_data';
 import 'dart:convert';
 
 import 'package:meta/meta.dart'; // Add this import at the top
 import 'package:logger/logger.dart';
 import 'package:json_annotation/json_annotation.dart';
-import 'package:open62541/open62541.dart';
+import 'package:open62541/open62541.dart'
+    if (dart.library.js_interop) 'web_stubs/open62541_stub.dart';
 import 'package:rxdart/rxdart.dart';
 import 'package:collection/collection.dart';
 
-import 'package:jbtm/src/m2400.dart' show M2400RecordType;
-import 'package:jbtm/src/m2400_fields.dart' show M2400Field;
-import 'package:jbtm/src/m2400_client_wrapper.dart' show M2400ClientWrapper;
-import 'package:jbtm/src/msocket.dart' as jbtm show ConnectionStatus;
+import 'package:jbtm/src/m2400.dart'
+    if (dart.library.js_interop) 'web_stubs/jbtm_m2400_stub.dart'
+    show M2400RecordType;
+import 'package:jbtm/src/m2400_fields.dart'
+    if (dart.library.js_interop) 'web_stubs/jbtm_m2400_fields_stub.dart'
+    show M2400Field;
+import 'package:jbtm/src/m2400_client_wrapper.dart'
+    if (dart.library.js_interop) 'web_stubs/jbtm_m2400_client_wrapper_stub.dart'
+    show M2400ClientWrapper;
+import 'package:jbtm/src/msocket.dart'
+    if (dart.library.js_interop) 'web_stubs/jbtm_msocket_stub.dart'
+    as jbtm show ConnectionStatus;
 
-import 'package:modbus_client/modbus_client.dart' show ModbusElementType, ModbusEndianness;
+import 'package:modbus_client/modbus_client.dart'
+    if (dart.library.js_interop) 'web_stubs/modbus_client_stub.dart'
+    show ModbusElementType, ModbusEndianness;
 
-import 'collector.dart';
-import 'modbus_client_wrapper.dart' show ModbusDataType;
-import 'modbus_device_client.dart' show ModbusDeviceClientAdapter;
-import 'preferences.dart';
+import 'collector.dart'
+    if (dart.library.js_interop) 'web_stubs/collector_stub.dart';
+import 'modbus_client_wrapper.dart'
+    if (dart.library.js_interop) 'web_stubs/modbus_client_wrapper_stub.dart'
+    show ModbusDataType;
+import 'modbus_device_client.dart'
+    if (dart.library.js_interop) 'web_stubs/modbus_device_client_stub.dart'
+    show ModbusDeviceClientAdapter;
+import 'preferences.dart'
+    if (dart.library.js_interop) 'web_stubs/preferences_stub.dart';
 
 part 'state_man.g.dart';
 
@@ -618,7 +636,14 @@ class KeyMappings {
       throw Exception('Key mappings file not found: $path');
     }
     final contents = await file.readAsString();
-    return KeyMappings.fromString(contents);
+    final Map<String, dynamic> json;
+    try {
+      json = jsonDecode(contents) as Map<String, dynamic>;
+    } on FormatException catch (e) {
+      throw Exception(
+          'Invalid JSON in key mappings file: $path - ${e.message}');
+    }
+    return KeyMappings.fromJson(json);
   }
 
   factory KeyMappings.fromJson(Map<String, dynamic> json) =>

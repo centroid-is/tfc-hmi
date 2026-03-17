@@ -1,7 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
+import 'dart:io' if (dart.library.js_interop) '../core/io_stub.dart';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
@@ -41,7 +42,7 @@ class KeyRepositoryPage extends ConsumerWidget {
   /// Optional proposal JSON passed via Beamer route data.
   final String? proposalData;
 
-  KeyRepositoryPage({super.key, this.proposalData});
+  const KeyRepositoryPage({super.key, this.proposalData});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -1256,6 +1257,7 @@ class _KeyMappingsImportExportCard extends ConsumerWidget {
   }
 
   Future<void> _onExport(BuildContext context, WidgetRef ref) async {
+    if (kIsWeb) return; // File I/O not available on web
     try {
       final prefs = await ref.read(preferencesProvider.future);
       final keyMappings = await KeyMappings.fromPrefs(prefs);
@@ -1263,7 +1265,8 @@ class _KeyMappingsImportExportCard extends ConsumerWidget {
           const JsonEncoder.withIndent('  ').convert(keyMappings.toJson());
 
       String? savePath;
-      if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+      if (!kIsWeb &&
+          (Platform.isWindows || Platform.isLinux || Platform.isMacOS)) {
         savePath = await FilePicker.platform.saveFile(
           dialogTitle: 'Export Key Mappings',
           fileName: 'key_mappings.json',
@@ -1298,6 +1301,7 @@ class _KeyMappingsImportExportCard extends ConsumerWidget {
   }
 
   Future<void> _onImport(BuildContext context, WidgetRef ref) async {
+    if (kIsWeb) return; // File I/O not available on web
     try {
       final pick = await FilePicker.platform.pickFiles(
         type: FileType.custom,

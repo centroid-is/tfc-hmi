@@ -1,0 +1,704 @@
+{
+    "assets": [
+        {
+            "asset_name": "SpeedBatcherConfig",
+            "page_name": "main",
+            "coordinates": {
+                "x": 0.8024159062734938,
+                "y": 0.0714955661664393,
+                "angle": null
+            },
+            "size": {
+                "width": 0.1,
+                "height": 0.1
+            },
+            "label": "SpeedBatcher 1",
+            "runningKey": "",
+            "cleaningKey": "",
+            "batchReadyKey": "",
+            "droppedBatchKey": "",
+            "gateKey": ""
+        },
+        {
+            "asset_name": "SpeedBatcherConfig",
+            "page_name": "main",
+            "coordinates": {
+                "x": 0.8033491402575842,
+                "y": 0.32583387410866943,
+                "angle": null
+            },
+            "size": {
+                "width": 0.015347885402455661,
+                "height": 0.027285129604365622
+            },
+            "label": "SpeedBatcher 2",
+            "runningKey": "",
+            "cleaningKey": "",
+            "batchReadyKey": "",
+            "droppedBatchKey": "",
+            "gateKey": ""
+        },
+        {
+            "asset_name": "SpeedBatcherConfig",
+            "page_name": "main",
+            "coordinates": {
+                "x": 0.807303125802372,
+                "y": 0.5844475995981799,
+                "angle": null
+            },
+            "size": {
+                "width": 0.03,
+                "height": 0.03
+            },
+            "label": "SpeedBatcher 3",
+            "runningKey": "",
+            "cleaningKey": "",
+            "batchReadyKey": "",
+            "droppedBatchKey": "",
+            "gateKey": ""
+        },
+        {
+            "asset_name": "ConveyorConfig",
+            "page_name": "main",
+            "coordinates": {
+                "x": 0.7341055755698613,
+                "y": 0.0032187926330150083,
+                "angle": 0.0
+            },
+            "size": {
+                "width": 0.2214,
+                "height": 0.05
+            },
+            "key": "Motor"
+        },
+        {
+            "asset_name": "ConveyorConfig",
+            "page_name": "main",
+            "coordinates": {
+                "x": 0.7361418237204774,
+                "y": 0.25830277967257903,
+                "angle": null
+            },
+            "size": {
+                "width": 0.2214,
+                "height": 0.05
+            },
+            "key": "Motor"
+        },
+        {
+            "asset_name": "ConveyorConfig",
+            "page_name": "main",
+            "coordinates": {
+                "x": 0.7359170011804017,
+                "y": 0.5155282230559352,
+                "angle": null
+            },
+            "size": {
+                "width": 0.2214,
+                "height": 0.05
+            },
+            "key": "Motor"
+        },
+        {
+            "asset_name": "ConveyorConfig",
+            "page_name": "main",
+            "coordinates": {
+                "x": 0.5314813690393715,
+                "y": 0.1876430337653476,
+                "angle": null
+            },
+            "size": {
+                "width": 0.2,
+                "height": 0.05
+            },
+            "key": "Motor"
+        },
+        {
+            "asset_name": "ConveyorConfig",
+            "page_name": "main",
+            "coordinates": {
+                "x": 0.15675615214390828,
+                "y": 0.6263474164392919,
+                "angle": -70.0
+            },
+            "size": {
+                "width": 0.2,
+                "height": 0.05
+            },
+            "key": "Motor"
+        },
+        {
+            "asset_name": "ConveyorConfig",
+            "page_name": "main",
+            "coordinates": {
+                "x": 0.30424273606699825,
+                "y": 0.45048622953615314,
+                "angle": 0.0
+            },
+            "size": {
+                "width": 0.4,
+                "height": 0.05
+            },
+            "key": "Motor"
+        },
+        {
+            "asset_name": "ConveyorConfig",
+            "page_name": "main",
+            "coordinates": {
+                "x": 0.5110944611053676,
+                "y": 0.8626355729877223,
+                "angle": -70.0
+            },
+            "size": {
+                "width": 0.1,
+                "height": 0.05
+            },
+            "key": "Motor"
+        },
+        {
+            "asset_name": "ConveyorConfig",
+            "page_name": "main",
+            "coordinates": {
+                "x": 0.582021476048239,
+                "y": 0.7809134123465216,
+                "angle": null
+            },
+            "size": {
+                "width": 0.2214,
+                "height": 0.05
+            },
+            "key": "Motor"
+        },
+        {
+            "asset_name": "AirCabConfig",
+            "page_name": "main",
+            "coordinates": {
+                "x": 0.5933913664147771,
+                "y": 0.31099057810368375,
+                "angle": null
+            },
+            "size": {
+                "width": 0.03,
+                "height": 0.03
+            },
+            "label": "+UH1.72",
+            "pressureKey": "",
+            "softStartKey": "",
+            "buttonKey": ""
+        },
+        {
+            "asset_name": "AirCabConfig",
+            "page_name": "main",
+            "coordinates": {
+                "x": 0.5906994912016115,
+                "y": 0.6043856582537517,
+                "angle": null
+            },
+            "size": {
+                "width": 0.03,
+                "height": 0.03
+            },
+            "label": "+UH1.71",
+            "pressureKey": "",
+            "softStartKey": "",
+            "buttonKey": ""
+        },
+        {
+            "asset_name": "ElCabConfig",
+            "page_name": "main",
+            "coordinates": {
+                "x": 0.851577571436945,
+                "y": 0.8725366643929066,
+                "angle": null
+            },
+            "size": {
+                "width": 0.05,
+                "height": 0.1
+            },
+            "key": "Elcab"
+        },
+        {
+            "asset_name": "ChecklistsConfig",
+            "page_name": "main",
+            "coordinates": {
+                "x": 0.4323037682256137,
+                "y": 0.012010572987721714,
+                "angle": null
+            },
+            "size": {
+                "width": 0.03,
+                "height": 0.03
+            },
+            "line1": [
+                {
+                    "asset_name": "LEDConfig",
+                    "page_name": "main",
+                    "coordinates": {
+                        "x": 0.0,
+                        "y": 0.0,
+                        "angle": null
+                    },
+                    "size": {
+                        "width": 0.03,
+                        "height": 0.03
+                    },
+                    "key": "Led preview",
+                    "text": null,
+                    "on_color": {
+                        "red": 0.2980392156862745,
+                        "green": 0.6862745098039216,
+                        "blue": 0.3137254901960784,
+                        "alpha": 1.0
+                    },
+                    "off_color": {
+                        "red": 0.2980392156862745,
+                        "green": 0.6862745098039216,
+                        "blue": 0.3137254901960784,
+                        "alpha": 1.0
+                    },
+                    "text_pos": "right",
+                    "led_type": null
+                }
+            ],
+            "line2": [
+                {
+                    "asset_name": "LEDConfig",
+                    "page_name": "main",
+                    "coordinates": {
+                        "x": 0.0,
+                        "y": 0.0,
+                        "angle": null
+                    },
+                    "size": {
+                        "width": 0.03,
+                        "height": 0.03
+                    },
+                    "key": "Led preview",
+                    "text": null,
+                    "on_color": {
+                        "red": 0.2980392156862745,
+                        "green": 0.6862745098039216,
+                        "blue": 0.3137254901960784,
+                        "alpha": 1.0
+                    },
+                    "off_color": {
+                        "red": 0.2980392156862745,
+                        "green": 0.6862745098039216,
+                        "blue": 0.3137254901960784,
+                        "alpha": 1.0
+                    },
+                    "text_pos": "right",
+                    "led_type": null
+                }
+            ],
+            "line3": [
+                {
+                    "asset_name": "LEDConfig",
+                    "page_name": "main",
+                    "coordinates": {
+                        "x": 0.0,
+                        "y": 0.0,
+                        "angle": null
+                    },
+                    "size": {
+                        "width": 0.03,
+                        "height": 0.03
+                    },
+                    "key": "Led preview",
+                    "text": null,
+                    "on_color": {
+                        "red": 0.2980392156862745,
+                        "green": 0.6862745098039216,
+                        "blue": 0.3137254901960784,
+                        "alpha": 1.0
+                    },
+                    "off_color": {
+                        "red": 0.2980392156862745,
+                        "green": 0.6862745098039216,
+                        "blue": 0.3137254901960784,
+                        "alpha": 1.0
+                    },
+                    "text_pos": "right",
+                    "led_type": null
+                }
+            ]
+        },
+        {
+            "asset_name": "LEDConfig",
+            "page_name": "main",
+            "coordinates": {
+                "x": 0.5327035193553885,
+                "y": 0.2501119116643932,
+                "angle": null
+            },
+            "size": {
+                "width": 0.02,
+                "height": 0.02
+            },
+            "key": "Led",
+            "text": "Outfeed Running",
+            "on_color": {
+                "red": 0.2980392156862745,
+                "green": 0.6862745098039216,
+                "blue": 0.3137254901960784,
+                "alpha": 1.0
+            },
+            "off_color": {
+                "red": 0.3764705882352941,
+                "green": 0.49019607843137253,
+                "blue": 0.5450980392156862,
+                "alpha": 1.0
+            },
+            "text_pos": "right",
+            "led_type": "circle"
+        },
+        {
+            "asset_name": "LEDConfig",
+            "page_name": "main",
+            "coordinates": {
+                "x": 0.5325656281974762,
+                "y": 0.276512406207367,
+                "angle": null
+            },
+            "size": {
+                "width": 0.02,
+                "height": 0.02
+            },
+            "key": "Led",
+            "text": "Drop Allowed",
+            "on_color": {
+                "red": 0.2980392156862745,
+                "green": 0.6862745098039216,
+                "blue": 0.3137254901960784,
+                "alpha": 1.0
+            },
+            "off_color": {
+                "red": 0.3764705882352941,
+                "green": 0.49019607843137253,
+                "blue": 0.5450980392156862,
+                "alpha": 1.0
+            },
+            "text_pos": "right",
+            "led_type": "circle"
+        },
+        {
+            "asset_name": "LEDConfig",
+            "page_name": "main",
+            "coordinates": {
+                "x": 0.5773292947433499,
+                "y": 0.9473961886084594,
+                "angle": null
+            },
+            "size": {
+                "width": 0.02,
+                "height": 0.02
+            },
+            "key": "Led",
+            "text": "Outfeed Running",
+            "on_color": {
+                "red": 0.2980392156862745,
+                "green": 0.6862745098039216,
+                "blue": 0.3137254901960784,
+                "alpha": 1.0
+            },
+            "off_color": {
+                "red": 0.3764705882352941,
+                "green": 0.49019607843137253,
+                "blue": 0.5450980392156862,
+                "alpha": 1.0
+            },
+            "text_pos": "right",
+            "led_type": "circle"
+        },
+        {
+            "asset_name": "LEDConfig",
+            "page_name": "main",
+            "coordinates": {
+                "x": 0.5773442829126884,
+                "y": 0.9725763130968628,
+                "angle": null
+            },
+            "size": {
+                "width": 0.02,
+                "height": 0.02
+            },
+            "key": "Led",
+            "text": "Drop Allowed",
+            "on_color": {
+                "red": 0.2980392156862745,
+                "green": 0.6862745098039216,
+                "blue": 0.3137254901960784,
+                "alpha": 1.0
+            },
+            "off_color": {
+                "red": 0.3764705882352941,
+                "green": 0.49019607843137253,
+                "blue": 0.5450980392156862,
+                "alpha": 1.0
+            },
+            "text_pos": "right",
+            "led_type": "circle"
+        },
+        {
+            "asset_name": "LEDConfig",
+            "page_name": "main",
+            "coordinates": {
+                "x": 0.25853992581855384,
+                "y": 0.8107520463847208,
+                "angle": null
+            },
+            "size": {
+                "width": 0.02,
+                "height": 0.02
+            },
+            "key": "Led",
+            "text": "Outfeed Running",
+            "on_color": {
+                "red": 0.2980392156862745,
+                "green": 0.6862745098039216,
+                "blue": 0.3137254901960784,
+                "alpha": 1.0
+            },
+            "off_color": {
+                "red": 0.3764705882352941,
+                "green": 0.49019607843137253,
+                "blue": 0.5450980392156862,
+                "alpha": 1.0
+            },
+            "text_pos": "right",
+            "led_type": "circle"
+        },
+        {
+            "asset_name": "LEDConfig",
+            "page_name": "main",
+            "coordinates": {
+                "x": 0.25874676255542295,
+                "y": 0.838772595497953,
+                "angle": null
+            },
+            "size": {
+                "width": 0.02,
+                "height": 0.02
+            },
+            "key": "Led",
+            "text": "Drop Allowed",
+            "on_color": {
+                "red": 0.2980392156862745,
+                "green": 0.6862745098039216,
+                "blue": 0.3137254901960784,
+                "alpha": 1.0
+            },
+            "off_color": {
+                "red": 0.3764705882352941,
+                "green": 0.49019607843137253,
+                "blue": 0.5450980392156862,
+                "alpha": 1.0
+            },
+            "text_pos": "right",
+            "led_type": "circle"
+        },
+        {
+            "asset_name": "LEDConfig",
+            "page_name": "main",
+            "coordinates": {
+                "x": 0.2914389575162004,
+                "y": 0.14796320770804916,
+                "angle": null
+            },
+            "size": {
+                "width": 0.05,
+                "height": 0.05
+            },
+            "key": "Line 1 On",
+            "text": null,
+            "on_color": {
+                "red": 0.2980392156862745,
+                "green": 0.6862745098039216,
+                "blue": 0.3137254901960784,
+                "alpha": 1.0
+            },
+            "off_color": {
+                "red": 0.3764705882352941,
+                "green": 0.49019607843137253,
+                "blue": 0.5450980392156862,
+                "alpha": 1.0
+            },
+            "text_pos": "right",
+            "led_type": "circle"
+        },
+        {
+            "asset_name": "LEDConfig",
+            "page_name": "main",
+            "coordinates": {
+                "x": 0.2914119788113913,
+                "y": 0.21225379433833544,
+                "angle": null
+            },
+            "size": {
+                "width": 0.05,
+                "height": 0.05
+            },
+            "key": "Line 2 On",
+            "text": null,
+            "on_color": {
+                "red": 0.2980392156862745,
+                "green": 0.6862745098039216,
+                "blue": 0.3137254901960784,
+                "alpha": 1.0
+            },
+            "off_color": {
+                "red": 0.3764705882352941,
+                "green": 0.49019607843137253,
+                "blue": 0.5450980392156862,
+                "alpha": 1.0
+            },
+            "text_pos": "right",
+            "led_type": "circle"
+        },
+        {
+            "asset_name": "LEDConfig",
+            "page_name": "main",
+            "coordinates": {
+                "x": 0.29123511841319916,
+                "y": 0.27487636425648043,
+                "angle": null
+            },
+            "size": {
+                "width": 0.05,
+                "height": 0.05
+            },
+            "key": "Line 3 On",
+            "text": null,
+            "on_color": {
+                "red": 0.2980392156862745,
+                "green": 0.6862745098039216,
+                "blue": 0.3137254901960784,
+                "alpha": 1.0
+            },
+            "off_color": {
+                "red": 0.3764705882352941,
+                "green": 0.49019607843137253,
+                "blue": 0.5450980392156862,
+                "alpha": 1.0
+            },
+            "text_pos": "right",
+            "led_type": "circle"
+        },
+        {
+            "asset_name": "LEDConfig",
+            "page_name": "main",
+            "coordinates": {
+                "x": 0.29205047482520474,
+                "y": 0.3376055167121418,
+                "angle": null
+            },
+            "size": {
+                "width": 0.05,
+                "height": 0.05
+            },
+            "key": "Cleaning",
+            "text": null,
+            "on_color": {
+                "red": 0.12941176470588237,
+                "green": 0.5882352941176471,
+                "blue": 0.9529411764705882,
+                "alpha": 1.0
+            },
+            "off_color": {
+                "red": 0.3764705882352941,
+                "green": 0.49019607843137253,
+                "blue": 0.5450980392156862,
+                "alpha": 1.0
+            },
+            "text_pos": "right",
+            "led_type": "circle"
+        },
+        {
+            "asset_name": "LEDConfig",
+            "page_name": "main",
+            "coordinates": {
+                "x": 0.07630836058214373,
+                "y": 0.09331405070169911,
+                "angle": null
+            },
+            "size": {
+                "width": 0.03,
+                "height": 0.03
+            },
+            "key": "",
+            "text": "",
+            "on_color": {
+                "red": 0.9568627450980393,
+                "green": 0.2627450980392157,
+                "blue": 0.21176470588235294,
+                "alpha": 1.0
+            },
+            "off_color": {
+                "red": 0.3764705882352941,
+                "green": 0.49019607843137253,
+                "blue": 0.5450980392156862,
+                "alpha": 1.0
+            },
+            "text_pos": "right",
+            "led_type": "square"
+        },
+        {
+            "asset_name": "LEDConfig",
+            "page_name": "main",
+            "coordinates": {
+                "x": 0.0761937950236999,
+                "y": 0.13003062154898232,
+                "angle": null
+            },
+            "size": {
+                "width": 0.03,
+                "height": 0.03
+            },
+            "key": "",
+            "text": "",
+            "on_color": {
+                "red": 1.0,
+                "green": 0.9215686274509803,
+                "blue": 0.23137254901960785,
+                "alpha": 1.0
+            },
+            "off_color": {
+                "red": 0.3764705882352941,
+                "green": 0.49019607843137253,
+                "blue": 0.5450980392156862,
+                "alpha": 1.0
+            },
+            "text_pos": "right",
+            "led_type": "square"
+        },
+        {
+            "asset_name": "LEDConfig",
+            "page_name": "main",
+            "coordinates": {
+                "x": 0.07628000413474935,
+                "y": 0.16819430269725683,
+                "angle": null
+            },
+            "size": {
+                "width": 0.03,
+                "height": 0.03
+            },
+            "key": "",
+            "text": "",
+            "on_color": {
+                "red": 0.2980392156862745,
+                "green": 0.6862745098039216,
+                "blue": 0.3137254901960784,
+                "alpha": 1.0
+            },
+            "off_color": {
+                "red": 0.3764705882352941,
+                "green": 0.49019607843137253,
+                "blue": 0.5450980392156862,
+                "alpha": 1.0
+            },
+            "text_pos": "right",
+            "led_type": "square"
+        }
+    ]
+}

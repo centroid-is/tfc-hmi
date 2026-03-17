@@ -1,0 +1,2 @@
+[console_scripts]
+tfc-orchestrator = orchestrator.cli:main

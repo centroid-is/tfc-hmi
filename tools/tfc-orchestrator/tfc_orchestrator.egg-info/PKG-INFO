@@ -1,0 +1,7 @@
+Metadata-Version: 2.4
+Name: tfc-orchestrator
+Version: 0.1.0
+Summary: Autonomous Claude Code orchestrator for TFC-HMI — runs phases with fresh context, parallel stories, state tracking.
+Requires-Python: >=3.11
+Requires-Dist: pyyaml>=6.0
+Requires-Dist: aiohttp>=3.9

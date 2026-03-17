@@ -4,6 +4,22 @@ model: opus
 max_turns: 200
 allowed_tools: "Bash,Read,Edit,Write,Glob,Grep,Agent,Skill"
 
+execution_mode: dag  # 'dag' (v3 parallel) or 'phase' (v2.1 sequential fallback)
+
+workers:
+  max_parallel: 4
+  worktree_isolation: true
+
+verification:
+  golden_tests: true
+  marionette: true
+  ai_design_review: false
+  ui_stories: [6, 7, 8, 9, 10, 11]
+  route_map:
+    7: ["/", "/advanced/preferences"]
+    10: ["/"]
+    11: ["*"]
+
 retry:
   max_attempts: 3
   circuit_breaker: true

@@ -1,5 +1,5 @@
 import 'dart:convert';
-import 'dart:io' show Platform;
+import 'dart:io' if (dart.library.js_interop) '../core/io_stub.dart';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -20,7 +20,6 @@ import '../chat/chat_overlay.dart' show ChatContext;
 import '../chat/hamburger_context_menu.dart';
 import '../chat/page_context_menu.dart';
 import '../chat/palette_context_menu.dart';
-import '../widgets/proposal_visual.dart';
 import '../providers/proposal_state.dart';
 import 'package:flutter/services.dart';
 

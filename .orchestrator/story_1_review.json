@@ -1,0 +1,68 @@
+{
+  "comments": [
+    {
+      "id": "mqtt_payload_key",
+      "severity": "should_fix",
+      "file": "packages/tfc_dart/lib/core/state_man.dart",
+      "line": 390,
+      "message": "MqttNodeConfig.payloadType is missing @JsonKey(name: 'payload_type'). Every other multi-word field in this file uses snake_case JSON keys (server_alias, use_tls, keep_alive_period, register_type, data_type, etc.). This field serializes as camelCase 'payloadType', breaking the convention and producing inconsistent config files. Add: @JsonKey(name: 'payload_type', defaultValue: MqttPayloadType.json)",
+      "status": "fixed",
+      "fix_attempts": 1
+    },
+    {
+      "id": "mqtt_qos_no_clamp",
+      "severity": "note",
+      "file": "packages/tfc_dart/lib/core/state_man.dart",
+      "line": 392,
+      "message": "MqttNodeConfig.qos accepts any int but MQTT only allows 0, 1, or 2. The codebase already clamps values in similar spots (ModbusConfig.unitId clamp 0-255, ModbusNodeConfig.address clamp 0-65535). Consider adding `: qos = qos.clamp(0, 2)` in the initializer list for consistency.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "mqtt_node_fromjson_defaults",
+      "severity": "should_fix",
+      "file": "packages/tfc_dart/test/core/mqtt_config_test.dart",
+      "line": 129,
+      "message": "MqttNodeConfig has a constructor-defaults test ('defaults: qos 0, payloadType json') but no fromJson-with-minimal-JSON test. MqttConfig has one (line 69: fromJson({'host': 'broker.local'}) which verifies generated code defaults). Add an equivalent: MqttNodeConfig.fromJson({'topic': 'x'}) and assert qos==0, payloadType==json, serverAlias==null. Constructor defaults and generated fromJson defaults are separate code paths \u2014 if a @JsonKey(defaultValue:) annotation were missing, only the fromJson path would break.",
+      "status": "fixed",
+      "fix_attempts": 1
+    },
+    {
+      "id": "mqtt_copy_test",
+      "severity": "note",
+      "file": "packages/tfc_dart/test/core/mqtt_config_test.dart",
+      "line": 235,
+      "message": "StateManConfig.copy() is used in the UI for editing configs. The 'round-trips with opcua + mqtt' test (line 264) covers fromJson(toJson()) implicitly, but an explicit test that StateManConfig.copy() preserves the mqtt list would mirror how copy() is actually used and catch regressions if copy() were ever reimplemented.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "mqtt_qos_boundary",
+      "severity": "note",
+      "file": "packages/tfc_dart/test/core/mqtt_config_test.dart",
+      "line": 109,
+      "message": "Only QoS values 0 (default, line 129) and 1 (round-trip, line 112) are tested. QoS 2 is never exercised. A parameterized test over [0, 1, 2] would confirm all valid MQTT QoS levels round-trip correctly through JSON serialization.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "mqtt_node_missing_topic",
+      "severity": "note",
+      "file": "packages/tfc_dart/test/core/mqtt_config_test.dart",
+      "line": 136,
+      "message": "No negative test for MqttNodeConfig.fromJson with missing required 'topic' field. The generated code does `json['topic'] as String` which throws TypeError on missing key. A test like `expect(() => MqttNodeConfig.fromJson({}), throwsA(isA<TypeError>()))` would document this contract and catch regressions if topic ever becomes optional.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "mqtt_keymappings_json_roundtrip",
+      "severity": "note",
+      "file": "packages/tfc_dart/test/core/mqtt_config_test.dart",
+      "line": 335,
+      "message": "KeyMappings with MQTT entries is only tested via in-memory construction (KeyMappings(nodes: {...})). No test exercises KeyMappings.fromJson \u2192 toJson round-trip with mqtt_node entries. While KeyMappingEntry.fromJson is tested separately (line 169), a full KeyMappings JSON round-trip would cover the generated map deserialization path end-to-end.",
+      "status": "open",
+      "fix_attempts": 0
+    }
+  ],
+  "fixed_then_reopened": []
+}
