@@ -216,14 +216,37 @@ class WorkerPool:
 
         self._snapshot_done = True
 
+    def _is_valid_worktree(self, wt_path: str) -> bool:
+        """Check if a directory is a valid git worktree (has .git file and is tracked)."""
+        git_file = Path(wt_path) / '.git'
+        if not git_file.exists():
+            return False
+        # Verify git recognizes it as a worktree
+        result = subprocess.run(
+            ['git', 'rev-parse', '--git-dir'],
+            cwd=wt_path, capture_output=True, text=True, timeout=10,
+        )
+        return result.returncode == 0
+
     def _create_worktree(self, story_id: int) -> tuple[str, str]:
-        """Create a git worktree for a story, or reuse if it exists. Returns (branch_name, worktree_path)."""
+        """Create a git worktree for a story, or reuse if valid. Returns (branch_name, worktree_path)."""
         branch = f'{self._branch_prefix()}/story-{story_id}'
         wt_path = str(self._worktree_dir() / f'story-{story_id}')
 
-        # Reuse existing worktree from interrupted run
+        # Reuse existing worktree ONLY if it's a valid git worktree
         if Path(wt_path).exists():
-            return branch, wt_path
+            if self._is_valid_worktree(wt_path):
+                return branch, wt_path
+            # Stale/broken directory — remove it before recreating
+            logger.warning('Removing broken worktree remnant at %s', wt_path)
+            subprocess.run(
+                ['git', 'worktree', 'remove', wt_path, '--force'],
+                cwd=self.project_dir, capture_output=True, timeout=30,
+            )
+            # If git worktree remove didn't clean it, force-remove the dir
+            if Path(wt_path).exists():
+                import shutil
+                shutil.rmtree(wt_path, ignore_errors=True)
 
         # Ensure HEAD contains all prior work
         self.snapshot_working_tree()
@@ -628,8 +651,20 @@ class WorkerPool:
         Uses --output-format stream-json and parses output in a reader thread
         to write human-readable progress to the log file in real-time.
         """
+        # Wrap story prompt with worktree isolation context
+        wrapped_prompt = (
+            f"## Environment\n"
+            f"You are working in an isolated git worktree at: {cwd}\n"
+            f"This worktree is a FULL copy of the repository.\n"
+            f"CRITICAL: Do ALL work within this directory. NEVER cd to "
+            f"{self.project_dir} or any other directory outside the worktree.\n"
+            f"All file paths in the task below are relative to the repo root, "
+            f"which is this worktree directory.\n\n"
+            f"## Task: Story {story.id} — {story.name}\n"
+            f"{story.prompt}"
+        )
         cmd = [
-            'claude', '-p', story.prompt,
+            'claude', '-p', wrapped_prompt,
             '--model', plan.model,
             '--allowedTools', plan.allowed_tools,
             '--max-turns', str(plan.max_turns),
