@@ -120,6 +120,11 @@ Future<void> _startApp() async {
   final environmentVariableIsGod =
       !kIsWeb && Platform.environment['TFC_GOD'] == 'true';
 
+  // Static config mode: on web always, on native when CENTROID_CONFIG_DIR is set.
+  // Hides config editing pages (Server Config, Key Repository, Page Editor).
+  final isStaticMode =
+      kIsWeb || Platform.environment['CENTROID_CONFIG_DIR'] != null;
+
   registry.addMenuItem(const MenuItem(label: 'Home', path: '/', icon: Icons.home));
 
   registry.addMenuItem(const MenuItem(label: 'Alarm View', path: '/alarm-view', icon: Icons.alarm));
@@ -145,14 +150,14 @@ Future<void> _startApp() async {
           MenuItem(label: 'IP Settings', path: '/advanced/ip-settings', icon: Icons.settings_ethernet),
         if (!kIsWeb && Platform.isLinux)
           MenuItem(label: 'About Linux', path: '/advanced/about-linux', icon: Icons.info),
-        if (environmentVariableIsGod) MenuItem(label: 'Page Editor', path: '/advanced/page-editor', icon: Icons.edit),
+        if (!isStaticMode && environmentVariableIsGod) MenuItem(label: 'Page Editor', path: '/advanced/page-editor', icon: Icons.edit),
         if (environmentVariableIsGod)
           MenuItem(label: 'Preferences', path: '/advanced/preferences', icon: Icons.settings),
         if (environmentVariableIsGod)
           MenuItem(label: 'Alarm Editor', path: '/advanced/alarm-editor', icon: Icons.alarm),
         MenuItem(label: 'History View', path: '/advanced/history-view', icon: Icons.history),
-        MenuItem(label: 'Server Config', path: '/advanced/server-config', icon: FontAwesomeIcons.server),
-        MenuItem(label: 'Key Repository', path: '/advanced/key-repository', icon: FontAwesomeIcons.key),
+        if (!isStaticMode) MenuItem(label: 'Server Config', path: '/advanced/server-config', icon: FontAwesomeIcons.server),
+        if (!isStaticMode) MenuItem(label: 'Key Repository', path: '/advanced/key-repository', icon: FontAwesomeIcons.key),
         MenuItem(label: 'Knowledge Base', path: '/advanced/knowledge-base', icon: Icons.library_books),
       ],
     ),

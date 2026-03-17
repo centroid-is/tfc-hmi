@@ -1,5 +1,7 @@
-import 'dart:io' as io;
+import 'dart:io'
+    if (dart.library.js_interop) 'package:tfc/core/io_stub.dart';
 import 'dart:async';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:riverpod/riverpod.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
@@ -10,6 +12,7 @@ part 'database.g.dart';
 
 @Riverpod(keepAlive: true)
 Future<Database?> database(Ref ref) async {
+  if (kIsWeb) return null; // No Postgres on web
   final config = await DatabaseConfig.fromPrefs();
   if (config.postgres == null) {
     return null;
@@ -33,7 +36,7 @@ Future<Database?> database(Ref ref) async {
   } catch (e) {
     // close() now properly kills the DriftIsolate via shutdownAll()
     await appDb?.close();
-    io.stderr.writeln('Error opening database: $e');
+    stderr.writeln('Error opening database: $e');
     _scheduleRetry(ref, config);
     ref.onDispose(() {
       _retryTimer?.cancel();
