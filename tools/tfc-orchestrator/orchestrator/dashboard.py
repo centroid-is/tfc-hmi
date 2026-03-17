@@ -37,6 +37,7 @@ def build_dag_info(plan: Plan) -> dict:
                 'id': story.id,
                 'name': story.name,
                 'phase': phase.name,
+                'depends_on': list(story.depends_on),
             })
             for dep in story.depends_on:
                 edges.append([dep, story.id])
@@ -52,6 +53,8 @@ def derive_node_statuses(
     - Has result with status 'pass' → "passed"
     - Has result with status 'fail' → "failed"
     - Dependency failed → "skipped" (uses DAGScheduler cascade logic)
+    - Has result with status 'running' + log mtime > 120s → "interrupted"
+    - Has result with status 'running' + log mtime < 120s → "running"
     - No result but log file mtime < 120s ago → "running"
     - Otherwise → "pending"
     """
@@ -62,14 +65,33 @@ def derive_node_statuses(
 
     # Use DAGScheduler to compute cascade skips
     dag = DAGScheduler.from_plan(plan)
+
+    # First pass: identify stale running stories so we can mark them as failed
+    # in the DAG (for cascade purposes) but display them as "interrupted"
+    now = time.time()
+    interrupted_ids: set[int] = set()
+
+    for sid, status in result_map.items():
+        if status == 'running':
+            log_file = log_dir / f'story_{sid}.stdout.log'
+            if log_file.exists():
+                mtime = log_file.stat().st_mtime
+                if now - mtime > 120:
+                    interrupted_ids.add(sid)
+
     for sid, status in result_map.items():
         try:
             if status == 'pass':
                 dag.mark_running(sid)
                 dag.mark_passed(sid)
             elif status == 'running':
-                dag.mark_running(sid)
-                # Leave as RUNNING — don't mark failed
+                if sid in interrupted_ids:
+                    # Stale running — treat as failed for DAG cascade
+                    dag.mark_running(sid)
+                    dag.mark_failed(sid)
+                else:
+                    dag.mark_running(sid)
+                    # Leave as RUNNING — don't mark failed
             elif status == 'fail':
                 dag.mark_running(sid)
                 dag.mark_failed(sid)
@@ -80,7 +102,6 @@ def derive_node_statuses(
         except KeyError:
             pass
 
-    now = time.time()
     statuses: dict[int, str] = {}
     for phase in plan.phases:
         for story in phase.stories:
@@ -90,7 +111,11 @@ def derive_node_statuses(
             if dag_status == NodeStatus.PASSED:
                 statuses[sid] = 'passed'
             elif dag_status == NodeStatus.FAILED:
-                statuses[sid] = 'failed'
+                # Check if this was an interrupted story
+                if sid in interrupted_ids:
+                    statuses[sid] = 'interrupted'
+                else:
+                    statuses[sid] = 'failed'
             elif dag_status == NodeStatus.SKIPPED:
                 statuses[sid] = 'skipped'
             elif dag_status == NodeStatus.RUNNING:
@@ -112,31 +137,63 @@ def derive_node_statuses(
     return statuses
 
 
+def discover_plans(plans_dir: Path) -> dict[str, Plan]:
+    """Scan directory for *.yaml plan files, return {plan_name: Plan}."""
+    plans = {}
+    for f in sorted(plans_dir.glob('*.yaml')):
+        try:
+            plan = Plan.from_yaml(str(f))
+            plans[plan.name] = plan
+        except Exception:
+            pass
+    return plans
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _plan_paths(app, plan_name):
+    """Look up plan, state_path, and log_dir for a plan-scoped route."""
+    plan = app['plans'].get(plan_name)
+    if not plan:
+        raise web.HTTPNotFound(text=f'Plan not found: {plan_name}')
+    state_dir = Path(app['state_dir'])
+    state_path = state_dir / f'{plan_name}.state.json'
+    log_dir = state_dir / 'logs' / plan_name
+    return plan, state_path, log_dir
+
+
 # ---------------------------------------------------------------------------
 # aiohttp app
 # ---------------------------------------------------------------------------
 
 def create_app(
-    plan_path: str,
+    plans_dir: str,
     state_dir: str | None = None,
     poll_interval: float = 2.0,
 ) -> web.Application:
-    plan = Plan.from_yaml(plan_path)
+    plans = discover_plans(Path(plans_dir))
+    if not plans:
+        raise ValueError(f'No valid plan files found in {plans_dir}')
+
+    # Determine state_dir from first plan's project_dir if not given
     if state_dir is None:
-        state_dir = str(Path(plan.project_dir) / '.orchestrator')
-    state_path = Path(state_dir) / f'{plan.name}.state.json'
-    log_dir = Path(state_dir) / 'logs' / plan.name
+        first_plan = next(iter(plans.values()))
+        state_dir = str(Path(first_plan.project_dir) / '.orchestrator')
 
     app = web.Application()
-    app['plan'] = plan
-    app['state_path'] = state_path
-    app['log_dir'] = log_dir
+    app['plans'] = plans
+    app['plans_dir'] = plans_dir
+    app['state_dir'] = state_dir
     app['poll_interval'] = poll_interval
 
-    app.router.add_get('/api/state', _handle_state)
-    app.router.add_get('/api/events', _handle_events)
-    app.router.add_get('/api/logs/{story_id}/{stream}', _handle_logs)
-    app.router.add_get('/api/logs/{story_id}/{stream}/tail', _handle_log_tail)
+    # Multi-plan routes
+    app.router.add_get('/api/plans', _handle_plans)
+    app.router.add_get('/api/{plan_name}/state', _handle_state)
+    app.router.add_get('/api/{plan_name}/events', _handle_events)
+    app.router.add_get('/api/{plan_name}/logs/{story_id}/{stream}', _handle_logs)
+    app.router.add_get('/api/{plan_name}/logs/{story_id}/{stream}/tail', _handle_log_tail)
 
     # Static file serving for Svelte frontend
     if _DIST_DIR.is_dir():
@@ -146,17 +203,53 @@ def create_app(
     return app
 
 
+async def _handle_plans(request: web.Request) -> web.Response:
+    plans = request.app['plans']
+    state_dir = Path(request.app['state_dir'])
+
+    result = []
+    for name, plan in plans.items():
+        state_path = state_dir / f'{name}.state.json'
+        log_dir = state_dir / 'logs' / name
+        state_data = read_state(state_path)
+        statuses = derive_node_statuses(plan, state_data, log_dir)
+        total = sum(len(p.stories) for p in plan.phases)
+        passed = sum(1 for s in statuses.values() if s == 'passed')
+        failed = sum(1 for s in statuses.values() if s in ('failed', 'interrupted'))
+        running = sum(1 for s in statuses.values() if s == 'running')
+        status = (
+            'complete' if passed == total
+            else 'failed' if failed > 0
+            else 'running' if running > 0
+            else 'pending'
+        )
+        result.append({
+            'name': name,
+            'status': status,
+            'passed': passed,
+            'failed': failed,
+            'running': running,
+            'total': total,
+        })
+    return web.json_response(result)
+
+
 async def _handle_state(request: web.Request) -> web.Response:
-    plan: Plan = request.app['plan']
-    state_path: Path = request.app['state_path']
-    log_dir: Path = request.app['log_dir']
+    plan_name = request.match_info['plan_name']
+    plan, state_path, log_dir = _plan_paths(request.app, plan_name)
 
     state_data = read_state(state_path)
     dag_info = build_dag_info(plan)
     statuses = derive_node_statuses(plan, state_data, log_dir)
 
     return web.json_response({
-        'plan': {'name': plan.name, 'model': plan.model},
+        'plan': {
+            'name': plan.name,
+            'model': plan.model,
+            'max_parallel': plan.workers.max_parallel if plan.workers else 1,
+            'total_stories': sum(len(p.stories) for p in plan.phases),
+            'execution_mode': plan.execution_mode or 'sequential',
+        },
         'dag': dag_info,
         'state': state_data,
         'statuses': {str(k): v for k, v in statuses.items()},
@@ -164,7 +257,8 @@ async def _handle_state(request: web.Request) -> web.Response:
 
 
 async def _handle_events(request: web.Request) -> web.StreamResponse:
-    state_path: Path = request.app['state_path']
+    plan_name = request.match_info['plan_name']
+    plan, state_path, log_dir = _plan_paths(request.app, plan_name)
     poll_interval: float = request.app['poll_interval']
 
     resp = web.StreamResponse()
@@ -187,7 +281,13 @@ async def _handle_events(request: web.Request) -> web.StreamResponse:
             if count != last_count or ts != last_ts:
                 last_count = count
                 last_ts = ts
-                payload = json.dumps(state_data)
+                dag_info = build_dag_info(plan)
+                statuses = derive_node_statuses(plan, state_data, log_dir)
+                payload = json.dumps({
+                    'state': state_data,
+                    'statuses': {str(k): v for k, v in statuses.items()},
+                    'dag': dag_info,
+                })
                 await resp.write(f'data: {payload}\n\n'.encode())
 
             now = time.time()
@@ -196,7 +296,7 @@ async def _handle_events(request: web.Request) -> web.StreamResponse:
                 last_keepalive = now
 
             await asyncio.sleep(poll_interval)
-    except (ConnectionResetError, ConnectionAbortedError, asyncio.CancelledError, OSError):
+    except Exception:
         # Client disconnected — silently stop streaming
         pass
 
@@ -204,7 +304,8 @@ async def _handle_events(request: web.Request) -> web.StreamResponse:
 
 
 async def _handle_logs(request: web.Request) -> web.Response:
-    log_dir: Path = request.app['log_dir']
+    plan_name = request.match_info['plan_name']
+    _, _, log_dir = _plan_paths(request.app, plan_name)
     story_id = request.match_info['story_id']
     stream = request.match_info['stream']
 
@@ -213,7 +314,7 @@ async def _handle_logs(request: web.Request) -> web.Response:
 
     log_file = log_dir / f'story_{story_id}.{stream}.log'
     if not log_file.exists():
-        raise web.HTTPNotFound(text=f'Log not found: story_{story_id}.{stream}.log')
+        return web.Response(text='', content_type='text/plain')
 
     lines_param = int(request.query.get('lines', '200'))
     content = log_file.read_text()
@@ -224,7 +325,8 @@ async def _handle_logs(request: web.Request) -> web.Response:
 
 
 async def _handle_log_tail(request: web.Request) -> web.StreamResponse:
-    log_dir: Path = request.app['log_dir']
+    plan_name = request.match_info['plan_name']
+    _, _, log_dir = _plan_paths(request.app, plan_name)
     story_id = request.match_info['story_id']
     stream = request.match_info['stream']
 
@@ -232,8 +334,14 @@ async def _handle_log_tail(request: web.Request) -> web.StreamResponse:
         raise web.HTTPNotFound(text=f'Invalid stream: {stream}')
 
     log_file = log_dir / f'story_{story_id}.{stream}.log'
+
+    # Wait for log file to appear (up to 30s)
+    for _ in range(30):
+        if log_file.exists():
+            break
+        await asyncio.sleep(1)
     if not log_file.exists():
-        raise web.HTTPNotFound(text=f'Log not found')
+        return web.Response(text='', content_type='text/plain')
 
     resp = web.StreamResponse()
     resp.content_type = 'text/event-stream'
@@ -250,11 +358,12 @@ async def _handle_log_tail(request: web.Request) -> web.StreamResponse:
                     f.seek(offset)
                     new_data = f.read()
                 offset = size
-                payload = json.dumps(new_data)
-                await resp.write(f'data: {payload}\n\n'.encode())
+                # Send each line as a separate SSE event (no JSON wrapping)
+                for line in new_data.splitlines():
+                    await resp.write(f'data: {line}\n\n'.encode())
 
             await asyncio.sleep(1)
-    except (ConnectionResetError, ConnectionAbortedError, asyncio.CancelledError, OSError):
+    except Exception:
         # Client disconnected — silently stop streaming
         pass
 
@@ -269,7 +378,7 @@ async def _handle_index(request: web.Request) -> web.FileResponse:
 # Entry point
 # ---------------------------------------------------------------------------
 
-def run_dashboard(plan_path: str, host: str = '127.0.0.1', port: int = 8080):
-    app = create_app(plan_path)
+def run_dashboard(plans_dir: str, host: str = '127.0.0.1', port: int = 8080):
+    app = create_app(plans_dir)
     print(f'Dashboard: http://{host}:{port}')
     web.run_app(app, host=host, port=port, print=None)

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import signal
@@ -10,7 +11,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import IO, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .models import Story, Plan, RetryConfig
@@ -32,6 +33,80 @@ def _kill_process_tree(proc: subprocess.Popen | None):
             proc.wait(timeout=3)
         except (ProcessLookupError, ChildProcessError, subprocess.TimeoutExpired):
             pass
+
+
+def _stream_json_to_log(pipe: IO[str], log_file_handle: IO[str]):
+    """Read stream-json from Claude's stdout pipe and write readable progress to log.
+
+    stream-json format: newline-delimited JSON objects. Key message types:
+    - {"type":"assistant","message":{"content":[{"type":"text","text":"..."}]}}
+    - {"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{...}}]}}
+    - {"type":"result","subtype":"success","result":"final text",...}
+
+    Extracts and writes:
+    - Text output lines as-is
+    - Tool calls as: [ToolName] brief description
+    - Results as: --- Result: success | N turns | $X.XX | Ns ---
+    - Unrecognized event types as: [type] (for debugging)
+    """
+    for raw_line in pipe:
+        raw_line = raw_line.strip()
+        if not raw_line:
+            continue
+        try:
+            event = json.loads(raw_line)
+        except (json.JSONDecodeError, ValueError):
+            log_file_handle.write(raw_line + '\n')
+            log_file_handle.flush()
+            continue
+
+        etype = event.get('type', '')
+
+        if etype == 'assistant':
+            msg = event.get('message', {})
+            for block in msg.get('content', []):
+                btype = block.get('type', '')
+                if btype == 'text':
+                    text = block.get('text', '')
+                    if text.strip():
+                        log_file_handle.write(text)
+                        if not text.endswith('\n'):
+                            log_file_handle.write('\n')
+                        log_file_handle.flush()
+                elif btype == 'tool_use':
+                    name = block.get('name', '?')
+                    inp = block.get('input', {})
+                    if name in ('Read', 'Write', 'Edit'):
+                        desc = inp.get('file_path', '')
+                    elif name == 'Bash':
+                        desc = inp.get('command', '')[:80]
+                    elif name in ('Glob', 'Grep'):
+                        desc = inp.get('pattern', '')
+                    else:
+                        desc = str(inp)[:80]
+                    log_file_handle.write(f'[{name}] {desc}\n')
+                    log_file_handle.flush()
+
+        elif etype == 'result':
+            subtype = event.get('subtype', '')
+            cost = event.get('cost_usd', 0)
+            duration = event.get('duration_ms', 0)
+            turns = event.get('num_turns', 0)
+            log_file_handle.write(
+                f'\n--- Result: {subtype} | {turns} turns | '
+                f'${cost:.2f} | {duration / 1000:.0f}s ---\n'
+            )
+            result_text = event.get('result', '')
+            if result_text:
+                log_file_handle.write(result_text)
+                if not result_text.endswith('\n'):
+                    log_file_handle.write('\n')
+            log_file_handle.flush()
+
+        else:
+            # Log unrecognized event types for debugging
+            log_file_handle.write(f'[{etype}] {str(event)[:120]}\n')
+            log_file_handle.flush()
 
 
 @dataclass
@@ -206,6 +281,24 @@ class WorkerPool:
 
     def _merge_branch(self, branch: str, plan: 'Plan | None' = None) -> tuple[str | None, str]:
         """Merge a worktree branch back. On conflict, invokes Claude to resolve."""
+        # Auto-commit any dirty files on the base branch (e.g. generated files
+        # left by a previous story's merge) so git merge doesn't refuse.
+        subprocess.run(
+            ['git', 'add', '-A'],
+            cwd=self.project_dir, capture_output=True, timeout=30,
+        )
+        status = subprocess.run(
+            ['git', 'diff', '--cached', '--quiet'],
+            cwd=self.project_dir, capture_output=True, timeout=10,
+        )
+        if status.returncode != 0:
+            subprocess.run(
+                ['git', 'commit', '-m',
+                 'chore(orchestrator): auto-commit dirty files before merge'],
+                cwd=self.project_dir, capture_output=True, text=True, timeout=30,
+            )
+            logger.info('Auto-committed dirty files on base branch before merge')
+
         result = subprocess.run(
             ['git', 'merge', branch, '--no-edit'],
             cwd=self.project_dir, capture_output=True, text=True, timeout=60,
@@ -530,13 +623,17 @@ class WorkerPool:
     def _execute_claude(
         self, story: Story, plan: Plan, cwd: str,
     ) -> tuple[int, str]:
-        """Run claude -p in the given directory. Returns (exit_code, error)."""
+        """Run claude -p in the given directory. Returns (exit_code, error).
+
+        Uses --output-format stream-json and parses output in a reader thread
+        to write human-readable progress to the log file in real-time.
+        """
         cmd = [
             'claude', '-p', story.prompt,
             '--model', plan.model,
             '--allowedTools', plan.allowed_tools,
             '--max-turns', str(plan.max_turns),
-            '--output-format', 'text',
+            '--output-format', 'stream-json',
             '--dangerously-skip-permissions',
         ]
 
@@ -551,10 +648,19 @@ class WorkerPool:
             proc = subprocess.Popen(
                 cmd, cwd=cwd,
                 stdin=subprocess.DEVNULL,
-                stdout=stdout_log, stderr=stderr_log,
+                stdout=subprocess.PIPE,
+                stderr=stderr_log,
                 text=True, start_new_session=True,
             )
+            reader = threading.Thread(
+                target=_stream_json_to_log,
+                args=(proc.stdout, stdout_log),
+                daemon=True,
+            )
+            reader.start()
             proc.wait(timeout=1800)
+            reader.join(timeout=5)
+
             stderr = Path(stderr_path).read_text()
             return proc.returncode, stderr if proc.returncode != 0 else ''
         except subprocess.TimeoutExpired:

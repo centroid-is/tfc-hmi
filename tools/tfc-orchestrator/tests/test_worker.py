@@ -1,12 +1,14 @@
 """Tests for worker pool — worktree lifecycle, merge, cleanup."""
 import asyncio
+import io
+import json
 import tempfile
 from pathlib import Path
 from unittest.mock import patch, MagicMock, AsyncMock
 
 import pytest
 
-from orchestrator.worker import WorkerPool, WorkerResult, _story_with_prompt
+from orchestrator.worker import WorkerPool, WorkerResult, _story_with_prompt, _stream_json_to_log
 from orchestrator.models import Story, Plan, Phase, RetryConfig
 
 
@@ -83,6 +85,8 @@ class TestWorkerPoolWorktreeLifecycle:
     @patch('orchestrator.worker.subprocess.run')
     def test_merge_conflict_returns_none_with_details(self, mock_run):
         mock_run.side_effect = [
+            MagicMock(returncode=0),  # git add -A (pre-merge auto-commit check)
+            MagicMock(returncode=0),  # git diff --cached --quiet (clean)
             MagicMock(returncode=1, stdout='CONFLICT (content)', stderr=''),  # merge fails
             MagicMock(returncode=0),  # abort succeeds
         ]
@@ -119,6 +123,7 @@ class TestWorkerPoolExecution:
         mock_proc.wait.return_value = None
         mock_proc.returncode = 0
         mock_proc.pid = 12345
+        mock_proc.stdout = iter([])  # Empty stream for reader thread
         mock_popen.return_value = mock_proc
 
         pool = WorkerPool(max_workers=2, project_dir='/tmp/test')
@@ -149,6 +154,7 @@ class TestWorkerPoolConcurrency:
         mock_proc.wait.return_value = None
         mock_proc.returncode = 0
         mock_proc.pid = 12345
+        mock_proc.stdout = iter([])  # Empty stream for reader thread
         mock_popen.return_value = mock_proc
 
         pool = WorkerPool(max_workers=3, project_dir='/tmp/test')
@@ -189,6 +195,8 @@ class TestRetryLoop:
             validation_pass,         # attempt 2 validation passes
             git_ok,                  # git add -A (commit_worktree)
             no_changes,              # git status --porcelain
+            git_ok,                  # pre-merge: git add -A
+            no_changes,              # pre-merge: git diff --cached --quiet (clean)
             git_ok,                  # merge
             git_ok,                  # rev-parse HEAD
             git_ok,                  # cleanup worktree
@@ -198,6 +206,7 @@ class TestRetryLoop:
         mock_proc.wait.return_value = None
         mock_proc.returncode = 0
         mock_proc.pid = 12345
+        mock_proc.stdout = iter([])  # Empty stream for reader thread
         mock_popen.return_value = mock_proc
 
         plan = Plan(
@@ -237,6 +246,7 @@ class TestRetryLoop:
         mock_proc.wait.return_value = None
         mock_proc.returncode = 0
         mock_proc.pid = 12345
+        mock_proc.stdout = iter([])  # Empty stream for reader thread
         mock_popen.return_value = mock_proc
 
         plan = Plan(
@@ -267,6 +277,8 @@ class TestRetryLoop:
             validation_ok,      # validation passes first time
             git_ok,             # git add -A (commit_worktree)
             no_changes,         # git status --porcelain (nothing to commit)
+            git_ok,             # pre-merge: git add -A
+            no_changes,         # pre-merge: git diff --cached --quiet (clean)
             git_ok,             # merge
             git_ok,             # rev-parse
             git_ok,             # cleanup
@@ -276,6 +288,7 @@ class TestRetryLoop:
         mock_proc.wait.return_value = None
         mock_proc.returncode = 0
         mock_proc.pid = 12345
+        mock_proc.stdout = iter([])  # Empty stream for reader thread
         mock_popen.return_value = mock_proc
 
         plan = Plan(
@@ -327,12 +340,14 @@ class TestWorkerPoolCleanupStale:
             (wt_dir / 'story-1').mkdir()
 
             # Sequence: status (dirty), add, commit, rev-list (1 ahead),
-            # merge, rev-parse, cleanup
+            # pre-merge auto-commit, merge, rev-parse, cleanup
             mock_run.side_effect = [
                 MagicMock(returncode=0, stdout='M file.txt\n'),  # status: dirty
                 MagicMock(returncode=0),  # git add -A
                 MagicMock(returncode=0),  # git commit
                 MagicMock(returncode=0, stdout='1\n'),  # rev-list: 1 commit ahead
+                MagicMock(returncode=0),  # pre-merge: git add -A
+                MagicMock(returncode=0),  # pre-merge: git diff --cached --quiet (clean)
                 MagicMock(returncode=0, stdout='merged\n'),  # merge
                 MagicMock(returncode=0, stdout='abc123\n'),  # rev-parse HEAD
                 MagicMock(returncode=0),  # cleanup worktree
@@ -487,3 +502,200 @@ class TestCreateWorktreeVerification:
         assert branch == 'orchestrator/story-1'
         # Snapshot should have committed (3 calls) before branch (call 4)
         assert mock_run.call_count == 5
+
+
+class TestStreamJsonToLog:
+    """Tests for _stream_json_to_log — stream-json parser for live progress."""
+
+    def test_text_output(self):
+        """Text blocks from assistant messages should be written as-is."""
+        events = [
+            json.dumps({
+                "type": "assistant",
+                "message": {"content": [{"type": "text", "text": "Hello world"}]},
+            }),
+        ]
+        pipe = io.StringIO('\n'.join(events) + '\n')
+        log = io.StringIO()
+        _stream_json_to_log(pipe, log)
+        assert 'Hello world\n' == log.getvalue()
+
+    def test_tool_calls(self):
+        """Tool use blocks should be formatted as [ToolName] description."""
+        events = [
+            json.dumps({
+                "type": "assistant",
+                "message": {"content": [{
+                    "type": "tool_use", "name": "Read",
+                    "input": {"file_path": "/src/main.dart"},
+                }]},
+            }),
+            json.dumps({
+                "type": "assistant",
+                "message": {"content": [{
+                    "type": "tool_use", "name": "Bash",
+                    "input": {"command": "dart analyze lib/"},
+                }]},
+            }),
+            json.dumps({
+                "type": "assistant",
+                "message": {"content": [{
+                    "type": "tool_use", "name": "Grep",
+                    "input": {"pattern": "TODO"},
+                }]},
+            }),
+        ]
+        pipe = io.StringIO('\n'.join(events) + '\n')
+        log = io.StringIO()
+        _stream_json_to_log(pipe, log)
+        output = log.getvalue()
+        assert '[Read] /src/main.dart\n' in output
+        assert '[Bash] dart analyze lib/\n' in output
+        assert '[Grep] TODO\n' in output
+
+    def test_result_event(self):
+        """Result events should show subtype, turns, cost, and duration."""
+        events = [
+            json.dumps({
+                "type": "result",
+                "subtype": "success",
+                "cost_usd": 0.42,
+                "duration_ms": 65000,
+                "num_turns": 12,
+                "result": "All done.",
+            }),
+        ]
+        pipe = io.StringIO('\n'.join(events) + '\n')
+        log = io.StringIO()
+        _stream_json_to_log(pipe, log)
+        output = log.getvalue()
+        assert 'success' in output
+        assert '12 turns' in output
+        assert '$0.42' in output
+        assert '65s' in output
+        assert 'All done.' in output
+
+    def test_malformed_line(self):
+        """Non-JSON lines should be written to log as-is."""
+        pipe = io.StringIO('not json at all\n')
+        log = io.StringIO()
+        _stream_json_to_log(pipe, log)
+        assert 'not json at all\n' == log.getvalue()
+
+    def test_empty_lines_skipped(self):
+        """Empty lines should be silently skipped."""
+        pipe = io.StringIO('\n\n\n')
+        log = io.StringIO()
+        _stream_json_to_log(pipe, log)
+        assert '' == log.getvalue()
+
+    def test_edit_and_write_tool_calls(self):
+        """Edit and Write tool calls show file_path."""
+        events = [
+            json.dumps({
+                "type": "assistant",
+                "message": {"content": [{
+                    "type": "tool_use", "name": "Edit",
+                    "input": {"file_path": "/src/widget.dart", "old_string": "a", "new_string": "b"},
+                }]},
+            }),
+            json.dumps({
+                "type": "assistant",
+                "message": {"content": [{
+                    "type": "tool_use", "name": "Write",
+                    "input": {"file_path": "/src/new.dart", "content": "code"},
+                }]},
+            }),
+        ]
+        pipe = io.StringIO('\n'.join(events) + '\n')
+        log = io.StringIO()
+        _stream_json_to_log(pipe, log)
+        output = log.getvalue()
+        assert '[Edit] /src/widget.dart\n' in output
+        assert '[Write] /src/new.dart\n' in output
+
+    def test_glob_tool_call(self):
+        """Glob tool calls show the pattern."""
+        events = [
+            json.dumps({
+                "type": "assistant",
+                "message": {"content": [{
+                    "type": "tool_use", "name": "Glob",
+                    "input": {"pattern": "**/*.dart"},
+                }]},
+            }),
+        ]
+        pipe = io.StringIO('\n'.join(events) + '\n')
+        log = io.StringIO()
+        _stream_json_to_log(pipe, log)
+        assert '[Glob] **/*.dart\n' in log.getvalue()
+
+    def test_unknown_tool_shows_truncated_input(self):
+        """Unknown tool names should show truncated input dict."""
+        events = [
+            json.dumps({
+                "type": "assistant",
+                "message": {"content": [{
+                    "type": "tool_use", "name": "CustomTool",
+                    "input": {"key": "value"},
+                }]},
+            }),
+        ]
+        pipe = io.StringIO('\n'.join(events) + '\n')
+        log = io.StringIO()
+        _stream_json_to_log(pipe, log)
+        assert '[CustomTool]' in log.getvalue()
+
+    def test_unknown_event_type_logged(self):
+        """Unrecognized event types should be logged as [unknown: type]."""
+        events = [
+            json.dumps({"type": "system", "subtype": "init", "session_id": "abc"}),
+        ]
+        pipe = io.StringIO('\n'.join(events) + '\n')
+        log = io.StringIO()
+        _stream_json_to_log(pipe, log)
+        assert '[system]' in log.getvalue()
+
+    def test_multiple_content_blocks(self):
+        """Assistant message with multiple content blocks should handle all."""
+        events = [
+            json.dumps({
+                "type": "assistant",
+                "message": {"content": [
+                    {"type": "text", "text": "Reading file..."},
+                    {"type": "tool_use", "name": "Read", "input": {"file_path": "/a.txt"}},
+                ]},
+            }),
+        ]
+        pipe = io.StringIO('\n'.join(events) + '\n')
+        log = io.StringIO()
+        _stream_json_to_log(pipe, log)
+        output = log.getvalue()
+        assert 'Reading file...\n' in output
+        assert '[Read] /a.txt\n' in output
+
+    def test_text_with_trailing_newline_not_doubled(self):
+        """Text that already ends with newline shouldn't get double newline."""
+        events = [
+            json.dumps({
+                "type": "assistant",
+                "message": {"content": [{"type": "text", "text": "line\n"}]},
+            }),
+        ]
+        pipe = io.StringIO('\n'.join(events) + '\n')
+        log = io.StringIO()
+        _stream_json_to_log(pipe, log)
+        assert log.getvalue() == 'line\n'
+
+    def test_empty_text_skipped(self):
+        """Empty/whitespace-only text blocks should be skipped."""
+        events = [
+            json.dumps({
+                "type": "assistant",
+                "message": {"content": [{"type": "text", "text": "   "}]},
+            }),
+        ]
+        pipe = io.StringIO('\n'.join(events) + '\n')
+        log = io.StringIO()
+        _stream_json_to_log(pipe, log)
+        assert log.getvalue() == ''

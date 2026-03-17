@@ -476,7 +476,12 @@ def main():
             show_status(args.plan)
         elif args.command == 'dashboard':
             from .dashboard import run_dashboard
-            run_dashboard(args.plan, host=args.host, port=args.port)
+            plan_arg = Path(args.plan)
+            if plan_arg.is_file():
+                plans_dir = str(plan_arg.parent)
+            else:
+                plans_dir = str(plan_arg)
+            run_dashboard(plans_dir, host=args.host, port=args.port)
         elif args.command == 'reset':
             plan = Plan.from_yaml(args.plan)
             state_path = Path(plan.project_dir) / '.orchestrator' / f'{plan.name}.state.json'

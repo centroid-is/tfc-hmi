@@ -1,18 +1,21 @@
 <script>
   import { onDestroy } from 'svelte';
-  import { selectedStory, stories } from './stores.js';
+  import { get } from 'svelte/store';
+  import { selectedStory, stories, activePlan } from './stores.js';
 
   let activeTab = 'stdout';
   let logContent = '';
   let logEl;
   let eventSource = null;
+  let autoScroll = true;
 
   $: storyNode = $stories.find(n => n.id === $selectedStory);
   $: storyId = $selectedStory;
 
   // React to story or tab changes
   $: if (storyId !== null) {
-    loadLogs(storyId, activeTab);
+    const plan = get(activePlan);
+    if (plan) loadLogs(storyId, activeTab);
   } else {
     cleanup();
   }
@@ -29,24 +32,31 @@
     cleanup();
     if (id === null) return;
 
+    const plan = get(activePlan);
+    if (!plan) return;
+
     try {
-      const res = await fetch(`/api/logs/${id}/${tab}`);
-      logContent = res.ok ? await res.text() : '';
+      const res = await fetch(`/api/${plan}/logs/${id}/${tab}`);
+      if (res.ok) {
+        logContent = await res.text();
+      } else {
+        logContent = '(no logs yet — waiting for story to start...)';
+      }
     } catch {
       logContent = '(failed to load logs)';
     }
 
     // Connect SSE for live tail
-    eventSource = new EventSource(`/api/logs/${id}/${tab}/tail`);
+    eventSource = new EventSource(`/api/${plan}/logs/${id}/${tab}/tail`);
     eventSource.onmessage = (event) => {
       logContent += event.data + '\n';
-      scrollToBottom();
+      if (autoScroll) scrollToBottom();
     };
     eventSource.onerror = () => {
       // SSE auto-reconnects
     };
 
-    scrollToBottom();
+    if (autoScroll) scrollToBottom();
   }
 
   function scrollToBottom() {
@@ -76,6 +86,10 @@
         <button class="tab" class:active={activeTab === 'stderr'}
                 on:click={() => switchTab('stderr')}>stderr</button>
       </div>
+      <label class="autoscroll">
+        <input type="checkbox" bind:checked={autoScroll} />
+        Auto-scroll
+      </label>
       <button class="close-btn" on:click={close}>&times;</button>
     </div>
     <pre class="log-content" bind:this={logEl}>{logContent}</pre>
@@ -127,6 +141,19 @@
     background: #2196f3;
     border-color: #2196f3;
     color: #fff;
+  }
+  .autoscroll {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    font-size: 0.75rem;
+    color: #888;
+    cursor: pointer;
+    user-select: none;
+  }
+  .autoscroll input {
+    margin: 0;
+    cursor: pointer;
   }
   .close-btn {
     background: transparent;
