@@ -1,15 +1,29 @@
 <script>
   import { onMount, onDestroy } from 'svelte';
-  import { connectSSE, disconnectSSE } from './lib/sse.js';
-  import { dashboardData } from './lib/stores.js';
+  import { fetchPlans, connectPlan, disconnect } from './lib/sse.js';
+  import { activePlan, dashboardData } from './lib/stores.js';
   import Header from './lib/Header.svelte';
   import WorkerSlots from './lib/WorkerSlots.svelte';
   import DagGraph from './lib/DagGraph.svelte';
   import StoryTable from './lib/StoryTable.svelte';
   import LogViewer from './lib/LogViewer.svelte';
 
-  onMount(() => connectSSE());
-  onDestroy(() => disconnectSSE());
+  let pollInterval;
+  let unsub;
+
+  onMount(async () => {
+    await fetchPlans();
+    unsub = activePlan.subscribe(plan => {
+      if (plan) connectPlan(plan);
+    });
+    pollInterval = setInterval(fetchPlans, 5000);
+  });
+
+  onDestroy(() => {
+    disconnect();
+    if (pollInterval) clearInterval(pollInterval);
+    if (unsub) unsub();
+  });
 </script>
 
 <main>

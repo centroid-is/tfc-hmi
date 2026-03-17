@@ -1,19 +1,18 @@
 import { writable, derived } from 'svelte/store';
 
-export const dashboardData = writable(null);  // full /api/state response
-export const selectedStory = writable(null);   // story ID for log viewer
+// All plans summary (from /api/plans)
+export const planList = writable([]);
 
-export const stories = derived(dashboardData, $d => {
-  if (!$d) return [];
-  return $d.dag?.nodes || [];
-});
+// Currently selected plan name
+export const activePlan = writable(null);
 
-export const statuses = derived(dashboardData, $d => {
-  if (!$d) return {};
-  return $d.statuses || {};
-});
+// Full state for the active plan
+export const dashboardData = writable(null);
 
-export const planInfo = derived(dashboardData, $d => {
-  if (!$d) return null;
-  return $d.plan || null;
-});
+// Selected story ID for log viewer
+export const selectedStory = writable(null);
+
+// Derived (unchanged — still derive from dashboardData)
+export const stories = derived(dashboardData, $d => $d?.dag?.nodes || []);
+export const statuses = derived(dashboardData, $d => $d?.statuses || {});
+export const planInfo = derived(dashboardData, $d => $d?.plan || null);
