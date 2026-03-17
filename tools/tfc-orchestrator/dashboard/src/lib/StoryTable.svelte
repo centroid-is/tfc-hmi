@@ -8,6 +8,7 @@
     running: '#2196f3',
     skipped: '#ff9800',
     pending: '#555',
+    interrupted: '#9e9e9e',
   };
 
   $: results = $dashboardData?.state?.results || [];
@@ -23,21 +24,28 @@
   const interval = setInterval(() => { now = Date.now(); }, 1000);
   onDestroy(() => clearInterval(interval));
 
-  function formatDuration(result, status) {
-    if (!result) {
-      if (status === 'running') return '...';
-      return '--';
+  function formatDuration(result, status, _now) {
+    if (!result) return status === 'running' ? '...' : '--';
+
+    // Completed: use duration_seconds
+    if (result.duration_seconds && result.duration_seconds > 0) {
+      const secs = Math.floor(result.duration_seconds);
+      const m = Math.floor(secs / 60);
+      const s = secs % 60;
+      return m > 0 ? `${m}m ${s}s` : `${s}s`;
     }
-    const start = result.started_at;
-    const end = result.finished_at;
-    if (!start) return '--';
-    const startMs = new Date(start).getTime();
-    const endMs = end ? new Date(end).getTime() : now;
-    const secs = Math.floor((endMs - startMs) / 1000);
-    if (secs < 0) return '--';
-    const m = Math.floor(secs / 60);
-    const s = secs % 60;
-    return m > 0 ? `${m}m ${s}s` : `${s}s`;
+
+    // Running: compute from started_at
+    if (result.started_at && status === 'running') {
+      const startMs = new Date(result.started_at).getTime();
+      const secs = Math.floor((_now - startMs) / 1000);
+      if (secs < 0) return '...';
+      const m = Math.floor(secs / 60);
+      const s = secs % 60;
+      return m > 0 ? `${m}m ${s}s` : `${s}s`;
+    }
+
+    return '--';
   }
 
   function handleRowClick(id) {
@@ -71,10 +79,18 @@
               {status}
             </span>
           </td>
-          <td class="mono">{formatDuration(result, status)}</td>
-          <td class="mono">{result?.retries ?? '--'}</td>
-          <td class="mono">{result?.review ?? '--'}</td>
-          <td class="mono">{result?.verify ?? '--'}</td>
+          <td class="mono">{formatDuration(result, status, now)}</td>
+          <td class="mono">{result?.retry_count ?? '--'}</td>
+          <td class="mono">{result?.review_iterations ?? '--'}</td>
+          <td class="mono">
+            {#if result?.verification_passed === true}
+              <span style="color: #4caf50">✓</span>
+            {:else if result?.verification_passed === false}
+              <span style="color: #f44336">✗</span>
+            {:else}
+              --
+            {/if}
+          </td>
         </tr>
       {/each}
     </tbody>

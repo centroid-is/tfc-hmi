@@ -1,80 +1,68 @@
 <script>
-  import { dashboardData, planInfo, statuses, stories } from './stores.js';
+  import { planInfo, stories, statuses } from './stores.js';
 
-  $: maxParallel = $planInfo?.max_parallel || 4;
-
-  $: runningStories = (() => {
-    const running = [];
-    const s = $statuses;
-    const nodes = $stories;
-    for (const [id, status] of Object.entries(s)) {
-      if (status === 'running') {
-        const node = nodes.find(n => String(n.id) === String(id));
-        running.push({ id, name: node?.name || `Story ${id}` });
-      }
-    }
-    return running;
-  })();
-
-  $: slots = (() => {
-    const result = [];
-    for (let i = 0; i < maxParallel; i++) {
-      result.push(runningStories[i] || null);
-    }
-    return result;
-  })();
+  $: maxSlots = $planInfo?.max_parallel || 1;
+  $: runningStories = ($stories || []).filter(n => ($statuses || {})[n.id] === 'running');
+  $: slots = Array.from({ length: maxSlots }, (_, i) => runningStories[i] || null);
 </script>
 
-<div class="workers">
-  {#each slots as slot, i}
-    <div class="slot" class:active={slot}>
-      {#if slot}
-        <span class="slot-id">#{slot.id}</span>
-        <span class="slot-name">{slot.name}</span>
-      {:else}
-        <span class="slot-idle">idle</span>
-      {/if}
-    </div>
-  {/each}
+<div class="worker-slots">
+  <span class="slots-label">Workers</span>
+  <div class="slots-row">
+    {#each slots as story, i}
+      <div class="slot" class:active={story !== null}>
+        {#if story}
+          <span class="slot-id">#{story.id}</span>
+          <span class="slot-name">{story.name}</span>
+        {:else}
+          <span class="slot-idle">idle</span>
+        {/if}
+      </div>
+    {/each}
+  </div>
 </div>
 
 <style>
-  .workers {
+  .worker-slots {
     display: flex;
-    gap: 0.5rem;
+    flex-direction: row;
+    align-items: center;
+    gap: 0.75rem;
     margin-bottom: 1rem;
-    flex-wrap: wrap;
+  }
+  .slots-label {
+    color: #888;
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .slots-row {
+    display: flex;
+    flex-direction: row;
+    gap: 0.5rem;
   }
   .slot {
-    flex: 1;
-    min-width: 140px;
-    padding: 0.5rem 0.75rem;
+    background: #16213e;
     border-radius: 6px;
-    background: #2a2a3e;
+    padding: 0.4rem 0.8rem;
+    min-width: 120px;
     border: 1px solid #333;
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    font-size: 0.85rem;
-    overflow: hidden;
+    font-size: 0.8rem;
   }
   .slot.active {
-    background: #1a3a5c;
     border-color: #2196f3;
+    background: #1a2744;
   }
   .slot-id {
     font-weight: 700;
     color: #2196f3;
-    flex-shrink: 0;
+    margin-right: 0.4rem;
   }
   .slot-name {
     color: #e0e0e0;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
   }
   .slot-idle {
-    color: #666;
+    color: #555;
     font-style: italic;
   }
 </style>
