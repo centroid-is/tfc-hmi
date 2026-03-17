@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 
 import '../chat/ai_context_action.dart';
 import '../chat/chat_overlay.dart' show ChatContextType;
-import '../page_creator/assets/common.dart';
 import '../page_creator/page.dart';
 import 'asset_context_menu.dart' show extractAssetIdentifier;
 

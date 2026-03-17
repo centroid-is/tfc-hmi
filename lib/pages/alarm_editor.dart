@@ -12,7 +12,7 @@ class AlarmEditorPage extends ConsumerStatefulWidget {
   /// Optional proposal JSON passed via Beamer route data.
   final String? proposalData;
 
-  const AlarmEditorPage({Key? key, this.proposalData}) : super(key: key);
+  const AlarmEditorPage({super.key, this.proposalData});
 
   @override
   ConsumerState<AlarmEditorPage> createState() => _AlarmEditorPageState();
@@ -210,10 +210,10 @@ class _AlarmEditorPageState extends ConsumerState<AlarmEditorPage> {
                           _create = false;
                         });
                       },
-                      onCreate: (config_template) {
+                      onCreate: (configTemplate) {
                         setState(() {
                           _create = true;
-                          _createTemplate = config_template;
+                          _createTemplate = configTemplate;
                           _edit = null;
                           _show = null;
                         });

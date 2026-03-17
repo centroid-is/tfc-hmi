@@ -62,7 +62,7 @@ class PlcCodePicker extends ConsumerWidget {
         }
 
         return DropdownButtonFormField<String>(
-          value: selectedAssetKey,
+          initialValue: selectedAssetKey,
           decoration: const InputDecoration(
             labelText: 'PLC Code',
           ),

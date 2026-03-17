@@ -4,7 +4,6 @@ import 'dart:math' as math;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:logger/logger.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:tfc/core/preferences.dart';
 import 'package:tfc/page_creator/page.dart';
@@ -19,17 +18,6 @@ import '../widgets/base_scaffold.dart';
 import '../widgets/zoomable_canvas.dart';
 
 part 'page_view.g.dart';
-
-final _log = Logger(
-  printer: PrettyPrinter(
-    methodCount: 0,
-    errorMethodCount: 8,
-    lineLength: 120,
-    colors: true,
-    printEmojis: true,
-    dateTimeFormat: DateTimeFormat.onlyTimeAndSinceStart,
-  ),
-);
 
 @JsonSerializable()
 class AssetStackConfig {
@@ -97,7 +85,7 @@ class AssetStack extends ConsumerStatefulWidget {
   final Set<Asset> proposedAssets;
 
   const AssetStack({
-    Key? key,
+    super.key,
     required this.assets,
     required this.constraints,
     this.onTap,
@@ -107,7 +95,7 @@ class AssetStack extends ConsumerStatefulWidget {
     required this.selectedAssets,
     required this.mirroringDisabled,
     this.proposedAssets = const {},
-  }) : super(key: key);
+  });
 
   @override
   ConsumerState<AssetStack> createState() => _AssetStackState();
@@ -346,7 +334,7 @@ class _AssetStackState extends ConsumerState<AssetStack> {
 
 class AssetView extends ConsumerWidget {
   final String pageName;
-  const AssetView({Key? key, required this.pageName}) : super(key: key);
+  const AssetView({super.key, required this.pageName});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {

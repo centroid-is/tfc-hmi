@@ -284,7 +284,7 @@ class _GateStatusConfigEditorState extends State<_GateStatusConfigEditor> {
 
 class GateStatus extends ConsumerWidget {
   final GateStatusConfig config;
-  const GateStatus({required this.config});
+  const GateStatus({super.key, required this.config});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {

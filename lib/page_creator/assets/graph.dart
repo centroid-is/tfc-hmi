@@ -145,7 +145,7 @@ class GraphAssetConfig extends BaseAsset {
 
 class GraphContentConfig extends StatefulWidget {
   final GraphAssetConfig config;
-  const GraphContentConfig({required this.config});
+  const GraphContentConfig({super.key, required this.config});
 
   @override
   State<GraphContentConfig> createState() => GraphContentConfigState();

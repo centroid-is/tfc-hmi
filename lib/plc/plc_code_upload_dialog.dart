@@ -241,7 +241,7 @@ class _PlcCodeUploadDialogState extends State<PlcCodeUploadDialog> {
               const SizedBox(height: 4),
               DropdownButtonFormField<PlcVendor>(
                 key: const ValueKey('plc-vendor-dropdown'),
-                value: _selectedVendor,
+                initialValue: _selectedVendor,
                 isExpanded: true,
                 decoration: const InputDecoration(
                   border: OutlineInputBorder(),
@@ -288,7 +288,7 @@ class _PlcCodeUploadDialogState extends State<PlcCodeUploadDialog> {
               const SizedBox(height: 4),
               DropdownButtonFormField<String>(
                 key: const ValueKey('plc-server-alias-dropdown'),
-                value: _selectedServerAlias,
+                initialValue: _selectedServerAlias,
                 isExpanded: true,
                 decoration: const InputDecoration(
                   border: OutlineInputBorder(),

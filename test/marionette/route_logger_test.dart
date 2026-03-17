@@ -104,7 +104,7 @@ void main() {
                   child: Text('About'),
                 ),
           },
-        ),
+        ).call,
       );
 
       final logger = MarionetteRouteLogger(delegate);
@@ -145,7 +145,7 @@ void main() {
                   child: Text('Search: ${state.queryParameters['q'] ?? ''}'),
                 ),
           },
-        ),
+        ).call,
       );
 
       final logger = MarionetteRouteLogger(delegate);

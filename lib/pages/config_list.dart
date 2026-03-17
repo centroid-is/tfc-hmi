@@ -9,9 +9,9 @@ class ConfigListPage extends StatefulWidget {
   final DBusClient dbusClient;
 
   const ConfigListPage({
-    Key? key,
+    super.key,
     required this.dbusClient,
-  }) : super(key: key);
+  });
 
   @override
   State<ConfigListPage> createState() => _ConfigListPageState();

@@ -2,7 +2,6 @@ import 'package:drift/drift.dart' hide isNull;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tfc_dart/core/database_drift.dart';
 
-import 'package:tfc/providers/proposal_watcher.dart';
 import 'package:tfc/providers/proposal_state.dart';
 
 void main() {

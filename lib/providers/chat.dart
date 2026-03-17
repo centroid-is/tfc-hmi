@@ -10,16 +10,13 @@ import 'package:tfc_mcp_server/tfc_mcp_server.dart'
         DriftTechDocIndex,
         EnvOperatorIdentity,
         McpConfig,
-        McpDatabase,
-        McpToolToggles,
-        readMcpConfigFromPreferences;
+        McpDatabase;
 
 import 'package:tfc_dart/core/preferences.dart' show Preferences;
 
 import 'database.dart' show databaseProvider;
 import 'preferences.dart' show preferencesProvider;
 
-import '../chat/elicitation_dialog.dart';
 import '../chat/tool_filter.dart';
 import '../mcp/mcp_lifecycle_state.dart';
 import '../chat/chat_overlay.dart';
@@ -37,7 +34,6 @@ import 'llm.dart';
 import 'mcp_bridge.dart';
 import 'plc.dart' show plcCodeIndexProvider;
 import 'proposal_state.dart';
-import 'proposal_watcher.dart';
 import 'state_man.dart';
 
 /// Preference key for persisted chat history (legacy, migrated to conversations).

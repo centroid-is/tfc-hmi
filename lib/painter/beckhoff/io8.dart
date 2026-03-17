@@ -15,7 +15,7 @@ class IO8Widget extends AnimatedWidget {
   final List<String> ioLabels;
   final List<Color> ioLabelColors;
   final String name;
-  IO8Widget({
+  const IO8Widget({super.key, 
     required this.ledStates,
     this.height = 300,
     this.disconnected = false,
@@ -181,7 +181,6 @@ class IO8Painter extends CustomPainter {
     double ledBlockBottom = ledBlockY + ledBlockH;
 
     // Reserve space for bottom labels and padding
-    double bottomLabelH = labelH * 0.85;
     double bottomPad = pad * 0.7;
     double el1008H = labelH * 0.5;
     double beckhoffH = labelH * 0.34;

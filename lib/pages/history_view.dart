@@ -160,7 +160,6 @@ Icon _validityIcon(BuildContext context, PeriodValidity v) {
       return Icon(Icons.error_outline,
           size: 18, color: Theme.of(context).colorScheme.error);
     case PeriodValidity.unknown:
-    default:
       return Icon(Icons.help_outline,
           size: 18, color: Theme.of(context).colorScheme.outline);
   }

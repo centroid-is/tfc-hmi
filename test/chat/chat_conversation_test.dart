@@ -6,7 +6,6 @@ import 'package:tfc_dart/core/preferences.dart';
 import 'package:tfc/llm/conversation_models.dart';
 import 'package:tfc/llm/llm_models.dart';
 import 'package:tfc/llm/llm_provider.dart';
-import 'package:tfc/mcp/mcp_bridge_notifier.dart';
 import 'package:tfc/providers/chat.dart';
 import 'package:tfc/providers/mcp_bridge.dart';
 import 'package:tfc/providers/preferences.dart';
@@ -15,9 +14,9 @@ import '../helpers/test_helpers.dart';
 /// Fake LLM provider that returns a canned text response (no tool calls).
 class _FakeLlmProvider implements LlmProvider {
   int completeCalls = 0;
-  String responseText;
+  String responseText = '';
 
-  _FakeLlmProvider({this.responseText = 'AI reply'});
+  _FakeLlmProvider();
 
   @override
   LlmProviderType get providerType => LlmProviderType.claude;

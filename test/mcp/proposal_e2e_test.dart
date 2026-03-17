@@ -5,16 +5,14 @@
 /// Uses AppDatabase (which has the mcp_proposal table) as both the
 /// MCP server's database and the Flutter app's database — just like
 /// in-process mode.
+library;
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:drift/drift.dart' hide isNull;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mcp_dart/mcp_dart.dart';
 import 'package:tfc_dart/core/database_drift.dart';
 
-import 'package:tfc_mcp_server/src/identity/env_operator_identity.dart';
-import 'package:tfc_mcp_server/src/safety/risk_gate.dart';
 import 'package:tfc_mcp_server/tfc_mcp_server.dart';
 
 import 'package:tfc/providers/proposal_watcher.dart';

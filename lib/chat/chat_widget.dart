@@ -1,5 +1,4 @@
 import 'dart:io' as io;
-import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -167,7 +166,7 @@ class _ChatWidgetState extends ConsumerState<ChatWidget> {
           // Row 1: LLM Provider dropdown -- full width
           DropdownButtonFormField<LlmProviderType>(
             key: const ValueKey<String>('chat-provider-dropdown'),
-            value: selectedProvider.valueOrNull,
+            initialValue: selectedProvider.valueOrNull,
             decoration: const InputDecoration(
               isDense: true,
               contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),

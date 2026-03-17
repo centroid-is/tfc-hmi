@@ -55,6 +55,7 @@ class DrawnBoxConfig extends BaseAsset {
 
   factory DrawnBoxConfig.fromJson(Map<String, dynamic> json) =>
       _$DrawnBoxConfigFromJson(json);
+  @override
   Map<String, dynamic> toJson() => _$DrawnBoxConfigToJson(this);
 
   @override

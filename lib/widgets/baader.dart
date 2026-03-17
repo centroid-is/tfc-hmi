@@ -35,9 +35,7 @@ class Baader221CustomPainter extends CustomPainter {
     canvas.rotate(math.pi);
 
     // apply flip by making x-scale negative
-    final flipHorizontally = true;
-    final sx = (flipHorizontally ? -scale : scale);
-    canvas.scale(sx, scale);
+    canvas.scale(-scale, scale);
 
     // move path center to origin (opposite direction because we already moved to canvas center)
     canvas.translate(-cx, -cy);

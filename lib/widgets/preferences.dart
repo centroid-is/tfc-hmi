@@ -593,7 +593,7 @@ class _DatabaseConfigEditorState extends ConsumerState<_DatabaseConfigEditor> {
 }
 
 class PreferencesKeysWidget extends ConsumerStatefulWidget {
-  const PreferencesKeysWidget({Key? key}) : super(key: key);
+  const PreferencesKeysWidget({super.key});
 
   @override
   ConsumerState<PreferencesKeysWidget> createState() =>
@@ -790,7 +790,7 @@ class _PreferenceKeyTile extends StatefulWidget {
 class _PreferenceKeyTileState extends State<_PreferenceKeyTile> {
   late TextEditingController _controller;
   final _expansionController =
-      ExpansionTileController(); // todo deprecated since 3.31
+      ExpansibleController(); // todo deprecated since 3.31
   bool _isExpanded = false;
 
   @override

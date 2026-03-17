@@ -2,7 +2,6 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:tfc_mcp_server/tfc_mcp_server.dart' show ParsedSection;
 
 import '../../packages/tfc_mcp_server/test/helpers/mock_tech_doc_index.dart';
 

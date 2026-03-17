@@ -88,6 +88,7 @@ class StartStopPillButtonConfig extends BaseAsset {
 
   factory StartStopPillButtonConfig.fromJson(Map<String, dynamic> json) =>
       _$StartStopPillButtonConfigFromJson(json);
+  @override
   Map<String, dynamic> toJson() => _$StartStopPillButtonConfigToJson(this);
 }
 

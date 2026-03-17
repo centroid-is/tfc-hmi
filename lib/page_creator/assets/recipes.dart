@@ -228,7 +228,7 @@ class _RecipesState extends ConsumerState<Recipes> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               // Lines
-              Container(
+              SizedBox(
                 width: 100,
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -252,7 +252,7 @@ class _RecipesState extends ConsumerState<Recipes> {
               ),
               VerticalDivider(),
               // Recipes list
-              Container(
+              SizedBox(
                 width: 200,
                 child: LayoutBuilder(
                   builder: (context, constraints) {

@@ -318,7 +318,7 @@ class _AlarmFormState extends ConsumerState<AlarmForm> {
                     children: [
                       const SizedBox(height: 16),
                       DropdownButtonFormField<AlarmLevel>(
-                        value: rule.level,
+                        initialValue: rule.level,
                         decoration: InputDecoration(
                           labelText: 'Alarm Level',
                           border: const OutlineInputBorder(),
@@ -521,7 +521,7 @@ class _ListActiveAlarmsState extends ConsumerState<ListActiveAlarms> {
                   alarmMan,
                   history
                       .where((h) => h != null)
-                      .map((h) => (h!, h!.deactivated))
+                      .map((h) => (h!, h.deactivated))
                       .toList()
                     ..sort((a, b) => b.$2!.compareTo(a.$2!))
                 ))

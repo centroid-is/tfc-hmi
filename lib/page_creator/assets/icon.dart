@@ -96,6 +96,7 @@ class IconConfig extends BaseAsset {
 
   factory IconConfig.fromJson(Map<String, dynamic> json) =>
       _$IconConfigFromJson(json);
+  @override
   Map<String, dynamic> toJson() => _$IconConfigToJson(this);
 }
 
@@ -423,7 +424,7 @@ class _ConfigContentState extends State<_ConfigContent> {
               ),
             ),
           );
-        }).toList(),
+        }),
 
         const SizedBox(height: 16),
 

@@ -60,7 +60,6 @@ class LoginCredentials {
 
   Future<DBusClient> connect(BuildContext context) async {
     logger.d('Connecting to: $this');
-    BuildContext? dialogContext;
     try {
       final result = await (type == ConnectionType.system
               ? Future.value(DBusClient.system())

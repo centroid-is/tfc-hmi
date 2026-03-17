@@ -713,7 +713,7 @@ Future<String> buildDebugAssetMessageWithTechDoc(
 
   final plcBlocks = await plcBlocksFuture;
   final plcSection = hasPlcContext
-      ? buildPlcContextSection(plcContext!)
+      ? buildPlcContextSection(plcContext)
       : _buildPlcCodeSection(plcBlocks);
 
   final drawingResults = await drawingResultsFuture;
@@ -746,7 +746,7 @@ Future<String> buildDebugAssetMessageWithTechDoc(
     techBuf.writeln('');
     for (final section in sections) {
       final indent = '  ' * (section.level - 1);
-      techBuf.writeln('${indent}## ${section.title} (pp. ${section.pageStart}-${section.pageEnd})');
+      techBuf.writeln('$indent## ${section.title} (pp. ${section.pageStart}-${section.pageEnd})');
       if (section.content.isNotEmpty) {
         // Indent content to match section level for readability.
         final contentLines = section.content.split('\n');

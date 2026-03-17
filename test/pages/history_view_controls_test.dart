@@ -167,13 +167,6 @@ Widget _buildFixedControls({required double width}) {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Collect RenderFlex overflow errors during a test.
-List<FlutterErrorDetails> _collectOverflowErrors(
-    void Function() testBody) {
-  // Not used directly; we use a tearUp/tearDown pattern instead.
-  throw UnimplementedError();
-}
-
 void main() {
   group('HistoryViewPage header controls — overflow regression', () {
     final List<FlutterErrorDetails> overflowErrors = [];

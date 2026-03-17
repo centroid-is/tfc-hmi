@@ -197,8 +197,8 @@ class OrgFreedesktopDBusPeer extends DBusRemoteObject {
   late final Stream<OrgFreedesktopDBusPeerPrepareForSleep> prepareForSleep;
 
   OrgFreedesktopDBusPeer(
-      DBusClient client, String destination, DBusObjectPath path)
-      : super(client, name: destination, path: path) {
+      super.client, String destination, DBusObjectPath path)
+      : super(name: destination, path: path) {
     customPropertiesChanged = DBusRemoteObjectSignalStream(
             object: this,
             interface: 'org.freedesktop.DBus.Properties',
@@ -324,11 +324,11 @@ class OrgFreedesktopDBusPeer extends DBusRemoteObject {
   }
 
   /// Invokes org.freedesktop.DBus.Properties.Get()
-  Future<DBusValue> callGet(String interface_name, String property_name,
+  Future<DBusValue> callGet(String interfaceName, String propertyName,
       {bool noAutoStart = false,
       bool allowInteractiveAuthorization = false}) async {
     var result = await callMethod('org.freedesktop.DBus.Properties', 'Get',
-        [DBusString(interface_name), DBusString(property_name)],
+        [DBusString(interfaceName), DBusString(propertyName)],
         replySignature: DBusSignature('v'),
         noAutoStart: noAutoStart,
         allowInteractiveAuthorization: allowInteractiveAuthorization);
@@ -336,11 +336,11 @@ class OrgFreedesktopDBusPeer extends DBusRemoteObject {
   }
 
   /// Invokes org.freedesktop.DBus.Properties.GetAll()
-  Future<Map<String, DBusValue>> callGetAll(String interface_name,
+  Future<Map<String, DBusValue>> callGetAll(String interfaceName,
       {bool noAutoStart = false,
       bool allowInteractiveAuthorization = false}) async {
     var result = await callMethod('org.freedesktop.DBus.Properties', 'GetAll',
-        [DBusString(interface_name)],
+        [DBusString(interfaceName)],
         replySignature: DBusSignature('a{sv}'),
         noAutoStart: noAutoStart,
         allowInteractiveAuthorization: allowInteractiveAuthorization);
@@ -349,15 +349,15 @@ class OrgFreedesktopDBusPeer extends DBusRemoteObject {
 
   /// Invokes org.freedesktop.DBus.Properties.Set()
   Future<void> callSet(
-      String interface_name, String property_name, DBusValue value,
+      String interfaceName, String propertyName, DBusValue value,
       {bool noAutoStart = false,
       bool allowInteractiveAuthorization = false}) async {
     await callMethod(
         'org.freedesktop.DBus.Properties',
         'Set',
         [
-          DBusString(interface_name),
-          DBusString(property_name),
+          DBusString(interfaceName),
+          DBusString(propertyName),
           DBusVariant(value)
         ],
         replySignature: DBusSignature(''),
@@ -781,11 +781,11 @@ class OrgFreedesktopDBusPeer extends DBusRemoteObject {
   }
 
   /// Invokes org.freedesktop.login1.Manager.GetSession()
-  Future<DBusObjectPath> callGetSession(String session_id,
+  Future<DBusObjectPath> callGetSession(String sessionId,
       {bool noAutoStart = false,
       bool allowInteractiveAuthorization = false}) async {
     var result = await callMethod('org.freedesktop.login1.Manager',
-        'GetSession', [DBusString(session_id)],
+        'GetSession', [DBusString(sessionId)],
         replySignature: DBusSignature('o'),
         noAutoStart: noAutoStart,
         allowInteractiveAuthorization: allowInteractiveAuthorization);
@@ -829,11 +829,11 @@ class OrgFreedesktopDBusPeer extends DBusRemoteObject {
   }
 
   /// Invokes org.freedesktop.login1.Manager.GetSeat()
-  Future<DBusObjectPath> callGetSeat(String seat_id,
+  Future<DBusObjectPath> callGetSeat(String seatId,
       {bool noAutoStart = false,
       bool allowInteractiveAuthorization = false}) async {
     var result = await callMethod(
-        'org.freedesktop.login1.Manager', 'GetSeat', [DBusString(seat_id)],
+        'org.freedesktop.login1.Manager', 'GetSeat', [DBusString(seatId)],
         replySignature: DBusSignature('o'),
         noAutoStart: noAutoStart,
         allowInteractiveAuthorization: allowInteractiveAuthorization);
@@ -923,13 +923,13 @@ class OrgFreedesktopDBusPeer extends DBusRemoteObject {
       String type,
       String class_,
       String desktop,
-      String seat_id,
+      String seatId,
       int vtnr,
       String tty,
       String display,
       bool remote,
-      String remote_user,
-      String remote_host,
+      String remoteUser,
+      String remoteHost,
       List<List<DBusValue>> properties,
       {bool noAutoStart = false,
       bool allowInteractiveAuthorization = false}) async {
@@ -943,13 +943,13 @@ class OrgFreedesktopDBusPeer extends DBusRemoteObject {
           DBusString(type),
           DBusString(class_),
           DBusString(desktop),
-          DBusString(seat_id),
+          DBusString(seatId),
           DBusUint32(vtnr),
           DBusString(tty),
           DBusString(display),
           DBusBoolean(remote),
-          DBusString(remote_user),
-          DBusString(remote_host),
+          DBusString(remoteUser),
+          DBusString(remoteHost),
           DBusArray(DBusSignature('(sv)'),
               properties.map((child) => DBusStruct(child)))
         ],
@@ -967,13 +967,13 @@ class OrgFreedesktopDBusPeer extends DBusRemoteObject {
       String type,
       String class_,
       String desktop,
-      String seat_id,
+      String seatId,
       int vtnr,
       String tty,
       String display,
       bool remote,
-      String remote_user,
-      String remote_host,
+      String remoteUser,
+      String remoteHost,
       int flags,
       List<List<DBusValue>> properties,
       {bool noAutoStart = false,
@@ -988,13 +988,13 @@ class OrgFreedesktopDBusPeer extends DBusRemoteObject {
           DBusString(type),
           DBusString(class_),
           DBusString(desktop),
-          DBusString(seat_id),
+          DBusString(seatId),
           DBusUint32(vtnr),
           DBusString(tty),
           DBusString(display),
           DBusBoolean(remote),
-          DBusString(remote_user),
-          DBusString(remote_host),
+          DBusString(remoteUser),
+          DBusString(remoteHost),
           DBusUint64(flags),
           DBusArray(DBusSignature('(sv)'),
               properties.map((child) => DBusStruct(child)))
@@ -1006,55 +1006,55 @@ class OrgFreedesktopDBusPeer extends DBusRemoteObject {
   }
 
   /// Invokes org.freedesktop.login1.Manager.ReleaseSession()
-  Future<void> callReleaseSession(String session_id,
+  Future<void> callReleaseSession(String sessionId,
       {bool noAutoStart = false,
       bool allowInteractiveAuthorization = false}) async {
     await callMethod('org.freedesktop.login1.Manager', 'ReleaseSession',
-        [DBusString(session_id)],
+        [DBusString(sessionId)],
         replySignature: DBusSignature(''),
         noAutoStart: noAutoStart,
         allowInteractiveAuthorization: allowInteractiveAuthorization);
   }
 
   /// Invokes org.freedesktop.login1.Manager.ActivateSession()
-  Future<void> callActivateSession(String session_id,
+  Future<void> callActivateSession(String sessionId,
       {bool noAutoStart = false,
       bool allowInteractiveAuthorization = false}) async {
     await callMethod('org.freedesktop.login1.Manager', 'ActivateSession',
-        [DBusString(session_id)],
+        [DBusString(sessionId)],
         replySignature: DBusSignature(''),
         noAutoStart: noAutoStart,
         allowInteractiveAuthorization: allowInteractiveAuthorization);
   }
 
   /// Invokes org.freedesktop.login1.Manager.ActivateSessionOnSeat()
-  Future<void> callActivateSessionOnSeat(String session_id, String seat_id,
+  Future<void> callActivateSessionOnSeat(String sessionId, String seatId,
       {bool noAutoStart = false,
       bool allowInteractiveAuthorization = false}) async {
     await callMethod('org.freedesktop.login1.Manager', 'ActivateSessionOnSeat',
-        [DBusString(session_id), DBusString(seat_id)],
+        [DBusString(sessionId), DBusString(seatId)],
         replySignature: DBusSignature(''),
         noAutoStart: noAutoStart,
         allowInteractiveAuthorization: allowInteractiveAuthorization);
   }
 
   /// Invokes org.freedesktop.login1.Manager.LockSession()
-  Future<void> callLockSession(String session_id,
+  Future<void> callLockSession(String sessionId,
       {bool noAutoStart = false,
       bool allowInteractiveAuthorization = false}) async {
     await callMethod('org.freedesktop.login1.Manager', 'LockSession',
-        [DBusString(session_id)],
+        [DBusString(sessionId)],
         replySignature: DBusSignature(''),
         noAutoStart: noAutoStart,
         allowInteractiveAuthorization: allowInteractiveAuthorization);
   }
 
   /// Invokes org.freedesktop.login1.Manager.UnlockSession()
-  Future<void> callUnlockSession(String session_id,
+  Future<void> callUnlockSession(String sessionId,
       {bool noAutoStart = false,
       bool allowInteractiveAuthorization = false}) async {
     await callMethod('org.freedesktop.login1.Manager', 'UnlockSession',
-        [DBusString(session_id)],
+        [DBusString(sessionId)],
         replySignature: DBusSignature(''),
         noAutoStart: noAutoStart,
         allowInteractiveAuthorization: allowInteractiveAuthorization);
@@ -1082,33 +1082,33 @@ class OrgFreedesktopDBusPeer extends DBusRemoteObject {
 
   /// Invokes org.freedesktop.login1.Manager.KillSession()
   Future<void> callKillSession(
-      String session_id, String whom, int signal_number,
+      String sessionId, String whom, int signalNumber,
       {bool noAutoStart = false,
       bool allowInteractiveAuthorization = false}) async {
     await callMethod('org.freedesktop.login1.Manager', 'KillSession',
-        [DBusString(session_id), DBusString(whom), DBusInt32(signal_number)],
+        [DBusString(sessionId), DBusString(whom), DBusInt32(signalNumber)],
         replySignature: DBusSignature(''),
         noAutoStart: noAutoStart,
         allowInteractiveAuthorization: allowInteractiveAuthorization);
   }
 
   /// Invokes org.freedesktop.login1.Manager.KillUser()
-  Future<void> callKillUser(int uid, int signal_number,
+  Future<void> callKillUser(int uid, int signalNumber,
       {bool noAutoStart = false,
       bool allowInteractiveAuthorization = false}) async {
     await callMethod('org.freedesktop.login1.Manager', 'KillUser',
-        [DBusUint32(uid), DBusInt32(signal_number)],
+        [DBusUint32(uid), DBusInt32(signalNumber)],
         replySignature: DBusSignature(''),
         noAutoStart: noAutoStart,
         allowInteractiveAuthorization: allowInteractiveAuthorization);
   }
 
   /// Invokes org.freedesktop.login1.Manager.TerminateSession()
-  Future<void> callTerminateSession(String session_id,
+  Future<void> callTerminateSession(String sessionId,
       {bool noAutoStart = false,
       bool allowInteractiveAuthorization = false}) async {
     await callMethod('org.freedesktop.login1.Manager', 'TerminateSession',
-        [DBusString(session_id)],
+        [DBusString(sessionId)],
         replySignature: DBusSignature(''),
         noAutoStart: noAutoStart,
         allowInteractiveAuthorization: allowInteractiveAuthorization);
@@ -1126,11 +1126,11 @@ class OrgFreedesktopDBusPeer extends DBusRemoteObject {
   }
 
   /// Invokes org.freedesktop.login1.Manager.TerminateSeat()
-  Future<void> callTerminateSeat(String seat_id,
+  Future<void> callTerminateSeat(String seatId,
       {bool noAutoStart = false,
       bool allowInteractiveAuthorization = false}) async {
     await callMethod('org.freedesktop.login1.Manager', 'TerminateSeat',
-        [DBusString(seat_id)],
+        [DBusString(seatId)],
         replySignature: DBusSignature(''),
         noAutoStart: noAutoStart,
         allowInteractiveAuthorization: allowInteractiveAuthorization);
@@ -1149,11 +1149,11 @@ class OrgFreedesktopDBusPeer extends DBusRemoteObject {
 
   /// Invokes org.freedesktop.login1.Manager.AttachDevice()
   Future<void> callAttachDevice(
-      String seat_id, String sysfs_path, bool interactive,
+      String seatId, String sysfsPath, bool interactive,
       {bool noAutoStart = false,
       bool allowInteractiveAuthorization = false}) async {
     await callMethod('org.freedesktop.login1.Manager', 'AttachDevice',
-        [DBusString(seat_id), DBusString(sysfs_path), DBusBoolean(interactive)],
+        [DBusString(seatId), DBusString(sysfsPath), DBusBoolean(interactive)],
         replySignature: DBusSignature(''),
         noAutoStart: noAutoStart,
         allowInteractiveAuthorization: allowInteractiveAuthorization);
@@ -1549,22 +1549,22 @@ class OrgFreedesktopDBusPeer extends DBusRemoteObject {
   }
 
   /// Invokes org.freedesktop.login1.Manager.SetRebootToBootLoaderEntry()
-  Future<void> callSetRebootToBootLoaderEntry(String boot_loader_entry,
+  Future<void> callSetRebootToBootLoaderEntry(String bootLoaderEntry,
       {bool noAutoStart = false,
       bool allowInteractiveAuthorization = false}) async {
     await callMethod('org.freedesktop.login1.Manager',
-        'SetRebootToBootLoaderEntry', [DBusString(boot_loader_entry)],
+        'SetRebootToBootLoaderEntry', [DBusString(bootLoaderEntry)],
         replySignature: DBusSignature(''),
         noAutoStart: noAutoStart,
         allowInteractiveAuthorization: allowInteractiveAuthorization);
   }
 
   /// Invokes org.freedesktop.login1.Manager.SetWallMessage()
-  Future<void> callSetWallMessage(String wall_message, bool enable,
+  Future<void> callSetWallMessage(String wallMessage, bool enable,
       {bool noAutoStart = false,
       bool allowInteractiveAuthorization = false}) async {
     await callMethod('org.freedesktop.login1.Manager', 'SetWallMessage',
-        [DBusString(wall_message), DBusBoolean(enable)],
+        [DBusString(wallMessage), DBusBoolean(enable)],
         replySignature: DBusSignature(''),
         noAutoStart: noAutoStart,
         allowInteractiveAuthorization: allowInteractiveAuthorization);

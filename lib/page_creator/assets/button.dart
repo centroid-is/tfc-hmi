@@ -141,6 +141,7 @@ class ButtonConfig extends BaseAsset {
 
   factory ButtonConfig.fromJson(Map<String, dynamic> json) =>
       _$ButtonConfigFromJson(json);
+  @override
   Map<String, dynamic> toJson() => _$ButtonConfigToJson(this);
 }
 
@@ -199,7 +200,7 @@ class _ButtonState extends ConsumerState<Button> {
             .subscribe(widget.config.feedback!.key)
             .asStream()
             .asyncExpand((s) => s)
-            .map((value) => value?.asBool ?? false)
+            .map((value) => value.asBool)
             .startWith(_feedbackActive);
 
     final pressedStream = _pressedController.stream.startWith(_isPressed);

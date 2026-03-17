@@ -3,7 +3,7 @@ import '../widgets/preferences.dart';
 import '../widgets/base_scaffold.dart';
 
 class PreferencesPage extends StatelessWidget {
-  const PreferencesPage({Key? key}) : super(key: key);
+  const PreferencesPage({super.key});
 
   @override
   Widget build(BuildContext context) {

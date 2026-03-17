@@ -9,14 +9,14 @@ class ZoomableCanvas extends StatefulWidget {
   final bool scaleEnabled;
 
   const ZoomableCanvas({
-    Key? key,
+    super.key,
     required this.child,
     this.minScale = 1.0,
     this.maxScale = 4.0,
     this.aspectRatio = 16 / 9,
     this.panEnabled = true,
     this.scaleEnabled = true,
-  }) : super(key: key);
+  });
 
   @override
   State<ZoomableCanvas> createState() => _ZoomableCanvasState();

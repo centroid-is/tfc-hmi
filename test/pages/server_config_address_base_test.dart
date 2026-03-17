@@ -4,8 +4,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:shared_preferences_platform_interface/in_memory_shared_preferences_async.dart';
 import 'package:shared_preferences_platform_interface/shared_preferences_async_platform_interface.dart';
 import 'package:tfc_dart/core/secure_storage/secure_storage.dart';
-import 'package:tfc_dart/core/state_man.dart'
-    show StateManConfig, ModbusConfig, ModbusPollGroupConfig;
 
 import '../helpers/test_helpers.dart';
 

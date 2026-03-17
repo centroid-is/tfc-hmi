@@ -163,8 +163,6 @@ class _SchneiderATV320 extends ConsumerWidget {
               if (freqValue > 0.01) {
                 displayText = freqValue.toStringAsFixed(1);
               } else if (data["hmis"]?.asString != null) {
-                final hmisValue = data["hmis"]!.asInt;
-                final enumFields = data["hmis"]!.enumFields;
                 displayText = data["hmis"]!
                         .enumFields?[data["hmis"]!.asInt]
                         ?.displayName

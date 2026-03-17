@@ -1,5 +1,4 @@
 import 'dart:io' show Platform;
-import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -483,8 +482,6 @@ void main() {
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
 
-      late ProviderContainer container;
-
       await tester.pumpWidget(
         ProviderScope(
           overrides: [
@@ -497,7 +494,6 @@ void main() {
               return MaterialApp(
                 home: Consumer(
                   builder: (context, ref, _) {
-                    container = ProviderScope.containerOf(context);
                     return Scaffold(
                       body: Stack(
                         children: const [DrawingOverlay()],

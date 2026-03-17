@@ -724,15 +724,15 @@ class IconDataConverter implements JsonConverter<IconData, String> {
         return FontAwesomeIcons.plus;
       case 'minus':
         return FontAwesomeIcons.minus;
-      case 'search':
+      case 'fa_search':
         return FontAwesomeIcons.magnifyingGlass;
-      case 'edit':
+      case 'fa_edit':
         return FontAwesomeIcons.penToSquare;
       case 'trash':
         return FontAwesomeIcons.trash;
-      case 'download':
+      case 'fa_download':
         return FontAwesomeIcons.download;
-      case 'upload':
+      case 'fa_upload':
         return FontAwesomeIcons.upload;
       case 'share':
         return FontAwesomeIcons.share;
@@ -740,15 +740,15 @@ class IconDataConverter implements JsonConverter<IconData, String> {
         return FontAwesomeIcons.eye;
       case 'eye_slash':
         return FontAwesomeIcons.eyeSlash;
-      case 'lock':
+      case 'fa_lock':
         return FontAwesomeIcons.lock;
       case 'unlock':
         return FontAwesomeIcons.unlock;
-      case 'key':
+      case 'fa_key':
         return FontAwesomeIcons.key;
       case 'shield_alt':
         return FontAwesomeIcons.shieldHalved;
-      case 'star':
+      case 'fa_star':
         return FontAwesomeIcons.star;
       case 'star_solid':
         return FontAwesomeIcons.solidStar;
@@ -764,7 +764,7 @@ class IconDataConverter implements JsonConverter<IconData, String> {
         return FontAwesomeIcons.bell;
       case 'bell_solid':
         return FontAwesomeIcons.solidBell;
-      case 'home':
+      case 'fa_home':
         return FontAwesomeIcons.house;
       case 'chart_bar':
         return FontAwesomeIcons.chartBar;
@@ -776,21 +776,21 @@ class IconDataConverter implements JsonConverter<IconData, String> {
         return FontAwesomeIcons.database;
       case 'server':
         return FontAwesomeIcons.server;
-      case 'wifi':
+      case 'fa_wifi':
         return FontAwesomeIcons.wifi;
-      case 'bluetooth':
+      case 'fa_bluetooth':
         return FontAwesomeIcons.bluetooth;
-      case 'usb':
+      case 'fa_usb':
         return FontAwesomeIcons.usb;
       case 'plug':
         return FontAwesomeIcons.plug;
-      case 'battery_full':
+      case 'fa_battery_full':
         return FontAwesomeIcons.batteryFull;
       case 'battery_half':
         return FontAwesomeIcons.batteryHalf;
       case 'battery_empty':
         return FontAwesomeIcons.batteryEmpty;
-      case 'bolt':
+      case 'fa_bolt':
         return FontAwesomeIcons.bolt;
       case 'fire':
         return FontAwesomeIcons.fire;
@@ -800,7 +800,7 @@ class IconDataConverter implements JsonConverter<IconData, String> {
         return FontAwesomeIcons.sun;
       case 'moon':
         return FontAwesomeIcons.moon;
-      case 'cloud':
+      case 'fa_cloud':
         return FontAwesomeIcons.cloud;
       case 'cloud_rain':
         return FontAwesomeIcons.cloudRain;
@@ -850,7 +850,7 @@ class IconDataConverter implements JsonConverter<IconData, String> {
         return FontAwesomeIcons.networkWired;
       case 'microchip':
         return FontAwesomeIcons.microchip;
-      case 'memory':
+      case 'fa_memory':
         return FontAwesomeIcons.memory;
       case 'hdd':
         return FontAwesomeIcons.hardDrive;
@@ -930,8 +930,9 @@ class IconDataConverter implements JsonConverter<IconData, String> {
     if (iconData == Icons.tune) return 'tune';
     if (iconData == Icons.build) return 'build';
     if (iconData == Icons.engineering) return 'engineering';
-    if (iconData == Icons.precision_manufacturing)
+    if (iconData == Icons.precision_manufacturing) {
       return 'precision_manufacturing';
+    }
     if (iconData == Icons.factory) return 'factory';
     if (iconData == Icons.warehouse) return 'warehouse';
     if (iconData == warehouse_open) return 'warehouse_open';
@@ -941,8 +942,9 @@ class IconDataConverter implements JsonConverter<IconData, String> {
     if (iconData == Icons.inventory) return 'inventory';
     if (iconData == Icons.inventory_2) return 'inventory_2';
     if (iconData == Icons.local_shipping) return 'local_shipping';
-    if (iconData == Icons.local_shipping_outlined)
+    if (iconData == Icons.local_shipping_outlined) {
       return 'local_shipping_outlined';
+    }
     if (iconData == Icons.construction) return 'construction';
     if (iconData == Icons.handyman) return 'handyman';
     if (iconData == Icons.plumbing) return 'plumbing';
@@ -990,18 +992,21 @@ class IconDataConverter implements JsonConverter<IconData, String> {
     if (iconData == Icons.view_comfortable) return 'view_comfortable';
     if (iconData == Icons.view_day_outlined) return 'view_day_outlined';
     if (iconData == Icons.view_week_outlined) return 'view_week_outlined';
-    if (iconData == Icons.view_headline_outlined)
+    if (iconData == Icons.view_headline_outlined) {
       return 'view_headline_outlined';
-    if (iconData == Icons.view_carousel_outlined)
+    }
+    if (iconData == Icons.view_carousel_outlined) {
       return 'view_carousel_outlined';
+    }
     if (iconData == Icons.view_column_outlined) return 'view_column_outlined';
     if (iconData == Icons.view_stream_outlined) return 'view_stream_outlined';
     if (iconData == Icons.view_comfy_outlined) return 'view_comfy_outlined';
     if (iconData == Icons.view_compact_outlined) return 'view_compact_outlined';
     if (iconData == Icons.view_sidebar_outlined) return 'view_sidebar_outlined';
     if (iconData == Icons.view_array_outlined) return 'view_array_outlined';
-    if (iconData == Icons.view_timeline_outlined)
+    if (iconData == Icons.view_timeline_outlined) {
       return 'view_timeline_outlined';
+    }
     if (iconData == Icons.import_export) return 'import_export';
     if (iconData == Icons.file_download) return 'file_download';
     if (iconData == Icons.file_upload) return 'file_upload';
@@ -1070,8 +1075,9 @@ class IconDataConverter implements JsonConverter<IconData, String> {
     if (iconData == Icons.event_available) return 'event_available';
     if (iconData == Icons.event_busy) return 'event_busy';
     if (iconData == Icons.event_note_outlined) return 'event_note_outlined';
-    if (iconData == Icons.event_available_outlined)
+    if (iconData == Icons.event_available_outlined) {
       return 'event_available_outlined';
+    }
     if (iconData == Icons.event_busy_outlined) return 'event_busy_outlined';
     if (iconData == Icons.timer) return 'timer';
     if (iconData == Icons.timer_10) return 'timer_10';
@@ -1107,10 +1113,12 @@ class IconDataConverter implements JsonConverter<IconData, String> {
     if (iconData == Icons.supervisor_account) return 'supervisor_account';
     if (iconData == Icons.manage_accounts) return 'manage_accounts';
     if (iconData == Icons.account_balance) return 'account_balance';
-    if (iconData == Icons.account_balance_wallet)
+    if (iconData == Icons.account_balance_wallet) {
       return 'account_balance_wallet';
-    if (iconData == Icons.account_circle_outlined)
+    }
+    if (iconData == Icons.account_circle_outlined) {
       return 'account_circle_outlined';
+    }
     if (iconData == Icons.account_tree) return 'account_tree';
     if (iconData == Icons.assignment_ind) return 'assignment_ind';
     if (iconData == Icons.assignment_turned_in) return 'assignment_turned_in';
@@ -1119,18 +1127,22 @@ class IconDataConverter implements JsonConverter<IconData, String> {
     if (iconData == Icons.visibility) return 'visibility';
     if (iconData == Icons.visibility_off) return 'visibility_off';
     if (iconData == Icons.visibility_outlined) return 'visibility_outlined';
-    if (iconData == Icons.visibility_off_outlined)
+    if (iconData == Icons.visibility_off_outlined) {
       return 'visibility_off_outlined';
+    }
     if (iconData == Icons.check) return 'check';
     if (iconData == Icons.check_circle_outline) return 'check_circle_outline';
-    if (iconData == Icons.radio_button_unchecked)
+    if (iconData == Icons.radio_button_unchecked) {
       return 'radio_button_unchecked';
+    }
     if (iconData == Icons.radio_button_checked) return 'radio_button_checked';
     if (iconData == Icons.check_box) return 'check_box';
-    if (iconData == Icons.check_box_outline_blank)
+    if (iconData == Icons.check_box_outline_blank) {
       return 'check_box_outline_blank';
-    if (iconData == Icons.indeterminate_check_box)
+    }
+    if (iconData == Icons.indeterminate_check_box) {
       return 'indeterminate_check_box';
+    }
     if (iconData == Icons.star_border) return 'star_border';
     if (iconData == Icons.star_half) return 'star_half';
     if (iconData == Icons.star_outline) return 'star_outline';
@@ -1150,8 +1162,9 @@ class IconDataConverter implements JsonConverter<IconData, String> {
     if (iconData == Icons.photo) return 'photo';
     if (iconData == Icons.photo_outlined) return 'photo_outlined';
     if (iconData == Icons.photo_library) return 'photo_library';
-    if (iconData == Icons.photo_library_outlined)
+    if (iconData == Icons.photo_library_outlined) {
       return 'photo_library_outlined';
+    }
     if (iconData == Icons.camera_alt) return 'camera_alt';
     if (iconData == Icons.camera_alt_outlined) return 'camera_alt_outlined';
     if (iconData == Icons.videocam_outlined) return 'videocam_outlined';
@@ -1171,18 +1184,22 @@ class IconDataConverter implements JsonConverter<IconData, String> {
 
     // Settings & Configuration
     if (iconData == Icons.settings_applications) return 'settings_applications';
-    if (iconData == Icons.settings_backup_restore)
+    if (iconData == Icons.settings_backup_restore) {
       return 'settings_backup_restore';
+    }
     if (iconData == Icons.settings_bluetooth) return 'settings_bluetooth';
     if (iconData == Icons.settings_brightness) return 'settings_brightness';
     if (iconData == Icons.settings_cell) return 'settings_cell';
     if (iconData == Icons.settings_ethernet) return 'settings_ethernet';
-    if (iconData == Icons.settings_input_antenna)
+    if (iconData == Icons.settings_input_antenna) {
       return 'settings_input_antenna';
-    if (iconData == Icons.settings_input_component)
+    }
+    if (iconData == Icons.settings_input_component) {
       return 'settings_input_component';
-    if (iconData == Icons.settings_input_composite)
+    }
+    if (iconData == Icons.settings_input_composite) {
       return 'settings_input_composite';
+    }
     if (iconData == Icons.settings_input_hdmi) return 'settings_input_hdmi';
     if (iconData == Icons.settings_input_svideo) return 'settings_input_svideo';
     if (iconData == Icons.settings_overscan) return 'settings_overscan';
@@ -1190,8 +1207,9 @@ class IconDataConverter implements JsonConverter<IconData, String> {
     if (iconData == Icons.settings_power) return 'settings_power';
     if (iconData == Icons.settings_remote) return 'settings_remote';
     if (iconData == Icons.settings_suggest) return 'settings_suggest';
-    if (iconData == Icons.settings_system_daydream)
+    if (iconData == Icons.settings_system_daydream) {
       return 'settings_system_daydream';
+    }
     if (iconData == Icons.settings_voice) return 'settings_voice';
 
     // FontAwesome Icons
@@ -1201,8 +1219,9 @@ class IconDataConverter implements JsonConverter<IconData, String> {
     if (iconData == FontAwesomeIcons.bullseye) return 'bullseye';
     if (iconData == FontAwesomeIcons.ruler) return 'ruler';
     if (iconData == FontAwesomeIcons.anchor) return 'anchor';
-    if (iconData == FontAwesomeIcons.magnifyingGlassLocation)
+    if (iconData == FontAwesomeIcons.magnifyingGlassLocation) {
       return 'magnifying_glass_location';
+    }
     if (iconData == FontAwesomeIcons.slash) return 'slash';
     if (iconData == FontAwesomeIcons.dumbbell) return 'dumbbell';
     if (iconData == FontAwesomeIcons.play) return 'play';

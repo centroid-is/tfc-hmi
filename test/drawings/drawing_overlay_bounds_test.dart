@@ -3,7 +3,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:tfc/drawings/drawing_overlay.dart';
-import 'package:tfc/widgets/resizable_overlay_frame.dart';
 
 /// Tests for overlay bounds clamping — ensures the DrawingOverlay cannot be
 /// dragged or resized outside the window/screen bounds.

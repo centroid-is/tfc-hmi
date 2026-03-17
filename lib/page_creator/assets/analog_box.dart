@@ -132,6 +132,7 @@ class AnalogBoxConfig extends BaseAsset {
 
   factory AnalogBoxConfig.fromJson(Map<String, dynamic> json) =>
       _$AnalogBoxConfigFromJson(json);
+  @override
   Map<String, dynamic> toJson() => _$AnalogBoxConfigToJson(this);
 
   @override
@@ -687,7 +688,7 @@ class _AnalogBoxDialogState extends ConsumerState<_AnalogBoxDialog> {
 
           return Text(widget.config.text?.isNotEmpty == true
               ? widget.config.text!
-              : (resolvedKey ?? 'AnalogBox'));
+              : resolvedKey);
         },
       ),
       content: SingleChildScrollView(
@@ -932,8 +933,7 @@ class _AnalogBoxDialogState extends ConsumerState<_AnalogBoxDialog> {
               ),
 
             // Graph (simple: one series of analogKey)
-            if (widget.config.graphConfig != null &&
-                widget.config.analogKey != null) ...[
+            if (widget.config.graphConfig != null) ...[
               const SizedBox(height: 16),
               Card(
                 child: Padding(

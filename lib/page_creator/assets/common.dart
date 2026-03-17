@@ -1,4 +1,3 @@
-import 'dart:ui' show Size;
 import 'dart:math' as math;
 
 import 'dart:convert';
@@ -96,7 +95,7 @@ abstract class Asset {
   Map<String, dynamic> toJson();
 }
 
-@JsonSerializable(createFactory: false, explicitToJson: true)
+@JsonSerializable(createFactory: false, createToJson: false, explicitToJson: true)
 abstract class BaseAsset implements Asset {
   @override
   String get assetName => variant;
@@ -454,9 +453,9 @@ class _KeySearchDialogState extends ConsumerState<KeySearchDialog> {
 }
 
 class _KeyFieldDialog extends StatefulWidget {
-  final String? initialValue;
+  const _KeyFieldDialog();
 
-  const _KeyFieldDialog({this.initialValue});
+  String? get initialValue => null;
 
   @override
   State<_KeyFieldDialog> createState() => _KeyFieldDialogState();
@@ -1251,9 +1250,9 @@ class LayoutRotatedBox extends SingleChildRenderObjectWidget {
   final double angle;
   const LayoutRotatedBox({
     required this.angle,
-    Widget? child,
-    Key? key,
-  }) : super(key: key, child: child);
+    super.child,
+    super.key,
+  });
 
   @override
   RenderObject createRenderObject(BuildContext context) {

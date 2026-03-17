@@ -3,7 +3,6 @@
 
 // modified slightly to get initial mode
 
-import 'dart:io';
 import 'package:dbus/dbus.dart';
 import 'package:rxdart/rxdart.dart';
 
@@ -48,8 +47,8 @@ class IsCentroidOperationMode extends DBusRemoteObject {
   static const String _interface = 'is.centroid.OperationMode';
 
   IsCentroidOperationMode(
-      DBusClient client, String destination, DBusObjectPath path)
-      : super(client, name: destination, path: path) {
+      super.client, String destination, DBusObjectPath path)
+      : super(name: destination, path: path) {
     // Combine initial mode with update stream
     update = Stream.fromFuture(getMode())
         .map((initialMode) => IsCentroidOperationModeUpdate(DBusSignal(
@@ -85,11 +84,11 @@ class IsCentroidOperationMode extends DBusRemoteObject {
   }
 
   /// Invokes is.centroid.OperationMode.SetMode()
-  Future<void> callSetMode(String mode_str,
+  Future<void> callSetMode(String modeStr,
       {bool noAutoStart = false,
       bool allowInteractiveAuthorization = false}) async {
     await callMethod(
-        'is.centroid.OperationMode', 'SetMode', [DBusString(mode_str)],
+        'is.centroid.OperationMode', 'SetMode', [DBusString(modeStr)],
         replySignature: DBusSignature(''),
         noAutoStart: noAutoStart,
         allowInteractiveAuthorization: allowInteractiveAuthorization);
@@ -107,11 +106,11 @@ class IsCentroidOperationMode extends DBusRemoteObject {
   }
 
   /// Invokes org.freedesktop.DBus.Properties.Get()
-  Future<DBusValue> callGet(String interface_name, String property_name,
+  Future<DBusValue> callGet(String interfaceName, String propertyName,
       {bool noAutoStart = false,
       bool allowInteractiveAuthorization = false}) async {
     var result = await callMethod('org.freedesktop.DBus.Properties', 'Get',
-        [DBusString(interface_name), DBusString(property_name)],
+        [DBusString(interfaceName), DBusString(propertyName)],
         replySignature: DBusSignature('v'),
         noAutoStart: noAutoStart,
         allowInteractiveAuthorization: allowInteractiveAuthorization);
@@ -120,15 +119,15 @@ class IsCentroidOperationMode extends DBusRemoteObject {
 
   /// Invokes org.freedesktop.DBus.Properties.Set()
   Future<void> callSet(
-      String interface_name, String property_name, DBusValue value,
+      String interfaceName, String propertyName, DBusValue value,
       {bool noAutoStart = false,
       bool allowInteractiveAuthorization = false}) async {
     await callMethod(
         'org.freedesktop.DBus.Properties',
         'Set',
         [
-          DBusString(interface_name),
-          DBusString(property_name),
+          DBusString(interfaceName),
+          DBusString(propertyName),
           DBusVariant(value)
         ],
         replySignature: DBusSignature(''),
@@ -137,11 +136,11 @@ class IsCentroidOperationMode extends DBusRemoteObject {
   }
 
   /// Invokes org.freedesktop.DBus.Properties.GetAll()
-  Future<Map<String, DBusValue>> callGetAll(String interface_name,
+  Future<Map<String, DBusValue>> callGetAll(String interfaceName,
       {bool noAutoStart = false,
       bool allowInteractiveAuthorization = false}) async {
     var result = await callMethod('org.freedesktop.DBus.Properties', 'GetAll',
-        [DBusString(interface_name)],
+        [DBusString(interfaceName)],
         replySignature: DBusSignature('a{sv}'),
         noAutoStart: noAutoStart,
         allowInteractiveAuthorization: allowInteractiveAuthorization);

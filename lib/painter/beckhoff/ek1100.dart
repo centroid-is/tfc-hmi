@@ -228,8 +228,6 @@ class EthernetPortPainter extends CustomPainter {
   // Raw geometry in DXF coordinates (unscaled, unflipped)
   static const double _minX = 321.29203;
   static const double _minY = 528.911365;
-  static const double _maxX = 374.77203;
-  static const double _maxY = 593.541365;
   static const double _width = 53.48;
   static const double _height = 64.63;
 

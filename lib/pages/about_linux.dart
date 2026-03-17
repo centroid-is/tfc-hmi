@@ -66,7 +66,7 @@ class _AboutLinuxPageState extends State<AboutLinuxPage> {
     }
 
     // Helpers to read typed values (works for both direct & DBusVariant)
-    String? _str(String key) {
+    String? str(String key) {
       final v = props[key];
       if (v is DBusString) return v.value;
       if (v is DBusVariant && v.value is DBusString) {
@@ -75,7 +75,7 @@ class _AboutLinuxPageState extends State<AboutLinuxPage> {
       return null;
     }
 
-    int? _u64(String key) {
+    int? u64(String key) {
       final v = props[key];
       if (v is DBusUint64) return v.value;
       if (v is DBusVariant && v.value is DBusUint64) {
@@ -120,9 +120,9 @@ class _AboutLinuxPageState extends State<AboutLinuxPage> {
     }
 
     // 4) Prefer PrettyHostname → Hostname → StaticHostname, use getters as fallback if GetAll wasn’t allowed.
-    String hostname = _str('PrettyHostname') ??
-        _str('Hostname') ??
-        _str('StaticHostname') ??
+    String hostname = str('PrettyHostname') ??
+        str('Hostname') ??
+        str('StaticHostname') ??
         '';
 
     if (hostname.isEmpty) {
@@ -145,7 +145,7 @@ class _AboutLinuxPageState extends State<AboutLinuxPage> {
     }
 
     // Kernel & OS strings, with per-property fallbacks
-    Future<String?> _fallbackStr(
+    Future<String?> fallbackStr(
       String current,
       Future<String> Function() getter,
     ) async {
@@ -158,22 +158,22 @@ class _AboutLinuxPageState extends State<AboutLinuxPage> {
       }
     }
 
-    final kernelName = await _fallbackStr(
-            _str('KernelName') ?? '', _hostnamed.getKernelName) ??
+    final kernelName = await fallbackStr(
+            str('KernelName') ?? '', _hostnamed.getKernelName) ??
         '';
-    final kernelRelease = await _fallbackStr(
-            _str('KernelRelease') ?? '', _hostnamed.getKernelRelease) ??
+    final kernelRelease = await fallbackStr(
+            str('KernelRelease') ?? '', _hostnamed.getKernelRelease) ??
         '';
-    final kernelVersion = await _fallbackStr(
-            _str('KernelVersion') ?? '', _hostnamed.getKernelVersion) ??
+    final kernelVersion = await fallbackStr(
+            str('KernelVersion') ?? '', _hostnamed.getKernelVersion) ??
         '';
-    final osPretty = await _fallbackStr(_str('OperatingSystemPrettyName') ?? '',
+    final osPretty = await fallbackStr(str('OperatingSystemPrettyName') ?? '',
             _hostnamed.getOperatingSystemPrettyName) ??
         '';
 
     // Support end (uint64 microseconds since epoch in systemd)
     DateTime? osSupportEnd;
-    final t = _u64('OperatingSystemSupportEnd');
+    final t = u64('OperatingSystemSupportEnd');
     if (t != null && t > 0) {
       try {
         osSupportEnd =

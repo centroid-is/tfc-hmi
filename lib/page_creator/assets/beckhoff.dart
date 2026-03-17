@@ -81,8 +81,8 @@ class BeckhoffCX5010Config extends BaseAsset {
             if (subdevices.isNotEmpty) ...[
               for (final sub in subdevices)
                 _SubdeviceNormalized(
-                  child: sub.build(context),
                   targetHeight: _cxNativeSize.height,
+                  child: sub.build(context),
                 ),
             ],
           ],
@@ -106,6 +106,7 @@ class BeckhoffCX5010Config extends BaseAsset {
 
   factory BeckhoffCX5010Config.fromJson(Map<String, dynamic> json) =>
       _$BeckhoffCX5010ConfigFromJson(json);
+  @override
   Map<String, dynamic> toJson() => _$BeckhoffCX5010ConfigToJson(this);
 }
 
@@ -199,7 +200,7 @@ class _CXxxxxConfigContentState extends State<_CXxxxxConfigContent> {
                     border: OutlineInputBorder(),
                     labelText: 'Add Subdevice',
                   ),
-                  value: null,
+                  initialValue: null,
                   hint: const Text('Select a subdevice to add'),
                   items: _availableSubdevices.keys
                       .map((k) => DropdownMenuItem(value: k, child: Text(k)))
@@ -325,8 +326,8 @@ class BeckhoffEK1100Config extends BaseAsset {
             if (subdevices.isNotEmpty) ...[
               for (final sub in subdevices)
                 _SubdeviceNormalized(
-                  child: sub.build(context),
                   targetHeight: _ekNativeSize.height,
+                  child: sub.build(context),
                 ),
             ],
           ],
@@ -350,6 +351,7 @@ class BeckhoffEK1100Config extends BaseAsset {
 
   factory BeckhoffEK1100Config.fromJson(Map<String, dynamic> json) =>
       _$BeckhoffEK1100ConfigFromJson(json);
+  @override
   Map<String, dynamic> toJson() => _$BeckhoffEK1100ConfigToJson(this);
 }
 
@@ -419,7 +421,7 @@ class _EK1100ConfigContentState extends State<_EK1100ConfigContent> {
                     border: OutlineInputBorder(),
                     labelText: 'Add Subdevice',
                   ),
-                  value: null,
+                  initialValue: null,
                   hint: const Text('Select a subdevice to add'),
                   items: _availableSubdevices.keys
                       .map((k) => DropdownMenuItem(value: k, child: Text(k)))
@@ -1373,10 +1375,11 @@ class _BeckhoffEL1008 extends ConsumerWidget {
           List<bool>? rawStates = map["raw"] != null
               ? List.generate(8, (i) => (map["raw"]!.asInt & (1 << i)) != 0)
               : null;
-          List<bool>? processedStates = map["processed"] != null
-              ? List.generate(
-                  8, (i) => (map["processed"]!.asInt & (1 << i)) != 0)
-              : null;
+          // processedStates computed but not yet used in display
+          // List<bool>? processedStates = map["processed"] != null
+          //     ? List.generate(
+          //         8, (i) => (map["processed"]!.asInt & (1 << i)) != 0)
+          //     : null;
 
           return Column(
             children: [

@@ -90,6 +90,7 @@ class RatioNumberConfig extends BaseAsset {
 
   factory RatioNumberConfig.fromJson(Map<String, dynamic> json) =>
       _$RatioNumberConfigFromJson(json);
+  @override
   Map<String, dynamic> toJson() => _$RatioNumberConfigToJson(this);
 
   // Helper method to get display label for a key
@@ -126,7 +127,7 @@ class _RatioNumberConfigEditorState
     final optionVars = pageAssets.whereType<OptionVariableConfig>().toList();
 
     return DropdownButtonFormField<String?>(
-      value: widget.config.intervalVariable,
+      initialValue: widget.config.intervalVariable,
       decoration: const InputDecoration(
         labelText: 'Interval Variable',
         helperText: 'Link to an OptionVariable to control interval',

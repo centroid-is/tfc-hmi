@@ -65,6 +65,7 @@ class NumberConfig extends BaseAsset {
 
   factory NumberConfig.fromJson(Map<String, dynamic> json) =>
       _$NumberConfigFromJson(json);
+  @override
   Map<String, dynamic> toJson() => _$NumberConfigToJson(this);
 
   @override
@@ -468,7 +469,7 @@ class _NumberWriteDialogState extends ConsumerState<_NumberWriteDialog> {
               : widget.config.key;
           return Text(widget.config.text?.isNotEmpty == true
               ? widget.config.text!
-              : (resolvedKey ?? 'Number'));
+              : resolvedKey);
         },
       ),
       content: StreamBuilder<DynamicValue>(

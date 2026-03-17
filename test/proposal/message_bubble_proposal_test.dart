@@ -9,7 +9,6 @@ import 'package:tfc_dart/core/database_drift.dart';
 import 'package:tfc/chat/message_bubble.dart';
 import 'package:tfc/llm/llm_models.dart';
 import 'package:tfc/providers/proposal_state.dart';
-import 'package:tfc/providers/proposal_watcher.dart';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────
 

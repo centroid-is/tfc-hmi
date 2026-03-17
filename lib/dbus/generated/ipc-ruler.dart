@@ -1,7 +1,6 @@
 // This file was generated using the following command and may be overwritten.
 // dart-dbus generate-remote-object ipc-ruler.xml
 
-import 'dart:io';
 import 'package:dbus/dbus.dart';
 
 /// Signal data for org.freedesktop.DBus.Properties.PropertiesChanged.
@@ -44,8 +43,8 @@ class OrgFreedesktopDBusProperties extends DBusRemoteObject {
       connectionChange;
 
   OrgFreedesktopDBusProperties(
-      DBusClient client, String destination, DBusObjectPath path)
-      : super(client, name: destination, path: path) {
+      super.client, String destination, DBusObjectPath path)
+      : super(name: destination, path: path) {
     customPropertiesChanged = DBusRemoteObjectSignalStream(
             object: this,
             interface: 'org.freedesktop.DBus.Properties',
@@ -64,11 +63,11 @@ class OrgFreedesktopDBusProperties extends DBusRemoteObject {
   }
 
   /// Invokes org.freedesktop.DBus.Properties.Get()
-  Future<DBusValue> callGet(String interface_name, String property_name,
+  Future<DBusValue> callGet(String interfaceName, String propertyName,
       {bool noAutoStart = false,
       bool allowInteractiveAuthorization = false}) async {
     var result = await callMethod('org.freedesktop.DBus.Properties', 'Get',
-        [DBusString(interface_name), DBusString(property_name)],
+        [DBusString(interfaceName), DBusString(propertyName)],
         replySignature: DBusSignature('v'),
         noAutoStart: noAutoStart,
         allowInteractiveAuthorization: allowInteractiveAuthorization);
@@ -77,15 +76,15 @@ class OrgFreedesktopDBusProperties extends DBusRemoteObject {
 
   /// Invokes org.freedesktop.DBus.Properties.Set()
   Future<void> callSet(
-      String interface_name, String property_name, DBusValue value,
+      String interfaceName, String propertyName, DBusValue value,
       {bool noAutoStart = false,
       bool allowInteractiveAuthorization = false}) async {
     await callMethod(
         'org.freedesktop.DBus.Properties',
         'Set',
         [
-          DBusString(interface_name),
-          DBusString(property_name),
+          DBusString(interfaceName),
+          DBusString(propertyName),
           DBusVariant(value)
         ],
         replySignature: DBusSignature(''),
@@ -94,11 +93,11 @@ class OrgFreedesktopDBusProperties extends DBusRemoteObject {
   }
 
   /// Invokes org.freedesktop.DBus.Properties.GetAll()
-  Future<Map<String, DBusValue>> callGetAll(String interface_name,
+  Future<Map<String, DBusValue>> callGetAll(String interfaceName,
       {bool noAutoStart = false,
       bool allowInteractiveAuthorization = false}) async {
     var result = await callMethod('org.freedesktop.DBus.Properties', 'GetAll',
-        [DBusString(interface_name)],
+        [DBusString(interfaceName)],
         replySignature: DBusSignature('a{sv}'),
         noAutoStart: noAutoStart,
         allowInteractiveAuthorization: allowInteractiveAuthorization);
@@ -127,44 +126,44 @@ class OrgFreedesktopDBusProperties extends DBusRemoteObject {
   }
 
   /// Invokes is.centroid.manager.Connect()
-  Future<void> callConnect(String slot_name, String signal_name,
+  Future<void> callConnect(String slotName, String signalName,
       {bool noAutoStart = false,
       bool allowInteractiveAuthorization = false}) async {
     await callMethod('is.centroid.manager', 'Connect',
-        [DBusString(slot_name), DBusString(signal_name)],
+        [DBusString(slotName), DBusString(signalName)],
         replySignature: DBusSignature(''),
         noAutoStart: noAutoStart,
         allowInteractiveAuthorization: allowInteractiveAuthorization);
   }
 
   /// Invokes is.centroid.manager.Disconnect()
-  Future<void> callDisconnect(String slot_name,
+  Future<void> callDisconnect(String slotName,
       {bool noAutoStart = false,
       bool allowInteractiveAuthorization = false}) async {
     await callMethod(
-        'is.centroid.manager', 'Disconnect', [DBusString(slot_name)],
+        'is.centroid.manager', 'Disconnect', [DBusString(slotName)],
         replySignature: DBusSignature(''),
         noAutoStart: noAutoStart,
         allowInteractiveAuthorization: allowInteractiveAuthorization);
   }
 
   /// Invokes is.centroid.manager.RegisterSignal()
-  Future<void> callRegisterSignal(String name, String description, int type_id,
+  Future<void> callRegisterSignal(String name, String description, int typeId,
       {bool noAutoStart = false,
       bool allowInteractiveAuthorization = false}) async {
     await callMethod('is.centroid.manager', 'RegisterSignal',
-        [DBusString(name), DBusString(description), DBusByte(type_id)],
+        [DBusString(name), DBusString(description), DBusByte(typeId)],
         replySignature: DBusSignature(''),
         noAutoStart: noAutoStart,
         allowInteractiveAuthorization: allowInteractiveAuthorization);
   }
 
   /// Invokes is.centroid.manager.RegisterSlot()
-  Future<void> callRegisterSlot(String name, String description, int type_id,
+  Future<void> callRegisterSlot(String name, String description, int typeId,
       {bool noAutoStart = false,
       bool allowInteractiveAuthorization = false}) async {
     await callMethod('is.centroid.manager', 'RegisterSlot',
-        [DBusString(name), DBusString(description), DBusByte(type_id)],
+        [DBusString(name), DBusString(description), DBusByte(typeId)],
         replySignature: DBusSignature(''),
         noAutoStart: noAutoStart,
         allowInteractiveAuthorization: allowInteractiveAuthorization);

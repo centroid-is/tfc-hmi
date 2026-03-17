@@ -7,7 +7,6 @@ import 'package:tfc_dart/core/preferences.dart';
 
 import 'package:tfc/llm/llm_models.dart';
 import 'package:tfc/llm/llm_provider.dart';
-import 'package:tfc/mcp/mcp_bridge_notifier.dart';
 import 'package:tfc/providers/chat.dart';
 import 'package:tfc/providers/mcp_bridge.dart';
 import 'package:tfc/providers/preferences.dart';

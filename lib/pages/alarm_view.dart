@@ -4,7 +4,7 @@ import '../widgets/alarm.dart';
 import 'package:tfc_dart/core/alarm.dart';
 
 class AlarmViewPage extends StatefulWidget {
-  const AlarmViewPage({Key? key}) : super(key: key);
+  const AlarmViewPage({super.key});
 
   @override
   State<AlarmViewPage> createState() => _AlarmViewPageState();

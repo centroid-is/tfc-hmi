@@ -17,7 +17,6 @@ import 'package:open62541/open62541.dart'
         NodeClass,
         NodeId;
 
-import 'package:tfc/widgets/browse_panel.dart';
 import 'package:tfc/widgets/opcua_browse.dart';
 
 // ---------------------------------------------------------------------------

@@ -489,7 +489,6 @@ void main() {
         states.add(state);
       });
 
-      final countBefore = states.length;
       notifier.addProposal(makeProposal(id: 1, json: '{"uid":"dup"}'));
       final countAfterFirst = states.length;
       notifier.addProposal(makeProposal(id: 1, json: '{"uid":"dup"}'));

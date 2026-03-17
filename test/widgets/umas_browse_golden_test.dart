@@ -17,7 +17,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:modbus_client/modbus_client.dart';
 import 'package:tfc_dart/core/umas_client.dart';
-import 'package:tfc_dart/core/umas_types.dart';
 
 import 'package:tfc/widgets/browse_panel.dart';
 import 'package:tfc/widgets/umas_browse.dart';

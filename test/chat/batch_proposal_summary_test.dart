@@ -5,7 +5,6 @@ import 'package:tfc_dart/core/database_drift.dart';
 
 import 'package:tfc/chat/batch_proposal_summary.dart';
 import 'package:tfc/providers/proposal_state.dart';
-import 'package:tfc/providers/proposal_watcher.dart';
 
 PendingProposal _makeProposal({
   required int id,

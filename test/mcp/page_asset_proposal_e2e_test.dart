@@ -3,16 +3,14 @@
 ///
 /// Mirrors the pattern from proposal_e2e_test.dart but covers page, asset,
 /// and key_mapping proposal types which previously had no E2E coverage.
+library;
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mcp_dart/mcp_dart.dart';
 import 'package:tfc_dart/core/database_drift.dart';
 
-import 'package:tfc_mcp_server/src/identity/env_operator_identity.dart';
-import 'package:tfc_mcp_server/src/safety/risk_gate.dart';
 import 'package:tfc_mcp_server/tfc_mcp_server.dart';
 
 import 'package:tfc/providers/proposal_watcher.dart';

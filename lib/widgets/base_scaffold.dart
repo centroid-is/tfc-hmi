@@ -146,7 +146,7 @@ class _BaseScaffoldState extends ConsumerState<BaseScaffold> {
                                   .replaceAll('\n', ' ')
                                   .trim();
                               return description.length > 100
-                                  ? description.substring(0, 97) + '...'
+                                  ? '${description.substring(0, 97)}...'
                                   : description;
                             })(),
                           ),

@@ -69,6 +69,7 @@ class LEDConfig extends BaseAsset {
 
   factory LEDConfig.fromJson(Map<String, dynamic> json) =>
       _$LEDConfigFromJson(json);
+  @override
   Map<String, dynamic> toJson() => _$LEDConfigToJson(this);
 }
 

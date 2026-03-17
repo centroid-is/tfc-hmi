@@ -119,7 +119,7 @@ class _HistoryTablePaneState extends ConsumerState<HistoryTablePane> {
             // Use extended range for fetching
             return Stream.fromFuture(collector.database.queryTimeseriesData(
                 k, fetchRange!.end,
-                from: fetchRange!.start));
+                from: fetchRange.start));
           }
         }).toList();
 

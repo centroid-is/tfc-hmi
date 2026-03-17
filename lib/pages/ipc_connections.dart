@@ -19,14 +19,14 @@ const Map<int, String> _typeLabels = {
 class ConnectionsPage extends StatelessWidget {
   final DBusClient dbusClient;
 
-  ConnectionsPage({Key? key, required this.dbusClient}) : super(key: key);
+  const ConnectionsPage({super.key, required this.dbusClient});
 
   Future<IpcRulerClient> _connectClient() async {
     try {
       return await IpcRulerClient.create(dbusClient);
     } catch (e) {
       debugPrint('Failed to connect to IpcRulerClient: $e');
-      throw e;
+      rethrow;
     }
   }
 
@@ -63,10 +63,9 @@ class _ConnectionsPageContent extends StatefulWidget {
   final DBusClient dbusClient;
 
   const _ConnectionsPageContent({
-    Key? key,
     required this.client,
     required this.dbusClient,
-  }) : super(key: key);
+  });
 
   @override
   State<_ConnectionsPageContent> createState() =>
@@ -349,7 +348,7 @@ class _ConnectionsPageContentState extends State<_ConnectionsPageContent> {
                                     ],
                                   ),
                                 );
-                              }).toList(),
+                              }),
                             // Connect new slot(s)
                             ListTile(
                               dense: true,
@@ -378,12 +377,12 @@ class AddSlotDialog extends StatefulWidget {
   final VoidCallback onRefresh;
 
   const AddSlotDialog({
-    Key? key,
+    super.key,
     required this.client,
     required this.signal,
     required this.allSlots,
     required this.onRefresh,
-  }) : super(key: key);
+  });
 
   @override
   State<AddSlotDialog> createState() => _AddSlotDialogState();

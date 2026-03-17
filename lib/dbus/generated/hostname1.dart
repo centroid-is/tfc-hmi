@@ -1,7 +1,6 @@
 // This file was generated using the following command and may be overwritten.
 // dart-dbus generate-remote-object hostname1.xml
 
-import 'dart:io';
 import 'package:dbus/dbus.dart';
 
 /// Signal data for org.freedesktop.DBus.Properties.PropertiesChanged.
@@ -26,8 +25,8 @@ class OrgFreedesktopDBusPeer extends DBusRemoteObject {
       customPropertiesChanged;
 
   OrgFreedesktopDBusPeer(
-      DBusClient client, String destination, DBusObjectPath path)
-      : super(client, name: destination, path: path) {
+      super.client, String destination, DBusObjectPath path)
+      : super(name: destination, path: path) {
     customPropertiesChanged = DBusRemoteObjectSignalStream(
             object: this,
             interface: 'org.freedesktop.DBus.Properties',
@@ -72,11 +71,11 @@ class OrgFreedesktopDBusPeer extends DBusRemoteObject {
   }
 
   /// Invokes org.freedesktop.DBus.Properties.Get()
-  Future<DBusValue> callGet(String interface_name, String property_name,
+  Future<DBusValue> callGet(String interfaceName, String propertyName,
       {bool noAutoStart = false,
       bool allowInteractiveAuthorization = false}) async {
     var result = await callMethod('org.freedesktop.DBus.Properties', 'Get',
-        [DBusString(interface_name), DBusString(property_name)],
+        [DBusString(interfaceName), DBusString(propertyName)],
         replySignature: DBusSignature('v'),
         noAutoStart: noAutoStart,
         allowInteractiveAuthorization: allowInteractiveAuthorization);
@@ -84,11 +83,11 @@ class OrgFreedesktopDBusPeer extends DBusRemoteObject {
   }
 
   /// Invokes org.freedesktop.DBus.Properties.GetAll()
-  Future<Map<String, DBusValue>> callGetAll(String interface_name,
+  Future<Map<String, DBusValue>> callGetAll(String interfaceName,
       {bool noAutoStart = false,
       bool allowInteractiveAuthorization = false}) async {
     var result = await callMethod('org.freedesktop.DBus.Properties', 'GetAll',
-        [DBusString(interface_name)],
+        [DBusString(interfaceName)],
         replySignature: DBusSignature('a{sv}'),
         noAutoStart: noAutoStart,
         allowInteractiveAuthorization: allowInteractiveAuthorization);
@@ -97,15 +96,15 @@ class OrgFreedesktopDBusPeer extends DBusRemoteObject {
 
   /// Invokes org.freedesktop.DBus.Properties.Set()
   Future<void> callSet(
-      String interface_name, String property_name, DBusValue value,
+      String interfaceName, String propertyName, DBusValue value,
       {bool noAutoStart = false,
       bool allowInteractiveAuthorization = false}) async {
     await callMethod(
         'org.freedesktop.DBus.Properties',
         'Set',
         [
-          DBusString(interface_name),
-          DBusString(property_name),
+          DBusString(interfaceName),
+          DBusString(propertyName),
           DBusVariant(value)
         ],
         replySignature: DBusSignature(''),

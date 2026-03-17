@@ -8,7 +8,6 @@ import 'package:tfc_dart/core/database_drift.dart';
 
 import 'package:tfc/chat/proposal_action.dart';
 import 'package:tfc/providers/proposal_state.dart';
-import 'package:tfc/providers/proposal_watcher.dart';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────
 

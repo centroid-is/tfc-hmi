@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:tfc/mcp/mcp_bridge_notifier.dart';
 import 'package:tfc/providers/mcp_bridge.dart';
 import 'package:tfc/providers/preferences.dart';
 import 'package:tfc/providers/database.dart';

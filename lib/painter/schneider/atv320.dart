@@ -405,7 +405,6 @@ class ATV320 extends CustomPainter {
 
     // Draw 7-segment characters
     final int maxChars = 4;
-    final double charWidth = screenWidth / maxChars;
     final double charHeight =
         screenHeight * 0.8; // Use 80% of screen height for characters
     final double charY = screenTop + (screenHeight - charHeight) / 2;
@@ -480,10 +479,6 @@ class ATV320 extends CustomPainter {
       ..style = PaintingStyle.fill;
 
     // Draw circular button
-    final buttonCircle = Rect.fromCircle(
-      center: Offset(buttonCenterX, buttonCenterY),
-      radius: buttonRadius,
-    );
     canvas.drawCircle(
       Offset(buttonCenterX, buttonCenterY),
       buttonRadius,
@@ -557,7 +552,6 @@ class ATV320 extends CustomPainter {
       ..strokeWidth = 1.0 / gScale;
 
     final double tickLength = 2.0 * pxPerMm; // 2mm long ticks
-    final double tickWidth = 0.5 * pxPerMm; // 0.5mm wide ticks
 
     for (int i = 0; i < 16; i++) {
       final double angle =
@@ -670,21 +664,19 @@ class SimpleEthernetPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    const double _minX = 179.871662;
-    const double _minY = 615.792125;
-    const double _maxX = 329.147694;
-    const double _maxY = 788.641036;
-    const double _w = 149.27603200000001;
-    const double _h = 172.84891099999993;
-    if (_w == 0 || _h == 0) return;
-    final double scale = math.min(size.width / _w, size.height / _h);
-    final double dx = (size.width - _w * scale) / 2.0;
-    final double dy = (size.height - _h * scale) / 2.0;
+    const double minX = 179.871662;
+    const double maxY = 788.641036;
+    const double w = 149.27603200000001;
+    const double h = 172.84891099999993;
+    if (w == 0 || h == 0) return;
+    final double scale = math.min(size.width / w, size.height / h);
+    final double dx = (size.width - w * scale) / 2.0;
+    final double dy = (size.height - h * scale) / 2.0;
     canvas.save();
     canvas.translate(dx, dy);
     canvas.scale(scale, scale);
     // Map DXF coords (y up) -> canvas (y down)
-    canvas.translate(-_minX, -_maxY);
+    canvas.translate(-minX, -maxY);
     canvas.scale(1, -1);
 
     final Paint strokePaint = Paint()

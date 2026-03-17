@@ -4,6 +4,7 @@
 /// These tests exercise the real DriftTechDocIndex (in-memory DB) and
 /// the actual Flutter widgets, substituting only native plugins (pdfrx,
 /// FilePicker, SharedPreferences) that cannot run in a widget-test harness.
+library;
 import 'dart:async';
 import 'dart:typed_data';
 
@@ -13,13 +14,10 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:tfc_mcp_server/src/database/server_database.dart';
 import 'package:tfc_mcp_server/src/interfaces/tech_doc_index.dart';
 import 'package:tfc_mcp_server/src/services/drift_tech_doc_index.dart';
-import 'package:tfc_mcp_server/tfc_mcp_server.dart'
-    show TechDocSummary, TechDocSection;
 
 import 'package:tfc/drawings/drawing_overlay.dart';
 import 'package:tfc/providers/tech_doc.dart';
 import 'package:tfc/tech_docs/tech_doc_library_section.dart';
-import 'package:tfc/tech_docs/tech_doc_section_detail_panel.dart';
 import 'package:tfc/tech_docs/tech_doc_picker.dart';
 import 'package:tfc/tech_docs/tech_doc_upload_service.dart';
 

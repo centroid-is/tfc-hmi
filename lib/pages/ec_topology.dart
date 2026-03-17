@@ -3,6 +3,8 @@ import 'package:flutter/foundation.dart';
 import '../widgets/base_scaffold.dart';
 
 class EcTopologyPage extends StatelessWidget {
+  const EcTopologyPage({super.key});
+
   @override
   Widget build(BuildContext context) {
     return BaseScaffold(
@@ -32,7 +34,7 @@ class EcTopologyPage extends StatelessWidget {
 class ModuleWidget extends StatelessWidget {
   final List<bool> ledStates;
   final double width;
-  ModuleWidget({required this.ledStates, this.width = 80})
+  const ModuleWidget({super.key, required this.ledStates, this.width = 80})
       : assert(ledStates.length == 8);
 
   @override
@@ -94,7 +96,6 @@ class ModulePainter extends CustomPainter {
     double ledBlockBottom = ledBlockY + ledBlockH;
 
     // Reserve space for bottom labels and padding
-    double bottomLabelH = labelH * 0.85;
     double bottomPad = pad * 0.7;
     double el1008H = labelH * 0.5;
     double beckhoffH = labelH * 0.34;

@@ -97,6 +97,7 @@ class TextAssetConfig extends BaseAsset {
 
   factory TextAssetConfig.fromJson(Map<String, dynamic> json) =>
       _$TextAssetConfigFromJson(json);
+  @override
   Map<String, dynamic> toJson() => _$TextAssetConfigToJson(this);
 }
 
@@ -110,7 +111,7 @@ class TextAssetWidget extends ConsumerStatefulWidget {
 }
 
 class _TextAssetWidgetState extends ConsumerState<TextAssetWidget> {
-  Map<String, String> _variableValues = {};
+  final Map<String, String> _variableValues = {};
   bool _hasError = false;
   String _errorMessage = '';
 

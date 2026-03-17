@@ -125,7 +125,7 @@ class _HistoryGraphPaneState extends ConsumerState<HistoryGraphPane> {
           } else {
             return Stream.fromFuture(collector.database.queryTimeseriesData(
                 k, fetchRange!.end,
-                from: fetchRange!.start));
+                from: fetchRange.start));
           }
         }).toList();
 
@@ -521,9 +521,9 @@ class _HistoryGraphPaneState extends ConsumerState<HistoryGraphPane> {
             : 'Y',
       ),
       yAxis2: (displayCfg?.yAxis2Unit != null &&
-              displayCfg!.yAxis2Unit!.isNotEmpty)
+              displayCfg!.yAxis2Unit.isNotEmpty)
           ? GraphAxisConfig(
-              unit: displayCfg.yAxis2Unit!,
+              unit: displayCfg.yAxis2Unit,
               title: displayCfg.yAxis2Unit,
             )
           : graphData.any((m) => m.keys.any((k) => !k.mainAxis))

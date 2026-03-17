@@ -4,6 +4,7 @@
 /// [MockMcpClient] in packages/tfc_mcp_server/test/helpers/.
 /// This helper is for simpler unit tests that just need to verify
 /// bridge state management without spawning a real subprocess.
+library;
 
 /// Tracks calls made to a simulated MCP transport.
 class MockTransportTracker {

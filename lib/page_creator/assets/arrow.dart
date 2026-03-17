@@ -31,6 +31,7 @@ class ArrowConfig extends BaseAsset {
 
   factory ArrowConfig.fromJson(Map<String, dynamic> json) =>
       _$ArrowConfigFromJson(json);
+  @override
   Map<String, dynamic> toJson() => _$ArrowConfigToJson(this);
 
   @override
@@ -146,7 +147,7 @@ class _ArrowWidgetState extends ConsumerState<ArrowWidget> {
       builder: (context, snapshot) {
         String operation = "lost";
         if (snapshot.hasData) {
-          final str = snapshot.data.toString().toLowerCase() ?? "";
+          final str = snapshot.data.toString().toLowerCase();
           if (str.contains("left")) {
             operation = "left";
           } else if (str.contains("right")) {
