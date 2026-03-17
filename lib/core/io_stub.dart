@@ -18,3 +18,11 @@ class File {
     throw UnsupportedError('File is not available on web');
   }
 }
+
+/// Stub for dart:io stderr — should never be called on web.
+final stderr = _StderrStub();
+
+class _StderrStub {
+  void writeln([Object? object]) {}
+  void write(Object? object) {}
+}
