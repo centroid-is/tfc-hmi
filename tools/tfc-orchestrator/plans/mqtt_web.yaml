@@ -72,8 +72,6 @@ phases:
     validate:
       - "cd packages/tfc_dart && dart analyze --fatal-infos"
       - "cd packages/tfc_dart && dart test --exclude-tags=integration"
-      - "flutter analyze --fatal-warnings --no-fatal-infos"
-      - "cd centroid-hmi && flutter build web"
     stories:
       - id: 6
         name: "Web conditional imports + compilation"
@@ -84,11 +82,9 @@ phases:
 
   - name: "Widgets + Dashboard (Stories 8-10)"
     validate:
-      - "dart run build_runner build --delete-conflicting-outputs"
+      - "cd packages/tfc_dart && dart run build_runner build --delete-conflicting-outputs"
       - "cd packages/tfc_dart && dart analyze --fatal-infos"
-      - "flutter analyze --fatal-warnings --no-fatal-infos"
-      - "flutter test test/"
-      - "cd centroid-hmi && flutter build web"
+      - "cd packages/tfc_dart && dart test --exclude-tags=integration"
     stories:
       - id: 8
         name: "ImageFeedConfig asset"

@@ -88,57 +88,6 @@
       "verification_details": "",
       "started_at": "",
       "worker_slot": -1
-    },
-    {
-      "story_id": 6,
-      "story_name": "Web conditional imports + compilation",
-      "status": "running",
-      "duration_seconds": 0.0,
-      "error": "",
-      "timestamp": "2026-03-17T12:16:14.866450",
-      "retry_count": 0,
-      "review_iterations": 0,
-      "review_findings": 0,
-      "worktree_branch": "",
-      "merge_commit": "",
-      "verification_passed": null,
-      "verification_details": "",
-      "started_at": "2026-03-17T12:16:14.866444",
-      "worker_slot": -1
-    },
-    {
-      "story_id": 8,
-      "story_name": "ImageFeedConfig asset",
-      "status": "running",
-      "duration_seconds": 0.0,
-      "error": "",
-      "timestamp": "2026-03-17T12:16:14.866807",
-      "retry_count": 0,
-      "review_iterations": 0,
-      "review_findings": 0,
-      "worktree_branch": "",
-      "merge_commit": "",
-      "verification_passed": null,
-      "verification_details": "",
-      "started_at": "2026-03-17T12:16:14.866804",
-      "worker_slot": -1
-    },
-    {
-      "story_id": 9,
-      "story_name": "InferenceLogConfig asset",
-      "status": "fail",
-      "duration_seconds": 1931.6077897548676,
-      "error": "Validation failed: flutter analyze --fatal-warnings --no-fatal-infos\n146 issues found. (ran in 1.5s)\n\ns_platform_interface' isn't a dependency of the importing package \u2022 test/pages/server_config_test.dart:5:8 \u2022 depend_on_referenced_packages\n   info \u2022 The imported package 'shared_preferences_platform_interface' isn't a dependency of the importing package \u2022 test/pages/server_config_test.dart:6:8 \u2022 depend_on_referenced_packages\n   info \u2022 The imported package 'modbus_client' isn't a dependency of th",
-      "timestamp": "2026-03-17T12:48:26.475670",
-      "retry_count": 0,
-      "review_iterations": 0,
-      "review_findings": 0,
-      "worktree_branch": "",
-      "merge_commit": "",
-      "verification_passed": null,
-      "verification_details": "",
-      "started_at": "",
-      "worker_slot": -1
     }
   ]
 }

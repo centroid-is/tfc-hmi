@@ -54,6 +54,23 @@
       "verification_details": "",
       "started_at": "",
       "worker_slot": -1
+    },
+    {
+      "story_id": 4,
+      "story_name": "Wire static serving + integration test",
+      "status": "pass",
+      "duration_seconds": 75.70893096923828,
+      "error": "",
+      "timestamp": "2026-03-17T12:50:04.647189",
+      "retry_count": 0,
+      "review_iterations": 0,
+      "review_findings": 0,
+      "worktree_branch": "orchestrator/dashboard/story-4",
+      "merge_commit": "33c2ac73303ee42dd1e703b02cd3d9d7cc776349",
+      "verification_passed": null,
+      "verification_details": "",
+      "started_at": "",
+      "worker_slot": -1
     }
   ]
 }
