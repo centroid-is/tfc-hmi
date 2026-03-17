@@ -2,6 +2,7 @@
   import { onMount, onDestroy } from 'svelte';
   import { fetchPlans, connectPlan, disconnect } from './lib/sse.js';
   import { activePlan, dashboardData } from './lib/stores.js';
+  import PlanTabs from './lib/PlanTabs.svelte';
   import Header from './lib/Header.svelte';
   import WorkerSlots from './lib/WorkerSlots.svelte';
   import DagGraph from './lib/DagGraph.svelte';
@@ -27,6 +28,7 @@
 </script>
 
 <main>
+  <PlanTabs />
   {#if $dashboardData}
     <Header />
     <WorkerSlots />
@@ -36,7 +38,7 @@
     </div>
     <LogViewer />
   {:else}
-    <div class="loading">Connecting to orchestrator...</div>
+    <div class="loading">Select a plan...</div>
   {/if}
 </main>
 
