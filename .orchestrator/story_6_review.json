@@ -125,6 +125,78 @@
       "message": "The plan_arg.is_file() check silently treats a nonexistent path as a directory. If a user typos a plan path (e.g., `plans/mqtt_wb.yaml`), this passes the nonexistent parent to run_dashboard which will raise 'No valid plan files found' \u2014 a confusing error. Consider validating the resolved plans_dir exists before passing it through.",
       "status": "open",
       "fix_attempts": 0
+    },
+    {
+      "id": "no-kIsWeb-tests",
+      "severity": "should_fix",
+      "file": "test/core/web_stubs_test.dart",
+      "line": 1,
+      "message": "No tests exercise the kIsWeb guard branches added by Story 6. The state_man provider (lines 54, 59-64, 85), key_repository.dart (_onExport/_onImport), server_config.dart (_selectCertificate, _selectPrivateKey, _onExport, _onImport, locale init), and page_editor.dart (_isModifierPressed) all added kIsWeb conditionals but zero tests verify them. Since kIsWeb is a compile-time const that can't be mocked in native test runner, consider at minimum adding unit tests that verify the default (native) code path still works correctly with the new guard structure \u2014 e.g., that _onExport does NOT early-return when kIsWeb is false.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "io-stub-file-no-members",
+      "severity": "note",
+      "file": "lib/core/io_stub.dart",
+      "line": 16,
+      "message": "The File stub only stubs the constructor (throws UnsupportedError). Real dart:io File has members like existsSync(), readAsStringSync(), writeAsStringSync() etc. If any web-guarded code path leaks through (bug in a kIsWeb guard), the error will be an opaque UnsupportedError from the constructor rather than a descriptive method-not-found. Consider adding no-op or throwing stubs for commonly used File members (exists, readAsString, writeAsString) so stack traces are more diagnostic. Low priority since all File usage is behind kIsWeb guards.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "page-editor-guard-logic",
+      "severity": "note",
+      "file": "lib/pages/page_editor.dart",
+      "line": 365,
+      "message": "The kIsWeb guard in _isModifierPressed uses `if (kIsWeb || Platform.isWindows || Platform.isLinux)` \u2014 this means web uses Ctrl as modifier (same as Windows/Linux). On web, the actual OS is unknown at runtime, so macOS-in-browser users will need Ctrl instead of Cmd. This is a reasonable default but worth documenting as intentional behavior.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "config-json-no-schema-validation",
+      "severity": "note",
+      "file": "web/config/config.json",
+      "line": 1,
+      "message": "No test validates that web/config/config.json is parseable by StateManConfig.fromJson(). If the schema drifts (e.g., a new required field is added to MqttConfig), the web config silently becomes invalid. The inference_dashboard_config_test.dart validates page-editor.json + keymappings.json but not config.json. Consider adding a test that round-trips config.json through StateManConfig.fromJson().",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "stderr-guard-inconsistent",
+      "severity": "note",
+      "file": "lib/providers/state_man.dart",
+      "line": 54,
+      "message": "The kIsWeb guard on stderr.writeln (lines 54, 85) silently swallows errors on web. On web, stderr is unavailable, so the guard prevents a crash \u2014 but the error information is completely lost. Consider using debugPrint() instead, which works on all platforms and routes to the browser console on web.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "dup-web-dir",
+      "severity": "should_fix",
+      "file": "web/index.html",
+      "line": 1,
+      "message": "Duplicate web/ directory: both root-level `web/` and `centroid-hmi/web/` exist with overlapping but different content (root has comments + apple-touch-icon, centroid-hmi version is stripped). Only `centroid-hmi/web/` is used by `flutter build web` since that's the Flutter project directory. The root `web/` is dead weight that will confuse developers about which config files to edit. Delete root-level `web/` or make it clear it's not used.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "http-dep-unused",
+      "severity": "note",
+      "file": "centroid-hmi/pubspec.yaml",
+      "line": 59,
+      "message": "`http: ^1.0.0` was added per Story 6 AC but no Dart file imports `package:http` yet. The actual HTTP-based config fetching is implemented in Story 7. Premature dependency \u2014 harmless but adds to `pub get` resolution. Acceptable if Story 7 follows shortly.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "stub-logger-dep",
+      "severity": "note",
+      "file": "lib/pages/dbus_login_stub.dart",
+      "line": 5,
+      "message": "Stub imports `package:logger/logger.dart` and creates a real `Logger()` instance (line 7) to mirror the real file's top-level API. Since no external code references the stub's `logger` variable (it's only imported for the `LoginForm` class via conditional import), the import + instantiation is unnecessary overhead. Consider removing both lines \u2014 the conditional import only needs to provide the `LoginForm` class.",
+      "status": "open",
+      "fix_attempts": 0
     }
   ],
   "fixed_then_reopened": []

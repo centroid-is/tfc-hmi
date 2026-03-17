@@ -1,0 +1,439 @@
+name: multi-repo
+project_dir: /Users/jonb/Projects/tfc-hmi
+model: opus
+max_turns: 200
+allowed_tools: "Bash,Read,Edit,Write,Glob,Grep,Agent"
+
+execution_mode: dag
+
+workers:
+  max_parallel: 3
+  worktree_isolation: true
+
+retry:
+  max_attempts: 2
+  circuit_breaker: true
+
+review:
+  enabled: true
+  max_iterations: 2
+  reviewers:
+    - role: python_architect
+      focus: "clean abstractions, backwards compatibility, protocol correctness"
+    - role: test_engineer
+      focus: "test coverage, edge cases, reconnection scenarios"
+
+# ─────────────────────────────────────────────────────────────────────────
+# Acceptance criteria for ALL stories:
+#   1. `python -m pytest tests/ -x -q` passes
+#   2. Existing mqtt_web.yaml plan works identically (dry-run produces same DAG + prompts)
+#   3. Existing dashboard command still works for local-only usage
+# ─────────────────────────────────────────────────────────────────────────
+
+phases:
+  # ── Phase 1: Make repo-specific bits configurable (pure refactor) ────
+  - name: "Configurable defaults (Stories 1-2)"
+    validate:
+      - "cd tools/tfc-orchestrator && python -m pytest tests/ -x -q"
+    stories:
+      - id: 1
+        name: "Parameterize hardcoded repo references"
+        prompt: |
+          ## Goal
+          Make the orchestrator usable with any repo by parameterizing the few
+          hardcoded tfc-hmi references. CRITICAL: this is a REFACTOR — existing
+          plans must work identically with ZERO yaml changes.
+
+          ## TDD: Write tests first, then implement.
+
+          ## What to change
+
+          ### models.py — `_default_prompt()`
+          - Replace the body with a generic fallback that just says:
+            "Implement Story {id}: {name}. Follow all acceptance criteria."
+          - Remove references to ralph-plan.md, packages/tfc_dart, dart commands.
+          - The existing mqtt_web.yaml stories all have explicit `prompt:` or
+            `prompt_file:` so this fallback never fires for them. Verify this.
+
+          ### models.py — Plan dataclass
+          - Add `commit_scope: str = ''`. Parse from YAML `commit_scope:`.
+          - Add `stage_patterns: list[str] = field(default_factory=list)`.
+            Parse from YAML `stage_patterns:`.
+
+          ### executor.py — `commit_story()`
+          - Use `plan.commit_scope` in commit message: `feat({scope}): ...` if set,
+            else `feat: ...` (no scope).
+          - Use `plan.stage_patterns` for git add. If empty, fall back to `git add -A`.
+          - The function signature needs `plan` parameter. Update all callers.
+
+          ### prompts.py
+          - Line 157: replace `feat(mqtt):` with a variable `{commit_prefix}` that
+            uses plan.commit_scope if available.
+
+          ### verify.py — `run_golden_tests()`
+          - Add `golden_test_cmd` param. If provided, run that. If not, keep current
+            `flutter test test/painter/ test/page_creator/` as default.
+          - Add `golden_test_cmd: str = ''` to VerificationConfig, parse from YAML
+            `verification.golden_test_cmd:`.
+
+          ### verify.py — `run_marionette_check()`
+          - Add `marionette_cmd` param. If provided, run that. If not, keep current
+            `flutter run -d linux` as default.
+          - Add `marionette_cmd: str = ''` to VerificationConfig, parse from YAML
+            `verification.marionette_cmd:`.
+
+          ## Backwards compatibility proof
+          - Write a test that loads mqtt_web.yaml and verifies:
+            - commit_scope defaults to '' (so commit msg becomes `feat: Story N — ...`)
+            - stage_patterns defaults to [] (so `git add -A` is used)
+            - golden_test_cmd defaults to '' (so existing flutter command runs)
+            - _default_prompt is never called (all stories have explicit prompts)
+
+          ## Acceptance
+          - All existing tests pass
+          - New tests verify the parameterization
+          - mqtt_web.yaml loads and dry-runs identically
+
+      - id: 2
+        name: "Relative/expandable project_dir + plan-level setup"
+        depends_on: [1]
+        prompt: |
+          ## Goal
+          Allow project_dir to use `~` and relative paths so plan YAMLs are portable.
+          Add plan-level setup/teardown hooks for repo-specific env prep.
+
+          ## TDD: Write tests first, then implement.
+
+          ### models.py — Plan.from_yaml()
+          - After reading project_dir: expanduser() → resolve relative to YAML parent → realpath()
+          - Existing absolute paths pass through unchanged (backwards compatible).
+
+          ### models.py — Plan dataclass
+          - Add `setup: list[str]` and `teardown: list[str]`, default empty.
+          - Parse from top-level YAML keys.
+
+          ### worker.py — _run_story_sync()
+          - Run plan.setup commands in worktree cwd before _execute_claude().
+          - Plan-level setup runs BEFORE phase-level setup.
+          - Run plan.teardown after story completes (pass or fail).
+
+          ## Tests
+          - `~/foo` expands to absolute path
+          - `../my-repo` resolves relative to YAML directory
+          - Absolute paths unchanged
+          - setup/teardown parse from YAML and default to empty
+          - mqtt_web.yaml has no setup/teardown → empty lists, no behavioral change
+
+  # ── Phase 2: Hub WebSocket server + client ───────────────────────────
+  - name: "Hub protocol (Stories 3-5)"
+    validate:
+      - "cd tools/tfc-orchestrator && python -m pytest tests/ -x -q"
+    stories:
+      - id: 3
+        name: "Hub WebSocket server"
+        depends_on: [1]
+        prompt: |
+          ## Goal
+          Create the central hub — a WebSocket server that orchestrator instances
+          connect to. It accumulates state pushed by orchestrators and serves it
+          via the SAME REST API as the existing dashboard.py.
+
+          ## TDD: Write tests first, then implement.
+
+          ## New file: orchestrator/hub.py
+
+          ### HubServer class
+          ```python
+          class HubServer:
+              def __init__(self):
+                  self.connections: dict[str, web.WebSocketResponse] = {}  # plan_name → ws
+                  self.registry: dict[str, dict] = {}    # plan_name → {repo, plan_summary, dag}
+                  self.states: dict[str, list] = {}      # plan_name → [result dicts]
+                  self.log_buffers: dict[str, dict] = {} # plan_name → {story_id → {stdout: [...], stderr: [...]}}
+                  self._events: dict[str, asyncio.Event] = {}  # notify SSE on updates
+          ```
+
+          ### WebSocket protocol (JSON messages)
+          Orchestrator → Hub:
+          - `{"type": "register", "name": "mqtt-web", "repo": "/path/to/repo",
+              "plan": {"name", "model", "max_parallel", "total_stories", "execution_mode"},
+              "dag": {"nodes": [...], "edges": [...]}}`
+          - `{"type": "state_update", "name": "mqtt-web", "story_id": 1,
+              "status": "running|pass|fail", "duration_seconds": 0, "attempt": 1}`
+          - `{"type": "log_chunk", "name": "mqtt-web", "story_id": 1,
+              "stream": "stdout", "data": "some log text"}`
+          - `{"type": "heartbeat", "name": "mqtt-web", "timestamp": "2026-03-17T..."}`
+
+          Hub → Orchestrator:
+          - `{"type": "ack"}` (after register)
+
+          ### REST API (must match dashboard.py interface exactly)
+          - `GET /api/plans` → list of plan summaries with status/passed/failed/running/total + `connected: bool`
+          - `GET /api/{plan_name}/state` → `{plan, dag, state: {results}, statuses}`
+          - `GET /api/{plan_name}/events` → SSE stream, push when state_update arrives
+          - `GET /api/{plan_name}/logs/{story_id}/{stream}` → accumulated log text
+          - `GET /api/{plan_name}/logs/{story_id}/{stream}/tail` → SSE of new log chunks
+          - Serve Svelte dist at `/` if present
+
+          ### Status derivation
+          - Import and reuse `derive_node_statuses` logic from dashboard.py but adapt
+            to work on in-memory dicts instead of file reads. Factor out a shared
+            helper or just recompute from the states dict.
+
+          ### Disconnect handling
+          - On WS disconnect: remove from self.connections, keep state in registry/states.
+          - `/api/plans` shows `connected: false` for disconnected orchestrators.
+          - State persists so the dashboard still shows last-known status.
+
+          ### Entry point
+          ```python
+          def main():
+              parser = argparse.ArgumentParser(description='tfc-orchestrator hub')
+              parser.add_argument('--host', default='0.0.0.0')
+              parser.add_argument('--port', type=int, default=9000)
+              args = parser.parse_args()
+              hub = HubServer()
+              app = hub.create_app()
+              web.run_app(app, host=args.host, port=args.port)
+          ```
+
+          ### Tests (tests/test_hub.py)
+          Use aiohttp test client:
+          - WS connect + register → registry populated
+          - state_update → /api/plans shows correct counts
+          - state_update → /api/{name}/state returns correct statuses
+          - log_chunk → /api/{name}/logs returns accumulated text
+          - WS disconnect → connected=false, state preserved
+          - SSE /events emits on state_update
+          - heartbeat updates last_heartbeat timestamp
+
+      - id: 4
+        name: "Orchestrator WebSocket client"
+        depends_on: [3]
+        prompt: |
+          ## Goal
+          Add a fire-and-forget WebSocket client to the orchestrator. When `hub_url`
+          is set in the plan YAML, the orchestrator connects and pushes state.
+          When not set, behavior is unchanged (standalone mode).
+
+          ## TDD: Write tests first, then implement.
+
+          ## New file: orchestrator/hub_client.py
+
+          ```python
+          class HubClient:
+              def __init__(self, hub_url: str, plan_name: str):
+                  self.hub_url = hub_url
+                  self.plan_name = plan_name
+                  self._ws = None
+                  self._session = None
+                  self._connected = False
+                  self._reconnect_interval = 5
+                  self._queue: asyncio.Queue = asyncio.Queue()
+
+              async def start(self, plan_summary: dict, dag_info: dict):
+                  """Connect and send register. Start background reconnect + sender loops."""
+
+              async def stop(self):
+                  """Graceful close."""
+
+              async def send_state_update(self, story_id, status, **kwargs):
+                  """Enqueue state update. Non-blocking. Safe if disconnected."""
+
+              async def send_log_chunk(self, story_id, stream, data):
+                  """Enqueue log chunk. Non-blocking."""
+
+              async def _reconnect_loop(self):
+                  """Reconnect every N seconds if disconnected. Re-register on reconnect."""
+
+              async def _sender_loop(self):
+                  """Drain queue, send messages. Drop if disconnected."""
+          ```
+
+          Key design decisions:
+          - Queue-based: public methods enqueue, background task sends.
+          - If disconnected, messages are DROPPED (not buffered indefinitely).
+            State will re-sync via register on reconnect.
+          - All public methods are non-blocking and never raise on connection issues.
+          - Reconnect re-sends register with current accumulated state.
+
+          ### models.py
+          - Add `hub_url: str = ''` to Plan. Parse from YAML `hub_url:`.
+          - Empty string = standalone mode (no hub connection).
+
+          ### worker.py integration
+          - In WorkerPool: if plan.hub_url is set, create HubClient.
+          - In _run_plan_dag(): call hub_client.start() before dispatch loop,
+            hub_client.stop() after.
+          - In _run_story_sync(): after marking running/pass/fail in state,
+            also call hub_client.send_state_update().
+          - In _stream_json_to_log(): forward chunks to hub_client.send_log_chunk().
+
+          ### Backwards compatibility
+          - mqtt_web.yaml has no hub_url → HubClient is never created → identical behavior.
+
+          ### Tests (tests/test_hub_client.py)
+          - send_state_update enqueues without error
+          - messages dropped when disconnected (no exception, no hang)
+          - reconnect re-sends register message
+          - hub_url='' means no client created (test via worker.py)
+
+      - id: 5
+        name: "Hub CLI entry point"
+        depends_on: [3]
+        prompt: |
+          ## Goal
+          Add `hub` subcommand to CLI. Keep existing `dashboard` command unchanged.
+
+          ## TDD: Write tests first, then implement.
+
+          ### cli.py
+          Add:
+          ```
+          tfc-orchestrator hub [--host HOST] [--port PORT]
+          ```
+          - Default host: 0.0.0.0
+          - Default port: 9000
+          - Imports HubServer from hub.py, creates app, runs it.
+
+          ### pyproject.toml
+          - Add script entry: `tfc-hub = "orchestrator.hub:main"`
+
+          ### Existing `dashboard` command
+          - UNCHANGED. Still reads local plan YAML files and state JSON files.
+          - This is the standalone/single-repo dashboard.
+
+          ### Tests
+          - `hub` subcommand parses correctly
+          - `dashboard` still works as before
+          - --host and --port flags parsed
+
+  # ── Phase 3: Dashboard UI updates ────────────────────────────────────
+  - name: "Hub dashboard UI (Stories 6-7)"
+    validate:
+      - "cd tools/tfc-orchestrator && python -m pytest tests/ -x -q"
+      - "cd tools/tfc-orchestrator/dashboard && npm run build"
+    stories:
+      - id: 6
+        name: "Connection status indicators in Svelte"
+        depends_on: [3, 5]
+        prompt: |
+          ## Goal
+          Show which orchestrators are connected/offline in the Svelte dashboard.
+          The Svelte frontend already works with the hub because the REST API
+          is identical to dashboard.py. This story adds hub-specific UI elements.
+
+          ## Changes
+
+          ### PlanTabs.svelte (or equivalent)
+          - Show colored dot next to each plan name:
+            - Green dot: connected (connected: true from /api/plans)
+            - Gray dot: offline (connected: false)
+          - If `connected` field is missing (local dashboard mode), show no dot.
+          - Show `repo` label under plan name (truncated to last path component,
+            e.g. "/Users/jon/Projects/tfc-hmi" → "tfc-hmi")
+
+          ### Header.svelte
+          - Show "N connected" count when running against hub
+          - Detect hub mode: if any plan has `connected` field, we're in hub mode
+
+          ### Validation
+          - `npm run build` succeeds
+          - No TypeScript or Svelte compilation errors
+
+      - id: 7
+        name: "Integration test: full hub round-trip"
+        depends_on: [4, 6]
+        prompt: |
+          ## Goal
+          End-to-end test: start hub, connect mock orchestrator via WebSocket,
+          push state updates, verify REST API and SSE reflect the changes.
+
+          ## TDD: Write the test, then fix any issues found.
+
+          ### tests/test_hub_integration.py
+
+          Test scenario:
+          1. Start HubServer as aiohttp test app
+          2. Connect WebSocket client, send register message with a mock plan
+             (3 stories, simple DAG: 1→2→3)
+          3. Send state_update: story 1 running
+          4. Verify GET /api/plans shows status=running, running=1
+          5. Send state_update: story 1 pass
+          6. Verify GET /api/{name}/state shows story 1 passed
+          7. Send log_chunk for story 2
+          8. Verify GET /api/{name}/logs/2/stdout returns the chunk
+          9. Disconnect WebSocket
+          10. Verify GET /api/plans shows connected=false, state preserved
+
+          Also test:
+          - Two orchestrators connected simultaneously (different plan names)
+          - Reconnection: disconnect + reconnect, state re-registered
+          - SSE /events stream emits when state_update arrives
+
+          ### Validation
+          - `python -m pytest tests/test_hub_integration.py -v` passes
+
+  # ── Phase 4: Packaging ───────────────────────────────────────────────
+  - name: "Packaging (Story 8)"
+    validate:
+      - "cd tools/tfc-orchestrator && python -m pytest tests/ -x -q"
+    stories:
+      - id: 8
+        name: "Template plan generator and pip packaging"
+        depends_on: [5]
+        prompt: |
+          ## Goal
+          Make the orchestrator pip-installable and add `tfc-orchestrator init`
+          to bootstrap a plan YAML for any repo.
+
+          ## TDD: Write tests first, then implement.
+
+          ### pyproject.toml
+          - Proper metadata: name="tfc-orchestrator", version="4.0.0"
+          - Dependencies: aiohttp>=3.9, pyyaml
+          - Scripts: tfc-orchestrator, tfc-hub
+
+          ### cli.py — `init` subcommand
+          ```
+          tfc-orchestrator init [--dir PATH] [--name NAME] [--hub-url URL]
+          ```
+          - PATH defaults to cwd
+          - NAME defaults to repo directory name
+          - Reads git remote origin for context
+          - Generates plan YAML template at PATH/.orchestrator/plans/NAME.yaml:
+
+          ```yaml
+          # Generated by tfc-orchestrator init
+          name: {name}
+          project_dir: .  # Relative to this file
+          model: sonnet
+          max_turns: 200
+          # hub_url: "ws://localhost:9000/ws"
+
+          workers:
+            max_parallel: 3
+            worktree_isolation: true
+
+          retry:
+            max_attempts: 2
+
+          # commit_scope: ""
+          # stage_patterns: []
+
+          phases:
+            - name: "Phase 1"
+              validate:
+                - "echo 'replace with your test command'"
+              stories:
+                - id: 1
+                  name: "First story"
+                  prompt: |
+                    Describe what to implement.
+          ```
+
+          ### Tests
+          - Generated YAML parses with Plan.from_yaml()
+          - --dir sets project_dir
+          - --hub-url sets hub_url
+          - Creates .orchestrator/plans/ directory

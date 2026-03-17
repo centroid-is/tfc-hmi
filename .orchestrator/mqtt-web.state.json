@@ -143,10 +143,27 @@
     {
       "story_id": 6,
       "story_name": "Web conditional imports + compilation",
+      "status": "pass",
+      "duration_seconds": 630.9934928417206,
+      "error": "",
+      "timestamp": "2026-03-17T14:46:11.236709",
+      "retry_count": 0,
+      "review_iterations": 1,
+      "review_findings": 3,
+      "worktree_branch": "orchestrator/mqtt-web/story-6",
+      "merge_commit": "60bf9ca2810d5fbdacdc0d019fefce8a39c13617",
+      "verification_passed": true,
+      "verification_details": "\n00:00 +0: loading /Users/jonb/Projects/tfc-hmi/test/painter/auger_conveyor_test.dart                                                                                                                   \n00:01 +0: loading /Users/jonb/Projects/tfc-hmi/test/painter/auger_conveyor_test.dart                                                                                                                   \n00:01 +0: loading /Users/jonb/Projects/tfc-hmi/test/page_creator/all_keys_test.dart                ",
+      "started_at": "",
+      "worker_slot": -1
+    },
+    {
+      "story_id": 7,
+      "story_name": "Provider integration \u2014 static config + page hiding",
       "status": "running",
       "duration_seconds": 0.0,
       "error": "",
-      "timestamp": "2026-03-17T14:28:29.173850",
+      "timestamp": "2026-03-17T14:46:11.238494",
       "retry_count": 0,
       "review_iterations": 0,
       "review_findings": 0,
@@ -154,7 +171,7 @@
       "merge_commit": "",
       "verification_passed": null,
       "verification_details": "",
-      "started_at": "2026-03-17T14:28:29.173822",
+      "started_at": "2026-03-17T14:46:11.238487",
       "worker_slot": -1
     }
   ]
