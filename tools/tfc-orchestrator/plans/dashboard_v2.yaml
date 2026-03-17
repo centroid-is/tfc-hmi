@@ -1,0 +1,1119 @@
+name: dashboard-v2
+project_dir: /Users/jonb/Projects/tfc-hmi
+model: opus
+max_turns: 200
+allowed_tools: "Bash,Read,Edit,Write,Glob,Grep,Agent"
+
+execution_mode: dag
+
+workers:
+  max_parallel: 4
+  worktree_isolation: true
+
+retry:
+  max_attempts: 2
+  circuit_breaker: true
+
+review:
+  enabled: false
+
+gsd:
+  enabled: false
+
+global_prompt_prefix: |
+  ## TDD — MANDATORY for every story
+  Follow strict RED → GREEN → REFACTOR:
+  1. **RED**: Write failing tests FIRST that cover the acceptance criteria
+  2. **GREEN**: Write the minimum code to make tests pass
+  3. **REFACTOR**: Clean up while keeping tests green
+  Never write implementation before tests. Run tests after each change.
+
+phases:
+  - name: "Backend fixes"
+    stories:
+      - id: 1
+        name: "Multi-plan API + backend bug fixes"
+        acceptance_checks:
+          - "cd tools/tfc-orchestrator && /Users/jonb/Projects/tfc-hmi/tools/tfc-orchestrator/.venv/bin/python -m pytest tests/test_dashboard.py -v"
+        prompt: |
+          You are fixing and extending the tfc-orchestrator web dashboard backend.
+
+          ## TDD REQUIREMENT
+          Write tests FIRST (RED), then implement (GREEN), then refactor.
+          For every bug fix and feature below, add a test in `tests/test_dashboard.py` BEFORE
+          writing the fix. Run tests to confirm they fail, then implement the fix.
+
+          ## Context — Read these files first
+          - `tools/tfc-orchestrator/orchestrator/dashboard.py` — current backend (single-plan)
+          - `tools/tfc-orchestrator/orchestrator/cli.py` — CLI entry point (see `dashboard` command ~line 477)
+          - `tools/tfc-orchestrator/orchestrator/models.py` — Plan/Phase/Story dataclasses
+          - `tools/tfc-orchestrator/orchestrator/state.py` — OrchestratorState/StoryResult
+          - `tools/tfc-orchestrator/orchestrator/dag.py` — DAGScheduler, NodeStatus
+          - `tools/tfc-orchestrator/tests/test_dashboard.py` — existing tests
+
+          ## Bug 1: `build_dag_info` missing `depends_on`
+
+          The frontend DAG graph renders all nodes in ONE vertical column because nodes
+          don't include their dependency info. Fix:
+
+          ```python
+          def build_dag_info(plan: Plan) -> dict:
+              nodes = []
+              edges = []
+              for phase in plan.phases:
+                  for story in phase.stories:
+                      nodes.append({
+                          'id': story.id,
+                          'name': story.name,
+                          'phase': phase.name,
+                          'depends_on': list(story.depends_on),  # <-- ADD THIS
+                      })
+                      for dep in story.depends_on:
+                          edges.append([dep, story.id])
+              return {'nodes': nodes, 'edges': edges}
+          ```
+
+          ## Bug 2: SSE events send raw state, not computed data
+
+          The `/api/events` SSE handler sends only raw `state_data`. The frontend needs
+          recomputed `statuses` too (same as `/api/state`). Fix the event loop body:
+
+          ```python
+          state_data = read_state(state_path)
+          dag_info = build_dag_info(plan)
+          statuses = derive_node_statuses(plan, state_data, log_dir)
+          payload = json.dumps({
+              'state': state_data,
+              'statuses': {str(k): v for k, v in statuses.items()},
+              'dag': dag_info,
+          })
+          ```
+
+          ## Bug 3: Log tail sends JSON-encoded text
+
+          In `_handle_log_tail`, the data is JSON-encoded (`json.dumps(new_data)`) then the
+          frontend does `logContent += event.data`. But `event.data` has escaped newlines
+          like `"line1\\nline2"`. Fix by sending raw text lines as separate SSE events:
+
+          ```python
+          if size > offset:
+              with open(log_file) as f:
+                  f.seek(offset)
+                  new_data = f.read()
+              offset = size
+              # Send each line as a separate SSE event (no JSON wrapping)
+              for line in new_data.splitlines():
+                  await resp.write(f'data: {line}\n\n'.encode())
+          ```
+
+          ## Bug 4: Log tail crashes on client disconnect
+
+          `_handle_log_tail` catches `ConnectionResetError` but aiohttp raises
+          `aiohttp.client_exceptions.ClientConnectionResetError` which is NOT a subclass
+          of `ConnectionResetError`. This causes repeated tracebacks when browsers close
+          the SSE connection. Fix the except clause:
+
+          ```python
+          from aiohttp.client_exceptions import ClientConnectionResetError as AiohttpConnReset
+
+          # In _handle_log_tail:
+          except (ConnectionResetError, ConnectionAbortedError, asyncio.CancelledError,
+                  OSError, AiohttpConnReset, Exception):
+              pass
+          ```
+
+          Do the same for `_handle_events` to be safe.
+
+          ## Bug 5: Log 404 for running stories
+
+          When a story just started, its log file may not exist yet. Return empty 200
+          instead of 404 for missing log files when the story is running:
+
+          ```python
+          async def _handle_logs(request):
+              ...
+              if not log_file.exists():
+                  return web.Response(text='', content_type='text/plain')
+          ```
+
+          For the tail endpoint, if the file doesn't exist, wait for it (poll every 1s
+          for up to 30s, then give up):
+
+          ```python
+          async def _handle_log_tail(request):
+              ...
+              # Wait for log file to appear
+              for _ in range(30):
+                  if log_file.exists():
+                      break
+                  await asyncio.sleep(1)
+              if not log_file.exists():
+                  return web.Response(text='', content_type='text/plain')
+              ...
+          ```
+
+          ## Bug 5: Missing `max_parallel` and `total_stories` in plan info
+
+          Add to the state response:
+          ```python
+          'plan': {
+              'name': plan.name,
+              'model': plan.model,
+              'max_parallel': plan.workers.max_parallel if plan.workers else 1,
+              'total_stories': sum(len(p.stories) for p in plan.phases),
+              'execution_mode': plan.execution_mode or 'sequential',
+          },
+          ```
+
+          ## Bug 6: Stale "running" detection
+
+          Stories can get stuck as "running" if the orchestrator crashes. In `derive_node_statuses`,
+          when a story has status "running" in the state file, check the log file mtime.
+          If mtime > 120s ago, mark it as "interrupted" instead of "running".
+          Add "interrupted" as a valid status (treat it like "failed" for DAG cascade purposes,
+          but display differently in the UI — gray with a warning icon).
+
+          ## Feature: Multi-plan support
+
+          ### Plan discovery function
+          ```python
+          def discover_plans(plans_dir: Path) -> dict[str, Plan]:
+              """Scan directory for *.yaml plan files, return {plan_name: Plan}."""
+              plans = {}
+              for f in sorted(plans_dir.glob('*.yaml')):
+                  try:
+                      plan = Plan.from_yaml(str(f))
+                      plans[plan.name] = plan
+                  except Exception:
+                      pass
+              return plans
+          ```
+
+          ### Change `create_app` signature
+          ```python
+          def create_app(
+              plans_dir: str,
+              state_dir: str | None = None,
+              poll_interval: float = 2.0,
+          ) -> web.Application:
+              plans = discover_plans(Path(plans_dir))
+              if not plans:
+                  raise ValueError(f'No valid plan files found in {plans_dir}')
+
+              # Determine state_dir from first plan's project_dir if not given
+              if state_dir is None:
+                  first_plan = next(iter(plans.values()))
+                  state_dir = str(Path(first_plan.project_dir) / '.orchestrator')
+
+              app = web.Application()
+              app['plans'] = plans
+              app['plans_dir'] = plans_dir
+              app['state_dir'] = state_dir
+              app['poll_interval'] = poll_interval
+
+              # Multi-plan routes
+              app.router.add_get('/api/plans', _handle_plans)
+              app.router.add_get('/api/{plan_name}/state', _handle_state)
+              app.router.add_get('/api/{plan_name}/events', _handle_events)
+              app.router.add_get('/api/{plan_name}/logs/{story_id}/{stream}', _handle_logs)
+              app.router.add_get('/api/{plan_name}/logs/{story_id}/{stream}/tail', _handle_log_tail)
+
+              if _DIST_DIR.is_dir():
+                  app.router.add_get('/', _handle_index)
+                  app.router.add_static('/assets', _DIST_DIR / 'assets')
+
+              return app
+          ```
+
+          ### New `/api/plans` endpoint
+          Returns summary of all plans with their status:
+          ```python
+          async def _handle_plans(request):
+              plans = request.app['plans']
+              state_dir = Path(request.app['state_dir'])
+              result = []
+              for name, plan in plans.items():
+                  state_path = state_dir / f'{name}.state.json'
+                  log_dir = state_dir / 'logs' / name
+                  state_data = read_state(state_path)
+                  statuses = derive_node_statuses(plan, state_data, log_dir)
+                  total = sum(len(p.stories) for p in plan.phases)
+                  passed = sum(1 for s in statuses.values() if s == 'passed')
+                  failed = sum(1 for s in statuses.values() if s in ('failed', 'interrupted'))
+                  running = sum(1 for s in statuses.values() if s == 'running')
+                  status = 'complete' if passed == total else 'failed' if failed > 0 else 'running' if running > 0 else 'pending'
+                  result.append({
+                      'name': name,
+                      'status': status,
+                      'passed': passed,
+                      'failed': failed,
+                      'running': running,
+                      'total': total,
+                  })
+              return web.json_response(result)
+          ```
+
+          ### Helper for plan-scoped routes
+          ```python
+          def _plan_paths(app, plan_name):
+              plan = app['plans'].get(plan_name)
+              if not plan:
+                  raise web.HTTPNotFound(text=f'Plan not found: {plan_name}')
+              state_dir = Path(app['state_dir'])
+              state_path = state_dir / f'{plan_name}.state.json'
+              log_dir = state_dir / 'logs' / plan_name
+              return plan, state_path, log_dir
+          ```
+
+          Update all route handlers to use `request.match_info['plan_name']` and `_plan_paths()`.
+
+          ### CLI change
+          In `cli.py`, update the dashboard command to accept either a plan file or plans directory:
+          ```python
+          elif args.command == 'dashboard':
+              from .dashboard import run_dashboard
+              plan_arg = Path(args.plan)
+              if plan_arg.is_file():
+                  plans_dir = str(plan_arg.parent)
+              else:
+                  plans_dir = str(plan_arg)
+              run_dashboard(plans_dir, host=args.host, port=args.port)
+          ```
+
+          Update `run_dashboard`:
+          ```python
+          def run_dashboard(plans_dir: str, host='127.0.0.1', port=8080):
+              app = create_app(plans_dir)
+              print(f'Dashboard: http://{host}:{port}')
+              web.run_app(app, host=host, port=port, print=None)
+          ```
+
+          ## Update tests
+
+          Update `tests/test_dashboard.py`:
+          - Create temp directory with plan YAML files for test fixtures
+          - Update all `create_app()` calls to use new `plans_dir` signature
+          - Add: `test_discover_plans` — finds YAML files, ignores invalid ones
+          - Add: `test_api_plans_endpoint` — returns list with status/passed/total
+          - Add: `test_api_plan_state_route` — `/api/{plan}/state` works
+          - Add: `test_api_plan_not_found` — `/api/nonexistent/state` returns 404
+          - Add: `test_build_dag_includes_depends_on` — verify `depends_on` in nodes
+          - Keep all existing pure function tests working (update fixtures as needed)
+
+          ## Validate
+          ```bash
+          cd tools/tfc-orchestrator
+          /Users/jonb/Projects/tfc-hmi/tools/tfc-orchestrator/.venv/bin/python -m pytest tests/test_dashboard.py -v
+          /Users/jonb/Projects/tfc-hmi/tools/tfc-orchestrator/.venv/bin/python -m pytest tests/ -v --ignore=tests/test_dashboard.py
+          ```
+
+      - id: 2
+        name: "Live streaming logs via stream-json"
+        acceptance_checks:
+          - "cd tools/tfc-orchestrator && /Users/jonb/Projects/tfc-hmi/tools/tfc-orchestrator/.venv/bin/python -m pytest tests/test_worker.py -v"
+        prompt: |
+          You are adding live progress streaming to the tfc-orchestrator.
+
+          ## Context — Read these files
+          - `tools/tfc-orchestrator/orchestrator/worker.py` — see `_execute_claude` method (~line 530)
+          - `tools/tfc-orchestrator/tests/test_worker.py` — existing worker tests
+
+          ## Problem
+          Currently `_execute_claude` uses `--output-format text` which writes Claude's final
+          text response to the log file all at once. The dashboard log viewer shows nothing
+          until the story finishes — then shows the final summary. Users want to see live
+          progress: tool calls, file reads/edits, thinking, etc.
+
+          ## Solution: Use `--output-format stream-json` and parse in real-time
+
+          ### 1. Change the command
+          In `_execute_claude`, change:
+          - `'--output-format', 'text'` → `'--output-format', 'stream-json'`
+          - Don't write stdout directly to log file. Instead, pipe stdout to PIPE and
+            parse the stream-json in a reader thread.
+
+          ### 2. Create a stream parser
+
+          Add a function that reads stream-json from a pipe and writes human-readable
+          progress lines to the log file:
+
+          ```python
+          def _stream_json_to_log(pipe, log_file_handle):
+              """Read stream-json from Claude's stdout pipe and write readable progress to log.
+
+              stream-json format: newline-delimited JSON objects. Key message types:
+              - {"type":"assistant","message":{"content":[{"type":"text","text":"..."}]}}
+              - {"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{...}}]}}
+              - {"type":"result","subtype":"success","result":"final text",...}
+
+              We extract and write:
+              - Text output lines as-is
+              - Tool calls as: [tool] ToolName: brief description
+              - Results as: [result] success/error
+              """
+              import json
+              for raw_line in pipe:
+                  raw_line = raw_line.strip()
+                  if not raw_line:
+                      continue
+                  try:
+                      event = json.loads(raw_line)
+                  except json.JSONDecodeError:
+                      log_file_handle.write(raw_line + '\n')
+                      log_file_handle.flush()
+                      continue
+
+                  etype = event.get('type', '')
+
+                  if etype == 'assistant':
+                      msg = event.get('message', {})
+                      for block in msg.get('content', []):
+                          btype = block.get('type', '')
+                          if btype == 'text':
+                              text = block.get('text', '')
+                              if text.strip():
+                                  log_file_handle.write(text)
+                                  if not text.endswith('\n'):
+                                      log_file_handle.write('\n')
+                                  log_file_handle.flush()
+                          elif btype == 'tool_use':
+                              name = block.get('name', '?')
+                              inp = block.get('input', {})
+                              # Brief description of the tool call
+                              if name == 'Read':
+                                  desc = inp.get('file_path', '')
+                              elif name == 'Write':
+                                  desc = inp.get('file_path', '')
+                              elif name == 'Edit':
+                                  desc = inp.get('file_path', '')
+                              elif name == 'Bash':
+                                  desc = inp.get('command', '')[:80]
+                              elif name in ('Glob', 'Grep'):
+                                  desc = inp.get('pattern', '')
+                              else:
+                                  desc = str(inp)[:80]
+                              log_file_handle.write(f'[{name}] {desc}\n')
+                              log_file_handle.flush()
+
+                  elif etype == 'result':
+                      subtype = event.get('subtype', '')
+                      cost = event.get('cost_usd', 0)
+                      duration = event.get('duration_ms', 0)
+                      turns = event.get('num_turns', 0)
+                      log_file_handle.write(
+                          f'\n--- Result: {subtype} | {turns} turns | '
+                          f'${cost:.2f} | {duration/1000:.0f}s ---\n'
+                      )
+                      # Also write the final result text
+                      result_text = event.get('result', '')
+                      if result_text:
+                          log_file_handle.write(result_text)
+                          if not result_text.endswith('\n'):
+                              log_file_handle.write('\n')
+                      log_file_handle.flush()
+          ```
+
+          IMPORTANT: The actual stream-json format may differ from the above. Before writing
+          the parser, test the format by running this command from a shell (NOT inside Claude):
+          ```bash
+          unset CLAUDECODE
+          echo "say hello" | claude -p --output-format stream-json --max-turns 1 2>/dev/null | head -20
+          ```
+          Read the output and adapt the parser to match the actual JSON structure.
+          If you cannot run this command (e.g., inside a nested Claude session), write the
+          parser defensively: log any unrecognized event types as `[unknown: {type}]` so
+          we can see what's coming through and fix it later.
+
+          ### 3. Update `_execute_claude`
+
+          ```python
+          def _execute_claude(self, story, plan, cwd):
+              cmd = [
+                  'claude', '-p', story.prompt,
+                  '--model', plan.model,
+                  '--allowedTools', plan.allowed_tools,
+                  '--max-turns', str(plan.max_turns),
+                  '--output-format', 'stream-json',
+                  '--dangerously-skip-permissions',
+              ]
+
+              log_base = self._log_dir() / f'story_{story.id}'
+              stdout_path = f'{log_base}.stdout.log'
+              stderr_path = f'{log_base}.stderr.log'
+
+              proc = None
+              stdout_log = open(stdout_path, 'w')
+              stderr_log = open(stderr_path, 'w')
+              try:
+                  proc = subprocess.Popen(
+                      cmd, cwd=cwd,
+                      stdin=subprocess.DEVNULL,
+                      stdout=subprocess.PIPE,  # Pipe instead of file
+                      stderr=stderr_log,
+                      text=True, start_new_session=True,
+                  )
+                  # Parse stream in a thread so we don't block
+                  import threading
+                  reader = threading.Thread(
+                      target=_stream_json_to_log,
+                      args=(proc.stdout, stdout_log),
+                      daemon=True,
+                  )
+                  reader.start()
+                  proc.wait(timeout=1800)
+                  reader.join(timeout=5)
+
+                  stderr = Path(stderr_path).read_text()
+                  return proc.returncode, stderr if proc.returncode != 0 else ''
+              except subprocess.TimeoutExpired:
+                  _kill_process_tree(proc)
+                  return 124, 'Timeout after 1800s'
+              except KeyboardInterrupt:
+                  _kill_process_tree(proc)
+                  raise
+              finally:
+                  stdout_log.close()
+                  stderr_log.close()
+          ```
+
+          ### 4. Add tests
+
+          In `tests/test_worker.py`, add tests for `_stream_json_to_log`:
+          - `test_stream_json_text_output` — text blocks written as-is
+          - `test_stream_json_tool_calls` — tool uses formatted as `[ToolName] desc`
+          - `test_stream_json_result` — result event formatted with cost/duration
+          - `test_stream_json_malformed_line` — non-JSON lines written as-is
+          - `test_stream_json_empty_lines` — skipped silently
+
+          Use `io.StringIO` for both pipe input and log output in tests.
+
+          ### 5. Validate
+          ```bash
+          cd tools/tfc-orchestrator
+          /Users/jonb/Projects/tfc-hmi/tools/tfc-orchestrator/.venv/bin/python -m pytest tests/test_worker.py -v
+          /Users/jonb/Projects/tfc-hmi/tools/tfc-orchestrator/.venv/bin/python -m pytest tests/ -v
+          ```
+
+  - name: "Frontend — Multi-plan + stores"
+    stories:
+      - id: 3
+        name: "Stores + SSE refactor for multi-plan"
+        depends_on: [1]
+        acceptance_checks:
+          - "cd tools/tfc-orchestrator/dashboard && npm run build"
+        prompt: |
+          You are refactoring the Svelte frontend stores for multi-plan support.
+
+          ## Context — Read these files
+          - `tools/tfc-orchestrator/dashboard/src/lib/stores.js`
+          - `tools/tfc-orchestrator/dashboard/src/lib/sse.js`
+          - `tools/tfc-orchestrator/dashboard/src/App.svelte`
+
+          The backend API has changed. New routes:
+          - `GET /api/plans` → `[{"name": "mqtt-web", "status": "running", "passed": 5, "total": 11}, ...]`
+          - `GET /api/{plan_name}/state` → full state for one plan
+          - `GET /api/{plan_name}/events` → SSE for one plan
+          - `GET /api/{plan_name}/logs/{story_id}/{stream}` → log content
+          - `GET /api/{plan_name}/logs/{story_id}/{stream}/tail` → log tail SSE
+
+          ## Task 1: Rewrite `src/lib/stores.js`
+
+          ```js
+          import { writable, derived } from 'svelte/store';
+
+          // All plans summary (from /api/plans)
+          export const planList = writable([]);
+
+          // Currently selected plan name
+          export const activePlan = writable(null);
+
+          // Full state for the active plan
+          export const dashboardData = writable(null);
+
+          // Selected story ID for log viewer
+          export const selectedStory = writable(null);
+
+          // Derived (unchanged — still derive from dashboardData)
+          export const stories = derived(dashboardData, $d => $d?.dag?.nodes || []);
+          export const statuses = derived(dashboardData, $d => $d?.statuses || {});
+          export const planInfo = derived(dashboardData, $d => $d?.plan || null);
+          ```
+
+          ## Task 2: Rewrite `src/lib/sse.js`
+
+          ```js
+          import { planList, activePlan, dashboardData } from './stores.js';
+
+          let eventSource = null;
+          let currentPlan = null;
+
+          export async function fetchPlans() {
+            try {
+              const res = await fetch('/api/plans');
+              if (!res.ok) return;
+              const plans = await res.json();
+              planList.set(plans);
+              // Auto-select first plan if none selected
+              activePlan.update(current => current || (plans.length > 0 ? plans[0].name : null));
+            } catch (e) {
+              console.warn('Failed to fetch plans:', e);
+            }
+          }
+
+          export function connectPlan(planName) {
+            if (eventSource) {
+              eventSource.close();
+              eventSource = null;
+            }
+            currentPlan = planName;
+            if (!planName) {
+              dashboardData.set(null);
+              return;
+            }
+
+            fetch(`/api/${planName}/state`)
+              .then(r => r.json())
+              .then(data => {
+                if (currentPlan === planName) dashboardData.set(data);
+              })
+              .catch(() => dashboardData.set(null));
+
+            eventSource = new EventSource(`/api/${planName}/events`);
+            eventSource.onmessage = (event) => {
+              if (currentPlan !== planName) return;
+              try {
+                const data = JSON.parse(event.data);
+                dashboardData.update(current => ({ ...current, ...data }));
+              } catch (e) {
+                console.warn('SSE parse error:', e);
+              }
+            };
+          }
+
+          export function disconnect() {
+            if (eventSource) eventSource.close();
+            eventSource = null;
+            currentPlan = null;
+          }
+          ```
+
+          ## Task 3: Update `src/App.svelte` temporarily
+
+          Wire up the new stores/sse. Don't add PlanTabs yet (that's a separate story),
+          just make it auto-connect to the first plan:
+
+          ```svelte
+          <script>
+            import { onMount, onDestroy } from 'svelte';
+            import { fetchPlans, connectPlan, disconnect } from './lib/sse.js';
+            import { activePlan, dashboardData } from './lib/stores.js';
+            import Header from './lib/Header.svelte';
+            import WorkerSlots from './lib/WorkerSlots.svelte';
+            import DagGraph from './lib/DagGraph.svelte';
+            import StoryTable from './lib/StoryTable.svelte';
+            import LogViewer from './lib/LogViewer.svelte';
+
+            let pollInterval;
+            let unsub;
+
+            onMount(async () => {
+              await fetchPlans();
+              unsub = activePlan.subscribe(plan => {
+                if (plan) connectPlan(plan);
+              });
+              pollInterval = setInterval(fetchPlans, 5000);
+            });
+
+            onDestroy(() => {
+              disconnect();
+              if (pollInterval) clearInterval(pollInterval);
+              if (unsub) unsub();
+            });
+          </script>
+          ```
+
+          Keep the rest of App.svelte the same (Header, WorkerSlots, content grid, LogViewer).
+
+          ## Build
+          ```bash
+          cd tools/tfc-orchestrator/dashboard && npm run build
+          ```
+
+  - name: "Frontend — UI components"
+    stories:
+      - id: 4
+        name: "PlanTabs — active tabs + finished dropdown"
+        depends_on: [3]
+        acceptance_checks:
+          - "cd tools/tfc-orchestrator/dashboard && npm run build"
+        prompt: |
+          You are adding plan tabs to the dashboard.
+
+          ## Context — Read these files
+          - `tools/tfc-orchestrator/dashboard/src/lib/stores.js`
+          - `tools/tfc-orchestrator/dashboard/src/lib/sse.js`
+          - `tools/tfc-orchestrator/dashboard/src/App.svelte`
+
+          ## Task 1: Create `src/lib/PlanTabs.svelte`
+
+          Two sections:
+          - **Active plans** (status = "running" or "pending"): shown as prominent clickable tabs
+          - **Finished plans** (status = "complete" or "failed"): shown in a `<select>` dropdown
+
+          ```svelte
+          <script>
+            import { planList, activePlan, selectedStory } from './stores.js';
+            import { connectPlan } from './sse.js';
+
+            $: activePlans = $planList.filter(p => p.status === 'running' || p.status === 'pending');
+            $: finishedPlans = $planList.filter(p => p.status === 'complete' || p.status === 'failed');
+
+            function selectPlan(name) {
+              activePlan.set(name);
+              selectedStory.set(null);
+              connectPlan(name);
+            }
+          </script>
+
+          <nav class="plan-tabs">
+            {#each activePlans as plan}
+              <button class="tab" class:active={$activePlan === plan.name}
+                      on:click={() => selectPlan(plan.name)}>
+                <span class="tab-name">{plan.name}</span>
+                <span class="tab-progress">{plan.passed}/{plan.total}</span>
+              </button>
+            {/each}
+
+            {#if finishedPlans.length > 0}
+              <select class="finished-select"
+                      value={finishedPlans.some(p => p.name === $activePlan) ? $activePlan : ''}
+                      on:change={e => { if (e.target.value) selectPlan(e.target.value); }}>
+                <option value="" disabled>Finished ({finishedPlans.length})</option>
+                {#each finishedPlans as plan}
+                  <option value={plan.name}>
+                    {plan.name} — {plan.status} ({plan.passed}/{plan.total})
+                  </option>
+                {/each}
+              </select>
+            {/if}
+          </nav>
+          ```
+
+          Styles:
+          - `.plan-tabs`: flex row, background #0f1829, padding 0.5rem 1rem, gap 0,
+            border-bottom 2px solid #16213e, margin-bottom 1rem
+          - `.tab`: background transparent, border none, color #888, padding 0.6rem 1.2rem,
+            font-family inherit, font-size 0.9rem, cursor pointer, border-bottom 2px solid transparent,
+            transition all 0.2s
+          - `.tab.active`: color #fff, border-bottom-color #2196f3, background #16213e
+          - `.tab:hover`: color #ccc
+          - `.tab-name`: font-weight 600
+          - `.tab-progress`: margin-left 0.5rem, font-size 0.75rem, opacity 0.7
+          - `.finished-select`: margin-left auto, background #16213e, color #e0e0e0,
+            border 1px solid #333, border-radius 4px, padding 0.4rem 0.6rem,
+            font-family inherit, font-size 0.8rem, cursor pointer
+
+          ## Task 2: Update `src/App.svelte`
+
+          Add PlanTabs import and place it above Header:
+
+          ```svelte
+          <script>
+            // ... existing imports ...
+            import PlanTabs from './lib/PlanTabs.svelte';
+          </script>
+
+          <main>
+            <PlanTabs />
+            {#if $dashboardData}
+              <Header />
+              <!-- ... rest unchanged ... -->
+            {:else}
+              <div class="loading">Select a plan...</div>
+            {/if}
+          </main>
+          ```
+
+          ## Build
+          ```bash
+          cd tools/tfc-orchestrator/dashboard && npm run build
+          ```
+
+      - id: 5
+        name: "Fix DagGraph — layout, sizing, readability"
+        depends_on: [3]
+        acceptance_checks:
+          - "cd tools/tfc-orchestrator/dashboard && npm run build"
+        prompt: |
+          You are fixing the DAG graph component.
+
+          ## Context — Read this file
+          - `tools/tfc-orchestrator/dashboard/src/lib/DagGraph.svelte`
+
+          ## Problem
+          The DAG rendered all 11 nodes in a single column because `depends_on` was missing
+          from the node data (now fixed in the backend). But the layout also needs improvements.
+
+          ## Fix 1: Increase node sizes for readability
+
+          ```js
+          const NODE_W = 180;    // was 120
+          const NODE_H = 52;     // was 40
+          const LAYER_GAP = 220; // was 160
+          const NODE_GAP = 24;   // was 56 — tighter since nodes are bigger
+          const PAD = 40;        // was 20
+          ```
+
+          ## Fix 2: Show more of the name
+
+          Change `truncName` max from 12 to 24. Update text layout in the node:
+          - Line 1 (y offset +18): `#N` — bold, 13px
+          - Line 2 (y offset +36): story name — 10px, up to 24 chars
+
+          ## Fix 3: Phase grouping
+
+          Add subtle visual grouping by phase:
+          - Compute bounding box for each phase's nodes (min/max x/y with padding)
+          - Draw a translucent rounded rect behind each group: fill `rgba(255,255,255,0.03)`,
+            stroke `rgba(255,255,255,0.06)`, rx 12
+          - Phase label in small muted text (9px, #666) above the group rect
+
+          Add this before the edges in the SVG:
+          ```svelte
+          {#each phaseGroups as group}
+            <rect x={group.x - 8} y={group.y - 22} width={group.w + 16} height={group.h + 30}
+                  rx="12" fill="rgba(255,255,255,0.03)" stroke="rgba(255,255,255,0.06)" />
+            <text x={group.x - 4} y={group.y - 8} fill="#666" font-size="9">{group.name}</text>
+          {/each}
+          ```
+
+          Compute `phaseGroups` as a reactive declaration from `layout.positioned`.
+
+          ## Fix 4: Better edges
+
+          - Color: #4a5568 (lighter)
+          - Opacity: 0.6 default
+          - On node hover: highlight connected edges to full opacity (add CSS class)
+
+          ## Fix 5: Responsive container
+
+          - Remove `width: 100%` from `.dag-svg`
+          - Set explicit width/height from computed layout
+          - Container: `overflow-x: auto` (scroll when DAG is wider than container)
+          - Minimum height: 200px
+
+          ## Fix 6: Status colors — add "interrupted"
+
+          The backend now sends "interrupted" as a status for stories stuck from crashed runs.
+          Add to STATUS_COLORS:
+          ```js
+          interrupted: '#9e9e9e',  // gray
+          ```
+
+          ## Build
+          ```bash
+          cd tools/tfc-orchestrator/dashboard && npm run build
+          ```
+
+      - id: 6
+        name: "Fix LogViewer — plan-scoped routes + live streaming"
+        depends_on: [3]
+        acceptance_checks:
+          - "cd tools/tfc-orchestrator/dashboard && npm run build"
+        prompt: |
+          You are fixing the LogViewer component.
+
+          ## Context — Read these files
+          - `tools/tfc-orchestrator/dashboard/src/lib/LogViewer.svelte`
+          - `tools/tfc-orchestrator/dashboard/src/lib/stores.js`
+
+          ## Fix 1: Plan-scoped API routes
+
+          The backend routes changed to `/api/{plan_name}/logs/...`. Update URLs:
+
+          ```js
+          import { get } from 'svelte/store';
+          import { selectedStory, stories, activePlan } from './stores.js';
+
+          async function loadLogs(id, tab) {
+            cleanup();
+            if (id === null) return;
+
+            const plan = get(activePlan);
+            if (!plan) return;
+
+            try {
+              const res = await fetch(`/api/${plan}/logs/${id}/${tab}`);
+              if (res.ok) {
+                logContent = await res.text();
+              } else {
+                logContent = '(no logs yet — waiting for story to start...)';
+              }
+            } catch {
+              logContent = '(failed to load logs)';
+            }
+
+            // SSE tail
+            eventSource = new EventSource(`/api/${plan}/logs/${id}/${tab}/tail`);
+            eventSource.onmessage = (event) => {
+              // Backend now sends raw text lines (not JSON)
+              logContent += event.data + '\n';
+              if (autoScroll) scrollToBottom();
+            };
+          }
+          ```
+
+          ## Fix 2: Auto-scroll toggle
+
+          Add a checkbox so users can pause auto-scroll to read earlier output:
+
+          ```svelte
+          <script>
+            let autoScroll = true;
+          </script>
+
+          <!-- In the log-header, before close button -->
+          <label class="autoscroll">
+            <input type="checkbox" bind:checked={autoScroll} />
+            Auto-scroll
+          </label>
+          ```
+
+          Style: small, muted, inline with the tabs.
+
+          ## Fix 3: Reconnect on plan switch
+
+          When `activePlan` changes, close the log viewer (set selectedStory to null).
+          This is handled by PlanTabs, but also add a guard:
+
+          ```js
+          $: if (storyId !== null) {
+            const plan = get(activePlan);
+            if (plan) loadLogs(storyId, activeTab);
+          } else {
+            cleanup();
+          }
+          ```
+
+          ## Build
+          ```bash
+          cd tools/tfc-orchestrator/dashboard && npm run build
+          ```
+
+      - id: 7
+        name: "Fix StoryTable + WorkerSlots"
+        depends_on: [3]
+        acceptance_checks:
+          - "cd tools/tfc-orchestrator/dashboard && npm run build"
+        prompt: |
+          You are fixing the StoryTable and WorkerSlots components.
+
+          ## Context — Read these files
+          - `tools/tfc-orchestrator/dashboard/src/lib/StoryTable.svelte`
+          - `tools/tfc-orchestrator/dashboard/src/lib/WorkerSlots.svelte`
+          - `tools/tfc-orchestrator/dashboard/src/lib/stores.js`
+
+          ## StoryTable fixes
+
+          ### Fix 1: Duration not updating (Svelte reactivity bug)
+
+          The `now` variable updates via setInterval but isn't referenced in the template
+          expression, so Svelte doesn't re-render. Pass it explicitly:
+
+          ```svelte
+          <td class="mono">{formatDuration(result, status, now)}</td>
+          ```
+
+          Update the function signature: `function formatDuration(result, status, _now)`.
+
+          ### Fix 2: Completed duration shows "--"
+
+          The state data has `duration_seconds` (float) but the code tries to compute from
+          `started_at`/`finished_at`. `finished_at` doesn't exist. `started_at` is often
+          empty string for early stories. Fix:
+
+          ```js
+          function formatDuration(result, status, _now) {
+            if (!result) return status === 'running' ? '...' : '--';
+
+            // Completed: use duration_seconds
+            if (result.duration_seconds && result.duration_seconds > 0) {
+              const secs = Math.floor(result.duration_seconds);
+              const m = Math.floor(secs / 60);
+              const s = secs % 60;
+              return m > 0 ? `${m}m ${s}s` : `${s}s`;
+            }
+
+            // Running: compute from started_at
+            if (result.started_at && status === 'running') {
+              const startMs = new Date(result.started_at).getTime();
+              const secs = Math.floor((_now - startMs) / 1000);
+              if (secs < 0) return '...';
+              const m = Math.floor(secs / 60);
+              const s = secs % 60;
+              return m > 0 ? `${m}m ${s}s` : `${s}s`;
+            }
+
+            return '--';
+          }
+          ```
+
+          ### Fix 3: Wrong field names for Retries/Review/Verify
+
+          The state result object uses these fields (check the state JSON):
+          - `retry_count` (not `retries`)
+          - `review_iterations` (not `review`)
+          - `verification_passed` (boolean or null, not `verify`)
+
+          Update the table cells:
+          ```svelte
+          <td class="mono">{result?.retry_count ?? '--'}</td>
+          <td class="mono">{result?.review_iterations ?? '--'}</td>
+          <td class="mono">
+            {#if result?.verification_passed === true}
+              <span style="color: #4caf50">✓</span>
+            {:else if result?.verification_passed === false}
+              <span style="color: #f44336">✗</span>
+            {:else}
+              --
+            {/if}
+          </td>
+          ```
+
+          ### Fix 4: Add "interrupted" status color
+
+          ```js
+          const STATUS_COLORS = {
+            passed: '#4caf50',
+            failed: '#f44336',
+            running: '#2196f3',
+            skipped: '#ff9800',
+            pending: '#555',
+            interrupted: '#9e9e9e',
+          };
+          ```
+
+          ## WorkerSlots fixes
+
+          The backend now sends `max_parallel` in the plan info. Rewrite the component:
+
+          ```svelte
+          <script>
+            import { planInfo, stories, statuses } from './stores.js';
+
+            $: maxSlots = $planInfo?.max_parallel || 1;
+            $: runningStories = ($stories || []).filter(n => ($statuses || {})[n.id] === 'running');
+            $: slots = Array.from({ length: maxSlots }, (_, i) => runningStories[i] || null);
+          </script>
+
+          <div class="worker-slots">
+            <span class="slots-label">Workers</span>
+            <div class="slots-row">
+              {#each slots as story, i}
+                <div class="slot" class:active={story !== null}>
+                  {#if story}
+                    <span class="slot-id">#{story.id}</span>
+                    <span class="slot-name">{story.name}</span>
+                  {:else}
+                    <span class="slot-idle">idle</span>
+                  {/if}
+                </div>
+              {/each}
+            </div>
+          </div>
+          ```
+
+          Styles:
+          - `.worker-slots`: flex row, align center, gap 0.75rem, margin-bottom 1rem
+          - `.slots-label`: color #888, font-size 0.8rem, text-transform uppercase, letter-spacing 0.05em
+          - `.slots-row`: flex row, gap 0.5rem
+          - `.slot`: background #16213e, border-radius 6px, padding 0.4rem 0.8rem, min-width 120px,
+            border 1px solid #333, font-size 0.8rem
+          - `.slot.active`: border-color #2196f3, background #1a2744
+          - `.slot-id`: font-weight 700, color #2196f3, margin-right 0.4rem
+          - `.slot-name`: color #e0e0e0
+          - `.slot-idle`: color #555, font-style italic
+
+          ## Build
+          ```bash
+          cd tools/tfc-orchestrator/dashboard && npm run build
+          ```
+
+  - name: "Integration"
+    stories:
+      - id: 8
+        name: "Build + integration test + smoke verify"
+        depends_on: [2, 4, 5, 6, 7]
+        acceptance_checks:
+          - "cd tools/tfc-orchestrator && /Users/jonb/Projects/tfc-hmi/tools/tfc-orchestrator/.venv/bin/python -m pytest tests/test_dashboard.py -v"
+          - "cd tools/tfc-orchestrator/dashboard && npm run build"
+        prompt: |
+          You are doing final integration for dashboard v2.
+
+          ## Read ALL of these files
+          - `tools/tfc-orchestrator/orchestrator/dashboard.py`
+          - `tools/tfc-orchestrator/dashboard/src/App.svelte`
+          - `tools/tfc-orchestrator/dashboard/src/lib/stores.js`
+          - `tools/tfc-orchestrator/dashboard/src/lib/sse.js`
+          - `tools/tfc-orchestrator/dashboard/src/lib/PlanTabs.svelte`
+          - `tools/tfc-orchestrator/dashboard/src/lib/DagGraph.svelte`
+          - `tools/tfc-orchestrator/dashboard/src/lib/LogViewer.svelte`
+          - `tools/tfc-orchestrator/dashboard/src/lib/StoryTable.svelte`
+          - `tools/tfc-orchestrator/dashboard/src/lib/WorkerSlots.svelte`
+          - `tools/tfc-orchestrator/dashboard/src/lib/Header.svelte`
+          - `tools/tfc-orchestrator/tests/test_dashboard.py`
+
+          ## Task 1: Fix build errors
+
+          ```bash
+          cd tools/tfc-orchestrator/dashboard && npm run build 2>&1
+          ```
+
+          Fix any errors: import paths, missing stores, Svelte warnings, etc.
+          Iterate until the build succeeds with zero errors.
+
+          ## Task 2: Fix test failures
+
+          ```bash
+          cd tools/tfc-orchestrator
+          /Users/jonb/Projects/tfc-hmi/tools/tfc-orchestrator/.venv/bin/python -m pytest tests/test_dashboard.py -v
+          ```
+
+          The API changed (create_app now takes plans_dir, routes are plan-scoped).
+          Update test fixtures: create temp directories with plan YAML files.
+          Update route paths in test assertions (e.g., `/api/state` → `/api/{plan}/state`).
+
+          ## Task 3: Verify all other tests still pass
+
+          ```bash
+          cd tools/tfc-orchestrator
+          /Users/jonb/Projects/tfc-hmi/tools/tfc-orchestrator/.venv/bin/python -m pytest tests/ -v --ignore=tests/test_dashboard.py
+          ```
+
+          ## Task 4: Rebuild dist
+
+          ```bash
+          cd tools/tfc-orchestrator/dashboard && npm run build
+          ```
+
+          Verify `dist/` contains `index.html` + `assets/`.
+
+          ## Task 5: Print smoke test instructions
+
+          ```
+          Dashboard v2 ready!
+
+          Start:
+            cd tools/tfc-orchestrator && source .venv/bin/activate
+            python -m orchestrator.cli dashboard plans/
+            open http://127.0.0.1:8080
+
+          What to verify:
+            1. Tab bar: active plans as tabs, finished plans in dropdown
+            2. Click tabs to switch between plans (mqtt-web, dashboard, etc.)
+            3. DAG: horizontal layers by dependency, phase groups, readable names
+            4. Table: durations show correctly, retries/review/verify columns work
+            5. Click a story → log viewer opens with live-streamed content
+            6. Worker slots show running stories
+            7. Header shows correct counts and elapsed time
+          ```

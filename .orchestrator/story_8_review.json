@@ -1,0 +1,149 @@
+{
+  "comments": [
+    {
+      "id": "broad_except_01",
+      "severity": "should_fix",
+      "file": "tools/tfc-orchestrator/orchestrator/dashboard.py",
+      "line": 193,
+      "message": "Bare `Exception` in except clause makes `ConnectionResetError` and `ConnectionError` redundant and silently swallows all errors (e.g., JSON decode errors in `read_state`, file-not-found). Narrow to `except (ConnectionResetError, ConnectionAbortedError, asyncio.CancelledError):` or at minimum log unexpected exceptions before suppressing.",
+      "status": "fixed",
+      "fix_attempts": 1
+    },
+    {
+      "id": "missing_else_02",
+      "severity": "note",
+      "file": "tools/tfc-orchestrator/orchestrator/dashboard.py",
+      "line": 70,
+      "message": "The old code had a catch-all `else` branch that marked unknown statuses as failed. The new `elif` chain silently ignores unrecognized status values (e.g., 'timeout', 'skipped'). If this is intentional, a comment would clarify; otherwise add an `else` fallback.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "wrong_diff_03",
+      "severity": "blocker",
+      "file": "tools/tfc-orchestrator/orchestrator/dashboard.py",
+      "line": 0,
+      "message": "This diff modifies orchestrator dashboard infrastructure, not Story 8 (ImageFeedConfig asset). No ImageFeedConfig model, MQTT topic mapping, tests, or asset-related code is present. Either the wrong branch was diffed or the story implementation is missing entirely.",
+      "status": "fixed",
+      "fix_attempts": 1
+    },
+    {
+      "id": "no-story8-impl",
+      "severity": "blocker",
+      "file": "",
+      "line": 0,
+      "message": "Diff contains NO Story 8 implementation. Story 8 requires: ImageFeedConfig model (lib/page_creator/assets/image_feed.dart), ImageFeedWidget, tests (test/widgets/image_feed_test.dart), and registry.dart registration. The diff only modifies orchestrator state JSON and dashboard.py \u2014 zero Dart/Flutter code present.",
+      "status": "fixed",
+      "fix_attempts": 1
+    },
+    {
+      "id": "no-tdd-artifacts",
+      "severity": "blocker",
+      "file": "test/widgets/image_feed_test.dart",
+      "line": 0,
+      "message": "TDD violation: No test file created. Story 8 acceptance criteria explicitly require writing tests FIRST (RED phase) covering: JSON round-trip, empty grid render, image stream, maxImages limit, confidence color coding, pause/resume via controlKey, and malformed payload handling.",
+      "status": "fixed",
+      "fix_attempts": 1
+    },
+    {
+      "id": "broad-exception-catch",
+      "severity": "should_fix",
+      "file": "tools/tfc-orchestrator/orchestrator/dashboard.py",
+      "line": 193,
+      "message": "except (ConnectionResetError, ConnectionError, Exception) \u2014 bare `Exception` is a superclass of both ConnectionResetError and ConnectionError, making them redundant. More critically, catching Exception silently swallows programming errors (TypeError, KeyError, AttributeError). Narrow to `except (ConnectionResetError, ConnectionAbortedError, asyncio.CancelledError, OSError)` or similar.",
+      "status": "fixed",
+      "fix_attempts": 1
+    },
+    {
+      "id": "missing-else-status",
+      "severity": "should_fix",
+      "file": "tools/tfc-orchestrator/orchestrator/dashboard.py",
+      "line": 64,
+      "message": "derive_node_statuses: the original code had an `else` clause catching all non-'pass' statuses as failures. The new code only handles 'pass', 'running', and 'fail' explicitly \u2014 any other status string (e.g., 'skipped', 'timeout', typos) is silently ignored. Add an `else` clause to log a warning or treat unknown statuses as failures.",
+      "status": "fixed",
+      "fix_attempts": 1
+    },
+    {
+      "id": "no-dashboard-tests",
+      "severity": "should_fix",
+      "file": "tools/tfc-orchestrator/orchestrator/dashboard.py",
+      "line": 61,
+      "message": "No test updates accompany the dashboard.py behavior changes. The derive_node_statuses status mapping change and the SSE error handling should have corresponding test coverage to prevent regressions.",
+      "status": "fixed",
+      "fix_attempts": 1
+    },
+    {
+      "id": "no-running-result-test",
+      "severity": "should_fix",
+      "file": "tools/tfc-orchestrator/tests/test_dashboard.py",
+      "line": 280,
+      "message": "Missing test for the new `elif status == 'running'` branch (dashboard.py:70-72). The existing `test_running_detected_by_log_mtime` tests log-file-based detection for PENDING stories, but no test exercises the path where `result_map` contains `status: 'running'` \u2014 which should map to DAG RUNNING and output `'running'` without marking failed. Add a test with a result `{'story_id': 1, 'status': 'running', ...}` and assert dependents remain `'pending'` (not `'skipped'`).",
+      "status": "fixed",
+      "fix_attempts": 1
+    },
+    {
+      "id": "log-tail-no-disconnect-handling",
+      "severity": "should_fix",
+      "file": "tools/tfc-orchestrator/orchestrator/dashboard.py",
+      "line": 245,
+      "message": "`_handle_log_tail` has the exact same infinite-loop SSE pattern (`while True: await resp.write(...)`) that was just fixed in `_handle_events` with disconnect exception handling. A client disconnect here will raise `ConnectionResetError`/`OSError` and produce noisy tracebacks. Apply the same `try/except (ConnectionResetError, ConnectionAbortedError, asyncio.CancelledError, OSError)` pattern and add `return resp`.",
+      "status": "fixed",
+      "fix_attempts": 1
+    },
+    {
+      "id": "missing-else-02-resolved",
+      "severity": "note",
+      "file": "tools/tfc-orchestrator/orchestrator/dashboard.py",
+      "line": 76,
+      "message": "Existing review comment `missing_else_02` (status: open) appears resolved in this diff \u2014 the `else` clause at line 76-79 now logs a warning and marks unknown statuses as failed, matching the original catch-all behavior with added observability.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "dup-mark-running",
+      "severity": "note",
+      "file": "tools/tfc-orchestrator/orchestrator/dashboard.py",
+      "line": 67,
+      "message": "`dag.mark_running(sid)` is duplicated in all four branches of the if/elif/else. Extract it before the conditional to reduce repetition: call `dag.mark_running(sid)` once, then branch on status for `mark_passed`/`mark_failed`/log-warning.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "oserror-masks-fileio",
+      "severity": "note",
+      "file": "tools/tfc-orchestrator/orchestrator/dashboard.py",
+      "line": 191,
+      "message": "`OSError` in the SSE exception handler is intentional for network disconnects from `resp.write()`, but it also catches `FileNotFoundError` (subclass of `OSError`) from `read_state()`/`log_file.stat()` inside the loop body. If the state file or log file is deleted mid-stream, the SSE loop silently exits with no indication to the client or server logs. Consider logging at DEBUG level inside the except block so transient file-system errors are observable.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "generated-file-noise",
+      "severity": "note",
+      "file": "lib/providers/state_man.g.dart",
+      "line": 9,
+      "message": "Generated file hash change (`state_man.g.dart`) is included in this diff but appears unrelated to the dashboard changes. Verify this is from an intentional source change in `state_man.dart`; otherwise it adds noise to the diff and may conflict with other branches.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "oserror-redundant-subclasses",
+      "severity": "note",
+      "file": "tools/tfc-orchestrator/orchestrator/dashboard.py",
+      "line": 193,
+      "message": "`ConnectionResetError` and `ConnectionAbortedError` are both subclasses of `OSError`, so listing them alongside `OSError` is redundant. Fine for readability/intent documentation, but worth a comment explaining the explicit listing is for clarity.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "missing-else-02-stale",
+      "severity": "note",
+      "file": "tools/tfc-orchestrator/orchestrator/dashboard.py",
+      "line": 76,
+      "message": "Existing review comment `missing_else_02` (status: open) is resolved by this diff \u2014 the `else` clause at lines 76-79 now logs a warning and treats unknown statuses as failures. That comment should be marked fixed.",
+      "status": "open",
+      "fix_attempts": 0
+    }
+  ],
+  "fixed_then_reopened": []
+}

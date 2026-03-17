@@ -88,6 +88,57 @@
       "verification_details": "",
       "started_at": "",
       "worker_slot": -1
+    },
+    {
+      "story_id": 6,
+      "story_name": "Web conditional imports + compilation",
+      "status": "running",
+      "duration_seconds": 0.0,
+      "error": "",
+      "timestamp": "2026-03-17T12:57:51.854057",
+      "retry_count": 0,
+      "review_iterations": 0,
+      "review_findings": 0,
+      "worktree_branch": "",
+      "merge_commit": "",
+      "verification_passed": null,
+      "verification_details": "",
+      "started_at": "2026-03-17T12:57:51.854017",
+      "worker_slot": -1
+    },
+    {
+      "story_id": 8,
+      "story_name": "ImageFeedConfig asset",
+      "status": "pass",
+      "duration_seconds": 401.4368669986725,
+      "error": "",
+      "timestamp": "2026-03-17T13:15:41.624396",
+      "retry_count": 0,
+      "review_iterations": 3,
+      "review_findings": 0,
+      "worktree_branch": "orchestrator/mqtt-web/story-8",
+      "merge_commit": "f7456f764f2627c4644b358c5aabf2b4f25ff9e5",
+      "verification_passed": true,
+      "verification_details": "\n00:00 +0: loading /Users/jonb/Projects/tfc-hmi/test/painter/auger_conveyor_test.dart                                                                                                                   \n00:00 +0: /Users/jonb/Projects/tfc-hmi/test/painter/auger_conveyor_test.dart: AugerConveyorPainter shouldRepaint returns true when stateColor changes                                                  \n00:00 +1: /Users/jonb/Projects/tfc-hmi/test/painter/auger_conveyor_test.dart: AugerConveyorPainter ",
+      "started_at": "",
+      "worker_slot": -1
+    },
+    {
+      "story_id": 9,
+      "story_name": "InferenceLogConfig asset",
+      "status": "fail",
+      "duration_seconds": 709.7291939258575,
+      "error": "Merge conflict:\nerror: Your local changes to the following files would be overwritten by merge:\n\tlib/providers/state_man.g.dart\nPlease commit your changes or stash them before you merge.\nAborting\nMerge with strategy ort failed.\n",
+      "timestamp": "2026-03-17T13:15:41.625851",
+      "retry_count": 0,
+      "review_iterations": 0,
+      "review_findings": 0,
+      "worktree_branch": "",
+      "merge_commit": "",
+      "verification_passed": null,
+      "verification_details": "",
+      "started_at": "",
+      "worker_slot": -1
     }
   ]
 }

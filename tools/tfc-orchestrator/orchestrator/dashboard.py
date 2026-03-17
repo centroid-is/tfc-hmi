@@ -1,6 +1,7 @@
 """Dashboard — aiohttp web server for monitoring orchestrator runs."""
 import asyncio
 import json
+import logging
 import time
 from pathlib import Path
 
@@ -8,6 +9,8 @@ from aiohttp import web
 
 from .dag import DAGScheduler, NodeStatus
 from .models import Plan
+
+_log = logging.getLogger(__name__)
 
 _DIST_DIR = Path(__file__).parent.parent / 'dashboard' / 'dist'
 
@@ -61,10 +64,18 @@ def derive_node_statuses(
     dag = DAGScheduler.from_plan(plan)
     for sid, status in result_map.items():
         try:
-            dag.mark_running(sid)
             if status == 'pass':
+                dag.mark_running(sid)
                 dag.mark_passed(sid)
+            elif status == 'running':
+                dag.mark_running(sid)
+                # Leave as RUNNING — don't mark failed
+            elif status == 'fail':
+                dag.mark_running(sid)
+                dag.mark_failed(sid)
             else:
+                _log.warning('Unknown result status %r for story %s', status, sid)
+                dag.mark_running(sid)
                 dag.mark_failed(sid)
         except KeyError:
             pass
@@ -82,6 +93,8 @@ def derive_node_statuses(
                 statuses[sid] = 'failed'
             elif dag_status == NodeStatus.SKIPPED:
                 statuses[sid] = 'skipped'
+            elif dag_status == NodeStatus.RUNNING:
+                statuses[sid] = 'running'
             elif dag_status == NodeStatus.PENDING:
                 # Check for running via log file mtime
                 log_file = log_dir / f'story_{sid}.stdout.log'
@@ -164,24 +177,30 @@ async def _handle_events(request: web.Request) -> web.StreamResponse:
     last_ts = ''
     last_keepalive = time.time()
 
-    while True:
-        state_data = read_state(state_path)
-        results = state_data.get('results', [])
-        count = len(results)
-        ts = results[-1].get('timestamp', '') if results else ''
+    try:
+        while True:
+            state_data = read_state(state_path)
+            results = state_data.get('results', [])
+            count = len(results)
+            ts = results[-1].get('timestamp', '') if results else ''
 
-        if count != last_count or ts != last_ts:
-            last_count = count
-            last_ts = ts
-            payload = json.dumps(state_data)
-            await resp.write(f'data: {payload}\n\n'.encode())
+            if count != last_count or ts != last_ts:
+                last_count = count
+                last_ts = ts
+                payload = json.dumps(state_data)
+                await resp.write(f'data: {payload}\n\n'.encode())
 
-        now = time.time()
-        if now - last_keepalive >= 15:
-            await resp.write(b': keepalive\n\n')
-            last_keepalive = now
+            now = time.time()
+            if now - last_keepalive >= 15:
+                await resp.write(b': keepalive\n\n')
+                last_keepalive = now
 
-        await asyncio.sleep(poll_interval)
+            await asyncio.sleep(poll_interval)
+    except (ConnectionResetError, ConnectionAbortedError, asyncio.CancelledError, OSError):
+        # Client disconnected — silently stop streaming
+        pass
+
+    return resp
 
 
 async def _handle_logs(request: web.Request) -> web.Response:
@@ -223,17 +242,23 @@ async def _handle_log_tail(request: web.Request) -> web.StreamResponse:
 
     offset = log_file.stat().st_size
 
-    while True:
-        size = log_file.stat().st_size
-        if size > offset:
-            with open(log_file) as f:
-                f.seek(offset)
-                new_data = f.read()
-            offset = size
-            payload = json.dumps(new_data)
-            await resp.write(f'data: {payload}\n\n'.encode())
+    try:
+        while True:
+            size = log_file.stat().st_size
+            if size > offset:
+                with open(log_file) as f:
+                    f.seek(offset)
+                    new_data = f.read()
+                offset = size
+                payload = json.dumps(new_data)
+                await resp.write(f'data: {payload}\n\n'.encode())
 
-        await asyncio.sleep(1)
+            await asyncio.sleep(1)
+    except (ConnectionResetError, ConnectionAbortedError, asyncio.CancelledError, OSError):
+        # Client disconnected — silently stop streaming
+        pass
+
+    return resp
 
 
 async def _handle_index(request: web.Request) -> web.FileResponse:

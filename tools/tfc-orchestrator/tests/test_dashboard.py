@@ -247,6 +247,51 @@ class TestDeriveNodeStatuses:
         statuses = derive_node_statuses(plan, state_data, log_dir)
         assert statuses[1] == 'pending'
 
+    def test_running_result_status(self, tmp_path):
+        """A story with result status 'running' maps to DAG RUNNING, dependents stay pending."""
+        plan = _minimal_plan()
+        state_data = {
+            'results': [
+                {'story_id': 1, 'status': 'running', 'timestamp': '2026-01-01T00:01:00'},
+            ],
+        }
+        statuses = derive_node_statuses(plan, state_data, tmp_path)
+        assert statuses[1] == 'running'
+        # Dependents must remain pending, not skipped
+        assert statuses[2] == 'pending'
+        assert statuses[3] == 'pending'
+
+    def test_unknown_status_treated_as_failure(self, tmp_path):
+        """An unknown result status string (e.g., 'timeout') is treated as failed."""
+        plan = _minimal_plan()
+        state_data = {
+            'results': [
+                {'story_id': 1, 'status': 'timeout', 'timestamp': '2026-01-01T00:01:00'},
+            ],
+        }
+        statuses = derive_node_statuses(plan, state_data, tmp_path)
+        assert statuses[1] == 'failed'
+        # Dependents should cascade to skipped
+        assert statuses[2] == 'skipped'
+        assert statuses[3] == 'skipped'
+
+    def test_unknown_status_logs_warning(self, tmp_path, caplog):
+        """Unknown status string emits a warning log."""
+        import logging
+        plan = _minimal_plan(phases=[
+            Phase(name='P1', stories=[
+                Story(id=1, name='Story 1', prompt='p'),
+            ]),
+        ])
+        state_data = {
+            'results': [
+                {'story_id': 1, 'status': 'bogus', 'timestamp': '2026-01-01T00:01:00'},
+            ],
+        }
+        with caplog.at_level(logging.WARNING, logger='orchestrator.dashboard'):
+            derive_node_statuses(plan, state_data, tmp_path)
+        assert any('Unknown result status' in msg for msg in caplog.messages)
+
 
 # ===========================================================================
 # Route handler tests (aiohttp TestClient, no pytest-aiohttp plugin)
