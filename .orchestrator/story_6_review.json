@@ -1,0 +1,131 @@
+{
+  "comments": [
+    {
+      "id": "d1a0",
+      "severity": "note",
+      "file": "lib/providers/state_man.g.dart",
+      "line": 9,
+      "message": "Generated file has uncommitted hash change. Run `dart run build_runner build` to ensure this matches the current `state_man.dart` source, then commit together with the source change.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "b7f3",
+      "severity": "note",
+      "file": "tools/tfc-orchestrator/orchestrator/dashboard.py",
+      "line": 79,
+      "message": "Catching bare `OSError` is broad \u2014 it covers `FileNotFoundError`, `PermissionError`, etc., not just network errors. Consider narrowing to `ConnectionError` (parent of Reset/Aborted) plus `asyncio.CancelledError` if you want tighter scoping. Acceptable as-is for an SSE streaming loop where any I/O failure means 'stop streaming'.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "e4c2",
+      "severity": "note",
+      "file": "tools/tfc-orchestrator/orchestrator/dashboard.py",
+      "line": 64,
+      "message": "Good fix: the previous code called `mark_running` then fell through to `mark_failed` for *all* non-pass statuses, incorrectly failing genuinely running stories. The new branching is correct.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "a2d9",
+      "severity": "note",
+      "file": "tools/tfc-orchestrator/tests/test_dashboard.py",
+      "line": 275,
+      "message": "The `import logging` inside the test function is redundant \u2014 `logging` is already available at module scope (used by caplog). Minor style nit, no functional impact.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "dup-test-broken",
+      "severity": "blocker",
+      "file": "test/pages/web_stub_test.dart",
+      "line": 39,
+      "message": "Broken duplicate test file: Story 6 added required constructor params (dbusClient, serviceName, objectPath) to ConfigEditDialog, ConfigListPage, and ConnectionsPage stubs, but this older test file was not updated. It has 5 analysis errors and fails to compile. Either delete this file (since test/core/web_stubs_test.dart covers the same stubs correctly) or update it to pass the required arguments.",
+      "status": "fixed",
+      "fix_attempts": 1
+    },
+    {
+      "id": "dup-test-redundant",
+      "severity": "should_fix",
+      "file": "test/core/web_stubs_test.dart",
+      "line": 1,
+      "message": "Duplicate test coverage: test/core/web_stubs_test.dart and test/pages/web_stub_test.dart test identical behavior (all 6 stub widgets render 'Not available on web'). One should be deleted. Recommend keeping test/core/web_stubs_test.dart (the working one) and removing test/pages/web_stub_test.dart.",
+      "status": "fixed",
+      "fix_attempts": 1
+    },
+    {
+      "id": "no-cond-import-3stubs",
+      "severity": "note",
+      "file": "centroid-hmi/lib/main.dart",
+      "line": 28,
+      "message": "Story 6 AC requires conditional imports for all 6 native-only pages, but config_edit, config_list, and ipc_connections are not conditionally imported in main.dart. These pages are only instantiated from dbus-dependent code paths not reachable on web, so this is functionally safe, but diverges from the plan's literal requirement.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "mytest-leftover",
+      "severity": "should_fix",
+      "file": "mytest.dart",
+      "line": 0,
+      "message": "Empty leftover file 'mytest.dart' (0 bytes) committed in the Story 6 diff. Should be deleted \u2014 appears to be a debug artifact.",
+      "status": "fixed",
+      "fix_attempts": 1
+    },
+    {
+      "id": "stream-reader-no-guard",
+      "severity": "should_fix",
+      "file": "tools/tfc-orchestrator/orchestrator/worker.py",
+      "line": 52,
+      "message": "_stream_json_to_log has no top-level try/except. If log_file_handle.write() or .flush() raises (disk full, closed handle), the reader thread dies silently and stops draining proc.stdout. The subprocess will then block on stdout writes, hanging until the 1800s timeout in _execute_claude. Wrap the for-loop body in try/except Exception with a logged warning, or at minimum catch IOError to keep draining the pipe.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "auto-commit-git-add-A",
+      "severity": "note",
+      "file": "tools/tfc-orchestrator/orchestrator/worker.py",
+      "line": 287,
+      "message": "`git add -A` in _merge_branch stages everything in the project directory \u2014 including any .env files, large binaries, or editor temp files that happen to exist. Consider using a more targeted approach (e.g., `git add -u` to only stage tracked files) or adding a .gitignore check. The comment says 'generated files left by a previous story's merge' \u2014 if the scope is that narrow, `git add -u` would be safer.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "log-tail-bare-except",
+      "severity": "note",
+      "file": "tools/tfc-orchestrator/orchestrator/dashboard.py",
+      "line": 366,
+      "message": "Same issue as the events handler (review b7f3): bare `except Exception` swallows programming errors (KeyError, TypeError, AttributeError) in the log-tail streaming loop. Consider catching `(ConnectionError, asyncio.CancelledError, OSError)` to only suppress expected disconnect errors.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "log-tail-splitlines-empty",
+      "severity": "note",
+      "file": "tools/tfc-orchestrator/orchestrator/dashboard.py",
+      "line": 362,
+      "message": "The log-tail SSE loop sends each line via `new_data.splitlines()`. If a line is empty (blank line in log output), it produces `data: \\n\\n` which is a valid but empty SSE event. Not a bug, but frontend consumers should handle empty data events. Also, if a log write is mid-line (no trailing newline yet), `splitlines()` will emit a partial line \u2014 the next read will emit the remainder as a separate event, splitting one logical line across two SSE events.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "discover-plans-silent-swallow",
+      "severity": "note",
+      "file": "tools/tfc-orchestrator/orchestrator/dashboard.py",
+      "line": 146,
+      "message": "discover_plans catches bare Exception and silently skips. This hides real problems (e.g., PermissionError on a valid plan file, or a plan with a subtle schema error). Consider logging a warning with the filename and exception, similar to how derive_node_statuses logs warnings for unknown statuses.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "cli-nonexistent-path",
+      "severity": "note",
+      "file": "tools/tfc-orchestrator/orchestrator/cli.py",
+      "line": 479,
+      "message": "The plan_arg.is_file() check silently treats a nonexistent path as a directory. If a user typos a plan path (e.g., `plans/mqtt_wb.yaml`), this passes the nonexistent parent to run_dashboard which will raise 'No valid plan files found' \u2014 a confusing error. Consider validating the resolved plans_dir exists before passing it through.",
+      "status": "open",
+      "fix_attempts": 0
+    }
+  ],
+  "fixed_then_reopened": []
+}
