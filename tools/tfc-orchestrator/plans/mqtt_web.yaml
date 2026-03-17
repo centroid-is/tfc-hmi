@@ -78,10 +78,177 @@ phases:
       - id: 6
         name: "Web conditional imports + compilation"
         depends_on: [5]
-        timeout: 5400  # 90 min — large story, many stubs to create
+        max_extensions: 4
+        prompt: |
+          ## Goal
+          Make the Flutter app compile for web by splitting native-only code
+          behind conditional exports. The CORRECT approach is abstraction at
+          the module boundary — NOT individual stubs for every native type.
+
+          ## CRITICAL: Do NOT create individual stub files
+          The previous attempt created 13+ stub files (open62541_stub.dart,
+          jbtm_m2400_stub.dart, modbus_client_stub.dart, etc.) and was playing
+          whack-a-mole as each stub needed more types. That approach is WRONG.
+
+          Instead, use the DeviceClient abstraction that already exists in
+          state_man.dart (line ~847). The web build only needs MqttDeviceClient
+          — it never needs jbtm, open62541, modbus_client, drift, or sqlite3.
+
+          ## Step 0: Clean up previous failed attempt
+          The previous Story 6 attempt created 13 stub files and rewrote
+          many imports in state_man.dart to use conditional `if (dart.library.js_interop)`
+          stubs. This must be undone first:
+
+          1. Delete the entire `packages/tfc_dart/lib/core/web_stubs/` directory
+          2. Revert `state_man.dart` imports back to direct imports (remove all
+             `if (dart.library.js_interop) 'web_stubs/...'` lines, restore
+             the original direct imports of open62541, jbtm, modbus_client, etc.)
+          3. Revert any other files modified by the previous attempt that added
+             conditional imports to web_stubs/ (grep for `web_stubs` to find them)
+          4. Verify `dart test --exclude-tags=integration` still passes after cleanup
+             (native tests must not break)
+
+          Do this cleanup BEFORE starting the new approach.
+
+          ## Architecture
+
+          The abstraction boundary is: everything above DeviceClient is
+          platform-agnostic. Everything below (concrete adapters + their
+          native package imports) is native-only.
+
+          ### Step 1: Split state_man.dart (~1838 lines)
+
+          **`state_man.dart`** (keep) — Platform-agnostic core:
+          - All config classes (OpcUAConfig, M2400Config, ModbusConfig,
+            MqttConfig, StateManConfig, OpcUANodeConfig, etc.)
+          - ConnectionStatus enum, DynamicValue (already has a stub for open62541)
+          - DeviceClient abstract class
+          - StateMan class
+          - ClientWrapper (OPC UA wrapper)
+          - KeyMappings, KeyMappingEntry
+          - RunIterateStats, SingleWorker, AutoDisposingStream
+          - Remove ALL imports of jbtm, modbus_client, open62541, collector
+          - Import only pure Dart + rxdart + json_annotation
+
+          **`state_man_native.dart`** (new) — Native-only concrete adapters:
+          - M2400DeviceClientAdapter (imports jbtm)
+          - ModbusDeviceClientAdapter (imports modbus_client)
+          - Factory function: `List<DeviceClient> createNativeDeviceClients(StateManConfig config)`
+            that creates M2400 + Modbus adapters from config
+          - All the jbtm/modbus/open62541 imports live HERE
+
+          **`state_man_web.dart`** (new) — Web factory (trivial):
+          - Same factory signature, returns empty list (MQTT is already
+            created separately in StateMan via MqttDeviceClientAdapter)
+          - Zero native imports
+
+          **`state_man_exports.dart`** (new) — Conditional export barrel:
+          ```dart
+          export 'state_man.dart';
+          export 'state_man_native.dart'
+              if (dart.library.js_interop) 'state_man_web.dart';
+          ```
+
+          StateMan's constructor/factory currently creates M2400 and Modbus
+          adapters inline. Move that creation into the factory function in
+          state_man_native.dart, and call it conditionally from StateMan.
+
+          ### Step 2: Split database.dart the same way
+
+          **`database.dart`** (keep) — Abstract Database interface/base class
+          **`database_native.dart`** — drift + postgres + sqlite3 imports
+          **`database_web.dart`** — returns null (web has no database)
+          **`database_exports.dart`** — conditional export
+
+          ### Step 3: Fix remaining app-level imports
+
+          In `centroid-hmi/lib/`:
+          - `main.dart` — guard upgrader, marionette_flutter with kIsWeb
+            or conditional imports (these are app-level, not tfc_dart)
+          - Pages that use `dart:io` directly (server_config, key_repository)
+            — guard with kIsWeb checks
+          - `mcp_bridge_notifier.dart` — guard McpSseServer (uses dart:io)
+
+          ### Step 4: Delete ALL existing web_stubs/
+          After the split works, delete the entire
+          `packages/tfc_dart/lib/core/web_stubs/` directory.
+          Those 13 stub files are no longer needed.
+
+          ## TDD
+          1. Write a test that imports state_man_exports.dart and verifies
+             DeviceClient, StateMan, ConnectionStatus are accessible
+          2. Verify `dart analyze --fatal-infos` passes in packages/tfc_dart
+          3. Verify `dart test --exclude-tags=integration` passes
+          4. Verify `flutter build web` succeeds from centroid-hmi/
+             (THIS IS THE KEY ACCEPTANCE CRITERION)
+
+          ## Validation (run in order)
+          ```
+          cd packages/tfc_dart && dart run build_runner build --delete-conflicting-outputs
+          cd packages/tfc_dart && dart analyze --fatal-infos
+          cd packages/tfc_dart && dart test --exclude-tags=integration
+          cd centroid-hmi && flutter build web
+          ```
+          ALL FOUR must pass. If flutter build web fails, read the error
+          and fix it — do not create stub files.
       - id: 7
         name: "Provider integration — static config + page hiding"
         depends_on: [5, 6]
+        prompt: |
+          ## Goal
+          Wire static config loading into the provider layer so the web app
+          bypasses Preferences/SecureStorage/database entirely.
+
+          ## TDD: Write provider unit tests first, then implement.
+
+          ## What to create
+
+          ### config_loader.dart (conditional import hub)
+          Already exists at `lib/core/config_loader.dart`:
+          ```dart
+          export 'config_loader_native.dart'
+              if (dart.library.js_interop) 'config_loader_web.dart';
+          ```
+          Verify it exports `Future<StaticConfig?> loadStaticConfig()`.
+
+          ### config_loader_native.dart
+          Checks `CENTROID_CONFIG_DIR` env var, returns `StaticConfig.fromDirectory()`
+          or null if env var not set.
+
+          ### config_loader_web.dart
+          Fetches `config/config.json`, `config/keymappings.json`,
+          `config/page-editor.json` via HTTP relative to web root.
+          Returns `StaticConfig.fromStrings()` or null on failure.
+
+          ## What to modify
+
+          ### lib/providers/state_man.dart
+          - Add `staticConfigProvider` that calls `loadStaticConfig()`
+          - `stateManProvider`: if StaticConfig is present, create StateMan
+            directly from config (no Preferences, no SecureStorage)
+          - On web: only MQTT device clients created (no OPC UA, M2400, Modbus)
+
+          ### lib/providers/page_manager.dart
+          - If StaticConfig has pageEditorJson, load pages from that instead
+            of from Preferences
+
+          ### centroid-hmi/lib/main.dart
+          - On web (kIsWeb): skip SecureStorage.setInstance(), skip database init
+          - Load StaticConfig early in startup
+          - Hide config editing pages when in static mode
+
+          ## Menu / page hiding
+          When `isStaticMode` (StaticConfig != null):
+          - Hide: OPC UA config, M2400 config, Modbus config, Database config,
+            Network Manager, IPC connections
+          - Show: Inference dashboard, any static pages from page-editor.json
+
+          ## Validation
+          ```
+          cd packages/tfc_dart && dart analyze --fatal-infos
+          cd packages/tfc_dart && dart test --exclude-tags=integration
+          cd centroid-hmi && flutter build web
+          ```
 
   - name: "Widgets + Dashboard (Stories 8-10)"
     validate:
@@ -108,3 +275,61 @@ phases:
       - id: 11
         name: "Playwright E2E tests with stubbed MQTT data"
         depends_on: [7, 10]
+        prompt: |
+          ## Goal
+          Write and RUN Playwright E2E tests that verify the Flutter web app
+          works end-to-end with MQTT data.
+
+          NOTE: `--web-renderer html` flag no longer exists in Flutter 3.38+.
+          Use `flutter build web` (default renderer). The HTML renderer was
+          removed — CanvasKit is now the only option. If DOM selectors don't
+          work with CanvasKit's canvas output, use accessibility tree queries
+          or Playwright's accessibility locators instead.
+
+          ## Files to create
+          - `test/e2e/playwright.config.ts` — base URL localhost:8080, chromium
+          - `test/e2e/package.json` — playwright + mqtt deps
+          - `test/e2e/dashboard.spec.ts` — 5 test cases (see below)
+          - `test/e2e/mqtt-stub.ts` — MQTT publisher for synthetic inference data
+          - `test/e2e/run-e2e.sh` — orchestrator: starts Mosquitto, builds web,
+            copies config, installs playwright, runs tests, cleans up
+
+          ## MQTT stub publisher (mqtt-stub.ts)
+          - Connects to mqtt://localhost:1883
+          - Publishes to `inference/result` every 600ms:
+            `{"image": "<base64>", "label": "cat", "confidence": 0.92, "latency_ms": 45}`
+          - Maintains running stats on `inference/stats/*` topics
+          - Subscribes to `inference/control/pause` — stops when true
+          - Exports startPublishing() / stopPublishing()
+
+          ## Test cases (dashboard.spec.ts)
+          1. App loads and renders dashboard — 4 metric cards visible
+          2. MQTT data updates metric cards — processed > 0, confidence %, latency
+          3. Image feed shows images — grid count <= maxImages (9)
+          4. Inference log shows entries — newest at top, has class/confidence/status
+          5. Pause button stops the feed — count frozen while paused, resumes after
+
+          ## run-e2e.sh
+          ```bash
+          #!/bin/bash
+          set -e
+          SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+          REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+          trap 'cd "$REPO_ROOT/packages/tfc_dart/test/integration" && docker compose down' EXIT
+          # 1. Start Mosquitto
+          cd "$REPO_ROOT/packages/tfc_dart/test/integration" && docker compose up -d mosquitto
+          sleep 2
+          # 2. Build Flutter web
+          cd "$REPO_ROOT" && flutter build web
+          # 3. Copy config
+          cp -r "$REPO_ROOT/web/config" "$REPO_ROOT/build/web/config"
+          # 4. Install playwright
+          cd "$SCRIPT_DIR" && npm install && npx playwright install chromium
+          # 5. Run tests
+          set +e; npm test; TEST_EXIT=$?; set -e
+          exit $TEST_EXIT
+          ```
+
+          ## Validation
+          - `flutter build web` succeeds
+          - `./test/e2e/run-e2e.sh` runs and all Playwright tests pass

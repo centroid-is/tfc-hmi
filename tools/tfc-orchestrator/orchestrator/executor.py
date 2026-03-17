@@ -1,5 +1,6 @@
 """Execute stories via claude CLI in headless mode."""
 import hashlib
+import logging
 import os
 import signal
 import subprocess
@@ -8,6 +9,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .models import Story, Plan
+from .worker import _checkpoint_review
+
+logger = logging.getLogger(__name__)
 
 
 def _kill_process_tree(proc: subprocess.Popen | None):
@@ -118,7 +122,48 @@ def execute_story(
             text=True,
             start_new_session=True,  # own process group for clean cleanup
         )
-        proc.wait(timeout=story.timeout)
+
+        # Checkpoint loop: run for timeout, then ask reviewer
+        interval = story.timeout
+        extensions_used = 0
+        while True:
+            try:
+                proc.wait(timeout=interval)
+                break
+            except subprocess.TimeoutExpired:
+                elapsed = time.time() - start
+                if extensions_used >= story.max_extensions:
+                    _kill_process_tree(proc)
+                    return ExecutionResult(
+                        story_id=story.id, exit_code=124, stdout='',
+                        stderr=f'Timeout after {elapsed:.0f}s ({extensions_used} extensions exhausted)',
+                        duration_seconds=elapsed,
+                    )
+
+                extensions_used += 1
+                logger.info(
+                    'Story %d: checkpoint review (extension %d/%d, %.0fm elapsed)',
+                    story.id, extensions_used, story.max_extensions, elapsed / 60,
+                )
+                should_extend = _checkpoint_review(
+                    story_name=story.name,
+                    story_id=story.id,
+                    cwd=plan.project_dir,
+                    log_path=stdout_path,
+                    elapsed_seconds=elapsed,
+                    extension_number=extensions_used,
+                    max_extensions=story.max_extensions,
+                )
+                if should_extend:
+                    continue
+                else:
+                    _kill_process_tree(proc)
+                    return ExecutionResult(
+                        story_id=story.id, exit_code=124, stdout='',
+                        stderr=f'Killed by checkpoint reviewer after {elapsed:.0f}s',
+                        duration_seconds=elapsed,
+                    )
+
         stdout_log.close()
         stderr_log.close()
         stdout = Path(stdout_path).read_text()
@@ -129,16 +174,6 @@ def execute_story(
             exit_code=proc.returncode,
             stdout=stdout,
             stderr=stderr,
-            duration_seconds=duration,
-        )
-    except subprocess.TimeoutExpired:
-        _kill_process_tree(proc)
-        duration = time.time() - start
-        return ExecutionResult(
-            story_id=story.id,
-            exit_code=124,
-            stdout='',
-            stderr=f'Timeout after {duration:.0f}s',
             duration_seconds=duration,
         )
     except KeyboardInterrupt:

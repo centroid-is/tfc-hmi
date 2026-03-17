@@ -59,7 +59,8 @@ class Story:
     prompt: str
     depends_on: list[int] = field(default_factory=list)
     acceptance_checks: list[str] = field(default_factory=list)
-    timeout: int = 3600  # seconds, default 1 hour
+    timeout: int = 1800  # seconds per checkpoint interval
+    max_extensions: int = 3  # how many times reviewer can extend
 
 
 @dataclass
@@ -141,7 +142,8 @@ class Plan:
                     prompt=prompt,
                     depends_on=story_data.get('depends_on', []),
                     acceptance_checks=story_data.get('acceptance_checks', []),
-                    timeout=story_data.get('timeout', 3600),
+                    timeout=story_data.get('timeout', 1800),
+                    max_extensions=story_data.get('max_extensions', 3),
                 ))
             phases.append(Phase(
                 name=phase_data['name'],

@@ -19,6 +19,68 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _checkpoint_review(
+    story_name: str,
+    story_id: int,
+    cwd: str,
+    log_path: str,
+    elapsed_seconds: float,
+    extension_number: int,
+    max_extensions: int,
+) -> bool:
+    """Ask a reviewer Claude whether a running story should get more time.
+
+    Returns True to extend, False to kill.
+    """
+    # Gather evidence: git diff (what changed) + log tail (what it's doing)
+    try:
+        diff = subprocess.run(
+            ['git', 'diff', '--stat', 'HEAD'],
+            cwd=cwd, capture_output=True, text=True, timeout=10,
+        ).stdout.strip()[:2000]
+    except Exception:
+        diff = '(could not read git diff)'
+
+    try:
+        log_tail = Path(log_path).read_text()[-3000:]
+    except Exception:
+        log_tail = '(could not read log)'
+
+    prompt = (
+        f"You are a checkpoint reviewer for an autonomous coding agent.\n\n"
+        f"Story {story_id}: {story_name}\n"
+        f"Elapsed: {elapsed_seconds / 60:.0f} minutes\n"
+        f"Extension: {extension_number} of {max_extensions}\n\n"
+        f"## Git diff --stat (work done so far):\n```\n{diff}\n```\n\n"
+        f"## Recent log output (last ~3000 chars):\n```\n{log_tail}\n```\n\n"
+        f"## Decision\n"
+        f"Is the agent making meaningful progress? Consider:\n"
+        f"- Is it creating/editing files relevant to the story?\n"
+        f"- Is it stuck in a loop (repeating the same action)?\n"
+        f"- Is it making forward progress toward the goal?\n\n"
+        f"Reply with EXACTLY one line:\n"
+        f"EXTEND — if the agent is making progress and should continue\n"
+        f"KILL — if the agent is stuck, looping, or not making progress"
+    )
+
+    try:
+        result = subprocess.run(
+            ['claude', '-p', prompt, '--model', 'haiku',
+             '--output-format', 'text', '--max-turns', '1'],
+            capture_output=True, text=True, timeout=60,
+        )
+        verdict = result.stdout.strip().upper()
+        logger.info(
+            'Checkpoint review for story %d (ext %d/%d): %s',
+            story_id, extension_number, max_extensions, verdict[:100],
+        )
+        return verdict.startswith('EXTEND')
+    except Exception as e:
+        logger.warning('Checkpoint review failed for story %d: %s', story_id, e)
+        # On review failure, be generous — extend
+        return True
+
+
 def _kill_process_tree(proc: subprocess.Popen | None):
     if proc is None:
         return
@@ -680,6 +742,7 @@ class WorkerPool:
         proc = None
         stdout_log = open(stdout_path, 'w')
         stderr_log = open(stderr_path, 'w')
+        start_time = time.time()
         try:
             proc = subprocess.Popen(
                 cmd, cwd=cwd,
@@ -694,15 +757,63 @@ class WorkerPool:
                 daemon=True,
             )
             reader.start()
-            timeout = story.timeout
-            proc.wait(timeout=timeout)
-            reader.join(timeout=5)
 
+            # Checkpoint loop: run for timeout, then ask reviewer
+            interval = story.timeout
+            extensions_used = 0
+            while True:
+                try:
+                    proc.wait(timeout=interval)
+                    # Process finished naturally
+                    break
+                except subprocess.TimeoutExpired:
+                    elapsed = time.time() - start_time
+                    if extensions_used >= story.max_extensions:
+                        logger.info(
+                            'Story %d: max extensions (%d) reached after %.0fs, killing',
+                            story.id, story.max_extensions, elapsed,
+                        )
+                        _kill_process_tree(proc)
+                        return 124, (
+                            f'Timeout after {elapsed:.0f}s '
+                            f'({extensions_used} extensions exhausted)'
+                        )
+
+                    extensions_used += 1
+                    logger.info(
+                        'Story %d: checkpoint review (extension %d/%d, %.0fm elapsed)',
+                        story.id, extensions_used, story.max_extensions,
+                        elapsed / 60,
+                    )
+                    should_extend = _checkpoint_review(
+                        story_name=story.name,
+                        story_id=story.id,
+                        cwd=cwd,
+                        log_path=stdout_path,
+                        elapsed_seconds=elapsed,
+                        extension_number=extensions_used,
+                        max_extensions=story.max_extensions,
+                    )
+                    if should_extend:
+                        logger.info(
+                            'Story %d: reviewer approved extension %d/%d',
+                            story.id, extensions_used, story.max_extensions,
+                        )
+                        continue
+                    else:
+                        logger.info(
+                            'Story %d: reviewer denied extension, killing',
+                            story.id,
+                        )
+                        _kill_process_tree(proc)
+                        return 124, (
+                            f'Killed by checkpoint reviewer after {elapsed:.0f}s '
+                            f'(extension {extensions_used} denied)'
+                        )
+
+            reader.join(timeout=5)
             stderr = Path(stderr_path).read_text()
             return proc.returncode, stderr if proc.returncode != 0 else ''
-        except subprocess.TimeoutExpired:
-            _kill_process_tree(proc)
-            return 124, f'Timeout after {timeout}s'
         except KeyboardInterrupt:
             _kill_process_tree(proc)
             raise
