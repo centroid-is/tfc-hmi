@@ -8,7 +8,8 @@ import 'package:riverpod_annotation/riverpod_annotation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:tfc_dart/core/config_source.dart';
-import 'package:tfc_dart/core/modbus_device_client.dart';
+import 'package:tfc_dart/core/modbus_device_client.dart'
+    if (dart.library.js_interop) 'package:tfc_dart/core/web_stubs/modbus_device_client_stub.dart';
 import 'package:tfc_dart/core/mqtt_device_client.dart';
 import 'package:tfc_dart/core/state_man.dart';
 import 'package:tfc_dart/core/preferences.dart';

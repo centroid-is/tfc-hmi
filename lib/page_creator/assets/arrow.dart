@@ -3,7 +3,9 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:open62541/open62541.dart' show DynamicValue;
+import 'package:open62541/open62541.dart'
+    if (dart.library.js_interop) 'package:tfc_dart/core/web_stubs/open62541_stub.dart'
+    show DynamicValue;
 import 'package:tfc/page_creator/assets/common.dart';
 import 'package:tfc/providers/state_man.dart';
 import 'package:rxdart/rxdart.dart';

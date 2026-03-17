@@ -3,6 +3,7 @@ import 'dart:collection';
 import 'package:json_annotation/json_annotation.dart';
 
 import 'package:open62541/open62541.dart'
+    if (dart.library.js_interop) '../core/web_stubs/open62541_stub.dart'
     show DynamicValue, NodeId, LocalizedText, EnumField;
 
 // JSON converter for DynamicValue

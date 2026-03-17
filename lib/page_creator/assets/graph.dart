@@ -15,8 +15,11 @@ import 'common.dart';
 import '../../widgets/graph.dart';
 import '../../providers/database.dart';
 import '../../providers/state_man.dart';
-import 'package:tfc_dart/core/database.dart';
-import 'package:tfc_dart/core/database_drift.dart' as drift_db;
+import 'package:tfc_dart/core/database.dart'
+    if (dart.library.js_interop) 'package:tfc_dart/core/web_stubs/database_stub.dart';
+import 'package:tfc_dart/core/database_drift.dart'
+    if (dart.library.js_interop) 'package:tfc_dart/core/web_stubs/database_drift_stub.dart'
+    as drift_db;
 
 part 'graph.g.dart';
 

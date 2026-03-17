@@ -1,4 +1,4 @@
-import 'dart:io';
+import 'dart:io' if (dart.library.js_interop) 'web_stubs/io_stub.dart';
 
 import 'config_source.dart';
 import 'state_man.dart';

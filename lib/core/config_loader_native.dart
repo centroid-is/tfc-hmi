@@ -1,4 +1,4 @@
-import 'dart:io';
+import 'dart:io' if (dart.library.js_interop) 'io_stub.dart';
 
 import 'package:tfc_dart/core/config_source.dart';
 import 'package:tfc_dart/core/config_source_native.dart';

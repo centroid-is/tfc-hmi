@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'dart:io' as io;
+import 'dart:io' if (dart.library.js_interop) '../core/io_stub.dart' as io;
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:tfc_dart/core/preferences.dart' show Preferences;

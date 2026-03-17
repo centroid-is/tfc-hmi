@@ -4,7 +4,7 @@ import 'dart:convert';
 
 import 'package:meta/meta.dart';
 import 'package:mqtt_client/mqtt_client.dart';
-import 'package:open62541/open62541.dart' show DynamicValue;
+import 'package:open62541/open62541.dart' if (dart.library.js_interop) 'web_stubs/open62541_stub.dart' show DynamicValue;
 import 'package:rxdart/rxdart.dart';
 import 'package:typed_data/typed_data.dart' as typed;
 

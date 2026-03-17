@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
+import 'dart:io' if (dart.library.js_interop) 'web_stubs/io_stub.dart';
 
 import 'package:collection/collection.dart';
 import 'package:json_annotation/json_annotation.dart';

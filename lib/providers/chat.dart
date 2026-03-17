@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io' as io;
+import 'dart:io' if (dart.library.js_interop) '../core/io_stub.dart' as io;
 
 import 'package:mcp_dart/mcp_dart.dart';
 import 'package:riverpod/riverpod.dart';

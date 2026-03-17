@@ -13,7 +13,9 @@ import 'package:tfc/providers/preferences.dart';
 import 'package:tfc/widgets/dynamic_value.dart';
 import 'package:tfc_dart/converter/dynamic_value_converter.dart';
 
-import 'package:open62541/open62541.dart' show DynamicValue;
+import 'package:open62541/open62541.dart'
+    if (dart.library.js_interop) 'package:tfc_dart/core/web_stubs/open62541_stub.dart'
+    show DynamicValue;
 
 part 'recipes.g.dart';
 

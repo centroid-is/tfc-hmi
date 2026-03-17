@@ -1,4 +1,4 @@
-import 'dart:io';
+import 'dart:io' if (dart.library.js_interop) '../core/io_stub.dart';
 
 import 'package:flutter/material.dart';
 import 'package:beamer/beamer.dart';

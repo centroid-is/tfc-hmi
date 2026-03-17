@@ -2,7 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:tfc_dart/core/alarm.dart';
-import 'package:tfc_dart/core/boolean_expression.dart';
+import 'package:tfc_dart/core/boolean_expression.dart'
+    if (dart.library.js_interop) 'package:tfc_dart/core/web_stubs/boolean_expression_stub.dart';
 import '../chat/ai_context_action.dart';
 import '../chat/asset_context_menu.dart' show buildAlarmContextBlock;
 import '../chat/chat_overlay.dart' show ChatContextType;
