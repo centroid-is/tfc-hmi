@@ -301,13 +301,15 @@ class WorkerPool:
         story: Story,
         plan: Plan,
         validate_cmds: list[str],
+        setup_cmds: list[str] | None = None,
         dry_run: bool = False,
     ) -> WorkerResult:
         """Execute a story in an isolated worktree. Respects semaphore for concurrency limiting."""
         async with self._semaphore:
             loop = asyncio.get_running_loop()
             return await loop.run_in_executor(
-                None, self._run_story_sync, story, plan, validate_cmds, dry_run,
+                None, self._run_story_sync, story, plan, validate_cmds,
+                setup_cmds or [], dry_run,
             )
 
     def _run_story_sync(
@@ -315,11 +317,12 @@ class WorkerPool:
         story: Story,
         plan: Plan,
         validate_cmds: list[str],
+        setup_cmds: list[str],
         dry_run: bool,
     ) -> WorkerResult:
         """Synchronous story execution with retry loop.
 
-        Flow: create worktree → (run claude → validate → retry if failed) → merge → cleanup.
+        Flow: create worktree → setup deps → (run claude → validate → retry if failed) → merge → cleanup.
         On validation failure, re-runs claude with the error as context so it can fix the issues.
         """
         if dry_run:
@@ -335,6 +338,9 @@ class WorkerPool:
         # 1. Create worktree
         branch, wt_path = self._create_worktree(story.id)
         events.append(f'worktree_created:{wt_path}')
+
+        # 2. Setup: run explicit setup commands + auto-install missing deps
+        self._setup_worktree(wt_path, setup_cmds, events)
 
         try:
             last_error = ''
@@ -424,6 +430,87 @@ class WorkerPool:
                 duration=time.time() - start,
                 worktree_branch=branch, error=str(e), events=events,
             )
+
+    def _setup_worktree(self, wt_path: str, setup_cmds: list[str], events: list[str]):
+        """Run setup commands and auto-install dependencies in a worktree.
+
+        Self-healing: scans for dependency manifests (package.json, pyproject.toml,
+        pubspec.yaml) where the install directory is missing, and runs the
+        appropriate install command automatically.
+        """
+        # Run explicit setup commands first
+        for cmd in setup_cmds:
+            result = subprocess.run(
+                cmd, shell=True, cwd=wt_path,
+                capture_output=True, text=True, timeout=300,
+            )
+            if result.returncode == 0:
+                events.append(f'setup_ok:{cmd[:50]}')
+            else:
+                logger.warning('Setup command failed in %s: %s → %s',
+                               wt_path, cmd, result.stderr[:200])
+                events.append(f'setup_fail:{cmd[:50]}')
+
+        # Auto-detect and install missing dependencies
+        self._auto_install_deps(wt_path, events)
+
+    def _auto_install_deps(self, wt_path: str, events: list[str]):
+        """Scan worktree for dependency manifests and install if deps dir is missing.
+
+        Supports: npm (package.json), pip (pyproject.toml/requirements.txt),
+        dart/flutter (pubspec.yaml).
+        """
+        wt = Path(wt_path)
+
+        # Find all package.json files (npm/node projects)
+        for pkg_json in wt.rglob('package.json'):
+            # Skip node_modules to avoid false positives
+            if 'node_modules' in pkg_json.parts:
+                continue
+            pkg_dir = pkg_json.parent
+            if not (pkg_dir / 'node_modules').exists():
+                logger.info('Auto-installing npm deps: %s', pkg_dir)
+                result = subprocess.run(
+                    ['npm', 'install'],
+                    cwd=str(pkg_dir), capture_output=True, text=True, timeout=120,
+                )
+                if result.returncode == 0:
+                    events.append(f'auto_npm_install:{pkg_dir.name}')
+                else:
+                    logger.warning('npm install failed in %s: %s',
+                                   pkg_dir, result.stderr[:200])
+
+        # Find pyproject.toml or requirements.txt (Python projects)
+        for marker in wt.rglob('pyproject.toml'):
+            if '.venv' in marker.parts or 'node_modules' in marker.parts:
+                continue
+            pkg_dir = marker.parent
+            venv_dir = pkg_dir / '.venv'
+            if venv_dir.exists():
+                # venv exists but may need deps installed
+                pip = venv_dir / 'bin' / 'pip'
+                if pip.exists():
+                    result = subprocess.run(
+                        [str(pip), 'install', '-e', '.', '-q'],
+                        cwd=str(pkg_dir), capture_output=True, text=True, timeout=120,
+                    )
+                    if result.returncode == 0:
+                        events.append(f'auto_pip_install:{pkg_dir.name}')
+
+        # Find pubspec.yaml (Dart/Flutter projects)
+        for pubspec in wt.rglob('pubspec.yaml'):
+            if '.dart_tool' in pubspec.parts or 'node_modules' in pubspec.parts:
+                continue
+            pkg_dir = pubspec.parent
+            if not (pkg_dir / '.dart_tool').exists():
+                # Try flutter first, fall back to dart
+                for cmd in [['flutter', 'pub', 'get'], ['dart', 'pub', 'get']]:
+                    result = subprocess.run(
+                        cmd, cwd=str(pkg_dir), capture_output=True, text=True, timeout=120,
+                    )
+                    if result.returncode == 0:
+                        events.append(f'auto_pub_get:{pkg_dir.name}')
+                        break
 
     def _run_validation(self, validate_cmds: list[str], cwd: str) -> str | None:
         """Run validation commands. Returns error string on failure, None on success."""

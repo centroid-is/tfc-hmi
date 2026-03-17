@@ -65,6 +65,7 @@ class Phase:
     name: str
     stories: list[Story]
     validate: list[str] = field(default_factory=list)
+    setup: list[str] = field(default_factory=list)
 
     def execution_waves(self) -> list[list[Story]]:
         """Group stories into waves based on intra-phase dependencies.
@@ -143,6 +144,7 @@ class Plan:
                 name=phase_data['name'],
                 stories=stories,
                 validate=phase_data.get('validate', []),
+                setup=phase_data.get('setup', []),
             ))
 
         # Parse retry config

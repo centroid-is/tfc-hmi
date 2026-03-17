@@ -37,6 +37,23 @@
       "verification_details": "",
       "started_at": "",
       "worker_slot": -1
+    },
+    {
+      "story_id": 3,
+      "story_name": "Svelte dashboard components",
+      "status": "pass",
+      "duration_seconds": 197.1432240009308,
+      "error": "",
+      "timestamp": "2026-03-17T12:37:17.773684",
+      "retry_count": 0,
+      "review_iterations": 0,
+      "review_findings": 0,
+      "worktree_branch": "orchestrator/dashboard/story-3",
+      "merge_commit": "ceb014594d842d1903391a860f9bdd3b61e20501",
+      "verification_passed": null,
+      "verification_details": "",
+      "started_at": "",
+      "worker_slot": -1
     }
   ]
 }

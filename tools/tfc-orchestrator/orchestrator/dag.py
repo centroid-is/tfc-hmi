@@ -24,6 +24,7 @@ class DAGNode:
     depends_on: list[int] = field(default_factory=list)
     status: NodeStatus = NodeStatus.PENDING
     validate: list[str] = field(default_factory=list)
+    setup: list[str] = field(default_factory=list)
 
 
 class DAGScheduler:
@@ -135,5 +136,6 @@ class DAGScheduler:
                     story_id=story.id,
                     depends_on=list(story.depends_on),
                     validate=list(validate),
+                    setup=list(phase.setup),
                 ))
         return cls(nodes)

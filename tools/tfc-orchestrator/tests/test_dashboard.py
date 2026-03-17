@@ -360,3 +360,81 @@ class TestApiEvents(AioHTTPTestCase):
         chunk = await resp.content.readline()
         assert chunk  # Should get something (data or keepalive)
         resp.close()
+
+
+# ===========================================================================
+# Integration tests
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+class TestDashboardIntegration:
+    async def test_index_serves_svelte_app(self, tmp_path):
+        """GET / should return the built Svelte index.html."""
+        dist_dir = Path(__file__).parent.parent / 'dashboard' / 'dist'
+        if not dist_dir.exists():
+            pytest.skip("dashboard not built")
+
+        env = _setup_env(tmp_path)
+        app = create_app(
+            plan_path=env['plan_path'],
+            state_dir=env['state_dir'],
+        )
+
+        async with TestClient(TestServer(app)) as client:
+            resp = await client.get('/')
+            assert resp.status == 200
+            text = await resp.text()
+            assert '<div id="app">' in text
+            assert resp.content_type == 'text/html'
+
+    async def test_assets_serve_js(self, tmp_path):
+        """GET /assets/*.js should return built JS bundle."""
+        dist_dir = Path(__file__).parent.parent / 'dashboard' / 'dist'
+        assets_dir = dist_dir / 'assets'
+        if not assets_dir.exists():
+            pytest.skip("dashboard not built")
+
+        js_files = list(assets_dir.glob('*.js'))
+        if not js_files:
+            pytest.skip("no JS assets found")
+
+        env = _setup_env(tmp_path)
+        app = create_app(
+            plan_path=env['plan_path'],
+            state_dir=env['state_dir'],
+        )
+
+        js_name = js_files[0].name
+
+        async with TestClient(TestServer(app)) as client:
+            resp = await client.get(f'/assets/{js_name}')
+            assert resp.status == 200
+            assert 'javascript' in resp.content_type
+
+    async def test_full_api_state_with_real_plan(self, tmp_path):
+        """Test /api/state with the actual mqtt_web.yaml plan."""
+        plan_path = Path(__file__).parent.parent / 'plans' / 'mqtt_web.yaml'
+        if not plan_path.exists():
+            pytest.skip("mqtt_web.yaml not found")
+
+        state_dir = str(tmp_path / '.orchestrator')
+
+        app = create_app(
+            plan_path=str(plan_path),
+            state_dir=state_dir,
+        )
+
+        async with TestClient(TestServer(app)) as client:
+            resp = await client.get('/api/state')
+            assert resp.status == 200
+            data = await resp.json()
+
+            assert 'plan' in data
+            assert data['plan']['name'] == 'mqtt-web'
+            assert 'dag' in data
+            assert len(data['dag']['nodes']) > 0
+            assert 'statuses' in data
+            # All stories should be pending (no state file)
+            for status in data['statuses'].values():
+                assert status == 'pending'

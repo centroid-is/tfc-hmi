@@ -232,7 +232,7 @@ async def _run_plan_dag(
             if plan.workers.worktree_isolation and not dry_run:
                 # Use worker pool (worktree isolation)
                 task = asyncio.create_task(
-                    pool.run_story(story, plan, node.validate, dry_run),
+                    pool.run_story(story, plan, node.validate, node.setup, dry_run),
                 )
             else:
                 # Direct execution (no worktree)
