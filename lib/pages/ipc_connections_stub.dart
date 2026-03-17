@@ -4,7 +4,9 @@ library;
 import 'package:flutter/material.dart';
 
 class ConnectionsPage extends StatelessWidget {
-  const ConnectionsPage({super.key});
+  final dynamic dbusClient;
+
+  const ConnectionsPage({super.key, required this.dbusClient});
 
   @override
   Widget build(BuildContext context) {

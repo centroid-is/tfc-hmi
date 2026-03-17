@@ -4,7 +4,9 @@ library;
 import 'package:flutter/material.dart';
 
 class ConfigListPage extends StatelessWidget {
-  const ConfigListPage({super.key});
+  final dynamic dbusClient;
+
+  const ConfigListPage({super.key, required this.dbusClient});
 
   @override
   Widget build(BuildContext context) {

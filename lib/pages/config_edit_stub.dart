@@ -4,7 +4,16 @@ library;
 import 'package:flutter/material.dart';
 
 class ConfigEditDialog extends StatelessWidget {
-  const ConfigEditDialog({super.key});
+  final dynamic dbusClient;
+  final String serviceName;
+  final String objectPath;
+
+  const ConfigEditDialog({
+    super.key,
+    required this.dbusClient,
+    required this.serviceName,
+    required this.objectPath,
+  });
 
   @override
   Widget build(BuildContext context) {
