@@ -424,6 +424,10 @@ class StateManConfig {
     return 'StateManConfig(opcua: ${opcua.toString()}, jbtm: ${jbtm.toString()}, modbus: ${modbus.toString()}, mqtt: ${mqtt.toString()})';
   }
 
+  static StateManConfig fromString(String jsonString) {
+    return StateManConfig.fromJson(jsonDecode(jsonString));
+  }
+
   static Future<StateManConfig> fromFile(String path) async {
     final file = File(path);
     if (!await file.exists()) {
@@ -602,6 +606,19 @@ class KeyMappings {
       await prefs.setString('key_mappings', keyMappingsJson);
     }
     return KeyMappings.fromJson(jsonDecode(keyMappingsJson));
+  }
+
+  static KeyMappings fromString(String jsonString) {
+    return KeyMappings.fromJson(jsonDecode(jsonString));
+  }
+
+  static Future<KeyMappings> fromFile(String path) async {
+    final file = File(path);
+    if (!await file.exists()) {
+      throw Exception('Key mappings file not found: $path');
+    }
+    final contents = await file.readAsString();
+    return KeyMappings.fromString(contents);
   }
 
   factory KeyMappings.fromJson(Map<String, dynamic> json) =>
