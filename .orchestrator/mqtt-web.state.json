@@ -139,57 +139,6 @@
       "verification_details": "\n00:00 +0: loading /Users/jonb/Projects/tfc-hmi/test/painter/auger_conveyor_test.dart                                                                                                                   \n00:01 +0: loading /Users/jonb/Projects/tfc-hmi/test/painter/auger_conveyor_test.dart                                                                                                                   \n00:01 +0: /Users/jonb/Projects/tfc-hmi/test/painter/auger_conveyor_test.dart: AugerConveyorPainter ",
       "started_at": "",
       "worker_slot": -1
-    },
-    {
-      "story_id": 6,
-      "story_name": "Web conditional imports + compilation",
-      "status": "pass",
-      "duration_seconds": 630.9934928417206,
-      "error": "",
-      "timestamp": "2026-03-17T14:46:11.236709",
-      "retry_count": 0,
-      "review_iterations": 1,
-      "review_findings": 3,
-      "worktree_branch": "orchestrator/mqtt-web/story-6",
-      "merge_commit": "60bf9ca2810d5fbdacdc0d019fefce8a39c13617",
-      "verification_passed": true,
-      "verification_details": "\n00:00 +0: loading /Users/jonb/Projects/tfc-hmi/test/painter/auger_conveyor_test.dart                                                                                                                   \n00:01 +0: loading /Users/jonb/Projects/tfc-hmi/test/painter/auger_conveyor_test.dart                                                                                                                   \n00:01 +0: loading /Users/jonb/Projects/tfc-hmi/test/page_creator/all_keys_test.dart                ",
-      "started_at": "",
-      "worker_slot": -1
-    },
-    {
-      "story_id": 7,
-      "story_name": "Provider integration \u2014 static config + page hiding",
-      "status": "pass",
-      "duration_seconds": 1104.531594991684,
-      "error": "",
-      "timestamp": "2026-03-17T15:29:55.669920",
-      "retry_count": 0,
-      "review_iterations": 2,
-      "review_findings": 0,
-      "worktree_branch": "orchestrator/mqtt-web/story-7",
-      "merge_commit": "85436c6fe0d4f645297342141c624b1a515f49ad",
-      "verification_passed": true,
-      "verification_details": "\n00:00 +0: loading /Users/jonb/Projects/tfc-hmi/test/painter/auger_conveyor_test.dart                                                                                                                   \n00:01 +0: loading /Users/jonb/Projects/tfc-hmi/test/painter/auger_conveyor_test.dart                                                                                                                   \n00:01 +0: /Users/jonb/Projects/tfc-hmi/test/painter/auger_conveyor_test.dart: AugerConveyorPainter ",
-      "started_at": "",
-      "worker_slot": -1
-    },
-    {
-      "story_id": 11,
-      "story_name": "Playwright E2E tests with stubbed MQTT data",
-      "status": "pass",
-      "duration_seconds": 635.5324039459229,
-      "error": "",
-      "timestamp": "2026-03-17T16:00:47.817057",
-      "retry_count": 0,
-      "review_iterations": 3,
-      "review_findings": 3,
-      "worktree_branch": "orchestrator/mqtt-web/story-11",
-      "merge_commit": "d7d8537a8efe2df649e8585c098f492d4d566dab",
-      "verification_passed": true,
-      "verification_details": "\n00:00 +0: loading /Users/jonb/Projects/tfc-hmi/test/painter/auger_conveyor_test.dart                                                                                                                   \n00:01 +0: loading /Users/jonb/Projects/tfc-hmi/test/painter/auger_conveyor_test.dart                                                                                                                   \n00:01 +0: /Users/jonb/Projects/tfc-hmi/test/painter/auger_conveyor_test.dart: AugerConveyorPainter ",
-      "started_at": "",
-      "worker_slot": -1
     }
   ]
 }
