@@ -56,145 +56,148 @@ class _FakePreferences implements PreferencesApi {
 }
 
 void main() {
-  group('Inference dashboard config validation', () {
-    late String pageEditorJson;
-    late String keyMappingsJson;
-    late Map<String, dynamic> keyMappingsData;
+  const configDirs = {
+    'centroid-hmi/web/config': 'centroid-hmi/web/config',
+    'web/config': 'web/config',
+  };
 
-    setUpAll(() {
-      final pageEditorFile =
-          File('centroid-hmi/web/config/page-editor.json');
-      expect(pageEditorFile.existsSync(), isTrue,
-          reason: 'page-editor.json must exist in centroid-hmi/web/config/');
-      pageEditorJson = pageEditorFile.readAsStringSync();
+  for (final entry in configDirs.entries) {
+    final dirLabel = entry.key;
+    final dirPath = entry.value;
 
-      final keyMappingsFile =
-          File('centroid-hmi/web/config/keymappings.json');
-      expect(keyMappingsFile.existsSync(), isTrue,
-          reason: 'keymappings.json must exist in centroid-hmi/web/config/');
-      keyMappingsJson = keyMappingsFile.readAsStringSync();
-      keyMappingsData =
-          jsonDecode(keyMappingsJson) as Map<String, dynamic>;
-    });
+    group('Inference dashboard config validation ($dirLabel)', () {
+      late String pageEditorJson;
+      late String keyMappingsJson;
+      late Map<String, dynamic> keyMappingsData;
 
-    test('page-editor.json is valid JSON parseable by PageManager', () {
-      final manager = PageManager(pages: {}, prefs: _FakePreferences());
-      // fromJson populates manager.pages from the JSON string
-      manager.fromJson(pageEditorJson);
-      expect(manager.pages, isNotEmpty,
-          reason: 'PageManager should parse at least one page');
-    });
+      setUpAll(() {
+        final pageEditorFile = File('$dirPath/page-editor.json');
+        expect(pageEditorFile.existsSync(), isTrue,
+            reason: 'page-editor.json must exist in $dirPath/');
+        pageEditorJson = pageEditorFile.readAsStringSync();
 
-    test('all asset types are recognized by the registry', () {
-      final json = jsonDecode(pageEditorJson) as Map<String, dynamic>;
+        final keyMappingsFile = File('$dirPath/keymappings.json');
+        expect(keyMappingsFile.existsSync(), isTrue,
+            reason: 'keymappings.json must exist in $dirPath/');
+        keyMappingsJson = keyMappingsFile.readAsStringSync();
+        keyMappingsData =
+            jsonDecode(keyMappingsJson) as Map<String, dynamic>;
+      });
 
-      // Collect all asset_name values from the JSON
-      final assetNames = <String>[];
-      void findAssets(dynamic part) {
-        if (part is Map<String, dynamic>) {
-          if (part.containsKey('asset_name')) {
-            assetNames.add(part['asset_name'] as String);
-          }
-          part.values.forEach(findAssets);
-        } else if (part is List) {
-          part.forEach(findAssets);
-        }
-      }
+      test('page-editor.json is valid JSON parseable by PageManager', () {
+        final manager = PageManager(pages: {}, prefs: _FakePreferences());
+        manager.fromJson(pageEditorJson);
+        expect(manager.pages, isNotEmpty,
+            reason: 'PageManager should parse at least one page');
+      });
 
-      findAssets(json);
-      expect(assetNames, isNotEmpty,
-          reason: 'Should find asset_name entries in the JSON');
+      test('all asset types are recognized by the registry', () {
+        final json = jsonDecode(pageEditorJson) as Map<String, dynamic>;
 
-      // Verify each asset_name can be parsed by the registry
-      for (final name in assetNames) {
-        final asset = AssetRegistry.createDefaultAssetByName(name);
-        expect(asset, isNotNull,
-            reason: 'Asset type "$name" must be registered in AssetRegistry');
-      }
-    });
-
-    test(
-        'asset count matches expected '
-        '(4 NumberConfig + 1 ImageFeedConfig + 1 InferenceLogConfig + 1 ButtonConfig = 7)',
-        () {
-      final manager = PageManager(pages: {}, prefs: _FakePreferences());
-      manager.fromJson(pageEditorJson);
-
-      // Count all assets across all pages
-      var totalAssets = 0;
-      final typeCounts = <String, int>{};
-      for (final page in manager.pages.values) {
-        for (final asset in page.assets) {
-          totalAssets++;
-          final name = asset.assetName;
-          typeCounts[name] = (typeCounts[name] ?? 0) + 1;
-        }
-      }
-
-      expect(totalAssets, equals(7),
-          reason: 'Expected 7 total assets, got $totalAssets. '
-              'Breakdown: $typeCounts');
-
-      expect(typeCounts['NumberConfig'], equals(4),
-          reason: 'Expected 4 NumberConfig assets');
-      expect(typeCounts['ImageFeedConfig'], equals(1),
-          reason: 'Expected 1 ImageFeedConfig asset');
-      expect(typeCounts['InferenceLogConfig'], equals(1),
-          reason: 'Expected 1 InferenceLogConfig asset');
-      expect(typeCounts['ButtonConfig'], equals(1),
-          reason: 'Expected 1 ButtonConfig asset');
-    });
-
-    test('all asset keys reference valid keymappings entries', () {
-      final manager = PageManager(pages: {}, prefs: _FakePreferences());
-      manager.fromJson(pageEditorJson);
-
-      final nodes =
-          (keyMappingsData['nodes'] as Map<String, dynamic>).keys.toSet();
-
-      for (final page in manager.pages.values) {
-        for (final asset in page.assets) {
-          // allKeys is on BaseAsset, cast to access it
-          final baseAsset = asset as BaseAsset;
-          for (final key in baseAsset.allKeys) {
-            expect(nodes.contains(key), isTrue,
-                reason:
-                    'Asset key "$key" from ${asset.assetName} must exist '
-                    'in keymappings.json nodes. Available: $nodes');
+        final assetNames = <String>[];
+        void findAssets(dynamic part) {
+          if (part is Map<String, dynamic>) {
+            if (part.containsKey('asset_name')) {
+              assetNames.add(part['asset_name'] as String);
+            }
+            part.values.forEach(findAssets);
+          } else if (part is List) {
+            part.forEach(findAssets);
           }
         }
-      }
+
+        findAssets(json);
+        expect(assetNames, isNotEmpty,
+            reason: 'Should find asset_name entries in the JSON');
+
+        for (final name in assetNames) {
+          final asset = AssetRegistry.createDefaultAssetByName(name);
+          expect(asset, isNotNull,
+              reason:
+                  'Asset type "$name" must be registered in AssetRegistry');
+        }
+      });
+
+      test(
+          'asset count matches expected '
+          '(4 NumberConfig + 1 ImageFeedConfig + 1 InferenceLogConfig + 1 ButtonConfig = 7)',
+          () {
+        final manager = PageManager(pages: {}, prefs: _FakePreferences());
+        manager.fromJson(pageEditorJson);
+
+        var totalAssets = 0;
+        final typeCounts = <String, int>{};
+        for (final page in manager.pages.values) {
+          for (final asset in page.assets) {
+            totalAssets++;
+            final name = asset.assetName;
+            typeCounts[name] = (typeCounts[name] ?? 0) + 1;
+          }
+        }
+
+        expect(totalAssets, equals(7),
+            reason: 'Expected 7 total assets, got $totalAssets. '
+                'Breakdown: $typeCounts');
+
+        expect(typeCounts['NumberConfig'], equals(4),
+            reason: 'Expected 4 NumberConfig assets');
+        expect(typeCounts['ImageFeedConfig'], equals(1),
+            reason: 'Expected 1 ImageFeedConfig asset');
+        expect(typeCounts['InferenceLogConfig'], equals(1),
+            reason: 'Expected 1 InferenceLogConfig asset');
+        expect(typeCounts['ButtonConfig'], equals(1),
+            reason: 'Expected 1 ButtonConfig asset');
+      });
+
+      test('all asset keys reference valid keymappings entries', () {
+        final manager = PageManager(pages: {}, prefs: _FakePreferences());
+        manager.fromJson(pageEditorJson);
+
+        final nodes =
+            (keyMappingsData['nodes'] as Map<String, dynamic>).keys.toSet();
+
+        for (final page in manager.pages.values) {
+          for (final asset in page.assets) {
+            final baseAsset = asset as BaseAsset;
+            for (final key in baseAsset.allKeys) {
+              expect(nodes.contains(key), isTrue,
+                  reason:
+                      'Asset key "$key" from ${asset.assetName} must exist '
+                      'in keymappings.json nodes. Available: $nodes');
+            }
+          }
+        }
+      });
+
+      test('keymappings.json contains all required inference keys', () {
+        final nodes =
+            (keyMappingsData['nodes'] as Map<String, dynamic>).keys.toSet();
+
+        const requiredKeys = [
+          'inference.result',
+          'inference.stats.processed',
+          'inference.stats.avg_confidence',
+          'inference.stats.latency_ms',
+          'inference.stats.errors',
+          'inference.control.pause',
+        ];
+
+        for (final key in requiredKeys) {
+          expect(nodes.contains(key), isTrue,
+              reason: 'keymappings.json must contain "$key"');
+        }
+      });
+
+      test('page has correct menu item', () {
+        final manager = PageManager(pages: {}, prefs: _FakePreferences());
+        manager.fromJson(pageEditorJson);
+
+        expect(manager.pages.containsKey('/'), isTrue,
+            reason: 'Should have a page at path "/"');
+
+        final homePage = manager.pages['/']!;
+        expect(homePage.menuItem.label, equals('Inference Monitor'));
+      });
     });
-
-    test('keymappings.json contains all required inference keys', () {
-      final nodes =
-          (keyMappingsData['nodes'] as Map<String, dynamic>).keys.toSet();
-
-      const requiredKeys = [
-        'inference.result',
-        'inference.stats.processed',
-        'inference.stats.avg_confidence',
-        'inference.stats.latency_ms',
-        'inference.stats.errors',
-        'inference.control.pause',
-      ];
-
-      for (final key in requiredKeys) {
-        expect(nodes.contains(key), isTrue,
-            reason: 'keymappings.json must contain "$key"');
-      }
-    });
-
-    test('page has correct menu item', () {
-      final manager = PageManager(pages: {}, prefs: _FakePreferences());
-      manager.fromJson(pageEditorJson);
-
-      // Should have a home/root page
-      expect(manager.pages.containsKey('/'), isTrue,
-          reason: 'Should have a page at path "/"');
-
-      final homePage = manager.pages['/']!;
-      expect(homePage.menuItem.label, equals('Inference Monitor'));
-    });
-  });
+  }
 }

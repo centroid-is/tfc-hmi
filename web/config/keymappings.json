@@ -5,6 +5,24 @@
     },
     "actuator.valve": {
       "mqtt_node": { "topic": "plant/actuator/valve", "qos": 1, "payloadType": "json" }
+    },
+    "inference.result": {
+      "mqtt_node": { "topic": "inference/result", "qos": 0, "payloadType": "json" }
+    },
+    "inference.stats.processed": {
+      "mqtt_node": { "topic": "inference/stats/processed", "qos": 0, "payloadType": "json" }
+    },
+    "inference.stats.avg_confidence": {
+      "mqtt_node": { "topic": "inference/stats/avg_confidence", "qos": 0, "payloadType": "json" }
+    },
+    "inference.stats.latency_ms": {
+      "mqtt_node": { "topic": "inference/stats/latency_ms", "qos": 0, "payloadType": "json" }
+    },
+    "inference.stats.errors": {
+      "mqtt_node": { "topic": "inference/stats/errors", "qos": 0, "payloadType": "json" }
+    },
+    "inference.control.pause": {
+      "mqtt_node": { "topic": "inference/control/pause", "qos": 1, "payloadType": "json" }
     }
   }
 }

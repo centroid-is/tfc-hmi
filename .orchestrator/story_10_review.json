@@ -1,0 +1,176 @@
+{
+  "comments": [
+    {
+      "id": "a1b2c3",
+      "severity": "blocker",
+      "file": "centroid-hmi/web/config/page-editor.json",
+      "line": 1,
+      "message": "page-editor.json is empty \u2014 contains only a bare Home page with zero assets. Story 10 requires 7 assets (4 NumberConfig + 1 ImageFeedConfig + 1 InferenceLogConfig + 1 ButtonConfig) with the inference dashboard layout. The validation test (test/inference_dashboard_config_test.dart) reads this file and will FAIL on: 'all asset types are recognized' (expects non-empty assetNames), 'asset count matches expected (7)' (gets 0), and 'page has correct menu item' (label is 'Home' not 'Inference Monitor'). The primary deliverable of Story 10 \u2014 the dashboard layout JSON \u2014 was never created.",
+      "status": "fixed",
+      "fix_attempts": 1
+    },
+    {
+      "id": "d4e5f6",
+      "severity": "blocker",
+      "file": "web/config/keymappings.json",
+      "line": 1,
+      "message": "web/config/keymappings.json only has 2 base keys (sensor.temperature, actuator.valve) and is missing all 6 inference keys. The inference keys were added to centroid-hmi/web/config/keymappings.json but not mirrored here. The web/ directory appears to be a parallel deployment target; config files should be consistent or one should be the single source of truth.",
+      "status": "fixed",
+      "fix_attempts": 1
+    },
+    {
+      "id": "g7h8i9",
+      "severity": "should_fix",
+      "file": "web/config/page-editor.json",
+      "line": 1,
+      "message": "web/config/page-editor.json is also empty (bare Home page, no assets). Same issue as centroid-hmi/web/config/page-editor.json \u2014 if both locations are deployment targets, both need the inference dashboard layout.",
+      "status": "fixed",
+      "fix_attempts": 1
+    },
+    {
+      "id": "j0k1l2",
+      "severity": "should_fix",
+      "file": "web/index.html",
+      "line": 1,
+      "message": "New web/index.html duplicates centroid-hmi/web/index.html (nearly identical content with minor differences like apple-touch-icon link). Having two web/ directories with separate index.html files creates ambiguity about which is the canonical web entry point. Consider removing the duplicate or adding a comment explaining the distinction.",
+      "status": "fixed",
+      "fix_attempts": 1
+    },
+    {
+      "id": "m3n4o5",
+      "severity": "note",
+      "file": "lib/page_creator/assets/inference_log.dart",
+      "line": 286,
+      "message": "The bare `setState(() {})` call after AnimatedList mutations is intentional (to trigger rebuild for the empty-state overlay) but reads as a code smell. A brief comment like '// rebuild to update empty-state overlay' would clarify intent for future readers.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "p6q7r8",
+      "severity": "note",
+      "file": "test/inference_dashboard_config_test.dart",
+      "line": 65,
+      "message": "Test uses relative path File('centroid-hmi/web/config/page-editor.json') which assumes CWD is the repo root. This will break if tests are run from a subdirectory. Consider using Platform.script or a test utility to resolve paths relative to the project root.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "a1b2c3d4",
+      "severity": "blocker",
+      "file": "centroid-hmi/web/config/page-editor.json",
+      "line": 1,
+      "message": "page-editor.json is structurally wrong and nearly empty. It uses {\"pages\": {\"/\": {\"label\": \"Home\", \"assets\": []}}} but PageManager._fromJson expects top-level section keys mapping to objects with 'menu_item' (MenuItem), 'assets' (List), and 'mirroring_disabled' (bool) fields. Missing menu_item causes 'type Null is not a subtype of type Map<String,dynamic>' cast error. This causes 4/6 dashboard config tests to crash.",
+      "status": "fixed",
+      "fix_attempts": 1
+    },
+    {
+      "id": "b2c3d4e5",
+      "severity": "blocker",
+      "file": "centroid-hmi/web/config/page-editor.json",
+      "line": 5,
+      "message": "Story 10 requires 7 assets (4 NumberConfig, 1 ImageFeedConfig, 1 InferenceLogConfig, 1 ButtonConfig) with specific keys and positions. The file has 'assets': [] \u2014 zero assets were created. The entire dashboard layout from the acceptance criteria is missing.",
+      "status": "fixed",
+      "fix_attempts": 1
+    },
+    {
+      "id": "c3d4e5f6",
+      "severity": "blocker",
+      "file": "centroid-hmi/web/config/page-editor.json",
+      "line": 3,
+      "message": "Menu item label must be 'Inference Monitor' per acceptance criteria, but is 'Home'. Test 'page has correct menu item' fails.",
+      "status": "fixed",
+      "fix_attempts": 1
+    },
+    {
+      "id": "d4e5f6a7",
+      "severity": "blocker",
+      "file": "test/inference_dashboard_config_test.dart",
+      "line": 0,
+      "message": "5 of 6 tests FAIL. Only 'keymappings.json contains all required inference keys' passes. The tests correctly validate acceptance criteria but the config file was never populated with the required dashboard content. Story is incomplete \u2014 still in RED phase (tests written but GREEN implementation not done).",
+      "status": "fixed",
+      "fix_attempts": 1
+    },
+    {
+      "id": "e5f6a7b8",
+      "severity": "should_fix",
+      "file": "web/config/page-editor.json",
+      "line": 1,
+      "message": "Root web/config/page-editor.json is also empty (same problem). Story says to modify 'web/config/page-editor.json' but test reads from 'centroid-hmi/web/config/page-editor.json'. Both are empty. Unclear which is canonical \u2014 should be consistent.",
+      "status": "fixed",
+      "fix_attempts": 1
+    },
+    {
+      "id": "f6a7b8c9",
+      "severity": "should_fix",
+      "file": "web/config/keymappings.json",
+      "line": 1,
+      "message": "Root web/config/keymappings.json only has sensor.temperature and actuator.valve \u2014 missing all 6 inference keys. The centroid-hmi/web/config/keymappings.json has them. These two files are divergent; if web/config/ is the canonical static config directory, it's missing required content.",
+      "status": "fixed",
+      "fix_attempts": 1
+    },
+    {
+      "id": "a7b8c9d0",
+      "severity": "note",
+      "file": "lib/page_creator/assets/inference_log.dart",
+      "line": 192,
+      "message": "AnimatedList refactor and empty state overlay are outside Story 10 scope (page-editor.json + keymappings). These are UI enhancements that belong to Story 9. Widget tests pass (15/15) so the code is functional, but scope creep risks merge conflicts.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "b8c9d0e1",
+      "severity": "note",
+      "file": "web/index.html",
+      "line": 0,
+      "message": "New web scaffold files (index.html, manifest.json, config.json) are outside Story 10 scope. These may conflict with or duplicate centroid-hmi/web/ files. Story 10 is specifically about page-editor.json + keymappings.json content.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "q1r2s3",
+      "severity": "note",
+      "file": "web/config/keymappings.json",
+      "line": 9,
+      "message": "inference.result uses QoS 0 which is fine for streaming data, but consider whether high-frequency inference results could overwhelm the MQTT broker or web client. The HTML dashboard used 600ms intervals \u2014 if the publisher sends faster, there's no backpressure mechanism in QoS 0. This is acceptable for the config file but worth documenting the expected publish rate.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "r2s3t4",
+      "severity": "note",
+      "file": "web/config/keymappings.json",
+      "line": 0,
+      "message": "All 6 inference keys are consistent between web/config/keymappings.json and centroid-hmi/web/config/keymappings.json \u2014 good. However, there is no automated mechanism to keep these two files in sync. If one is edited in the future without updating the other, configs will silently diverge. Consider a symlink, a build step that copies one to the other, or a CI check that diffs them.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "t1a2b3c4",
+      "severity": "should_fix",
+      "file": "test/inference_dashboard_config_test.dart",
+      "line": 72,
+      "message": "Test only validates centroid-hmi/web/config/keymappings.json but the diff under review modifies web/config/keymappings.json. There is zero test coverage for the root web/config/ versions of either config file. If the two directories diverge again (as they did before this fix), only the centroid-hmi/ copy would be caught by tests. Add a parallel validation block (or parameterize the test) to also load and verify web/config/keymappings.json and web/config/page-editor.json.",
+      "status": "fixed",
+      "fix_attempts": 1
+    },
+    {
+      "id": "t2d3e4f5",
+      "severity": "note",
+      "file": "test/inference_dashboard_config_test.dart",
+      "line": 66,
+      "message": "Tests use hardcoded relative paths (File('centroid-hmi/web/config/...')). This means tests must be run from the repo root. Running from centroid-hmi/ (as flutter test normally does) causes setUpAll to fail with 'page-editor.json must exist'. Consider using Platform.environment or a path resolution helper to make tests CWD-independent. (Echoes existing note p6q7r8 \u2014 still unresolved.)",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "t3g4h5i6",
+      "severity": "note",
+      "file": "test/inference_dashboard_config_test.dart",
+      "line": 0,
+      "message": "No negative/boundary tests for config validation. For example: what happens if an asset references a key not in keymappings.json? What if page-editor.json has a duplicate asset_name entry? What if a required field (like 'key') is null? Story 10 AC only requires the happy-path tests that exist, but edge-case coverage would strengthen the config validation safety net.",
+      "status": "open",
+      "fix_attempts": 0
+    }
+  ],
+  "fixed_then_reopened": []
+}
