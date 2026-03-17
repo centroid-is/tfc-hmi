@@ -28,6 +28,7 @@ import 'speedbatcher.dart';
 import 'conveyor_gate.dart';
 import 'drawing_viewer.dart';
 import 'image_feed.dart';
+import 'inference_log.dart';
 
 class AssetRegistry {
   static final Logger _log = Logger();
@@ -71,6 +72,7 @@ class AssetRegistry {
     GateStatusConfig: GateStatusConfig.fromJson,
     DrawingViewerConfig: DrawingViewerConfig.fromJson,
     ImageFeedConfig: ImageFeedConfig.fromJson,
+    InferenceLogConfig: InferenceLogConfig.fromJson,
   };
 
   static final Map<Type, Asset Function()> defaultFactories = {
@@ -111,6 +113,7 @@ class AssetRegistry {
     GateStatusConfig: GateStatusConfig.preview,
     DrawingViewerConfig: DrawingViewerConfig.preview,
     ImageFeedConfig: ImageFeedConfig.preview,
+    InferenceLogConfig: InferenceLogConfig.preview,
   };
 
   static void registerFromJsonFactory<T extends Asset>(
