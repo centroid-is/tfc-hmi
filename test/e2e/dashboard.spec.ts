@@ -77,11 +77,10 @@ test.describe('Inference Dashboard E2E', () => {
     await page.goto('/');
     await waitForFlutterReady(page);
 
-    // Navigate to Inference Monitor if not already there
+    // Navigate to Inference Monitor
     const inferenceLink = page.getByText('Inference Monitor');
-    if (await inferenceLink.isVisible()) {
-      await inferenceLink.click();
-    }
+    await expect(inferenceLink).toBeVisible({ timeout: 15_000 });
+    await inferenceLink.click();
 
     // Start the MQTT stub publisher
     await startPublishing();
@@ -89,12 +88,23 @@ test.describe('Inference Dashboard E2E', () => {
     // Wait for data to flow (3 seconds at 600ms interval = ~5 messages)
     await page.waitForTimeout(3_000);
 
-    // The "Processed" metric should now show a number > 0.
-    // NumberConfig renders its value as text. We look for any digit in the page.
     const bodyText = await page.locator('body').innerText();
-    // After 3 seconds of publishing, totalProcessed should be >= 4
-    // The body should contain the count as text somewhere.
-    expect(bodyText).toMatch(/\d+/);
+
+    // "Processed" metric should show a number > 0
+    // Extract lines near "Processed" and look for a positive integer
+    const processedMatch = bodyText.match(/Processed[\s\S]{0,50}?(\d+)/);
+    expect(processedMatch).not.toBeNull();
+    expect(Number(processedMatch![1])).toBeGreaterThan(0);
+
+    // "Avg Confidence" metric should show a percentage (e.g. "75%") or decimal
+    const confidenceMatch = bodyText.match(/Avg Confidence[\s\S]{0,50}?(\d+\.?\d*)\s*%?/);
+    expect(confidenceMatch).not.toBeNull();
+    expect(Number(confidenceMatch![1])).toBeGreaterThan(0);
+
+    // "Latency" metric should show a number
+    const latencyMatch = bodyText.match(/Latency[\s\S]{0,50}?(\d+)/);
+    expect(latencyMatch).not.toBeNull();
+    expect(Number(latencyMatch![1])).toBeGreaterThan(0);
 
     stopPublishing();
   });
@@ -109,18 +119,15 @@ test.describe('Inference Dashboard E2E', () => {
 
     // Navigate to the inference monitor page
     const inferenceLink = page.getByText('Inference Monitor');
-    if (await inferenceLink.isVisible()) {
-      await inferenceLink.click();
-    }
+    await expect(inferenceLink).toBeVisible({ timeout: 15_000 });
+    await inferenceLink.click();
 
     await startPublishing();
 
-    // Wait for at least 3 images (3 * 600ms + buffer)
-    await page.waitForTimeout(3_000);
+    // Wait long enough for > 9 messages to exceed maxImages cap
+    // (9 * 600ms = 5.4s + buffer)
+    await page.waitForTimeout(7_000);
 
-    // The image feed renders image elements (Image.memory produces <img> tags
-    // in the HTML renderer). Also look for confidence labels.
-    // ImageFeedConfig shows labels like "cat", "dog" etc. as text overlays.
     const bodyText = await page.locator('body').innerText();
 
     // At least one class label should be visible in the image grid
@@ -132,6 +139,19 @@ test.describe('Inference Dashboard E2E', () => {
 
     // Confidence percentages should be visible (e.g. "92%", "78%")
     expect(bodyText).toMatch(/\d+%/);
+
+    // Verify image elements are rendered (Flutter HTML renderer outputs
+    // Image.memory as <img> tags).
+    const imageCount = await page.locator('img').count();
+    expect(imageCount).toBeGreaterThanOrEqual(3);
+
+    // Verify grid image count <= maxImages (9) by scoping to the
+    // image-feed-grid Semantics container. Flutter HTML renderer emits
+    // aria-label attributes from Semantics widgets.
+    const gridImages = await page
+      .locator('[aria-label="image-feed-grid"] img')
+      .count();
+    expect(gridImages).toBeLessThanOrEqual(9);
 
     stopPublishing();
   });
@@ -145,9 +165,8 @@ test.describe('Inference Dashboard E2E', () => {
     await waitForFlutterReady(page);
 
     const inferenceLink = page.getByText('Inference Monitor');
-    if (await inferenceLink.isVisible()) {
-      await inferenceLink.click();
-    }
+    await expect(inferenceLink).toBeVisible({ timeout: 15_000 });
+    await inferenceLink.click();
 
     await startPublishing();
 
@@ -176,6 +195,17 @@ test.describe('Inference Dashboard E2E', () => {
     // Latency values are shown (e.g., "45ms")
     expect(bodyText).toMatch(/\d+ms/);
 
+    // Verify newest entry is at the top: the log shows "#N" IDs from the
+    // MQTT stub's monotonically increasing totalProcessed counter.
+    // Entries are inserted at index 0 (newest first), so IDs should appear
+    // in descending order in the page text.
+    const ids = [...bodyText.matchAll(/#(\d+)/g)].map((m) => Number(m[1]));
+    expect(ids.length).toBeGreaterThanOrEqual(2);
+    // First visible ID should be >= second visible ID (descending order)
+    for (let i = 0; i < ids.length - 1; i++) {
+      expect(ids[i]).toBeGreaterThanOrEqual(ids[i + 1]);
+    }
+
     stopPublishing();
   });
 
@@ -188,9 +218,8 @@ test.describe('Inference Dashboard E2E', () => {
     await waitForFlutterReady(page);
 
     const inferenceLink = page.getByText('Inference Monitor');
-    if (await inferenceLink.isVisible()) {
-      await inferenceLink.click();
-    }
+    await expect(inferenceLink).toBeVisible({ timeout: 15_000 });
+    await inferenceLink.click();
 
     await startPublishing();
 

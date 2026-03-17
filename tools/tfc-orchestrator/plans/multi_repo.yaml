@@ -516,7 +516,7 @@ phases:
           - `python -m pytest tests/test_hub_integration.py -v` passes
 
   # ── Phase 4: Packaging ───────────────────────────────────────────────
-  - name: "Packaging (Story 8)"
+  - name: "Packaging (Stories 8, 12)"
     validate:
       - "cd tools/tfc-orchestrator && python -m pytest tests/ -x -q"
     stories:
@@ -578,6 +578,128 @@ phases:
           - --dir sets project_dir
           - --hub-url sets hub_url
           - Creates .orchestrator/plans/ directory
+
+      - id: 12
+        name: "Docker packaging for hub"
+        depends_on: [8]
+        prompt: |
+          ## Goal
+          Package the hub as a Docker container for easy deployment.
+          The hub is the only component that benefits from Docker — orchestrators
+          stay as local pip installs since they need repo-specific toolchains.
+
+          ## TDD: Write tests first, then implement.
+
+          ## Files to create
+
+          ### Dockerfile (at tools/tfc-orchestrator/Dockerfile)
+          ```dockerfile
+          # ── Stage 1: Build Svelte frontend ──
+          FROM node:20-alpine AS frontend
+          WORKDIR /build
+          COPY dashboard/package.json dashboard/package-lock.json ./
+          RUN npm ci
+          COPY dashboard/ ./
+          RUN npm run build
+
+          # ── Stage 2: Python runtime ──
+          FROM python:3.11-slim
+          RUN apt-get update && apt-get install -y --no-install-recommends \
+              git openssh-client \
+            && rm -rf /var/lib/apt/lists/*
+
+          # Install Claude CLI (npm package)
+          RUN apt-get update && apt-get install -y --no-install-recommends \
+              nodejs npm \
+            && npm install -g @anthropic-ai/claude-code \
+            && rm -rf /var/lib/apt/lists/*
+
+          WORKDIR /app
+          COPY pyproject.toml README.md ./
+          COPY orchestrator/ orchestrator/
+          RUN pip install --no-cache-dir .
+
+          # Copy built frontend
+          COPY --from=frontend /build/dist dashboard/dist/
+
+          # Workspace for cloned repos (mount as volume for persistence)
+          VOLUME /workspace
+
+          # SSH keys for private repo cloning (mount as volume)
+          VOLUME /root/.ssh
+
+          EXPOSE 9000
+
+          ENTRYPOINT ["tfc-hub"]
+          CMD ["--host", "0.0.0.0", "--port", "9000", "--workspace-dir", "/workspace"]
+          ```
+
+          ### docker-compose.yml (at tools/tfc-orchestrator/docker-compose.yml)
+          ```yaml
+          services:
+            hub:
+              build: .
+              ports:
+                - "9000:9000"
+              volumes:
+                - hub-workspace:/workspace
+                - ${HOME}/.ssh:/root/.ssh:ro          # for private repo cloning
+              environment:
+                - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}  # for plan creator agent
+              restart: unless-stopped
+
+          volumes:
+            hub-workspace:
+          ```
+
+          ### .dockerignore (at tools/tfc-orchestrator/.dockerignore)
+          ```
+          .venv/
+          __pycache__/
+          *.pyc
+          .pytest_cache/
+          .orchestrator/
+          dashboard/node_modules/
+          plans/
+          tests/
+          .git/
+          ```
+
+          ## Design decisions
+
+          ### Claude CLI authentication
+          The plan creator agent needs Claude CLI inside the container.
+          Two auth methods (documented in README, not enforced):
+          1. `ANTHROPIC_API_KEY` env var (simplest, via docker-compose)
+          2. Mount `~/.claude` config dir (for OAuth-based auth)
+          If neither is provided, the hub runs fine for monitoring (WebSocket relay,
+          dashboard) — only the plan creator feature is unavailable.
+
+          ### Git credentials for private repos
+          Mount `~/.ssh` as read-only for SSH-based cloning.
+          Or set `GIT_ASKPASS` / credential helpers via env vars.
+          Public repos work out of the box.
+
+          ### Volumes
+          - `/workspace` — cloned repos persist across container restarts
+          - `/root/.ssh` — SSH keys (read-only mount)
+
+          ### Health check
+          Add to Dockerfile:
+          ```dockerfile
+          HEALTHCHECK --interval=30s --timeout=5s \
+            CMD curl -f http://localhost:9000/api/plans || exit 1
+          ```
+          (Install curl in the image, or use python urllib instead.)
+
+          ## Tests
+          - `docker build -t tfc-hub .` succeeds
+          - `docker run --rm tfc-hub --help` shows hub CLI help
+          - `docker-compose up -d` starts hub on port 9000
+          - `curl http://localhost:9000/api/plans` returns `[]` (no orchestrators connected)
+          - Svelte frontend loads at http://localhost:9000/
+          - Container without ANTHROPIC_API_KEY: hub starts, plan creator returns
+            "Claude not configured" error on session start
 
   # ── Phase 5: Plan Creator Agent ──────────────────────────────────────
   - name: "Plan Creator (Stories 9-11)"

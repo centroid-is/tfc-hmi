@@ -307,15 +307,18 @@ class _ImageFeedWidgetState extends ConsumerState<ImageFeedWidget> {
   Widget build(BuildContext context) {
     return Stack(
       children: [
-        GridView.builder(
-          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: widget.config.gridColumns,
-            crossAxisSpacing: 4,
-            mainAxisSpacing: 4,
+        Semantics(
+          label: 'image-feed-grid',
+          child: GridView.builder(
+            gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: widget.config.gridColumns,
+              crossAxisSpacing: 4,
+              mainAxisSpacing: 4,
+            ),
+            itemCount: _entries.length,
+            itemBuilder: (context, index) =>
+                _ImageCell(entry: _entries[index], config: widget.config),
           ),
-          itemCount: _entries.length,
-          itemBuilder: (context, index) =>
-              _ImageCell(entry: _entries[index], config: widget.config),
         ),
         if (_paused)
           Positioned.fill(

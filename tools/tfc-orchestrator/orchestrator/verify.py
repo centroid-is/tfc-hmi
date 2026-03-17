@@ -94,23 +94,43 @@ def run_marionette_check(
 def run_ai_design_review(
     project_dir: str,
     story_id: int,
+    reference_html: str = '',
     dry_run: bool = False,
 ) -> tuple[bool, str]:
-    """AI-powered visual design review. Soft gate — informational only."""
+    """AI-powered visual design review. Compares built app against reference HTML if provided."""
     if dry_run:
         return True, 'dry run'
 
     try:
-        prompt = (
-            f"Review the UI screenshots for story {story_id}. "
-            f"Check for visual consistency, spacing, alignment, and design patterns. "
-            f"Output PASS if the design looks good, or FINDINGS followed by a list of issues."
-        )
+        if reference_html:
+            ref_path = f'{project_dir}/{reference_html}'
+            prompt = (
+                f"You are verifying Story {story_id} of the MQTT web plan.\n\n"
+                f"1. Read the reference HTML mockup at: {ref_path}\n"
+                f"2. Read the Flutter widget code in lib/page_creator/assets/ "
+                f"(especially image_feed.dart and inference_log.dart)\n"
+                f"3. Compare: does the Flutter implementation match the reference "
+                f"dashboard's layout, components, and data display?\n\n"
+                f"Check:\n"
+                f"- Metric cards (Processed, Avg Confidence, Latency, Errors)\n"
+                f"- Image feed grid with confidence overlays\n"
+                f"- Inference log with thumbnails, status badges, confidence bars\n"
+                f"- Pause/resume toggle\n"
+                f"- Overall layout and visual structure\n\n"
+                f"Output PASS if the implementation faithfully represents the "
+                f"reference design, or FAIL followed by specific discrepancies."
+            )
+        else:
+            prompt = (
+                f"Review the UI code for story {story_id}. "
+                f"Check for visual consistency, spacing, alignment, and design patterns. "
+                f"Output PASS if the design looks good, or FAIL followed by a list of issues."
+            )
         result = subprocess.run(
             ['claude', '-p', prompt, '--model', 'sonnet',
-             '--output-format', 'text'],
+             '--output-format', 'text', '--max-turns', '10'],
             cwd=project_dir,
-            capture_output=True, text=True, timeout=300,
+            capture_output=True, text=True, timeout=600,
         )
         output = result.stdout.strip()
         if output.startswith('PASS'):
@@ -148,10 +168,10 @@ def run_verification_gate(
         report.marionette_passed = passed
         report.marionette_details = details
 
-    # Layer 3: AI design review (soft, informational)
+    # Layer 3: AI design review — compares against reference HTML if provided
     if config.ai_design_review:
         passed, details = run_ai_design_review(
-            project_dir, story_id, dry_run,
+            project_dir, story_id, config.reference_html, dry_run,
         )
         report.ai_review_passed = passed
         report.ai_review_details = details

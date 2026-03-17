@@ -141,8 +141,8 @@
       "file": "packages/tfc_dart/lib/core/state_man.dart",
       "line": 1289,
       "message": "_resolveOtherDeviceClient does not match mqttNode.serverAlias against the DeviceClient. Compare with _resolveModbusDeviceClient (line 1273) which extracts `entry!.modbusNode!.serverAlias` and filters with `dc.serverAlias == alias`. With multiple MQTT brokers, the current code returns the first non-M2400/non-Modbus DeviceClient where canSubscribe() is true \u2014 regardless of whether the key's configured broker matches the client. Extract `keyMappings.nodes[key]!.mqttNode!.serverAlias` and add a type check + alias comparison (e.g. `if (dc is MqttDeviceClientAdapter && dc.serverAlias == alias)`) to match the defensive pattern of the other resolvers.",
-      "status": "open",
-      "fix_attempts": 0
+      "status": "fixed",
+      "fix_attempts": 1
     },
     {
       "id": "no-multi-broker-test",
@@ -159,8 +159,8 @@
       "file": "packages/tfc_dart/lib/core/state_man.dart",
       "line": 1291,
       "message": "_resolveOtherDeviceClient does not explicitly match serverAlias from keyMappings against the DeviceClient, unlike _resolveModbusDeviceClient (line 1278) which checks `dc is ModbusDeviceClientAdapter && dc.serverAlias == alias`. The MQTT resolver relies on the adapter's canSubscribe() to internally filter by serverAlias. This works today because MqttDeviceClientAdapter.canSubscribe performs the check, but it violates the defensive pattern established by the Modbus resolver. If a second non-M2400/non-Modbus adapter is added (or an MQTT adapter has a canSubscribe bug), keys could route to the wrong adapter. Extract `final alias = keyMappings.nodes[key]!.mqttNode!.serverAlias` and add `dc is MqttDeviceClientAdapter && dc.config.serverAlias == alias` to match the Modbus resolver pattern.",
-      "status": "open",
-      "fix_attempts": 0
+      "status": "fixed",
+      "fix_attempts": 1
     },
     {
       "id": "method-name-vs-guard-mismatch",

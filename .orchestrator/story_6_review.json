@@ -78,8 +78,8 @@
       "file": "tools/tfc-orchestrator/orchestrator/worker.py",
       "line": 52,
       "message": "_stream_json_to_log has no top-level try/except. If log_file_handle.write() or .flush() raises (disk full, closed handle), the reader thread dies silently and stops draining proc.stdout. The subprocess will then block on stdout writes, hanging until the 1800s timeout in _execute_claude. Wrap the for-loop body in try/except Exception with a logged warning, or at minimum catch IOError to keep draining the pipe.",
-      "status": "open",
-      "fix_attempts": 0
+      "status": "fixed",
+      "fix_attempts": 1
     },
     {
       "id": "auto-commit-git-add-A",
@@ -132,8 +132,8 @@
       "file": "test/core/web_stubs_test.dart",
       "line": 1,
       "message": "No tests exercise the kIsWeb guard branches added by Story 6. The state_man provider (lines 54, 59-64, 85), key_repository.dart (_onExport/_onImport), server_config.dart (_selectCertificate, _selectPrivateKey, _onExport, _onImport, locale init), and page_editor.dart (_isModifierPressed) all added kIsWeb conditionals but zero tests verify them. Since kIsWeb is a compile-time const that can't be mocked in native test runner, consider at minimum adding unit tests that verify the default (native) code path still works correctly with the new guard structure \u2014 e.g., that _onExport does NOT early-return when kIsWeb is false.",
-      "status": "open",
-      "fix_attempts": 0
+      "status": "fixed",
+      "fix_attempts": 1
     },
     {
       "id": "io-stub-file-no-members",
@@ -177,8 +177,8 @@
       "file": "web/index.html",
       "line": 1,
       "message": "Duplicate web/ directory: both root-level `web/` and `centroid-hmi/web/` exist with overlapping but different content (root has comments + apple-touch-icon, centroid-hmi version is stripped). Only `centroid-hmi/web/` is used by `flutter build web` since that's the Flutter project directory. The root `web/` is dead weight that will confuse developers about which config files to edit. Delete root-level `web/` or make it clear it's not used.",
-      "status": "open",
-      "fix_attempts": 0
+      "status": "fixed",
+      "fix_attempts": 1
     },
     {
       "id": "http-dep-unused",

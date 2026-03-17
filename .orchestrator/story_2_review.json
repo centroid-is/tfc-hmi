@@ -7,7 +7,7 @@
       "line": 183,
       "message": "Missing test for raw payload type. Acceptance criteria require all three payload types (JSON, string, raw) be tested. MqttPayloadType.raw is exercised in code (parseMqttPayload handles it) but has no dedicated test case. Add: test('raw payload produces DynamicValue bytes', () { ... parseMqttPayload([0x01, 0x02], MqttPayloadType.raw) ... })",
       "status": "fixed",
-      "fix_attempts": 2
+      "fix_attempts": 3
     },
     {
       "id": "d4e5f6",
@@ -16,7 +16,7 @@
       "line": 137,
       "message": "Missing test for subscribableKeys when both config.serverAlias and mqttNode.serverAlias are null. Acceptance criteria specify: collect keys where mqttNode.serverAlias == config.serverAlias OR both are null. While Dart null == null is true so the impl works, this edge case should have an explicit test to guard against regressions.",
       "status": "fixed",
-      "fix_attempts": 2
+      "fix_attempts": 3
     },
     {
       "id": "g7h8i9",
@@ -25,7 +25,7 @@
       "line": 297,
       "message": "Missing test for connection failure path. FakeMqttClient has shouldFailConnect flag (line 26) but no test exercises it. Acceptance criteria require: 'On failure: emit ConnectionStatus.disconnected'. Add a test that sets shouldFailConnect=true and verifies disconnected status is emitted.",
       "status": "fixed",
-      "fix_attempts": 2
+      "fix_attempts": 3
     },
     {
       "id": "j1k2l3",
@@ -114,8 +114,8 @@
       "file": "packages/tfc_dart/lib/core/mqtt_device_client.dart",
       "line": 222,
       "message": "Missing retry-with-backoff on initial connect failure. Spec (ralph-plan.md line 276) says: 'On failure: emit ConnectionStatus.disconnected, schedule retry with backoff'. Current catch block only emits disconnected and stops. autoReconnect (line 193) only handles reconnection after a successful initial connection followed by disconnect \u2014 it does NOT retry a failed initial connect(). Add a delayed recursive call to _connectAsync() with exponential backoff on failure, or document that initial connect retry is the caller's responsibility.",
-      "status": "open",
-      "fix_attempts": 0
+      "status": "fixed",
+      "fix_attempts": 1
     },
     {
       "id": "u4v5w6",
@@ -123,8 +123,8 @@
       "file": "packages/tfc_dart/lib/core/mqtt_device_client.dart",
       "line": 123,
       "message": "subscribe() before connect() silently loses MQTT topic subscriptions. _client?.subscribe() (null-aware) is a no-op when _client is null, but the topic is still added to _subscribedTopics (line 125). When connect() later succeeds, these pre-registered topics are never re-subscribed on the broker. Either: (a) queue topics and subscribe them in _connectAsync after successful connect, or (b) throw/assert if _client is null, or (c) document that subscribe() must be called after connect().",
-      "status": "open",
-      "fix_attempts": 0
+      "status": "fixed",
+      "fix_attempts": 1
     },
     {
       "id": "x7y8z9",
@@ -132,8 +132,8 @@
       "file": "packages/tfc_dart/test/core/mqtt_device_client_test.dart",
       "line": 462,
       "message": "Connection failure test first assertion is trivially true. `expect(statuses, contains(ConnectionStatus.disconnected))` passes regardless of shouldFailConnect because BehaviorSubject is seeded with disconnected. Strengthen by checking the status sequence: expect(statuses, equals([ConnectionStatus.disconnected, ConnectionStatus.connecting, ConnectionStatus.disconnected])) or at minimum verify that connecting appeared before the final disconnected.",
-      "status": "open",
-      "fix_attempts": 0
+      "status": "fixed",
+      "fix_attempts": 1
     },
     {
       "id": "a2b3c4",
@@ -168,8 +168,8 @@
       "file": "packages/tfc_dart/lib/core/mqtt_device_client.dart",
       "line": 123,
       "message": "subscribe() called before connect() completes silently loses MQTT topic subscriptions. Line 124 `_client?.subscribe(...)` does nothing when _client is null (pre-connect) or not yet connected (mid-connect), but line 125 still adds the topic to _subscribedTopics. When connect() later succeeds, it never re-subscribes these queued topics. Fix: either (a) don't add to _subscribedTopics until _client?.subscribe returns non-null, and re-subscribe pending topics in _connectAsync after successful connect, or (b) throw/assert if _client is null to enforce connect-before-subscribe ordering.",
-      "status": "open",
-      "fix_attempts": 0
+      "status": "fixed",
+      "fix_attempts": 1
     },
     {
       "id": "v5w6x7",
@@ -177,8 +177,8 @@
       "file": "packages/tfc_dart/lib/core/mqtt_device_client.dart",
       "line": 222,
       "message": "Story 2 acceptance criteria require 'On failure: emit ConnectionStatus.disconnected, schedule retry with backoff'. The implementation emits disconnected (line 223) but never schedules a retry. autoReconnect=true only works after a successful initial connection. If the first connect() fails (broker down at startup), the adapter stays disconnected permanently with no recovery path. Add a retry loop with exponential backoff (e.g., 1s\u21922s\u21924s\u2026\u219230s cap) in the catch block.",
-      "status": "open",
-      "fix_attempts": 0
+      "status": "fixed",
+      "fix_attempts": 1
     },
     {
       "id": "y8z9a0",

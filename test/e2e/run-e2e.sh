@@ -21,6 +21,9 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
+# Ensure Mosquitto is stopped on exit (even if set -e triggers an early abort).
+trap 'echo "=== Stopping Mosquitto (cleanup) ===" && cd "$REPO_ROOT/packages/tfc_dart/test/integration" && docker compose down' EXIT
+
 echo "=== Repo root: $REPO_ROOT ==="
 
 # 1. Start Mosquitto (and TimescaleDB, though E2E tests don't need it)
@@ -33,7 +36,7 @@ sleep 2
 # 2. Build Flutter web (HTML renderer — produces real DOM elements)
 echo "=== Building Flutter web (HTML renderer) ==="
 cd "$REPO_ROOT"
-flutter build web --web-renderer html
+flutter build web
 
 # 3. Copy static config files into the build output.
 # The web app fetches these via HTTP at runtime.
@@ -48,12 +51,10 @@ npx playwright install chromium
 
 # 5. Run Playwright tests
 echo "=== Running Playwright E2E tests ==="
+set +e
 npm test
 TEST_EXIT=$?
+set -e
 
-# 6. Cleanup
-echo "=== Stopping Mosquitto ==="
-cd "$REPO_ROOT/packages/tfc_dart/test/integration"
-docker compose down
-
+# 6. Cleanup is handled by the EXIT trap (docker compose down).
 exit $TEST_EXIT

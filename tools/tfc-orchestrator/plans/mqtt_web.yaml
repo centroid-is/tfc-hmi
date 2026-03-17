@@ -13,7 +13,8 @@ workers:
 verification:
   golden_tests: true
   marionette: true
-  ai_design_review: false
+  ai_design_review: true
+  reference_html: "image_inference_live_dashboard.html"
   ui_stories: [6, 7, 8, 9, 10, 11]
   route_map:
     7: ["/", "/advanced/preferences"]
@@ -72,6 +73,7 @@ phases:
     validate:
       - "cd packages/tfc_dart && dart analyze --fatal-infos"
       - "cd packages/tfc_dart && dart test --exclude-tags=integration"
+      - "cd centroid-hmi && flutter build web"
     stories:
       - id: 6
         name: "Web conditional imports + compilation"
@@ -98,6 +100,9 @@ phases:
         depends_on: [8, 9]
 
   - name: "E2E Tests (Story 11)"
+    validate:
+      - "cd centroid-hmi && flutter build web"
+      - "cd centroid-hmi && ./test/e2e/run-e2e.sh"
     stories:
       - id: 11
         name: "Playwright E2E tests with stubbed MQTT data"

@@ -1,0 +1,257 @@
+{
+  "comments": [
+    {
+      "id": "a1b2c3",
+      "severity": "should_fix",
+      "file": "test/e2e/run-e2e.sh",
+      "line": 51,
+      "message": "`set -e` at line 3 causes the script to exit immediately if `npm test` fails (non-zero exit), so lines 52-58 (cleanup: docker compose down) never run. Mosquitto stays up after test failure. Fix: use a trap \u2014 `trap 'cd \"$REPO_ROOT/packages/tfc_dart/test/integration\" && docker compose down' EXIT` \u2014 or disable set -e around the test command: `set +e; npm test; TEST_EXIT=$?; set -e`.",
+      "status": "fixed",
+      "fix_attempts": 1
+    },
+    {
+      "id": "d4e5f6",
+      "severity": "should_fix",
+      "file": "test/e2e/dashboard.spec.ts",
+      "line": 94,
+      "message": "Test 2 assertions are too weak. Acceptance criteria says to verify 'processed' shows number > 0, 'avg confidence' shows a percentage, and 'latency' shows a number. The test only checks `bodyText.match(/\\d+/)` which matches ANY digit anywhere on the page (true even without MQTT data). Should use more targeted locators or check for specific metric text near known labels.",
+      "status": "fixed",
+      "fix_attempts": 1
+    },
+    {
+      "id": "g7h8i9",
+      "severity": "should_fix",
+      "file": "test/e2e/dashboard.spec.ts",
+      "line": 82,
+      "message": "Conditional navigation (`if (await inferenceLink.isVisible()) click`) silently skips navigation if the link isn't found. Tests 2-5 all repeat this pattern. If the menu item is missing, the test should fail immediately rather than proceeding on the wrong page. Use `await expect(inferenceLink).toBeVisible()` then `await inferenceLink.click()` unconditionally.",
+      "status": "fixed",
+      "fix_attempts": 1
+    },
+    {
+      "id": "j1k2l3",
+      "severity": "note",
+      "file": "test/e2e/mqtt-stub.ts",
+      "line": 40,
+      "message": "Module-level mutable state (totalProcessed, totalConfidence, etc.) is not reset between tests unless startPublishing() is called again. If a test calls startPublishing() but doesn't call stopPublishing() (relying solely on afterEach), the client reference persists and startPublishing() early-returns on line 93 without resetting stats. Consider: stopPublishing() should always be called before startPublishing() resets, or the early-return guard should also reset stats.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "m4n5o6",
+      "severity": "note",
+      "file": "test/e2e/dashboard.spec.ts",
+      "line": 208,
+      "message": "Pause verification counts regex matches of /\\d+%/g across the entire body text. This is fragile \u2014 any DOM re-render or re-layout that duplicates text nodes could cause countDuring to exceed countBefore even while paused, leading to a flaky test. A more robust approach would capture a specific metric value (e.g. the processed count) and assert it stays constant.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "p7q8r9",
+      "severity": "note",
+      "file": "test/e2e/dashboard.spec.ts",
+      "line": 240,
+      "message": "Test 6 ('Config pages are hidden on web') is not in the Story 11 acceptance criteria. This is acceptable as bonus coverage, but should be noted for traceability.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "e2e-sete-nocleanup",
+      "severity": "blocker",
+      "file": "test/e2e/run-e2e.sh",
+      "line": 51,
+      "message": "set -e (line 19) causes the script to exit immediately if `npm test` fails, so line 52 (`TEST_EXIT=$?`) and the cleanup step (lines 55-58, docker compose down) are never reached. Mosquitto containers are left running on test failure. Fix: add a trap at the top (e.g. `trap 'cd ... && docker compose down' EXIT`) or disable set -e before `npm test` (`set +e; npm test; TEST_EXIT=$?; set -e`).",
+      "status": "fixed",
+      "fix_attempts": 1
+    },
+    {
+      "id": "e2e-t2-weak-assert",
+      "severity": "should_fix",
+      "file": "test/e2e/dashboard.spec.ts",
+      "line": 97,
+      "message": "Test 2: Acceptance criteria require verifying 'processed' metric > 0, 'avg confidence' shows a percentage, and 'latency' shows a number. The test only checks `bodyText.match(/\\d+/)` which matches any pre-existing digit on the page. Missing explicit checks for avg_confidence (percentage) and latency values.",
+      "status": "fixed",
+      "fix_attempts": 1
+    },
+    {
+      "id": "e2e-t3-no-img-count",
+      "severity": "should_fix",
+      "file": "test/e2e/dashboard.spec.ts",
+      "line": 119,
+      "message": "Test 3: Acceptance criteria require 'Verify image count in grid <= maxImages (9)'. The test never counts image elements \u2014 it only checks for class label text and percentage text. Should query `<img>` elements or equivalent Flutter HTML renderer output and assert count >= 3 and <= 9.",
+      "status": "fixed",
+      "fix_attempts": 1
+    },
+    {
+      "id": "e2e-t4-no-order",
+      "severity": "should_fix",
+      "file": "test/e2e/dashboard.spec.ts",
+      "line": 155,
+      "message": "Test 4: Acceptance criteria require 'Verify newest entry is at the top'. The test checks that class labels, status badges, and percentages exist but never verifies ordering (e.g., that the first visible log entry corresponds to the most recent message).",
+      "status": "fixed",
+      "fix_attempts": 1
+    },
+    {
+      "id": "e2e-t5-fragile-proxy",
+      "severity": "note",
+      "file": "test/e2e/dashboard.spec.ts",
+      "line": 208,
+      "message": "Test 5: Uses regex match count of `\\d+%` as a proxy for image/entry count. This is fragile \u2014 other percentage values on the page (metric cards, etc.) could inflate the count and mask a real pause failure. Consider counting specific image or log entry DOM elements instead.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "img-cap-loose",
+      "severity": "should_fix",
+      "file": "test/e2e/dashboard.spec.ts",
+      "line": 148,
+      "message": "Image count upper bound (9 + 30 = 39) does not verify the acceptance criterion 'Verify image count in grid <= maxImages (9)'. The test counts ALL <img> tags on the page, not just grid images. If the maxImages cap is broken and the grid renders 15 images, the test still passes (15 + log thumbnails < 39). Either scope the selector to grid-only images (e.g., a parent container locator) or at minimum tighten the bound so a broken cap would be caught. As-is, the cap verification is effectively untested.",
+      "status": "fixed",
+      "fix_attempts": 1
+    },
+    {
+      "id": "order-regex-broad",
+      "severity": "note",
+      "file": "test/e2e/dashboard.spec.ts",
+      "line": 196,
+      "message": "The regex `/#(\\d+)/g` used for descending-order verification matches ANY '#' followed by digits in the page text, not just log entry IDs. If the Flutter HTML renderer emits other '#N' patterns (anchor fragments, style references, etc.), the extracted ID sequence could contain noise that breaks the ordering assertion or masks a real ordering bug. Consider matching a more specific pattern tied to the log entry format (e.g., including surrounding text like a label prefix).",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "s12-dockerfile-dup-apt",
+      "severity": "note",
+      "file": "tools/tfc-orchestrator/plans/multi_repo.yaml",
+      "line": 599,
+      "message": "Story 12 Dockerfile plan has two separate `RUN apt-get update && apt-get install` blocks. The first installs git+openssh and deletes apt lists; the second re-runs `apt-get update` to install nodejs+npm. Combine into a single RUN layer to avoid the redundant apt-get update and reduce image size by ~20-40 MB.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "s12-healthcheck-no-curl",
+      "severity": "note",
+      "file": "tools/tfc-orchestrator/plans/multi_repo.yaml",
+      "line": 642,
+      "message": "Story 12 HEALTHCHECK uses `curl -f http://localhost:9000/api/plans` but curl is not in the apt-get install list. The plan comment mentions 'Install curl in the image, or use python urllib instead' but the Dockerfile spec itself omits curl. Either add `curl` to the package list or replace the HEALTHCHECK with a Python one-liner: `CMD python -c \"import urllib.request; urllib.request.urlopen('http://localhost:9000/api/plans')\" || exit 1`.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "t2-conf-val",
+      "severity": "should_fix",
+      "file": "test/e2e/dashboard.spec.ts",
+      "line": 101,
+      "message": "Test 2: Avg Confidence value is not asserted > 0, unlike Processed (line 97) and Latency (line 106) which both check `toBeGreaterThan(0)`. If the app rendered 'Avg Confidence 0' or '0%' (e.g. data not flowing), the regex would match and the not-null check would pass. Add: `expect(Number(confidenceMatch![1])).toBeGreaterThan(0);` for consistency and to confirm data actually flowed.",
+      "status": "fixed",
+      "fix_attempts": 1
+    },
+    {
+      "id": "t3-img-cap",
+      "severity": "should_fix",
+      "file": "test/e2e/dashboard.spec.ts",
+      "line": 148,
+      "message": "Test 3: Acceptance criteria requires 'Verify image count in grid <= maxImages (9)'. The test counts ALL `<img>` elements on the page and allows up to 39 (9 + 30). This is far too generous to detect a broken grid cap \u2014 if the grid rendered 20 images instead of 9, with 15 log thumbnails = 35 total, the test would still pass. Either scope the locator to the grid container (e.g. a parent element containing only grid images) or tighten the bound. If Flutter's DOM structure makes scoping difficult, at minimum document why 39 is acceptable and that this is a weak proxy for the grid cap.",
+      "status": "fixed",
+      "fix_attempts": 1
+    },
+    {
+      "id": "t4-id-fragile",
+      "severity": "note",
+      "file": "test/e2e/dashboard.spec.ts",
+      "line": 196,
+      "message": "Test 4: Ordering verification relies on the Flutter app rendering '#N' IDs in the DOM from the stub's monotonic totalProcessed counter. This is a coupling between test and app rendering format \u2014 if the app changes how it renders IDs (e.g. drops the '#' prefix or uses timestamps instead), this assertion silently degrades. The `ids.length >= 2` guard catches complete absence, but consider adding a comment documenting the assumed rendering format and which widget produces it.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "trap-chain",
+      "severity": "note",
+      "file": "test/e2e/run-e2e.sh",
+      "line": 25,
+      "message": "EXIT trap uses `&&` chaining: if `cd` fails (e.g. directory deleted), `docker compose down` is skipped and Mosquitto stays running. Safer to use `;` between commands: `echo '...' ; cd '...' && docker compose down || docker compose -f '...' down` or move the cd outside the trap by using the full `-f` path for docker compose.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "scope-s12",
+      "severity": "note",
+      "file": "tools/tfc-orchestrator/plans/multi_repo.yaml",
+      "line": 519,
+      "message": "Scope creep: Story 12 (Docker packaging for hub, 122 lines of plan YAML) was added in the Story 11 diff. This is unrelated to Playwright E2E tests and should be in its own commit for traceability.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "scope-reviews",
+      "severity": "note",
+      "file": ".orchestrator/story_2_review.json",
+      "line": 10,
+      "message": "Scope creep: fix_attempts counters in story_2/3/5/6_review.json were bumped and multiple items marked 'fixed' across four unrelated stories. While these are orchestrator metadata (not production code), bundling them in the Story 11 diff muddies the commit history. Consider committing review-state changes separately.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "grid-no-lower",
+      "severity": "should_fix",
+      "file": "test/e2e/dashboard.spec.ts",
+      "line": 154,
+      "message": "Test 3: `gridImages` is only asserted `<= 9` but never `>= 1`. If the `[aria-label=\"image-feed-grid\"]` selector fails to match (e.g., Flutter version changes Semantics\u2192aria-label rendering, or the Semantics widget is removed), `gridImages` evaluates to 0 and `<= 9` passes silently \u2014 the maxImages cap is no longer verified. Add `expect(gridImages).toBeGreaterThanOrEqual(1)` before the upper-bound check to catch selector breakage.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "semantics-a11y",
+      "severity": "note",
+      "file": "lib/page_creator/assets/image_feed.dart",
+      "line": 311,
+      "message": "Semantics(label: 'image-feed-grid') uses a kebab-case technical identifier rather than human-readable accessibility text. A screen reader would announce 'image-feed-grid' which is not meaningful to visually impaired users. Since this serves dual purpose (E2E test hook + accessibility tree), consider a natural-language label like 'Image feed gallery' that works for both Playwright selectors and assistive technology.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "t3-grid-no-lower",
+      "severity": "should_fix",
+      "file": "test/e2e/dashboard.spec.ts",
+      "line": 154,
+      "message": "Test 3: `gridImages` only has an upper-bound assertion (`<= 9`) with no lower bound. If the `[aria-label=\"image-feed-grid\"]` selector fails to match (e.g., Flutter HTML renderer doesn't emit `aria-label` from `Semantics` widget, or uses a different attribute name), `gridImages` is 0, which trivially satisfies `<= 9`. The maxImages cap is then completely untested. Add `expect(gridImages).toBeGreaterThanOrEqual(3)` before the `<= 9` check \u2014 this validates both that the selector works AND that the cap is enforceable.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "t1-no-navigate",
+      "severity": "should_fix",
+      "file": "test/e2e/dashboard.spec.ts",
+      "line": 66,
+      "message": "Test 1: Acceptance criteria require 'Verify 4 metric cards are present', but the test never navigates to the Inference Monitor page \u2014 it only goes to `/` and checks body text. Tests 2\u20135 all explicitly click 'Inference Monitor' to navigate. If the default landing page is 'Home' (not the inference dashboard), the metric card labels ('Processed', 'Avg Confidence', 'Latency', 'Errors') may not be visible and the test would fail. Either navigate to Inference Monitor before asserting metric cards, or add a comment explaining why navigation is unnecessary (e.g., it's the default landing page).",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "t5-pause-no-imgcount",
+      "severity": "note",
+      "file": "test/e2e/dashboard.spec.ts",
+      "line": 237,
+      "message": "Test 5: Acceptance criteria say 'Record current image count' and verify it hasn't increased while paused. The test uses `\\d+%` regex match count as a proxy instead of counting actual image or log entry DOM elements. This is covered by existing review notes (m4n5o6, e2e-t5-fragile-proxy) but remains unfixed \u2014 the acceptance criteria specifically mention 'image count', not 'percentage text count'.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "t3-timing-margin",
+      "severity": "note",
+      "file": "test/e2e/dashboard.spec.ts",
+      "line": 129,
+      "message": "Test 3: 7s wait is intended to produce >9 messages (at 600ms intervals = ~11.7 messages) to test the maxImages=9 cap. However, the margin is thin \u2014 MQTT message delivery latency, Flutter rendering time, and CI load could reduce actual received messages to \u22649, making the cap assertion vacuously true. Consider 10s wait (~16.7 messages) for a comfortable margin, especially on slower CI environments.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "semantics-prod-change",
+      "severity": "note",
+      "file": "lib/page_creator/assets/image_feed.dart",
+      "line": 310,
+      "message": "Production code change: `Semantics(label: 'image-feed-grid')` wrapper added around GridView.builder solely to support the E2E test's `[aria-label=\"image-feed-grid\"]` selector. This is acceptable (improves accessibility too), but the test's correctness depends on Flutter's HTML renderer emitting this as an `aria-label` attribute. If the renderer changes behavior (e.g., uses `role` or a different attribute), the E2E selector silently breaks. Consider adding a brief comment in the Dart code noting the E2E dependency.",
+      "status": "open",
+      "fix_attempts": 0
+    }
+  ],
+  "fixed_then_reopened": []
+}

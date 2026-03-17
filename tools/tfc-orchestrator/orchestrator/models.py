@@ -47,6 +47,7 @@ class VerificationConfig:
     golden_tests: bool = False
     marionette: bool = False
     ai_design_review: bool = False
+    reference_html: str = ''
     ui_stories: list[int] = field(default_factory=list)
     route_map: dict[int, list[str]] = field(default_factory=dict)
 
@@ -191,6 +192,7 @@ class Plan:
             golden_tests=verify_data.get('golden_tests', False),
             marionette=verify_data.get('marionette', False),
             ai_design_review=verify_data.get('ai_design_review', False),
+            reference_html=verify_data.get('reference_html', ''),
             ui_stories=verify_data.get('ui_stories', []),
             route_map=route_map,
         )

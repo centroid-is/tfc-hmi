@@ -7,7 +7,7 @@
       "line": 191,
       "message": "Scope creep: retry logic with exponential backoff, pending topic queuing, and _disposed guard are not part of Story 5 (Static config loading). These belong to a separate story/commit. Mixing stories in one diff breaks TDD traceability \u2014 cannot verify RED\u2192GREEN\u2192REFACTOR for Story 5 in isolation.",
       "status": "fixed",
-      "fix_attempts": 2
+      "fix_attempts": 3
     },
     {
       "id": "scope02",
@@ -16,7 +16,7 @@
       "line": 11,
       "message": "Scope creep: WebSocket URL construction fix (wss:// scheme, wsPath appended) is not part of Story 5. Should be a separate commit tied to its own story.",
       "status": "fixed",
-      "fix_attempts": 2
+      "fix_attempts": 3
     },
     {
       "id": "scope03",
@@ -25,7 +25,7 @@
       "line": 1302,
       "message": "Scope creep: Renaming _resolveOtherDeviceClient \u2192 _resolveMqttDeviceClient plus comment rewrite is not in Story 5's acceptance criteria. This is a valid improvement but belongs in the story that introduced it (Story 3) or its own refactor commit.",
       "status": "fixed",
-      "fix_attempts": 2
+      "fix_attempts": 3
     },
     {
       "id": "retry01",
@@ -159,8 +159,8 @@
       "file": "packages/tfc_dart/lib/core/state_man.dart",
       "line": 615,
       "message": "Inconsistent error handling: KeyMappings.fromFile delegates to fromString which calls raw jsonDecode \u2014 a malformed keymappings.json produces a bare FormatException with no file path context. Compare with StateManConfig.fromFile (line 437-442) which wraps jsonDecode in try/catch and includes the path in the error message. Story 5 REFACTOR criterion: 'Review for consistent error handling across fromFile/fromString methods'. Add the same try/catch pattern.",
-      "status": "open",
-      "fix_attempts": 0
+      "status": "fixed",
+      "fix_attempts": 1
     },
     {
       "id": "errimpl01",
@@ -168,8 +168,8 @@
       "file": "packages/tfc_dart/lib/core/state_man.dart",
       "line": 620,
       "message": "KeyMappings.fromFile does not wrap jsonDecode in try-catch for FormatException, unlike StateManConfig.fromFile (line 438-442) which catches FormatException and re-throws with contextual message ('Invalid JSON in config file: $path'). Invalid JSON in a keymappings file will produce a raw FormatException with no file path context. Add matching try-catch: `on FormatException catch (e) { throw Exception('Invalid JSON in key mappings file: $path - ${e.message}'); }`",
-      "status": "open",
-      "fix_attempts": 0
+      "status": "fixed",
+      "fix_attempts": 1
     },
     {
       "id": "errimpl02",
