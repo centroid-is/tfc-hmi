@@ -634,6 +634,7 @@ class WorkerPool:
             '--allowedTools', plan.allowed_tools,
             '--max-turns', str(plan.max_turns),
             '--output-format', 'stream-json',
+            '--verbose',
             '--dangerously-skip-permissions',
         ]
 
