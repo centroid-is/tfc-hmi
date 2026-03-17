@@ -1,11 +1,11 @@
 <script>
   import { dashboardData, statuses, selectedStory } from './stores.js';
 
-  const NODE_W = 120;
-  const NODE_H = 40;
-  const LAYER_GAP = 160;
-  const NODE_GAP = 56;
-  const PAD = 20;
+  const NODE_W = 180;
+  const NODE_H = 52;
+  const LAYER_GAP = 220;
+  const NODE_GAP = 24;
+  const PAD = 40;
 
   const STATUS_COLORS = {
     passed: '#4caf50',
@@ -13,11 +13,14 @@
     running: '#2196f3',
     skipped: '#ff9800',
     pending: '#555',
+    interrupted: '#9e9e9e',
   };
 
   $: nodes = $dashboardData?.dag?.nodes || [];
   $: edges = $dashboardData?.dag?.edges || [];
   $: st = $statuses;
+
+  let hoveredNode = null;
 
   $: layout = (() => {
     if (!nodes.length) return { positioned: [], svgW: 0, svgH: 0 };
@@ -77,6 +80,34 @@
     return { positioned, posMap, svgW, svgH };
   })();
 
+  $: phaseGroups = (() => {
+    if (!layout.positioned || !layout.positioned.length) return [];
+    const phases = {};
+    for (const n of layout.positioned) {
+      const phase = n.phase || 'default';
+      if (!phases[phase]) phases[phase] = [];
+      phases[phase].push(n);
+    }
+    return Object.entries(phases).map(([name, pnodes]) => {
+      const minX = Math.min(...pnodes.map(n => n.x));
+      const minY = Math.min(...pnodes.map(n => n.y));
+      const maxX = Math.max(...pnodes.map(n => n.x + NODE_W));
+      const maxY = Math.max(...pnodes.map(n => n.y + NODE_H));
+      return { name, x: minX, y: minY, w: maxX - minX, h: maxY - minY };
+    });
+  })();
+
+  $: connectedEdges = (() => {
+    if (hoveredNode == null) return new Set();
+    const s = new Set();
+    for (const [from, to] of edges) {
+      if (from === hoveredNode || to === hoveredNode) {
+        s.add(`${from}-${to}`);
+      }
+    }
+    return s;
+  })();
+
   $: edgePaths = (() => {
     if (!layout.posMap) return [];
     return edges.map(([from, to]) => {
@@ -88,11 +119,12 @@
       const x2 = b.x;
       const y2 = b.y + NODE_H / 2;
       const cx = (x1 + x2) / 2;
-      return { from, to, d: `M${x1},${y1} C${cx},${y1} ${cx},${y2} ${x2},${y2}` };
+      const key = `${from}-${to}`;
+      return { from, to, key, d: `M${x1},${y1} C${cx},${y1} ${cx},${y2} ${x2},${y2}` };
     }).filter(Boolean);
   })();
 
-  function truncName(name, max = 12) {
+  function truncName(name, max = 24) {
     if (!name) return '';
     return name.length > max ? name.slice(0, max) + '...' : name;
   }
@@ -104,17 +136,24 @@
 
 <div class="dag-container">
   {#if layout.svgW > 0}
-    <svg viewBox="0 0 {layout.svgW} {layout.svgH}" class="dag-svg">
+    <svg width={layout.svgW} height={Math.max(layout.svgH, 200)} viewBox="0 0 {layout.svgW} {Math.max(layout.svgH, 200)}" class="dag-svg">
       <defs>
         <marker id="arrow" viewBox="0 0 10 7" refX="10" refY="3.5"
                 markerWidth="8" markerHeight="6" orient="auto-start-reverse">
-          <path d="M0,0 L10,3.5 L0,7 Z" fill="#666" />
+          <path d="M0,0 L10,3.5 L0,7 Z" fill="#4a5568" />
         </marker>
       </defs>
 
+      {#each phaseGroups as group}
+        <rect x={group.x - 8} y={group.y - 22} width={group.w + 16} height={group.h + 30}
+              rx="12" fill="rgba(255,255,255,0.03)" stroke="rgba(255,255,255,0.06)" />
+        <text x={group.x - 4} y={group.y - 8} fill="#666" font-size="9">{group.name}</text>
+      {/each}
+
       {#each edgePaths as edge}
-        <path d={edge.d} fill="none" stroke="#666" stroke-width="1.5"
-              marker-end="url(#arrow)" />
+        <path d={edge.d} fill="none" stroke="#4a5568" stroke-width="1.5"
+              marker-end="url(#arrow)"
+              class="edge" class:edge-highlight={connectedEdges.has(edge.key)} />
       {/each}
 
       {#each layout.positioned as node}
@@ -122,6 +161,8 @@
         <!-- svelte-ignore a11y-no-static-element-interactions -->
         <g class="node" class:node-running={node.status === 'running'}
            on:click={() => handleClick(node.id)}
+           on:mouseenter={() => hoveredNode = node.id}
+           on:mouseleave={() => hoveredNode = null}
            style="cursor: pointer;">
           <rect x={node.x} y={node.y} width={NODE_W} height={NODE_H}
                 rx="6" ry="6"
@@ -129,12 +170,12 @@
                 stroke={$selectedStory === node.id ? '#fff' : 'none'}
                 stroke-width="2"
                 opacity="0.9" />
-          <text x={node.x + NODE_W / 2} y={node.y + 15}
-                text-anchor="middle" fill="#fff" font-size="11" font-weight="700">
+          <text x={node.x + NODE_W / 2} y={node.y + 18}
+                text-anchor="middle" fill="#fff" font-size="13" font-weight="700">
             #{node.id}
           </text>
-          <text x={node.x + NODE_W / 2} y={node.y + 30}
-                text-anchor="middle" fill="#ddd" font-size="9">
+          <text x={node.x + NODE_W / 2} y={node.y + 36}
+                text-anchor="middle" fill="#ddd" font-size="10">
             {truncName(node.name)}
           </text>
         </g>
@@ -151,11 +192,17 @@
     border-radius: 8px;
     padding: 0.75rem;
     overflow-x: auto;
+    min-height: 200px;
   }
   .dag-svg {
-    width: 100%;
-    height: auto;
     display: block;
+  }
+  .edge {
+    opacity: 0.6;
+    transition: opacity 0.15s;
+  }
+  .edge-highlight {
+    opacity: 1;
   }
   .node:hover rect {
     opacity: 1;
