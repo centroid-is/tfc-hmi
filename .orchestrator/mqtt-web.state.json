@@ -160,10 +160,27 @@
     {
       "story_id": 7,
       "story_name": "Provider integration \u2014 static config + page hiding",
+      "status": "pass",
+      "duration_seconds": 1104.531594991684,
+      "error": "",
+      "timestamp": "2026-03-17T15:29:55.669920",
+      "retry_count": 0,
+      "review_iterations": 2,
+      "review_findings": 0,
+      "worktree_branch": "orchestrator/mqtt-web/story-7",
+      "merge_commit": "85436c6fe0d4f645297342141c624b1a515f49ad",
+      "verification_passed": true,
+      "verification_details": "\n00:00 +0: loading /Users/jonb/Projects/tfc-hmi/test/painter/auger_conveyor_test.dart                                                                                                                   \n00:01 +0: loading /Users/jonb/Projects/tfc-hmi/test/painter/auger_conveyor_test.dart                                                                                                                   \n00:01 +0: /Users/jonb/Projects/tfc-hmi/test/painter/auger_conveyor_test.dart: AugerConveyorPainter ",
+      "started_at": "",
+      "worker_slot": -1
+    },
+    {
+      "story_id": 11,
+      "story_name": "Playwright E2E tests with stubbed MQTT data",
       "status": "running",
       "duration_seconds": 0.0,
       "error": "",
-      "timestamp": "2026-03-17T14:46:11.238494",
+      "timestamp": "2026-03-17T15:29:55.670886",
       "retry_count": 0,
       "review_iterations": 0,
       "review_findings": 0,
@@ -171,7 +188,7 @@
       "merge_commit": "",
       "verification_passed": null,
       "verification_details": "",
-      "started_at": "2026-03-17T14:46:11.238487",
+      "started_at": "2026-03-17T15:29:55.670881",
       "worker_slot": -1
     }
   ]

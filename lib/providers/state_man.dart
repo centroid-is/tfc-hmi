@@ -34,7 +34,7 @@ Future<KeyMappings> fetchKeyMappings(PreferencesApi prefs) async {
 @Riverpod(keepAlive: true)
 Future<StateMan> stateMan(Ref ref) async {
   // Check for static config first — bypasses preferences entirely
-  final staticCfg = await ref.watch(staticConfigProvider.future);
+  final staticCfg = await ref.read(staticConfigProvider.future);
   if (staticCfg != null) {
     return _createFromStaticConfig(ref, staticCfg);
   }
@@ -111,6 +111,9 @@ Future<StateMan> _createFromStaticConfig(
     keyMappings: keyMappings,
     deviceClients: mqttClients,
   );
+
+  // Initialize collector (matches normal path behavior at line 84)
+  ref.read(collectorProvider.future);
 
   ref.onDispose(() async {
     await stateMan.close();

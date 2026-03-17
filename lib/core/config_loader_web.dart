@@ -7,18 +7,24 @@ import 'package:tfc_dart/core/config_source.dart';
 /// Always returns a [StaticConfig] on web (or `null` if the required
 /// config files are not served).
 Future<StaticConfig?> loadStaticConfig() async {
-  final configResp = await http.get(Uri.parse('config/config.json'));
-  final keyMappingsResp = await http.get(Uri.parse('config/keymappings.json'));
-  final pageEditorResp = await http.get(Uri.parse('config/page-editor.json'));
+  try {
+    final configResp = await http.get(Uri.parse('config/config.json'));
+    final keyMappingsResp =
+        await http.get(Uri.parse('config/keymappings.json'));
+    final pageEditorResp =
+        await http.get(Uri.parse('config/page-editor.json'));
 
-  if (configResp.statusCode != 200 || keyMappingsResp.statusCode != 200) {
-    return null; // Required config files not found
+    if (configResp.statusCode != 200 || keyMappingsResp.statusCode != 200) {
+      return null; // Required config files not found
+    }
+
+    return StaticConfig.fromStrings(
+      configJson: configResp.body,
+      keyMappingsJson: keyMappingsResp.body,
+      pageEditorJson:
+          pageEditorResp.statusCode == 200 ? pageEditorResp.body : null,
+    );
+  } catch (_) {
+    return null; // Network error, DNS failure, timeout, etc.
   }
-
-  return StaticConfig.fromStrings(
-    configJson: configResp.body,
-    keyMappingsJson: keyMappingsResp.body,
-    pageEditorJson:
-        pageEditorResp.statusCode == 200 ? pageEditorResp.body : null,
-  );
 }

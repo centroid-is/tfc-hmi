@@ -19,9 +19,9 @@ review:
   max_iterations: 2
   reviewers:
     - role: python_architect
-      focus: "clean abstractions, backwards compatibility, protocol correctness"
+      focus: "clean abstractions, backwards compatibility, protocol correctness, threading safety"
     - role: test_engineer
-      focus: "test coverage, edge cases, reconnection scenarios"
+      focus: "test coverage, edge cases, reconnection scenarios, async/sync boundary"
 
 # ─────────────────────────────────────────────────────────────────────────
 # Acceptance criteria for ALL stories:
@@ -135,8 +135,11 @@ phases:
         prompt: |
           ## Goal
           Create the central hub — a WebSocket server that orchestrator instances
-          connect to. It accumulates state pushed by orchestrators and serves it
-          via the SAME REST API as the existing dashboard.py.
+          connect to. The hub is a DUMB RELAY: it stores what orchestrators push
+          and serves it via the SAME REST API shape as dashboard.py.
+
+          The hub does NOT derive statuses itself. Orchestrators push pre-computed
+          statuses so the hub has no dependency on Plan objects or DAGScheduler.
 
           ## TDD: Write tests first, then implement.
 
@@ -146,44 +149,68 @@ phases:
           ```python
           class HubServer:
               def __init__(self):
-                  self.connections: dict[str, web.WebSocketResponse] = {}  # plan_name → ws
-                  self.registry: dict[str, dict] = {}    # plan_name → {repo, plan_summary, dag}
-                  self.states: dict[str, list] = {}      # plan_name → [result dicts]
-                  self.log_buffers: dict[str, dict] = {} # plan_name → {story_id → {stdout: [...], stderr: [...]}}
-                  self._events: dict[str, asyncio.Event] = {}  # notify SSE on updates
+                  # Keyed by composite ID: "{repo_basename}/{plan_name}"
+                  # This prevents collision when two repos have plans with the same name.
+                  self.connections: dict[str, web.WebSocketResponse] = {}
+                  self.registry: dict[str, dict] = {}     # → {repo, plan_summary, dag}
+                  self.states: dict[str, dict] = {}        # → {results: [...], statuses: {...}}
+                  self.log_buffers: dict[str, dict] = {}   # → {story_id → {stdout: deque, stderr: deque}}
+                  self._update_condition: asyncio.Condition = asyncio.Condition()
+                  self._max_log_lines: int = 5000  # ring buffer per story per stream
           ```
+
+          ### Composite key
+          When an orchestrator registers with name="mqtt-web" and repo="/Users/jon/Projects/tfc-hmi",
+          the composite key is "tfc-hmi/mqtt-web" (last path component of repo + plan name).
+          If a second orchestrator tries to register with the SAME composite key while
+          one is already connected, reject with:
+          `{"type": "error", "message": "Plan 'tfc-hmi/mqtt-web' already connected"}`
+          If the first is disconnected (stale entry), allow re-registration (overwrite).
 
           ### WebSocket protocol (JSON messages)
           Orchestrator → Hub:
           - `{"type": "register", "name": "mqtt-web", "repo": "/path/to/repo",
               "plan": {"name", "model", "max_parallel", "total_stories", "execution_mode"},
-              "dag": {"nodes": [...], "edges": [...]}}`
-          - `{"type": "state_update", "name": "mqtt-web", "story_id": 1,
-              "status": "running|pass|fail", "duration_seconds": 0, "attempt": 1}`
+              "dag": {"nodes": [...], "edges": [...]},
+              "state": {"results": [...], "statuses": {"1": "passed", ...}}}`
+            NOTE: register includes full current state snapshot so reconnects restore everything.
+          - `{"type": "state_update", "name": "mqtt-web",
+              "results": [<full results list>],
+              "statuses": {"1": "passed", "2": "running", ...}}`
+            NOTE: statuses are PRE-COMPUTED by the orchestrator using derive_node_statuses().
+            The hub just stores and serves them. No Plan or DAGScheduler needed on the hub.
           - `{"type": "log_chunk", "name": "mqtt-web", "story_id": 1,
               "stream": "stdout", "data": "some log text"}`
           - `{"type": "heartbeat", "name": "mqtt-web", "timestamp": "2026-03-17T..."}`
 
           Hub → Orchestrator:
-          - `{"type": "ack"}` (after register)
+          - `{"type": "ack"}` (after successful register)
+          - `{"type": "error", "message": "..."}` (on duplicate key, bad message, etc.)
 
-          ### REST API (must match dashboard.py interface exactly)
-          - `GET /api/plans` → list of plan summaries with status/passed/failed/running/total + `connected: bool`
-          - `GET /api/{plan_name}/state` → `{plan, dag, state: {results}, statuses}`
-          - `GET /api/{plan_name}/events` → SSE stream, push when state_update arrives
-          - `GET /api/{plan_name}/logs/{story_id}/{stream}` → accumulated log text
-          - `GET /api/{plan_name}/logs/{story_id}/{stream}/tail` → SSE of new log chunks
-          - Serve Svelte dist at `/` if present
+          ### REST API (matches dashboard.py response shapes)
+          - `GET /api/plans` → `[{"name", "status", "passed", "failed", "running", "total", "connected", "last_heartbeat", "repo", "composite_key"}]`
+            Status/counts derived from stored statuses dict (count values, no DAGScheduler needed).
+            `connected: bool` — true if WebSocket is active.
+          - `GET /api/{composite_key}/state` → `{"plan": {...}, "dag": {...}, "state": {"results": [...]}, "statuses": {...}}`
+            Served directly from stored data. No computation needed.
+          - `GET /api/{composite_key}/events` → SSE stream.
+            Uses `asyncio.Condition` for fan-out: state_update handler calls
+            `self._update_condition.notify_all()`. Each SSE handler waits on the
+            condition in a loop, checks if its plan's state changed, and pushes.
+          - `GET /api/{composite_key}/logs/{story_id}/{stream}` → plain text from deque
+          - `GET /api/{composite_key}/logs/{story_id}/{stream}/tail` → SSE of new chunks
+            Uses a per-plan asyncio.Condition (or the global one) to wake on new log_chunks.
+          - Serve Svelte dist at `/` if present.
 
-          ### Status derivation
-          - Import and reuse `derive_node_statuses` logic from dashboard.py but adapt
-            to work on in-memory dicts instead of file reads. Factor out a shared
-            helper or just recompute from the states dict.
+          ### Log buffer ring
+          Each story/stream gets a `collections.deque(maxlen=5000)`.
+          log_chunk appends lines. `/logs/` endpoint joins and returns.
+          This bounds memory regardless of run duration.
 
           ### Disconnect handling
-          - On WS disconnect: remove from self.connections, keep state in registry/states.
-          - `/api/plans` shows `connected: false` for disconnected orchestrators.
-          - State persists so the dashboard still shows last-known status.
+          On WS close: remove from self.connections. Keep everything else (registry,
+          states, log_buffers). REST API continues serving last-known state with
+          connected=false.
 
           ### Entry point
           ```python
@@ -199,12 +226,15 @@ phases:
 
           ### Tests (tests/test_hub.py)
           Use aiohttp test client:
-          - WS connect + register → registry populated
-          - state_update → /api/plans shows correct counts
-          - state_update → /api/{name}/state returns correct statuses
-          - log_chunk → /api/{name}/logs returns accumulated text
+          - WS connect + register → registry populated, ack returned
+          - state_update with pre-computed statuses → /api/plans shows correct counts
+          - state_update → /api/{key}/state returns stored statuses as-is
+          - log_chunk → /api/{key}/logs returns accumulated text
+          - log buffer respects max_log_lines (deque maxlen)
           - WS disconnect → connected=false, state preserved
-          - SSE /events emits on state_update
+          - SSE /events emits when state_update arrives (test with asyncio.wait_for)
+          - Duplicate composite key while connected → error response
+          - Duplicate composite key while disconnected → re-registration allowed
           - heartbeat updates last_heartbeat timestamp
 
       - id: 4
@@ -218,65 +248,169 @@ phases:
 
           ## TDD: Write tests first, then implement.
 
+          ## CRITICAL: Threading/async boundary
+          worker.py uses ThreadPoolExecutor. _run_story_sync() is synchronous.
+          But HubClient needs async WebSocket I/O. The design must bridge this:
+
+          - HubClient runs its own asyncio event loop in a DAEMON THREAD.
+          - Public methods (send_state_update, send_log_chunk) use a thread-safe
+            `queue.Queue` (not asyncio.Queue) to enqueue messages from any thread.
+          - The daemon thread's event loop drains the queue and sends via WebSocket.
+          - This means _run_story_sync() can call hub_client.send_state_update()
+            directly — it's a normal sync call that puts a dict on a thread-safe queue.
+
           ## New file: orchestrator/hub_client.py
 
           ```python
+          import queue
+          import threading
+          import asyncio
+          import json
+          import logging
+          from typing import TYPE_CHECKING
+
+          if TYPE_CHECKING:
+              from .state import OrchestratorState
+
+          import aiohttp
+
+          logger = logging.getLogger(__name__)
+
+
           class HubClient:
-              def __init__(self, hub_url: str, plan_name: str):
-                  self.hub_url = hub_url
+              """Non-blocking WebSocket client that pushes state to the hub.
+
+              Runs its own event loop in a daemon thread. All public methods are
+              thread-safe and non-blocking. Safe to call from sync code.
+              """
+
+              def __init__(self, hub_url: str, plan_name: str, repo: str):
+                  self.hub_url = hub_url          # e.g. "ws://localhost:9000/ws"
                   self.plan_name = plan_name
-                  self._ws = None
-                  self._session = None
+                  self.repo = repo
+                  self._state_ref: OrchestratorState | None = None  # for reconnect snapshots
+                  self._plan_summary: dict = {}
+                  self._dag_info: dict = {}
+                  self._msg_queue: queue.Queue = queue.Queue(maxsize=1000)
+                  self._stop_event = threading.Event()
+                  self._thread: threading.Thread | None = None
                   self._connected = False
                   self._reconnect_interval = 5
-                  self._queue: asyncio.Queue = asyncio.Queue()
 
-              async def start(self, plan_summary: dict, dag_info: dict):
-                  """Connect and send register. Start background reconnect + sender loops."""
+              def start(self, plan_summary: dict, dag_info: dict, state: 'OrchestratorState'):
+                  """Start the background sender thread. Call from main thread."""
+                  self._plan_summary = plan_summary
+                  self._dag_info = dag_info
+                  self._state_ref = state  # kept for reconnect state snapshots
+                  self._thread = threading.Thread(target=self._run_loop, daemon=True)
+                  self._thread.start()
 
-              async def stop(self):
-                  """Graceful close."""
+              def stop(self):
+                  """Signal the background thread to stop."""
+                  self._stop_event.set()
+                  if self._thread:
+                      self._thread.join(timeout=5)
 
-              async def send_state_update(self, story_id, status, **kwargs):
-                  """Enqueue state update. Non-blocking. Safe if disconnected."""
+              def send_state_update(self, results: list[dict], statuses: dict[int, str]):
+                  """Enqueue state update. Thread-safe. Non-blocking. Drops if queue full."""
+                  msg = {
+                      "type": "state_update",
+                      "name": self.plan_name,
+                      "results": results,
+                      "statuses": {str(k): v for k, v in statuses.items()},
+                  }
+                  try:
+                      self._msg_queue.put_nowait(msg)
+                  except queue.Full:
+                      pass  # drop — next update will have current state anyway
 
-              async def send_log_chunk(self, story_id, stream, data):
-                  """Enqueue log chunk. Non-blocking."""
+              def send_log_chunk(self, story_id: int, stream: str, data: str):
+                  """Enqueue log chunk. Thread-safe. Non-blocking."""
+                  msg = {
+                      "type": "log_chunk",
+                      "name": self.plan_name,
+                      "story_id": story_id,
+                      "stream": stream,
+                      "data": data,
+                  }
+                  try:
+                      self._msg_queue.put_nowait(msg)
+                  except queue.Full:
+                      pass
 
-              async def _reconnect_loop(self):
-                  """Reconnect every N seconds if disconnected. Re-register on reconnect."""
+              def _run_loop(self):
+                  """Background thread: runs asyncio event loop."""
+                  loop = asyncio.new_event_loop()
+                  asyncio.set_event_loop(loop)
+                  try:
+                      loop.run_until_complete(self._async_loop())
+                  finally:
+                      loop.close()
 
-              async def _sender_loop(self):
-                  """Drain queue, send messages. Drop if disconnected."""
+              async def _async_loop(self):
+                  """Connect, send register, drain queue, reconnect on failure."""
+                  ...  # Implementation: connect WS, send register (with state snapshot),
+                       # loop: drain _msg_queue with timeout, send each message,
+                       # on WS error: reconnect after _reconnect_interval,
+                       # re-send register with fresh state snapshot from _state_ref,
+                       # exit when _stop_event.is_set()
+
+              def _build_register_msg(self) -> dict:
+                  """Build register message with current state snapshot."""
+                  state_snapshot = {"results": [], "statuses": {}}
+                  if self._state_ref:
+                      # Read current results from OrchestratorState (thread-safe, it uses a lock)
+                      state_snapshot = {
+                          "results": [... serialize self._state_ref.results ...],
+                          "statuses": {... derive from results ...},
+                      }
+                  return {
+                      "type": "register",
+                      "name": self.plan_name,
+                      "repo": self.repo,
+                      "plan": self._plan_summary,
+                      "dag": self._dag_info,
+                      "state": state_snapshot,
+                  }
           ```
 
-          Key design decisions:
-          - Queue-based: public methods enqueue, background task sends.
-          - If disconnected, messages are DROPPED (not buffered indefinitely).
-            State will re-sync via register on reconnect.
-          - All public methods are non-blocking and never raise on connection issues.
-          - Reconnect re-sends register with current accumulated state.
+          ### Deriving statuses for push
+          The orchestrator already has derive_node_statuses() in dashboard.py.
+          But that function needs a Plan and log_dir. Instead, add a simpler helper:
+
+          In state.py or a new helper, add:
+          ```python
+          def derive_statuses_from_state(state: OrchestratorState, plan: Plan) -> dict[int, str]:
+              """Derive story statuses from OrchestratorState for hub push."""
+          ```
+          This reuses the DAGScheduler logic locally (orchestrator HAS the Plan object)
+          and returns {story_id: status_string}. The hub just stores the result.
 
           ### models.py
           - Add `hub_url: str = ''` to Plan. Parse from YAML `hub_url:`.
           - Empty string = standalone mode (no hub connection).
 
           ### worker.py integration
-          - In WorkerPool: if plan.hub_url is set, create HubClient.
-          - In _run_plan_dag(): call hub_client.start() before dispatch loop,
+          - In WorkerPool.__init__(): if plan.hub_url is set, create HubClient(hub_url, plan.name, plan.project_dir).
+          - In _run_plan_dag(): call hub_client.start(plan_summary, dag_info, state) before dispatch loop.
             hub_client.stop() after.
-          - In _run_story_sync(): after marking running/pass/fail in state,
-            also call hub_client.send_state_update().
-          - In _stream_json_to_log(): forward chunks to hub_client.send_log_chunk().
+          - In _run_story_sync(): after each state.mark_running/mark_complete/mark_failed + state.save():
+            also call hub_client.send_state_update(results, statuses).
+            Use the new derive_statuses_from_state() helper to compute statuses.
+          - In _stream_json_to_log(): also call hub_client.send_log_chunk().
 
           ### Backwards compatibility
           - mqtt_web.yaml has no hub_url → HubClient is never created → identical behavior.
 
           ### Tests (tests/test_hub_client.py)
-          - send_state_update enqueues without error
-          - messages dropped when disconnected (no exception, no hang)
-          - reconnect re-sends register message
-          - hub_url='' means no client created (test via worker.py)
+          - send_state_update enqueues dict on queue (inspect _msg_queue)
+          - send_state_update on full queue doesn't raise (drops silently)
+          - send_log_chunk enqueues correctly
+          - start() creates and starts daemon thread
+          - stop() signals thread to exit within timeout
+          - _build_register_msg includes state snapshot from OrchestratorState
+          - hub_url='' means no HubClient created (test via WorkerPool init)
+          - Integration: start client, connect to test hub, verify register message received
 
       - id: 5
         name: "Hub CLI entry point"
@@ -330,6 +464,7 @@ phases:
             - Green dot: connected (connected: true from /api/plans)
             - Gray dot: offline (connected: false)
           - If `connected` field is missing (local dashboard mode), show no dot.
+            This ensures backwards compatibility with the standalone dashboard.
           - Show `repo` label under plan name (truncated to last path component,
             e.g. "/Users/jon/Projects/tfc-hmi" → "tfc-hmi")
 
@@ -356,20 +491,26 @@ phases:
           Test scenario:
           1. Start HubServer as aiohttp test app
           2. Connect WebSocket client, send register message with a mock plan
-             (3 stories, simple DAG: 1→2→3)
-          3. Send state_update: story 1 running
+             (3 stories, simple DAG: 1→2→3) and initial state (all pending)
+          3. Send state_update: story 1 running (with pre-computed statuses)
           4. Verify GET /api/plans shows status=running, running=1
-          5. Send state_update: story 1 pass
-          6. Verify GET /api/{name}/state shows story 1 passed
+          5. Send state_update: story 1 pass (with updated statuses)
+          6. Verify GET /api/{composite_key}/state shows story 1 passed in statuses
           7. Send log_chunk for story 2
-          8. Verify GET /api/{name}/logs/2/stdout returns the chunk
+          8. Verify GET /api/{composite_key}/logs/2/stdout returns the chunk
           9. Disconnect WebSocket
           10. Verify GET /api/plans shows connected=false, state preserved
+          11. Reconnect, send register with FULL state snapshot (story 1 passed)
+          12. Verify state is restored correctly after reconnect
 
           Also test:
-          - Two orchestrators connected simultaneously (different plan names)
-          - Reconnection: disconnect + reconnect, state re-registered
+          - Two orchestrators from DIFFERENT repos connected simultaneously
+          - Two orchestrators from SAME repo but different plan names
+          - Duplicate composite key while first is connected → error message
+          - Duplicate composite key after first disconnects → re-registration succeeds
           - SSE /events stream emits when state_update arrives
+          - Log buffer ring: send > 5000 lines, verify only last 5000 returned
+          - Heartbeat updates last_heartbeat timestamp
 
           ### Validation
           - `python -m pytest tests/test_hub_integration.py -v` passes
@@ -381,7 +522,7 @@ phases:
     stories:
       - id: 8
         name: "Template plan generator and pip packaging"
-        depends_on: [5]
+        depends_on: [7]
         prompt: |
           ## Goal
           Make the orchestrator pip-installable and add `tfc-orchestrator init`
@@ -437,3 +578,326 @@ phases:
           - --dir sets project_dir
           - --hub-url sets hub_url
           - Creates .orchestrator/plans/ directory
+
+  # ── Phase 5: Plan Creator Agent ──────────────────────────────────────
+  - name: "Plan Creator (Stories 9-11)"
+    validate:
+      - "cd tools/tfc-orchestrator && python -m pytest tests/ -x -q"
+      - "cd tools/tfc-orchestrator/dashboard && npm run build"
+    stories:
+      - id: 9
+        name: "Plan creator Claude agent backend"
+        depends_on: [3, 8]
+        prompt: |
+          ## Goal
+          Add a Claude agent to the hub that helps users create plan YAMLs
+          through conversation. The agent can explore target repos to understand
+          their structure and generate well-tailored plans.
+
+          ## TDD: Write tests first, then implement.
+
+          ## New file: orchestrator/plan_agent.py
+
+          ### PlanAgentSession class
+          Manages a single Claude subprocess for interactive plan creation.
+
+          ```python
+          class PlanAgentSession:
+              """Interactive Claude session for plan creation."""
+
+              def __init__(self, session_id: str, repo_path: str):
+                  self.session_id = session_id
+                  self.repo_path = repo_path  # target repo to explore
+                  self._proc: subprocess.Popen | None = None
+                  self._alive = False
+
+              async def start(self):
+                  """Spawn Claude subprocess with plan-creation system prompt."""
+                  ...
+
+              async def send_message(self, user_msg: str) -> AsyncIterator[str]:
+                  """Send user message, yield streamed response chunks."""
+                  ...
+
+              async def stop(self):
+                  """Kill the Claude subprocess."""
+                  ...
+          ```
+
+          ### Claude invocation
+          Use `claude` CLI in conversation mode (NOT `-p` one-shot). The agent
+          needs to maintain conversation context across multiple user messages.
+
+          Approach: use `claude` with `--output-format stream-json` and pipe
+          stdin/stdout. Send user messages as JSON to stdin, read responses
+          from stdout.
+
+          Actually, simpler approach: use the Claude API directly via the
+          `anthropic` Python SDK (if available) or spawn sequential `claude -p`
+          calls with conversation history appended to the prompt. The sequential
+          approach is simpler and doesn't require the SDK as a dependency.
+
+          **Recommended: sequential `claude -p` with accumulated context.**
+          Each user message triggers a new `claude -p` call with the full
+          conversation history in the prompt. This is stateless and robust.
+
+          ```python
+          async def send_message(self, user_msg: str) -> str:
+              self._history.append({"role": "user", "content": user_msg})
+              prompt = self._build_prompt()
+              result = await asyncio.to_thread(
+                  subprocess.run,
+                  ["claude", "-p", prompt,
+                   "--model", "sonnet",
+                   "--allowedTools", "Read,Glob,Grep,Bash",
+                   "--output-format", "text",
+                   "--dangerously-skip-permissions"],
+                  cwd=self.repo_path,
+                  capture_output=True, text=True, timeout=120,
+              )
+              response = result.stdout.strip()
+              self._history.append({"role": "assistant", "content": response})
+              return response
+          ```
+
+          ### System prompt (embedded in plan_agent.py)
+          The system prompt must include:
+          1. The plan YAML schema with all fields documented
+          2. A complete example plan (use mqtt_web.yaml as template, anonymized)
+          3. Instructions to:
+             - Ask clarifying questions before generating (what language? what tests? how many phases?)
+             - Explore the repo structure first (read key files, find test commands, understand build system)
+             - Generate the YAML in a ```yaml code block
+             - Follow TDD conventions in story prompts
+             - Set appropriate validate commands based on the repo's toolchain
+
+          ### Hub integration (hub.py)
+          Add to HubServer:
+          ```python
+          self.plan_sessions: dict[str, PlanAgentSession] = {}  # session_id → session
+          ```
+
+          New WebSocket endpoint: `/ws/plan-creator`
+          Protocol:
+          - Client → Hub: `{"type": "start_session", "repo_url": "https://github.com/foo/bar.git"}`
+            OR: `{"type": "start_session", "repo_path": "/local/path/to/repo"}`
+            If `repo_url` is provided, hub clones it first (see Workspace Manager below).
+            If `repo_path` is provided, use it directly (existing behavior).
+            Returns `{"type": "session_started", "session_id": "...", "repo_path": "/resolved/path"}`
+          - Client → Hub: `{"type": "chat", "session_id": "...", "message": "I want to add auth"}`
+            Hub calls session.send_message(), returns `{"type": "response", "content": "..."}`
+            (For v1, response is sent as a single message after Claude finishes.
+             Streaming can be added later.)
+          - Client → Hub: `{"type": "save_plan", "session_id": "...", "yaml_content": "...", "plan_name": "auth"}`
+            Hub writes YAML to `{repo_path}/.orchestrator/plans/{plan_name}.yaml`
+            Returns `{"type": "plan_saved", "path": "..."}`
+          - Client → Hub: `{"type": "end_session", "session_id": "..."}`
+            Hub stops the session, cleans up.
+
+          ### Workspace Manager (in plan_agent.py or new orchestrator/workspace.py)
+          Manages cloned repos in a workspace directory.
+
+          ```python
+          class WorkspaceManager:
+              """Manages git clones for plan creation sessions."""
+
+              def __init__(self, workspace_dir: str = "~/.tfc-orchestrator/repos"):
+                  self.workspace_dir = Path(workspace_dir).expanduser()
+                  self.workspace_dir.mkdir(parents=True, exist_ok=True)
+
+              def resolve_repo(self, repo_url: str | None, repo_path: str | None) -> str:
+                  """Return a local path to the repo. Clones if repo_url given."""
+                  if repo_path:
+                      return repo_path
+                  if repo_url:
+                      return self._clone_or_reuse(repo_url)
+                  raise ValueError("Either repo_url or repo_path required")
+
+              def _clone_or_reuse(self, url: str) -> str:
+                  """Clone repo or reuse existing clone. Returns local path."""
+                  # Derive directory name from URL:
+                  # "https://github.com/foo/bar.git" → "github.com_foo_bar"
+                  repo_name = self._url_to_dirname(url)
+                  clone_dir = self.workspace_dir / repo_name
+
+                  if clone_dir.exists() and (clone_dir / ".git").exists():
+                      # Existing clone — pull latest
+                      subprocess.run(
+                          ["git", "pull", "--ff-only"],
+                          cwd=str(clone_dir), capture_output=True, timeout=60,
+                      )
+                      return str(clone_dir)
+
+                  # Fresh shallow clone (fast, saves disk)
+                  subprocess.run(
+                      ["git", "clone", "--depth", "1", url, str(clone_dir)],
+                      capture_output=True, text=True, timeout=120, check=True,
+                  )
+                  return str(clone_dir)
+
+              def _url_to_dirname(self, url: str) -> str:
+                  """Convert git URL to a safe directory name."""
+                  # Strip protocol, .git suffix, replace / with _
+                  ...
+
+              def cleanup_old(self, max_age_days: int = 30):
+                  """Remove clones not accessed in N days."""
+                  ...
+          ```
+
+          Key design:
+          - Workspace dir: `~/.tfc-orchestrator/repos/` (configurable via hub --workspace-dir)
+          - Shallow clone (`--depth 1`) for speed — plan creator only needs current state
+          - Reuse existing clones (pull latest on reuse)
+          - Directory name derived from URL (deterministic, so same URL = same clone)
+          - Uses whatever git credentials are configured on the host (SSH keys, credential helpers)
+          - cleanup_old() removes stale clones (called on hub startup)
+
+          ### Hub integration
+          Add `--workspace-dir` flag to hub CLI (default: ~/.tfc-orchestrator/repos)
+          HubServer creates WorkspaceManager in __init__().
+          start_session handler calls workspace.resolve_repo() before creating PlanAgentSession.
+
+          ### Session cleanup
+          - Sessions auto-expire after 30 minutes of inactivity.
+          - Max 3 concurrent sessions (prevent resource exhaustion).
+          - On hub shutdown, all sessions are stopped.
+          - Cloned repos are NOT deleted with sessions (they persist for reuse).
+          - Stale clones cleaned on hub startup (default: 30 days).
+
+          ### Tests (tests/test_plan_agent.py)
+          - PlanAgentSession._build_prompt() includes system prompt + history
+          - send_message appends to history correctly
+          - Session start/stop lifecycle
+          - Hub WebSocket: start_session with repo_path creates session
+          - Hub WebSocket: start_session with repo_url clones and creates session
+          - Hub WebSocket: start_session with same repo_url reuses existing clone
+          - Hub WebSocket: chat returns response
+          - Hub WebSocket: save_plan writes YAML file
+          - Hub WebSocket: end_session cleans up
+          - WorkspaceManager._url_to_dirname produces safe, deterministic names
+          - WorkspaceManager.cleanup_old removes stale dirs (mock mtime)
+          - Session timeout after inactivity
+          - Max concurrent sessions enforced
+          - Clone failure (bad URL) returns error to client
+
+      - id: 10
+        name: "Plan creator chat UI"
+        depends_on: [9]
+        prompt: |
+          ## Goal
+          Add a plan creation page to the Svelte dashboard with a chat interface
+          and YAML editor.
+
+          ## Changes
+
+          ### New route: /create-plan (or modal/drawer from header)
+
+          ### Layout: two-panel
+          ```
+          ┌─────────────────────┬──────────────────────┐
+          │  Chat               │  YAML Preview/Editor  │
+          │                     │                        │
+          │  [Claude]: What     │  name: my-plan         │
+          │  repo are we        │  project_dir: .        │
+          │  working with?      │  model: sonnet         │
+          │                     │  ...                   │
+          │  [You]: /path/to/   │                        │
+          │  my-project         │                        │
+          │                     │                        │
+          │  [Claude]: I see    │                        │
+          │  a Go project with  │                        │
+          │  ...                │                        │
+          │                     │  ┌──────┐ ┌────────┐  │
+          │  [input box    ]    │  │ Save │ │ Copy   │  │
+          └─────────────────────┴──┴──────┴─┴────────┴──┘
+          ```
+
+          ### Chat panel (left)
+          - WebSocket connection to `/ws/plan-creator`
+          - Input box at bottom, messages scroll up
+          - On first message, send `start_session` with repo_path
+            (either entered by user or selected from connected orchestrators)
+          - Subsequent messages sent as `chat` type
+          - Claude responses rendered as markdown (use existing markdown renderer if any)
+          - Show loading spinner while waiting for Claude response
+
+          ### YAML panel (right)
+          - Auto-populated when Claude generates a ```yaml block in its response
+          - Parse Claude's response, extract yaml code blocks, show latest one
+          - Editable text area (user can tweak the YAML manually)
+          - Syntax highlighting if easy (monospace + basic coloring is fine for v1)
+          - "Save" button: sends `save_plan` message with the YAML content
+            Shows success/error toast
+          - "Copy" button: copies YAML to clipboard
+
+          ### Repo selector (top of chat, before session starts)
+          Three input modes, shown as tabs or radio buttons:
+          1. **Paste URL** — text input for git URL (https:// or git@...).
+             Shows clone progress indicator. On success, transitions to chat.
+             On failure (bad URL, auth error), shows error with hint
+             ("Check the URL or ensure git credentials are configured").
+          2. **Connected repos** — dropdown of repos from connected orchestrators
+             (fetched from /api/plans, deduplicated by repo path).
+          3. **Local path** — text input for an absolute path on the hub machine.
+          - Selected source is sent with start_session (repo_url or repo_path).
+          - After session starts, show resolved repo path in a small badge.
+
+          ### Navigation
+          - Add "Create Plan" button in the dashboard header/nav
+          - Links to the /create-plan route
+
+          ### Session management
+          - On page leave, send end_session to clean up
+          - Show session status (active/expired)
+
+          ### Validation
+          - `npm run build` succeeds
+          - Chat messages send and receive correctly
+          - YAML extraction from Claude responses works
+          - Save writes file and shows confirmation
+
+      - id: 11
+        name: "Plan creator integration test"
+        depends_on: [9, 10]
+        prompt: |
+          ## Goal
+          End-to-end test of the plan creation flow.
+
+          ## TDD: Write the test, then fix any issues found.
+
+          ### tests/test_plan_creator_integration.py
+
+          Test scenario (local path):
+          1. Start HubServer as aiohttp test app
+          2. Connect WebSocket to /ws/plan-creator
+          3. Send start_session with repo_path = temp directory
+             (with dummy files: README.md, src/main.py, tests/test_main.py)
+          4. Verify session_started response with session_id and repo_path
+          5. Send chat message: "Create a plan for this Python project"
+          6. Verify response contains text (Claude's reply)
+          7. Send save_plan with valid YAML content and plan_name
+          8. Verify YAML file written to {repo_path}/.orchestrator/plans/{name}.yaml
+          9. Verify saved YAML parses with Plan.from_yaml()
+          10. Send end_session
+          11. Verify session cleaned up
+
+          Test scenario (git URL clone):
+          1. Create a bare git repo in a temp dir (acts as "remote")
+          2. Send start_session with repo_url = "file:///tmp/bare-repo.git"
+             (use file:// protocol to avoid network dependency in tests)
+          3. Verify hub clones to workspace dir
+          4. Verify session_started returns resolved local repo_path
+          5. Verify clone is reused on second start_session with same URL
+          6. Verify clone_failure with bad URL returns error message
+
+          Also test:
+          - Max concurrent sessions: start 4 sessions, 4th gets error
+          - Session timeout: create session, wait (mock time), verify expired
+          - save_plan with invalid YAML → error response
+          - Chat after end_session → error response
+          - Multiple yaml blocks in one response → latest one shown
+          - WorkspaceManager.cleanup_old removes repos older than threshold
+
+          ### Validation
+          - `python -m pytest tests/test_plan_creator_integration.py -v` passes

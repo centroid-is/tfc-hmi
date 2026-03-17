@@ -1,0 +1,104 @@
+{
+  "comments": [
+    {
+      "id": "a1b2c3",
+      "severity": "should_fix",
+      "file": "lib/providers/state_man.dart",
+      "line": 118,
+      "message": "_createFromStaticConfig does not eagerly initialize collectorProvider (line 84 in the normal path does `ref.read(collectorProvider.future)`). On web this is fine (database is null \u2192 collector returns null), but on native kiosk deployments using CENTROID_CONFIG_DIR, data collection via Collector will never start unless a widget happens to watch it. Add `ref.read(collectorProvider.future);` before `return stateMan;` to match the normal path behavior.",
+      "status": "fixed",
+      "fix_attempts": 1
+    },
+    {
+      "id": "d4e5f6",
+      "severity": "should_fix",
+      "file": "lib/providers/state_man.dart",
+      "line": 37,
+      "message": "Uses `ref.watch(staticConfigProvider.future)` but existing code deliberately uses `ref.read` (line 45) to prevent reactive cascades that would destroy OPC-UA connections/isolates. staticConfigProvider is keepAlive and loaded once so in practice this won't cause issues, but for consistency with the stated architectural intent (comment on lines 42-44), consider using `ref.read` here too.",
+      "status": "fixed",
+      "fix_attempts": 1
+    },
+    {
+      "id": "g7h8i9",
+      "severity": "note",
+      "file": "lib/core/config_loader_web.dart",
+      "line": 10,
+      "message": "No try/catch around HTTP requests. If the web server is unreachable or returns unexpected errors, the futures will throw unhandled, bubbling up as a provider error. Consider wrapping in try/catch and returning null on failure, consistent with the native path's graceful null return.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "j0k1l2",
+      "severity": "note",
+      "file": "lib/providers/page_manager.dart",
+      "line": 12,
+      "message": "In static config mode, `preferencesProvider` is still watched and awaited (line 12) even though prefs won't be used for read/write. This creates an unnecessary dependency \u2014 if preferences resolution is slow or fails on web, it blocks page manager initialization. Consider passing a no-op prefs or guarding with `staticCfg != null` before watching preferences.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "s7-tdd-01",
+      "severity": "should_fix",
+      "file": "packages/tfc_dart/test/core/static_config_provider_test.dart",
+      "line": 1,
+      "message": "TDD acceptance criteria explicitly requires 'Write provider unit tests first: staticConfigProvider returns expected config from test JSON, stateManProvider bypasses preferences when StaticConfig is present, pageManagerProvider loads from static JSON.' No Riverpod provider-level tests exist \u2014 tests only cover low-level StaticConfig/StateMan.create in isolation, not the provider wiring (e.g., using ProviderContainer with overrides to verify stateManProvider checks staticConfigProvider.future FIRST and short-circuits).",
+      "status": "fixed",
+      "fix_attempts": 1
+    },
+    {
+      "id": "s7-tdd-02",
+      "severity": "should_fix",
+      "file": "lib/providers/page_manager.dart",
+      "line": 14,
+      "message": "No test covers the static config branch in pageManagerProvider. The `if (staticCfg?.pageEditorJson != null)` path that calls `pageManager.fromJson()` and returns without calling `save()` is entirely untested. A provider-level test should verify: (1) static config JSON is loaded via fromJson, (2) save() is NOT called, (3) fallback to prefs.getString('page_editor_data') when staticConfig is null.",
+      "status": "fixed",
+      "fix_attempts": 1
+    },
+    {
+      "id": "s7-web-01",
+      "severity": "should_fix",
+      "file": "lib/core/config_loader_web.dart",
+      "line": 9,
+      "message": "loadStaticConfig() has no try-catch around the three http.get() calls. If any request throws (network error, DNS failure, timeout), the exception propagates uncaught to staticConfigProvider, putting it in error state and potentially crashing the web app on startup. Wrap in try-catch returning null on failure, consistent with the non-200 status code handling.",
+      "status": "fixed",
+      "fix_attempts": 1
+    },
+    {
+      "id": "s7-web-02",
+      "severity": "note",
+      "file": "lib/core/config_loader_web.dart",
+      "line": 10,
+      "message": "Three sequential HTTP requests (config.json, keymappings.json, page-editor.json) could be parallelized with Future.wait() to reduce startup latency on web. Minor performance improvement.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "s7-test-03",
+      "severity": "note",
+      "file": "packages/tfc_dart/test/core/static_config_provider_test.dart",
+      "line": 1,
+      "message": "Test file is named 'static_config_provider_test.dart' but does not test any Riverpod provider. It tests StaticConfig construction and StateMan.create \u2014 functionality already covered by config_source_test.dart. Consider renaming to 'static_config_stateman_test.dart' or adding actual provider tests.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "s7-test-04",
+      "severity": "note",
+      "file": "test/core/config_loader_test.dart",
+      "line": 1,
+      "message": "No test exists for config_loader_web.dart \u2014 only the native path (staticConfigFromDirectory) is tested. The web HTTP fetch logic (status code handling, optional page-editor.json) is noted as 'validated via web build + deployment tests' but has zero unit test coverage. Consider adding tests with a mock HTTP client.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "s7-catch-scope",
+      "severity": "note",
+      "file": "lib/core/config_loader_web.dart",
+      "line": 27,
+      "message": "The catch(_) block wraps both the HTTP requests AND the StaticConfig.fromStrings() call. If config files are served with status 200 but contain malformed JSON, the parse error from fromStrings() is silently swallowed and null is returned \u2014 the app falls through to the preferences path (which on web likely also fails, producing a confusing error unrelated to the real cause). Consider narrowing the try/catch to only the HTTP calls, or catching FormatException separately and logging/rethrowing so malformed config files surface a clear error.",
+      "status": "open",
+      "fix_attempts": 0
+    }
+  ],
+  "fixed_then_reopened": []
+}
