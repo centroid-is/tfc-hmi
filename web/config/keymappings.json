@@ -1,0 +1,10 @@
+{
+  "nodes": {
+    "sensor.temperature": {
+      "mqtt_node": { "topic": "plant/sensor/temperature", "qos": 0, "payloadType": "json" }
+    },
+    "actuator.valve": {
+      "mqtt_node": { "topic": "plant/actuator/valve", "qos": 1, "payloadType": "json" }
+    }
+  }
+}

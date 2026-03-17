@@ -1,0 +1,15 @@
+{
+  "opcua": [],
+  "jbtm": [],
+  "modbus": [],
+  "mqtt": [
+    {
+      "host": "localhost",
+      "port": 9001,
+      "use_web_socket": true,
+      "ws_path": "/mqtt",
+      "client_id": "tfc-web",
+      "keep_alive_period": 60
+    }
+  ]
+}

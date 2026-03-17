@@ -1,0 +1,140 @@
+{
+  "comments": [
+    {
+      "id": "a1f3c",
+      "severity": "should_fix",
+      "file": "lib/page_creator/assets/inference_log.dart",
+      "line": 313,
+      "message": "Missing slide-in animation for new entries. Spec explicitly requires 'New entries inserted at TOP (most recent first) with slide-in animation'. Current implementation uses plain ListView.builder \u2014 should use AnimatedList with SlideTransition or similar to animate new rows in.",
+      "status": "fixed",
+      "fix_attempts": 1
+    },
+    {
+      "id": "b2e7d",
+      "severity": "should_fix",
+      "file": "lib/page_creator/assets/inference_log.dart",
+      "line": 310,
+      "message": "No empty-state placeholder when log has zero entries. Spec says widget should show something meaningful when empty. Current build() renders an empty ListView with no visual indicator. Add an 'if (_entries.isEmpty)' branch with a centered placeholder icon/text.",
+      "status": "fixed",
+      "fix_attempts": 1
+    },
+    {
+      "id": "c4d9a",
+      "severity": "note",
+      "file": "lib/page_creator/assets/inference_log.dart",
+      "line": 210,
+      "message": "Heavy code duplication with image_feed.dart \u2014 _subscribeToStreams(), _onFeedData() payload parsing, _onControlData(), and the PAUSED overlay are nearly identical. Consider extracting a shared _FeedSubscriptionMixin or base class to DRY up future maintenance.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "d5b1e",
+      "severity": "note",
+      "file": "test/widgets/inference_log_test.dart",
+      "line": 240,
+      "message": "Empty-log test (line 240) only asserts 'find.byType(ListView)' \u2014 it does not verify any placeholder text or icon. If an empty-state placeholder is added per the spec, this test should assert on the placeholder content.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "a1f2c3",
+      "severity": "should_fix",
+      "file": "lib/page_creator/assets/inference_log.dart",
+      "line": 313,
+      "message": "Missing slide-in animation per acceptance criteria: 'New entries inserted at TOP (most recent first) with slide-in animation'. Implementation uses plain ListView.builder with setState but no AnimatedList or SlideTransition. Should use AnimatedList with insertItem() for visual slide-in effect.",
+      "status": "fixed",
+      "fix_attempts": 1
+    },
+    {
+      "id": "b4d5e6",
+      "severity": "should_fix",
+      "file": "test/widgets/inference_log_test.dart",
+      "line": 875,
+      "message": "Test 'confidence bar color coding correct' only verifies percentage text (90%, 60%, 30%) is displayed, but never asserts the actual LinearProgressIndicator valueColor matches green/yellow/red. Find the LinearProgressIndicator widgets and check their valueColor property to actually test color coding.",
+      "status": "fixed",
+      "fix_attempts": 1
+    },
+    {
+      "id": "c7f8a9",
+      "severity": "should_fix",
+      "file": "test/widgets/inference_log_test.dart",
+      "line": 910,
+      "message": "Test 'status badge text/color correct for ok/low/error' verifies badge text but never asserts Container decoration colors. The test name promises color verification but only checks text. Find the Container with BoxDecoration and assert color matches green/yellow/red for each threshold.",
+      "status": "fixed",
+      "fix_attempts": 1
+    },
+    {
+      "id": "d0e1f2",
+      "severity": "note",
+      "file": "test/widgets/inference_log_test.dart",
+      "line": 230,
+      "message": "Test 'empty log renders placeholder' only asserts ListView exists (findsOneWidget) but doesn't verify any actual placeholder content (empty-state message, icon, etc.). The acceptance criteria says 'Empty log renders placeholder' implying visible empty-state UX, but the widget just renders an empty ListView with no placeholder.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "e3g4h5",
+      "severity": "note",
+      "file": "lib/page_creator/assets/inference_log.dart",
+      "line": 200,
+      "message": "_subscribeToStreams() is fire-and-forget from initState \u2014 if stateManProvider.future rejects or subscribe() throws, the error is silently swallowed. Consistent with image_feed.dart pattern but worth noting.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "f6i7j8",
+      "severity": "note",
+      "file": "test/widgets/inference_log_test.dart",
+      "line": 0,
+      "message": "No test coverage for configure() editor widget (InferenceLogConfigEditor). The acceptance criteria includes configure() in the config class spec but no test exercises the editor fields (KeyField, SwitchListTile, etc.).",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "t1a2b3",
+      "severity": "note",
+      "file": "test/widgets/inference_log_test.dart",
+      "line": 245,
+      "message": "No test verifies AnimatedList or SlideTransition widgets are used. The acceptance criteria mandates 'slide-in animation' for new entries and the implementation uses AnimatedList+SlideTransition, but no test asserts `find.byType(AnimatedList)` or `find.byType(SlideTransition)`. Distinct from existing comments a1f3c/a1f2c3 which flagged the *implementation* lacking animation \u2014 now the implementation is correct but the *test* doesn't guard against regression to plain ListView.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "t4c5d6",
+      "severity": "note",
+      "file": "test/widgets/inference_log_test.dart",
+      "line": 240,
+      "message": "Empty-state test verifies placeholder appears when empty but no test asserts it disappears after entries arrive. Adding `expect(find.byIcon(Icons.inbox_outlined), findsNothing)` after emitting the first entry in the 'adding entries via stream shows rows' test would close this gap.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "a2c3f",
+      "severity": "note",
+      "file": "lib/page_creator/assets/inference_log.dart",
+      "line": 286,
+      "message": "Empty `setState(() {})` call is a code smell. It works (triggers rebuild to show/hide the empty-state overlay) but is non-obvious. A brief comment like `// Rebuild to update empty-state overlay` would clarify intent for future maintainers.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "b7d4e",
+      "severity": "note",
+      "file": "lib/page_creator/assets/inference_log.dart",
+      "line": 337,
+      "message": "The Tween + CurveTween chain is re-created inline on every itemBuilder invocation. For a minor perf win, extract as a static field: `static final _slideTween = Tween<Offset>(begin: Offset(-1,0), end: Offset.zero).chain(CurveTween(curve: Curves.easeOut));` then use `animation.drive(_slideTween)`.",
+      "status": "open",
+      "fix_attempts": 0
+    },
+    {
+      "id": "c9e1a",
+      "severity": "note",
+      "file": "test/widgets/inference_log_test.dart",
+      "line": 245,
+      "message": "No test specifically asserts the SlideTransition animation widget exists. While `pumpAndSettle` verifies entries appear, an explicit `expect(find.byType(SlideTransition), findsWidgets)` after adding entries would confirm the animation wrapper is present, guarding against regression to a plain list.",
+      "status": "open",
+      "fix_attempts": 0
+    }
+  ],
+  "fixed_then_reopened": []
+}

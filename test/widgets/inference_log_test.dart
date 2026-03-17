@@ -237,8 +237,9 @@ void main() {
       ));
       await tester.pumpAndSettle();
 
-      // Should show some kind of empty state
-      expect(find.byType(ListView), findsOneWidget);
+      // Should show empty state placeholder with icon and text
+      expect(find.byIcon(Icons.inbox_outlined), findsOneWidget);
+      expect(find.text('No entries yet'), findsOneWidget);
     });
 
     testWidgets('adding entries via stream shows rows', (tester) async {
@@ -336,6 +337,25 @@ void main() {
       expect(find.text('90%'), findsOneWidget);
       expect(find.text('60%'), findsOneWidget);
       expect(find.text('30%'), findsOneWidget);
+
+      // Verify actual LinearProgressIndicator colors
+      final indicators = tester.widgetList<LinearProgressIndicator>(
+        find.byType(LinearProgressIndicator),
+      ).toList();
+      expect(indicators, hasLength(3));
+      // Order: newest first → low (0.30/red), mid (0.60/yellow), high (0.90/green)
+      expect(
+        (indicators[0].valueColor as AlwaysStoppedAnimation<Color>).value,
+        Colors.red,
+      );
+      expect(
+        (indicators[1].valueColor as AlwaysStoppedAnimation<Color>).value,
+        Colors.yellow.shade700,
+      );
+      expect(
+        (indicators[2].valueColor as AlwaysStoppedAnimation<Color>).value,
+        Colors.green,
+      );
     });
 
     testWidgets('status badge text/color correct for ok/low/error',
@@ -369,6 +389,31 @@ void main() {
           _makePayload(label: 'bad', confidence: 0.30));
       await tester.pumpAndSettle();
       expect(find.text('error'), findsOneWidget);
+
+      // Verify badge container colors
+      for (final (text, color) in [
+        ('ok', Colors.green),
+        ('low', Colors.yellow.shade700),
+        ('error', Colors.red),
+      ]) {
+        final badgeFinder = find.ancestor(
+          of: find.text(text),
+          matching: find.byWidgetPredicate(
+            (w) =>
+                w is Container &&
+                w.decoration is BoxDecoration &&
+                (w.decoration as BoxDecoration).color != null,
+          ),
+        );
+        expect(badgeFinder, findsAtLeastNWidgets(1),
+            reason: 'Badge container for "$text" not found');
+        final container = tester.widget<Container>(badgeFinder.first);
+        expect(
+          (container.decoration as BoxDecoration).color,
+          color,
+          reason: 'Badge color for "$text"',
+        );
+      }
     });
 
     testWidgets('pause via controlKey stops new entries', (tester) async {
@@ -445,7 +490,8 @@ void main() {
       fake.emit('inference/result', 'not valid json!!!');
       await tester.pumpAndSettle();
 
-      expect(find.byType(ListView), findsOneWidget);
+      // Widget still renders without crashing (empty state visible)
+      expect(find.byIcon(Icons.inbox_outlined), findsOneWidget);
       expect(tester.takeException(), isNull);
 
       // Valid payload after malformed still works

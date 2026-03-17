@@ -189,6 +189,7 @@ class _InferenceLogWidgetState extends ConsumerState<InferenceLogWidget> {
   static final Logger _log = Logger();
 
   final List<LogEntry> _entries = [];
+  final GlobalKey<AnimatedListState> _listKey = GlobalKey<AnimatedListState>();
   bool _paused = false;
 
   StreamSubscription<DynamicValue>? _feedSub;
@@ -259,12 +260,30 @@ class _InferenceLogWidgetState extends ConsumerState<InferenceLogWidget> {
       );
 
       if (mounted) {
-        setState(() {
-          _entries.insert(0, entry); // New entries at top
-          while (_entries.length > widget.config.maxEntries) {
-            _entries.removeLast();
-          }
-        });
+        _entries.insert(0, entry);
+        _listKey.currentState?.insertItem(
+          0,
+          duration: const Duration(milliseconds: 300),
+        );
+        while (_entries.length > widget.config.maxEntries) {
+          final removedIndex = _entries.length - 1;
+          final removed = _entries.removeAt(removedIndex);
+          _listKey.currentState?.removeItem(
+            removedIndex,
+            (context, animation) => SizeTransition(
+              sizeFactor: animation,
+              child: _LogRow(
+                entry: removed,
+                config: widget.config,
+                confidenceBarColor: _confidenceBarColor,
+                statusBadgeText: _statusBadgeText,
+                statusBadgeColor: _statusBadgeColor,
+              ),
+            ),
+            duration: const Duration(milliseconds: 200),
+          );
+        }
+        setState(() {}); // Update empty state overlay
       }
     } catch (e) {
       _log.w('Malformed inference log payload: $e');
@@ -310,16 +329,41 @@ class _InferenceLogWidgetState extends ConsumerState<InferenceLogWidget> {
   Widget build(BuildContext context) {
     return Stack(
       children: [
-        ListView.builder(
-          itemCount: _entries.length,
-          itemBuilder: (context, index) => _LogRow(
-            entry: _entries[index],
-            config: widget.config,
-            confidenceBarColor: _confidenceBarColor,
-            statusBadgeText: _statusBadgeText,
-            statusBadgeColor: _statusBadgeColor,
-          ),
+        AnimatedList(
+          key: _listKey,
+          initialItemCount: _entries.length,
+          itemBuilder: (context, index, animation) {
+            return SlideTransition(
+              position: animation.drive(
+                Tween<Offset>(
+                  begin: const Offset(-1.0, 0.0),
+                  end: Offset.zero,
+                ).chain(CurveTween(curve: Curves.easeOut)),
+              ),
+              child: _LogRow(
+                entry: _entries[index],
+                config: widget.config,
+                confidenceBarColor: _confidenceBarColor,
+                statusBadgeText: _statusBadgeText,
+                statusBadgeColor: _statusBadgeColor,
+              ),
+            );
+          },
         ),
+        if (_entries.isEmpty)
+          const Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.inbox_outlined, size: 48, color: Colors.grey),
+                SizedBox(height: 8),
+                Text(
+                  'No entries yet',
+                  style: TextStyle(color: Colors.grey),
+                ),
+              ],
+            ),
+          ),
         if (_paused)
           Positioned.fill(
             child: Container(
