@@ -1,9 +1,7 @@
 import 'dart:async';
-import 'dart:io' if (dart.library.js_interop) '../core/io_stub.dart' as io;
+import 'dart:io' as io;
 
-import 'package:open62541/open62541.dart'
-    if (dart.library.js_interop) 'package:tfc_dart/core/web_stubs/open62541_stub.dart'
-    show DynamicValue;
+import 'package:open62541/open62541.dart' show DynamicValue;
 import 'package:tfc_dart/core/state_man.dart';
 import 'package:tfc_mcp_server/tfc_mcp_server.dart'
     show ServerAliasProvider, StateReader;

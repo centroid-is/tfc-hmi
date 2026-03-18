@@ -1,5 +1,5 @@
 import 'dart:math';
-import 'dart:io' if (dart.library.js_interop) '../../core/io_stub.dart';
+import 'dart:io';
 
 import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter/material.dart';

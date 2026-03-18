@@ -1,10 +1,9 @@
-import 'dart:io' if (dart.library.js_interop) '../core/io_stub.dart' show Platform;
+import 'dart:io' show Platform;
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:pdfrx/pdfrx.dart'
-    if (dart.library.js_interop) '../core/pdfrx_stub.dart';
+import 'package:pdfrx/pdfrx.dart';
 
 /// A self-contained PDF viewer with built-in Cmd+F / Ctrl+F search.
 ///

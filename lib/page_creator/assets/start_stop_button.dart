@@ -6,9 +6,7 @@ import 'package:json_annotation/json_annotation.dart';
 import 'package:logger/logger.dart';
 import 'package:rxdart/rxdart.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
-import 'package:open62541/open62541.dart'
-    if (dart.library.js_interop) 'package:tfc_dart/core/web_stubs/open62541_stub.dart'
-    show DynamicValue, NodeId;
+import 'package:open62541/open62541.dart' show DynamicValue, NodeId;
 
 import 'common.dart';
 import '../../providers/state_man.dart';

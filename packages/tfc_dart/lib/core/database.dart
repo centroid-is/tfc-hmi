@@ -1,4 +1,4 @@
-import 'dart:io' if (dart.library.js_interop) 'web_stubs/io_stub.dart';
+import 'dart:io';
 import 'dart:async';
 import 'dart:convert';
 import 'package:drift/drift.dart' show QueryRow, Variable;

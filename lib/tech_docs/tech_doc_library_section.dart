@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'dart:io' if (dart.library.js_interop) '../core/io_stub.dart' as io;
+import 'dart:io' as io;
 import 'dart:typed_data';
 
 import 'package:desktop_drop/desktop_drop.dart';

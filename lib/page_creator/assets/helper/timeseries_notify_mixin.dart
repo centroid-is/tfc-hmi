@@ -2,11 +2,8 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:tfc_dart/core/database.dart'
-    if (dart.library.js_interop) 'package:tfc_dart/core/web_stubs/database_stub.dart';
-import 'package:tfc_dart/core/database_drift.dart'
-    if (dart.library.js_interop) 'package:tfc_dart/core/web_stubs/database_drift_stub.dart'
-    as drift_db;
+import 'package:tfc_dart/core/database.dart';
+import 'package:tfc_dart/core/database_drift.dart' as drift_db;
 
 import '../../../providers/database.dart';
 import '../../../providers/state_man.dart';

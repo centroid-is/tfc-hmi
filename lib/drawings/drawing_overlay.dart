@@ -2,8 +2,7 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:pdfrx/pdfrx.dart'
-    if (dart.library.js_interop) '../core/pdfrx_stub.dart';
+import 'package:pdfrx/pdfrx.dart';
 
 import '../widgets/resizable_overlay_frame.dart';
 import 'drawing_viewer.dart';

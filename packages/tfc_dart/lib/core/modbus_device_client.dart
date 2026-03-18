@@ -1,5 +1,5 @@
-import 'package:open62541/open62541.dart' if (dart.library.js_interop) 'web_stubs/open62541_stub.dart' show DynamicValue, NodeId;
-import 'package:modbus_client/modbus_client.dart' if (dart.library.js_interop) 'web_stubs/modbus_client_stub.dart' show ModbusEndianness;
+import 'package:open62541/open62541.dart' show DynamicValue, NodeId;
+import 'package:modbus_client/modbus_client.dart' show ModbusEndianness;
 import 'package:tfc_dart/core/modbus_client_wrapper.dart';
 import 'package:tfc_dart/core/state_man.dart'
     show ConnectionStatus, DeviceClient, KeyMappings, ModbusConfig, ModbusNodeConfig, StateMan;

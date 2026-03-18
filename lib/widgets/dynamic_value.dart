@@ -1,9 +1,7 @@
-import 'dart:io' if (dart.library.js_interop) '../core/io_stub.dart' show stderr;
+import 'dart:io' show stderr;
 
 import 'package:flutter/material.dart';
-import 'package:open62541/open62541.dart'
-    if (dart.library.js_interop) 'package:tfc_dart/core/web_stubs/open62541_stub.dart'
-    show DynamicValue;
+import 'package:open62541/open62541.dart' show DynamicValue;
 
 class DynamicValueWidget extends StatelessWidget {
   final DynamicValue _value;

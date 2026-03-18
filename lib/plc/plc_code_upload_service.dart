@@ -1,4 +1,4 @@
-import 'dart:io' if (dart.library.js_interop) '../core/io_stub.dart';
+import 'dart:io';
 
 import 'package:tfc_mcp_server/tfc_mcp_server.dart';
 

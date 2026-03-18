@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'dart:io' if (dart.library.js_interop) '../core/io_stub.dart';
+import 'dart:io';
 
 import 'package:dbus/dbus.dart';
 import 'package:dartssh2/dartssh2.dart';

@@ -1,5 +1,5 @@
 import 'dart:convert';
-import 'dart:io' if (dart.library.js_interop) '../core/io_stub.dart' as io;
+import 'dart:io' as io;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -15,8 +15,7 @@ import '../providers/mcp_bridge.dart';
 import '../providers/preferences.dart';
 import 'package:tfc_dart/core/preferences.dart';
 import 'package:tfc/core/preferences.dart';
-import 'package:tfc_dart/core/database.dart'
-    if (dart.library.js_interop) 'package:tfc_dart/core/web_stubs/database_stub.dart';
+import 'package:tfc_dart/core/database.dart';
 
 /// MCP Server settings section for the preferences page.
 ///

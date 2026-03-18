@@ -12,8 +12,7 @@ import '../../providers/database.dart';
 import '../../widgets/graph.dart';
 import 'package:tfc/converter/color_converter.dart';
 import 'package:tfc_dart/converter/duration_converter.dart';
-import 'package:tfc_dart/core/database.dart'
-    if (dart.library.js_interop) 'package:tfc_dart/core/web_stubs/database_stub.dart';
+import 'package:tfc_dart/core/database.dart';
 
 part 'ratio_number.g.dart';
 

@@ -4,8 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:rxdart/rxdart.dart';
 import 'package:cristalyse/cristalyse.dart' as cs;
-import 'package:tfc_dart/core/database.dart'
-    if (dart.library.js_interop) 'package:tfc_dart/core/web_stubs/database_stub.dart';
+import 'package:tfc_dart/core/database.dart';
 
 import 'graph.dart';
 import '../providers/collector.dart';

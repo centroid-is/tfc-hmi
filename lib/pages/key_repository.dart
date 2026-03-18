@@ -13,16 +13,10 @@ import '../widgets/base_scaffold.dart';
 import '../widgets/proposal_visual.dart';
 import '../providers/proposal_state.dart';
 import 'package:tfc_dart/core/state_man.dart';
-import 'package:tfc_dart/core/modbus_client_wrapper.dart'
-    if (dart.library.js_interop) 'package:tfc_dart/core/web_stubs/modbus_client_wrapper_stub.dart'
-    show ModbusDataType;
-import 'package:tfc_dart/core/collector.dart'
-    if (dart.library.js_interop) 'package:tfc_dart/core/web_stubs/collector_stub.dart';
-import 'package:tfc_dart/core/database.dart'
-    if (dart.library.js_interop) 'package:tfc_dart/core/web_stubs/database_stub.dart';
-import 'package:jbtm/src/m2400.dart'
-    if (dart.library.js_interop) 'package:tfc_dart/core/web_stubs/jbtm_m2400_stub.dart'
-    show M2400RecordType;
+import 'package:tfc_dart/core/modbus_client_wrapper.dart' show ModbusDataType;
+import 'package:tfc_dart/core/collector.dart';
+import 'package:tfc_dart/core/database.dart';
+import 'package:jbtm/src/m2400.dart' show M2400RecordType;
 import '../widgets/fuzzy_search_bar.dart';
 import '../widgets/bit_mask_grid.dart';
 import '../widgets/key_mapping_sections.dart';

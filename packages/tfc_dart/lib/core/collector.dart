@@ -3,13 +3,13 @@ import 'dart:collection';
 import 'package:rxdart/rxdart.dart';
 import 'package:logger/logger.dart';
 import 'package:json_annotation/json_annotation.dart';
-import 'package:open62541/open62541.dart' if (dart.library.js_interop) 'web_stubs/open62541_stub.dart' show DynamicValue;
+import 'package:open62541/open62541.dart' show DynamicValue;
 
 import '../converter/dynamic_value_converter.dart';
 import '../converter/duration_converter.dart';
-import '../core/boolean_expression.dart' if (dart.library.js_interop) 'web_stubs/boolean_expression_stub.dart';
+import '../core/boolean_expression.dart';
 import 'state_man.dart';
-import 'database.dart' if (dart.library.js_interop) 'web_stubs/database_stub.dart';
+import 'database.dart';
 
 part 'collector.g.dart';
 

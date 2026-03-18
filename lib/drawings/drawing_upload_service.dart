@@ -1,9 +1,8 @@
-import 'dart:io' if (dart.library.js_interop) '../core/io_stub.dart';
+import 'dart:io';
 
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
-import 'package:pdfrx/pdfrx.dart'
-    if (dart.library.js_interop) '../core/pdfrx_stub.dart';
+import 'package:pdfrx/pdfrx.dart';
 import 'package:tfc_mcp_server/tfc_mcp_server.dart';
 
 /// Service for uploading and managing electrical drawing PDFs.
