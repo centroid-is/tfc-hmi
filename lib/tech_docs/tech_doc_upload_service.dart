@@ -1,7 +1,9 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:tfc_mcp_server/tfc_mcp_server.dart' show TechDocIndex;
+import 'package:tfc_mcp_server/tfc_mcp_server.dart'
+    if (dart.library.js_interop) 'package:tfc_mcp_server/tfc_mcp_server_web.dart'
+    show TechDocIndex;
 
 import 'section_detector.dart';
 

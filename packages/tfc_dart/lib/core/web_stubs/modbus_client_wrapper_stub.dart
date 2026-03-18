@@ -27,11 +27,17 @@ class ModbusRegisterSpec {
 }
 
 class ModbusClientWrapper {
-  ModbusClientWrapper({
-    required String host,
-    required int port,
+  final String host;
+  final int port;
+
+  /// Stub — always null on web (no ModbusClientTcp).
+  dynamic get client => null;
+
+  ModbusClientWrapper(
+    this.host,
+    this.port, [
     int unitId = 1,
-  }) {
+  ]) {
     throw UnsupportedError('Modbus not available on web');
   }
 }

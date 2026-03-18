@@ -14,7 +14,7 @@ library;
 import 'dart:async';
 import 'dart:isolate';
 
-import 'package:open62541/open62541.dart';
+import 'package:tfc_dart/core/dynamic_value.dart';
 import 'package:test/test.dart';
 import 'package:tfc_dart/core/collector.dart';
 import 'package:tfc_dart/core/database.dart';

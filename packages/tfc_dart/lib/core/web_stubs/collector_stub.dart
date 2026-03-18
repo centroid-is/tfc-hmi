@@ -1,7 +1,7 @@
 /// Web stub for collector.dart
-/// On web, collection is not performed.
+/// On web, collection is not performed — types exist for compilation only.
 
-import 'database_stub.dart' show RetentionPolicy;
+import 'database_stub.dart' show Database, RetentionPolicy, TimeseriesData;
 import 'boolean_expression_stub.dart' show ExpressionConfig;
 
 class CollectEntry {
@@ -55,8 +55,35 @@ class CollectorConfig {
   Map<String, dynamic> toJson() => {'collect': collect};
   static CollectorConfig fromJson(Map<String, dynamic> json) =>
       CollectorConfig(collect: json['collect'] as bool? ?? false);
+
+  CollectorConfig copyWith({bool? collect}) =>
+      CollectorConfig(collect: collect ?? this.collect);
 }
 
 class Collector {
-  Collector._();
+  final CollectorConfig config;
+  final dynamic stateMan;
+  final Database database;
+
+  static const configLocation = 'collector_config';
+
+  Collector({
+    required this.config,
+    required this.stateMan,
+    required this.database,
+  });
+
+  Stream<List<TimeseriesData<dynamic>>> collectStream(String key,
+      {Duration since = const Duration(days: 1)}) {
+    throw UnsupportedError('Collector not available on web');
+  }
+
+  Future<void> collectEntry(CollectEntry entry) async {}
+
+  void stopCollect(CollectEntry entry) {}
+
+  void close() {}
+
+  Map<String, dynamic> getStats() => {};
+  void resetStats() {}
 }

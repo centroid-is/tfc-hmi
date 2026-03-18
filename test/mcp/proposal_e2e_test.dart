@@ -13,7 +13,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mcp_dart/mcp_dart.dart';
 import 'package:tfc_dart/core/database_drift.dart';
 
-import 'package:tfc_mcp_server/tfc_mcp_server.dart';
+import 'package:tfc_mcp_server/tfc_mcp_server.dart'
+    if (dart.library.js_interop) 'package:tfc_mcp_server/tfc_mcp_server_web.dart';
 
 import 'package:tfc/providers/proposal_watcher.dart';
 

@@ -1,4 +1,4 @@
-import 'dart:io' as io;
+import 'dart:io' if (dart.library.js_interop) '../core/io_stub.dart' as io;
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -690,7 +690,7 @@ class _ChatWidgetState extends ConsumerState<ChatWidget> {
         attachment,
       ];
     } catch (e) {
-      io.stderr.writeln('ChatWidget._pickAttachment: $e');
+      debugPrint('ChatWidget._pickAttachment: $e');
     }
   }
 

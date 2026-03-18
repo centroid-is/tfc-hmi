@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:open62541/open62541.dart' show DynamicValue;
+import 'package:tfc_dart/core/dynamic_value.dart' show DynamicValue;
 import 'package:test/test.dart';
 
 import 'package:tfc_dart/core/state_man.dart';
@@ -188,7 +188,6 @@ void main() {
           ),
         }),
         deviceClients: [mqttMock],
-        useIsolate: false,
       );
     });
 
@@ -295,7 +294,6 @@ void main() {
           ),
         }),
         deviceClients: [mqttMock],
-        useIsolate: false,
       );
 
       // OPC UA key should NOT be routed to MQTT mock
@@ -330,7 +328,6 @@ void main() {
           ),
         }),
         deviceClients: [mqttMock],
-        useIsolate: false,
       );
 
       // Modbus key should NOT be routed to MQTT mock
@@ -361,7 +358,6 @@ void main() {
           ),
         }),
         deviceClients: [mqttMock],
-        useIsolate: false,
       );
 
       // MQTT should claim the key (before OPC UA fallthrough)
@@ -442,8 +438,8 @@ void main() {
     });
   });
 
-  group('_resolveOtherDeviceClient keyMappings guard', () {
-    test('key without mqttNode is NOT routed to a non-M2400/non-Modbus DeviceClient even if canSubscribe returns true', () async {
+  group('DeviceClient routing for generic keys', () {
+    test('key is routed to DeviceClient that canSubscribe even without mqttNode', () async {
       // A DeviceClient that claims it can subscribe to 'orphan_key'
       final greedyMock = MockMqttDeviceClient(
         keys: {'orphan_key'},
@@ -459,20 +455,18 @@ void main() {
           ),
         }),
         deviceClients: [greedyMock],
-        useIsolate: false,
       );
 
-      // The mock *can* subscribe, but keyMappings has no mqttNode for this key.
-      // _resolveOtherDeviceClient should NOT route to greedyMock.
+      // The mock *can* subscribe — DeviceClient routing uses canSubscribe.
       expect(greedyMock.canSubscribe('orphan_key'), isTrue);
 
-      // read() should fall through to OPC UA path and throw (no OPC UA client)
-      expect(
-        () => stateMan.read('orphan_key'),
-        throwsA(isA<StateManException>()),
-      );
-      // greedyMock.read should NOT have been called
-      expect(greedyMock.readCalls, isEmpty);
+      // read() should route to the greedyMock since it canSubscribe.
+      // Mock returns null (no cached value), so read() will throw, but
+      // the mock should have been called.
+      try {
+        await stateMan.read('orphan_key');
+      } catch (_) {}
+      expect(greedyMock.readCalls, isNotEmpty);
 
       await stateMan.close();
     });

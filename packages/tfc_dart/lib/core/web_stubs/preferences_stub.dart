@@ -118,7 +118,8 @@ class Preferences implements PreferencesApi {
   @override
   Future<double?> getDouble(String key) => _memoryCache.getDouble(key);
   @override
-  Future<String?> getString(String key) => _memoryCache.getString(key);
+  Future<String?> getString(String key, {bool secret = false}) =>
+      _memoryCache.getString(key);
   @override
   Future<List<String>?> getStringList(String key) =>
       _memoryCache.getStringList(key);
@@ -134,13 +135,15 @@ class Preferences implements PreferencesApi {
   Future<void> setDouble(String key, double value) =>
       _memoryCache.setDouble(key, value);
   @override
-  Future<void> setString(String key, String value) =>
+  Future<void> setString(String key, String value,
+          {bool secret = false, bool saveToDb = true}) =>
       _memoryCache.setString(key, value);
   @override
   Future<void> setStringList(String key, List<String> value) =>
       _memoryCache.setStringList(key, value);
   @override
-  Future<void> remove(String key) => _memoryCache.remove(key);
+  Future<void> remove(String key, {bool secret = false}) =>
+      _memoryCache.remove(key);
   @override
   Future<void> clear({Set<String>? allowList}) =>
       _memoryCache.clear(allowList: allowList);

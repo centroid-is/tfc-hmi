@@ -20,9 +20,19 @@ import '../widgets/base_scaffold.dart';
 import '../widgets/connection_status_chip.dart';
 import '../widgets/preferences.dart';
 import 'package:tfc_dart/core/state_man.dart';
-import 'package:tfc_dart/core/modbus_device_client.dart';
-import 'package:modbus_client/modbus_client.dart' show ModbusEndianness;
-import 'package:tfc_dart/core/database.dart';
+import 'package:tfc_dart/core/opcua_device_client.dart'
+    if (dart.library.js_interop) 'package:tfc_dart/core/web_stubs/opcua_device_client_stub.dart'
+    show ClientWrapper;
+import 'package:tfc_dart/core/m2400_device_client.dart'
+    if (dart.library.js_interop) 'package:tfc_dart/core/web_stubs/m2400_device_client_stub.dart'
+    show M2400DeviceClientAdapter;
+import 'package:tfc_dart/core/modbus_device_client.dart'
+    if (dart.library.js_interop) 'package:tfc_dart/core/web_stubs/modbus_device_client_stub.dart';
+import 'package:modbus_client/modbus_client.dart'
+    if (dart.library.js_interop) 'package:tfc_dart/core/web_stubs/modbus_client_stub.dart'
+    show ModbusEndianness;
+import 'package:tfc_dart/core/database.dart'
+    if (dart.library.js_interop) 'package:tfc_dart/core/web_stubs/database_stub.dart';
 import '../providers/state_man.dart';
 import '../providers/preferences.dart';
 import '../providers/database.dart';

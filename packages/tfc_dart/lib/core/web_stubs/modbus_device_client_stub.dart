@@ -3,15 +3,17 @@
 /// On native, the real modbus_device_client.dart is used instead (via
 /// conditional import in state_man.dart). This stub is only resolved on web.
 
-import 'package:open62541/open62541.dart'
-    if (dart.library.js_interop) 'open62541_stub.dart' show DynamicValue;
-import '../state_man.dart' show DeviceClient, ConnectionStatus;
+import '../dynamic_value.dart' show DynamicValue;
+import '../state_man.dart' show DeviceClient, ConnectionStatus, KeyMappings, ModbusConfig;
+import 'modbus_client_wrapper_stub.dart' show ModbusClientWrapper;
 
 class ModbusDeviceClientAdapter implements DeviceClient {
   final String? serverAlias;
+  final ModbusClientWrapper wrapper;
 
-  ModbusDeviceClientAdapter(dynamic wrapper,
-      {required Map<String, dynamic> specs, this.serverAlias}) {
+  ModbusDeviceClientAdapter(ModbusClientWrapper w,
+      {required Map<String, dynamic> specs, this.serverAlias})
+      : wrapper = w {
     throw UnsupportedError('Modbus not available on web');
   }
 
@@ -34,3 +36,8 @@ class ModbusDeviceClientAdapter implements DeviceClient {
   @override
   void dispose() {}
 }
+
+List<DeviceClient> buildModbusDeviceClients(
+  List<ModbusConfig> modbusConfigs,
+  KeyMappings keyMappings,
+) => [];

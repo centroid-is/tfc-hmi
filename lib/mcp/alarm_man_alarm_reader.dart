@@ -1,5 +1,8 @@
-import 'package:tfc_dart/core/alarm.dart';
-import 'package:tfc_mcp_server/tfc_mcp_server.dart' show AlarmReader;
+import 'package:tfc_dart/core/alarm.dart'
+    if (dart.library.js_interop) 'package:tfc_dart/core/web_stubs/alarm_stub.dart';
+import 'package:tfc_mcp_server/tfc_mcp_server.dart'
+    if (dart.library.js_interop) 'package:tfc_mcp_server/tfc_mcp_server_web.dart'
+    show AlarmReader;
 
 /// [AlarmReader] implementation backed by the Flutter app's [AlarmMan].
 ///

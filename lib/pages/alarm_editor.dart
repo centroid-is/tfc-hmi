@@ -4,7 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../widgets/alarm.dart';
 import '../widgets/base_scaffold.dart';
-import 'package:tfc_dart/core/alarm.dart';
+import 'package:tfc_dart/core/alarm.dart'
+    if (dart.library.js_interop) 'package:tfc_dart/core/web_stubs/alarm_stub.dart';
 import '../providers/alarm.dart';
 import '../providers/proposal_state.dart';
 

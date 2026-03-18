@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 import '../widgets/base_scaffold.dart';
 import '../widgets/alarm.dart';
-import 'package:tfc_dart/core/alarm.dart';
+import 'package:tfc_dart/core/alarm.dart'
+    if (dart.library.js_interop) 'package:tfc_dart/core/web_stubs/alarm_stub.dart';
 
 class AlarmViewPage extends StatefulWidget {
   const AlarmViewPage({super.key});

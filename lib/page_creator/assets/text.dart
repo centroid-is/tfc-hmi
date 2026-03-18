@@ -2,7 +2,7 @@ import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_colorpicker/flutter_colorpicker.dart';
-import 'package:open62541/open62541.dart' show DynamicValue;
+import 'package:tfc_dart/core/dynamic_value.dart' show DynamicValue;
 import 'package:rxdart/rxdart.dart';
 
 import 'common.dart';

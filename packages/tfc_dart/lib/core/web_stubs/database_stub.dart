@@ -18,35 +18,79 @@ class RetentionPolicy {
 }
 
 class DatabaseConfig {
-  final String host;
-  final int port;
-  final String database;
-  final String username;
-  final String password;
+  dynamic postgres;
+  dynamic sslMode;
+  bool debug;
+  Duration connectTimeout;
+  Duration queryTimeout;
 
   DatabaseConfig({
-    required this.host,
-    required this.port,
-    required this.database,
-    required this.username,
-    required this.password,
+    this.postgres,
+    this.sslMode,
+    this.debug = false,
+    this.connectTimeout = const Duration(seconds: 5),
+    this.queryTimeout = const Duration(seconds: 30),
   });
+
+  factory DatabaseConfig.fromJson(Map<String, dynamic> json) =>
+      DatabaseConfig();
+
+  Map<String, dynamic> toJson() => {};
 
   static Future<DatabaseConfig> fromEnv() async =>
       throw UnsupportedError('Database not available on web');
 
-  static Future<DatabaseConfig?> fromPrefs(dynamic prefs) async => null;
+  static Future<DatabaseConfig> fromPrefs() async => DatabaseConfig();
+
+  Future<void> toPrefs() async {}
+
+  @override
+  String toString() => 'DatabaseConfig(web stub)';
 }
 
 class Database {
   final dynamic db;
-  Database._() : db = null;
+  Database(this.db, {Duration healthTimeout = const Duration(seconds: 30)});
 
-  static Future<Database?> connectWithRetry({
-    required DatabaseConfig config,
-    int maxRetries = 3,
+  static Future<void> probe(DatabaseConfig config) async =>
+      throw UnsupportedError('Database.probe not available on web');
+
+  static Future<Database> connectWithRetry(
+    DatabaseConfig config, {
+    Duration retryDelay = const Duration(seconds: 2),
+    bool useIsolate = true,
   }) async =>
-      null;
+      throw UnsupportedError('Database.connectWithRetry not available on web');
+
+  Future<List<TimeseriesData<dynamic>>> queryTimeseriesData(
+    String tableName,
+    DateTime to, {
+    String? orderBy,
+    DateTime? from,
+  }) async =>
+      [];
+
+  Future<void> dispose() async {}
+
+  Future<List<TimeseriesData<dynamic>>> queryTimeseriesDataDownsampled(
+    String tableName,
+    DateTime from,
+    DateTime to, {
+    int maxPoints = 1000,
+  }) async =>
+      [];
 
   Future<void> close() async {}
+}
+
+class TimeseriesData<T> {
+  final T value;
+  final DateTime time;
+
+  @override
+  String toString() {
+    return 'TimeseriesData(value: $value, time: $time)';
+  }
+
+  TimeseriesData(this.value, this.time);
 }

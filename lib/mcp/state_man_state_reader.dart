@@ -1,9 +1,10 @@
 import 'dart:async';
-import 'dart:io' as io;
 
-import 'package:open62541/open62541.dart' show DynamicValue;
+import 'package:flutter/foundation.dart' show debugPrint;
+import 'package:tfc_dart/core/dynamic_value.dart' show DynamicValue;
 import 'package:tfc_dart/core/state_man.dart';
 import 'package:tfc_mcp_server/tfc_mcp_server.dart'
+    if (dart.library.js_interop) 'package:tfc_mcp_server/tfc_mcp_server_web.dart'
     show ServerAliasProvider, StateReader;
 
 /// [StateReader] implementation backed by the Flutter app's [StateMan].
@@ -82,13 +83,13 @@ class StateManStateReader implements StateReader, ServerAliasProvider {
             }
           },
           onError: (error) {
-            io.stderr.writeln(
+            debugPrint(
                 'StateManStateReader: subscription error for key "$key": $error');
           },
         );
         _subscriptions.add(sub);
       } catch (e) {
-        io.stderr.writeln(
+        debugPrint(
             'StateManStateReader: failed to subscribe to key "$key": $e');
       }
     }

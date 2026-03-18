@@ -1,7 +1,10 @@
-import 'dart:io' as io;
+import 'dart:io' if (dart.library.js_interop) '../core/io_stub.dart' as io;
 
-import 'package:mcp_dart/mcp_dart.dart';
+import 'package:flutter/foundation.dart' show debugPrint;
+import 'package:mcp_dart/mcp_dart.dart'
+    if (dart.library.js_interop) '../core/mcp_dart_stub.dart';
 import 'package:tfc_mcp_server/tfc_mcp_server.dart'
+    if (dart.library.js_interop) 'package:tfc_mcp_server/tfc_mcp_server_web.dart'
     show
         TfcMcpServer,
         McpDatabase,
@@ -52,7 +55,7 @@ class McpSseServer {
         for (final pid in pids.split('\n')) {
           final trimmed = pid.trim();
           if (trimmed.isNotEmpty) {
-            io.stderr.writeln(
+            debugPrint(
               'McpSseServer: killing stale process $trimmed on port $port',
             );
             io.Process.killPid(int.parse(trimmed));
@@ -91,7 +94,7 @@ class McpSseServer {
     _streamableServer = server;
     _port = port;
 
-    io.stderr.writeln('McpSseServer: listening on http://localhost:$_port/mcp');
+    debugPrint('McpSseServer: listening on http://localhost:$_port/mcp');
   }
 
   /// Stop the server and clean up resources.
@@ -102,7 +105,7 @@ class McpSseServer {
 
     if (server != null) {
       await server.stop();
-      io.stderr.writeln('McpSseServer: stopped');
+      debugPrint('McpSseServer: stopped');
     }
   }
 }

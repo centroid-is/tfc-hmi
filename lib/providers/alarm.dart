@@ -1,7 +1,8 @@
 import 'package:riverpod/riverpod.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
-import 'package:tfc_dart/core/alarm.dart';
+import 'package:tfc_dart/core/alarm.dart'
+    if (dart.library.js_interop) 'package:tfc_dart/core/web_stubs/alarm_stub.dart';
 import 'preferences.dart';
 import 'state_man.dart';
 part 'alarm.g.dart';

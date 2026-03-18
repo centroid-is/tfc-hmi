@@ -1,4 +1,4 @@
-import 'package:open62541/open62541.dart' show DynamicValue, NodeId;
+import 'package:tfc_dart/core/dynamic_value.dart' show DynamicValue, NodeId;
 import 'package:tfc_dart/core/state_man.dart'
     show KeyMappingEntry, ModbusNodeConfig, ModbusRegisterType, StateMan;
 import 'package:tfc_dart/core/modbus_client_wrapper.dart' show ModbusDataType;

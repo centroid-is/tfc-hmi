@@ -139,6 +139,23 @@
       "verification_details": "\n00:00 +0: loading /Users/jonb/Projects/tfc-hmi/test/painter/auger_conveyor_test.dart                                                                                                                   \n00:01 +0: loading /Users/jonb/Projects/tfc-hmi/test/painter/auger_conveyor_test.dart                                                                                                                   \n00:01 +0: /Users/jonb/Projects/tfc-hmi/test/painter/auger_conveyor_test.dart: AugerConveyorPainter ",
       "started_at": "",
       "worker_slot": -1
+    },
+    {
+      "story_id": 6,
+      "story_name": "Web conditional imports + compilation",
+      "status": "running",
+      "duration_seconds": 0.0,
+      "error": "",
+      "timestamp": "2026-03-17T19:19:23.286768",
+      "retry_count": 0,
+      "review_iterations": 0,
+      "review_findings": 0,
+      "worktree_branch": "",
+      "merge_commit": "",
+      "verification_passed": null,
+      "verification_details": "",
+      "started_at": "2026-03-17T19:19:23.286738",
+      "worker_slot": -1
     }
   ]
 }

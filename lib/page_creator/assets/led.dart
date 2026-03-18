@@ -1,6 +1,4 @@
 import 'dart:math';
-import 'dart:io';
-
 import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -237,7 +235,7 @@ class Led extends ConsumerWidget {
           ),
       builder: (context, snapshot) {
         if (snapshot.hasError) {
-          stderr.writeln(
+          debugPrint(
               'Stream setup error for ${config.key}, error: ${snapshot.error}');
           return LedRaw(config, value: null);
         }

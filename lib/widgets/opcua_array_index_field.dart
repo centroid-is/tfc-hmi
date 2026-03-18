@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:open62541/open62541.dart' show NodeId, DynamicValue;
+import 'package:tfc_dart/core/dynamic_value.dart' show NodeId, DynamicValue;
 import 'package:tfc_dart/core/state_man.dart';
+import 'package:tfc_dart/core/opcua_device_client.dart'
+    if (dart.library.js_interop) 'package:tfc_dart/core/web_stubs/opcua_device_client_stub.dart'
+    show ClientWrapper;
 import '../providers/state_man.dart';
 
 /// A field that lets the user select an index within an OPC UA array node.

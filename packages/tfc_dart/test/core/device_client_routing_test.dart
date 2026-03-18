@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:open62541/open62541.dart' show DynamicValue;
+import 'package:tfc_dart/core/dynamic_value.dart' show DynamicValue;
 import 'package:test/test.dart';
 import 'package:tfc_dart/core/state_man.dart';
 

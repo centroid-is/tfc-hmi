@@ -1,5 +1,4 @@
-import 'dart:io' show Platform;
-
+import 'package:flutter/foundation.dart' show defaultTargetPlatform, TargetPlatform;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -106,7 +105,7 @@ class SearchablePdfViewerState extends State<SearchablePdfViewer> {
     // On macOS, Cmd (Meta) + scroll wheel = zoom.
     // On all platforms, Ctrl + scroll is already handled by pdfrx.
     final isMacOsCmdScroll =
-        Platform.isMacOS && HardwareKeyboard.instance.isMetaPressed;
+        defaultTargetPlatform == TargetPlatform.macOS && HardwareKeyboard.instance.isMetaPressed;
 
     if (!isMacOsCmdScroll) return;
 
@@ -250,9 +249,9 @@ class SearchablePdfViewerState extends State<SearchablePdfViewer> {
       onKeyEvent: (node, event) {
         if (event is KeyDownEvent &&
             event.logicalKey == LogicalKeyboardKey.keyF &&
-            (HardwareKeyboard.instance.isMetaPressed && Platform.isMacOS ||
+            (HardwareKeyboard.instance.isMetaPressed && defaultTargetPlatform == TargetPlatform.macOS ||
                 HardwareKeyboard.instance.isControlPressed &&
-                    !Platform.isMacOS)) {
+                    defaultTargetPlatform != TargetPlatform.macOS)) {
           setState(() => _searchVisible = !_searchVisible);
           return KeyEventResult.handled;
         }

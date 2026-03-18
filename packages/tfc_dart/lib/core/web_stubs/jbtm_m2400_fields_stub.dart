@@ -2,6 +2,8 @@
 
 // ignore_for_file: constant_identifier_names
 
+import 'jbtm_m2400_stub.dart' show M2400RecordType;
+
 enum FieldType { string, numeric, unknown }
 
 enum M2400Field {
@@ -71,3 +73,32 @@ enum M2400Field {
     return null;
   }
 }
+
+/// Weigher status codes from FLD_STATUS / FLD_WEIGHING_STATUS.
+enum WeigherStatus {
+  bad(0, 'Bad'),
+  r1(1, 'Range 1'),
+  r2(2, 'Range 2'),
+  badDeny(10, 'Bad - Denied'),
+  badStddev(11, 'Bad - Std Dev'),
+  badAlibi(12, 'Bad - Alibi'),
+  badUnexpect(13, 'Bad - Unexpected'),
+  badUnder(14, 'Bad - Underweight'),
+  badOver(15, 'Bad - Overweight'),
+  unknown(-1, 'Unknown');
+
+  final int code;
+  final String displayName;
+  const WeigherStatus(this.code, this.displayName);
+
+  static final Map<int, WeigherStatus> _byCode = {
+    for (final status in values)
+      if (status != unknown) status.code: status,
+  };
+
+  static WeigherStatus fromCode(int code) => _byCode[code] ?? unknown;
+}
+
+/// Fields typically present in each record type (stub mirrors real data).
+const Map<M2400RecordType, Set<M2400Field>> expectedFields = {};
+

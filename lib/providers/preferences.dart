@@ -1,5 +1,6 @@
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:tfc_dart/core/preferences.dart';
+import 'package:tfc_dart/core/preferences.dart'
+    if (dart.library.js_interop) 'package:tfc_dart/core/web_stubs/preferences_stub.dart';
 import 'package:riverpod/riverpod.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 

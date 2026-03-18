@@ -5,7 +5,8 @@ import 'package:flutter/material.dart';
 import 'assets/common.dart';
 import 'assets/registry.dart';
 import '../models/menu_item.dart';
-import 'package:tfc_dart/core/preferences.dart';
+import 'package:tfc_dart/core/preferences.dart'
+    if (dart.library.js_interop) 'package:tfc_dart/core/web_stubs/preferences_stub.dart';
 import 'package:tfc/converter/icon.dart';
 
 part 'page.g.dart';

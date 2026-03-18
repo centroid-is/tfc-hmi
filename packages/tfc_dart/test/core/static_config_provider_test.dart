@@ -1,6 +1,6 @@
 import 'dart:convert';
 
-import 'package:open62541/open62541.dart' show DynamicValue;
+import 'package:tfc_dart/core/dynamic_value.dart' show DynamicValue;
 import 'package:test/test.dart';
 
 import 'package:tfc_dart/core/config_source.dart';
@@ -44,7 +44,6 @@ void main() {
         config: staticConfig.stateManConfig,
         keyMappings: staticConfig.keyMappings,
         deviceClients: <DeviceClient>[], // No real clients in test
-        useIsolate: false,
       );
 
       expect(stateMan, isNotNull);
@@ -81,7 +80,6 @@ void main() {
         config: staticConfig.stateManConfig,
         keyMappings: staticConfig.keyMappings,
         deviceClients: [mock],
-        useIsolate: false,
       );
 
       mock.setCachedValue('mqtt_sensor', DynamicValue(value: 42.5));
@@ -151,7 +149,6 @@ void main() {
         config: staticConfig.stateManConfig,
         keyMappings: staticConfig.keyMappings,
         deviceClients: [mqttMock], // Only MQTT
-        useIsolate: false,
       );
 
       // The StateMan has only the MQTT mock as device client

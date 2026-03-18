@@ -7,7 +7,7 @@ import 'dart:convert';
 
 import 'package:mqtt_client/mqtt_client.dart';
 import 'package:mqtt_client/mqtt_server_client.dart';
-import 'package:open62541/open62541.dart' show DynamicValue;
+import 'package:tfc_dart/core/dynamic_value.dart' show DynamicValue;
 import 'package:tfc_dart/core/mqtt_device_client.dart';
 import 'package:tfc_dart/core/state_man.dart';
 import 'package:test/test.dart';

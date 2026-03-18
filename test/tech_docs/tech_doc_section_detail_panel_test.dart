@@ -4,7 +4,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tfc/providers/tech_doc.dart';
 import 'package:tfc/tech_docs/tech_doc_section_detail_panel.dart';
-import 'package:tfc_mcp_server/tfc_mcp_server.dart' show TechDocSummary;
+import 'package:tfc_mcp_server/tfc_mcp_server.dart'
+    if (dart.library.js_interop) 'package:tfc_mcp_server/tfc_mcp_server_web.dart'
+    show TechDocSummary;
 
 void main() {
   group('TechDocSectionDetailPanel', () {

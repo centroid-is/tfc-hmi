@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
-import 'package:tfc_dart/core/umas_client.dart';
+import 'package:tfc_dart/core/umas_client.dart'
+    if (dart.library.js_interop) 'package:tfc_dart/core/web_stubs/umas_client_stub.dart';
 import 'package:tfc_dart/core/umas_types.dart';
 import 'package:tfc_dart/core/state_man.dart';
-import 'package:tfc_dart/core/modbus_device_client.dart';
+import 'package:tfc_dart/core/modbus_device_client.dart'
+    if (dart.library.js_interop) 'package:tfc_dart/core/web_stubs/modbus_device_client_stub.dart';
 
 import 'browse_panel.dart';
 

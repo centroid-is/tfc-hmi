@@ -16,6 +16,7 @@ import 'dart:async';
 import 'dart:math';
 
 import 'package:open62541/open62541.dart';
+import 'package:tfc_dart/core/opcua_device_client.dart' show ClientWrapper;
 import 'package:tfc_dart/core/state_man.dart';
 import 'package:test/test.dart';
 

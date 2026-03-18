@@ -14,6 +14,7 @@ import 'package:jbtm/jbtm.dart' hide ConnectionStatus;
 import 'package:test/test.dart';
 import 'package:tfc_dart/core/collector.dart';
 import 'package:tfc_dart/core/database.dart';
+import 'package:tfc_dart/core/m2400_device_client.dart' show createM2400DeviceClients;
 import 'package:tfc_dart/core/state_man.dart';
 
 import 'docker_compose.dart';

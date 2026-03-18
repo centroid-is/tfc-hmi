@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:io' as io;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -9,13 +8,16 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:tfc/providers/database.dart';
 import 'package:tfc_mcp_server/tfc_mcp_server.dart'
+    if (dart.library.js_interop) 'package:tfc_mcp_server/tfc_mcp_server_web.dart'
     show McpConfig, McpToolToggles, readMcpConfigFromPreferences, writeMcpConfigToPreferences;
 
 import '../providers/mcp_bridge.dart';
 import '../providers/preferences.dart';
-import 'package:tfc_dart/core/preferences.dart';
+import 'package:tfc_dart/core/preferences.dart'
+    if (dart.library.js_interop) 'package:tfc_dart/core/web_stubs/preferences_stub.dart';
 import 'package:tfc/core/preferences.dart';
-import 'package:tfc_dart/core/database.dart';
+import 'package:tfc_dart/core/database.dart'
+    if (dart.library.js_interop) 'package:tfc_dart/core/web_stubs/database_stub.dart';
 
 /// MCP Server settings section for the preferences page.
 ///
@@ -235,7 +237,7 @@ class _McpServerSectionState extends ConsumerState<McpServerSection> {
                   setState(
                       () => _config = _config.copyWith(toggles: newToggles));
                   await _saveConfig(prefs);
-                  io.stderr.writeln(
+                  debugPrint(
                     'AUDIT: toggle_change key=${meta.key} '
                     'value=$value '
                     'timestamp=${DateTime.now().toIso8601String()}',
