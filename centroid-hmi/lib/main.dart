@@ -39,6 +39,8 @@ import 'package:tfc/widgets/base_scaffold.dart';
 import 'package:tfc_dart/core/secure_storage/secure_storage.dart';
 import 'package:tfc/core/secure_storage/other.dart';
 
+import 'pages/version_manager_page.dart';
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   AmplifySecureStorageDart.registerWith();
@@ -101,6 +103,7 @@ void main() async {
         MenuItem(label: 'History View', path: '/advanced/history-view', icon: Icons.history),
         MenuItem(label: 'Server Config', path: '/advanced/server-config', icon: FontAwesomeIcons.server),
         MenuItem(label: 'Key Repository', path: '/advanced/key-repository', icon: FontAwesomeIcons.key),
+        MenuItem(label: 'Version Manager', path: '/advanced/version-manager', icon: Icons.update),
       ],
     ),
   );
@@ -114,13 +117,6 @@ void main() async {
       onMacOS: () => GitHubReleaseStore(owner: 'centroid-is', repo: 'tfc-hmi2'),
     ),
     debugLogging: true,
-  );
-
-  final managerLauncher = ManagerLauncher(
-    assetLoader: (key) async {
-      final bd = await rootBundle.load(key);
-      return bd.buffer.asUint8List(bd.offsetInBytes, bd.lengthInBytes);
-    },
   );
 
   runApp(ProviderScope(
@@ -145,6 +141,13 @@ void main() async {
 }
 
 Completer<DBusClient> dbusCompleter = Completer();
+
+final managerLauncher = ManagerLauncher(
+  assetLoader: (key) async {
+    final bd = await rootBundle.load(key);
+    return bd.buffer.asUint8List(bd.offsetInBytes, bd.lengthInBytes);
+  },
+);
 
 RoutesLocationBuilder createLocationBuilder(List<MenuItem> extraMenuItems) {
   final routes = {
@@ -230,6 +233,11 @@ RoutesLocationBuilder createLocationBuilder(List<MenuItem> extraMenuItems) {
         BeamPage(key: const ValueKey('/advanced/server-config'), title: 'Server Config', child: ServerConfigPage()),
     '/advanced/key-repository': (context, state, args) =>
         BeamPage(key: const ValueKey('/advanced/key-repository'), title: 'Key Repository', child: const KeyRepositoryPage()),
+    '/advanced/version-manager': (context, state, args) => BeamPage(
+          key: const ValueKey('/advanced/version-manager'),
+          title: 'Version Manager',
+          child: VersionManagerPage(launcher: managerLauncher),
+        ),
     AppRoutes.alarmView: (context, state, args) =>
         BeamPage(key: const ValueKey('/alarm-view'), title: 'Alarm View', child: AlarmViewPage()),
   };
