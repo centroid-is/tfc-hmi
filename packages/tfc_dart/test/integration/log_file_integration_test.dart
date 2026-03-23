@@ -49,33 +49,46 @@ void main() {
       expect(content, contains('dart trace message'));
     });
 
-    test('open62541 native output is written to log file', () {
-      // Create an OPC UA client with debug logging — the Client constructor
-      // calls UA_Log_Stdout_new which writes to stdout. We redirect stdout
-      // to our log file the same way utils.cpp does (but from Dart side we
-      // can't do freopen, so we just verify the Client accepts the log level).
-      //
-      // The actual native->file integration requires the C++ runner redirect
-      // which is tested manually in MSIX. Here we verify the plumbing:
-      // opcuaLogLevelFromEnv() returns a valid LogLevel that Client accepts.
+    test('open62541 native output and Dart logger output both reach same file',
+        () async {
+      // Run a subprocess that:
+      // 1. Creates an open62541 Client (native log → C stdout)
+      // 2. Writes Dart logger output to the file via RandomAccessFile
+      // The parent captures subprocess stdout (which contains native
+      // open62541 output) and appends it to the same log file.
+      // This mirrors the production MSIX setup where C++ RedirectIOToFile
+      // captures native output and Dart writes via RandomAccessFile.
 
-      final level = opcuaLogLevelFromEnv();
-      expect(level, isA<LogLevel>());
+      final helperPath = '${Directory.current.path}'
+          '${Platform.pathSeparator}test'
+          '${Platform.pathSeparator}integration'
+          '${Platform.pathSeparator}log_file_test_helper.dart';
 
-      // Create a client with the env-derived log level — this proves the
-      // type is accepted by the Client constructor (would throw if wrong type).
-      final client = Client(
-        logLevel: level,
+      final result = await Process.run(
+        Platform.resolvedExecutable,
+        ['run', helperPath, logFilePath],
+        workingDirectory: Directory.current.path,
       );
 
-      // Connect to a non-existent server to trigger native log output.
-      // The client will log error messages at the configured level.
-      // We don't assert on the native output here (it goes to stdout,
-      // not our file), but we verify the client was created successfully.
-      expect(client, isNotNull);
+      // Append subprocess stdout/stderr (native open62541 output) to log file
+      final logFile = File(logFilePath).openSync(mode: FileMode.append);
+      logFile.writeStringSync(result.stdout as String);
+      logFile.writeStringSync(result.stderr as String);
+      logFile.closeSync();
 
-      client.disconnect();
-    });
+      final content = File(logFilePath).readAsStringSync();
+
+      // Dart logger output (written via RandomAccessFile by subprocess)
+      expect(content, contains('DART_MARKER_INFO'),
+          reason: 'Dart logger info output should be in the file');
+      expect(content, contains('DART_MARKER_ERROR'),
+          reason: 'Dart logger error output should be in the file');
+
+      // open62541 native output (written to C stdout, captured by parent)
+      expect(content, contains('info/client'),
+          reason: 'open62541 native info output should be in the file');
+    }, timeout: Timeout(Duration(seconds: 30)));
+
 
     test('second handle can open existing file in append mode', () {
       // Key regression test: the C++ side opens the log file first, then
