@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Ready to execute
-stopped_at: Completed 02-core-engine-02-03-PLAN.md
-last_updated: "2026-03-23T18:58:13.169Z"
+status: Phase complete — ready for verification
+stopped_at: Completed 02-core-engine-02-05-PLAN.md
+last_updated: "2026-03-23T19:06:38.327Z"
 progress:
   total_phases: 5
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 8
-  completed_plans: 7
+  completed_plans: 8
 ---
 
 # Project State
@@ -53,6 +53,7 @@ Plan: 5 of 5
 | Phase 02-core-engine P02 | 2 | 2 tasks | 6 files |
 | Phase 02-core-engine P04 | 5 | 2 tasks | 7 files |
 | Phase 02-core-engine P03 | 145 | 2 tasks | 6 files |
+| Phase 02-core-engine P05 | 5 | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -81,6 +82,9 @@ Recent decisions affecting current work:
 - [Phase 02-core-engine]: extractManagerFrom takes src+appdataRoot params for testability; pathIsFromMSIX extracted from IsRunningFromMSIX for table-driven testing
 - [Phase 02-core-engine]: DownloadAndVerify uses net/http for SHA256SUMS.txt fetch and github.DownloadWithProgress for asset - temp file renamed atomically on verify success
 - [Phase 02-core-engine]: WaitForPIDExit returns nil on timeout (no force-kill) - Flutter app exits voluntarily; process.go has no build tag, platform files implement waitForPIDExitPlatform
+- [Phase 02-core-engine]: Engine Update() takes DestDir in UpdateOptions — allows test TempDirs without global state
+- [Phase 02-core-engine]: main_windows.go uses init() with build tag — main.go stays platform-agnostic, MSIX extraction runs before main
+- [Phase 02-core-engine]: CGO_ENABLED=1 required for Fyne build — MSYS2 MinGW-w64 gcc must be on PATH for Windows builds
 
 ### Pending Todos
 
@@ -94,6 +98,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-23T18:58:13.166Z
-Stopped at: Completed 02-core-engine-02-03-PLAN.md
+Last session: 2026-03-23T19:06:38.324Z
+Stopped at: Completed 02-core-engine-02-05-PLAN.md
 Resume file: None

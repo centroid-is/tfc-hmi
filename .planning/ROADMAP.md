@@ -13,7 +13,7 @@ Five phases that take centroidx-manager from zero to a fully-tested, cross-platf
 Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Foundation** - Certificate infrastructure, MSIX sideload config, CI pipeline, and Go scaffolding on all three platforms (completed 2026-03-23)
-- [ ] **Phase 2: Core Engine** - GitHub client, download/verify, platform installer, PID-wait, first-time install, and unit/mock tests
+- [x] **Phase 2: Core Engine** - GitHub client, download/verify, platform installer, PID-wait, first-time install, and unit/mock tests (completed 2026-03-23)
 - [ ] **Phase 3: Flutter Integration** - Custom UpgraderStore plugin, manager launcher, MSIX embedding, macOS quarantine handling, and end-to-end update flow
 - [ ] **Phase 4: Version Management** - Version picker UI, rollback, Flutter Settings deep-link, and CalVer comparison
 - [ ] **Phase 5: Integration Tests** - E2E tests against real GitHub Releases and platform install verification
@@ -47,14 +47,14 @@ Plans:
   3. Network failures, checksum mismatches, and permission errors each produce a clear error message in the Fyne UI rather than a silent crash or hang
   4. On Windows, the manager extracts itself to `%APPDATA%\centroidx\manager\` and the first-time install handles certificate trust before package installation
   5. Unit tests (version comparison, GitHub API client, download+verify) and mock-HTTP integration tests all pass in CI
-**Plans:** 4/5 plans executed
+**Plans:** 5/5 plans complete
 
 Plans:
 - [x] 02-01-PLAN.md — Interfaces, version parser (CalVer), and SHA256 checksum verification (TDD)
 - [x] 02-02-PLAN.md — GitHub Releases API client with httptest mock tests
 - [x] 02-03-PLAN.md — Download+verify pipeline and cross-platform PID wait
 - [x] 02-04-PLAN.md — Platform installers (Windows/Linux/macOS), cert trust, MSIX extraction
-- [ ] 02-05-PLAN.md — Update engine orchestration, Fyne UI, and CLI entrypoint
+- [x] 02-05-PLAN.md — Update engine orchestration, Fyne UI, and CLI entrypoint
 
 ### Phase 3: Flutter Integration
 **Goal**: The Flutter app detects a new GitHub Release on startup, prompts the user, and hands off to the bundled manager — which completes the install and relaunches the app — on all three platforms, including macOS Sequoia Gatekeeper handling
@@ -96,7 +96,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Foundation | 3/3 | Complete   | 2026-03-23 |
-| 2. Core Engine | 4/5 | In Progress|  |
+| 2. Core Engine | 5/5 | Complete   | 2026-03-23 |
 | 3. Flutter Integration | 0/TBD | Not started | - |
 | 4. Version Management | 0/TBD | Not started | - |
 | 5. Integration Tests | 0/TBD | Not started | - |
