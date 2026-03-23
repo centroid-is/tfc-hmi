@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Ready to execute
-stopped_at: Completed 02-core-engine-02-04-PLAN.md
-last_updated: "2026-03-23T18:52:59.775Z"
+stopped_at: Completed 02-core-engine-02-03-PLAN.md
+last_updated: "2026-03-23T18:58:13.169Z"
 progress:
   total_phases: 5
   completed_phases: 1
   total_plans: 8
-  completed_plans: 6
+  completed_plans: 7
 ---
 
 # Project State
@@ -24,7 +24,7 @@ See: .planning/PROJECT.md (updated 2026-03-23)
 ## Current Position
 
 Phase: 02 (Core Engine) — EXECUTING
-Plan: 4 of 5
+Plan: 5 of 5
 
 ## Performance Metrics
 
@@ -52,6 +52,7 @@ Plan: 4 of 5
 | Phase 02-core-engine P01 | 3 | 2 tasks | 9 files |
 | Phase 02-core-engine P02 | 2 | 2 tasks | 6 files |
 | Phase 02-core-engine P04 | 5 | 2 tasks | 7 files |
+| Phase 02-core-engine P03 | 145 | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -78,6 +79,8 @@ Recent decisions affecting current work:
 - [Phase 02-core-engine]: Helper functions in installer.go (no build tag) instead of per-platform files — enables one test file to cover all platform command construction via mockRunner
 - [Phase 02-core-engine]: installLinux uses exec.LookPath for pkexec/sudo detection at runtime — avoids hardcoding elevation path
 - [Phase 02-core-engine]: extractManagerFrom takes src+appdataRoot params for testability; pathIsFromMSIX extracted from IsRunningFromMSIX for table-driven testing
+- [Phase 02-core-engine]: DownloadAndVerify uses net/http for SHA256SUMS.txt fetch and github.DownloadWithProgress for asset - temp file renamed atomically on verify success
+- [Phase 02-core-engine]: WaitForPIDExit returns nil on timeout (no force-kill) - Flutter app exits voluntarily; process.go has no build tag, platform files implement waitForPIDExitPlatform
 
 ### Pending Todos
 
@@ -91,6 +94,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-23T18:52:59.772Z
-Stopped at: Completed 02-core-engine-02-04-PLAN.md
+Last session: 2026-03-23T18:58:13.166Z
+Stopped at: Completed 02-core-engine-02-03-PLAN.md
 Resume file: None

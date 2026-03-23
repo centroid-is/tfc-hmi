@@ -47,12 +47,12 @@ Plans:
   3. Network failures, checksum mismatches, and permission errors each produce a clear error message in the Fyne UI rather than a silent crash or hang
   4. On Windows, the manager extracts itself to `%APPDATA%\centroidx\manager\` and the first-time install handles certificate trust before package installation
   5. Unit tests (version comparison, GitHub API client, download+verify) and mock-HTTP integration tests all pass in CI
-**Plans:** 3/5 plans executed
+**Plans:** 4/5 plans executed
 
 Plans:
 - [x] 02-01-PLAN.md — Interfaces, version parser (CalVer), and SHA256 checksum verification (TDD)
 - [x] 02-02-PLAN.md — GitHub Releases API client with httptest mock tests
-- [ ] 02-03-PLAN.md — Download+verify pipeline and cross-platform PID wait
+- [x] 02-03-PLAN.md — Download+verify pipeline and cross-platform PID wait
 - [x] 02-04-PLAN.md — Platform installers (Windows/Linux/macOS), cert trust, MSIX extraction
 - [ ] 02-05-PLAN.md — Update engine orchestration, Fyne UI, and CLI entrypoint
 
@@ -96,7 +96,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Foundation | 3/3 | Complete   | 2026-03-23 |
-| 2. Core Engine | 3/5 | In Progress|  |
+| 2. Core Engine | 4/5 | In Progress|  |
 | 3. Flutter Integration | 0/TBD | Not started | - |
 | 4. Version Management | 0/TBD | Not started | - |
 | 5. Integration Tests | 0/TBD | Not started | - |
