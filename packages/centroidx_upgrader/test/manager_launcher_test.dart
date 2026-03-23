@@ -315,5 +315,149 @@ void main() {
         await tempDir.delete(recursive: true);
       }
     });
+
+    // -----------------------------------------------------------------------
+    // launchForPicker behavior tests
+    // -----------------------------------------------------------------------
+
+    // Test 10: launchForPicker passes --picker flag (and nothing else)
+    test('launchForPicker passes --picker flag', () async {
+      late List<String> capturedArgs;
+
+      final tempDir = await Directory.systemTemp.createTemp('mltest10_');
+      final managerPath = '${tempDir.path}/centroidx-manager';
+
+      try {
+        final launcher = ManagerLauncher(
+          processStarter: (exe, args, {mode = ProcessStartMode.normal}) async {
+            capturedArgs = List.unmodifiable(args);
+            return _FakeProcess(42);
+          },
+          pathResolver: () async => managerPath,
+          assetLoader: (_) async => _fakeAssetBytes,
+          commandRunner: (exe, args) async => ProcessResult(0, 0, '', ''),
+          platformIsWindows: false,
+          platformIsMacOS: false,
+        );
+
+        await launcher.launchForPicker();
+
+        expect(capturedArgs, equals(['--picker']),
+            reason: 'launchForPicker should pass only --picker, not --update/--version/--wait-pid');
+      } finally {
+        await tempDir.delete(recursive: true);
+      }
+    });
+
+    // Test 11: launchForPicker uses ProcessStartMode.normal
+    test('launchForPicker uses ProcessStartMode.normal', () async {
+      late ProcessStartMode capturedMode;
+
+      final tempDir = await Directory.systemTemp.createTemp('mltest11_');
+      final managerPath = '${tempDir.path}/centroidx-manager';
+
+      try {
+        final launcher = ManagerLauncher(
+          processStarter: (exe, args, {mode = ProcessStartMode.normal}) async {
+            capturedMode = mode;
+            return _FakeProcess(42);
+          },
+          pathResolver: () async => managerPath,
+          assetLoader: (_) async => _fakeAssetBytes,
+          commandRunner: (exe, args) async => ProcessResult(0, 0, '', ''),
+          platformIsWindows: false,
+          platformIsMacOS: false,
+        );
+
+        await launcher.launchForPicker();
+
+        expect(capturedMode, equals(ProcessStartMode.normal),
+            reason: 'Picker window stays open alongside Flutter — must not be detached');
+      } finally {
+        await tempDir.delete(recursive: true);
+      }
+    });
+
+    // Test 12: launchForPicker returns the PID of the spawned process
+    test('launchForPicker returns spawned process PID', () async {
+      final tempDir = await Directory.systemTemp.createTemp('mltest12_');
+      final managerPath = '${tempDir.path}/centroidx-manager';
+
+      try {
+        final launcher = ManagerLauncher(
+          processStarter: (exe, args, {mode = ProcessStartMode.normal}) async =>
+              _FakeProcess(5678),
+          pathResolver: () async => managerPath,
+          assetLoader: (_) async => _fakeAssetBytes,
+          commandRunner: (exe, args) async => ProcessResult(0, 0, '', ''),
+          platformIsWindows: false,
+          platformIsMacOS: false,
+        );
+
+        final resultPid = await launcher.launchForPicker();
+
+        expect(resultPid, equals(5678));
+      } finally {
+        await tempDir.delete(recursive: true);
+      }
+    });
+
+    // Test 13: launchForPicker calls ensureExtracted (invokes assetLoader when file missing)
+    test('launchForPicker calls ensureExtracted', () async {
+      var assetLoaderCalled = false;
+
+      final tempDir = await Directory.systemTemp.createTemp('mltest13_');
+      // Use a path that doesn't exist so ensureExtracted actually writes
+      final managerPath = '${tempDir.path}/nested/centroidx-manager';
+
+      try {
+        final launcher = ManagerLauncher(
+          processStarter: (exe, args, {mode = ProcessStartMode.normal}) async =>
+              _FakeProcess(42),
+          pathResolver: () async => managerPath,
+          assetLoader: (key) async {
+            assetLoaderCalled = true;
+            return _fakeAssetBytes;
+          },
+          commandRunner: (exe, args) async => ProcessResult(0, 0, '', ''),
+          platformIsWindows: false,
+          platformIsMacOS: false,
+        );
+
+        await launcher.launchForPicker();
+
+        expect(assetLoaderCalled, isTrue,
+            reason: 'ensureExtracted should be called, which invokes assetLoader when file is missing');
+      } finally {
+        await tempDir.delete(recursive: true);
+      }
+    });
+
+    // Test 14: launchForPicker calls stripQuarantine on macOS
+    test('launchForPicker strips quarantine on macOS', () async {
+      final recorder = _RecordingCommandRunner();
+
+      final tempDir = await Directory.systemTemp.createTemp('mltest14_');
+      final managerPath = '${tempDir.path}/centroidx-manager';
+
+      try {
+        final launcher = ManagerLauncher(
+          processStarter: (exe, args, {mode = ProcessStartMode.normal}) async =>
+              _FakeProcess(42),
+          pathResolver: () async => managerPath,
+          assetLoader: (_) async => _fakeAssetBytes,
+          commandRunner: recorder.call,
+          platformIsWindows: false,
+          platformIsMacOS: true,
+        );
+
+        await launcher.launchForPicker();
+
+        expect(recorder.executables, contains('xattr'),
+            reason: 'stripQuarantine should call xattr on macOS');
+      } finally {
+        await tempDir.delete(recursive: true);
+      }
+    });
   });
 }

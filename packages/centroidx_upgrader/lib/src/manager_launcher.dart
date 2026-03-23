@@ -156,6 +156,27 @@ class ManagerLauncher {
     return process.pid;
   }
 
+  /// Launches the manager in version-picker mode.
+  ///
+  /// Unlike [launchForUpdate], this uses [ProcessStartMode.normal] because
+  /// the Flutter app stays open while the user interacts with the picker
+  /// window. The picker is a visible, interactive Go Fyne window.
+  ///
+  /// Returns the PID of the spawned manager process.
+  Future<int> launchForPicker() async {
+    await ensureExtracted();
+    final path = await resolveManagerPath();
+    await stripQuarantine(path);
+
+    final process = await _startProcess(
+      path,
+      ['--picker'],
+      mode: ProcessStartMode.normal,
+    );
+
+    return process.pid;
+  }
+
   // ---------------------------------------------------------------------------
   // Private helpers
   // ---------------------------------------------------------------------------
