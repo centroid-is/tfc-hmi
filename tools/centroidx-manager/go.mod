@@ -2,7 +2,10 @@ module github.com/centroid-is/centroidx-manager
 
 go 1.26.1
 
-require fyne.io/fyne/v2 v2.7.3
+require (
+	fyne.io/fyne/v2 v2.7.3
+	github.com/Masterminds/semver/v3 v3.4.0
+)
 
 require (
 	fyne.io/systray v1.12.0 // indirect
