@@ -4,7 +4,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:open62541/open62541.dart' show DynamicValue;
+import 'package:tfc_dart/core/dynamic_value.dart' show DynamicValue;
 import 'package:tfc_dart/core/state_man.dart';
 
 import 'package:tfc/page_creator/assets/inference_log.dart';

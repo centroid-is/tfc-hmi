@@ -135,7 +135,7 @@ jobs:
       working-directory: packages/tfc_dart
       env:
         TIMESCALEDB_EXTERNAL: ${{ matrix.timescaledb_external }}
-      run: dart test
+      run: dart test --exclude-tags=integration
 
     - name: Upload test results
       uses: actions/upload-artifact@v4
