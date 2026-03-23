@@ -139,6 +139,11 @@ None - no external service configuration required.
 - Manager binary assets (`assets/manager/centroidx-manager_*`) need to be added to `centroid-hmi/pubspec.yaml` assets section for bundling
 - No blockers for Plan 02 (main.dart wiring)
 
+## Self-Check: PASSED
+
+All 7 files exist at expected paths. All 5 task commits verified in git log.
+18/18 tests pass in `flutter test`.
+
 ---
 *Phase: 03-flutter-integration*
 *Completed: 2026-03-23*
