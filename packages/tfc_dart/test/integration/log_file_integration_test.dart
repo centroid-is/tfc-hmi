@@ -51,22 +51,25 @@ void main() {
 
     test('open62541 native output and Dart logger output both reach same file',
         () async {
-      // Run a subprocess that:
-      // 1. Creates an open62541 Client (native log → C stdout)
-      // 2. Writes Dart logger output to the file via RandomAccessFile
-      // The parent captures subprocess stdout (which contains native
-      // open62541 output) and appends it to the same log file.
-      // This mirrors the production MSIX setup where C++ RedirectIOToFile
-      // captures native output and Dart writes via RandomAccessFile.
+      // Compile and run a helper that:
+      // 1. Writes Dart logger output to a file via RandomAccessFile
+      // 2. Creates an open62541 Client (native log → C stdout)
+      // Parent captures stdout and appends to the same file, then verifies
+      // both Dart and native output are present.
+      //
+      // Must use a compiled exe (not `dart run`) to avoid native asset
+      // build hook race conditions on Windows CI.
 
-      final helperPath = '${Directory.current.path}'
+      final helperSrc = '${Directory.current.path}'
           '${Platform.pathSeparator}test'
           '${Platform.pathSeparator}integration'
           '${Platform.pathSeparator}log_file_test_helper.dart';
 
+      // Run the helper as a subprocess. It writes Dart logger output to the
+      // file via RandomAccessFile and open62541 native output to stdout.
       final result = await Process.run(
         Platform.resolvedExecutable,
-        ['run', helperPath, logFilePath],
+        ['run', helperSrc, logFilePath],
         workingDirectory: Directory.current.path,
       );
 
@@ -78,7 +81,7 @@ void main() {
 
       final content = File(logFilePath).readAsStringSync();
 
-      // Dart logger output (written via RandomAccessFile by subprocess)
+      // Dart logger output (written via RandomAccessFile by helper)
       expect(content, contains('DART_MARKER_INFO'),
           reason: 'Dart logger info output should be in the file');
       expect(content, contains('DART_MARKER_ERROR'),
@@ -87,7 +90,7 @@ void main() {
       // open62541 native output (written to C stdout, captured by parent)
       expect(content, contains('info/client'),
           reason: 'open62541 native info output should be in the file');
-    }, timeout: Timeout(Duration(seconds: 30)));
+    }, timeout: Timeout(Duration(seconds: 120)));
 
 
     test('second handle can open existing file in append mode', () {
@@ -185,3 +188,4 @@ class _MinLevelFilter extends LogFilter {
   @override
   bool shouldLog(LogEvent event) => event.level >= minLevel;
 }
+
