@@ -5,7 +5,9 @@ import 'package:tfc/providers/mcp_bridge.dart';
 import 'package:tfc/providers/preferences.dart';
 import 'package:tfc/providers/database.dart';
 import 'package:tfc/widgets/preferences.dart';
-import 'package:tfc_mcp_server/tfc_mcp_server.dart' show McpToolToggles;
+import 'package:tfc_mcp_server/tfc_mcp_server.dart'
+    if (dart.library.js_interop) 'package:tfc_mcp_server/tfc_mcp_server_web.dart'
+    show McpToolToggles;
 
 import '../helpers/test_helpers.dart';
 

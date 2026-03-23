@@ -2,9 +2,9 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:tfc_dart/core/alarm.dart';
-import 'package:tfc_dart/core/boolean_expression.dart' show Expression;
+import 'package:tfc_dart/tfc_dart.dart';
 import 'package:tfc_mcp_server/tfc_mcp_server.dart'
+    if (dart.library.js_interop) 'package:tfc_mcp_server/tfc_mcp_server_web.dart'
     show DrawingIndex, DrawingSearchResult, PlcCodeBlock, PlcCodeIndex, PlcContext, TechDocIndex, TechDocSection;
 
 import '../page_creator/assets/common.dart';
@@ -713,7 +713,7 @@ Future<String> buildDebugAssetMessageWithTechDoc(
 
   final plcBlocks = await plcBlocksFuture;
   final plcSection = hasPlcContext
-      ? buildPlcContextSection(plcContext!)
+      ? buildPlcContextSection(plcContext)
       : _buildPlcCodeSection(plcBlocks);
 
   final drawingResults = await drawingResultsFuture;
@@ -746,7 +746,7 @@ Future<String> buildDebugAssetMessageWithTechDoc(
     techBuf.writeln('');
     for (final section in sections) {
       final indent = '  ' * (section.level - 1);
-      techBuf.writeln('${indent}## ${section.title} (pp. ${section.pageStart}-${section.pageEnd})');
+      techBuf.writeln('$indent## ${section.title} (pp. ${section.pageStart}-${section.pageEnd})');
       if (section.content.isNotEmpty) {
         // Indent content to match section level for readability.
         final contentLines = section.content.split('\n');

@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show defaultTargetPlatform, TargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:dbus/dbus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -6,12 +7,12 @@ import 'package:flutter_svg/flutter_svg.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'dart:async';
-import 'dart:io' show Platform;
+import 'package:tfc/core/platform_io.dart' show Platform;
 import 'package:path/path.dart' as path;
 import '../dbus/remote.dart';
 import '../theme.dart';
 import '../providers/theme.dart';
-import 'package:tfc_dart/core/secure_storage/secure_storage.dart';
+import 'package:tfc_dart/tfc_dart.dart';
 
 final logger = Logger();
 
@@ -60,7 +61,6 @@ class LoginCredentials {
 
   Future<DBusClient> connect(BuildContext context) async {
     logger.d('Connecting to: $this');
-    BuildContext? dialogContext;
     try {
       final result = await (type == ConnectionType.system
               ? Future.value(DBusClient.system())
@@ -176,9 +176,10 @@ class _LoginFormState extends ConsumerState<LoginForm> {
     logger.d('Picking private key');
     String? sshDir;
 
-    if (!Platform.isAndroid && !Platform.isIOS) {
+    if (defaultTargetPlatform != TargetPlatform.android &&
+        defaultTargetPlatform != TargetPlatform.iOS) {
       // Desktop platforms only
-      if (Platform.isWindows) {
+      if (defaultTargetPlatform == TargetPlatform.windows) {
         final userProfile = Platform.environment['USERPROFILE'];
         sshDir = userProfile != null ? path.join(userProfile, '.ssh') : null;
       } else {

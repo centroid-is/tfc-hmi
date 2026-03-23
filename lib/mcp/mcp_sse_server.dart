@@ -1,7 +1,10 @@
-import 'dart:io' as io;
+import 'package:tfc/core/platform_io.dart' as io;
 
-import 'package:mcp_dart/mcp_dart.dart';
+import 'package:flutter/foundation.dart' show debugPrint;
+import 'package:mcp_dart/mcp_dart.dart'
+    if (dart.library.js_interop) '../core/mcp_dart_stub.dart';
 import 'package:tfc_mcp_server/tfc_mcp_server.dart'
+    if (dart.library.js_interop) 'package:tfc_mcp_server/tfc_mcp_server_web.dart'
     show
         TfcMcpServer,
         McpDatabase,
@@ -70,7 +73,7 @@ class McpSseServer {
     _streamableServer = server;
     _port = port;
 
-    io.stderr.writeln('McpSseServer: listening on http://localhost:$_port/mcp');
+    debugPrint('McpSseServer: listening on http://localhost:$_port/mcp');
   }
 
   /// Stop the server and clean up resources.
@@ -81,7 +84,7 @@ class McpSseServer {
 
     if (server != null) {
       await server.stop();
-      io.stderr.writeln('McpSseServer: stopped');
+      debugPrint('McpSseServer: stopped');
     }
   }
 }

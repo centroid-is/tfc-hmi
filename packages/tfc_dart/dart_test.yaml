@@ -1,3 +1,7 @@
 # Run test files sequentially so integration tests that share
 # Docker Compose services don't race each other.
 concurrency: 1
+
+tags:
+  integration:
+    # Docker Compose integration tests — skip with --exclude-tags=integration

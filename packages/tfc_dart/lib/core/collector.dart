@@ -3,7 +3,7 @@ import 'dart:collection';
 import 'package:rxdart/rxdart.dart';
 import 'package:logger/logger.dart';
 import 'package:json_annotation/json_annotation.dart';
-import 'package:open62541/open62541.dart' show DynamicValue;
+import 'dynamic_value.dart';
 
 import '../converter/dynamic_value_converter.dart';
 import '../converter/duration_converter.dart';

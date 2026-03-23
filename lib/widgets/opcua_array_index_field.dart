@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:open62541/open62541.dart' show NodeId, DynamicValue;
-import 'package:tfc_dart/core/state_man.dart';
+import 'package:tfc_dart/tfc_dart.dart';
 import '../providers/state_man.dart';
 
 /// A field that lets the user select an index within an OPC UA array node.
@@ -100,7 +99,7 @@ class OpcUaArrayIndexFieldState extends ConsumerState<OpcUaArrayIndexField> {
           ? NodeId.fromNumeric(ns, int.parse(id))
           : NodeId.fromString(ns, id);
 
-      final DynamicValue value =
+      final value =
           await wrapper.client.read(nodeId).timeout(const Duration(seconds: 5));
 
       if (!mounted) return;

@@ -12,7 +12,7 @@ dependencies:
   open62541:
     git:
       url: https://github.com/centroid-is/open62541_dart.git
-      ref: main
+      ref: make-dynamic-value-pure-dart
 
 dev_dependencies:
   test: ^1.25.0

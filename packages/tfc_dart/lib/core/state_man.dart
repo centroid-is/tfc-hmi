@@ -1,27 +1,43 @@
 import 'dart:async';
-import 'dart:io';
+import 'dart:io'
+    if (dart.library.js_interop) 'web_stubs/io_stub.dart';
 import 'dart:typed_data';
 import 'dart:convert';
 
 import 'package:meta/meta.dart'; // Add this import at the top
 import 'package:logger/logger.dart';
 import 'package:json_annotation/json_annotation.dart';
-import 'package:open62541/open62541.dart';
+import 'dynamic_value.dart';
 import 'package:rxdart/rxdart.dart';
 import 'package:collection/collection.dart';
 
-import 'package:jbtm/src/m2400.dart' show M2400RecordType;
-import 'package:jbtm/src/m2400_fields.dart' show M2400Field;
-import 'package:jbtm/src/m2400_client_wrapper.dart' show M2400ClientWrapper;
-import 'package:tfc_dart/core/log_config.dart' show opcuaLogLevelFromEnv;
-import 'package:jbtm/src/msocket.dart' as jbtm show ConnectionStatus;
+import 'package:jbtm/src/m2400.dart'
+    if (dart.library.js_interop) 'web_stubs/jbtm_m2400_stub.dart'
+    show M2400RecordType;
+import 'package:jbtm/src/m2400_fields.dart'
+    if (dart.library.js_interop) 'web_stubs/jbtm_m2400_fields_stub.dart'
+    show M2400Field;
 
-import 'package:modbus_client/modbus_client.dart' show ModbusElementType, ModbusEndianness;
+import 'package:modbus_client/modbus_client.dart'
+    if (dart.library.js_interop) 'web_stubs/modbus_client_stub.dart'
+    show ModbusElementType, ModbusEndianness;
 
-import 'collector.dart';
-import 'modbus_client_wrapper.dart' show ModbusDataType;
-import 'modbus_device_client.dart' show ModbusDeviceClientAdapter;
-import 'preferences.dart';
+import 'collector.dart'
+    if (dart.library.js_interop) 'web_stubs/collector_stub.dart';
+import 'modbus_client_wrapper.dart'
+    if (dart.library.js_interop) 'web_stubs/modbus_client_wrapper_stub.dart'
+    show ModbusDataType;
+import 'm2400_device_client.dart'
+    if (dart.library.js_interop) 'web_stubs/m2400_device_client_stub.dart'
+    show M2400DeviceClientAdapter;
+import 'modbus_device_client.dart'
+    if (dart.library.js_interop) 'web_stubs/modbus_device_client_stub.dart'
+    show ModbusDeviceClientAdapter;
+import 'opcua_device_client.dart'
+    if (dart.library.js_interop) 'web_stubs/opcua_device_client_stub.dart'
+    show ClientWrapper, OpcUaDeviceClientAdapter;
+import 'preferences.dart'
+    if (dart.library.js_interop) 'web_stubs/preferences_stub.dart';
 
 part 'state_man.g.dart';
 
@@ -324,6 +340,88 @@ class ModbusNodeConfig {
       'ModbusNodeConfig(alias: $serverAlias, registerType: $registerType, address: $address, dataType: $dataType, pollGroup: $pollGroup)';
 }
 
+// =============================================================================
+// MQTT configuration classes
+// =============================================================================
+
+/// Payload interpretation strategy for MQTT messages.
+enum MqttPayloadType { json, raw, string }
+
+/// Top-level configuration for a single MQTT broker connection.
+///
+/// Parallels [OpcUAConfig], [M2400Config], and [ModbusConfig] in the config
+/// hierarchy.
+@JsonSerializable(explicitToJson: true)
+class MqttConfig {
+  String host;
+  int port;
+  @JsonKey(name: 'server_alias')
+  String? serverAlias;
+  @JsonKey(name: 'use_tls')
+  bool useTls;
+  @JsonKey(name: 'use_web_socket')
+  bool useWebSocket;
+  @JsonKey(name: 'ws_path')
+  String wsPath;
+  String? username;
+  String? password;
+  @JsonKey(name: 'client_id')
+  String? clientId;
+  @JsonKey(name: 'keep_alive_period')
+  int keepAlivePeriod;
+
+  MqttConfig({
+    this.host = '',
+    this.port = 1883,
+    this.serverAlias,
+    this.useTls = false,
+    this.useWebSocket = false,
+    this.wsPath = '/mqtt',
+    this.username,
+    this.password,
+    this.clientId,
+    this.keepAlivePeriod = 60,
+  });
+
+  factory MqttConfig.fromJson(Map<String, dynamic> json) =>
+      _$MqttConfigFromJson(json);
+  Map<String, dynamic> toJson() => _$MqttConfigToJson(this);
+
+  @override
+  String toString() =>
+      'MqttConfig(host: $host, port: $port, alias: $serverAlias, useTls: $useTls, useWebSocket: $useWebSocket)';
+}
+
+/// Per-key configuration that describes which MQTT topic a key maps to.
+///
+/// Parallels [OpcUANodeConfig], [M2400NodeConfig], and [ModbusNodeConfig] in
+/// the keymappings.
+@JsonSerializable(explicitToJson: true)
+class MqttNodeConfig {
+  String topic;
+  @JsonKey(defaultValue: 0)
+  int qos;
+  @JsonKey(name: 'server_alias')
+  String? serverAlias;
+  @JsonKey(name: 'payload_type', defaultValue: MqttPayloadType.json)
+  MqttPayloadType payloadType;
+
+  MqttNodeConfig({
+    required this.topic,
+    this.qos = 0,
+    this.serverAlias,
+    this.payloadType = MqttPayloadType.json,
+  });
+
+  factory MqttNodeConfig.fromJson(Map<String, dynamic> json) =>
+      _$MqttNodeConfigFromJson(json);
+  Map<String, dynamic> toJson() => _$MqttNodeConfigToJson(this);
+
+  @override
+  String toString() =>
+      'MqttNodeConfig(topic: $topic, qos: $qos, alias: $serverAlias, payloadType: $payloadType)';
+}
+
 @JsonSerializable(explicitToJson: true)
 class StateManConfig {
   List<OpcUAConfig> opcua;
@@ -331,14 +429,20 @@ class StateManConfig {
   List<M2400Config> jbtm;
   @JsonKey(defaultValue: [])
   List<ModbusConfig> modbus;
+  @JsonKey(defaultValue: [])
+  List<MqttConfig> mqtt;
 
-  StateManConfig({required this.opcua, this.jbtm = const [], this.modbus = const []});
+  StateManConfig({required this.opcua, this.jbtm = const [], this.modbus = const [], this.mqtt = const []});
 
   StateManConfig copy() => StateManConfig.fromJson(toJson());
 
   @override
   String toString() {
-    return 'StateManConfig(opcua: ${opcua.toString()}, jbtm: ${jbtm.toString()}, modbus: ${modbus.toString()})';
+    return 'StateManConfig(opcua: ${opcua.toString()}, jbtm: ${jbtm.toString()}, modbus: ${modbus.toString()}, mqtt: ${mqtt.toString()})';
+  }
+
+  static StateManConfig fromString(String jsonString) {
+    return StateManConfig.fromJson(jsonDecode(jsonString));
   }
 
   static Future<StateManConfig> fromFile(String path) async {
@@ -415,6 +519,8 @@ class KeyMappingEntry {
   M2400NodeConfig? m2400Node;
   @JsonKey(name: 'modbus_node')
   ModbusNodeConfig? modbusNode;
+  @JsonKey(name: 'mqtt_node')
+  MqttNodeConfig? mqttNode;
   bool? io; // if true, the key is an IO unit
   CollectEntry? collect;
 
@@ -429,14 +535,15 @@ class KeyMappingEntry {
   int? bitShift;
 
   String? get server =>
-      opcuaNode?.serverAlias ?? m2400Node?.serverAlias ?? modbusNode?.serverAlias;
+      opcuaNode?.serverAlias ?? m2400Node?.serverAlias ?? modbusNode?.serverAlias ?? mqttNode?.serverAlias;
 
-  KeyMappingEntry({this.opcuaNode, this.m2400Node, this.modbusNode, this.collect, this.bitMask, this.bitShift});
+  KeyMappingEntry({this.opcuaNode, this.m2400Node, this.modbusNode, this.mqttNode, this.collect, this.bitMask, this.bitShift});
 
   KeyMappingEntry copyWith({
     OpcUANodeConfig? opcuaNode,
     M2400NodeConfig? m2400Node,
     ModbusNodeConfig? modbusNode,
+    MqttNodeConfig? mqttNode,
     CollectEntry? collect,
     int? bitMask,
     int? bitShift,
@@ -446,6 +553,7 @@ class KeyMappingEntry {
       opcuaNode: opcuaNode ?? this.opcuaNode,
       m2400Node: m2400Node ?? this.m2400Node,
       modbusNode: modbusNode ?? this.modbusNode,
+      mqttNode: mqttNode ?? this.mqttNode,
       collect: collect ?? this.collect,
       bitMask: clearBitMask ? null : (bitMask ?? this.bitMask),
       bitShift: clearBitMask ? null : (bitShift ?? this.bitShift),
@@ -458,7 +566,7 @@ class KeyMappingEntry {
 
   @override
   String toString() {
-    return 'KeyMappingEntry(opcuaNode: ${opcuaNode?.toString()}, m2400Node: ${m2400Node?.toString()}, modbusNode: ${modbusNode?.toString()}, collect: $collect, io: $io)';
+    return 'KeyMappingEntry(opcuaNode: ${opcuaNode?.toString()}, m2400Node: ${m2400Node?.toString()}, modbusNode: ${modbusNode?.toString()}, mqttNode: ${mqttNode?.toString()}, collect: $collect, io: $io)';
   }
 }
 
@@ -476,7 +584,8 @@ class KeyMappings {
     final entry = nodes[key];
     return entry?.opcuaNode?.serverAlias ??
         entry?.m2400Node?.serverAlias ??
-        entry?.modbusNode?.serverAlias;
+        entry?.modbusNode?.serverAlias ??
+        entry?.mqttNode?.serverAlias;
   }
 
   String? lookupKey(NodeId nodeId) {
@@ -516,6 +625,26 @@ class KeyMappings {
     return KeyMappings.fromJson(jsonDecode(keyMappingsJson));
   }
 
+  static KeyMappings fromString(String jsonString) {
+    return KeyMappings.fromJson(jsonDecode(jsonString));
+  }
+
+  static Future<KeyMappings> fromFile(String path) async {
+    final file = File(path);
+    if (!await file.exists()) {
+      throw Exception('Key mappings file not found: $path');
+    }
+    final contents = await file.readAsString();
+    final Map<String, dynamic> json;
+    try {
+      json = jsonDecode(contents) as Map<String, dynamic>;
+    } on FormatException catch (e) {
+      throw Exception(
+          'Invalid JSON in key mappings file: $path - ${e.message}');
+    }
+    return KeyMappings.fromJson(json);
+  }
+
   factory KeyMappings.fromJson(Map<String, dynamic> json) =>
       _$KeyMappingsFromJson(json);
   Map<String, dynamic> toJson() => _$KeyMappingsToJson(this);
@@ -552,159 +681,7 @@ class SingleWorker {
 
 enum ConnectionStatus { connected, connecting, disconnected }
 
-class ClientWrapper {
-  final ClientApi client;
-  final OpcUAConfig config;
-  int? subscriptionId;
-  final SingleWorker worker = SingleWorker();
-  StreamSubscription? _heartbeatSub;
-  int _heartbeatGeneration = 0;
-  DateTime? _lastHeartbeatTick;
-  bool _inactive = false;
-  bool sessionLost = false;
-  bool resendOnRecovery;
-  final Set<AutoDisposingStream> streams = {};
-  final Logger _logger = Logger();
-
-  /// Check if the subscription is dead and needs to be recreated.
-  /// Only SubscriptionDeleted (server killed it) and SecureChannelClosed
-  /// (connection lost) are fatal — Inactivity is transient and recovers
-  /// on its own when the connection stabilises.
-  /// Handles both direct type checks AND string representations — the
-  /// isolate handler converts errors to strings via error.toString().
-  static bool isSubscriptionDead(Object error) {
-    if (error is SubscriptionDeleted || error is SecureChannelClosed) {
-      return true;
-    }
-    if (error is String) {
-      return error.contains('SubscriptionDeleted') ||
-          error.contains('SecureChannelClosed');
-    }
-    return false;
-  }
-
-  ConnectionStatus _connectionStatus = ConnectionStatus.disconnected;
-  final StreamController<ConnectionStatus> _connectionController =
-      StreamController<ConnectionStatus>.broadcast();
-
-  ClientWrapper(this.client, this.config, {this.resendOnRecovery = true});
-
-  /// Current connection status (synchronous, always up-to-date).
-  ConnectionStatus get connectionStatus => _connectionStatus;
-
-  /// Stream of connection status changes. Subscribe anytime — read
-  /// [connectionStatus] for the current value.
-  Stream<ConnectionStatus> get connectionStream => _connectionController.stream;
-
-  void updateConnectionStatus(ClientState state) {
-    final next = _mapState(state);
-    if (next == _connectionStatus) return;
-    _connectionStatus = next;
-    _connectionController.add(next);
-  }
-
-  static ConnectionStatus _mapState(ClientState state) {
-    if (state.sessionState == SessionState.UA_SESSIONSTATE_ACTIVATED) {
-      return ConnectionStatus.connected;
-    }
-    if (state.channelState == SecureChannelState.UA_SECURECHANNELSTATE_OPEN) {
-      return ConnectionStatus.connecting;
-    }
-    return ConnectionStatus.disconnected;
-  }
-
-  void startHeartbeat(int subId) {
-    _heartbeatSub?.cancel();
-    final serverTimeNode = NodeId.fromNumeric(0, 2258);
-    // Generation counter: isolate stream cancel() is async and stale
-    // callbacks can fire after stopHeartbeat(). Each callback checks
-    // its captured generation against the current one.
-    final gen = ++_heartbeatGeneration;
-    _logger.i('[${config.endpoint}] Starting heartbeat on sub=$subId');
-    _heartbeatSub = client.monitoredItems(
-      {
-        serverTimeNode: [AttributeId.UA_ATTRIBUTEID_VALUE]
-      },
-      subId,
-    ).listen(
-      (_) {
-        if (gen != _heartbeatGeneration) return;
-        _lastHeartbeatTick = DateTime.now();
-        if (_inactive) {
-          _logger.i('[${config.endpoint}] Heartbeat recovered (sub=$subId)');
-          _handleRecovery();
-        }
-        if (_connectionStatus == ConnectionStatus.disconnected) {
-          updateConnectionStatus(ClientState(
-            channelState: SecureChannelState.UA_SECURECHANNELSTATE_OPEN,
-            sessionState: SessionState.UA_SESSIONSTATE_ACTIVATED,
-            recoveryStatus: 0,
-          ));
-        }
-      },
-      onError: (error) {
-        if (gen != _heartbeatGeneration) return;
-        final now = DateTime.now();
-        final sinceTick = _lastHeartbeatTick != null
-            ? now.difference(_lastHeartbeatTick!).inMilliseconds
-            : -1;
-        _logger.w('[${config.endpoint}] Heartbeat error (sub=$subId, '
-            '${now.toUtc().toIso8601String()}, ${sinceTick}ms since last tick): $error');
-        if (error is Inactivity || error.toString().contains('Inactivity')) {
-          _inactive = true;
-          return;
-        }
-        if (isSubscriptionDead(error)) {
-          _logger.e('[${config.endpoint}] Heartbeat lost (sub=$subId): $error');
-          sessionLost = true;
-          stopHeartbeat();
-        }
-      },
-    );
-  }
-
-  void stopHeartbeat() {
-    _heartbeatSub?.cancel();
-    _heartbeatSub = null;
-  }
-
-  void _handleRecovery() {
-    _inactive = false;
-    if (resendOnRecovery) {
-      for (final s in streams) {
-        s.resendLastValue();
-      }
-    }
-  }
-
-  /// Mark session as lost — called by stateStream as fallback when
-  /// heartbeat didn't catch it (e.g. session drops before heartbeat started).
-  void markSessionLost() => sessionLost = true;
-
-  /// Simulate inactivity for testing.
-  @visibleForTesting
-  void simulateInactivity() => _inactive = true;
-
-  /// Simulate a fatal heartbeat error (SubscriptionDeleted/SecureChannelClosed).
-  @visibleForTesting
-  void simulateFatalHeartbeatError() {
-    sessionLost = true;
-    stopHeartbeat();
-  }
-
-  /// Simulate heartbeat tick for testing (triggers recovery if inactive).
-  @visibleForTesting
-  void simulateHeartbeatTick() {
-    if (_inactive) {
-      _handleRecovery();
-    }
-  }
-
-  void dispose() {
-    stopHeartbeat();
-    _connectionController.close();
-  }
-}
+// ClientWrapper has been moved to opcua_device_client.dart
 
 /// Protocol-agnostic device client interface.
 ///
@@ -746,77 +723,6 @@ abstract class DeviceClient {
   void dispose();
 }
 
-/// Adapter that wraps [M2400ClientWrapper] from the jbtm package as a
-/// [DeviceClient] for use in [StateMan].
-///
-/// Maps jbtm's [jbtm.ConnectionStatus] to state_man's [ConnectionStatus] and
-/// delegates subscribe/connect/dispose to the underlying wrapper.
-class M2400DeviceClientAdapter implements DeviceClient {
-  /// The underlying M2400ClientWrapper from jbtm.
-  final M2400ClientWrapper wrapper;
-
-  /// The server alias for this device (from M2400Config).
-  final String? serverAlias;
-
-  static const _validKeys = {'BATCH', 'STAT', 'INTRO', 'LUA'};
-
-  M2400DeviceClientAdapter(this.wrapper, {this.serverAlias});
-
-  @override
-  Set<String> get subscribableKeys => _validKeys;
-
-  @override
-  bool canSubscribe(String key) => _validKeys.contains(key.split('.').first);
-
-  @override
-  Stream<DynamicValue> subscribe(String key) => wrapper.subscribe(key);
-
-  @override
-  DynamicValue? read(String key) => wrapper.lastValue(key);
-
-  @override
-  ConnectionStatus get connectionStatus => _mapStatus(wrapper.status);
-
-  @override
-  Stream<ConnectionStatus> get connectionStream =>
-      wrapper.statusStream.map(_mapStatus);
-
-  @override
-  Future<void> write(String key, DynamicValue value) {
-    throw UnsupportedError('M2400 does not support writes');
-  }
-
-  @override
-  void connect() => wrapper.connect();
-
-  @override
-  void dispose() => wrapper.dispose();
-
-  /// Map jbtm's ConnectionStatus to state_man's ConnectionStatus.
-  static ConnectionStatus _mapStatus(jbtm.ConnectionStatus s) {
-    switch (s) {
-      case jbtm.ConnectionStatus.connected:
-        return ConnectionStatus.connected;
-      case jbtm.ConnectionStatus.connecting:
-        return ConnectionStatus.connecting;
-      case jbtm.ConnectionStatus.disconnected:
-        return ConnectionStatus.disconnected;
-    }
-  }
-}
-
-/// Create [DeviceClient] instances for each [M2400Config] in the list.
-///
-/// Each M2400Config produces one [M2400DeviceClientAdapter] wrapping an
-/// [M2400ClientWrapper]. The caller is responsible for calling [connect()]
-/// and [dispose()] on the returned clients.
-List<DeviceClient> createM2400DeviceClients(List<M2400Config> configs) {
-  return configs.map((config) {
-    final wrapper = M2400ClientWrapper(config.host, config.port);
-    return M2400DeviceClientAdapter(wrapper, serverAlias: config.serverAlias);
-  }).toList();
-}
-
 class StateMan {
   final logger = Logger();
   final StateManConfig config;
@@ -841,233 +747,45 @@ class StateMan {
     return DynamicValue(value: masked, typeId: value.typeId);
   }
 
-  final List<ClientWrapper> clients;
   final List<DeviceClient> deviceClients;
   final Map<String, AutoDisposingStream<DynamicValue>> _subscriptions = {};
-  bool _shouldRun = true;
   final Map<String, String> _substitutions = {};
   final _subsMap$ = BehaviorSubject<Map<String, String>>.seeded(const {});
   String alias;
 
-  /// Constructor requires the server endpoint.
+  /// Backward-compatible accessor for OPC UA [ClientWrapper] instances.
+  ///
+  /// Extracts wrappers from the first [OpcUaDeviceClientAdapter] found in
+  /// [deviceClients]. Returns an empty list when no OPC UA adapter is present
+  /// (e.g. on web or MQTT-only configs).
+  List<ClientWrapper> get clients {
+    for (final dc in deviceClients) {
+      if (dc is OpcUaDeviceClientAdapter) return dc.clients;
+    }
+    return const [];
+  }
+
+  /// Constructor — all protocol access routes through [deviceClients].
   StateMan._({
     required this.config,
     required this.keyMappings,
-    required this.clients,
     required this.alias,
     this.deviceClients = const [],
-  }) {
-    for (final wrapper in clients) {
-      if (wrapper.client is Client) {
-        // spawn a background task to keep the client active
-        () async {
-          final clientref = wrapper.client as Client;
-          final stats =
-              RunIterateStats("${wrapper.config.endpoint} \"$alias\"");
-          while (_shouldRun) {
-            try {
-              clientref.connect(wrapper.config.endpoint).onError(
-                  (e, stacktrace) => logger.e(
-                      'Failed to connect to ${wrapper.config.endpoint}: $e'));
-              while (_shouldRun) {
-                final startTime = DateTime.now();
-                final continueRunning =
-                    clientref.runIterate(const Duration(milliseconds: 10));
-                final execTime = DateTime.now().difference(startTime);
-                stats.recordCall(execTime);
-                if (!continueRunning) break;
-                await Future.delayed(const Duration(milliseconds: 10));
-              }
-              stats.logFinal();
-              logger.e('Disconnecting client');
-              clientref.disconnect();
-            } catch (error) {
-              logger.e("Client run iterate error: $error");
-              try {
-                clientref.disconnect();
-              } catch (_) {}
-            }
-            await Future.delayed(const Duration(milliseconds: 1000));
-          }
-          logger.e('StateMan background run iterate task exited');
-        }();
-      }
-      if (wrapper.client is ClientIsolate) {
-        final clientref = wrapper.client as ClientIsolate;
-        () async {
-          while (_shouldRun) {
-            try {
-              clientref.connect(wrapper.config.endpoint).onError(
-                  (e, stacktrace) => logger.e(
-                      'Failed to connect to ${wrapper.config.endpoint}: $e'));
-              await clientref.runIterate();
-            } catch (error) {
-              logger.e("run iterate error: $error");
-              try {
-                // try to disconnect
-                await clientref.disconnect();
-              } catch (_) {}
-              // Throttle if often occuring error
-              await Future.delayed(const Duration(seconds: 1));
-            }
-          }
-        }();
-      }
+  });
 
-      SecureChannelState? lastChannelState;
-      DateTime? channelOpenedAt;
-      final channelLifetimeSec = 60; // 1 minute as configured
-
-      wrapper.client.stateStream.listen((value) {
-        wrapper.updateConnectionStatus(value);
-        final now = DateTime.now();
-
-        // Log SecureChannel state transitions with timestamps
-        if (value.channelState != lastChannelState) {
-          final timeSinceOpen = channelOpenedAt != null
-              ? now.difference(channelOpenedAt!).inSeconds
-              : 0;
-          logger.i(
-              '[$alias ${wrapper.config.endpoint}] SecureChannel state: ${lastChannelState?.name} -> ${value.channelState.name} '
-              '(session: ${value.sessionState.name}, recovery: ${value.recoveryStatus}) '
-              '[uptime: ${timeSinceOpen}s]');
-
-          if (value.channelState ==
-              SecureChannelState.UA_SECURECHANNELSTATE_OPEN) {
-            channelOpenedAt = now;
-            logger.i(
-                '[$alias ${wrapper.config.endpoint}] Channel opened at $now, renewal expected at ~${channelLifetimeSec * 0.75}s');
-          }
-
-          lastChannelState = value.channelState;
-        }
-
-        if (value.channelState ==
-            SecureChannelState.UA_SECURECHANNELSTATE_CLOSED) {
-          final timeSinceOpen = channelOpenedAt != null
-              ? now.difference(channelOpenedAt!).inSeconds
-              : 0;
-          logger.e(
-              '[$alias ${wrapper.config.endpoint}] Channel closed after ${timeSinceOpen}s (expected lifetime: ${channelLifetimeSec}s, '
-              'renewal window: ${channelLifetimeSec * 0.75}s-${channelLifetimeSec}s)');
-          channelOpenedAt = null;
-        }
-        // Fallback: treat as session loss if wrapper had a subscription
-        // (heartbeat may have already set sessionLost via fatal error)
-        if (value.sessionState ==
-                SessionState.UA_SESSIONSTATE_CREATE_REQUESTED &&
-            wrapper.subscriptionId != null) {
-          logger.e('[$alias ${wrapper.config.endpoint}] Session lost!');
-          wrapper.markSessionLost();
-        }
-        if (value.sessionState == SessionState.UA_SESSIONSTATE_ACTIVATED) {
-          if (wrapper.sessionLost) {
-            logger.e(
-                '[$alias ${wrapper.config.endpoint}] Session lost, resubscribing (old sub=${wrapper.subscriptionId})');
-            wrapper.sessionLost = false;
-            wrapper.subscriptionId = null;
-            wrapper.stopHeartbeat();
-            // Only resubscribe keys belonging to this wrapper
-            final lostAlias = wrapper.config.serverAlias;
-            final keysToResub = _subscriptions.values
-                .where((e) => keyMappings.lookupServerAlias(e.key) == lostAlias)
-                .map((e) => e.key)
-                .toList();
-            logger.i(
-                '[$alias ${wrapper.config.endpoint}] Resubscribing ${keysToResub.length} keys');
-
-            // Phase 1: Cancel ALL old raw subscriptions before creating
-            // any new ones. This queues all DeleteMonitoredItemsRequests
-            // in the native layer synchronously. By doing all cancels
-            // first, we prevent cross-key monId collision: after session
-            // loss the server assigns fresh monIds (1, 2, 3…) that may
-            // collide with OLD monIds captured in other keys' cancel
-            // closures, so a stale delete for key A could destroy key B's
-            // newly created item if creates and deletes are interleaved.
-            for (final key in keysToResub) {
-              final ads = _subscriptions[key];
-              logger.d('[$alias] resub $key: exists=${ads != null}, '
-                  'hasRawSub=${ads?._rawSub != null}');
-              if (ads != null && ads._rawSub != null) {
-                final oldSub = ads._rawSub;
-                ads._rawSub = null;
-                oldSub!.cancel(); // fire-and-forget; queues delete via FFI
-              }
-            }
-
-            // Phase 2: Now create new monitored items. All deletes are
-            // already queued and will be sent before any creates because
-            // runIterate hasn't had a chance to run yet (no await above).
-            for (final key in keysToResub) {
-              _monitor(key, resub: true).catchError((e, s) {
-                logger.e('[$alias] Failed to resubscribe key "$key": $e\n$s');
-              });
-            }
-          }
-        }
-      }, onError: (e, s) {
-        logger.e('[$alias] Failed to listen to state stream: $e, $s');
-      });
-    }
-  }
-
+  /// Create a StateMan with the given device clients.
+  ///
+  /// The caller is responsible for creating and passing in all device clients
+  /// (OPC UA, M2400, Modbus, MQTT). This factory connects them all.
   static Future<StateMan> create({
     required StateManConfig config,
     required KeyMappings keyMappings,
-    bool useIsolate = true,
     String alias = '',
     List<DeviceClient> deviceClients = const [],
-    bool resendOnRecovery = true,
   }) async {
-    // Example directory: /Users/jonb/Library/Containers/is.centroid.sildarvinnsla.skammtalina/Data/Documents/certs
-    List<ClientWrapper> clients = [];
-    for (final opcuaConfig in config.opcua) {
-      Uint8List? cert;
-      Uint8List? key;
-      MessageSecurityMode securityMode =
-          MessageSecurityMode.UA_MESSAGESECURITYMODE_NONE;
-      if (opcuaConfig.sslCert != null && opcuaConfig.sslKey != null) {
-        cert = opcuaConfig.sslCert!;
-        key = opcuaConfig.sslKey!;
-        securityMode =
-            MessageSecurityMode.UA_MESSAGESECURITYMODE_SIGNANDENCRYPT;
-      }
-      String? username;
-      String? password;
-      if (opcuaConfig.username != null && opcuaConfig.password != null) {
-        username = opcuaConfig.username;
-        password = opcuaConfig.password;
-      }
-      clients.add(ClientWrapper(
-        useIsolate
-            ? await ClientIsolate.create(
-                username: username,
-                password: password,
-                certificate: cert,
-                privateKey: key,
-                securityMode: securityMode,
-                logLevel: opcuaLogLevelFromEnv(),
-                secureChannelLifeTime: Duration(
-                    minutes: 1), // TODO can I reproduce the problem more often
-              )
-            : Client(
-                username: username,
-                password: password,
-                certificate: cert,
-                privateKey: key,
-                securityMode: securityMode,
-                logLevel: opcuaLogLevelFromEnv(),
-                secureChannelLifeTime: Duration(
-                    minutes: 1), // TODO can I reproduce the problem more often
-              ),
-        opcuaConfig,
-        resendOnRecovery: resendOnRecovery,
-      ));
-    }
     final stateMan = StateMan._(
         config: config,
         keyMappings: keyMappings,
-        clients: clients,
         alias: alias,
         deviceClients: deviceClients);
 
@@ -1077,17 +795,6 @@ class StateMan {
     }
 
     return stateMan;
-  }
-
-  ClientWrapper _getClientWrapper(String key) {
-    final alias = keyMappings.lookupServerAlias(key);
-    final wrapper = clients.firstWhereOrNull(
-        (wrapper) => wrapper.config.serverAlias == alias);
-    if (wrapper == null) {
-      throw StateManException(
-          'No OPC-UA client found for key "$key" (server alias: $alias)');
-    }
-    return wrapper;
   }
 
   void setSubstitution(String key, String value) {
@@ -1194,7 +901,11 @@ class StateMan {
     return null;
   }
 
-  /// Example: read("myKey")
+  /// Find a [DeviceClient] (e.g. MQTT) that can handle [key], excluding
+  /// M2400 and Modbus adapters which are resolved by their own methods.
+  /// Returns null if no device client claims the key or if keyMappings has
+  /// no mqttNode for this key.
+  /// Read a single key from any device client.
   Future<DynamicValue> read(String key) async {
     key = resolveKey(key);
 
@@ -1228,152 +939,58 @@ class StateMan {
       return value;
     }
 
-    // Fall through to OPC UA
-    try {
-      final client = _getClientWrapper(key).client;
-      final nodeId = _lookupNodeId(key);
-      if (nodeId == null) {
-        throw StateManException("Key: \"$key\" not found");
+    // Route to any other device client that can handle this key
+    for (final dc in deviceClients) {
+      if (dc is M2400DeviceClientAdapter) continue;
+      if (dc is ModbusDeviceClientAdapter) continue;
+      if (dc.canSubscribe(key)) {
+        final value = dc.read(key);
+        if (value == null) {
+          throw StateManException('No cached value for key: "$key" -- not received yet');
+        }
+        return value;
       }
-      final (id, idx) = nodeId;
-      await client.awaitConnect();
-      var value = await client.read(id);
-      if (idx != null) {
-        value = value[idx];
-      }
-      // Apply bit mask if configured on this key
-      final entry = keyMappings.nodes[key];
-      return applyBitMask(value, entry?.bitMask, entry?.bitShift);
-    } catch (e) {
-      throw StateManException('Failed to read key: \"$key\": $e');
     }
+
+    throw StateManException('No device client found for key: "$key"');
   }
 
   Future<Map<String, DynamicValue>> readMany(List<String> keys) async {
     final results = <String, DynamicValue>{};
 
-    // Separate DeviceClient keys from OPC UA keys
-    final opcuaKeys = <String>[];
     for (final keyToResolve in keys) {
-      final key = resolveKey(keyToResolve);
-
-      // Check Modbus
-      final modbusDc = _resolveModbusDeviceClient(key);
-      if (modbusDc != null) {
-        final value = modbusDc.read(key);
-        if (value != null) results[key] = value;
-        continue;
-      }
-
-      // Check M2400
-      final m2400 = _resolveM2400Key(key);
-      if (m2400 != null) {
-        final value = m2400.dc.read(m2400.subscribeKey);
-        if (value != null) {
-          var result = value;
-          if (m2400.fieldName != null) result = result[m2400.fieldName!];
-          results[key] = result;
-        }
-        continue;
-      }
-
-      opcuaKeys.add(key);
-    }
-
-    // Process remaining OPC UA keys
-    final parameters = <ClientApi, Map<NodeId, List<AttributeId>>>{};
-
-    for (final key in opcuaKeys) {
-      final ClientApi client;
       try {
-        client = _getClientWrapper(key).client;
-      } catch (e) {
-        throw StateManException('No client for key: "$key": $e');
+        final value = await read(keyToResolve);
+        results[resolveKey(keyToResolve)] = value;
+      } catch (_) {
+        // Skip keys that can't be read
       }
-      final nodeId = _lookupNodeId(key);
-      if (nodeId == null) {
-        throw StateManException("Key: \"$key\" not found");
-      }
-      final (id, idx) = nodeId;
-      parameters[client] = {
-        id: [
-          AttributeId.UA_ATTRIBUTEID_DESCRIPTION,
-          AttributeId.UA_ATTRIBUTEID_DISPLAYNAME,
-          AttributeId.UA_ATTRIBUTEID_DATATYPE,
-          AttributeId.UA_ATTRIBUTEID_VALUE,
-        ]
-      };
     }
 
-    for (final pair in parameters.entries) {
-      final client = pair.key;
-      final parameters = pair.value;
-      await client.awaitConnect();
-      final res = await client.readAttribute(parameters);
-      results.addAll(res.map((nodeId, value) {
-        final key = keyMappings.lookupKey(nodeId);
-        if (key == null) {
-          throw StateManException("Key: \"$key\" not found");
-        }
-        // todo refactor this to not be so ugly
-        final foo = _lookupNodeId(key);
-        if (foo == null) {
-          throw StateManException("Weird error:Key: \"$key\" not found");
-        }
-        final (_, idx) = foo;
-        if (idx != null) {
-          return MapEntry(key, value[idx]);
-        }
-        return MapEntry(key, value);
-      }));
-    }
     return results;
   }
 
-  /// Example: write("myKey", DynamicValue(value: 42, typeId: NodeId.int16))
+  /// Write a value to a device by key.
   Future<void> write(String key, DynamicValue value) async {
     key = resolveKey(key);
 
-    // Check Modbus (and other DeviceClient protocols)
-    final modbusDc = _resolveModbusDeviceClient(key);
-    if (modbusDc != null) {
-      await modbusDc.write(key, value);
-      return;
-    }
-
-    try {
-      final client = _getClientWrapper(key).client;
-      final nodeId = _lookupNodeId(key);
-      if (nodeId == null) {
-        throw StateManException("Key: \"$key\" not found");
-      }
-      final (id, idx) = nodeId;
-      await client.awaitConnect();
-      if (idx != null) {
-        // a bit special, we need to read to be able to write
-        // not sure I like this
-        final readValue = await client.read(id);
-        readValue[idx] = value;
-        await client.write(id, readValue);
+    for (final dc in deviceClients) {
+      if (dc.canSubscribe(key)) {
+        await dc.write(key, value);
         return;
       }
-      await client.write(id, value);
-    } catch (e) {
-      throw StateManException('Failed to write node: \"$key\": $e');
     }
+
+    throw StateManException('No device client found for write key: "$key"');
   }
 
-  /// Subscribe to data changes on a specific node with type safety.
-  /// Returns a Stream that can be cancelled to stop the subscription.
+  /// Subscribe to data changes on a specific key.
   ///
-  /// Routes to [DeviceClient] instances first (e.g., M2400), falling through
-  /// to OPC UA [_monitor] if no device client claims the key.
-  ///
-  /// Example: subscribe("myIntKey") or subscribe("BATCH.weight")
+  /// Routes to the appropriate [DeviceClient] based on key mappings.
   Future<Stream<DynamicValue>> subscribe(String key) async {
     key = resolveKey(key);
 
-    // Check M2400 key mappings first
+    // Check M2400 key mappings first (special handling for status filter)
     final m2400 = _resolveM2400Key(key);
     if (m2400 != null) {
       Stream<DynamicValue> stream = m2400.dc.subscribe(m2400.subscribeKey);
@@ -1392,8 +1009,23 @@ class StateMan {
       return modbusDc.subscribe(key);
     }
 
-    // Fall through to OPC UA
-    return _monitor(key);
+    // Route to any device client that can handle this key
+    for (final dc in deviceClients) {
+      if (dc is M2400DeviceClientAdapter) continue;
+      if (dc is ModbusDeviceClientAdapter) continue;
+      if (dc.canSubscribe(key)) {
+        return dc.subscribe(key);
+      }
+    }
+
+    // Check if we have an internal subscription (e.g. from addSubscription)
+    if (_subscriptions.containsKey(key)) {
+      return _subscriptions[key]!.stream;
+    }
+
+    // No device client found — return error stream instead of crashing
+    return Stream.error(
+        StateManException('No device client found for key: "$key"'));
   }
 
   void updateKeyMappings(KeyMappings newKeyMappings) {
@@ -1402,39 +1034,22 @@ class StateMan {
 
   List<String> get keys => keyMappings.keys.toList();
 
-  /// Close the connection to the server.
+  /// Close all connections and dispose resources.
   Future<void> close() async {
-    _shouldRun = false;
     logger.d('Closing connection');
 
-    // Dispose device clients (M2400, etc.)
     for (final dc in deviceClients) {
       dc.dispose();
     }
 
-    for (final wrapper in clients) {
-      try {
-        if (wrapper.client is ClientIsolate) {
-          await (wrapper.client as ClientIsolate).disconnect();
-        } else {
-          (wrapper.client as Client).disconnect();
-        }
-      } catch (_) {}
-      await wrapper.client.delete();
-      wrapper.dispose();
-    }
     // Clean up subscriptions
     for (final entry in _subscriptions.values) {
-      entry._rawSub?.cancel();
-      entry._subject.close();
+      entry.cancelRawSub();
+      entry.closeSubject();
     }
     _subscriptions.clear();
 
     _subsMap$.close();
-  }
-
-  (NodeId, int?)? _lookupNodeId(String key) {
-    return keyMappings.lookupNodeId(key);
   }
 
   @visibleForTesting
@@ -1448,126 +1063,6 @@ class StateMan {
       logger.d('Unsubscribed from $key');
     });
     _subscriptions[key]!.subscribe(subscription, firstValue);
-  }
-
-  Future<Stream<DynamicValue>> _monitor(String key,
-      {bool resub = false}) async {
-    if (_subscriptions.containsKey(key) && !resub) {
-      return _subscriptions[key]!.stream;
-    }
-
-    logger.d(
-        '[$alias] _monitor($key, resub=$resub) hasExisting=${_subscriptions.containsKey(key)}');
-
-    // Register entry synchronously before any await so concurrent
-    // callers for the same key hit the early return above.
-    if (!_subscriptions.containsKey(key)) {
-      final ads = AutoDisposingStream<DynamicValue>(key, (key) {
-        _subscriptions.remove(key);
-        // Remove from wrapper's stream set on disposal
-        for (final w in clients) {
-          w.streams.remove(_subscriptions[key]);
-        }
-        logger.d('Unsubscribed from $key');
-      });
-      _subscriptions[key] = ads;
-      try {
-        _getClientWrapper(key).streams.add(ads);
-      } catch (_) {
-        // No wrapper for this key (e.g. addSubscription path)
-      }
-    }
-
-    late ClientApi client;
-    late (NodeId, int?) nodeId;
-    try {
-      client = _getClientWrapper(key).client;
-      await client.awaitConnect();
-      final lookup = _lookupNodeId(key);
-      if (lookup == null) {
-        throw StateManException('Key: "$key" not found');
-      }
-      nodeId = lookup;
-    } catch (e) {
-      logger.e('Failed to connect to client for key: "$key": $e');
-      return Stream.error(
-          StateManException('Failed to connect to client for key: "$key": $e'));
-    }
-    final (id, idx) = nodeId;
-
-    int retries = 0;
-    while (_shouldRun) {
-      try {
-        final wrapper = _getClientWrapper(key);
-        // Cancel any leftover subscription from a previous failed attempt
-        // so we don't leak monitored items while retrying.
-        _subscriptions[key]?._rawSub?.cancel();
-        _subscriptions[key]?._rawSub = null;
-
-        await client.awaitConnect();
-
-        if (wrapper.subscriptionId == null &&
-            await wrapper.worker.doTheWork()) {
-          try {
-            // keepAliveCount=30 → inactivity after (100ms×30)+5s ≈ 8s.
-            // Tolerates intermittent packet loss on unstable connections.
-            wrapper.subscriptionId = await client.subscriptionCreate(
-              requestedMaxKeepAliveCount: 30,
-            );
-            logger.i(
-                '[$alias ${wrapper.config.endpoint}] Created subscription ${wrapper.subscriptionId}');
-            wrapper.startHeartbeat(wrapper.subscriptionId!);
-          } catch (e) {
-            logger.e('Failed to create subscription: $e');
-          } finally {
-            wrapper.worker.complete();
-          }
-        }
-        if (wrapper.subscriptionId == null) {
-          continue;
-        }
-
-        final ads = _subscriptions[key]!;
-        final hadPrevious = ads._rawSub != null;
-
-        logger.d(
-            '[$alias] Creating monitored items for $key on sub=${wrapper.subscriptionId}');
-
-        var stream = client.monitor(id, wrapper.subscriptionId!);
-        if (idx != null) {
-          stream = stream.map((value) => value[idx]);
-        }
-        // Apply bit mask if configured on this key
-        final entry = keyMappings.nodes[key];
-        if (entry?.bitMask != null) {
-          stream = stream.map((value) =>
-              applyBitMask(value, entry!.bitMask, entry.bitShift));
-        }
-
-        // Wait for monitor to deliver first value. No asBroadcastStream()
-        // needed — subscribe() holds _rawSub, and cancel propagates
-        // properly to delete monitored items on retry.
-        final firstEmission = Completer<void>();
-        final wrappedStream = stream.map((value) {
-          if (!firstEmission.isCompleted) firstEmission.complete();
-          return value;
-        });
-        ads.subscribe(wrappedStream, null);
-        await firstEmission.future.timeout(const Duration(seconds: 5));
-        logger.i('[$alias] Subscribed $key (replaced previous: $hadPrevious)');
-
-        return ads.stream;
-      } catch (e) {
-        retries++;
-        if (retries > 10) {
-          logger.w('Failed to get initial value for $key: $e');
-          retries = 0;
-        }
-        await Future.delayed(const Duration(seconds: 1));
-        continue;
-      }
-    }
-    throw StateManException('StateMan closed while monitoring "$key"');
   }
 }
 
@@ -1591,6 +1086,22 @@ class AutoDisposingStream<T> {
   }
 
   Stream<T> get stream => _subject.stream;
+
+  /// Last value received from the raw stream.
+  T? get lastValue => _lastValue;
+
+  /// The raw upstream subscription (for cancellation/replacement).
+  StreamSubscription<T>? get rawSub => _rawSub;
+  set rawSub(StreamSubscription<T>? value) => _rawSub = value;
+
+  /// Cancel the raw subscription if active.
+  void cancelRawSub() {
+    _rawSub?.cancel();
+    _rawSub = null;
+  }
+
+  /// Close the replay subject.
+  void closeSubject() => _subject.close();
 
   void subscribe(Stream<T> raw, T? firstValue) {
     _logger.d('[$key] subscribe() called: '

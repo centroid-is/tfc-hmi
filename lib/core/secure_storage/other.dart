@@ -1,6 +1,5 @@
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-
-import 'package:tfc_dart/core/secure_storage/secure_storage.dart';
+import 'package:tfc_dart/core/secure_storage/interface.dart';
 
 class OtherSecureStorage implements MySecureStorage {
   final _storage = FlutterSecureStorage(
