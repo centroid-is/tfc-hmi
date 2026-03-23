@@ -2,9 +2,9 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Ready to execute
-stopped_at: Completed 03-flutter-integration-03-01-PLAN.md
-last_updated: "2026-03-23T19:36:26.959Z"
+status: Phase complete — ready for verification
+stopped_at: Completed 03-flutter-integration-03-02-PLAN.md
+last_updated: "2026-03-23T19:44:31.928Z"
 progress:
   total_phases: 5
   completed_phases: 2
@@ -55,6 +55,7 @@ Plan: 2 of 2
 | Phase 02-core-engine P03 | 145 | 2 tasks | 6 files |
 | Phase 02-core-engine P05 | 5 | 2 tasks | 7 files |
 | Phase 03-flutter-integration P01 | 6 | 2 tasks | 7 files |
+| Phase 03-flutter-integration P02 | 3 | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -89,6 +90,8 @@ Recent decisions affecting current work:
 - [Phase 03-flutter-integration]: AssetLoader typedef returns List<int> not ByteData so tests run without Flutter binding initialization
 - [Phase 03-flutter-integration]: platformIsWindows/platformIsMacOS injected as constructor params instead of dart:io Platform.isX to enable platform-branch testing on any OS
 - [Phase 03-flutter-integration]: Injectable typedefs pattern (ProcessStarter, CommandRunner, AssetLoader, PathResolver) established for testable process/filesystem operations in Dart
+- [Phase 03-flutter-integration]: Use upgrader.state.versionInfo (not currentVersionInfo) for appStoreVersion - Upgrader v11 exposes version info through UpgraderState, not a direct getter on Upgrader class
+- [Phase 03-flutter-integration]: Instantiate ManagerLauncher with rootBundle-backed assetLoader in main.dart - avoids UnimplementedError from _flutterServices() placeholder in production
 
 ### Pending Todos
 
@@ -102,6 +105,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-23T19:36:26.956Z
-Stopped at: Completed 03-flutter-integration-03-01-PLAN.md
+Last session: 2026-03-23T19:44:31.925Z
+Stopped at: Completed 03-flutter-integration-03-02-PLAN.md
 Resume file: None

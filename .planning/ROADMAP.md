@@ -66,7 +66,7 @@ Plans:
   3. The `microsoft_store_upgrader` dependency is removed from `pubspec.yaml` and the build succeeds
   4. The manager binary is bundled inside the MSIX, deb, and dmg packages and is accessible to the Flutter launcher without manual user steps
   5. The full update flow completes on Windows (MSIX), Linux (deb), and macOS 15.1+ (dmg) with no extra user steps — macOS quarantine attribute is stripped programmatically before launch
-**Plans:** 2 plans
+**Plans:** 1/2 plans executed
 
 Plans:
 - [x] 03-01-PLAN.md — TDD centroidx_upgrader Dart package (GitHubReleaseStore + ManagerLauncher)
@@ -101,6 +101,6 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 |-------|----------------|--------|-----------|
 | 1. Foundation | 3/3 | Complete   | 2026-03-23 |
 | 2. Core Engine | 5/5 | Complete   | 2026-03-23 |
-| 3. Flutter Integration | 0/2 | In progress | - |
+| 3. Flutter Integration | 1/2 | In Progress|  |
 | 4. Version Management | 0/TBD | Not started | - |
 | 5. Integration Tests | 0/TBD | Not started | - |
