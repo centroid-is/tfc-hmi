@@ -7,6 +7,7 @@
 #include <windows.h>
 
 #include <iostream>
+#include <vector>
 
 void CreateAndAttachConsole() {
   if (::AllocConsole()) {
@@ -34,21 +35,39 @@ void RedirectIOToConsole() {
 }
 
 void RedirectIOToFile(const char* path) {
-  FILE *fp = nullptr;
-  if (freopen_s(&fp, path, "w", stdout) != 0 || fp == nullptr) {
-    return;
-  }
-  setvbuf(stdout, nullptr, _IONBF, 0);
+  // Open with FILE_SHARE_READ | FILE_SHARE_WRITE so Dart can also write to this file.
+  // freopen_s does NOT expose sharing flags and defaults to exclusive access,
+  // which blocks Dart's File.openSync() from appending to the same log file.
+  int wlen = ::MultiByteToWideChar(CP_UTF8, 0, path, -1, nullptr, 0);
+  if (wlen <= 0) return;
+  std::vector<wchar_t> wpath(wlen);
+  ::MultiByteToWideChar(CP_UTF8, 0, path, -1, wpath.data(), wlen);
 
-  // In MSIX GUI apps, freopen_s may assign stdout to fd 3+ (not fd 1) because
-  // fd 1 starts as -2 (invalid). The Dart VM hard-codes fd 1 for stdout and
-  // fd 2 for stderr (File::OpenStdio), so we must wire those explicitly.
-  int stdout_fd = _fileno(stdout);
-  _dup2(stdout_fd, 1);
-  _dup2(stdout_fd, 2);
+  HANDLE hFile = ::CreateFileW(
+      wpath.data(),
+      GENERIC_WRITE,
+      FILE_SHARE_READ | FILE_SHARE_WRITE,
+      nullptr,
+      CREATE_ALWAYS,
+      FILE_ATTRIBUTE_NORMAL,
+      nullptr);
+  if (hFile == INVALID_HANDLE_VALUE) return;
+
+  // Associate the Win32 handle with a CRT file descriptor, then with stdout.
+  int fd = _open_osfhandle(reinterpret_cast<intptr_t>(hFile), _O_WRONLY | _O_TEXT);
+  if (fd == -1) { ::CloseHandle(hFile); return; }
+
+  FILE *fp = _fdopen(fd, "w");
+  if (!fp) { _close(fd); return; }
+  setvbuf(fp, nullptr, _IONBF, 0);
+
+  // Replace CRT stdout with our file stream.
+  *stdout = *fp;
+  // Wire fd 1 and fd 2 to the same file so Dart (which uses fd 1) can reach it.
+  _dup2(fd, 1);
+  _dup2(fd, 2);
 
   // Sync Win32 standard handles (Dart uses GetStdHandle -> WriteFile).
-  HANDLE hFile = (HANDLE)_get_osfhandle(1);
   ::SetStdHandle(STD_OUTPUT_HANDLE, hFile);
   ::SetStdHandle(STD_ERROR_HANDLE, hFile);
 
