@@ -7,9 +7,11 @@ import (
 	"net/http"
 	"os"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
+	"github.com/Masterminds/semver/v3"
 	gogithub "github.com/google/go-github/v84/github"
 
 	"github.com/centroid-is/centroidx-manager/internal/github"
@@ -88,6 +90,45 @@ func (e *Engine) FetchReleaseInfo(ctx context.Context, version string) (*Release
 	}
 
 	return nil, fmt.Errorf("fetch release: version %q not found in GitHub Releases", version)
+}
+
+// ListAllReleases returns all releases from GitHub sorted newest-first using
+// CalVer semver comparison. Releases with unparseable version tags are silently
+// skipped. Returns an empty (non-nil) slice when there are no parseable releases.
+// Returns a wrapped error if the GitHub client call fails.
+func (e *Engine) ListAllReleases(ctx context.Context) ([]ReleaseInfo, error) {
+	releases, err := e.client.ListReleases(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list releases: %w", err)
+	}
+
+	// tagged pairs a parsed semver version with its ReleaseInfo for sorting.
+	type tagged struct {
+		version *semver.Version
+		info    ReleaseInfo
+	}
+
+	result := make([]tagged, 0, len(releases))
+	for _, r := range releases {
+		info := releaseToInfo(r)
+		v, err := ParseVersion(info.Version)
+		if err != nil {
+			// Silently skip releases with unparseable tags (drafts, bad tags, etc.)
+			continue
+		}
+		result = append(result, tagged{version: v, info: *info})
+	}
+
+	// Sort descending: newest version first.
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].version.GreaterThan(result[j].version)
+	})
+
+	out := make([]ReleaseInfo, len(result))
+	for i, t := range result {
+		out[i] = t.info
+	}
+	return out, nil
 }
 
 // releaseToInfo converts a GitHub API release to a ReleaseInfo.

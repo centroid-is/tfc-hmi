@@ -453,3 +453,107 @@ func platformAssetName() string {
 
 // ---- os.ReadFile needed for checksum test cleanup check.
 var _ = os.ReadFile
+
+// ---- TestEngine_ListAllReleases -------------------------------------------
+
+func TestEngine_ListAllReleases_SortDescending(t *testing.T) {
+	releases := []*gogithub.RepositoryRelease{
+		buildRelease("2026.3.5", "notes", nil),
+		buildRelease("2026.10.1", "notes", nil),
+		buildRelease("2026.3.6", "notes", nil),
+	}
+	client := &mockReleasesClient{releases: releases}
+	eng := NewEngine(client, &mockInstaller{})
+
+	result, err := eng.ListAllReleases(context.Background())
+	if err != nil {
+		t.Fatalf("ListAllReleases returned error: %v", err)
+	}
+	if len(result) != 3 {
+		t.Fatalf("expected 3 releases, got %d", len(result))
+	}
+	// Expect newest-first: 2026.10.1, 2026.3.6, 2026.3.5
+	expected := []string{"2026.10.1", "2026.3.6", "2026.3.5"}
+	for i, v := range expected {
+		if result[i].Version != v {
+			t.Errorf("result[%d]: expected %q, got %q", i, v, result[i].Version)
+		}
+	}
+}
+
+func TestEngine_ListAllReleases_MonthBoundary(t *testing.T) {
+	releases := []*gogithub.RepositoryRelease{
+		buildRelease("2026.9.30", "old", nil),
+		buildRelease("2026.10.1", "new", nil),
+	}
+	client := &mockReleasesClient{releases: releases}
+	eng := NewEngine(client, &mockInstaller{})
+
+	result, err := eng.ListAllReleases(context.Background())
+	if err != nil {
+		t.Fatalf("ListAllReleases returned error: %v", err)
+	}
+	if len(result) != 2 {
+		t.Fatalf("expected 2 releases, got %d", len(result))
+	}
+	// 2026.10.1 must sort before 2026.9.30 (month boundary: 10 > 9)
+	if result[0].Version != "2026.10.1" {
+		t.Errorf("expected first result to be 2026.10.1 (month boundary), got %q", result[0].Version)
+	}
+	if result[1].Version != "2026.9.30" {
+		t.Errorf("expected second result to be 2026.9.30, got %q", result[1].Version)
+	}
+}
+
+func TestEngine_ListAllReleases_SkipsUnparseable(t *testing.T) {
+	releases := []*gogithub.RepositoryRelease{
+		buildRelease("2026.3.6", "notes", nil),
+		buildRelease("invalid-tag", "bad", nil),
+		buildRelease("2026.3.5", "notes", nil),
+	}
+	client := &mockReleasesClient{releases: releases}
+	eng := NewEngine(client, &mockInstaller{})
+
+	result, err := eng.ListAllReleases(context.Background())
+	if err != nil {
+		t.Fatalf("ListAllReleases returned error: %v", err)
+	}
+	if len(result) != 2 {
+		t.Fatalf("expected 2 releases (unparseable skipped), got %d", len(result))
+	}
+	// Verify neither returned entry is the invalid one
+	for _, r := range result {
+		if r.Version == "invalid-tag" {
+			t.Error("expected invalid-tag to be skipped, but it appeared in results")
+		}
+	}
+}
+
+func TestEngine_ListAllReleases_Empty(t *testing.T) {
+	client := &mockReleasesClient{releases: []*gogithub.RepositoryRelease{}}
+	eng := NewEngine(client, &mockInstaller{})
+
+	result, err := eng.ListAllReleases(context.Background())
+	if err != nil {
+		t.Fatalf("ListAllReleases returned error on empty: %v", err)
+	}
+	if result == nil {
+		t.Fatal("expected empty slice, got nil")
+	}
+	if len(result) != 0 {
+		t.Fatalf("expected 0 releases, got %d", len(result))
+	}
+}
+
+func TestEngine_ListAllReleases_NetworkError(t *testing.T) {
+	client := &mockReleasesClient{err: errors.New("dial tcp: connection refused")}
+	eng := NewEngine(client, &mockInstaller{})
+
+	_, err := eng.ListAllReleases(context.Background())
+	if err == nil {
+		t.Fatal("expected error from ListAllReleases when client fails, got nil")
+	}
+	if !strings.Contains(err.Error(), "list releases") {
+		t.Errorf("expected error to contain 'list releases', got: %v", err)
+	}
+}
