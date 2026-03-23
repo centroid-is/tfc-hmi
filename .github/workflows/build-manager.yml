@@ -64,3 +64,40 @@ jobs:
         with:
           name: ${{ matrix.artifact_name }}
           path: tools/centroidx-manager/${{ matrix.artifact_name }}
+
+  integration-test:
+    needs: [build]
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            goos: windows
+          - os: ubuntu-latest
+            goos: linux
+          - os: macos-latest
+            goos: darwin
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+
+      - name: Install Linux build dependencies
+        if: matrix.os == 'ubuntu-latest'
+        run: sudo apt-get update && sudo apt-get install -y gcc libgl1-mesa-dev xorg-dev
+
+      - name: Install Windows build dependencies (MinGW)
+        if: matrix.os == 'windows-latest'
+        shell: bash
+        run: choco install mingw -y
+
+      - name: Run integration tests
+        working-directory: tools/centroidx-manager
+        env:
+          CGO_ENABLED: '1'
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: go test -tags integration -v -timeout 300s ./internal/update/ -run TestIntegration
