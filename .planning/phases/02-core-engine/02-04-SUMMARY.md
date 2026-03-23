@@ -120,6 +120,19 @@ None — all functions are fully implemented. LaunchApp in windows.go uses `expl
 - MSIX extraction ready for Windows bundle scenario
 - LaunchApp on Windows needs real package family name when MSIX packaging is finalized
 
+## Self-Check: PASSED
+
+- FOUND: tools/centroidx-manager/internal/platform/installer.go
+- FOUND: tools/centroidx-manager/internal/platform/installer_test.go
+- FOUND: tools/centroidx-manager/internal/platform/windows.go
+- FOUND: tools/centroidx-manager/internal/platform/linux.go
+- FOUND: tools/centroidx-manager/internal/platform/darwin.go
+- FOUND: tools/centroidx-manager/internal/platform/extract_windows.go
+- FOUND: tools/centroidx-manager/internal/platform/extract_windows_test.go
+- FOUND: .planning/phases/02-core-engine/02-04-SUMMARY.md
+- Commit 5e8292a: FOUND in git log
+- 12/12 tests PASS: `go test -v ./internal/platform/...`
+
 ---
 *Phase: 02-core-engine*
 *Completed: 2026-03-23*
