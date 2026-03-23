@@ -42,10 +42,39 @@ jobs:
         working-directory: centroid-hmi
         run: flutter build windows --release
 
-      - name: Create MSIX for Store
+      - name: Write certificate PFX from secret
+        if: ${{ github.event_name != 'pull_request' }}
+        shell: powershell
+        run: |
+          $bytes = [Convert]::FromBase64String("${{ secrets.MSIX_CERT_PFX_BASE64 }}")
+          [IO.File]::WriteAllBytes("${{ github.workspace }}/centroid-hmi/centroidx-sideload.pfx", $bytes)
+
+      - name: Build MSIX (sideload, signed)
+        if: ${{ github.event_name != 'pull_request' }}
+        working-directory: centroid-hmi
+        shell: powershell
+        run: dart run msix:create --certificate-password "${{ secrets.MSIX_CERT_PASSWORD }}"
+
+      - name: Build MSIX (unsigned, CI check only)
+        if: ${{ github.event_name == 'pull_request' }}
         working-directory: centroid-hmi
         shell: powershell
         run: dart run msix:create --store
+
+      - name: Verify MSIX signature and timestamp
+        if: ${{ github.event_name != 'pull_request' }}
+        working-directory: centroid-hmi
+        shell: powershell
+        run: |
+          $msix = Get-ChildItem -Recurse -Filter *.msix | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if (-not $msix) { throw "No .msix file found after build" }
+          Write-Host "Verifying: $($msix.FullName)"
+          $output = signtool verify /pa /v $msix.FullName 2>&1 | Out-String
+          Write-Host $output
+          if ($output -notmatch "The signature is timestamped") {
+            throw "MSIX signature is NOT timestamped. Check signtool_options in pubspec.yaml."
+          }
+          Write-Host "PASS: Signature is timestamped"
 
       - name: Locate MSIX
         working-directory: centroid-hmi

@@ -1,0 +1,66 @@
+name: Build centroidx-manager
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        type: string
+        default: ''
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            goos: windows
+            goarch: amd64
+            artifact_name: centroidx-manager_windows_amd64.exe
+          - os: ubuntu-latest
+            goos: linux
+            goarch: amd64
+            artifact_name: centroidx-manager_linux_amd64
+          - os: macos-latest
+            goos: darwin
+            goarch: arm64
+            artifact_name: centroidx-manager_darwin_arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+
+      - name: Install Windows build dependencies (MinGW)
+        if: matrix.os == 'windows-latest'
+        shell: bash
+        run: |
+          # Safety net: ensure MinGW is available for CGO.
+          # windows-latest typically ships MinGW, but runner images change
+          # without notice. choco install is a no-op if already present.
+          choco install mingw -y
+
+      - name: Install Linux build dependencies
+        if: matrix.os == 'ubuntu-latest'
+        run: sudo apt-get update && sudo apt-get install -y gcc libgl1-mesa-dev xorg-dev
+
+      - name: Build manager binary
+        working-directory: tools/centroidx-manager
+        env:
+          CGO_ENABLED: '1'
+        run: go build -o ${{ matrix.artifact_name }} .
+
+      - name: Rename binary for artifact upload
+        working-directory: tools/centroidx-manager
+        shell: bash
+        run: |
+          echo "Built: ${{ matrix.artifact_name }}"
+          ls -la ${{ matrix.artifact_name }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: tools/centroidx-manager/${{ matrix.artifact_name }}
