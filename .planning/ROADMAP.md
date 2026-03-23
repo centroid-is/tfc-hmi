@@ -69,7 +69,7 @@ Plans:
 **Plans:** 2 plans
 
 Plans:
-- [ ] 03-01-PLAN.md — TDD centroidx_upgrader Dart package (GitHubReleaseStore + ManagerLauncher)
+- [x] 03-01-PLAN.md — TDD centroidx_upgrader Dart package (GitHubReleaseStore + ManagerLauncher)
 - [ ] 03-02-PLAN.md — Wire into Flutter app, remove microsoft_store_upgrader, add manager asset dir
 
 ### Phase 4: Version Management

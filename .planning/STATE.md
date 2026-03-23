@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Phase complete — ready for verification
-stopped_at: Completed 02-core-engine-02-05-PLAN.md
-last_updated: "2026-03-23T19:06:38.327Z"
+status: Ready to execute
+stopped_at: Completed 03-flutter-integration-03-01-PLAN.md
+last_updated: "2026-03-23T19:36:26.959Z"
 progress:
   total_phases: 5
   completed_phases: 2
-  total_plans: 8
-  completed_plans: 8
+  total_plans: 10
+  completed_plans: 9
 ---
 
 # Project State
@@ -19,12 +19,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-23)
 
 **Core value:** Users receive a seamless, one-click update experience — popup notification on startup, click yes, app updates and reopens — without depending on the Microsoft Store
-**Current focus:** Phase 02 — Core Engine
+**Current focus:** Phase 03 — Flutter Integration
 
 ## Current Position
 
-Phase: 02 (Core Engine) — EXECUTING
-Plan: 5 of 5
+Phase: 03 (Flutter Integration) — EXECUTING
+Plan: 2 of 2
 
 ## Performance Metrics
 
@@ -54,6 +54,7 @@ Plan: 5 of 5
 | Phase 02-core-engine P04 | 5 | 2 tasks | 7 files |
 | Phase 02-core-engine P03 | 145 | 2 tasks | 6 files |
 | Phase 02-core-engine P05 | 5 | 2 tasks | 7 files |
+| Phase 03-flutter-integration P01 | 6 | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -85,6 +86,9 @@ Recent decisions affecting current work:
 - [Phase 02-core-engine]: Engine Update() takes DestDir in UpdateOptions — allows test TempDirs without global state
 - [Phase 02-core-engine]: main_windows.go uses init() with build tag — main.go stays platform-agnostic, MSIX extraction runs before main
 - [Phase 02-core-engine]: CGO_ENABLED=1 required for Fyne build — MSYS2 MinGW-w64 gcc must be on PATH for Windows builds
+- [Phase 03-flutter-integration]: AssetLoader typedef returns List<int> not ByteData so tests run without Flutter binding initialization
+- [Phase 03-flutter-integration]: platformIsWindows/platformIsMacOS injected as constructor params instead of dart:io Platform.isX to enable platform-branch testing on any OS
+- [Phase 03-flutter-integration]: Injectable typedefs pattern (ProcessStarter, CommandRunner, AssetLoader, PathResolver) established for testable process/filesystem operations in Dart
 
 ### Pending Todos
 
@@ -98,6 +102,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-23T19:06:38.324Z
-Stopped at: Completed 02-core-engine-02-05-PLAN.md
+Last session: 2026-03-23T19:36:26.956Z
+Stopped at: Completed 03-flutter-integration-03-01-PLAN.md
 Resume file: None
