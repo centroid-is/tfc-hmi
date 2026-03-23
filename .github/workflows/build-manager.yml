@@ -101,3 +101,9 @@ jobs:
           CGO_ENABLED: '1'
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: go test -tags integration -v -timeout 300s ./internal/update/ -run TestIntegration
+
+      - name: Run platform integration tests
+        working-directory: tools/centroidx-manager
+        env:
+          CGO_ENABLED: '1'
+        run: go test -tags integration -v -timeout 120s ./internal/platform/ -run TestIntegration
