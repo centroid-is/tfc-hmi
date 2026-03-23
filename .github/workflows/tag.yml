@@ -81,3 +81,40 @@ jobs:
     with:
       ref: ${{ needs.retag-pubspec.outputs.ref }}
     secrets: inherit
+
+  build-manager:
+    needs: [retag-pubspec]
+    uses: ./.github/workflows/build-manager.yml
+    with:
+      ref: ${{ needs.retag-pubspec.outputs.ref }}
+    secrets: inherit
+
+  create-release:
+    needs: [retag-pubspec, build-manager, windows-build]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts/
+          merge-multiple: true
+
+      - name: Generate SHA256SUMS.txt
+        working-directory: release-artifacts
+        run: |
+          echo "Artifacts to checksum:"
+          ls -la
+          sha256sum centroidx-manager_* > SHA256SUMS.txt
+          echo ""
+          echo "SHA256SUMS.txt contents:"
+          cat SHA256SUMS.txt
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: |
+            release-artifacts/centroidx-manager_*
+            release-artifacts/SHA256SUMS.txt
+            release-artifacts/*.msix

@@ -1,0 +1,15 @@
+{
+  "id": 1,
+  "tag_name": "2026.3.6",
+  "name": "CentroidX 2026.3.6",
+  "body": "## Changes\n- Bug fixes\n- Performance improvements",
+  "prerelease": false,
+  "draft": false,
+  "published_at": "2026-03-06T12:00:00Z",
+  "assets": [
+    {"id": 1001, "name": "centroidx_windows_amd64.msix", "browser_download_url": "PLACEHOLDER_URL/centroidx_windows_amd64.msix", "size": 52428800, "content_type": "application/octet-stream"},
+    {"id": 1002, "name": "centroidx_linux_amd64.deb", "browser_download_url": "PLACEHOLDER_URL/centroidx_linux_amd64.deb", "size": 41943040, "content_type": "application/octet-stream"},
+    {"id": 1003, "name": "centroidx_darwin_arm64.dmg", "browser_download_url": "PLACEHOLDER_URL/centroidx_darwin_arm64.dmg", "size": 47185920, "content_type": "application/octet-stream"},
+    {"id": 1004, "name": "SHA256SUMS.txt", "browser_download_url": "PLACEHOLDER_URL/SHA256SUMS.txt", "size": 256, "content_type": "text/plain"}
+  ]
+}

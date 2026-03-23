@@ -30,3 +30,6 @@ packages/*/pubspec.lock
 build/
 .direnv
 .planning/
+
+# CentroidX sideload certificate — private key, never commit
+centroidx-sideload.pfx

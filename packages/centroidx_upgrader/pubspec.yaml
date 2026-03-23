@@ -1,0 +1,19 @@
+name: centroidx_upgrader
+description: GitHub Releases update checker and manager launcher for CentroidX
+version: 0.1.0
+publish_to: 'none'
+
+environment:
+  sdk: ^3.6.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  http: ^1.6.0
+  version: ^3.0.2
+  path_provider: ^2.1.5
+  upgrader: ^11.5.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter

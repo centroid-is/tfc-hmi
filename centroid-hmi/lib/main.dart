@@ -8,8 +8,9 @@ import 'package:dbus/dbus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:amplify_secure_storage_dart/amplify_secure_storage_dart.dart';
+import 'package:flutter/services.dart' show rootBundle;
 import 'package:upgrader/upgrader.dart';
-import 'package:microsoft_store_upgrader/microsoft_store_upgrader.dart';
+import 'package:centroidx_upgrader/centroidx_upgrader.dart';
 
 import 'package:tfc/route_registry.dart';
 import 'package:tfc/routes.dart';
@@ -108,21 +109,39 @@ void main() async {
 
   final upgrader = Upgrader(
     storeController: UpgraderStoreController(
-      onWindows: () => UpgraderWindowsStore(productId: '9NH89T11ZZ59'),
+      onWindows: () => GitHubReleaseStore(owner: 'centroid-is', repo: 'tfc-hmi2'),
+      onLinux: () => GitHubReleaseStore(owner: 'centroid-is', repo: 'tfc-hmi2'),
+      onMacOS: () => GitHubReleaseStore(owner: 'centroid-is', repo: 'tfc-hmi2'),
     ),
     debugLogging: true,
   );
 
-  runApp(ProviderScope(
-      child: UpgradeAlert(
-    child: MyApp(locationBuilder: locationBuilder),
-    upgrader: upgrader,
-    onUpdate: () {
-      stderr.writeln("Updating software from store");
-      UpgraderWindowsStore.installUpdate();
-      return false;
+  final managerLauncher = ManagerLauncher(
+    assetLoader: (key) async {
+      final bd = await rootBundle.load(key);
+      return bd.buffer.asUint8List(bd.offsetInBytes, bd.lengthInBytes);
     },
-  )));
+  );
+
+  runApp(ProviderScope(
+    child: UpgradeAlert(
+      upgrader: upgrader,
+      onUpdate: () {
+        final targetVersion =
+            upgrader.state.versionInfo?.appStoreVersion?.toString() ?? '';
+        unawaited(
+          managerLauncher
+              .launchForUpdate(
+                version: targetVersion,
+                flutterPid: pid,
+              )
+              .then((_) => exit(0)),
+        );
+        return false; // Prevent upgrader from calling sendUserToAppStore()
+      },
+      child: MyApp(locationBuilder: locationBuilder),
+    ),
+  ));
 }
 
 Completer<DBusClient> dbusCompleter = Completer();
