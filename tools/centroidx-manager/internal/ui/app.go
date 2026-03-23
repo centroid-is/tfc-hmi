@@ -36,12 +36,18 @@ type Options struct {
 }
 
 // Run initialises the Fyne application, creates all engine dependencies,
-// and routes to the correct mode (install or update). It blocks until the
-// window is closed or the app exits.
+// and routes to the correct mode (install, update, or picker). It blocks until
+// the window is closed or the app exits.
 func Run(opts Options) {
 	a := app.New()
 	w := a.NewWindow("CentroidX Manager")
-	w.Resize(fyne.NewSize(500, 400))
+
+	// Picker mode uses a wider window for the split list+detail layout.
+	if opts.Mode == "picker" {
+		w.Resize(fyne.NewSize(700, 500))
+	} else {
+		w.Resize(fyne.NewSize(500, 400))
+	}
 
 	// Resolve token from option or environment variable.
 	token := opts.Token
@@ -57,6 +63,8 @@ func Run(opts Options) {
 	switch opts.Mode {
 	case "update":
 		runUpdateMode(w, eng, opts)
+	case "picker":
+		runPickerMode(w, eng)
 	default:
 		runInstallMode(w, eng)
 	}

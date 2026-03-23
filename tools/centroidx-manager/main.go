@@ -16,6 +16,7 @@ var (
 func main() {
 	// --- CLI flags ---
 	updateMode := flag.Bool("update", false, "Run in update mode (called by Flutter app)")
+	pickerMode := flag.Bool("picker", false, "Open version picker UI for rollback/manual install")
 	version := flag.String("version", "", "Target version to install (default: latest)")
 	waitPID := flag.Int("wait-pid", 0, "PID of the running app to wait for before installing")
 	token := flag.String("token", "", "GitHub API token (optional; falls back to CENTROIDX_GITHUB_TOKEN env var)")
@@ -26,6 +27,9 @@ func main() {
 	mode := "install" // default: first-time install
 	if *updateMode {
 		mode = "update"
+	}
+	if *pickerMode {
+		mode = "picker"
 	}
 
 	// --- MSIX extraction (Windows only — see main_windows.go) ---
