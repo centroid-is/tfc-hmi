@@ -208,6 +208,57 @@ const _$ModbusDataTypeEnumMap = {
   ModbusDataType.float64: 'float64',
 };
 
+MqttConfig _$MqttConfigFromJson(Map<String, dynamic> json) => MqttConfig(
+      host: json['host'] as String? ?? '',
+      port: (json['port'] as num?)?.toInt() ?? 1883,
+      serverAlias: json['server_alias'] as String?,
+      useTls: json['use_tls'] as bool? ?? false,
+      useWebSocket: json['use_web_socket'] as bool? ?? false,
+      wsPath: json['ws_path'] as String? ?? '/mqtt',
+      username: json['username'] as String?,
+      password: json['password'] as String?,
+      clientId: json['client_id'] as String?,
+      keepAlivePeriod: (json['keep_alive_period'] as num?)?.toInt() ?? 60,
+    );
+
+Map<String, dynamic> _$MqttConfigToJson(MqttConfig instance) =>
+    <String, dynamic>{
+      'host': instance.host,
+      'port': instance.port,
+      'server_alias': instance.serverAlias,
+      'use_tls': instance.useTls,
+      'use_web_socket': instance.useWebSocket,
+      'ws_path': instance.wsPath,
+      'username': instance.username,
+      'password': instance.password,
+      'client_id': instance.clientId,
+      'keep_alive_period': instance.keepAlivePeriod,
+    };
+
+MqttNodeConfig _$MqttNodeConfigFromJson(Map<String, dynamic> json) =>
+    MqttNodeConfig(
+      topic: json['topic'] as String,
+      qos: (json['qos'] as num?)?.toInt() ?? 0,
+      serverAlias: json['server_alias'] as String?,
+      payloadType:
+          $enumDecodeNullable(_$MqttPayloadTypeEnumMap, json['payload_type']) ??
+              MqttPayloadType.json,
+    );
+
+Map<String, dynamic> _$MqttNodeConfigToJson(MqttNodeConfig instance) =>
+    <String, dynamic>{
+      'topic': instance.topic,
+      'qos': instance.qos,
+      'server_alias': instance.serverAlias,
+      'payload_type': _$MqttPayloadTypeEnumMap[instance.payloadType]!,
+    };
+
+const _$MqttPayloadTypeEnumMap = {
+  MqttPayloadType.json: 'json',
+  MqttPayloadType.raw: 'raw',
+  MqttPayloadType.string: 'string',
+};
+
 StateManConfig _$StateManConfigFromJson(Map<String, dynamic> json) =>
     StateManConfig(
       opcua: (json['opcua'] as List<dynamic>)
@@ -221,6 +272,10 @@ StateManConfig _$StateManConfigFromJson(Map<String, dynamic> json) =>
               ?.map((e) => ModbusConfig.fromJson(e as Map<String, dynamic>))
               .toList() ??
           [],
+      mqtt: (json['mqtt'] as List<dynamic>?)
+              ?.map((e) => MqttConfig.fromJson(e as Map<String, dynamic>))
+              .toList() ??
+          [],
     );
 
 Map<String, dynamic> _$StateManConfigToJson(StateManConfig instance) =>
@@ -228,6 +283,7 @@ Map<String, dynamic> _$StateManConfigToJson(StateManConfig instance) =>
       'opcua': instance.opcua.map((e) => e.toJson()).toList(),
       'jbtm': instance.jbtm.map((e) => e.toJson()).toList(),
       'modbus': instance.modbus.map((e) => e.toJson()).toList(),
+      'mqtt': instance.mqtt.map((e) => e.toJson()).toList(),
     };
 
 OpcUANodeConfig _$OpcUANodeConfigFromJson(Map<String, dynamic> json) =>
@@ -260,6 +316,9 @@ KeyMappingEntry _$KeyMappingEntryFromJson(Map<String, dynamic> json) =>
           ? null
           : ModbusNodeConfig.fromJson(
               json['modbus_node'] as Map<String, dynamic>),
+      mqttNode: json['mqtt_node'] == null
+          ? null
+          : MqttNodeConfig.fromJson(json['mqtt_node'] as Map<String, dynamic>),
       collect: json['collect'] == null
           ? null
           : CollectEntry.fromJson(json['collect'] as Map<String, dynamic>),
@@ -272,6 +331,7 @@ Map<String, dynamic> _$KeyMappingEntryToJson(KeyMappingEntry instance) =>
       'opcua_node': instance.opcuaNode?.toJson(),
       'm2400_node': instance.m2400Node?.toJson(),
       'modbus_node': instance.modbusNode?.toJson(),
+      'mqtt_node': instance.mqttNode?.toJson(),
       'io': instance.io,
       'collect': instance.collect?.toJson(),
       'bit_mask': instance.bitMask,

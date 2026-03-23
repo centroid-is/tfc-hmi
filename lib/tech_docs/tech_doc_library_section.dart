@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'dart:io' as io;
+import 'package:tfc/core/platform_io.dart' as io;
 import 'dart:typed_data';
 
 import 'package:desktop_drop/desktop_drop.dart';
@@ -10,6 +10,7 @@ import 'package:intl/intl.dart';
 import 'package:logger/logger.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:tfc_mcp_server/tfc_mcp_server.dart'
+    if (dart.library.js_interop) 'package:tfc_mcp_server/tfc_mcp_server_web.dart'
     show TechDocIndex, TechDocSummary, PlcAssetSummary, DriftPlcCodeIndex;
 
 import '../chat/ai_context_action.dart';

@@ -1,7 +1,8 @@
-import 'dart:io';
 import 'dart:async';
 import 'dart:math' as math;
+import 'package:flutter/foundation.dart' show defaultTargetPlatform, TargetPlatform;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show SystemNavigator;
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:beamer/beamer.dart';
 import 'package:logger/logger.dart';
@@ -11,7 +12,7 @@ import '../models/menu_item.dart';
 import '../route_registry.dart';
 import '../providers/theme.dart';
 import '../providers/alarm.dart';
-import 'package:tfc_dart/core/alarm.dart';
+import 'package:tfc_dart/tfc_dart.dart';
 import 'alarm.dart';
 import '../routes.dart';
 // ===================
@@ -146,7 +147,7 @@ class _BaseScaffoldState extends ConsumerState<BaseScaffold> {
                                   .replaceAll('\n', ' ')
                                   .trim();
                               return description.length > 100
-                                  ? description.substring(0, 97) + '...'
+                                  ? '${description.substring(0, 97)}...'
                                   : description;
                             })(),
                           ),
@@ -214,7 +215,7 @@ class _BaseScaffoldState extends ConsumerState<BaseScaffold> {
                             ),
                           globalLeftProvider?.buildAppBarLeftWidgets(context) ??
                               const SizedBox.shrink(),
-                          if (Platform.isAndroid || Platform.isIOS)
+                          if (defaultTargetPlatform == TargetPlatform.android || defaultTargetPlatform == TargetPlatform.iOS)
                             IconButton(
                               icon: const Icon(Icons.fullscreen),
                               onPressed: _toggleFullscreen,
@@ -237,7 +238,7 @@ class _BaseScaffoldState extends ConsumerState<BaseScaffold> {
                               padding: const EdgeInsets.only(right: 16.0),
                               child: GestureDetector(
                                 onDoubleTap: () {
-                                  exit(0);
+                                  SystemNavigator.pop();
                                 },
                                 child: SvgPicture.asset(
                                   'assets/centroid.svg',

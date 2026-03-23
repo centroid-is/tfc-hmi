@@ -7,7 +7,7 @@ import 'package:rxdart/rxdart.dart';
 import 'common.dart';
 import 'package:tfc/converter/icon.dart';
 import 'package:tfc/converter/color_converter.dart';
-import 'package:tfc_dart/core/boolean_expression.dart';
+import 'package:tfc_dart/tfc_dart.dart';
 import '../../widgets/boolean_expression.dart';
 import '../../providers/state_man.dart';
 
@@ -96,6 +96,7 @@ class IconConfig extends BaseAsset {
 
   factory IconConfig.fromJson(Map<String, dynamic> json) =>
       _$IconConfigFromJson(json);
+  @override
   Map<String, dynamic> toJson() => _$IconConfigToJson(this);
 }
 
@@ -423,7 +424,7 @@ class _ConfigContentState extends State<_ConfigContent> {
               ),
             ),
           );
-        }).toList(),
+        }),
 
         const SizedBox(height: 16),
 

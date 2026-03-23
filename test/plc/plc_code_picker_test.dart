@@ -3,7 +3,9 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:tfc_mcp_server/tfc_mcp_server.dart' show PlcAssetSummary;
+import 'package:tfc_mcp_server/tfc_mcp_server.dart'
+    if (dart.library.js_interop) 'package:tfc_mcp_server/tfc_mcp_server_web.dart'
+    show PlcAssetSummary;
 
 import 'package:tfc/plc/plc_code_picker.dart';
 import 'package:tfc/providers/plc.dart';

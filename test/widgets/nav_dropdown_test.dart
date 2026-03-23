@@ -5,24 +5,6 @@ import 'package:tfc/widgets/nav_dropdown.dart';
 import 'package:tfc/route_registry.dart';
 import 'package:beamer/beamer.dart';
 
-/// A minimal BeamLocation for testing.
-class _TestLocation extends BeamLocation<BeamState> {
-  _TestLocation() : super(RouteInformation(uri: Uri.parse('/test')));
-
-  @override
-  List<BeamPage> buildPages(BuildContext context, BeamState state) {
-    return [
-      const BeamPage(
-        key: ValueKey('test'),
-        child: SizedBox.shrink(),
-      ),
-    ];
-  }
-
-  @override
-  List<Pattern> get pathPatterns => ['/test'];
-}
-
 MenuItem _testMenuItem() {
   return MenuItem(
     label: 'TestMenu',

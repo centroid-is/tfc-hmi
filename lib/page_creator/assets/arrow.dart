@@ -3,7 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:open62541/open62541.dart' show DynamicValue;
+import 'package:tfc_dart/core/dynamic_value.dart' show DynamicValue;
 import 'package:tfc/page_creator/assets/common.dart';
 import 'package:tfc/providers/state_man.dart';
 import 'package:rxdart/rxdart.dart';
@@ -31,6 +31,7 @@ class ArrowConfig extends BaseAsset {
 
   factory ArrowConfig.fromJson(Map<String, dynamic> json) =>
       _$ArrowConfigFromJson(json);
+  @override
   Map<String, dynamic> toJson() => _$ArrowConfigToJson(this);
 
   @override
@@ -146,7 +147,7 @@ class _ArrowWidgetState extends ConsumerState<ArrowWidget> {
       builder: (context, snapshot) {
         String operation = "lost";
         if (snapshot.hasData) {
-          final str = snapshot.data.toString().toLowerCase() ?? "";
+          final str = snapshot.data.toString().toLowerCase();
           if (str.contains("left")) {
             operation = "left";
           } else if (str.contains("right")) {

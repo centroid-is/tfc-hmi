@@ -8,15 +8,15 @@ import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_colorpicker/flutter_colorpicker.dart';
 import 'package:tfc/converter/color_converter.dart';
-import 'package:tfc_dart/converter/duration_converter.dart';
-import 'package:tfc_dart/core/state_man.dart';
+import 'package:tfc_dart/tfc_dart.dart';
+import 'package:tfc_dart/core/database_drift.dart'
+    if (dart.library.js_interop) 'package:tfc_dart/core/web_stubs/database_drift_stub.dart'
+    as drift_db;
 
 import 'common.dart';
 import '../../widgets/graph.dart';
 import '../../providers/database.dart';
 import '../../providers/state_man.dart';
-import 'package:tfc_dart/core/database.dart';
-import 'package:tfc_dart/core/database_drift.dart' as drift_db;
 
 part 'graph.g.dart';
 
@@ -145,7 +145,7 @@ class GraphAssetConfig extends BaseAsset {
 
 class GraphContentConfig extends StatefulWidget {
   final GraphAssetConfig config;
-  const GraphContentConfig({required this.config});
+  const GraphContentConfig({super.key, required this.config});
 
   @override
   State<GraphContentConfig> createState() => GraphContentConfigState();

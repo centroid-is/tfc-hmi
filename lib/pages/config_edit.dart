@@ -11,11 +11,11 @@ class ConfigEditDialog extends StatefulWidget {
   final String objectPath;
 
   const ConfigEditDialog({
-    Key? key,
+    super.key,
     required this.dbusClient,
     required this.serviceName,
     required this.objectPath,
-  }) : super(key: key);
+  });
 
   @override
   State<ConfigEditDialog> createState() => _ConfigEditDialogState();
@@ -640,13 +640,13 @@ class _ConfigEditDialogState extends State<ConfigEditDialog> {
             Expanded(
               child: DropdownButtonFormField<String>(
                 isExpanded: true,
-                value: value as String?,
+                initialValue: value as String?,
                 decoration: InputDecoration(
                   labelText: fieldName,
                   hintText: description,
                 ),
                 items: enumList
-                    .map((e) => DropdownMenuItem(child: Text(e), value: e))
+                    .map((e) => DropdownMenuItem(value: e, child: Text(e)))
                     .toList(),
                 onChanged: readOnly ? null : (val) => onChanged(val),
                 validator: (val) {
@@ -657,7 +657,7 @@ class _ConfigEditDialogState extends State<ConfigEditDialog> {
                 },
               ),
             ),
-            if (description != null && description.isNotEmpty)
+            if (description.isNotEmpty)
               IconButton(
                 icon: const Icon(Icons.info_outline),
                 onPressed: () {

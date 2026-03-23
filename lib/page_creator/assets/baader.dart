@@ -91,6 +91,7 @@ class Baader221Config extends BaseAsset {
 
   factory Baader221Config.fromJson(Map<String, dynamic> json) =>
       _$Baader221ConfigFromJson(json);
+  @override
   Map<String, dynamic> toJson() => _$Baader221ConfigToJson(this);
 }
 

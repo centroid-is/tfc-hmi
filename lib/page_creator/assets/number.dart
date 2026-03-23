@@ -9,7 +9,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:open62541/open62541.dart' show DynamicValue;
+import 'package:tfc_dart/core/dynamic_value.dart' show DynamicValue;
 import 'package:rxdart/rxdart.dart';
 
 import 'common.dart';
@@ -65,6 +65,7 @@ class NumberConfig extends BaseAsset {
 
   factory NumberConfig.fromJson(Map<String, dynamic> json) =>
       _$NumberConfigFromJson(json);
+  @override
   Map<String, dynamic> toJson() => _$NumberConfigToJson(this);
 
   @override
@@ -468,7 +469,7 @@ class _NumberWriteDialogState extends ConsumerState<_NumberWriteDialog> {
               : widget.config.key;
           return Text(widget.config.text?.isNotEmpty == true
               ? widget.config.text!
-              : (resolvedKey ?? 'Number'));
+              : resolvedKey);
         },
       ),
       content: StreamBuilder<DynamicValue>(

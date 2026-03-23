@@ -1,0 +1,116 @@
+{
+  "/": {
+    "menu_item": {
+      "label": "Inference Monitor",
+      "path": "/",
+      "icon": "monitoring",
+      "children": []
+    },
+    "assets": [
+      {
+        "asset_name": "NumberConfig",
+        "key": "inference.stats.processed",
+        "showDecimalPoint": false,
+        "decimalPlaces": 0,
+        "scale": null,
+        "units": null,
+        "textColor": { "red": 0.0, "green": 0.0, "blue": 0.0, "alpha": 1.0 },
+        "graph_config": null,
+        "writable": false,
+        "coordinates": { "x": 0.125, "y": 0.13, "angle": null },
+        "size": { "width": 0.15, "height": 0.08 },
+        "text": "Processed",
+        "textPos": "above"
+      },
+      {
+        "asset_name": "NumberConfig",
+        "key": "inference.stats.avg_confidence",
+        "showDecimalPoint": true,
+        "decimalPlaces": 2,
+        "scale": null,
+        "units": "%",
+        "textColor": { "red": 0.0, "green": 0.0, "blue": 0.0, "alpha": 1.0 },
+        "graph_config": null,
+        "writable": false,
+        "coordinates": { "x": 0.345, "y": 0.13, "angle": null },
+        "size": { "width": 0.15, "height": 0.08 },
+        "text": "Avg Confidence",
+        "textPos": "above"
+      },
+      {
+        "asset_name": "NumberConfig",
+        "key": "inference.stats.latency_ms",
+        "showDecimalPoint": true,
+        "decimalPlaces": 1,
+        "scale": null,
+        "units": "ms",
+        "textColor": { "red": 0.0, "green": 0.0, "blue": 0.0, "alpha": 1.0 },
+        "graph_config": null,
+        "writable": false,
+        "coordinates": { "x": 0.565, "y": 0.13, "angle": null },
+        "size": { "width": 0.15, "height": 0.08 },
+        "text": "Latency",
+        "textPos": "above"
+      },
+      {
+        "asset_name": "NumberConfig",
+        "key": "inference.stats.errors",
+        "showDecimalPoint": false,
+        "decimalPlaces": 0,
+        "scale": null,
+        "units": null,
+        "textColor": { "red": 0.8, "green": 0.0, "blue": 0.0, "alpha": 1.0 },
+        "graph_config": null,
+        "writable": false,
+        "coordinates": { "x": 0.785, "y": 0.13, "angle": null },
+        "size": { "width": 0.15, "height": 0.08 },
+        "text": "Errors",
+        "textPos": "above"
+      },
+      {
+        "asset_name": "ImageFeedConfig",
+        "key": "inference.result",
+        "control_key": "inference.control.pause",
+        "max_images": 9,
+        "grid_columns": 3,
+        "show_confidence": true,
+        "show_label": true,
+        "show_new_badge": true,
+        "coordinates": { "x": 0.28, "y": 0.56, "angle": null },
+        "size": { "width": 0.52, "height": 0.55 },
+        "text": "Image Feed",
+        "textPos": "above"
+      },
+      {
+        "asset_name": "InferenceLogConfig",
+        "key": "inference.result",
+        "control_key": "inference.control.pause",
+        "max_entries": 30,
+        "show_thumbnail": true,
+        "show_confidence_bar": true,
+        "show_latency": true,
+        "coordinates": { "x": 0.76, "y": 0.56, "angle": null },
+        "size": { "width": 0.42, "height": 0.55 },
+        "text": "Inference Log",
+        "textPos": "above"
+      },
+      {
+        "asset_name": "ButtonConfig",
+        "key": "inference.control.pause",
+        "outward_color": { "red": 0.2, "green": 0.6, "blue": 0.9, "alpha": 1.0 },
+        "inward_color": { "red": 0.1, "green": 0.4, "blue": 0.7, "alpha": 1.0 },
+        "button_type": "square",
+        "is_toggle": true,
+        "server_writes_low": false,
+        "feedback": null,
+        "icon": null,
+        "coordinates": { "x": 0.075, "y": 0.92, "angle": null },
+        "size": { "width": 0.12, "height": 0.06 },
+        "text": "Pause Feed",
+        "textPos": "inside"
+      }
+    ],
+    "mirroring_disabled": false,
+    "navigation_priority": 0
+  }
+}

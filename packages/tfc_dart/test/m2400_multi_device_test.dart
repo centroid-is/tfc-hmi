@@ -1,8 +1,9 @@
 import 'dart:async';
 
 import 'package:jbtm/jbtm.dart' hide ConnectionStatus;
-import 'package:open62541/open62541.dart' show DynamicValue;
+import 'package:tfc_dart/core/dynamic_value.dart' show DynamicValue;
 import 'package:test/test.dart';
+import 'package:tfc_dart/core/m2400_device_client.dart' show M2400DeviceClientAdapter, createM2400DeviceClients;
 import 'package:tfc_dart/core/state_man.dart';
 
 void main() {

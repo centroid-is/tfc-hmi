@@ -7,14 +7,10 @@ import 'common.dart';
 import 'dart:async';
 import 'package:logger/logger.dart';
 import '../../providers/state_man.dart';
-import 'package:tfc_dart/core/state_man.dart';
+import 'package:tfc_dart/tfc_dart.dart';
 import 'package:rxdart/rxdart.dart';
-import 'package:open62541/open62541.dart' show DynamicValue;
 import '../../widgets/graph.dart';
 import 'auger_conveyor_painter.dart';
-import 'package:tfc_dart/core/database.dart';
-import 'package:tfc_dart/core/collector.dart';
-import '../page.dart';
 import 'conveyor_gate.dart';
 
 part 'conveyor.g.dart';
@@ -85,12 +81,13 @@ class ConveyorColorPaletteConfig extends BaseAsset {
 
   factory ConveyorColorPaletteConfig.fromJson(Map<String, dynamic> json) =>
       _$ConveyorColorPaletteConfigFromJson(json);
+  @override
   Map<String, dynamic> toJson() => _$ConveyorColorPaletteConfigToJson(this);
 }
 
 class ConveyorColorPalette extends StatelessWidget {
   final ConveyorColorPaletteConfig config;
-  const ConveyorColorPalette({required this.config});
+  const ConveyorColorPalette({super.key, required this.config});
 
   @override
   Widget build(BuildContext context) {
@@ -224,6 +221,7 @@ class ConveyorConfig extends BaseAsset {
 
   factory ConveyorConfig.fromJson(Map<String, dynamic> json) =>
       _$ConveyorConfigFromJson(json);
+  @override
   Map<String, dynamic> toJson() => _$ConveyorConfigToJson(this);
 }
 
@@ -470,7 +468,7 @@ class _ConveyorConfigContentState extends State<_ConveyorConfigContent> {
 
 class Conveyor extends ConsumerStatefulWidget {
   final ConveyorConfig config;
-  const Conveyor(this.config, {Key? key}) : super(key: key);
+  const Conveyor(this.config, {super.key});
 
   @override
   ConsumerState<Conveyor> createState() => _ConveyorState();

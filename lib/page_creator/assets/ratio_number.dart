@@ -11,8 +11,7 @@ import '../../providers/current_page_assets.dart';
 import '../../providers/database.dart';
 import '../../widgets/graph.dart';
 import 'package:tfc/converter/color_converter.dart';
-import 'package:tfc_dart/converter/duration_converter.dart';
-import 'package:tfc_dart/core/database.dart';
+import 'package:tfc_dart/tfc_dart.dart';
 
 part 'ratio_number.g.dart';
 
@@ -90,6 +89,7 @@ class RatioNumberConfig extends BaseAsset {
 
   factory RatioNumberConfig.fromJson(Map<String, dynamic> json) =>
       _$RatioNumberConfigFromJson(json);
+  @override
   Map<String, dynamic> toJson() => _$RatioNumberConfigToJson(this);
 
   // Helper method to get display label for a key
@@ -126,7 +126,7 @@ class _RatioNumberConfigEditorState
     final optionVars = pageAssets.whereType<OptionVariableConfig>().toList();
 
     return DropdownButtonFormField<String?>(
-      value: widget.config.intervalVariable,
+      initialValue: widget.config.intervalVariable,
       decoration: const InputDecoration(
         labelText: 'Interval Variable',
         helperText: 'Link to an OptionVariable to control interval',
