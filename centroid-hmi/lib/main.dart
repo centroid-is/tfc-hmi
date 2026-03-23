@@ -32,6 +32,7 @@ import 'package:tfc/pages/about_linux.dart'
 import 'package:tfc/pages/tech_doc_library.dart';
 import 'package:tfc/transition_delegate.dart';
 import 'package:tfc/providers/theme.dart';
+import 'package:tfc/core/config_loader.dart';
 import 'package:tfc/core/preferences.dart';
 import 'package:tfc/page_creator/page.dart';
 
@@ -129,10 +130,24 @@ Future<void> _startApp() async {
 
   registry.addMenuItem(const MenuItem(label: 'Alarm View', path: '/alarm-view', icon: Icons.alarm));
 
-  // This is not ideal, if a second HMI adds a page, we will need to restart the app twice
-  final prefs = SharedPreferencesWrapper(SharedPreferencesAsync());
-  final pageManager = PageManager(pages: {}, prefs: prefs);
-  await pageManager.load();
+  // Load pages: from static config when available, otherwise from SharedPreferences.
+  final PageManager pageManager;
+  if (isStaticMode) {
+    final staticCfg = await loadStaticConfig();
+    if (staticCfg?.pageEditorJson != null) {
+      final prefs = SharedPreferencesWrapper(SharedPreferencesAsync());
+      pageManager = PageManager(pages: {}, prefs: prefs);
+      pageManager.fromJson(staticCfg!.pageEditorJson!);
+    } else {
+      final prefs = SharedPreferencesWrapper(SharedPreferencesAsync());
+      pageManager = PageManager(pages: {}, prefs: prefs);
+      await pageManager.load();
+    }
+  } else {
+    final prefs = SharedPreferencesWrapper(SharedPreferencesAsync());
+    pageManager = PageManager(pages: {}, prefs: prefs);
+    await pageManager.load();
+  }
 
   final extraMenuItems = pageManager.getRootMenuItems();
 

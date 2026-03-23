@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -150,8 +151,8 @@ class _AssetStackState extends ConsumerState<AssetStack> {
           final halfW = assetW / 2;
           final halfH = assetH / 2;
 
-          final textScaler = TextScaler.linear(
-              math.min(asset.size.width * W, asset.size.height * H) / 25);
+          final rawScale = math.min(asset.size.width * W, asset.size.height * H) / 25;
+          final textScaler = TextScaler.linear(math.min(rawScale, 2.0));
           final labelStyle = DefaultTextStyle.of(context).style.copyWith(
                 fontSize: textScaler
                     .scale(DefaultTextStyle.of(context).style.fontSize ?? 16),
@@ -342,7 +343,8 @@ class AssetView extends ConsumerWidget {
       title: 'Asset View',
       body: ZoomableCanvas(
         child: LayoutBuilder(
-          builder: (context, constraints) => FutureBuilder<PageManager>(
+          builder: (context, constraints) {
+            return FutureBuilder<PageManager>(
             future: ref.watch(pageManagerProvider.future),
             builder: (context, snap) {
               final pageManager = snap.data;
@@ -354,8 +356,10 @@ class AssetView extends ConsumerWidget {
                   child: Text('Page: "$pageName" not found'),
                 );
               }
+              final assets = pageManager.pages[pageName]?.assets ?? [];
+              debugPrint('[AssetView] rendering AssetStack with ${assets.length} assets');
               return AssetStack(
-                assets: pageManager.pages[pageName]?.assets ?? [],
+                assets: assets,
                 constraints: constraints,
                 absorb: false,
                 selectedAssets: const {},
@@ -363,7 +367,8 @@ class AssetView extends ConsumerWidget {
                     pageManager.pages[pageName]?.mirroringDisabled ?? false,
               );
             },
-          ),
+          );
+          },
         ),
       ),
     );

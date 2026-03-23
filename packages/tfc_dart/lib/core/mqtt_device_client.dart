@@ -86,6 +86,9 @@ class MqttDeviceClientAdapter implements DeviceClient {
   /// Topics already subscribed on the MQTT client.
   final Set<String> _subscribedTopics = {};
 
+  /// QoS level per topic, used for re-subscribing on (re)connect.
+  final Map<String, MqttQos> _topicQos = {};
+
   /// Reverse lookup: MQTT topic → set of keymapping keys.
   final Map<String, Set<String>> _topicToKeys = {};
 
@@ -121,8 +124,18 @@ class MqttDeviceClientAdapter implements DeviceClient {
 
     // Subscribe to MQTT topic if not already done
     if (!_subscribedTopics.contains(mqttNode.topic)) {
-      _client?.subscribe(mqttNode.topic, MqttQos.values[mqttNode.qos]);
+      final qos = MqttQos.values[mqttNode.qos];
+      _topicQos[mqttNode.topic] = qos;
+      // Register the topic BEFORE calling _client.subscribe() —
+      // the library throws ConnectionException when not yet connected,
+      // and we need the topic in _subscribedTopics so that onConnected
+      // can re-subscribe it once the connection is established.
       _subscribedTopics.add(mqttNode.topic);
+      try {
+        _client?.subscribe(mqttNode.topic, qos);
+      } catch (_) {
+        // Will be (re-)subscribed in onConnected callback.
+      }
     }
 
     // Register reverse lookup
@@ -193,6 +206,18 @@ class MqttDeviceClientAdapter implements DeviceClient {
     _client!.autoReconnect = true;
     _client!.onConnected = () {
       _connectionController.add(ConnectionStatus.connected);
+      // Ensure the updates listener is active — onConnected may fire before
+      // connect() returns, so we set it up here as well.
+      if (_updatesSubscription == null) {
+        _updatesSubscription = _client!.updates?.listen(_handleUpdates);
+      }
+      // Re-subscribe all topics that were registered before the connection
+      // was established (subscribe() can be called before connect() completes
+      // since connect() is fire-and-forget from StateMan.create).
+      for (final topic in _subscribedTopics) {
+        final qos = _topicQos[topic] ?? MqttQos.atMostOnce;
+        _client?.subscribe(topic, qos);
+      }
     };
     _client!.onDisconnected = () {
       _connectionController.add(ConnectionStatus.disconnected);

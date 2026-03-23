@@ -9,7 +9,8 @@
       "use_web_socket": true,
       "ws_path": "/mqtt",
       "client_id": "tfc-web",
-      "keep_alive_period": 60
+      "keep_alive_period": 60,
+      "server_alias": "mqtt-web"
     }
   ]
 }

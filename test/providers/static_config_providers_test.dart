@@ -239,5 +239,50 @@ void main() {
       expect(pageManager.pages.containsKey('/'), isTrue);
       expect(pageManager.pages['/']!.menuItem.label, 'Prefs Page');
     });
+
+    test('resolves with static config when database is null (web path)',
+        () async {
+      // Simulates the web path: database is null, static config provides
+      // page JSON. Preferences are still needed (PageManager.prefs field)
+      // but the page data comes from static config, not prefs storage.
+      final pageJson = jsonEncode({
+        '/': {
+          'menu_item': {
+            'label': 'Web Home',
+            'path': '/',
+            'icon': 'home',
+            'children': [],
+          },
+          'assets': [],
+          'mirroring_disabled': false,
+        },
+      });
+
+      final staticConfig = StaticConfig.fromStrings(
+        configJson: jsonEncode({'opcua': []}),
+        keyMappingsJson: jsonEncode({'nodes': {}}),
+        pageEditorJson: pageJson,
+      );
+
+      final prefs = await createTestPreferences();
+
+      final container = ProviderContainer(
+        overrides: [
+          staticConfigProvider.overrideWith((ref) async => staticConfig),
+          preferencesProvider.overrideWith((ref) async => prefs),
+          databaseProvider.overrideWith((ref) async => null),
+        ],
+      );
+      addTearDown(container.dispose);
+
+      final pageManager = await container.read(pageManagerProvider.future);
+      expect(pageManager.pages.containsKey('/'), isTrue);
+      expect(pageManager.pages['/']!.menuItem.label, 'Web Home');
+
+      // Verify page data came from static config, not preferences storage
+      final storedData = await prefs.getString(PageManager.storageKey);
+      expect(storedData, isNull,
+          reason: 'Static config path should not save to prefs');
+    });
   });
 }

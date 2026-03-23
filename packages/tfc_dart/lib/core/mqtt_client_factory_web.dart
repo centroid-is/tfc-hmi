@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:mqtt_client/mqtt_client.dart';
 import 'package:mqtt_client/mqtt_browser_client.dart';
 
@@ -10,5 +11,8 @@ MqttClient createMqttClient(MqttConfig config) {
   final scheme = config.useTls ? 'wss' : 'ws';
   final url = '$scheme://${config.host}:${config.port}${config.wsPath}';
 
-  return MqttBrowserClient(url, clientId);
+  debugPrint('[createMqttClient] url=$url clientId=$clientId alias=${config.serverAlias}');
+  // Must use withPort: MqttBrowserClient default constructor sets port=1883,
+  // and the browser WS connection replaces the URL's port with this field.
+  return MqttBrowserClient.withPort(url, clientId, config.port);
 }

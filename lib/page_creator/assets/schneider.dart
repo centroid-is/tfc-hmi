@@ -6,7 +6,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:rxdart/rxdart.dart';
 import 'package:open62541/open62541.dart'
     if (dart.library.js_interop) 'package:tfc_dart/core/web_stubs/open62541_stub.dart'
-    show AttributeId, DynamicValue, LocalizedText, NodeId;
+    as opcua;
+import 'package:tfc_dart/core/dynamic_value.dart' show DynamicValue, LocalizedText;
 
 import 'common.dart';
 import '../../painter/schneider/atv320.dart';
@@ -240,14 +241,17 @@ class _ATV320ConfigDialogState extends State<_ATV320ConfigDialog> {
       );
       await wrapper.client.awaitConnect();
 
-      final children = await wrapper.client.browse(nodeId);
+      final opcuaId = nodeId.isString()
+          ? opcua.NodeId.fromString(nodeId.namespace, nodeId.string)
+          : opcua.NodeId.fromNumeric(nodeId.namespace, nodeId.numeric);
+      final children = await wrapper.client.browse(opcuaId);
 
       // Batch read descriptions for all children
-      final readParams = <NodeId, List<AttributeId>>{};
+      final readParams = <opcua.NodeId, List<opcua.AttributeId>>{};
       for (final child in children) {
         readParams[child.nodeId] = [
-          AttributeId.UA_ATTRIBUTEID_DESCRIPTION,
-          AttributeId.UA_ATTRIBUTEID_DISPLAYNAME,
+          opcua.AttributeId.UA_ATTRIBUTEID_DESCRIPTION,
+          opcua.AttributeId.UA_ATTRIBUTEID_DISPLAYNAME,
         ];
       }
       final results = await wrapper.client.readAttribute(readParams);

@@ -1,28 +1,28 @@
 {
   "nodes": {
     "sensor.temperature": {
-      "mqtt_node": { "topic": "plant/sensor/temperature", "qos": 0, "payload_type": "json" }
+      "mqtt_node": { "server_alias": "mqtt-web", "topic": "plant/sensor/temperature", "qos": 0, "payload_type": "json" }
     },
     "actuator.valve": {
-      "mqtt_node": { "topic": "plant/actuator/valve", "qos": 1, "payload_type": "json" }
+      "mqtt_node": { "server_alias": "mqtt-web", "topic": "plant/actuator/valve", "qos": 1, "payload_type": "json" }
     },
     "inference.result": {
-      "mqtt_node": { "topic": "inference/result", "qos": 0, "payload_type": "json" }
+      "mqtt_node": { "server_alias": "mqtt-web", "topic": "inference/result", "qos": 0, "payload_type": "string" }
     },
     "inference.stats.processed": {
-      "mqtt_node": { "topic": "inference/stats/processed", "qos": 0, "payload_type": "json" }
+      "mqtt_node": { "server_alias": "mqtt-web", "topic": "inference/stats/processed", "qos": 0, "payload_type": "json" }
     },
     "inference.stats.avg_confidence": {
-      "mqtt_node": { "topic": "inference/stats/avg_confidence", "qos": 0, "payload_type": "json" }
+      "mqtt_node": { "server_alias": "mqtt-web", "topic": "inference/stats/avg_confidence", "qos": 0, "payload_type": "json" }
     },
     "inference.stats.latency_ms": {
-      "mqtt_node": { "topic": "inference/stats/latency_ms", "qos": 0, "payload_type": "json" }
+      "mqtt_node": { "server_alias": "mqtt-web", "topic": "inference/stats/latency_ms", "qos": 0, "payload_type": "json" }
     },
     "inference.stats.errors": {
-      "mqtt_node": { "topic": "inference/stats/errors", "qos": 0, "payload_type": "json" }
+      "mqtt_node": { "server_alias": "mqtt-web", "topic": "inference/stats/errors", "qos": 0, "payload_type": "json" }
     },
     "inference.control.pause": {
-      "mqtt_node": { "topic": "inference/control/pause", "qos": 1, "payload_type": "json" }
+      "mqtt_node": { "server_alias": "mqtt-web", "topic": "inference/control/pause", "qos": 1, "payload_type": "json" }
     }
   }
 }

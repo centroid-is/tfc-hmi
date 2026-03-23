@@ -100,7 +100,11 @@ class Preferences implements PreferencesApi {
 
   static Future<Preferences> create(
       {required dynamic db, PreferencesApi? localCache}) async {
-    throw UnsupportedError('Preferences.create not available on web');
+    return Preferences(
+      database: null,
+      secureStorage: null,
+      localCache: localCache,
+    );
   }
 
   Stream<String> get onPreferencesChanged => _onPreferencesChanged.stream;

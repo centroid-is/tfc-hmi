@@ -15,7 +15,7 @@ Future<StaticConfig?> loadStaticConfig() async {
         await http.get(Uri.parse('config/page-editor.json'));
 
     if (configResp.statusCode != 200 || keyMappingsResp.statusCode != 200) {
-      return null; // Required config files not found
+      return null;
     }
 
     return StaticConfig.fromStrings(
@@ -25,6 +25,6 @@ Future<StaticConfig?> loadStaticConfig() async {
           pageEditorResp.statusCode == 200 ? pageEditorResp.body : null,
     );
   } catch (_) {
-    return null; // Network error, DNS failure, timeout, etc.
+    return null;
   }
 }
