@@ -128,3 +128,12 @@ None - no external service configuration required.
 ---
 *Phase: 04-version-management*
 *Completed: 2026-03-23*
+
+## Self-Check: PASSED
+
+- FOUND: tools/centroidx-manager/internal/ui/picker.go
+- FOUND: tools/centroidx-manager/internal/ui/picker_test.go
+- FOUND: .planning/phases/04-version-management/04-01-SUMMARY.md
+- FOUND commit: 3bd408e (feat: Engine.ListAllReleases)
+- FOUND commit: 081328d (feat: picker UI, --picker flag)
+- Tests: all passing (`go test -tags ci ./internal/ui/ ./internal/update/ -count=1`)
