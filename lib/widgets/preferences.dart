@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:io' as io;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -9,13 +8,13 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:tfc/providers/database.dart';
 import 'package:tfc_mcp_server/tfc_mcp_server.dart'
+    if (dart.library.js_interop) 'package:tfc_mcp_server/tfc_mcp_server_web.dart'
     show McpConfig, McpToolToggles, readMcpConfigFromPreferences, writeMcpConfigToPreferences;
 
 import '../providers/mcp_bridge.dart';
 import '../providers/preferences.dart';
-import 'package:tfc_dart/core/preferences.dart';
+import 'package:tfc_dart/tfc_dart.dart';
 import 'package:tfc/core/preferences.dart';
-import 'package:tfc_dart/core/database.dart';
 
 /// MCP Server settings section for the preferences page.
 ///
@@ -235,7 +234,7 @@ class _McpServerSectionState extends ConsumerState<McpServerSection> {
                   setState(
                       () => _config = _config.copyWith(toggles: newToggles));
                   await _saveConfig(prefs);
-                  io.stderr.writeln(
+                  debugPrint(
                     'AUDIT: toggle_change key=${meta.key} '
                     'value=$value '
                     'timestamp=${DateTime.now().toIso8601String()}',
@@ -593,7 +592,7 @@ class _DatabaseConfigEditorState extends ConsumerState<_DatabaseConfigEditor> {
 }
 
 class PreferencesKeysWidget extends ConsumerStatefulWidget {
-  const PreferencesKeysWidget({Key? key}) : super(key: key);
+  const PreferencesKeysWidget({super.key});
 
   @override
   ConsumerState<PreferencesKeysWidget> createState() =>
@@ -790,7 +789,7 @@ class _PreferenceKeyTile extends StatefulWidget {
 class _PreferenceKeyTileState extends State<_PreferenceKeyTile> {
   late TextEditingController _controller;
   final _expansionController =
-      ExpansionTileController(); // todo deprecated since 3.31
+      ExpansibleController(); // todo deprecated since 3.31
   bool _isExpanded = false;
 
   @override

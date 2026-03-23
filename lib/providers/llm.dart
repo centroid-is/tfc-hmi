@@ -1,7 +1,6 @@
 import 'package:riverpod/riverpod.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
-import 'package:tfc_dart/core/preferences.dart';
 
 import '../llm/llm_models.dart';
 import '../llm/llm_provider.dart';

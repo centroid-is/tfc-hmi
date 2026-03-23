@@ -14,6 +14,9 @@ import 'package:tfc_dart/core/modbus_client_wrapper.dart' show ModbusDataType;
 import 'package:tfc/pages/key_repository.dart';
 import 'package:tfc/providers/preferences.dart';
 import 'package:tfc/providers/database.dart';
+import 'package:tfc/providers/static_config.dart';
+import 'package:tfc/providers/collector.dart';
+import 'package:tfc/providers/state_man.dart';
 
 import '../helpers/test_helpers.dart';
 
@@ -150,6 +153,12 @@ void main() {
               return testPrefs;
             }),
             databaseProvider.overrideWith((ref) async => null),
+            staticConfigProvider.overrideWith((ref) async => null),
+            collectorProvider.overrideWith((ref) async => null),
+            stateManProvider.overrideWith((ref) async => await StateMan.create(
+                  config: StateManConfig(opcua: [], modbus: [], jbtm: [], mqtt: []),
+                  keyMappings: KeyMappings(nodes: {}),
+                )),
           ],
           child: MaterialApp(
             home: Scaffold(body: KeyRepositoryContent()),
@@ -202,6 +211,12 @@ void main() {
               return testPrefs;
             }),
             databaseProvider.overrideWith((ref) async => null),
+            staticConfigProvider.overrideWith((ref) async => null),
+            collectorProvider.overrideWith((ref) async => null),
+            stateManProvider.overrideWith((ref) async => await StateMan.create(
+                  config: StateManConfig(opcua: [], modbus: [], jbtm: [], mqtt: []),
+                  keyMappings: KeyMappings(nodes: {}),
+                )),
           ],
           child: MaterialApp(
             home: Scaffold(body: KeyRepositoryContent()),
@@ -251,6 +266,12 @@ void main() {
               return testPrefs;
             }),
             databaseProvider.overrideWith((ref) async => null),
+            staticConfigProvider.overrideWith((ref) async => null),
+            collectorProvider.overrideWith((ref) async => null),
+            stateManProvider.overrideWith((ref) async => await StateMan.create(
+                  config: StateManConfig(opcua: [], modbus: [], jbtm: [], mqtt: []),
+                  keyMappings: KeyMappings(nodes: {}),
+                )),
           ],
           child: MaterialApp(
             home: Scaffold(body: KeyRepositoryContent()),
@@ -430,6 +451,12 @@ void main() {
               return testPrefs;
             }),
             databaseProvider.overrideWith((ref) async => null),
+            staticConfigProvider.overrideWith((ref) async => null),
+            collectorProvider.overrideWith((ref) async => null),
+            stateManProvider.overrideWith((ref) async => await StateMan.create(
+                  config: StateManConfig(opcua: [], modbus: [], jbtm: [], mqtt: []),
+                  keyMappings: KeyMappings(nodes: {}),
+                )),
           ],
           child: MaterialApp(
             home: Scaffold(body: KeyRepositoryContent()),
@@ -757,6 +784,12 @@ void main() {
               return testPrefs;
             }),
             databaseProvider.overrideWith((ref) async => null),
+            staticConfigProvider.overrideWith((ref) async => null),
+            collectorProvider.overrideWith((ref) async => null),
+            stateManProvider.overrideWith((ref) async => await StateMan.create(
+                  config: StateManConfig(opcua: [], modbus: [], jbtm: [], mqtt: []),
+                  keyMappings: KeyMappings(nodes: {}),
+                )),
           ],
           child: MaterialApp(
             home: Scaffold(
@@ -797,6 +830,12 @@ void main() {
               return testPrefs;
             }),
             databaseProvider.overrideWith((ref) async => null),
+            staticConfigProvider.overrideWith((ref) async => null),
+            collectorProvider.overrideWith((ref) async => null),
+            stateManProvider.overrideWith((ref) async => await StateMan.create(
+                  config: StateManConfig(opcua: [], modbus: [], jbtm: [], mqtt: []),
+                  keyMappings: KeyMappings(nodes: {}),
+                )),
           ],
           child: MaterialApp(
             home: Scaffold(
@@ -1100,6 +1139,12 @@ void main() {
               return testPrefs;
             }),
             databaseProvider.overrideWith((ref) async => null),
+            staticConfigProvider.overrideWith((ref) async => null),
+            collectorProvider.overrideWith((ref) async => null),
+            stateManProvider.overrideWith((ref) async => await StateMan.create(
+                  config: StateManConfig(opcua: [], modbus: [], jbtm: [], mqtt: []),
+                  keyMappings: KeyMappings(nodes: {}),
+                )),
           ],
           child: MaterialApp(
             home: Scaffold(body: KeyRepositoryContent()),

@@ -9,7 +9,8 @@ import 'package:tfc/page_creator/assets/drawing_viewer.dart';
 import 'package:tfc/page_creator/assets/registry.dart';
 import 'package:tfc/providers/tech_doc.dart';
 import 'package:tfc/tech_docs/tech_doc_picker.dart';
-import 'package:tfc_mcp_server/tfc_mcp_server.dart';
+import 'package:tfc_mcp_server/tfc_mcp_server.dart'
+    if (dart.library.js_interop) 'package:tfc_mcp_server/tfc_mcp_server_web.dart';
 
 void main() {
   group('DrawingViewerConfig serialization', () {

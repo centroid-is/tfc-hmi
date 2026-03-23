@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../widgets/alarm.dart';
 import '../widgets/base_scaffold.dart';
-import 'package:tfc_dart/core/alarm.dart';
+import 'package:tfc_dart/tfc_dart.dart';
 import '../providers/alarm.dart';
 import '../providers/proposal_state.dart';
 
@@ -12,7 +12,7 @@ class AlarmEditorPage extends ConsumerStatefulWidget {
   /// Optional proposal JSON passed via Beamer route data.
   final String? proposalData;
 
-  const AlarmEditorPage({Key? key, this.proposalData}) : super(key: key);
+  const AlarmEditorPage({super.key, this.proposalData});
 
   @override
   ConsumerState<AlarmEditorPage> createState() => _AlarmEditorPageState();
@@ -210,10 +210,10 @@ class _AlarmEditorPageState extends ConsumerState<AlarmEditorPage> {
                           _create = false;
                         });
                       },
-                      onCreate: (config_template) {
+                      onCreate: (configTemplate) {
                         setState(() {
                           _create = true;
-                          _createTemplate = config_template;
+                          _createTemplate = configTemplate;
                           _edit = null;
                           _show = null;
                         });

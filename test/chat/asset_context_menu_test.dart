@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:tfc_dart/core/alarm.dart';
 import 'package:tfc_dart/core/boolean_expression.dart';
 import 'package:tfc_mcp_server/tfc_mcp_server.dart'
+    if (dart.library.js_interop) 'package:tfc_mcp_server/tfc_mcp_server_web.dart'
     show TechDocIndex, TechDocSection, TechDocSummary, TechDocSearchResult, TechDocLink, ParsedSection,
          DrawingIndex, DrawingSearchResult, DrawingSummary, DrawingPageText;
 import 'package:tfc_mcp_server/src/services/plc_context_service.dart'

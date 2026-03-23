@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:rxdart/rxdart.dart';
 import 'package:cristalyse/cristalyse.dart' as cs;
-import 'package:tfc_dart/core/database.dart';
+import 'package:tfc_dart/tfc_dart.dart';
 
 import 'graph.dart';
 import '../providers/collector.dart';
@@ -125,7 +125,7 @@ class _HistoryGraphPaneState extends ConsumerState<HistoryGraphPane> {
           } else {
             return Stream.fromFuture(collector.database.queryTimeseriesData(
                 k, fetchRange!.end,
-                from: fetchRange!.start));
+                from: fetchRange.start));
           }
         }).toList();
 
@@ -521,9 +521,9 @@ class _HistoryGraphPaneState extends ConsumerState<HistoryGraphPane> {
             : 'Y',
       ),
       yAxis2: (displayCfg?.yAxis2Unit != null &&
-              displayCfg!.yAxis2Unit!.isNotEmpty)
+              displayCfg!.yAxis2Unit.isNotEmpty)
           ? GraphAxisConfig(
-              unit: displayCfg.yAxis2Unit!,
+              unit: displayCfg.yAxis2Unit,
               title: displayCfg.yAxis2Unit,
             )
           : graphData.any((m) => m.keys.any((k) => !k.mainAxis))

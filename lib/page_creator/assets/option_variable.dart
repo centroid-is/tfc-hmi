@@ -116,6 +116,7 @@ class OptionVariableConfig extends BaseAsset {
 
   factory OptionVariableConfig.fromJson(Map<String, dynamic> json) =>
       _$OptionVariableConfigFromJson(json);
+  @override
   Map<String, dynamic> toJson() => _$OptionVariableConfigToJson(this);
 }
 
@@ -546,7 +547,7 @@ class _ConfigContent extends ConsumerWidget {
 
         // Default option
         DropdownButtonFormField<String?>(
-          value: config.options.any((o) => o.value == config.defaultValue)
+          initialValue: config.options.any((o) => o.value == config.defaultValue)
               ? config.defaultValue
               : null,
           decoration: const InputDecoration(
@@ -841,7 +842,6 @@ class _OptionsEditorDialog extends StatefulWidget {
 
 class _OptionsEditorDialogState extends State<_OptionsEditorDialog> {
   late List<OptionItem> _options;
-  final _formKey = GlobalKey<FormState>();
 
   @override
   void initState() {

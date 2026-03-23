@@ -1,13 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
-import 'package:tfc_dart/core/state_man.dart';
-import 'package:tfc_dart/core/modbus_client_wrapper.dart' show ModbusDataType;
-import 'package:tfc_dart/core/umas_types.dart' show mapUmasDataTypeToModbus;
-import 'package:tfc_dart/core/collector.dart';
-import 'package:tfc_dart/core/database.dart';
-import 'package:jbtm/src/m2400.dart' show M2400RecordType;
+import 'package:tfc_dart/tfc_dart.dart';
+import 'package:jbtm/src/m2400.dart'
+    if (dart.library.js_interop) 'package:tfc_dart/core/web_stubs/jbtm_m2400_stub.dart'
+    show M2400RecordType;
 import 'package:jbtm/src/m2400_fields.dart'
+    if (dart.library.js_interop) 'package:tfc_dart/core/web_stubs/jbtm_m2400_fields_stub.dart'
     show M2400Field, WeigherStatus, expectedFields;
 import '../providers/state_man.dart';
 import '../pages/key_repository.dart' show ModbusConfigListExt;

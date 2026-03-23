@@ -1,6 +1,7 @@
 /// Tests for optimistic UI behavior: pending uploads appear dimmed,
 /// pending deletes hide rows, DB operations are transactional,
 /// and extract/store split produces correct display data.
+library;
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -9,8 +10,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:tfc_mcp_server/src/database/server_database.dart';
 import 'package:tfc_mcp_server/src/interfaces/tech_doc_index.dart';
 import 'package:tfc_mcp_server/src/services/drift_tech_doc_index.dart';
-import 'package:tfc_mcp_server/tfc_mcp_server.dart'
-    show TechDocSummary, TechDocSection;
 
 import 'package:tfc/providers/tech_doc.dart';
 import 'package:tfc/tech_docs/tech_doc_library_section.dart';

@@ -13,7 +13,7 @@ import 'package:tfc/providers/preferences.dart';
 import 'package:tfc/widgets/dynamic_value.dart';
 import 'package:tfc_dart/converter/dynamic_value_converter.dart';
 
-import 'package:open62541/open62541.dart' show DynamicValue;
+import 'package:tfc_dart/core/dynamic_value.dart' show DynamicValue;
 
 part 'recipes.g.dart';
 
@@ -228,7 +228,7 @@ class _RecipesState extends ConsumerState<Recipes> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               // Lines
-              Container(
+              SizedBox(
                 width: 100,
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -252,7 +252,7 @@ class _RecipesState extends ConsumerState<Recipes> {
               ),
               VerticalDivider(),
               // Recipes list
-              Container(
+              SizedBox(
                 width: 200,
                 child: LayoutBuilder(
                   builder: (context, constraints) {

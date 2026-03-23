@@ -1,4 +1,4 @@
-import 'dart:io' show Platform;
+import 'package:tfc/core/platform_io.dart';
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';

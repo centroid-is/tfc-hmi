@@ -44,7 +44,6 @@ void main() async {
   final stateMan = await StateMan.create(
     config: alarmSmConfig,
     keyMappings: keyMappings,
-    useIsolate: false,
     alias: 'alarmman',
   );
 

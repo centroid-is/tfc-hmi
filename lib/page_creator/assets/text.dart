@@ -2,7 +2,7 @@ import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_colorpicker/flutter_colorpicker.dart';
-import 'package:open62541/open62541.dart' show DynamicValue;
+import 'package:tfc_dart/core/dynamic_value.dart' show DynamicValue;
 import 'package:rxdart/rxdart.dart';
 
 import 'common.dart';
@@ -97,6 +97,7 @@ class TextAssetConfig extends BaseAsset {
 
   factory TextAssetConfig.fromJson(Map<String, dynamic> json) =>
       _$TextAssetConfigFromJson(json);
+  @override
   Map<String, dynamic> toJson() => _$TextAssetConfigToJson(this);
 }
 
@@ -110,7 +111,7 @@ class TextAssetWidget extends ConsumerStatefulWidget {
 }
 
 class _TextAssetWidgetState extends ConsumerState<TextAssetWidget> {
-  Map<String, String> _variableValues = {};
+  final Map<String, String> _variableValues = {};
   bool _hasError = false;
   String _errorMessage = '';
 
