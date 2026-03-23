@@ -199,7 +199,10 @@ void main() {
         language: null,
       );
 
-      expect(capturedHeaders['authorization'], equals('Bearer ghp_testtoken123'));
+      // http package may normalize header keys to lowercase
+      final authValue = capturedHeaders['authorization'] ??
+          capturedHeaders['Authorization'];
+      expect(authValue, equals('Bearer ghp_testtoken123'));
     });
 
     // Test 9: Omits Authorization header when token is null/empty
@@ -219,7 +222,9 @@ void main() {
         language: null,
       );
 
-      expect(capturedHeaders.containsKey('authorization'), isFalse);
+      final hasAuth = capturedHeaders.containsKey('authorization') ||
+          capturedHeaders.containsKey('Authorization');
+      expect(hasAuth, isFalse);
     });
   });
 }
