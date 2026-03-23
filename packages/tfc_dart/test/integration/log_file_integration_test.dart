@@ -67,11 +67,22 @@ void main() {
 
       // Run the helper as a subprocess. It writes Dart logger output to the
       // file via RandomAccessFile and open62541 native output to stdout.
-      final result = await Process.run(
-        Platform.resolvedExecutable,
-        ['run', helperSrc, logFilePath],
-        workingDirectory: Directory.current.path,
-      );
+      // Retry once on Windows if the native build hook has a DLL copy race
+      // (PathExistsException — a known Dart tooling issue).
+      var result = ProcessResult(0, -1, '', '');
+      for (var attempt = 0; attempt < 2; attempt++) {
+        result = await Process.run(
+          Platform.resolvedExecutable,
+          ['run', helperSrc, logFilePath],
+          workingDirectory: Directory.current.path,
+        );
+        if (result.exitCode == 0 ||
+            !(result.stderr as String).contains('PathExistsException')) {
+          break;
+        }
+        // Wait briefly and retry
+        await Future.delayed(Duration(seconds: 2));
+      }
 
       // Append subprocess stdout/stderr (native open62541 output) to log file
       final logFile = File(logFilePath).openSync(mode: FileMode.append);
