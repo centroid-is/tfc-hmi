@@ -81,7 +81,11 @@ Plans:
   2. Selecting any previous version from the list installs it, replacing the current version (rollback works)
   3. A deep-link from the Flutter app's Settings page opens the manager directly to the version picker
   4. Version comparisons using the `YYYY.MM.DD+build` format are correct — `2026.10.1` is correctly identified as newer than `2026.9.30`
-**Plans**: TBD
+**Plans:** 0/2 plans executed
+
+Plans:
+- [ ] 04-01-PLAN.md — Go engine ListAllReleases + Fyne version picker UI + --picker flag (TDD)
+- [ ] 04-02-PLAN.md — Flutter launchForPicker + VersionManagerPage + Advanced Settings wiring (TDD)
 
 ### Phase 5: Integration Tests
 **Goal**: The complete update flow is validated against real GitHub Releases in CI, confirming each platform's install commands execute correctly on clean machines
@@ -90,7 +94,11 @@ Plans:
 **Success Criteria** (what must be TRUE):
   1. A CI job downloads a real asset from a GitHub Release, verifies the SHA256 checksum, and the test passes against the live GitHub Releases API
   2. Platform install commands (`Add-AppxPackage`, `dpkg -i`, `hdiutil`+copy) execute correctly and are verified per platform in CI
-**Plans**: TBD
+**Plans:** 2 plans
+
+Plans:
+- [x] 05-01-PLAN.md — E2E download + SHA256 verify against live GitHub Releases (TEST-03)
+- [x] 05-02-PLAN.md — Platform install command verification per OS in CI (TEST-04)
 
 ## Progress
 
@@ -102,5 +110,5 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 | 1. Foundation | 3/3 | Complete   | 2026-03-23 |
 | 2. Core Engine | 5/5 | Complete   | 2026-03-23 |
 | 3. Flutter Integration | 1/2 | In Progress|  |
-| 4. Version Management | 0/TBD | Not started | - |
-| 5. Integration Tests | 0/TBD | Not started | - |
+| 4. Version Management | 0/2 | Planned    |  |
+| 5. Integration Tests | 0/2 | Planned | - |

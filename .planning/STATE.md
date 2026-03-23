@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Phase complete — ready for verification
-stopped_at: Completed 03-flutter-integration-03-02-PLAN.md
-last_updated: "2026-03-23T19:44:31.928Z"
+stopped_at: Completed 05-02-PLAN.md
+last_updated: "2026-03-23T20:28:07.081Z"
 progress:
   total_phases: 5
-  completed_phases: 2
-  total_plans: 10
-  completed_plans: 9
+  completed_phases: 5
+  total_plans: 14
+  completed_plans: 14
 ---
 
 # Project State
@@ -19,11 +19,11 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-23)
 
 **Core value:** Users receive a seamless, one-click update experience — popup notification on startup, click yes, app updates and reopens — without depending on the Microsoft Store
-**Current focus:** Phase 03 — Flutter Integration
+**Current focus:** Phase 05 — Integration Tests
 
 ## Current Position
 
-Phase: 03 (Flutter Integration) — EXECUTING
+Phase: 05 (Integration Tests) — EXECUTING
 Plan: 2 of 2
 
 ## Performance Metrics
@@ -56,6 +56,10 @@ Plan: 2 of 2
 | Phase 02-core-engine P05 | 5 | 2 tasks | 7 files |
 | Phase 03-flutter-integration P01 | 6 | 2 tasks | 7 files |
 | Phase 03-flutter-integration P02 | 3 | 2 tasks | 6 files |
+| Phase 04-version-management P02 | 152 | 2 tasks | 4 files |
+| Phase 04-version-management P01 | 25 | 2 tasks | 6 files |
+| Phase 05-integration-tests P01 | 2 | 2 tasks | 2 files |
+| Phase 05 P02 | 2 | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -92,6 +96,16 @@ Recent decisions affecting current work:
 - [Phase 03-flutter-integration]: Injectable typedefs pattern (ProcessStarter, CommandRunner, AssetLoader, PathResolver) established for testable process/filesystem operations in Dart
 - [Phase 03-flutter-integration]: Use upgrader.state.versionInfo (not currentVersionInfo) for appStoreVersion - Upgrader v11 exposes version info through UpgraderState, not a direct getter on Upgrader class
 - [Phase 03-flutter-integration]: Instantiate ManagerLauncher with rootBundle-backed assetLoader in main.dart - avoids UnimplementedError from _flutterServices() placeholder in production
+- [Phase 04-version-management]: managerLauncher promoted to module level — avoids threading it through createLocationBuilder, matches dbusCompleter pattern
+- [Phase 04-version-management]: ProcessStartMode.normal for launchForPicker — picker window is interactive and stays open alongside Flutter app unlike launchForUpdate (detached)
+- [Phase 04-01]: Use -tags ci for Fyne UI tests to disable GLFW driver (no CGO required in test environment)
+- [Phase 04-01]: ShowVersionPicker returns *widget.List for testability, accepts nil window for unit tests
+- [Phase 04-01]: ListAllReleases uses sort.Slice with semver.GreaterThan to avoid month boundary pitfall of string comparison
+- [Phase 05-integration-tests]: Integration tests placed in package update (same package) to access unexported selectPlatformAssetName() helper for platform-agnostic asset discovery
+- [Phase 05-integration-tests]: Tests use t.Skip (not t.Fatal) when no matching platform asset found — keeps CI green in repos without all platform assets
+- [Phase 05]: Same package (package platform) for integration tests to access parseMountPoint() without exporting it
+- [Phase 05]: Linux DpkgDryRun uses dpkg --info (not dpkg -i) so no root access is needed on CI runners
+- [Phase 05]: Platform test step gets 120s timeout vs 300s for download tests — local commands only, no network
 
 ### Pending Todos
 
@@ -105,6 +119,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-23T19:44:31.925Z
-Stopped at: Completed 03-flutter-integration-03-02-PLAN.md
+Last session: 2026-03-23T20:28:07.078Z
+Stopped at: Completed 05-02-PLAN.md
 Resume file: None

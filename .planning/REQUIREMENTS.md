@@ -45,10 +45,10 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Version Management & Rollback
 
-- [ ] **VER-01**: Manager UI lists all available versions from GitHub Releases
-- [ ] **VER-02**: User can install any previous version (rollback)
-- [ ] **VER-03**: Settings page in Flutter app links to manager's version picker
-- [ ] **VER-04**: Version comparison handles YYYY.MM.DD+build format correctly
+- [x] **VER-01**: Manager UI lists all available versions from GitHub Releases
+- [x] **VER-02**: User can install any previous version (rollback)
+- [x] **VER-03**: Settings page in Flutter app links to manager's version picker
+- [x] **VER-04**: Version comparison handles YYYY.MM.DD+build format correctly
 
 ### CI/CD & Distribution
 
@@ -61,8 +61,8 @@ Requirements for initial release. Each maps to roadmap phases.
 
 - [x] **TEST-01**: Unit tests for version comparison, GitHub API client, download+verify logic
 - [x] **TEST-02**: Integration test: mock HTTP server simulating GitHub Releases API
-- [ ] **TEST-03**: E2E test: download real asset from GitHub Release and verify checksum
-- [ ] **TEST-04**: Platform install test: verify install commands execute correctly per platform
+- [x] **TEST-03**: E2E test: download real asset from GitHub Release and verify checksum
+- [x] **TEST-04**: Platform install test: verify install commands execute correctly per platform
 
 ## v2 Requirements
 
@@ -122,18 +122,18 @@ Which phases cover which requirements. Updated during roadmap creation.
 | FLT-05 | Phase 3 | Complete |
 | FLT-06 | Phase 3 | Complete |
 | FLT-07 | Phase 3 | Complete |
-| VER-01 | Phase 4 | Pending |
-| VER-02 | Phase 4 | Pending |
-| VER-03 | Phase 4 | Pending |
-| VER-04 | Phase 4 | Pending |
+| VER-01 | Phase 4 | Complete |
+| VER-02 | Phase 4 | Complete |
+| VER-03 | Phase 4 | Complete |
+| VER-04 | Phase 4 | Complete |
 | CI-01 | Phase 1 | Complete |
 | CI-02 | Phase 1 | Complete |
 | CI-03 | Phase 1 | Complete |
 | CI-04 | Phase 1 | Complete |
 | TEST-01 | Phase 2 | Complete |
 | TEST-02 | Phase 2 | Complete |
-| TEST-03 | Phase 5 | Pending |
-| TEST-04 | Phase 5 | Pending |
+| TEST-03 | Phase 5 | Complete |
+| TEST-04 | Phase 5 | Complete |
 
 **Coverage:**
 - v1 requirements: 36 total
