@@ -50,10 +50,10 @@ dependencies:
   rxdart: ^0.28.0
   amplify_secure_storage_dart: ^0.5.6
   upgrader: ^11.5.1
-  microsoft_store_upgrader:
-    git:
-      url: https://github.com/centroid-is/microsoft-store-upgrader.git
-      ref: main
+  http: ^1.6.0
+  path_provider: ^2.1.5
+  centroidx_upgrader:
+    path: ../packages/centroidx_upgrader
 
 dev_dependencies:
   flutter_native_splash: ^2.4.6
@@ -84,6 +84,7 @@ flutter:
 
 assets:
   - assets/icon.png
+  - assets/manager/
 
 flutter_launcher_icons:
   android: true
@@ -136,4 +137,7 @@ msix_config:
   identity_name: Centroid.CentroidX
   architecture: x64
   capabilities: "internetClient,privateNetworkClientServer"
-  store: true
+  store: false
+  certificate_path: centroidx-sideload.pfx
+  certificate_password: PLACEHOLDER_SET_IN_CI
+  signtool_options: /fd SHA256 /tr http://timestamp.digicert.com /td SHA256
