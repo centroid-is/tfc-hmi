@@ -41,20 +41,50 @@ func (e execRunner) Run(name string, args ...string) ([]byte, error) {
 // installWindows runs Add-AppxPackage via PowerShell to install an MSIX.
 // -ForceApplicationShutdown ensures any running package processes are stopped first.
 func installWindows(runner CommandRunner, assetPath string) error {
+	// First attempt: install directly.
 	out, err := runner.Run(
 		"powershell",
 		"-NoProfile", "-NonInteractive",
 		"-Command",
 		"Add-AppxPackage -Path '"+assetPath+"' -ForceApplicationShutdown",
 	)
-	if err != nil {
-		detail := strings.TrimSpace(string(out))
-		if detail != "" {
-			return &commandError{op: "Add-AppxPackage failed: " + detail, cause: err}
-		}
-		return &commandError{op: "Add-AppxPackage failed", cause: err}
+	if err == nil {
+		return nil
 	}
-	return nil
+
+	detail := strings.TrimSpace(string(out))
+
+	// If the error is a publisher conflict (0x80073CFB), remove the old package
+	// and retry. This happens when switching from Store to sideload signing.
+	if strings.Contains(detail, "0x80073CFB") || strings.Contains(detail, "conflicting") {
+		// Remove conflicting package(s) with the same identity name
+		runner.Run(
+			"powershell",
+			"-NoProfile", "-NonInteractive",
+			"-Command",
+			"Get-AppxPackage -Name 'Centroid.CentroidX' | Remove-AppxPackage",
+		)
+		// Retry install
+		out2, err2 := runner.Run(
+			"powershell",
+			"-NoProfile", "-NonInteractive",
+			"-Command",
+			"Add-AppxPackage -Path '"+assetPath+"' -ForceApplicationShutdown",
+		)
+		if err2 != nil {
+			detail2 := strings.TrimSpace(string(out2))
+			if detail2 != "" {
+				return &commandError{op: "Add-AppxPackage failed after removing conflict: " + detail2, cause: err2}
+			}
+			return &commandError{op: "Add-AppxPackage failed after removing conflict", cause: err2}
+		}
+		return nil
+	}
+
+	if detail != "" {
+		return &commandError{op: "Add-AppxPackage failed: " + detail, cause: err}
+	}
+	return &commandError{op: "Add-AppxPackage failed", cause: err}
 }
 
 // trustCertificateWindows imports a certificate into LocalMachine\TrustedPeople.

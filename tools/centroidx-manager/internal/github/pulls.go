@@ -59,7 +59,7 @@ func (c *githubClient) ListPRsWithArtifacts(ctx context.Context, platformAssetNa
 		}
 
 		// Get workflow runs for this PR's head branch
-		artifacts, err := c.fetchBranchArtifacts(ctx, info.Branch, platformAssetName)
+		artifacts, err := c.fetchBranchArtifacts(ctx, info.Branch, "")
 		if err != nil {
 			// Skip PRs where we can't fetch artifacts (permissions, etc.)
 			continue
@@ -75,9 +75,25 @@ func (c *githubClient) ListPRsWithArtifacts(ctx context.Context, platformAssetNa
 }
 
 // fetchBranchArtifacts gets the latest workflow run artifacts for a branch.
+// Checks multiple workflows: windows.yml (MSIX), build-manager.yml (Go binary).
 func (c *githubClient) fetchBranchArtifacts(ctx context.Context, branch, platformAssetName string) ([]PRArtifact, error) {
-	// List workflow runs for this branch, filtered to success
-	runs, _, err := c.client.Actions.ListWorkflowRunsByFileName(ctx, c.owner, c.repo, "build-manager.yml", &gogithub.ListWorkflowRunsOptions{
+	// Try windows.yml first (produces MSIX), then fall back to build-manager.yml
+	workflows := []string{"windows.yml", "build-manager.yml"}
+	for _, wf := range workflows {
+		arts, err := c.fetchWorkflowArtifacts(ctx, branch, wf)
+		if err != nil {
+			continue
+		}
+		if len(arts) > 0 {
+			return arts, nil
+		}
+	}
+	return nil, nil
+}
+
+// fetchWorkflowArtifacts gets artifacts from the latest successful run of a workflow.
+func (c *githubClient) fetchWorkflowArtifacts(ctx context.Context, branch, workflowFile string) ([]PRArtifact, error) {
+	runs, _, err := c.client.Actions.ListWorkflowRunsByFileName(ctx, c.owner, c.repo, workflowFile, &gogithub.ListWorkflowRunsOptions{
 		Branch: branch,
 		Status: "success",
 		ListOptions: gogithub.ListOptions{PerPage: 1},
@@ -99,15 +115,11 @@ func (c *githubClient) fetchBranchArtifacts(ctx context.Context, branch, platfor
 
 	var result []PRArtifact
 	for _, a := range artList.Artifacts {
-		name := a.GetName()
-		// Only include the matching platform artifact
-		if name == platformAssetName {
-			result = append(result, PRArtifact{
-				Name:        name,
-				DownloadURL: a.GetArchiveDownloadURL(),
-				SizeBytes:   a.GetSizeInBytes(),
-			})
-		}
+		result = append(result, PRArtifact{
+			Name:        a.GetName(),
+			DownloadURL: a.GetArchiveDownloadURL(),
+			SizeBytes:   a.GetSizeInBytes(),
+		})
 	}
 	return result, nil
 }

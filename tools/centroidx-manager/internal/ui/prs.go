@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gioui.org/app"
 	"gioui.org/layout"
@@ -87,12 +88,12 @@ func layoutPRPicker(gtx layout.Context, th *material.Theme, state *prPickerState
 		return layout.Center.Layout(gtx, lbl.Layout)
 	}
 
-	// Handle install
+	// Handle install — pick first MSIX artifact, fall back to first available
 	if state.installBtn.Clicked(gtx) && state.selected >= 0 && !state.installing {
 		state.installing = true
 		pr := state.prs[state.selected]
-		art := pr.Artifacts[0]
-		state.statusMsg = fmt.Sprintf("Downloading PR #%d artifact...", pr.Number)
+		art := pickBestArtifact(pr.Artifacts)
+		state.statusMsg = fmt.Sprintf("Downloading %s from PR #%d...", art.Name, pr.Number)
 		go func() {
 			err := downloadAndInstallArtifact(client, installer, art, func(msg string, pct float32) {
 				state.statusMsg = msg
@@ -244,6 +245,16 @@ func layoutPRDetail(gtx layout.Context, th *material.Theme, state *prPickerState
 type PRInstaller interface {
 	Install(assetPath string) error
 	LaunchApp() error
+}
+
+// pickBestArtifact selects the best artifact to install — prefers MSIX, falls back to first.
+func pickBestArtifact(artifacts []ghclient.PRArtifact) ghclient.PRArtifact {
+	for _, a := range artifacts {
+		if strings.HasSuffix(a.Name, ".msix") || strings.Contains(a.Name, "msix") || strings.Contains(a.Name, "MSIX") {
+			return a
+		}
+	}
+	return artifacts[0]
 }
 
 // downloadAndInstallArtifact downloads a GitHub Actions artifact zip, extracts
