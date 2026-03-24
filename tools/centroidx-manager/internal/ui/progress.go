@@ -1,37 +1,60 @@
 package ui
 
 import (
-	"fyne.io/fyne/v2"
-	"fyne.io/fyne/v2/dialog"
-	"fyne.io/fyne/v2/widget"
+	"image"
+	"image/color"
+
+	"gioui.org/layout"
+	"gioui.org/op/clip"
+	"gioui.org/op/paint"
+	"gioui.org/unit"
+	"gioui.org/widget/material"
 )
 
-// NewProgressDialog creates a custom download-progress dialog containing a
-// ProgressBar. The dialog uses dialog.NewCustomWithoutButtons (the deprecated
-// dialog.NewProgress must NOT be used per project constraints).
-//
-// Returns the ProgressBar and the dialog. Caller must call dlg.Show() to
-// display it and dlg.Hide() when the operation completes.
-func NewProgressDialog(win fyne.Window, title string) (*widget.ProgressBar, dialog.Dialog) {
-	bar := widget.NewProgressBar()
-	bar.Min = 0
-	bar.Max = 1
-
-	dlg := dialog.NewCustomWithoutButtons(title, bar, win)
-	return bar, dlg
+// layoutProgress renders a centered status label with a progress bar below it.
+func layoutProgress(gtx layout.Context, th *material.Theme, state *appState) layout.Dimensions {
+	return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		gtx.Constraints.Max.X = gtx.Dp(unit.Dp(400))
+		return layout.Flex{Axis: layout.Vertical, Alignment: layout.Middle}.Layout(gtx,
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				lbl := material.H6(th, state.status)
+				if state.err != nil {
+					lbl.Color = color.NRGBA{R: 200, A: 255}
+				}
+				return lbl.Layout(gtx)
+			}),
+			layout.Rigid(layout.Spacer{Height: unit.Dp(16)}.Layout),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return drawProgressBar(gtx, th, state.progress)
+			}),
+		)
+	})
 }
 
-// UpdateProgress sets the progress bar value based on bytes downloaded vs total.
-// MUST be called via fyne.Do() when invoked from a goroutine (Fyne v2.6+ thread safety).
-//
-// Example:
-//
-//	fyne.Do(func() {
-//	    ui.UpdateProgress(bar, downloaded, total)
-//	})
-func UpdateProgress(bar *widget.ProgressBar, downloaded, total int64) {
-	if total <= 0 {
-		return
+// drawProgressBar renders a simple horizontal progress bar.
+func drawProgressBar(gtx layout.Context, th *material.Theme, progress float32) layout.Dimensions {
+	width := gtx.Constraints.Max.X
+	height := gtx.Dp(unit.Dp(8))
+
+	// Background track
+	trackRect := image.Rect(0, 0, width, height)
+	trackClip := clip.Rect(trackRect).Push(gtx.Ops)
+	paint.ColorOp{Color: color.NRGBA{R: 220, G: 220, B: 220, A: 255}}.Add(gtx.Ops)
+	paint.PaintOp{}.Add(gtx.Ops)
+	trackClip.Pop()
+
+	// Filled portion
+	if progress > 0 {
+		fillWidth := int(float32(width) * progress)
+		if fillWidth > width {
+			fillWidth = width
+		}
+		fillRect := image.Rect(0, 0, fillWidth, height)
+		fillClip := clip.Rect(fillRect).Push(gtx.Ops)
+		paint.ColorOp{Color: th.Palette.ContrastBg}.Add(gtx.Ops)
+		paint.PaintOp{}.Add(gtx.Ops)
+		fillClip.Pop()
 	}
-	bar.SetValue(float64(downloaded) / float64(total))
+
+	return layout.Dimensions{Size: image.Point{X: width, Y: height}}
 }

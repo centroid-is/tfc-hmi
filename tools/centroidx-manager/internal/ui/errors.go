@@ -1,26 +1,21 @@
 package ui
 
 import (
-	"errors"
 	"strings"
 
-	"fyne.io/fyne/v2"
-	"fyne.io/fyne/v2/dialog"
-	"fyne.io/fyne/v2/widget"
+	"gioui.org/layout"
+	"gioui.org/unit"
+	"gioui.org/widget"
+	"gioui.org/widget/material"
 
 	"github.com/centroid-is/centroidx-manager/internal/update"
 )
 
-// ShowError categorises err and shows a user-friendly Fyne error dialog.
-//
-// Error categories:
-//   - Contains "network", "dial", or "connection refused" → Network Error
-//   - Contains "checksum" → Download Verification Failed
-//   - Contains "permission" or "access denied" → Permission Error
-//   - Default: original error message
-func ShowError(win fyne.Window, err error) {
-	msg := userFriendlyMessage(err)
-	dialog.ShowError(errors.New(msg), win)
+// ConfirmState tracks whether the user has confirmed an action.
+type ConfirmState struct {
+	installBtn widget.Clickable
+	cancelBtn  widget.Clickable
+	confirmed  bool
 }
 
 // userFriendlyMessage converts an error into a human-readable string.
@@ -36,44 +31,51 @@ func userFriendlyMessage(err error) string {
 		strings.Contains(lower, "no such host") ||
 		strings.Contains(lower, "i/o timeout"):
 		return "Network Error: Could not reach the update server. Check your internet connection."
-
 	case strings.Contains(lower, "checksum"):
 		return "Download Verification Failed: The downloaded file may be corrupted. Please try again."
-
 	case strings.Contains(lower, "permission") ||
 		strings.Contains(lower, "access denied") ||
 		strings.Contains(lower, "access is denied"):
 		return "Permission Error: The installer needs administrator privileges. Please try running as administrator."
-
 	default:
 		return err.Error()
 	}
 }
 
-// ShowReleaseNotes shows a dialog with the release notes and Install/Cancel buttons.
-// onConfirm is called when the user clicks "Install"; nothing happens on "Cancel".
-//
-// The notes content is rendered using widget.NewRichTextFromMarkdown so that
-// GitHub Markdown (headings, lists, bold) is displayed correctly.
-func ShowReleaseNotes(win fyne.Window, info *update.ReleaseInfo, onConfirm func()) {
+// layoutReleaseNotes shows release notes with Install/Cancel buttons.
+func layoutReleaseNotes(gtx layout.Context, th *material.Theme, info *update.ReleaseInfo, state *ConfirmState) layout.Dimensions {
 	notes := info.Notes
 	if notes == "" {
 		notes = "No release notes available."
 	}
 
-	notesWidget := widget.NewRichTextFromMarkdown(notes)
-	notesWidget.Wrapping = fyne.TextWrapWord
+	if state.installBtn.Clicked(gtx) {
+		state.confirmed = true
+	}
 
-	dialog.NewCustomConfirm(
-		"Update Available: v"+info.Version,
-		"Install",
-		"Cancel",
-		notesWidget,
-		func(ok bool) {
-			if ok {
-				onConfirm()
-			}
-		},
-		win,
-	).Show()
+	return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		gtx.Constraints.Max.X = gtx.Dp(unit.Dp(500))
+		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return material.H5(th, "Update Available: v"+info.Version).Layout(gtx)
+			}),
+			layout.Rigid(layout.Spacer{Height: unit.Dp(12)}.Layout),
+			layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+				return material.Body1(th, notes).Layout(gtx)
+			}),
+			layout.Rigid(layout.Spacer{Height: unit.Dp(12)}.Layout),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return layout.Flex{Spacing: layout.SpaceStart}.Layout(gtx,
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return material.Button(th, &state.installBtn, "Install").Layout(gtx)
+					}),
+					layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						btn := material.Button(th, &state.cancelBtn, "Cancel")
+						return btn.Layout(gtx)
+					}),
+				)
+			}),
+		)
+	})
 }

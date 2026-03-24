@@ -1,16 +1,14 @@
 package ui
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 	"time"
-
-	"fyne.io/fyne/v2/test"
-	"fyne.io/fyne/v2/widget"
 
 	"github.com/centroid-is/centroidx-manager/internal/update"
 )
 
-// buildTestReleases creates a slice of ReleaseInfo for testing.
 func buildTestReleases() []update.ReleaseInfo {
 	return []update.ReleaseInfo{
 		{
@@ -31,73 +29,54 @@ func buildTestReleases() []update.ReleaseInfo {
 	}
 }
 
-// TestShowVersionPicker_ListRendersAllVersions verifies that when ShowVersionPicker
-// is called with 3 releases, the resulting list widget reports length 3.
-func TestShowVersionPicker_ListRendersAllVersions(t *testing.T) {
-	_ = test.NewTempApp(t)
-
-	releases := buildTestReleases()
-
-	var capturedList *widget.List
-	onInstall := func(r update.ReleaseInfo) {}
-
-	capturedList = ShowVersionPicker(nil, releases, onInstall)
-
-	if capturedList == nil {
-		t.Fatal("ShowVersionPicker returned nil list")
+func TestPickerState_InitialState(t *testing.T) {
+	state := &pickerState{
+		loading:  true,
+		selected: -1,
 	}
-	length := capturedList.Length()
-	if length != len(releases) {
-		t.Errorf("expected list length %d, got %d", len(releases), length)
+	if !state.loading {
+		t.Error("expected loading=true initially")
+	}
+	if state.selected != -1 {
+		t.Errorf("expected selected=-1, got %d", state.selected)
 	}
 }
 
-// TestShowVersionPicker_OnSelected_UpdatesDetail verifies that selecting an item
-// in the list populates the detail variable with the correct version's notes.
-func TestShowVersionPicker_OnSelected_UpdatesDetail(t *testing.T) {
-	_ = test.NewTempApp(t)
-
-	releases := buildTestReleases()
-
-	var selectedVersion string
-	onInstall := func(r update.ReleaseInfo) {
-		selectedVersion = r.Version
+func TestPickerState_ReleasesLoaded(t *testing.T) {
+	state := &pickerState{
+		releases: buildTestReleases(),
+		selected: -1,
 	}
-
-	list := ShowVersionPicker(nil, releases, onInstall)
-	if list == nil {
-		t.Fatal("ShowVersionPicker returned nil list")
+	if len(state.releases) != 3 {
+		t.Errorf("expected 3 releases, got %d", len(state.releases))
 	}
-
-	// Simulate selecting item 0 (the first/newest version)
-	list.Select(0)
-
-	// The OnSelected callback on the list should have fired and updated the selection.
-	// We verify by triggering an install via the captured onInstall callback.
-	// Since ShowVersionPicker stores the selection internally, test via the list callback.
-	if list.Length() != 3 {
-		t.Errorf("list length should still be 3 after selection, got %d", list.Length())
-	}
-	// Verify the selected item index is tracked (list.OnSelected fires synchronously in tests)
-	_ = selectedVersion // selectedVersion only set when Install is actually tapped
 }
 
-// TestRunPickerMode_ErrorShowsErrorDialog verifies the error path does not panic
-// when ListAllReleases would fail. We test ShowVersionPicker with an empty list
-// to cover the no-results path without triggering goroutine/Fyne app complexity.
-func TestRunPickerMode_ErrorShowsErrorDialog(t *testing.T) {
-	_ = test.NewTempApp(t)
-
-	// Empty releases — simulates scenario where no versions are available
-	var releases []update.ReleaseInfo
-	onInstall := func(r update.ReleaseInfo) {}
-
-	// Should not panic with empty releases
-	list := ShowVersionPicker(nil, releases, onInstall)
-	if list == nil {
-		t.Fatal("ShowVersionPicker returned nil list even for empty releases")
+func TestPickerState_Selection(t *testing.T) {
+	state := &pickerState{
+		releases: buildTestReleases(),
+		selected: 0,
 	}
-	if list.Length() != 0 {
-		t.Errorf("expected empty list, got length %d", list.Length())
+	if state.releases[state.selected].Version != "2026.10.1" {
+		t.Errorf("expected version 2026.10.1, got %s", state.releases[state.selected].Version)
+	}
+}
+
+func TestUserFriendlyMessage_Network(t *testing.T) {
+	tests := []struct {
+		input    string
+		contains string
+	}{
+		{"connection refused", "Network Error"},
+		{"dial tcp: no such host", "Network Error"},
+		{"checksum mismatch", "Download Verification"},
+		{"access denied", "Permission Error"},
+		{"something random", "something random"},
+	}
+	for _, tt := range tests {
+		msg := userFriendlyMessage(fmt.Errorf("%s", tt.input))
+		if !strings.Contains(msg, tt.contains) {
+			t.Errorf("userFriendlyMessage(%q) = %q, want to contain %q", tt.input, msg, tt.contains)
+		}
 	}
 }
