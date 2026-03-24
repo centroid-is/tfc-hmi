@@ -2,6 +2,13 @@ name: Build centroidx-manager
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
+      - 'feat/centroidx-manager'
+    paths:
+      - 'tools/centroidx-manager/**'
+      - '.github/workflows/build-manager.yml'
   pull_request:
     paths:
       - 'tools/centroidx-manager/**'
