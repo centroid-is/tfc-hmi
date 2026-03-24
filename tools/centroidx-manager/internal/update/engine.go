@@ -198,6 +198,19 @@ func (e *Engine) SelectAsset(release *gogithub.RepositoryRelease) (*gogithub.Rel
 //	windows -> .msix
 //	linux   -> .deb
 //	darwin  -> .dmg
+// SelectPlatformAssetName returns the expected Flutter app asset filename for the current platform.
+func SelectPlatformAssetName() string { return selectPlatformAssetName() }
+
+// SelectManagerAssetName returns the expected manager binary artifact name
+// for the current platform, matching CI artifact naming.
+func SelectManagerAssetName() string {
+	ext := ""
+	if runtime.GOOS == "windows" {
+		ext = ".exe"
+	}
+	return fmt.Sprintf("centroidx-manager_%s_%s%s", runtime.GOOS, runtime.GOARCH, ext)
+}
+
 func selectPlatformAssetName() string {
 	ext := platformExt()
 	return fmt.Sprintf("centroidx_%s_%s%s", runtime.GOOS, runtime.GOARCH, ext)

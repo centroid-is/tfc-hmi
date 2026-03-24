@@ -20,6 +20,7 @@ func main() {
 	version := flag.String("version", "", "Target version to install (default: latest)")
 	waitPID := flag.Int("wait-pid", 0, "PID of the running app to wait for before installing")
 	token := flag.String("token", "", "GitHub API token (optional; falls back to CENTROIDX_GITHUB_TOKEN env var)")
+	prsMode := flag.Bool("prs", false, "Show open PRs with CI artifacts to install from (dev/testing)")
 	localPkg := flag.String("local-package", "", "Install from a local package file (dev/testing: skip GitHub Releases)")
 	artifactURL := flag.String("artifact-url", "", "Download and install from a direct URL (dev/testing: CI artifact URLs)")
 
@@ -32,6 +33,9 @@ func main() {
 	}
 	if *pickerMode {
 		mode = "picker"
+	}
+	if *prsMode {
+		mode = "prs"
 	}
 	if *localPkg != "" {
 		mode = "local-install"

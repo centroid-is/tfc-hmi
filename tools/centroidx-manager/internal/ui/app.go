@@ -53,6 +53,14 @@ func Run(opts Options) {
 			runUpdateMode(w, th, eng, opts)
 		case "picker":
 			runPickerMode(w, th, eng)
+		case "prs":
+			prClient, ok := ghclient.AsPRClient(client)
+			if !ok {
+				runInstallMode(w, th, eng) // fallback
+			} else {
+				assetName := update.SelectManagerAssetName()
+				runPRPickerMode(w, th, prClient, installer, assetName)
+			}
 		case "local-install":
 			runLocalInstallMode(w, th, eng, opts.LocalPkg)
 		case "url-install":
