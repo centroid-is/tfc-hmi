@@ -44,7 +44,7 @@ func Run(opts Options) {
 			w.Option(app.Title("CentroidX Manager"), app.Size(unit.Dp(500), unit.Dp(400)))
 		}
 
-		th := material.NewTheme()
+		th := SolarizedDarkTheme()
 
 		switch opts.Mode {
 		case "update":

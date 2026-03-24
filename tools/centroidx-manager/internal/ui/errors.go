@@ -53,11 +53,15 @@ func layoutReleaseNotes(gtx layout.Context, th *material.Theme, info *update.Rel
 		state.confirmed = true
 	}
 
+	fillBackground(gtx, th.Palette.Bg)
+
 	return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		gtx.Constraints.Max.X = gtx.Dp(unit.Dp(500))
 		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return material.H5(th, "Update Available: v"+info.Version).Layout(gtx)
+				lbl := material.H5(th, "Update Available: v"+info.Version)
+				lbl.Color = ColorAccent()
+				return lbl.Layout(gtx)
 			}),
 			layout.Rigid(layout.Spacer{Height: unit.Dp(12)}.Layout),
 			layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
@@ -67,11 +71,14 @@ func layoutReleaseNotes(gtx layout.Context, th *material.Theme, info *update.Rel
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 				return layout.Flex{Spacing: layout.SpaceStart}.Layout(gtx,
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-						return material.Button(th, &state.installBtn, "Install").Layout(gtx)
+						btn := material.Button(th, &state.installBtn, "Install")
+						btn.Background = ColorAccent()
+						return btn.Layout(gtx)
 					}),
 					layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 						btn := material.Button(th, &state.cancelBtn, "Cancel")
+						btn.Background = ColorSurface()
 						return btn.Layout(gtx)
 					}),
 				)

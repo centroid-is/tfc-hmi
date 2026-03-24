@@ -11,39 +11,54 @@ import (
 	"gioui.org/widget/material"
 )
 
-// layoutProgress renders a centered status label with a progress bar below it.
+// layoutProgress renders a centered status label with a progress bar below it,
+// with a full Solarized Dark background fill.
 func layoutProgress(gtx layout.Context, th *material.Theme, state *appState) layout.Dimensions {
+	// Fill entire background
+	fillBackground(gtx, th.Palette.Bg)
+
 	return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		gtx.Constraints.Max.X = gtx.Dp(unit.Dp(400))
 		return layout.Flex{Axis: layout.Vertical, Alignment: layout.Middle}.Layout(gtx,
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 				lbl := material.H6(th, state.status)
 				if state.err != nil {
-					lbl.Color = color.NRGBA{R: 200, A: 255}
+					lbl.Color = ColorError()
+				} else if state.done {
+					lbl.Color = ColorSuccess()
 				}
 				return lbl.Layout(gtx)
 			}),
-			layout.Rigid(layout.Spacer{Height: unit.Dp(16)}.Layout),
+			layout.Rigid(layout.Spacer{Height: unit.Dp(20)}.Layout),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return drawProgressBar(gtx, th, state.progress)
+				return drawProgressBar(gtx, state.progress)
 			}),
 		)
 	})
 }
 
-// drawProgressBar renders a simple horizontal progress bar.
-func drawProgressBar(gtx layout.Context, th *material.Theme, progress float32) layout.Dimensions {
-	width := gtx.Constraints.Max.X
-	height := gtx.Dp(unit.Dp(8))
+// fillBackground paints the entire frame with the given color.
+func fillBackground(gtx layout.Context, c color.NRGBA) {
+	rect := image.Rect(0, 0, gtx.Constraints.Max.X, gtx.Constraints.Max.Y)
+	bg := clip.Rect(rect).Push(gtx.Ops)
+	paint.ColorOp{Color: c}.Add(gtx.Ops)
+	paint.PaintOp{}.Add(gtx.Ops)
+	bg.Pop()
+}
 
-	// Background track
+// drawProgressBar renders a horizontal progress bar with Solarized colors.
+func drawProgressBar(gtx layout.Context, progress float32) layout.Dimensions {
+	width := gtx.Constraints.Max.X
+	height := gtx.Dp(unit.Dp(6))
+
+	// Background track (base02 — slightly lighter than bg)
 	trackRect := image.Rect(0, 0, width, height)
 	trackClip := clip.Rect(trackRect).Push(gtx.Ops)
-	paint.ColorOp{Color: color.NRGBA{R: 220, G: 220, B: 220, A: 255}}.Add(gtx.Ops)
+	paint.ColorOp{Color: ColorSurface()}.Add(gtx.Ops)
 	paint.PaintOp{}.Add(gtx.Ops)
 	trackClip.Pop()
 
-	// Filled portion
+	// Filled portion (blue accent)
 	if progress > 0 {
 		fillWidth := int(float32(width) * progress)
 		if fillWidth > width {
@@ -51,7 +66,7 @@ func drawProgressBar(gtx layout.Context, th *material.Theme, progress float32) l
 		}
 		fillRect := image.Rect(0, 0, fillWidth, height)
 		fillClip := clip.Rect(fillRect).Push(gtx.Ops)
-		paint.ColorOp{Color: th.Palette.ContrastBg}.Add(gtx.Ops)
+		paint.ColorOp{Color: ColorAccent()}.Add(gtx.Ops)
 		paint.PaintOp{}.Add(gtx.Ops)
 		fillClip.Pop()
 	}
