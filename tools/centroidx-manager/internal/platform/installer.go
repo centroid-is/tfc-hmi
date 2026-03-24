@@ -2,6 +2,7 @@ package platform
 
 import (
 	"os/exec"
+	"strings"
 )
 
 // Installer is the interface for platform-specific installation operations.
@@ -40,13 +41,17 @@ func (e execRunner) Run(name string, args ...string) ([]byte, error) {
 // installWindows runs Add-AppxPackage via PowerShell to install an MSIX.
 // -ForceApplicationShutdown ensures any running package processes are stopped first.
 func installWindows(runner CommandRunner, assetPath string) error {
-	_, err := runner.Run(
+	out, err := runner.Run(
 		"powershell",
 		"-NoProfile", "-NonInteractive",
 		"-Command",
 		"Add-AppxPackage -Path '"+assetPath+"' -ForceApplicationShutdown",
 	)
 	if err != nil {
+		detail := strings.TrimSpace(string(out))
+		if detail != "" {
+			return &commandError{op: "Add-AppxPackage failed: " + detail, cause: err}
+		}
 		return &commandError{op: "Add-AppxPackage failed", cause: err}
 	}
 	return nil

@@ -294,6 +294,48 @@ func (e *Engine) Install(ctx context.Context, destDir string, onProgress func(do
 	})
 }
 
+// InstallLocal installs from a local package file path (dev/testing mode).
+// Skips GitHub Releases — directly calls the platform installer.
+func (e *Engine) InstallLocal(pkgPath string) error {
+	if err := e.installer.Install(pkgPath); err != nil {
+		return fmt.Errorf("install local package: %w", err)
+	}
+	return e.installer.LaunchApp()
+}
+
+// InstallFromURL downloads a package from a direct URL and installs it.
+// Used for dev/testing with CI artifact URLs.
+func (e *Engine) InstallFromURL(ctx context.Context, url string, onProgress func(downloaded, total int64)) error {
+	destDir := os.TempDir()
+	// Extract filename from URL
+	parts := strings.Split(url, "/")
+	filename := parts[len(parts)-1]
+	if filename == "" {
+		filename = "centroidx-package" + platformExt()
+	}
+
+	destPath := fmt.Sprintf("%s/%s", destDir, filename)
+
+	// Download with progress
+	data, err := fetchBytes(ctx, url)
+	if err != nil {
+		return fmt.Errorf("download artifact: %w", err)
+	}
+
+	if onProgress != nil {
+		onProgress(int64(len(data)), int64(len(data)))
+	}
+
+	if err := os.WriteFile(destPath, data, 0o644); err != nil {
+		return fmt.Errorf("write artifact: %w", err)
+	}
+
+	if err := e.installer.Install(destPath); err != nil {
+		return fmt.Errorf("install artifact: %w", err)
+	}
+	return e.installer.LaunchApp()
+}
+
 // downloadCertAsset looks for a .cer asset in the release asset list and
 // downloads it to destDir. Returns the local path on success, ("", nil) if no
 // cert asset is present, or ("", err) on download failure.

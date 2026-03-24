@@ -17,12 +17,14 @@ import (
 
 // Options controls how the application is started.
 type Options struct {
-	Mode    string // "install", "update", or "picker"
-	Version string
-	WaitPID int
-	Token   string
-	Owner   string
-	Repo    string
+	Mode        string // "install", "update", "picker", "local-install", "url-install"
+	Version     string
+	WaitPID     int
+	Token       string
+	Owner       string
+	Repo        string
+	LocalPkg    string // Path to local package file (dev mode)
+	ArtifactURL string // Direct download URL for CI artifact (dev mode)
 }
 
 // Run creates the window and engine, then runs the event loop.
@@ -51,6 +53,10 @@ func Run(opts Options) {
 			runUpdateMode(w, th, eng, opts)
 		case "picker":
 			runPickerMode(w, th, eng)
+		case "local-install":
+			runLocalInstallMode(w, th, eng, opts.LocalPkg)
+		case "url-install":
+			runURLInstallMode(w, th, eng, opts)
 		default:
 			runInstallMode(w, th, eng)
 		}
@@ -64,6 +70,68 @@ type appState struct {
 	progress float32
 	err      error
 	done     bool
+}
+
+// runLocalInstallMode installs from a local package file (dev/testing mode).
+func runLocalInstallMode(w *app.Window, th *material.Theme, eng *update.Engine, pkgPath string) {
+	state := &appState{status: fmt.Sprintf("Installing from local file:\n%s", pkgPath)}
+
+	go func() {
+		if err := eng.InstallLocal(pkgPath); err != nil {
+			state.err = err
+			state.status = userFriendlyMessage(err)
+		} else {
+			state.status = "Installation complete!"
+			state.done = true
+		}
+		w.Invalidate()
+	}()
+
+	var ops op.Ops
+	for {
+		switch e := w.Event().(type) {
+		case app.DestroyEvent:
+			return
+		case app.FrameEvent:
+			gtx := app.NewContext(&ops, e)
+			layoutProgress(gtx, th, state)
+			e.Frame(gtx.Ops)
+		}
+	}
+}
+
+// runURLInstallMode downloads from a direct URL and installs (dev/CI artifact testing).
+func runURLInstallMode(w *app.Window, th *material.Theme, eng *update.Engine, opts Options) {
+	state := &appState{status: fmt.Sprintf("Downloading from:\n%s", opts.ArtifactURL)}
+
+	go func() {
+		err := eng.InstallFromURL(context.Background(), opts.ArtifactURL, func(dl, total int64) {
+			if total > 0 {
+				state.progress = float32(dl) / float32(total)
+				w.Invalidate()
+			}
+		})
+		if err != nil {
+			state.err = err
+			state.status = userFriendlyMessage(err)
+		} else {
+			state.status = "Installation complete!"
+			state.done = true
+		}
+		w.Invalidate()
+	}()
+
+	var ops op.Ops
+	for {
+		switch e := w.Event().(type) {
+		case app.DestroyEvent:
+			return
+		case app.FrameEvent:
+			gtx := app.NewContext(&ops, e)
+			layoutProgress(gtx, th, state)
+			e.Frame(gtx.Ops)
+		}
+	}
 }
 
 // runInstallMode handles first-time installation with a progress display.
