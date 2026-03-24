@@ -20,7 +20,7 @@ import (
 
 const (
 	integrationOwner = "centroid-is"
-	integrationRepo  = "tfc-hmi2"
+	integrationRepo  = "tfc-hmi"
 	// integrationTimeout is the maximum duration for all network calls in each test.
 	integrationTimeout = 120 * time.Second
 )
@@ -57,7 +57,7 @@ func requireRelease(t *testing.T, client githubclient.ReleasesClient) suitableRe
 		t.Fatalf("ListReleases failed: %v", err)
 	}
 	if len(releases) == 0 {
-		t.Skip("no releases found in centroid-is/tfc-hmi2 — skipping integration test")
+		t.Skip("no releases found in centroid-is/tfc-hmi — skipping integration test")
 	}
 
 	platformAssetName := selectPlatformAssetName()
@@ -84,14 +84,14 @@ func requireRelease(t *testing.T, client githubclient.ReleasesClient) suitableRe
 	}
 
 	t.Skipf(
-		"no release in centroid-is/tfc-hmi2 has both %q and SHA256SUMS.txt — skipping (running on %s/%s)",
+		"no release in centroid-is/tfc-hmi has both %q and SHA256SUMS.txt — skipping (running on %s/%s)",
 		platformAssetName, runtime.GOOS, runtime.GOARCH,
 	)
 	return suitableRelease{} // unreachable — t.Skipf does not return
 }
 
 // TestIntegration_ListReleases verifies that the real GitHub Releases API
-// returns at least one release for centroid-is/tfc-hmi2.
+// returns at least one release for centroid-is/tfc-hmi.
 func TestIntegration_ListReleases(t *testing.T) {
 	token := requireToken(t)
 	client := githubclient.NewClient(integrationOwner, integrationRepo, token, "")
@@ -105,7 +105,7 @@ func TestIntegration_ListReleases(t *testing.T) {
 	}
 
 	if len(releases) == 0 {
-		t.Skip("no releases found in centroid-is/tfc-hmi2 — skipping (expected at least 1 release)")
+		t.Skip("no releases found in centroid-is/tfc-hmi — skipping (expected at least 1 release)")
 	}
 
 	t.Logf("ListReleases returned %d releases; first tag: %s", len(releases), releases[0].GetTagName())

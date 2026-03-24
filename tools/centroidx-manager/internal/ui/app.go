@@ -31,7 +31,7 @@ type Options struct {
 	// Owner is the GitHub repo owner (default: centroid-is).
 	Owner string
 
-	// Repo is the GitHub repo name (default: tfc-hmi2).
+	// Repo is the GitHub repo name (default: tfc-hmi).
 	Repo string
 }
 

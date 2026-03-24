@@ -112,9 +112,9 @@ void main() async {
 
   final upgrader = Upgrader(
     storeController: UpgraderStoreController(
-      onWindows: () => GitHubReleaseStore(owner: 'centroid-is', repo: 'tfc-hmi2'),
-      onLinux: () => GitHubReleaseStore(owner: 'centroid-is', repo: 'tfc-hmi2'),
-      onMacOS: () => GitHubReleaseStore(owner: 'centroid-is', repo: 'tfc-hmi2'),
+      onWindows: () => GitHubReleaseStore(owner: 'centroid-is', repo: 'tfc-hmi'),
+      onLinux: () => GitHubReleaseStore(owner: 'centroid-is', repo: 'tfc-hmi'),
+      onMacOS: () => GitHubReleaseStore(owner: 'centroid-is', repo: 'tfc-hmi'),
     ),
     debugLogging: true,
   );

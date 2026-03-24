@@ -13,7 +13,7 @@ class GitHubReleaseStore extends UpgraderStore {
   /// The GitHub repository owner (e.g. 'centroid-is').
   final String owner;
 
-  /// The GitHub repository name (e.g. 'tfc-hmi2').
+  /// The GitHub repository name (e.g. 'tfc-hmi').
   final String repo;
 
   /// Optional GitHub personal access token for authenticated API requests.

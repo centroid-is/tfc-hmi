@@ -36,7 +36,7 @@ GitHubReleaseStore _storeWith({
 
   return GitHubReleaseStore(
     owner: 'centroid-is',
-    repo: 'tfc-hmi2',
+    repo: 'tfc-hmi',
     httpClient: fakeClient,
     token: token,
   );
@@ -46,7 +46,7 @@ GitHubReleaseStore _storeWith({
 String _releaseJson({
   String tagName = '2026.4.1',
   String body = 'Bug fixes and improvements.',
-  String htmlUrl = 'https://github.com/centroid-is/tfc-hmi2/releases/tag/2026.4.1',
+  String htmlUrl = 'https://github.com/centroid-is/tfc-hmi/releases/tag/2026.4.1',
 }) {
   return jsonEncode({
     'tag_name': tagName,
@@ -145,7 +145,7 @@ void main() {
 
     // Test 6: Populates appStoreListingURL from html_url field
     test('getVersionInfo populates appStoreListingURL from html_url field', () async {
-      const url = 'https://github.com/centroid-is/tfc-hmi2/releases/tag/2026.4.1';
+      const url = 'https://github.com/centroid-is/tfc-hmi/releases/tag/2026.4.1';
       final store = _storeWith(
         statusCode: 200,
         body: _releaseJson(htmlUrl: url),

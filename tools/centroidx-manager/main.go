@@ -7,10 +7,10 @@ import (
 )
 
 // Build-time variables — set via -ldflags at release time.
-// Example: go build -ldflags "-X main.githubOwner=centroid-is -X main.githubRepo=tfc-hmi2"
+// Example: go build -ldflags "-X main.githubOwner=centroid-is -X main.githubRepo=tfc-hmi"
 var (
 	githubOwner = "centroid-is"
-	githubRepo  = "tfc-hmi2"
+	githubRepo  = "tfc-hmi"
 )
 
 func main() {
