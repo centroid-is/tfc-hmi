@@ -51,7 +51,7 @@ jobs:
       - name: Build MSIX (sideload, signed)
         working-directory: centroid-hmi
         shell: powershell
-        run: dart run msix:create --certificate-password "${{ secrets.MSIX_CERT_PASSWORD }}"
+        run: echo "n" | dart run msix:create --certificate-password "${{ secrets.MSIX_CERT_PASSWORD }}"
 
       - name: Verify MSIX signature and timestamp
         working-directory: centroid-hmi
