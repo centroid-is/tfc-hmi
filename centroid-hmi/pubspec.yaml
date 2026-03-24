@@ -140,4 +140,3 @@ msix_config:
   store: false
   certificate_path: centroidx-sideload.pfx
   certificate_password: PLACEHOLDER_SET_IN_CI
-  signtool_options: /fd SHA256 /tr http://timestamp.digicert.com /td SHA256
