@@ -57,7 +57,7 @@ func TestIntegration_HdiutilCreateMountUnmount(t *testing.T) {
 	// Step 3: Attach the DMG.
 	plistOut, stderr, err := runCommand(t,
 		"hdiutil", "attach",
-		"-nobrowse", "-quiet", "-plist",
+		"-nobrowse", "-plist",
 		dmgPath,
 	)
 	if err != nil {

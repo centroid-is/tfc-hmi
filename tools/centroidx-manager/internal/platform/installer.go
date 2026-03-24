@@ -84,7 +84,7 @@ func installLinux(runner CommandRunner, assetPath string) error {
 // installDarwin mounts a DMG, copies the .app to /Applications, strips the
 // quarantine attribute, and unmounts the DMG.
 func installDarwin(runner CommandRunner, assetPath string) error {
-	out, err := runner.Run("hdiutil", "attach", assetPath, "-nobrowse", "-quiet", "-plist")
+	out, err := runner.Run("hdiutil", "attach", assetPath, "-nobrowse", "-plist")
 	if err != nil {
 		return &commandError{op: "hdiutil attach failed", cause: err}
 	}
