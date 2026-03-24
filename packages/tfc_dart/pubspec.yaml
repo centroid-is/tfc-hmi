@@ -37,6 +37,10 @@ dependencies:
   jbtm:
     path: ../jbtm
 
+  # Modbus TCP client (local fork with frame parsing + keepalive fixes)
+  modbus_client_tcp:
+    path: ../modbus_client_tcp
+
   # Utilities
   collection: ^1.18.0
   path: ^1.9.1

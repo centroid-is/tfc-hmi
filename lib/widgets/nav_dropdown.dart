@@ -33,15 +33,36 @@ class TopLevelNavIndicator extends StatelessWidget {
   }
 }
 
-class NavDropdown extends StatelessWidget {
+class NavDropdown extends StatefulWidget {
   static const double itemHeight = 48.0;
   static const double menuWidth = 260.0;
+
+  /// Notifies listeners when any [NavDropdown] popup menu is open.
+  /// Used by the app shell to hide overlapping widgets (e.g. chat FAB)
+  /// that are rendered above the Navigator's Overlay in the widget tree.
+  static final ValueNotifier<bool> isAnyMenuOpen = ValueNotifier<bool>(false);
+
   final MenuItem menuItem;
 
   const NavDropdown({
     super.key,
     required this.menuItem,
   });
+
+  @override
+  State<NavDropdown> createState() => NavDropdownState();
+}
+
+class NavDropdownState extends State<NavDropdown> {
+  /// Guard that prevents [showMenu] from being called while a popup menu is
+  /// already open. Without this, rapid tapping can push a second popup route
+  /// while the Navigator is still transitioning, throwing
+  /// `'!_debugLocked': is not true`.
+  bool _isMenuOpen = false;
+
+  /// Whether the popup menu is currently open. Exposed for testing.
+  @visibleForTesting
+  bool get isMenuOpen => _isMenuOpen;
 
   // From a given page path. Find the topmost node that holds
   // the ownership path of the node
@@ -58,13 +79,18 @@ class NavDropdown extends StatelessWidget {
   /// Flattens the menu tree into indented PopupMenuItems.
   /// Sections (items with children) appear as disabled headers;
   /// leaf pages are clickable.
-  List<PopupMenuEntry<MenuItem>> buildFlatMenu(MenuItem root, {int depth = 0}) {
-    final items = <PopupMenuEntry<MenuItem>>[];
+  ///
+  /// Navigation is performed in [PopupMenuItem.onTap] (which fires before
+  /// Flutter's internal `Navigator.pop(null)`), so the pop value is always
+  /// `void` — compatible with any route type on the root Navigator stack.
+  List<PopupMenuEntry<void>> buildFlatMenu(MenuItem root,
+      {required BuildContext parentContext, int depth = 0}) {
+    final items = <PopupMenuEntry<void>>[];
     for (final child in root.children) {
       final indent = EdgeInsets.only(left: depth * 16.0);
       if (child.children.isNotEmpty) {
         // Section header (not clickable)
-        items.add(PopupMenuItem<MenuItem>(
+        items.add(PopupMenuItem<void>(
           enabled: false,
           height: NavDropdown.itemHeight,
           child: Padding(
@@ -78,11 +104,12 @@ class NavDropdown extends StatelessWidget {
             ),
           ),
         ));
-        items.addAll(buildFlatMenu(child, depth: depth + 1));
+        items.addAll(buildFlatMenu(child,
+            parentContext: parentContext, depth: depth + 1));
       } else {
-        items.add(PopupMenuItem<MenuItem>(
+        items.add(PopupMenuItem<void>(
           height: NavDropdown.itemHeight,
-          value: child,
+          onTap: () => beamSafelyKids(parentContext, child),
           child: Padding(
             padding: indent,
             child: Row(
@@ -123,8 +150,15 @@ class NavDropdown extends StatelessWidget {
     return Builder(
       builder: (innerContext) {
         return InkWell(
+          key: ValueKey<String>('nav-${widget.menuItem.label.toLowerCase()}'),
           onTap: () async {
-            final totalItems = _countAllItems(menuItem);
+            // BUG-001 fix: prevent re-entrant showMenu calls during
+            // Navigator transitions from rapid tapping.
+            if (_isMenuOpen) return;
+            _isMenuOpen = true;
+            NavDropdown.isAnyMenuOpen.value = true;
+
+            final totalItems = _countAllItems(widget.menuItem);
             final menuHeight = totalItems * NavDropdown.itemHeight;
             final RenderBox button =
                 innerContext.findRenderObject() as RenderBox;
@@ -137,35 +171,53 @@ class NavDropdown extends StatelessWidget {
 
             // Center the popup horizontally over the nav item
             final buttonCenterX = buttonPos.dx + button.size.width / 2;
-            final menuLeft = (buttonCenterX - menuWidth / 2)
-                .clamp(0.0, overlaySize.width - menuWidth);
-            final menuTop = buttonPos.dy - menuHeight;
+            final menuLeft = (buttonCenterX - NavDropdown.menuWidth / 2)
+                .clamp(0.0, overlaySize.width - NavDropdown.menuWidth);
+
+            // BUG-005 fix: clamp the menu top so it never extends above
+            // the screen and cap the height so the popup scrolls when
+            // there are too many items.
+            const double menuPadding = 8.0; // vertical padding inside popup
+            final availableHeight =
+                (buttonPos.dy - menuPadding).clamp(0.0, double.infinity);
+            final effectiveMenuHeight =
+                menuHeight < availableHeight ? menuHeight : availableHeight;
+            final menuTop =
+                (buttonPos.dy - effectiveMenuHeight).clamp(0.0, buttonPos.dy);
 
             final position = RelativeRect.fromLTRB(
               menuLeft,
               menuTop,
-              overlaySize.width - menuLeft - menuWidth,
+              overlaySize.width - menuLeft - NavDropdown.menuWidth,
               overlaySize.height - buttonPos.dy,
             );
 
-            final MenuItem? selectedItem = await showMenu<MenuItem>(
-              context: parentContext,
-              position: position,
-              items: buildFlatMenu(menuItem),
-              constraints: const BoxConstraints(
-                minWidth: menuWidth,
-                maxWidth: menuWidth,
-              ),
-            );
-            if (selectedItem != null) {
-              // todo get rid of the warning
-              beamSafelyKids(parentContext, selectedItem);
+            try {
+              await showMenu<void>(
+                context: parentContext,
+                position: position,
+                // BUG-002 fix: use root navigator so the popup route does not
+                // share a HeroController with Beamer's nested Navigator.
+                useRootNavigator: true,
+                items: buildFlatMenu(widget.menuItem,
+                    parentContext: parentContext),
+                constraints: BoxConstraints(
+                  minWidth: NavDropdown.menuWidth,
+                  maxWidth: NavDropdown.menuWidth,
+                  // BUG-005: cap height so the popup scrolls instead of
+                  // extending off-screen when there are many items.
+                  maxHeight: effectiveMenuHeight + menuPadding * 2,
+                ),
+              );
+            } finally {
+              _isMenuOpen = false;
+              NavDropdown.isAnyMenuOpen.value = false;
             }
           },
           child: TopLevelNavIndicator(
-            menuItem.icon,
-            menuItem.label,
-            menuItem == activeRoot,
+            widget.menuItem.icon,
+            widget.menuItem.label,
+            widget.menuItem == activeRoot,
           ),
         );
       },

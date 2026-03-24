@@ -39,6 +39,8 @@ Map<String, dynamic> _$BaseAssetToJson(BaseAsset instance) => <String, dynamic>{
       'size': instance.size.toJson(),
       'text': instance.text,
       'textPos': _$TextPosEnumMap[instance.textPos],
+      'techDocId': instance.techDocId,
+      'plcAssetKey': instance.plcAssetKey,
     };
 
 const _$TextPosEnumMap = {

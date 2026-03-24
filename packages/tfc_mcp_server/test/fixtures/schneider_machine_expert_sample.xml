@@ -1,0 +1,427 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Schneider Electric Machine Expert PLCopen TC6 XML export.
+
+  This fixture simulates a realistic EcoStruxure Machine Expert project
+  export following the PLCopen XML Interchange Format (IEC 61131-10).
+
+  Contains:
+  - fileHeader with product/vendor metadata
+  - contentHeader with coordinate scaling info
+  - 3 POUs under <types><pous>:
+    1. FB_ConveyorControl (functionBlock) - conveyor motor control with actions/methods
+    2. PLC_PRG (program) - main cyclic program
+    3. FC_Hysteresis (function) - reusable comparison function
+  - 1 globalVars section: GVL_System
+  - Realistic IEC 61131-3 structured text implementations
+
+  PLCopen XML structure (TC6 v2.01):
+  - Root: <project xmlns="http://www.plcopen.org/xml/tc6_0201">
+  - Variable types as child elements: <BOOL/>, <INT/>, <REAL/>, <TIME/>,
+    <derived name="..."/>, <string length="N"/>,
+    <array><dimension lower="L" upper="U"/><baseType>...</baseType></array>
+  - Variable sections: <inputVars>, <outputVars>, <localVars>, <inOutVars>, <tempVars>
+  - Implementation: <body><ST><xhtml:p><![CDATA[...]]></xhtml:p></ST></body>
+  - Documentation: <documentation><xhtml:p>...</xhtml:p></documentation>
+  - Children: <actions><action name="...">, <methods><method name="...">
+
+  Verified against: PLCopen TC6_XML_V201 schema, Beremiz standard function
+  blocks, and the parser in schneider_xml_parser.dart.
+-->
+<project xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xmlns="http://www.plcopen.org/xml/tc6_0201"
+         xmlns:xhtml="http://www.w3.org/1999/xhtml"
+         xsi:schemaLocation="http://www.plcopen.org/xml/tc6_0201 http://www.plcopen.org/xml/tc6_0201">
+
+  <fileHeader companyName="Schneider Electric"
+              productName="EcoStruxure Machine Expert"
+              productVersion="V2.1"
+              creationDateTime="2025-09-15T14:30:00"/>
+
+  <contentHeader name="ConveyorLineProject"
+                 modificationDateTime="2025-09-15T16:45:00">
+    <coordinateInfo>
+      <fbd>
+        <scaling x="10" y="10"/>
+      </fbd>
+      <ld>
+        <scaling x="10" y="10"/>
+      </ld>
+      <sfc>
+        <scaling x="10" y="10"/>
+      </sfc>
+    </coordinateInfo>
+  </contentHeader>
+
+  <types>
+    <dataTypes/>
+
+    <pous>
+      <!-- ================================================================
+           FB_ConveyorControl: Function block for conveyor belt control.
+           Handles start/stop sequencing, speed ramping, jam detection,
+           and product counting. Realistic industrial conveyor logic.
+           ================================================================ -->
+      <pou name="FB_ConveyorControl" pouType="functionBlock">
+        <interface>
+          <inputVars>
+            <variable name="bStart">
+              <type><BOOL/></type>
+              <documentation><xhtml:p>Start command from HMI</xhtml:p></documentation>
+            </variable>
+            <variable name="bStop">
+              <type><BOOL/></type>
+              <documentation><xhtml:p>Stop command from HMI</xhtml:p></documentation>
+            </variable>
+            <variable name="rTargetSpeed">
+              <type><REAL/></type>
+              <documentation><xhtml:p>Target speed in m/min (0..30)</xhtml:p></documentation>
+            </variable>
+            <variable name="bPhotoEye">
+              <type><BOOL/></type>
+              <documentation><xhtml:p>Product detection photo eye</xhtml:p></documentation>
+            </variable>
+            <variable name="rMotorCurrent">
+              <type><REAL/></type>
+              <documentation><xhtml:p>Motor current feedback in Amps</xhtml:p></documentation>
+            </variable>
+          </inputVars>
+          <outputVars>
+            <variable name="bMotorRun">
+              <type><BOOL/></type>
+              <documentation><xhtml:p>Motor run output to VFD</xhtml:p></documentation>
+            </variable>
+            <variable name="rSpeedRef">
+              <type><REAL/></type>
+              <documentation><xhtml:p>Speed reference output 0..100%</xhtml:p></documentation>
+            </variable>
+            <variable name="bJamDetected">
+              <type><BOOL/></type>
+              <documentation><xhtml:p>Jam condition detected</xhtml:p></documentation>
+            </variable>
+            <variable name="nProductCount">
+              <type><DINT/></type>
+              <documentation><xhtml:p>Products counted since reset</xhtml:p></documentation>
+            </variable>
+            <variable name="nState">
+              <type><INT/></type>
+              <documentation><xhtml:p>State machine: 0=Idle, 1=Starting, 2=Running, 3=Stopping, 4=Faulted</xhtml:p></documentation>
+            </variable>
+          </outputVars>
+          <localVars>
+            <variable name="rCurrentSpeed">
+              <type><REAL/></type>
+            </variable>
+            <variable name="rRampRate">
+              <type><REAL/></type>
+              <initialValue><simpleValue value="5.0"/></initialValue>
+            </variable>
+            <variable name="tJamTimer">
+              <type><TIME/></type>
+            </variable>
+            <variable name="tRampTimer">
+              <type><TIME/></type>
+            </variable>
+            <variable name="rJamCurrentThreshold">
+              <type><REAL/></type>
+              <initialValue><simpleValue value="15.0"/></initialValue>
+            </variable>
+            <variable name="bPhotoEyePrev">
+              <type><BOOL/></type>
+            </variable>
+            <variable name="aSpeedLog">
+              <type>
+                <array>
+                  <dimension lower="0" upper="9"/>
+                  <baseType><REAL/></baseType>
+                </array>
+              </type>
+              <documentation><xhtml:p>Rolling speed log for diagnostics</xhtml:p></documentation>
+            </variable>
+            <variable name="nLogIndex">
+              <type><INT/></type>
+            </variable>
+          </localVars>
+        </interface>
+        <body>
+          <ST>
+            <xhtml:p><![CDATA[(* FB_ConveyorControl - Conveyor belt state machine *)
+(* States: 0=Idle, 1=Starting, 2=Running, 3=Stopping, 4=Faulted *)
+
+CASE nState OF
+  0: (* Idle *)
+    bMotorRun := FALSE;
+    rSpeedRef := 0.0;
+    IF bStart AND NOT bStop THEN
+      nState := 1;
+      rCurrentSpeed := 0.0;
+    END_IF;
+
+  1: (* Starting - ramp up speed *)
+    bMotorRun := TRUE;
+    rCurrentSpeed := rCurrentSpeed + rRampRate;
+    IF rCurrentSpeed >= rTargetSpeed THEN
+      rCurrentSpeed := rTargetSpeed;
+      nState := 2;
+    END_IF;
+    rSpeedRef := (rCurrentSpeed / 30.0) * 100.0;
+
+  2: (* Running *)
+    bMotorRun := TRUE;
+    rSpeedRef := (rTargetSpeed / 30.0) * 100.0;
+
+    (* Jam detection: motor current exceeds threshold *)
+    IF rMotorCurrent > rJamCurrentThreshold THEN
+      bJamDetected := TRUE;
+      nState := 4;
+    END_IF;
+
+    (* Product counting on rising edge of photo eye *)
+    IF bPhotoEye AND NOT bPhotoEyePrev THEN
+      nProductCount := nProductCount + 1;
+    END_IF;
+    bPhotoEyePrev := bPhotoEye;
+
+    (* Speed logging for diagnostics *)
+    aSpeedLog[nLogIndex] := rCurrentSpeed;
+    nLogIndex := (nLogIndex + 1) MOD 10;
+
+    IF bStop THEN
+      nState := 3;
+    END_IF;
+
+  3: (* Stopping - ramp down *)
+    rCurrentSpeed := rCurrentSpeed - rRampRate;
+    IF rCurrentSpeed <= 0.0 THEN
+      rCurrentSpeed := 0.0;
+      bMotorRun := FALSE;
+      nState := 0;
+    END_IF;
+    rSpeedRef := (rCurrentSpeed / 30.0) * 100.0;
+
+  4: (* Faulted *)
+    bMotorRun := FALSE;
+    rSpeedRef := 0.0;
+    (* Require explicit reset via ResetFault action *)
+END_CASE;]]></xhtml:p>
+          </ST>
+        </body>
+
+        <!-- Action: ResetFault - clears fault condition and returns to idle -->
+        <action name="ResetFault">
+          <body>
+            <ST>
+              <xhtml:p><![CDATA[bJamDetected := FALSE;
+nState := 0;
+rCurrentSpeed := 0.0;
+rSpeedRef := 0.0;]]></xhtml:p>
+            </ST>
+          </body>
+        </action>
+
+        <!-- Action: ResetCounter - zeroes the product count -->
+        <action name="ResetCounter">
+          <body>
+            <ST>
+              <xhtml:p><![CDATA[nProductCount := 0;]]></xhtml:p>
+            </ST>
+          </body>
+        </action>
+
+        <!-- Method: GetDiagnostics - returns diagnostic string -->
+        <method name="GetDiagnostics">
+          <interface>
+            <outputVars>
+              <variable name="sDiagText">
+                <type><string length="255"/></type>
+              </variable>
+            </outputVars>
+          </interface>
+          <body>
+            <ST>
+              <xhtml:p><![CDATA[CASE nState OF
+  0: sDiagText := 'Conveyor idle';
+  1: sDiagText := 'Conveyor starting';
+  2: sDiagText := 'Conveyor running';
+  3: sDiagText := 'Conveyor stopping';
+  4: sDiagText := 'FAULT: Jam detected';
+ELSE
+  sDiagText := 'Unknown state';
+END_CASE;]]></xhtml:p>
+            </ST>
+          </body>
+        </method>
+      </pou>
+
+      <!-- ================================================================
+           PLC_PRG: Main cyclic program.
+           Instantiates conveyor FBs and manages system-level logic.
+           ================================================================ -->
+      <pou name="PLC_PRG" pouType="program">
+        <interface>
+          <localVars>
+            <variable name="fbConveyor1">
+              <type><derived name="FB_ConveyorControl"/></type>
+              <documentation><xhtml:p>Infeed conveyor</xhtml:p></documentation>
+            </variable>
+            <variable name="fbConveyor2">
+              <type><derived name="FB_ConveyorControl"/></type>
+              <documentation><xhtml:p>Outfeed conveyor</xhtml:p></documentation>
+            </variable>
+            <variable name="bSystemReady">
+              <type><BOOL/></type>
+            </variable>
+            <variable name="bGlobalEStop">
+              <type><BOOL/></type>
+            </variable>
+            <variable name="nTotalProducts">
+              <type><DINT/></type>
+            </variable>
+            <variable name="rLineEfficiency">
+              <type><REAL/></type>
+            </variable>
+            <variable name="sAlarmText">
+              <type><string length="120"/></type>
+            </variable>
+            <variable name="aZoneSpeeds">
+              <type>
+                <array>
+                  <dimension lower="1" upper="4"/>
+                  <baseType><REAL/></baseType>
+                </array>
+              </type>
+            </variable>
+          </localVars>
+        </interface>
+        <body>
+          <ST>
+            <xhtml:p><![CDATA[(* PLC_PRG - Main cyclic program *)
+
+(* Emergency stop handling *)
+IF bGlobalEStop THEN
+    fbConveyor1(bStart := FALSE, bStop := TRUE, rTargetSpeed := 0.0,
+                bPhotoEye := FALSE, rMotorCurrent := 0.0);
+    fbConveyor2(bStart := FALSE, bStop := TRUE, rTargetSpeed := 0.0,
+                bPhotoEye := FALSE, rMotorCurrent := 0.0);
+    sAlarmText := 'EMERGENCY STOP ACTIVE';
+    RETURN;
+END_IF;
+
+(* Normal operation: call conveyor function blocks *)
+fbConveyor1(rTargetSpeed := aZoneSpeeds[1]);
+fbConveyor2(rTargetSpeed := aZoneSpeeds[2]);
+
+(* Aggregate product count *)
+nTotalProducts := fbConveyor1.nProductCount + fbConveyor2.nProductCount;
+
+(* System status *)
+bSystemReady := NOT bGlobalEStop
+                AND NOT fbConveyor1.bJamDetected
+                AND NOT fbConveyor2.bJamDetected;
+
+(* Line efficiency calc *)
+IF nTotalProducts > 0 THEN
+    rLineEfficiency := INT_TO_REAL(nTotalProducts) / 1000.0 * 100.0;
+    IF rLineEfficiency > 100.0 THEN
+        rLineEfficiency := 100.0;
+    END_IF;
+END_IF;]]></xhtml:p>
+          </ST>
+        </body>
+      </pou>
+
+      <!-- ================================================================
+           FC_Hysteresis: Reusable function for hysteresis comparison.
+           Returns TRUE when value exceeds high threshold, FALSE when
+           below low threshold, otherwise retains previous state.
+           ================================================================ -->
+      <pou name="FC_Hysteresis" pouType="function">
+        <interface>
+          <returnType><BOOL/></returnType>
+          <inputVars>
+            <variable name="rValue">
+              <type><REAL/></type>
+              <documentation><xhtml:p>Process value to compare</xhtml:p></documentation>
+            </variable>
+            <variable name="rHighThreshold">
+              <type><REAL/></type>
+              <documentation><xhtml:p>Upper threshold (set point)</xhtml:p></documentation>
+            </variable>
+            <variable name="rLowThreshold">
+              <type><REAL/></type>
+              <documentation><xhtml:p>Lower threshold (reset point)</xhtml:p></documentation>
+            </variable>
+          </inputVars>
+          <inOutVars>
+            <variable name="bPreviousState">
+              <type><BOOL/></type>
+              <documentation><xhtml:p>Previous output state (caller must retain)</xhtml:p></documentation>
+            </variable>
+          </inOutVars>
+          <localVars>
+            <variable name="bResult">
+              <type><BOOL/></type>
+            </variable>
+          </localVars>
+        </interface>
+        <body>
+          <ST>
+            <xhtml:p><![CDATA[(* FC_Hysteresis - Hysteresis comparator function *)
+(* Once rValue rises above rHighThreshold, output is TRUE.
+   Output stays TRUE until rValue falls below rLowThreshold. *)
+
+IF rValue >= rHighThreshold THEN
+    bResult := TRUE;
+ELSIF rValue <= rLowThreshold THEN
+    bResult := FALSE;
+ELSE
+    bResult := bPreviousState;
+END_IF;
+
+bPreviousState := bResult;
+FC_Hysteresis := bResult;]]></xhtml:p>
+          </ST>
+        </body>
+      </pou>
+    </pous>
+
+    <!-- ==================================================================
+         GVL_System: Global variable list for system-wide parameters.
+         ================================================================== -->
+    <globalVars name="GVL_System">
+      <variable name="rSystemPressure">
+        <type><REAL/></type>
+        <documentation><xhtml:p>Main line pressure in bar</xhtml:p></documentation>
+      </variable>
+      <variable name="bMaintenanceMode">
+        <type><BOOL/></type>
+        <documentation><xhtml:p>Maintenance mode active - disables interlocks</xhtml:p></documentation>
+      </variable>
+      <variable name="nOperatingHours">
+        <type><DINT/></type>
+        <documentation><xhtml:p>Total operating hours counter</xhtml:p></documentation>
+      </variable>
+      <variable name="rAmbientTemp">
+        <type><REAL/></type>
+        <documentation><xhtml:p>Ambient temperature in degrees C</xhtml:p></documentation>
+      </variable>
+      <variable name="sProductionBatch">
+        <type><string length="40"/></type>
+        <documentation><xhtml:p>Current production batch ID</xhtml:p></documentation>
+      </variable>
+    </globalVars>
+  </types>
+
+  <instances>
+    <configurations>
+      <configuration name="ConveyorLine">
+        <resource name="Application">
+          <task name="MainTask" interval="T#10ms" priority="1">
+            <pouInstance name="PLC_PRG" typeName="PLC_PRG"/>
+          </task>
+        </resource>
+      </configuration>
+    </configurations>
+  </instances>
+
+</project>

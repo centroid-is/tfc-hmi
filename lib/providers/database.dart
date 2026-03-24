@@ -20,7 +20,9 @@ Future<Database?> database(Ref ref) async {
     final db = Database(appDb);
     await db.db.open();
 
-    // Clean up when the provider is invalidated or disposed
+    // Clean up when the provider is invalidated or disposed.
+    // The pg pool's built-in keepalive handles reconnection after
+    // transient outages — no provider-level recovery needed.
     ref.onDispose(() async {
       _retryTimer?.cancel();
       await db.dispose();
@@ -42,6 +44,7 @@ Future<Database?> database(Ref ref) async {
 
 Timer? _retryTimer;
 
+/// Schedule initial connection retry (DB was never reachable).
 void _scheduleRetry(Ref ref, DatabaseConfig config) {
   _retryTimer?.cancel();
   _retryTimer = Timer(const Duration(seconds: 2), () async {

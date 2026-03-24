@@ -47,6 +47,8 @@ IconConfig _$IconConfigFromJson(Map<String, dynamic> json) => IconConfig(
       ..size = RelativeSize.fromJson(json['size'] as Map<String, dynamic>)
       ..text = json['text'] as String?
       ..textPos = $enumDecodeNullable(_$TextPosEnumMap, json['textPos'])
+      ..techDocId = (json['techDocId'] as num?)?.toInt()
+      ..plcAssetKey = json['plcAssetKey'] as String?
       ..color = const OptionalColorConverter()
           .fromJson(json['color'] as Map<String, dynamic>?)
       ..conditionalStates = (json['conditional_states'] as List<dynamic>?)
@@ -60,6 +62,8 @@ Map<String, dynamic> _$IconConfigToJson(IconConfig instance) =>
       'size': instance.size.toJson(),
       'text': instance.text,
       'textPos': _$TextPosEnumMap[instance.textPos],
+      'techDocId': instance.techDocId,
+      'plcAssetKey': instance.plcAssetKey,
       'iconData': const IconDataConverter().toJson(instance.iconData),
       'color': const OptionalColorConverter().toJson(instance.color),
       'conditional_states':

@@ -1,0 +1,251 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Schneider Electric Control Expert (EcoStruxure) XEF-style XML export.
+
+  This fixture simulates a realistic XEF project export containing:
+  - 1 FBSource (Derived Function Block / DFB): FB_ATV320_Drive
+  - 1 STSource (Structured Text section / Program): MainTask
+  - 1 FBSource (Function): FC_ScaleAnalog
+  - 1 program element with section children: WaterProcess
+
+  The XML structure follows Control Expert conventions:
+  - <ExchangeFile> root element wrapping the full export
+  - <FBSource nameOfFBType="DFB"> for Derived Function Blocks
+  - <STSource> for standalone ST programs/sections
+  - <objectName> child for the block name
+  - <variables>/<variable> for XML-declared variables with name, typeName, class
+  - <sourceCode> containing the full structured text as inline text
+  - <program name="..."> with <section> children for task programs
+
+  Variable classes map to IEC 61131-3 sections:
+    INPUT   -> VAR_INPUT
+    OUTPUT  -> VAR_OUTPUT
+    IN_OUT  -> VAR_IN_OUT
+    LOCAL   -> VAR
+    GLOBAL  -> VAR_GLOBAL
+
+  Verified against: Schneider Electric EcoStruxure Control Expert V15,
+  Unity Pro XEF export format, and the parser in schneider_xml_parser.dart.
+-->
+<ExchangeFile>
+
+  <!-- ====================================================================
+       FB_ATV320_Drive: DFB for Schneider ATV320 variable frequency drive.
+       Realistic industrial function block controlling a VFD via Modbus.
+       VAR_INPUT: command signals, speed setpoint
+       VAR_OUTPUT: status feedback, actual speed, fault code
+       VAR: internal state tracking
+       ==================================================================== -->
+  <FBSource nameOfFBType="DFB" version="0.07">
+    <objectName>FB_ATV320_Drive</objectName>
+    <variables>
+      <variable name="bRunFwd" typeName="BOOL" class="INPUT"/>
+      <variable name="bRunRev" typeName="BOOL" class="INPUT"/>
+      <variable name="bQuickStop" typeName="BOOL" class="INPUT"/>
+      <variable name="rSpeedSetpoint" typeName="REAL" class="INPUT"/>
+      <variable name="bReady" typeName="BOOL" class="OUTPUT"/>
+      <variable name="bRunning" typeName="BOOL" class="OUTPUT"/>
+      <variable name="bFaulted" typeName="BOOL" class="OUTPUT"/>
+      <variable name="rActualSpeed" typeName="REAL" class="OUTPUT"/>
+      <variable name="nFaultCode" typeName="INT" class="OUTPUT"/>
+      <variable name="nCmdWord" typeName="INT" class="LOCAL"/>
+      <variable name="nStatusWord" typeName="INT" class="LOCAL"/>
+      <variable name="bFirstScan" typeName="BOOL" class="LOCAL"/>
+      <variable name="tFaultDelay" typeName="TIME" class="LOCAL"/>
+    </variables>
+    <sourceCode>FUNCTION_BLOCK FB_ATV320_Drive
+VAR_INPUT
+    bRunFwd : BOOL;         (* Command: Run forward *)
+    bRunRev : BOOL;         (* Command: Run reverse *)
+    bQuickStop : BOOL;      (* Command: Quick stop *)
+    rSpeedSetpoint : REAL;  (* Speed setpoint 0..100% *)
+END_VAR
+VAR_OUTPUT
+    bReady : BOOL;          (* Drive ready *)
+    bRunning : BOOL;        (* Drive running *)
+    bFaulted : BOOL;        (* Drive in fault *)
+    rActualSpeed : REAL;    (* Actual speed feedback 0..100% *)
+    nFaultCode : INT;       (* Active fault code *)
+END_VAR
+VAR
+    nCmdWord : INT;         (* Modbus control word *)
+    nStatusWord : INT;      (* Modbus status word *)
+    bFirstScan : BOOL := TRUE;
+    tFaultDelay : TIME := T#2s;
+END_VAR
+
+(* ATV320 Control Word Construction:
+   Bit 0 = SwitchOn, Bit 1 = EnableVoltage, Bit 2 = QuickStop (inverted),
+   Bit 3 = EnableOperation, Bit 4..5 = direction, Bit 7 = FaultReset *)
+
+IF bFirstScan THEN
+    nCmdWord := 0;
+    bFirstScan := FALSE;
+END_IF;
+
+(* Build command word *)
+IF bQuickStop THEN
+    nCmdWord := 16#0002;  (* Quick stop active - remove bit 2 *)
+ELSIF bRunFwd THEN
+    nCmdWord := 16#000F;  (* Forward run command *)
+ELSIF bRunRev THEN
+    nCmdWord := 16#002F;  (* Reverse run command *)
+ELSE
+    nCmdWord := 16#0006;  (* Standstill, voltage enabled *)
+END_IF;
+
+(* Decode status word *)
+bReady := (nStatusWord AND 16#0001) &lt;&gt; 0;
+bRunning := (nStatusWord AND 16#0004) &lt;&gt; 0;
+bFaulted := (nStatusWord AND 16#0008) &lt;&gt; 0;
+
+(* Speed feedback scaling: raw register 0..16384 = 0..100% *)
+rActualSpeed := INT_TO_REAL(nStatusWord) / 163.84;
+
+(* Fault code extraction *)
+IF bFaulted THEN
+    nFaultCode := nStatusWord / 256;
+ELSE
+    nFaultCode := 0;
+END_IF;
+END_FUNCTION_BLOCK</sourceCode>
+  </FBSource>
+
+  <!-- ====================================================================
+       MainTask: ST section for main cyclic task.
+       Instantiates function blocks and orchestrates the process.
+       ==================================================================== -->
+  <STSource>
+    <objectName>MainTask</objectName>
+    <sourceCode>PROGRAM MainTask
+VAR
+    fbDrive1 : FB_ATV320_Drive;  (* Pump 1 drive *)
+    fbDrive2 : FB_ATV320_Drive;  (* Pump 2 drive *)
+    bAutoMode : BOOL;
+    bEmergencyStop : BOOL;
+    rTankLevel : REAL;           (* Tank level 0..100% *)
+    nCycleCount : DINT;
+    rTemperature : REAL;         (* Process temperature degC *)
+    tScanTime : TIME;
+END_VAR
+
+(* Emergency stop overrides everything *)
+IF bEmergencyStop THEN
+    fbDrive1(bRunFwd := FALSE, bQuickStop := TRUE, rSpeedSetpoint := 0.0);
+    fbDrive2(bRunFwd := FALSE, bQuickStop := TRUE, rSpeedSetpoint := 0.0);
+    RETURN;
+END_IF;
+
+(* Auto mode: regulate tank level *)
+IF bAutoMode THEN
+    IF rTankLevel &lt; 30.0 THEN
+        fbDrive1(bRunFwd := TRUE, rSpeedSetpoint := 80.0);
+        fbDrive2(bRunFwd := TRUE, rSpeedSetpoint := 60.0);
+    ELSIF rTankLevel &gt; 80.0 THEN
+        fbDrive1(bRunFwd := FALSE, rSpeedSetpoint := 0.0);
+        fbDrive2(bRunFwd := FALSE, rSpeedSetpoint := 0.0);
+    END_IF;
+END_IF;
+
+nCycleCount := nCycleCount + 1;
+END_PROGRAM</sourceCode>
+  </STSource>
+
+  <!-- ====================================================================
+       FC_ScaleAnalog: Standalone function for analog scaling.
+       Converts raw analog input to engineering units.
+       ==================================================================== -->
+  <FBSource nameOfFBType="DFB" version="0.02">
+    <objectName>FC_ScaleAnalog</objectName>
+    <variables>
+      <variable name="nRawValue" typeName="INT" class="INPUT"/>
+      <variable name="rRawLow" typeName="REAL" class="INPUT"/>
+      <variable name="rRawHigh" typeName="REAL" class="INPUT"/>
+      <variable name="rEngLow" typeName="REAL" class="INPUT"/>
+      <variable name="rEngHigh" typeName="REAL" class="INPUT"/>
+      <variable name="bClamp" typeName="BOOL" class="INPUT"/>
+      <variable name="rResult" typeName="REAL" class="OUTPUT"/>
+      <variable name="bInRange" typeName="BOOL" class="OUTPUT"/>
+    </variables>
+    <sourceCode>FUNCTION FC_ScaleAnalog : REAL
+VAR_INPUT
+    nRawValue : INT;     (* Raw ADC value *)
+    rRawLow : REAL;      (* Raw range low *)
+    rRawHigh : REAL;     (* Raw range high *)
+    rEngLow : REAL;      (* Engineering units low *)
+    rEngHigh : REAL;     (* Engineering units high *)
+    bClamp : BOOL;       (* Clamp output to range *)
+END_VAR
+VAR_OUTPUT
+    rResult : REAL;
+    bInRange : BOOL;
+END_VAR
+VAR
+    rScaled : REAL;
+    rSpan : REAL;
+END_VAR
+
+rSpan := rRawHigh - rRawLow;
+IF rSpan = 0.0 THEN
+    rResult := rEngLow;
+    bInRange := FALSE;
+    RETURN;
+END_IF;
+
+rScaled := rEngLow + ((INT_TO_REAL(nRawValue) - rRawLow) / rSpan) * (rEngHigh - rEngLow);
+
+IF bClamp THEN
+    IF rScaled &lt; rEngLow THEN
+        rScaled := rEngLow;
+    ELSIF rScaled &gt; rEngHigh THEN
+        rScaled := rEngHigh;
+    END_IF;
+END_IF;
+
+rResult := rScaled;
+bInRange := (rScaled &gt;= rEngLow) AND (rScaled &lt;= rEngHigh);
+FC_ScaleAnalog := rResult;
+END_FUNCTION</sourceCode>
+  </FBSource>
+
+  <!-- ====================================================================
+       WaterProcess: Program element with section children.
+       Represents a task program composed of multiple ST sections,
+       which is how Control Expert organizes larger programs.
+       ==================================================================== -->
+  <program name="WaterProcess">
+    <section name="Init">
+      <![CDATA[
+(* Initialization section *)
+IF bFirstRun THEN
+    rSetpointPressure := 4.5;
+    nAlarmMask := 16#FFFF;
+    bFirstRun := FALSE;
+END_IF;
+]]>
+    </section>
+    <section name="ProcessControl">
+      <![CDATA[
+(* Main process control logic *)
+VAR
+    rSetpointPressure : REAL;
+    rActualPressure : REAL;
+    nAlarmMask : INT;
+    bFirstRun : BOOL := TRUE;
+    bPumpEnable : BOOL;
+    rPIDOutput : REAL;
+END_VAR
+
+IF bPumpEnable THEN
+    rPIDOutput := (rSetpointPressure - rActualPressure) * 2.5;
+    IF rPIDOutput > 100.0 THEN
+        rPIDOutput := 100.0;
+    ELSIF rPIDOutput < 0.0 THEN
+        rPIDOutput := 0.0;
+    END_IF;
+END_IF;
+]]>
+    </section>
+  </program>
+
+</ExchangeFile>
