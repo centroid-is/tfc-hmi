@@ -91,6 +91,15 @@ func buildRelease(tag, body string, assets []*gogithub.ReleaseAsset) *gogithub.R
 	}
 }
 
+// buildDownloadableRelease creates a release that has the current platform's
+// asset so it passes the ListAllReleases filter.
+func buildDownloadableRelease(tag, body string) *gogithub.RepositoryRelease {
+	assetName := selectPlatformAssetName()
+	return buildRelease(tag, body, []*gogithub.ReleaseAsset{
+		buildAsset(assetName, "https://example.com/"+assetName),
+	})
+}
+
 // buildAsset creates a ReleaseAsset pointing at the given URL.
 func buildAsset(name, downloadURL string) *gogithub.ReleaseAsset {
 	return &gogithub.ReleaseAsset{
@@ -458,9 +467,9 @@ var _ = os.ReadFile
 
 func TestEngine_ListAllReleases_SortDescending(t *testing.T) {
 	releases := []*gogithub.RepositoryRelease{
-		buildRelease("2026.3.5", "notes", nil),
-		buildRelease("2026.10.1", "notes", nil),
-		buildRelease("2026.3.6", "notes", nil),
+		buildDownloadableRelease("2026.3.5", "notes"),
+		buildDownloadableRelease("2026.10.1", "notes"),
+		buildDownloadableRelease("2026.3.6", "notes"),
 	}
 	client := &mockReleasesClient{releases: releases}
 	eng := NewEngine(client, &mockInstaller{})
@@ -483,8 +492,8 @@ func TestEngine_ListAllReleases_SortDescending(t *testing.T) {
 
 func TestEngine_ListAllReleases_MonthBoundary(t *testing.T) {
 	releases := []*gogithub.RepositoryRelease{
-		buildRelease("2026.9.30", "old", nil),
-		buildRelease("2026.10.1", "new", nil),
+		buildDownloadableRelease("2026.9.30", "old"),
+		buildDownloadableRelease("2026.10.1", "new"),
 	}
 	client := &mockReleasesClient{releases: releases}
 	eng := NewEngine(client, &mockInstaller{})
@@ -507,9 +516,9 @@ func TestEngine_ListAllReleases_MonthBoundary(t *testing.T) {
 
 func TestEngine_ListAllReleases_SkipsUnparseable(t *testing.T) {
 	releases := []*gogithub.RepositoryRelease{
-		buildRelease("2026.3.6", "notes", nil),
-		buildRelease("invalid-tag", "bad", nil),
-		buildRelease("2026.3.5", "notes", nil),
+		buildDownloadableRelease("2026.3.6", "notes"),
+		buildDownloadableRelease("invalid-tag", "bad"),
+		buildDownloadableRelease("2026.3.5", "notes"),
 	}
 	client := &mockReleasesClient{releases: releases}
 	eng := NewEngine(client, &mockInstaller{})
@@ -542,6 +551,29 @@ func TestEngine_ListAllReleases_Empty(t *testing.T) {
 	}
 	if len(result) != 0 {
 		t.Fatalf("expected 0 releases, got %d", len(result))
+	}
+}
+
+func TestEngine_ListAllReleases_FiltersNoAssets(t *testing.T) {
+	releases := []*gogithub.RepositoryRelease{
+		buildDownloadableRelease("2026.3.6", "has asset"),
+		buildRelease("2026.3.5", "no assets", nil), // no platform asset
+		buildRelease("2026.3.4", "wrong asset", []*gogithub.ReleaseAsset{
+			buildAsset("something-else.zip", "https://example.com/other.zip"),
+		}),
+	}
+	client := &mockReleasesClient{releases: releases}
+	eng := NewEngine(client, &mockInstaller{})
+
+	result, err := eng.ListAllReleases(context.Background())
+	if err != nil {
+		t.Fatalf("ListAllReleases returned error: %v", err)
+	}
+	if len(result) != 1 {
+		t.Fatalf("expected 1 release (only one with platform asset), got %d", len(result))
+	}
+	if result[0].Version != "2026.3.6" {
+		t.Errorf("expected version 2026.3.6, got %q", result[0].Version)
 	}
 }
 

@@ -108,12 +108,17 @@ func (e *Engine) ListAllReleases(ctx context.Context) ([]ReleaseInfo, error) {
 		info    ReleaseInfo
 	}
 
+	targetAsset := selectPlatformAssetName()
 	result := make([]tagged, 0, len(releases))
 	for _, r := range releases {
 		info := releaseToInfo(r)
 		v, err := ParseVersion(info.Version)
 		if err != nil {
 			// Silently skip releases with unparseable tags (drafts, bad tags, etc.)
+			continue
+		}
+		// Only include releases that have a downloadable asset for this platform.
+		if !releaseHasAsset(info.Assets, targetAsset) {
 			continue
 		}
 		result = append(result, tagged{version: v, info: *info})
@@ -129,6 +134,16 @@ func (e *Engine) ListAllReleases(ctx context.Context) ([]ReleaseInfo, error) {
 		out[i] = t.info
 	}
 	return out, nil
+}
+
+// releaseHasAsset checks if a release contains an asset with the given name.
+func releaseHasAsset(assets []*gogithub.ReleaseAsset, name string) bool {
+	for _, a := range assets {
+		if a.GetName() == name {
+			return true
+		}
+	}
+	return false
 }
 
 // releaseToInfo converts a GitHub API release to a ReleaseInfo.
