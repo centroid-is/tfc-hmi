@@ -34,6 +34,11 @@ jobs:
         with:
           go-version: '1.26'
 
+      - name: Embed Windows icon resource
+        working-directory: tools/centroidx-manager
+        shell: bash
+        run: windres --use-temp-file -o centroidx.syso centroidx.rc
+
       - name: Build centroidx-manager for Windows
         working-directory: tools/centroidx-manager
         run: go build -o centroidx-manager_windows_amd64.exe .

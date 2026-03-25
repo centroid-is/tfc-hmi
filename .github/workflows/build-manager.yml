@@ -55,6 +55,14 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y gcc pkg-config libwayland-dev libx11-dev libx11-xcb-dev libxkbcommon-x11-dev libgles2-mesa-dev libegl1-mesa-dev libffi-dev libxcursor-dev libxrandr-dev libxinerama-dev libxi-dev libxxf86vm-dev libvulkan-dev
 
+      - name: Embed Windows icon resource
+        if: matrix.os == 'windows-latest'
+        working-directory: tools/centroidx-manager
+        shell: bash
+        run: |
+          windres --use-temp-file -o centroidx.syso centroidx.rc
+          echo "Icon resource compiled: $(wc -c < centroidx.syso) bytes"
+
       - name: Build manager binary
         working-directory: tools/centroidx-manager
         env:
