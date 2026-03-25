@@ -66,7 +66,9 @@ void main() {
   // background isolate all perform native socket/pipe IO that can trigger
   // SIGPIPE when the remote end closes unexpectedly.
   if (Platform.isLinux || Platform.isMacOS) {
-    ProcessSignal.sigpipe.watch().listen((_) {});
+    ProcessSignal.sigpipe.watch().listen((_) {
+      stderr.writeln('SIGPIPE received — broken pipe (ignored)');
+    });
   }
 
   if (_enableMarionette) {
