@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 86 75" width="256" height="256">
+  <!-- Triangle mark only, extracted from centroid.svg, recentered -->
+  <g fill="#0b1320" transform="translate(-31.777,-150.195)">
+    <!-- Main triangle body -->
+    <path d="M 74.691406,168.71875 67.4375,181.31641 92.460938,224.74609 H 57.996094 l -5.3125,-9.21484 h 23.824218 l -19.707031,-34.21484 17.890625,-31.0625 18.027344,31.25 -5.332031,9.20312 z"/>
+    <!-- Right triangle leg -->
+    <path d="m 117.60156,224.74609 h -10.63672 l -14.242184,-24.71484 5.320313,-9.24609 z"/>
+    <!-- Left triangle leg -->
+    <path d="M 56.707031,200.01953 42.414062,224.74609 H 31.777344 l 19.613281,-33.97265 z"/>
+  </g>
+</svg>
