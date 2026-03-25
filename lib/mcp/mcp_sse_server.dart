@@ -44,27 +44,6 @@ class McpSseServer {
   }) async {
     if (isRunning) return;
 
-    // Try to kill any stale process holding the port from a previous crash
-    try {
-      final result = await io.Process.run('lsof', ['-ti:$port']);
-      final pids = result.stdout.toString().trim();
-      if (pids.isNotEmpty) {
-        for (final pid in pids.split('\n')) {
-          final trimmed = pid.trim();
-          if (trimmed.isNotEmpty) {
-            io.stderr.writeln(
-              'McpSseServer: killing stale process $trimmed on port $port',
-            );
-            io.Process.killPid(int.parse(trimmed));
-          }
-        }
-        // Brief delay to let the OS release the port
-        await Future<void>.delayed(const Duration(milliseconds: 500));
-      }
-    } catch (_) {
-      // lsof may not exist on all platforms; ignore errors
-    }
-
     final server = StreamableMcpServer(
       serverFactory: (sessionId) {
         final tfcServer = TfcMcpServer(
