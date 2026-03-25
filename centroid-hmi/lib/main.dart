@@ -61,6 +61,14 @@ import 'marionette_init.dart';
 const _enableMarionette = bool.fromEnvironment('MARIONETTE');
 
 void main() {
+  // Ignore SIGPIPE so broken-pipe writes become IOExceptions instead of
+  // killing the process.  The MCP HTTP server, OPC UA client, and pdfium
+  // background isolate all perform native socket/pipe IO that can trigger
+  // SIGPIPE when the remote end closes unexpectedly.
+  if (Platform.isLinux || Platform.isMacOS) {
+    ProcessSignal.sigpipe.watch().listen((_) {});
+  }
+
   if (_enableMarionette) {
     // Marionette binding must be in the same zone as runApp — skip runZonedGuarded.
     initMarionette();
