@@ -86,19 +86,6 @@ RUN flutter pub get
 ARG BUILD_MODE=debug
 RUN flutter build linux --${BUILD_MODE}
 
-# Download libpdfium.so (flutter-elinux and ivi-homescreen builds skip the
-# pdfium_flutter CMake plugin pipeline, so it is never fetched automatically)
-ARG PDFIUM_RELEASE=chromium%2F7520
-RUN ARCH=$(dpkg-architecture -qDEB_HOST_ARCH) \
-    && case "$ARCH" in amd64) CPU="x64";; arm64) CPU="arm64";; *) echo "Unsupported: $ARCH"; exit 1;; esac \
-    && curl -sL "https://github.com/bblanchon/pdfium-binaries/releases/download/${PDFIUM_RELEASE}/pdfium-linux-${CPU}.tgz" \
-       -o /tmp/pdfium.tgz \
-    && mkdir -p /tmp/pdfium \
-    && tar -xzf /tmp/pdfium.tgz -C /tmp/pdfium lib/libpdfium.so \
-    && BUILD_DIR=$(find build/linux -path "*/${BUILD_MODE}/bundle" -type d | head -1) \
-    && cp /tmp/pdfium/lib/libpdfium.so "${BUILD_DIR}/lib/" \
-    && rm -rf /tmp/pdfium /tmp/pdfium.tgz
-
 # Assemble the ivi-homescreen bundle from the Linux build output
 RUN BUILD_DIR=$(find build/linux -path "*/${BUILD_MODE}/bundle" -type d | head -1) \
     && echo "=== Flutter build output ===" \
