@@ -57,6 +57,17 @@ jobs:
         working-directory: centroid-hmi
         run: flutter-elinux build elinux ${{ inputs.release && '--release' || '--debug' }}
 
+      - name: Download libpdfium.so (not built by flutter-elinux)
+        working-directory: centroid-hmi
+        run: |
+          PDFIUM_RELEASE="chromium%2F7520"
+          curl -sL "https://github.com/bblanchon/pdfium-binaries/releases/download/${PDFIUM_RELEASE}/pdfium-linux-x64.tgz" \
+            -o /tmp/pdfium.tgz
+          mkdir -p /tmp/pdfium
+          tar -xzf /tmp/pdfium.tgz -C /tmp/pdfium lib/libpdfium.so
+          BUNDLE_DIR="build/elinux/x64/${{ inputs.release && 'release' || 'debug' }}/bundle"
+          cp /tmp/pdfium/lib/libpdfium.so "${BUNDLE_DIR}/lib/"
+
       - name: Move build artifacts
         working-directory: centroid-hmi
         run: |
