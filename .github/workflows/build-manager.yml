@@ -69,6 +69,51 @@ jobs:
           CGO_ENABLED: ${{ matrix.cgo }}
         run: go build -o ${{ matrix.artifact_name }} .
 
+      - name: Sign and notarize macOS binary
+        if: matrix.os == 'macos-latest' && env.APPLE_CERTIFICATE_P12_BASE64 != ''
+        working-directory: tools/centroidx-manager
+        env:
+          APPLE_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+        run: |
+          # Import certificate into temporary keychain
+          KEYCHAIN_PATH=$RUNNER_TEMP/signing.keychain-db
+          KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          echo "$APPLE_CERTIFICATE_P12_BASE64" | base64 --decode > $RUNNER_TEMP/certificate.p12
+          security import $RUNNER_TEMP/certificate.p12 -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain-db
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          # Find signing identity
+          IDENTITY=$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" | grep "Developer ID Application" | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          echo "Signing with: $IDENTITY"
+
+          # Sign with hardened runtime + timestamp (required for notarization)
+          codesign --force --options runtime --sign "$IDENTITY" --timestamp ${{ matrix.artifact_name }}
+          codesign --verify --deep --strict ${{ matrix.artifact_name }}
+          echo "Signing verified"
+
+          # Notarize
+          zip ${{ matrix.artifact_name }}.zip ${{ matrix.artifact_name }}
+          xcrun notarytool submit ${{ matrix.artifact_name }}.zip \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_ID_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait
+          echo "Notarization complete"
+          rm ${{ matrix.artifact_name }}.zip
+
+          # Cleanup keychain
+          security delete-keychain "$KEYCHAIN_PATH"
+
       - name: Verify binary
         working-directory: tools/centroidx-manager
         shell: bash
