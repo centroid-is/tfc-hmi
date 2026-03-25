@@ -58,26 +58,16 @@ jobs:
           echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> $GITHUB_ENV
           echo "Signing identity: $IDENTITY"
 
-      - name: Patch Xcode project for Developer ID signing
+      - name: Disable Xcode signing (will re-sign manually after build)
         working-directory: centroid-hmi/macos
         run: |
-          # Switch from Automatic (requires provisioning profile) to Manual with Developer ID
+          # Disable all code signing in Xcode — we re-sign with Developer ID after build
           sed -i '' 's/CODE_SIGN_STYLE = Automatic/CODE_SIGN_STYLE = Manual/g' Runner.xcodeproj/project.pbxproj
-
-          if [ -n "$CODESIGN_IDENTITY" ]; then
-            # Set Developer ID identity for all build configurations
-            sed -i '' 's/"CODE_SIGN_IDENTITY\[sdk=macosx\*\]" = "Apple Development"/"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Developer ID Application"/g' Runner.xcodeproj/project.pbxproj
-            # Also set the plain CODE_SIGN_IDENTITY where it's "-" (ad-hoc)
-            sed -i '' 's/CODE_SIGN_IDENTITY = "-"/CODE_SIGN_IDENTITY = "Developer ID Application"/g' Runner.xcodeproj/project.pbxproj
-          else
-            # No cert available — sign ad-hoc so build succeeds
-            sed -i '' 's/"CODE_SIGN_IDENTITY\[sdk=macosx\*\]" = "Apple Development"/"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-"/g' Runner.xcodeproj/project.pbxproj
-          fi
-
-          # Remove DEVELOPMENT_TEAM requirement (not needed for Developer ID)
+          sed -i '' 's/"CODE_SIGN_IDENTITY\[sdk=macosx\*\]" = "Apple Development"/CODE_SIGN_IDENTITY = ""/g' Runner.xcodeproj/project.pbxproj
+          sed -i '' 's/CODE_SIGN_IDENTITY = "-"/CODE_SIGN_IDENTITY = ""/g' Runner.xcodeproj/project.pbxproj
           sed -i '' '/DEVELOPMENT_TEAM/d' Runner.xcodeproj/project.pbxproj
-          # Remove provisioning profile requirement
           sed -i '' '/PROVISIONING_PROFILE_SPECIFIER/d' Runner.xcodeproj/project.pbxproj
+          sed -i '' '/CODE_SIGN_ENTITLEMENTS/d' Runner.xcodeproj/project.pbxproj
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
@@ -88,7 +78,17 @@ jobs:
         working-directory: centroid-hmi
         run: flutter pub get
 
-      - name: Build macOS release
+      - name: Inject no-signing xcconfig
+        working-directory: centroid-hmi/macos
+        run: |
+          # Create an xcconfig that disables signing; include it in Release config
+          echo 'CODE_SIGN_IDENTITY =' > NoSign.xcconfig
+          echo 'CODE_SIGNING_REQUIRED = NO' >> NoSign.xcconfig
+          echo 'CODE_SIGNING_ALLOWED = NO' >> NoSign.xcconfig
+          # Append include to the Flutter-generated Release xcconfig
+          echo '#include "NoSign.xcconfig"' >> Flutter/Release.xcconfig
+
+      - name: Build macOS release (unsigned — re-signed after build)
         working-directory: centroid-hmi
         run: flutter build macos --release
 
