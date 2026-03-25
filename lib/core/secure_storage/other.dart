@@ -3,7 +3,9 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:tfc_dart/core/secure_storage/secure_storage.dart';
 
 class OtherSecureStorage implements MySecureStorage {
-  final _storage = FlutterSecureStorage();
+  final _storage = FlutterSecureStorage(
+    mOptions: MacOsOptions(accountName: 'CentroidX'),
+  );
 
   @override
   Future<void> write({required String key, required String value}) async {
