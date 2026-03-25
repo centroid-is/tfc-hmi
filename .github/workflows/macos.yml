@@ -33,11 +33,14 @@ jobs:
           ref: ${{ inputs.ref || github.ref }}
 
       - name: Import signing certificate
-        if: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 != '' }}
         env:
           APPLE_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
         run: |
+          if [ -z "$APPLE_CERTIFICATE_P12_BASE64" ]; then
+            echo "No signing certificate configured — skipping"
+            exit 0
+          fi
           KEYCHAIN_PATH=$RUNNER_TEMP/signing.keychain-db
           KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
           security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
