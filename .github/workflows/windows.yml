@@ -29,6 +29,23 @@ jobs:
         with:
           ref: ${{ inputs.ref || github.ref }}
 
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+
+      - name: Build centroidx-manager for Windows
+        working-directory: tools/centroidx-manager
+        run: go build -o centroidx-manager_windows_amd64.exe .
+
+      - name: Bundle manager binary into Flutter assets
+        shell: bash
+        run: |
+          mkdir -p centroid-hmi/assets/manager
+          cp tools/centroidx-manager/centroidx-manager_windows_amd64.exe \
+             centroid-hmi/assets/manager/centroidx-manager_windows_amd64.exe
+          ls -la centroid-hmi/assets/manager/
+
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
