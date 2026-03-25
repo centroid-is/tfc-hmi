@@ -40,7 +40,8 @@ func Run(opts Options) {
 
 	go func() {
 		w := new(app.Window)
-		if opts.Mode == "picker" {
+
+		if opts.Mode == "picker" || opts.Mode == "prs" {
 			w.Option(app.Title("CentroidX Version Manager"), app.Size(unit.Dp(700), unit.Dp(500)))
 		} else {
 			w.Option(app.Title("CentroidX Manager"), app.Size(unit.Dp(500), unit.Dp(400)))
