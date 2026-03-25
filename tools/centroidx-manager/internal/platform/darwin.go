@@ -26,3 +26,14 @@ func (d *darwinInstaller) TrustCertificate(_ string) error {
 func (d *darwinInstaller) LaunchApp() error {
 	return launchAppDetached(d.runner, "/Applications/CentroidX.app/Contents/MacOS/centroidx")
 }
+
+func (d *darwinInstaller) IsInstalled() bool {
+	out, err := d.runner.Run("test", "-d", "/Applications/CentroidX.app")
+	_ = out
+	return err == nil
+}
+
+func (d *darwinInstaller) Uninstall() error {
+	_, err := d.runner.Run("rm", "-rf", "/Applications/CentroidX.app")
+	return err
+}

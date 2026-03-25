@@ -70,6 +70,9 @@ func (m *mockInstaller) TrustCertificate(certPath string) error {
 	return nil
 }
 
+func (m *mockInstaller) IsInstalled() bool { return len(m.installed) > 0 }
+func (m *mockInstaller) Uninstall() error { m.installed = nil; return nil }
+
 func (m *mockInstaller) LaunchApp() error {
 	if m.launchErr != nil {
 		return m.launchErr

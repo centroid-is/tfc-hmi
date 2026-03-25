@@ -22,6 +22,12 @@ type Installer interface {
 
 	// LaunchApp starts the installed application after update.
 	LaunchApp() error
+
+	// IsInstalled returns true if the application package is currently installed.
+	IsInstalled() bool
+
+	// Uninstall removes the application package.
+	Uninstall() error
 }
 
 // CommandRunner abstracts exec.Command for testing.

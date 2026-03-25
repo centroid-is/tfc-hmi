@@ -26,3 +26,13 @@ func (l *linuxInstaller) TrustCertificate(_ string) error {
 func (l *linuxInstaller) LaunchApp() error {
 	return launchAppDetached(l.runner, "/opt/centroidx/centroidx")
 }
+
+func (l *linuxInstaller) IsInstalled() bool {
+	out, err := l.runner.Run("dpkg", "-s", "centroidx")
+	return err == nil && len(out) > 0
+}
+
+func (l *linuxInstaller) Uninstall() error {
+	_, err := l.runner.Run("sudo", "dpkg", "-r", "centroidx")
+	return err
+}

@@ -25,23 +25,26 @@ import (
 
 // prPickerState holds state for the PR artifact picker UI.
 type prPickerState struct {
-	prs        []ghclient.PRInfo
-	selected   int
-	listState  widget.List
-	itemClicks []widget.Clickable
-	installBtn widget.Clickable
-	loading    bool
-	err        error
-	installing bool
-	progress   float32
-	statusMsg  string
+	prs          []ghclient.PRInfo
+	selected     int
+	listState    widget.List
+	itemClicks   []widget.Clickable
+	installBtn   widget.Clickable
+	uninstallBtn widget.Clickable
+	loading      bool
+	err          error
+	installing   bool
+	progress     float32
+	statusMsg    string
+	isInstalled  bool
 }
 
 // runPRPickerMode fetches PRs with artifacts and shows a picker.
 func runPRPickerMode(w *app.Window, th *material.Theme, client ghclient.PRCapableClient, installer PRInstaller, platformAsset string) {
 	state := &prPickerState{
-		loading:  true,
-		selected: -1,
+		loading:     true,
+		selected:    -1,
+		isInstalled: installer.IsInstalled(),
 	}
 	state.listState.List.Axis = layout.Vertical
 
@@ -88,6 +91,23 @@ func layoutPRPicker(gtx layout.Context, th *material.Theme, state *prPickerState
 		return layout.Center.Layout(gtx, lbl.Layout)
 	}
 
+	// Handle uninstall
+	if state.uninstallBtn.Clicked(gtx) && state.isInstalled && !state.installing {
+		state.installing = true
+		state.statusMsg = "Uninstalling..."
+		go func() {
+			if err := installer.Uninstall(); err != nil {
+				state.statusMsg = userFriendlyMessage(err)
+				state.err = err
+			} else {
+				state.statusMsg = "Uninstalled!"
+				state.isInstalled = false
+			}
+			state.installing = false
+			w.Invalidate()
+		}()
+	}
+
 	// Handle install — pick first MSIX artifact, fall back to first available
 	if state.installBtn.Clicked(gtx) && state.selected >= 0 && !state.installing {
 		state.installing = true
@@ -105,6 +125,7 @@ func layoutPRPicker(gtx layout.Context, th *material.Theme, state *prPickerState
 				state.statusMsg = userFriendlyMessage(err)
 			} else {
 				state.statusMsg = fmt.Sprintf("PR #%d installed!", pr.Number)
+				state.isInstalled = true
 			}
 			state.installing = false
 			w.Invalidate()
@@ -226,15 +247,28 @@ func layoutPRDetail(gtx layout.Context, th *material.Theme, state *prPickerState
 			layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 				return layout.Dimensions{}
 			}),
-			// Install button
+			// Install / Uninstall buttons
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 				if state.selected < 0 || state.installing {
 					return layout.Dimensions{}
 				}
 				return layout.Inset{Bottom: unit.Dp(12)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-					btn := material.Button(th, &state.installBtn, "Install from this PR")
-					btn.Background = ColorAccent()
-					return btn.Layout(gtx)
+					return layout.Flex{Spacing: layout.SpaceStart}.Layout(gtx,
+						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+							btn := material.Button(th, &state.installBtn, "Install from this PR")
+							btn.Background = ColorAccent()
+							return btn.Layout(gtx)
+						}),
+						layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
+						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+							if !state.isInstalled {
+								return layout.Dimensions{}
+							}
+							btn := material.Button(th, &state.uninstallBtn, "Uninstall")
+							btn.Background = ColorError()
+							return btn.Layout(gtx)
+						}),
+					)
 				})
 			}),
 		)
@@ -245,6 +279,8 @@ func layoutPRDetail(gtx layout.Context, th *material.Theme, state *prPickerState
 type PRInstaller interface {
 	Install(assetPath string) error
 	LaunchApp() error
+	IsInstalled() bool
+	Uninstall() error
 }
 
 // pickBestArtifact selects the best artifact to install — prefers MSIX, falls back to first.
