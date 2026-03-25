@@ -114,7 +114,7 @@ jobs:
             --entitlements macos/Runner/Release.entitlements "$APP_PATH"
 
           codesign --verify --deep --strict "$APP_PATH"
-          echo "APP_PATH=$APP_PATH" >> $GITHUB_ENV
+          echo "APP_PATH=$(pwd)/$APP_PATH" >> $GITHUB_ENV
           echo "Signing verified"
 
       - name: Set APP_PATH for unsigned builds
@@ -122,7 +122,7 @@ jobs:
         working-directory: centroid-hmi
         run: |
           APP_PATH=$(find build/macos/Build/Products/Release -name "*.app" -maxdepth 1 | head -1)
-          echo "APP_PATH=$APP_PATH" >> $GITHUB_ENV
+          echo "APP_PATH=$(pwd)/$APP_PATH" >> $GITHUB_ENV
 
       - name: Create DMG
         run: |
