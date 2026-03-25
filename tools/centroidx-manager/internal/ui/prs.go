@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"gioui.org/app"
@@ -283,11 +284,20 @@ type PRInstaller interface {
 	Uninstall() error
 }
 
-// pickBestArtifact selects the best artifact to install — prefers MSIX, falls back to first.
+// pickBestArtifact selects the best artifact to install for the current platform.
+// On macOS prefers DMG, on Windows prefers MSIX, falls back to first.
 func pickBestArtifact(artifacts []ghclient.PRArtifact) ghclient.PRArtifact {
 	for _, a := range artifacts {
-		if strings.HasSuffix(a.Name, ".msix") || strings.Contains(a.Name, "msix") || strings.Contains(a.Name, "MSIX") {
-			return a
+		name := strings.ToLower(a.Name)
+		if strings.Contains(name, "darwin") || strings.Contains(name, "dmg") {
+			if runtime.GOOS == "darwin" {
+				return a
+			}
+		}
+		if strings.Contains(name, "msix") || strings.Contains(name, "windows") {
+			if runtime.GOOS == "windows" {
+				return a
+			}
 		}
 	}
 	return artifacts[0]

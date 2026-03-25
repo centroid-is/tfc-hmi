@@ -95,6 +95,8 @@ jobs:
       - name: Re-sign with hardened runtime for notarization
         if: env.CODESIGN_IDENTITY != ''
         working-directory: centroid-hmi
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           APP_PATH=$(find build/macos/Build/Products/Release -name "*.app" -maxdepth 1 | head -1)
           echo "Re-signing with hardened runtime: $APP_PATH"
@@ -109,9 +111,14 @@ jobs:
             codesign --force --options runtime --sign "$CODESIGN_IDENTITY" --timestamp "$fw"
           done
 
+          # Expand $(AppIdentifierPrefix) in entitlements — Xcode does this
+          # automatically but manual signing does not
+          TEAM_ID="${APPLE_TEAM_ID:-Q4FZLRTZ4M}"
+          sed "s/\$(AppIdentifierPrefix)/${TEAM_ID}./" macos/Runner/Release.entitlements > /tmp/release.entitlements
+
           # Sign the main app bundle
           codesign --force --options runtime --sign "$CODESIGN_IDENTITY" --timestamp \
-            --entitlements macos/Runner/Release.entitlements "$APP_PATH"
+            --entitlements /tmp/release.entitlements "$APP_PATH"
 
           codesign --verify --deep --strict "$APP_PATH"
           echo "APP_PATH=$(pwd)/$APP_PATH" >> $GITHUB_ENV

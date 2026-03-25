@@ -77,8 +77,8 @@ func (c *githubClient) ListPRsWithArtifacts(ctx context.Context, platformAssetNa
 // fetchBranchArtifacts gets the latest workflow run artifacts for a branch.
 // Checks multiple workflows: windows.yml (MSIX), build-manager.yml (Go binary).
 func (c *githubClient) fetchBranchArtifacts(ctx context.Context, branch, platformAssetName string) ([]PRArtifact, error) {
-	// Try windows.yml first (produces MSIX), then fall back to build-manager.yml
-	workflows := []string{"windows.yml", "build-manager.yml"}
+	// Check platform-specific workflows for installable artifacts
+	workflows := []string{"macos.yml", "windows.yml", "build-manager.yml"}
 	for _, wf := range workflows {
 		arts, err := c.fetchWorkflowArtifacts(ctx, branch, wf)
 		if err != nil {
