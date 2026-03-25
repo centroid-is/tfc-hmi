@@ -62,7 +62,7 @@ func installWindows(runner CommandRunner, assetPath string) error {
 
 	// If the error is a publisher conflict (0x80073CFB), remove the old package
 	// and retry. This happens when switching from Store to sideload signing.
-	if strings.Contains(detail, "0x80073CFB") || strings.Contains(detail, "conflicting") {
+	if strings.Contains(detail, "0x80073CF") || strings.Contains(detail, "conflicting") || strings.Contains(detail, "Deployment failed") {
 		// Remove conflicting package(s) with the same identity name
 		runner.Run(
 			"powershell",
