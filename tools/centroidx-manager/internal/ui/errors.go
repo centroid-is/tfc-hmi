@@ -37,6 +37,12 @@ func userFriendlyMessage(err error) string {
 		strings.Contains(lower, "access denied") ||
 		strings.Contains(lower, "access is denied"):
 		return "Permission Error: The installer needs administrator privileges. Please try running as administrator."
+	case strings.Contains(lower, "no asset found") ||
+		strings.Contains(lower, "select asset"):
+		return "No installable package found for this platform.\nA new release with platform packages has not been published yet."
+	case strings.Contains(lower, "404") ||
+		strings.Contains(lower, "not found"):
+		return "Release not found. Check your internet connection and try again."
 	default:
 		return err.Error()
 	}
