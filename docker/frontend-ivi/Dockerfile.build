@@ -165,6 +165,10 @@ COPY --from=flutter-builder /bundle/ ./bundle/
 # (it looks relative to the executable, not the bundle path)
 RUN ln -s bundle/data data
 
+# Symlink so FFI plugins (pdfium_flutter, etc.) can resolve their .so files
+# (pdfrx loads libpdfium.so relative to the app dir, not the bundle dir)
+RUN ln -s bundle/lib lib
+
 RUN chown -R centroid:centroid $APP_DIR \
     && chmod +x ./homescreen
 

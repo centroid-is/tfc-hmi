@@ -21,6 +21,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libglib2.0-0 \
     libsecret-1-0 \
     sqlite3 \
+    curl ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 # Hacks for amplify secure storage
@@ -43,6 +44,15 @@ ARG APP_BUNDLE
 ENV BUNDLE=${APP_BUNDLE}
 
 COPY ${APP_BUNDLE} $APP_DIR/
+
+# Download libpdfium.so (flutter-elinux skips the CMake FFI plugin pipeline)
+ARG PDFIUM_RELEASE=chromium%2F7520
+RUN curl -sL "https://github.com/bblanchon/pdfium-binaries/releases/download/${PDFIUM_RELEASE}/pdfium-linux-x64.tgz" \
+      -o /tmp/pdfium.tgz \
+    && mkdir -p /tmp/pdfium \
+    && tar -xzf /tmp/pdfium.tgz -C /tmp/pdfium lib/libpdfium.so \
+    && cp /tmp/pdfium/lib/libpdfium.so $APP_DIR/lib/ \
+    && rm -rf /tmp/pdfium /tmp/pdfium.tgz
 
 RUN chown -R centroid:centroid $APP_DIR \
     && chmod +x $APP_DIR/${BINARY}
