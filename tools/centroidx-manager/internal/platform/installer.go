@@ -47,6 +47,8 @@ func (e execRunner) Run(name string, args ...string) ([]byte, error) {
 // installWindows runs Add-AppxPackage via PowerShell to install an MSIX.
 // -ForceApplicationShutdown ensures any running package processes are stopped first.
 func installWindows(runner CommandRunner, assetPath string) error {
+	// Normalize path to Windows backslashes for PowerShell
+	assetPath = strings.ReplaceAll(assetPath, "/", "\\")
 	// First attempt: install directly.
 	out, err := runner.Run(
 		"powershell",

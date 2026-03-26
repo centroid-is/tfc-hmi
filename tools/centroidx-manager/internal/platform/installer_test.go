@@ -74,7 +74,7 @@ func TestWindowsInstaller_Install(t *testing.T) {
 	if !hasArgContaining(all, "-ForceApplicationShutdown") {
 		t.Errorf("expected '-ForceApplicationShutdown' in command args, got: %v", all)
 	}
-	if !hasArgContaining(all, "/tmp/app.msix") {
+	if !hasArgContaining(all, "app.msix") {
 		t.Errorf("expected asset path in command args, got: %v", all)
 	}
 }
