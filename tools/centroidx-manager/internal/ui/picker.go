@@ -20,16 +20,17 @@ import (
 
 // pickerState holds all mutable state for the version picker UI.
 type pickerState struct {
-	releases    []update.ReleaseInfo
-	selected    int
-	listState   widget.List
-	itemClicks  []widget.Clickable
-	installBtn  widget.Clickable
-	loading     bool
-	err         error
-	installing  bool
-	progress    float32
-	statusMsg   string
+	releases       []update.ReleaseInfo
+	selected       int
+	listState      widget.List
+	notesListState widget.List
+	itemClicks     []widget.Clickable
+	installBtn     widget.Clickable
+	loading        bool
+	err            error
+	installing     bool
+	progress       float32
+	statusMsg      string
 }
 
 // runPickerMode fetches versions and runs the picker event loop.
@@ -39,6 +40,7 @@ func runPickerMode(w *app.Window, th *material.Theme, eng *update.Engine) {
 		selected: -1,
 	}
 	state.listState.List.Axis = layout.Vertical
+	state.notesListState.List.Axis = layout.Vertical
 
 	go func() {
 		releases, err := eng.ListAllReleases(context.Background())
@@ -196,7 +198,7 @@ func layoutDetail(gtx layout.Context, th *material.Theme, state *pickerState) la
 			}),
 			layout.Rigid(layout.Spacer{Height: unit.Dp(12)}.Layout),
 
-			// Release notes
+			// Release notes (scrollable)
 			layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 				if state.selected < 0 {
 					return layout.Dimensions{}
@@ -206,7 +208,9 @@ func layoutDetail(gtx layout.Context, th *material.Theme, state *pickerState) la
 				if notes == "" {
 					notes = "No release notes available."
 				}
-				return material.Body1(th, notes).Layout(gtx)
+				return material.List(th, &state.notesListState).Layout(gtx, 1, func(gtx layout.Context, _ int) layout.Dimensions {
+					return material.Body1(th, notes).Layout(gtx)
+				})
 			}),
 
 			// Status + progress (when installing)
