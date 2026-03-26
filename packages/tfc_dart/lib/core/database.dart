@@ -211,7 +211,16 @@ class _PendingWrite {
   final DateTime time;
   final dynamic value;
 
-  _PendingWrite(this.time, this.value);
+  /// Monotonic sequence number for deterministic insertion-order sorting.
+  /// [DateTime.now()] has limited resolution on Windows (~15 ms), so many
+  /// writes created in a tight loop share the same timestamp.  Sorting by
+  /// [time] alone gives a non-deterministic order for equal timestamps
+  /// (Dart's [List.sort] is not guaranteed stable), which causes the wrong
+  /// items to be dropped during queue overflow trimming.
+  final int seq;
+  static int _nextSeq = 0;
+
+  _PendingWrite(this.time, this.value) : seq = _nextSeq++;
 
   Map<String, dynamic> toMap() {
     if (value is Map<String, dynamic>) {
@@ -640,12 +649,14 @@ class Database {
   ///
   /// When multiple concurrent flushes fail, the order they call this method is
   /// non-deterministic. To always drop the globally oldest data regardless of
-  /// call order, items are sorted by timestamp before trimming.
+  /// call order, items are sorted by monotonic sequence number before trimming.
+  /// (Sorting by timestamp alone is non-deterministic on Windows where
+  /// DateTime.now() has ~15 ms resolution and Dart's List.sort is not stable.)
   void _queueForRetry(String tableName, List<_PendingWrite> writes) {
     final queue = _retryQueue.putIfAbsent(tableName, () => []);
     queue.addAll(writes);
     if (queue.length > _maxRetryQueueSize) {
-      queue.sort((a, b) => a.time.compareTo(b.time));
+      queue.sort((a, b) => a.seq.compareTo(b.seq));
       final overflow = queue.length - _maxRetryQueueSize;
       logger.w('Retry queue overflow for $tableName, dropping $overflow oldest items');
       queue.removeRange(0, overflow);
