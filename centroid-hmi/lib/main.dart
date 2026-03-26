@@ -50,6 +50,7 @@ import 'package:tfc/providers/proposal_state.dart';
 import 'package:tfc/providers/scaffold_messenger_key.dart';
 
 import 'package:tfc_dart/core/secure_storage/secure_storage.dart';
+import 'package:tfc_dart/core/log_config.dart';
 import 'package:tfc/core/secure_storage/other.dart';
 import 'package:pdfrx/pdfrx.dart';
 
@@ -62,22 +63,81 @@ import 'pages/version_manager_page.dart';
 /// Enable with: --dart-define=MARIONETTE=true
 const _enableMarionette = bool.fromEnvironment('MARIONETTE');
 
+/// Synchronous log file handle for MSIX debug logging.
+///
+/// In MSIX, neither Flutter's print() nor dart:io's stdout route through the
+/// C++ freopen_s redirect. We open the log file directly from Dart using
+/// synchronous IO (RandomAccessFile) to guarantee writes are flushed.
+RandomAccessFile? _logFile;
+
+void _debugPrint(Zone self, ZoneDelegate parent, Zone zone, String line) {
+  if (_logFile != null) {
+    _logFile!.writeStringSync('$line\n');
+  }
+  // Forward to parent so debugger/DevTools still works.
+  parent.print(zone, line);
+}
+
 void main() {
+  // Ignore SIGPIPE so broken-pipe writes become IOExceptions instead of
+  // killing the process.  The MCP HTTP server, OPC UA client, and pdfium
+  // background isolate all perform native socket/pipe IO that can trigger
+  // SIGPIPE when the remote end closes unexpectedly.
+  if (Platform.isLinux || Platform.isMacOS) {
+    try {
+      ProcessSignal.sigpipe.watch().listen((_) {
+        stderr.writeln('SIGPIPE received — broken pipe (ignored)');
+      });
+    } on SignalException {
+      // flutter-elinux does not support signal watching
+    }
+  }
+
+  final logFilePath = Platform.environment['CENTROID_LOG_FILE'];
+  final debugMode = Platform.environment['CENTROID_STDOUT'] == '1' ||
+      Platform.environment['CENTROID_STDOUT'] == 'true' ||
+      logFilePath != null;
+
+  if (debugMode && logFilePath != null) {
+    try {
+      _logFile = File(logFilePath).openSync(mode: FileMode.append);
+    } catch (_) {}
+  }
+
+  initLogConfig();
+
   if (_enableMarionette) {
     initMarionette();
-    _startApp();
+    _startApp(debugMode);
   } else {
     runZonedGuarded(() {
       WidgetsFlutterBinding.ensureInitialized();
-      _startApp();
+      _startApp(debugMode);
     }, (error, stackTrace) {
       stderr.writeln('Unhandled async error: $error');
       stderr.writeln('$stackTrace');
-    });
+    },
+    zoneSpecification: debugMode
+        ? ZoneSpecification(print: _debugPrint)
+        : null,
+    );
   }
 }
 
-Future<void> _startApp() async {
+/// All initialisation that depends on a Flutter binding being present,
+/// through to [runApp].  Called from the same zone that initialised the
+/// binding so that Flutter's zone-check in [runApp] is satisfied.
+Future<void> _startApp([bool debugMode = false]) async {
+  if (debugMode) {
+    print('[CentroidX] v${Platform.version} starting...');
+    print('[CentroidX] Platform: ${Platform.operatingSystem} ${Platform.operatingSystemVersion}');
+    print('[CentroidX] Executable: ${Platform.resolvedExecutable}');
+    print('[CentroidX] Environment: CENTROID_STDOUT=${Platform.environment['CENTROID_STDOUT'] ?? 'unset'}, '
+        'CENTROID_LOG_FILE=${Platform.environment['CENTROID_LOG_FILE'] ?? 'unset'}, '
+        'CENTROID_LOG_LEVEL=${Platform.environment['CENTROID_LOG_LEVEL'] ?? 'unset'}, '
+        'CENTROID_OPCUA_LOG_LEVEL=${Platform.environment['CENTROID_OPCUA_LOG_LEVEL'] ?? 'unset'}');
+  }
+
   pdfrxFlutterInitialize();
   AmplifySecureStorageDart.registerWith();
   if (Platform.isWindows) {

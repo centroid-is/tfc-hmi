@@ -4,13 +4,9 @@ import 'dart:isolate';
 import 'package:logger/logger.dart';
 import 'package:tfc_dart/core/collector.dart';
 import 'package:tfc_dart/core/database.dart';
+import 'package:tfc_dart/core/log_config.dart';
 import 'package:tfc_dart/core/modbus_device_client.dart';
 import 'package:tfc_dart/core/state_man.dart';
-
-class _TraceFilter extends LogFilter {
-  @override
-  bool shouldLog(LogEvent event) => true;
-}
 
 /// Configuration for spawning a DataAcquisition isolate.
 class DataAcquisitionIsolateConfig {
@@ -38,7 +34,7 @@ class DataAcquisitionIsolateConfig {
 @pragma('vm:entry-point')
 Future<void> dataAcquisitionIsolateEntry(
     DataAcquisitionIsolateConfig config) async {
-  Logger.defaultFilter = () => _TraceFilter();
+  initLogConfig();
   final logger = Logger();
 
   final dbConfig = DatabaseConfig.fromJson(config.dbConfigJson);

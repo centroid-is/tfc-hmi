@@ -1,11 +1,13 @@
 #include "utils.h"
 
 #include <flutter_windows.h>
+#include <fcntl.h>
 #include <io.h>
 #include <stdio.h>
 #include <windows.h>
 
 #include <iostream>
+#include <vector>
 
 void CreateAndAttachConsole() {
   if (::AllocConsole()) {
@@ -19,6 +21,59 @@ void CreateAndAttachConsole() {
     std::ios::sync_with_stdio();
     FlutterDesktopResyncOutputStreams();
   }
+}
+
+void RedirectIOToConsole() {
+  FILE *fp;
+  freopen_s(&fp, "CONOUT$", "w", stdout);
+  freopen_s(&fp, "CONOUT$", "w", stderr);
+  freopen_s(&fp, "CONIN$", "r", stdin);
+  setvbuf(stdout, nullptr, _IONBF, 0);
+  setvbuf(stderr, nullptr, _IONBF, 0);
+  std::ios::sync_with_stdio();
+  FlutterDesktopResyncOutputStreams();
+}
+
+void RedirectIOToFile(const char* path) {
+  // Open with FILE_SHARE_READ | FILE_SHARE_WRITE so Dart can also write to this file.
+  // freopen_s does NOT expose sharing flags and defaults to exclusive access,
+  // which blocks Dart's File.openSync() from appending to the same log file.
+  int wlen = ::MultiByteToWideChar(CP_UTF8, 0, path, -1, nullptr, 0);
+  if (wlen <= 0) return;
+  std::vector<wchar_t> wpath(wlen);
+  ::MultiByteToWideChar(CP_UTF8, 0, path, -1, wpath.data(), wlen);
+
+  HANDLE hFile = ::CreateFileW(
+      wpath.data(),
+      GENERIC_WRITE,
+      FILE_SHARE_READ | FILE_SHARE_WRITE,
+      nullptr,
+      CREATE_ALWAYS,
+      FILE_ATTRIBUTE_NORMAL,
+      nullptr);
+  if (hFile == INVALID_HANDLE_VALUE) return;
+
+  // Associate the Win32 handle with a CRT file descriptor, then with stdout.
+  int fd = _open_osfhandle(reinterpret_cast<intptr_t>(hFile), _O_WRONLY | _O_TEXT);
+  if (fd == -1) { ::CloseHandle(hFile); return; }
+
+  FILE *fp = _fdopen(fd, "w");
+  if (!fp) { _close(fd); return; }
+  setvbuf(fp, nullptr, _IONBF, 0);
+
+  // Replace CRT stdout with our file stream.
+  *stdout = *fp;
+  // Wire fd 1 and fd 2 to the same file so Dart (which uses fd 1) can reach it.
+  _dup2(fd, 1);
+  _dup2(fd, 2);
+
+  // Sync Win32 standard handles (Dart uses GetStdHandle -> WriteFile).
+  ::SetStdHandle(STD_OUTPUT_HANDLE, hFile);
+  ::SetStdHandle(STD_ERROR_HANDLE, hFile);
+
+  // Force std::cout/cerr to re-associate with the redirected CRT streams.
+  std::ios::sync_with_stdio(false);
+  std::ios::sync_with_stdio(true);
 }
 
 std::vector<std::string> GetCommandLineArguments() {

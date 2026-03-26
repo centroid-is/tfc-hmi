@@ -8,6 +8,12 @@
 // it for both the runner and the Flutter library.
 void CreateAndAttachConsole();
 
+// Redirects stdout and stderr to an already-attached console.
+void RedirectIOToConsole();
+
+// Redirects stdout and stderr to a log file.
+void RedirectIOToFile(const char* path);
+
 // Takes a null-terminated wchar_t* encoded in UTF-16 and returns a std::string
 // encoded in UTF-8. Returns an empty std::string on failure.
 std::string Utf8FromUtf16(const wchar_t* utf16_string);
