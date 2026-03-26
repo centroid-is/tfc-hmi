@@ -328,7 +328,10 @@ func downloadAndInstallArtifact(client ghclient.PRCapableClient, installer PRIns
 		return fmt.Errorf("open artifact zip: %w", err)
 	}
 
-	tmpDir := os.TempDir()
+	tmpDir, err := os.MkdirTemp("", "centroidx-pr-*")
+	if err != nil {
+		return fmt.Errorf("create temp dir: %w", err)
+	}
 	var extractedPath string
 	for _, f := range zipReader.File {
 		destPath := filepath.Join(tmpDir, f.Name)
