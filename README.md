@@ -8,9 +8,9 @@ Download the **CentroidX Version Manager** for your platform — it handles inst
 
 | Platform | Download |
 |----------|----------|
-| **macOS** (Apple Silicon) | [`centroidx-manager_darwin_arm64`](https://github.com/centroid-is/tfc-hmi/releases/latest/download/centroidx-manager_darwin_arm64) |
-| **Windows** (x64) | [`centroidx-manager_windows_amd64.exe`](https://github.com/centroid-is/tfc-hmi/releases/latest/download/centroidx-manager_windows_amd64.exe) |
-| **Linux** (x64) | [`centroidx-manager_linux_amd64`](https://github.com/centroid-is/tfc-hmi/releases/latest/download/centroidx-manager_linux_amd64) |
+| :apple: **macOS** (Apple Silicon) | [`centroidx-manager_darwin_arm64`](https://github.com/centroid-is/tfc-hmi/releases/latest/download/centroidx-manager_darwin_arm64) |
+| :window: **Windows** (x64) | [`centroidx-manager_windows_amd64.exe`](https://github.com/centroid-is/tfc-hmi/releases/latest/download/centroidx-manager_windows_amd64.exe) |
+| :penguin: **Linux** (x64) | [`centroidx-manager_linux_amd64`](https://github.com/centroid-is/tfc-hmi/releases/latest/download/centroidx-manager_linux_amd64) |
 
 Run the manager and it will download and install the latest CentroidX release.
 
