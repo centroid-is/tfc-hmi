@@ -39,8 +39,16 @@ Process? _serverProcess;
 final _portPattern = RegExp(r'PORT=(\d+)');
 
 Future<void> _startStub() async {
-  final python = Platform.isWindows ? 'python' : 'python3';
   final stubScript = '$_projectRoot/test/umas_stub_server.py';
+
+  // Try python3 first (Unix, some Windows setups), fall back to python.
+  String python;
+  try {
+    final r = await Process.run('python3', ['--version']);
+    python = r.exitCode == 0 ? 'python3' : 'python';
+  } catch (_) {
+    python = 'python';
+  }
 
   // Use port 0 so the OS assigns a free port — no cleanup needed.
   _serverProcess = await Process.start(
@@ -49,9 +57,13 @@ Future<void> _startStub() async {
   );
 
   // Collect stderr for debugging
+  final stderrBuf = StringBuffer();
   _serverProcess!.stderr
       .transform(const SystemEncoding().decoder)
-      .listen((line) => stderr.write('[STUB ERR] $line'));
+      .listen((line) {
+    stderr.write('[STUB ERR] $line');
+    stderrBuf.write(line);
+  });
 
   // Wait for the stub to print its actual port.
   final completer = Completer<int>();
@@ -68,7 +80,9 @@ Future<void> _startStub() async {
   });
 
   _stubPort = await completer.future.timeout(const Duration(seconds: 5),
-      onTimeout: () => throw StateError('Stub server did not start'));
+      onTimeout: () => throw StateError(
+          'Stub server did not start (python=$python, '
+          'script=$stubScript, stderr=$stderrBuf)'));
 }
 
 void _stopStub() {
