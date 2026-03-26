@@ -15,7 +15,8 @@ import 'package:modbus_client_tcp/modbus_client_tcp.dart';
 import 'package:tfc_dart/core/umas_client.dart';
 import 'package:test/test.dart';
 
-const _stubPort = 15020; // High port to avoid conflicts
+/// Port assigned by the OS after the stub server binds to port 0.
+late int _stubPort;
 
 /// Resolves the project root from the tfc_dart package directory.
 String get _projectRoot {
@@ -33,24 +34,18 @@ String get _projectRoot {
 
 Process? _serverProcess;
 
-Future<void> _startStub() async {
-  // Kill any leftover stub on our port (Unix only, skip on Windows)
-  if (!Platform.isWindows) {
-    try {
-      final result = await Process.run('lsof', ['-ti', ':$_stubPort']);
-      final pids = (result.stdout as String).trim();
-      if (pids.isNotEmpty) {
-        await Process.run('kill', ['-9', ...pids.split('\n')]);
-        await Future.delayed(const Duration(milliseconds: 500));
-      }
-    } catch (_) {}
-  }
+/// Pattern to extract the actual bound port from the stub's stdout.
+/// The stub prints: "[STUB] UMAS stub server listening on PORT=<N>"
+final _portPattern = RegExp(r'PORT=(\d+)');
 
+Future<void> _startStub() async {
   final python = Platform.isWindows ? 'python' : 'python3';
   final stubScript = '$_projectRoot/test/umas_stub_server.py';
+
+  // Use port 0 so the OS assigns a free port — no cleanup needed.
   _serverProcess = await Process.start(
     python,
-    ['-u', stubScript, '$_stubPort'], // -u = unbuffered stdout
+    ['-u', stubScript, '--port', '0'], // -u = unbuffered stdout
   );
 
   // Collect stderr for debugging
@@ -58,18 +53,21 @@ Future<void> _startStub() async {
       .transform(const SystemEncoding().decoder)
       .listen((line) => stderr.write('[STUB ERR] $line'));
 
-  // Wait for "listening" in stdout
-  final completer = Completer<void>();
+  // Wait for the stub to print its actual port.
+  final completer = Completer<int>();
   _serverProcess!.stdout
       .transform(const SystemEncoding().decoder)
       .listen((line) {
     stdout.write('[STUB] $line');
-    if (!completer.isCompleted && line.contains('listening')) {
-      completer.complete();
+    if (!completer.isCompleted) {
+      final match = _portPattern.firstMatch(line);
+      if (match != null) {
+        completer.complete(int.parse(match.group(1)!));
+      }
     }
   });
 
-  await completer.future.timeout(const Duration(seconds: 5),
+  _stubPort = await completer.future.timeout(const Duration(seconds: 5),
       onTimeout: () => throw StateError('Stub server did not start'));
 }
 
