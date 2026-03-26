@@ -2,30 +2,44 @@
 #include <flutter/flutter_view_controller.h>
 #include <windows.h>
 
+#include <cstdlib>
+
 #include "flutter_window.h"
 #include "utils.h"
 
-/*static void RedirectIOToConsole()
-{
-  FILE *fp;
-  freopen_s(&fp, "CONOUT$", "w", stdout);
-  freopen_s(&fp, "CONOUT$", "w", stderr);
-  freopen_s(&fp, "CONIN$", "r", stdin);
-  setvbuf(stdout, nullptr, _IONBF, 0);
-  setvbuf(stderr, nullptr, _IONBF, 0);
-}*/
-
 int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
                       _In_ wchar_t *command_line, _In_ int show_command) {
-  // Attach to console when present (e.g., 'flutter run') or create a
-  // new console when running with a debugger.
-  if (!::AttachConsole(ATTACH_PARENT_PROCESS) && ::IsDebuggerPresent()) {
-    CreateAndAttachConsole();
-  /*}
-  else if (!::AttachConsole(ATTACH_PARENT_PROCESS))
-  {
-    RedirectIOToConsole();*/
+  // Debug logging for MSIX/release builds:
+  //   CENTROID_STDOUT=1          → opens a console window with all output
+  //   CENTROID_LOG_FILE=<path>   → writes all output to a file
+  char* debug_env = nullptr;
+  size_t debug_env_len = 0;
+  _dupenv_s(&debug_env, &debug_env_len, "CENTROID_STDOUT");
+
+  char* log_file_env = nullptr;
+  size_t log_file_env_len = 0;
+  _dupenv_s(&log_file_env, &log_file_env_len, "CENTROID_LOG_FILE");
+
+  bool debug_mode = debug_env != nullptr &&
+                    (strcmp(debug_env, "1") == 0 || strcmp(debug_env, "true") == 0);
+
+  if (log_file_env != nullptr && log_file_env[0] != '\0') {
+    RedirectIOToFile(log_file_env);
+  } else if (debug_mode) {
+    if (!::AttachConsole(ATTACH_PARENT_PROCESS)) {
+      CreateAndAttachConsole();
+    } else {
+      RedirectIOToConsole();
+    }
+  } else {
+    // Normal mode: console only from terminal or under debugger
+    if (!::AttachConsole(ATTACH_PARENT_PROCESS) && ::IsDebuggerPresent()) {
+      CreateAndAttachConsole();
+    }
   }
+
+  free(debug_env);
+  free(log_file_env);
 
   // Initialize COM, so that it is available for use in the library and/or
   // plugins.
