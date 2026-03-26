@@ -1,55 +1,38 @@
-<!--
-This README describes the package. If you publish this package to pub.dev,
-this README's contents appear on the landing page for your package.
+# CentroidX
 
-For information about how to write a good package README, see the guide for
-[writing package pages](https://dart.dev/tools/pub/writing-package-pages).
+Industrial HMI (Human-Machine Interface) for monitoring and controlling automation systems via OPC-UA and MQTT.
 
-For general information about developing packages, see the Dart guide for
-[creating packages](https://dart.dev/guides/libraries/create-packages)
-and the Flutter guide for
-[developing packages and plugins](https://flutter.dev/to/develop-packages).
--->
+## Install
 
-TODO: Put a short description of the package here that helps potential users
-know whether this package might be useful for them.
+Download the **CentroidX Version Manager** for your platform — it handles installation, updates, and rollback:
 
-## Features
+| Platform | Download |
+|----------|----------|
+| **macOS** (Apple Silicon) | [`centroidx-manager_darwin_arm64`](https://github.com/centroid-is/tfc-hmi/releases/latest/download/centroidx-manager_darwin_arm64) |
+| **Windows** (x64) | [`centroidx-manager_windows_amd64.exe`](https://github.com/centroid-is/tfc-hmi/releases/latest/download/centroidx-manager_windows_amd64.exe) |
+| **Linux** (x64) | [`centroidx-manager_linux_amd64`](https://github.com/centroid-is/tfc-hmi/releases/latest/download/centroidx-manager_linux_amd64) |
 
-TODO: List what your package can do. Maybe include images, gifs, or videos.
+Run the manager and it will download and install the latest CentroidX release.
 
-## Getting started
+> macOS and Windows binaries are signed and notarized — no Gatekeeper warnings.
 
-TODO: List prerequisites and provide or point to information on how to
-start using the package.
+## Development
 
-## Usage
+### Prerequisites
 
-TODO: Include short and useful examples for package users. Add longer examples
-to `/example` folder.
+- Flutter SDK (stable channel)
+- Dart SDK
+- For NixOS: install the `mkhl.direnv` VSCode extension and run `direnv allow`
 
-```dart
-const like = 'sample';
-```
-
-## Additional information
-
-TODO: Tell users more about the package: where to find more information, how to
-contribute to the package, how to file issues, what response they can expect
-from the package authors, and more.
-
-## NixOS VSCode
-
-install extension mkhl.direnv
-
-```sh
-direnv allow
-```
-
-# Generate code
-
-Generate json_serializable code
+### Code generation
 
 ```sh
 flutter pub run build_runner build
+```
+
+### Run
+
+```sh
+cd centroid-hmi
+flutter run -d macos
 ```
