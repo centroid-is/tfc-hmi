@@ -27,7 +27,7 @@ func main() {
 	flag.Parse()
 
 	// --- Mode routing ---
-	mode := "install" // default: first-time install
+	mode := "picker" // default: show version picker
 	if *updateMode {
 		mode = "update"
 	}
