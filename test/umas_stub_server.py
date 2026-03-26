@@ -5,15 +5,18 @@ Responds to FC90 (0x5A) UMAS requests over Modbus TCP MBAP framing.
 Supports: ReadPlcId (0x02), Init (0x01), ReadDataDictionary (0x26)
 with record types 0xDD02/0xDD03 in corrected PLC4X mspec format.
 
-Usage: python3 test/umas_stub_server.py [port]
+Usage: python3 test/umas_stub_server.py [--port PORT]
+       python3 test/umas_stub_server.py [PORT]  (legacy positional)
+
+When --port 0 (the default), the OS assigns a free port and the actual
+port is printed as "PORT=<N>" on stdout for the test harness to parse.
 """
 
+import argparse
 import struct
 import socketserver
 import sys
 import signal
-
-PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 5020
 
 # --- Sample data: realistic Schneider PLC variable tree ---
 
@@ -248,10 +251,22 @@ class ReusableTCPServer(socketserver.ThreadingTCPServer):
 
 
 def main():
-    server = ReusableTCPServer(("0.0.0.0", PORT), UmasHandler)
+    parser = argparse.ArgumentParser(description="Stub UMAS/Modbus TCP server")
+    parser.add_argument("port_positional", nargs="?", type=int, default=None,
+                        help="Port (positional, legacy). Use --port instead.")
+    parser.add_argument("--port", type=int, default=None,
+                        help="Port to bind (0 = OS-assigned, default: 0)")
+    args = parser.parse_args()
+
+    # --port flag takes precedence, then positional, then default 0
+    port = args.port if args.port is not None else (args.port_positional if args.port_positional is not None else 0)
+
+    server = ReusableTCPServer(("127.0.0.1", port), UmasHandler)
+    actual_port = server.server_address[1]
     if hasattr(signal, 'SIGTERM'):
         signal.signal(signal.SIGTERM, lambda *_: (server.shutdown(), sys.exit(0)))
-    print(f"[STUB] UMAS stub server listening on port {PORT}", flush=True)
+    # The "PORT=<N>" token is parsed by the Dart test to discover the bound port.
+    print(f"[STUB] UMAS stub server listening on PORT={actual_port}", flush=True)
     print(f"[STUB] Variables: {len(VARIABLES)}, Custom types: {len(DATA_TYPES)}", flush=True)
     try:
         server.serve_forever()

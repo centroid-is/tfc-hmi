@@ -25,12 +25,15 @@ final serverTimeNode = NodeId.fromNumeric(0, 2258);
 
 void main() {
   final rng = Random();
-  final serverPort = 14840 + rng.nextInt(1000);
+  final basePort = 14840 + rng.nextInt(1000);
+  var _testIndex = 0;
+  late int serverPort;
 
   late Server server;
   late Timer serverTimer;
 
   setUp(() async {
+    serverPort = basePort + _testIndex++;
     server = Server(port: serverPort, logLevel: LogLevel.UA_LOGLEVEL_WARNING);
     server.start();
 
