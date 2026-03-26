@@ -9,8 +9,9 @@ import 'package:dbus/dbus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:amplify_secure_storage_dart/amplify_secure_storage_dart.dart';
+import 'package:flutter/services.dart' show rootBundle;
 import 'package:upgrader/upgrader.dart';
-import 'package:microsoft_store_upgrader/microsoft_store_upgrader.dart';
+import 'package:centroidx_upgrader/centroidx_upgrader.dart';
 
 import 'package:tfc/route_registry.dart';
 import 'package:tfc/routes.dart';
@@ -57,6 +58,7 @@ import 'package:tfc/widgets/proposal_banner.dart';
 import 'package:tfc/marionette/route_logger.dart';
 
 import 'marionette_init.dart';
+import 'pages/version_manager_page.dart';
 
 /// Enable with: --dart-define=MARIONETTE=true
 const _enableMarionette = bool.fromEnvironment('MARIONETTE');
@@ -105,13 +107,9 @@ void main() {
   initLogConfig();
 
   if (_enableMarionette) {
-    // Marionette binding must be in the same zone as runApp — skip runZonedGuarded.
     initMarionette();
     _startApp(debugMode);
   } else {
-    // WidgetsFlutterBinding.ensureInitialized() and runApp() must execute in
-    // the SAME zone.  Wrapping everything inside runZonedGuarded ensures both
-    // live in the guarded child zone, avoiding the zone-mismatch assertion.
     runZonedGuarded(() {
       WidgetsFlutterBinding.ensureInitialized();
       _startApp(debugMode);
@@ -201,6 +199,7 @@ Future<void> _startApp([bool debugMode = false]) async {
         MenuItem(label: 'History View', path: '/advanced/history-view', icon: Icons.history),
         MenuItem(label: 'Server Config', path: '/advanced/server-config', icon: FontAwesomeIcons.server),
         MenuItem(label: 'Key Repository', path: '/advanced/key-repository', icon: FontAwesomeIcons.key),
+        MenuItem(label: 'Version Manager', path: '/advanced/version-manager', icon: Icons.update),
         MenuItem(label: 'Knowledge Base', path: '/advanced/knowledge-base', icon: Icons.library_books),
       ],
     ),
@@ -210,26 +209,42 @@ Future<void> _startApp([bool debugMode = false]) async {
 
   final upgrader = Upgrader(
     storeController: UpgraderStoreController(
-      onWindows: () => UpgraderWindowsStore(productId: '9NH89T11ZZ59'),
+      onWindows: () => GitHubReleaseStore(owner: 'centroid-is', repo: 'tfc-hmi'),
+      onLinux: () => GitHubReleaseStore(owner: 'centroid-is', repo: 'tfc-hmi'),
+      onMacOS: () => GitHubReleaseStore(owner: 'centroid-is', repo: 'tfc-hmi'),
     ),
     debugLogging: true,
   );
 
-  final app = ProviderScope(
-      child: UpgradeAlert(
-    child: MyApp(locationBuilder: locationBuilder),
-    upgrader: upgrader,
-    onUpdate: () {
-      stderr.writeln("Updating software from store");
-      UpgraderWindowsStore.installUpdate();
-      return false;
-    },
+  runApp(ProviderScope(
+    child: UpgradeAlert(
+      upgrader: upgrader,
+      onUpdate: () {
+        final targetVersion =
+            upgrader.state.versionInfo?.appStoreVersion?.toString() ?? '';
+        unawaited(
+          managerLauncher
+              .launchForUpdate(
+                version: targetVersion,
+                flutterPid: pid,
+              )
+              .then((_) => exit(0)),
+        );
+        return false;
+      },
+      child: MyApp(locationBuilder: locationBuilder),
+    ),
   ));
-
-  runApp(app);
 }
 
 Completer<DBusClient> dbusCompleter = Completer();
+
+final managerLauncher = ManagerLauncher(
+  assetLoader: (key) async {
+    final bd = await rootBundle.load(key);
+    return bd.buffer.asUint8List(bd.offsetInBytes, bd.lengthInBytes);
+  },
+);
 
 RoutesLocationBuilder createLocationBuilder(List<MenuItem> extraMenuItems) {
   final routes = {
@@ -322,6 +337,11 @@ RoutesLocationBuilder createLocationBuilder(List<MenuItem> extraMenuItems) {
     '/advanced/key-repository': (context, state, args) => BeamPage(
         key: const ValueKey('/advanced/key-repository'), title: 'Key Repository',
         child: KeyRepositoryPage(proposalData: args is String ? args : null)),
+    '/advanced/version-manager': (context, state, args) => BeamPage(
+          key: const ValueKey('/advanced/version-manager'),
+          title: 'Version Manager',
+          child: VersionManagerPage(launcher: managerLauncher),
+        ),
     '/advanced/knowledge-base': (context, state, args) => BeamPage(
         key: const ValueKey('/advanced/knowledge-base'), title: 'Knowledge Base', child: const TechDocLibraryPage()),
     AppRoutes.alarmView: (context, state, args) =>

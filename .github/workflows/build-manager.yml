@@ -1,0 +1,170 @@
+name: Build centroidx-manager
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - 'feat/centroidx-manager'
+    paths:
+      - 'tools/centroidx-manager/**'
+      - '.github/workflows/build-manager.yml'
+  pull_request:
+    paths:
+      - 'tools/centroidx-manager/**'
+      - '.github/workflows/build-manager.yml'
+  workflow_call:
+    inputs:
+      ref:
+        type: string
+        default: ''
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            goos: windows
+            goarch: amd64
+            artifact_name: centroidx-manager_windows_amd64.exe
+            cgo: '0'
+          - os: ubuntu-latest
+            goos: linux
+            goarch: amd64
+            artifact_name: centroidx-manager_linux_amd64
+            cgo: '1'
+          - os: macos-latest
+            goos: darwin
+            goarch: arm64
+            artifact_name: centroidx-manager_darwin_arm64
+            cgo: '1'
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+
+      - name: Install Linux build dependencies (Gio)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc pkg-config libwayland-dev libx11-dev libx11-xcb-dev libxkbcommon-x11-dev libgles2-mesa-dev libegl1-mesa-dev libffi-dev libxcursor-dev libxrandr-dev libxinerama-dev libxi-dev libxxf86vm-dev libvulkan-dev
+
+      - name: Embed Windows icon resource
+        if: matrix.os == 'windows-latest'
+        working-directory: tools/centroidx-manager
+        shell: bash
+        run: |
+          windres --use-temp-file -o centroidx.syso centroidx.rc
+          echo "Icon resource compiled: $(wc -c < centroidx.syso) bytes"
+
+      - name: Build manager binary
+        working-directory: tools/centroidx-manager
+        env:
+          CGO_ENABLED: ${{ matrix.cgo }}
+        run: go build -o ${{ matrix.artifact_name }} .
+
+      - name: Sign and notarize macOS binary
+        if: matrix.os == 'macos-latest' && env.APPLE_CERTIFICATE_P12_BASE64 != ''
+        working-directory: tools/centroidx-manager
+        env:
+          APPLE_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+        run: |
+          # Import certificate into temporary keychain
+          KEYCHAIN_PATH=$RUNNER_TEMP/signing.keychain-db
+          KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          echo "$APPLE_CERTIFICATE_P12_BASE64" | base64 --decode > $RUNNER_TEMP/certificate.p12
+          security import $RUNNER_TEMP/certificate.p12 -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain-db
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          # Find signing identity
+          IDENTITY=$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" | grep "Developer ID Application" | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          echo "Signing with: $IDENTITY"
+
+          # Sign with hardened runtime + timestamp (required for notarization)
+          codesign --force --options runtime --sign "$IDENTITY" --timestamp ${{ matrix.artifact_name }}
+          codesign --verify --deep --strict ${{ matrix.artifact_name }}
+          echo "Signing verified"
+
+          # Notarize
+          zip ${{ matrix.artifact_name }}.zip ${{ matrix.artifact_name }}
+          xcrun notarytool submit ${{ matrix.artifact_name }}.zip \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_ID_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait
+          echo "Notarization complete"
+          rm ${{ matrix.artifact_name }}.zip
+
+          # Cleanup keychain
+          security delete-keychain "$KEYCHAIN_PATH"
+
+      - name: Verify binary
+        working-directory: tools/centroidx-manager
+        shell: bash
+        run: |
+          echo "Built: ${{ matrix.artifact_name }}"
+          ls -la ${{ matrix.artifact_name }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: tools/centroidx-manager/${{ matrix.artifact_name }}
+
+  integration-test:
+    needs: [build]
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            goos: windows
+            cgo: '0'
+          - os: ubuntu-latest
+            goos: linux
+            cgo: '1'
+          - os: macos-latest
+            goos: darwin
+            cgo: '1'
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+
+      - name: Install Linux build dependencies (Gio)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc pkg-config libwayland-dev libx11-dev libx11-xcb-dev libxkbcommon-x11-dev libgles2-mesa-dev libegl1-mesa-dev libffi-dev libxcursor-dev libxrandr-dev libxinerama-dev libxi-dev libxxf86vm-dev libvulkan-dev
+
+      - name: Run integration tests
+        working-directory: tools/centroidx-manager
+        env:
+          CGO_ENABLED: ${{ matrix.cgo }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: go test -tags integration -v -timeout 300s ./internal/update/ -run TestIntegration
+
+      - name: Run platform integration tests
+        working-directory: tools/centroidx-manager
+        env:
+          CGO_ENABLED: ${{ matrix.cgo }}
+        run: go test -tags integration -v -timeout 120s ./internal/platform/ -run TestIntegration

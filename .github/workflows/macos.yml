@@ -1,0 +1,179 @@
+name: macOS Build
+
+on:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      ref:
+        description: 'Git ref to checkout (commit SHA, branch, tag)'
+        type: string
+        default: ''
+  push:
+    branches:
+      - main
+      - 'feat/centroidx-manager'
+    paths:
+      - 'centroid-hmi/**'
+      - '.github/workflows/macos.yml'
+  pull_request:
+    paths:
+      - 'centroid-hmi/**'
+      - '.github/workflows/macos.yml'
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - name: Import signing certificate
+        env:
+          APPLE_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          if [ -z "$APPLE_CERTIFICATE_P12_BASE64" ]; then
+            echo "No signing certificate configured — skipping"
+            exit 0
+          fi
+          KEYCHAIN_PATH=$RUNNER_TEMP/signing.keychain-db
+          KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          echo "$APPLE_CERTIFICATE_P12_BASE64" | base64 --decode > $RUNNER_TEMP/certificate.p12
+          security import $RUNNER_TEMP/certificate.p12 -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain-db
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          IDENTITY=$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" | grep "Developer ID Application" | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          echo "CODESIGN_IDENTITY=$IDENTITY" >> $GITHUB_ENV
+          echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> $GITHUB_ENV
+          echo "Signing identity: $IDENTITY"
+
+      - name: Disable Xcode signing (will re-sign manually after build)
+        working-directory: centroid-hmi/macos
+        run: |
+          # Disable all code signing in Xcode — we re-sign with Developer ID after build
+          sed -i '' 's/CODE_SIGN_STYLE = Automatic/CODE_SIGN_STYLE = Manual/g' Runner.xcodeproj/project.pbxproj
+          sed -i '' 's/"CODE_SIGN_IDENTITY\[sdk=macosx\*\]" = "Apple Development"/CODE_SIGN_IDENTITY = ""/g' Runner.xcodeproj/project.pbxproj
+          sed -i '' 's/CODE_SIGN_IDENTITY = "-"/CODE_SIGN_IDENTITY = ""/g' Runner.xcodeproj/project.pbxproj
+          sed -i '' '/DEVELOPMENT_TEAM/d' Runner.xcodeproj/project.pbxproj
+          sed -i '' '/PROVISIONING_PROFILE_SPECIFIER/d' Runner.xcodeproj/project.pbxproj
+          sed -i '' '/CODE_SIGN_ENTITLEMENTS/d' Runner.xcodeproj/project.pbxproj
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Get Flutter packages
+        working-directory: centroid-hmi
+        run: flutter pub get
+
+      - name: Inject no-signing xcconfig
+        working-directory: centroid-hmi/macos
+        run: |
+          # Create an xcconfig that disables signing; include it in Release config
+          echo 'CODE_SIGN_IDENTITY =' > NoSign.xcconfig
+          echo 'CODE_SIGNING_REQUIRED = NO' >> NoSign.xcconfig
+          echo 'CODE_SIGNING_ALLOWED = NO' >> NoSign.xcconfig
+          # Append include to the Flutter-generated Release xcconfig
+          echo '#include "NoSign.xcconfig"' >> Flutter/Release.xcconfig
+
+      - name: Build macOS release (unsigned — re-signed after build)
+        working-directory: centroid-hmi
+        run: flutter build macos --release
+
+      - name: Re-sign with hardened runtime for notarization
+        if: env.CODESIGN_IDENTITY != ''
+        working-directory: centroid-hmi
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          APP_PATH=$(find build/macos/Build/Products/Release -name "*.app" -maxdepth 1 | head -1)
+          echo "Re-signing with hardened runtime: $APP_PATH"
+
+          # Sign all nested code first (frameworks, dylibs, helpers)
+          find "$APP_PATH" -type f \( -name "*.dylib" -o -name "*.framework" -o -perm +111 \) -not -path "*/Headers/*" -not -name "*.h" | while read -r item; do
+            codesign --force --options runtime --sign "$CODESIGN_IDENTITY" --timestamp "$item" 2>/dev/null || true
+          done
+
+          # Sign framework bundles
+          find "$APP_PATH" -name "*.framework" -type d | while read -r fw; do
+            codesign --force --options runtime --sign "$CODESIGN_IDENTITY" --timestamp "$fw"
+          done
+
+          # Expand $(AppIdentifierPrefix) in entitlements — Xcode does this
+          # automatically but manual signing does not
+          TEAM_ID="${APPLE_TEAM_ID:-Q4FZLRTZ4M}"
+          sed "s/\$(AppIdentifierPrefix)/${TEAM_ID}./" macos/Runner/Release.entitlements > /tmp/release.entitlements
+
+          # Sign the main app bundle
+          codesign --force --options runtime --sign "$CODESIGN_IDENTITY" --timestamp \
+            --entitlements /tmp/release.entitlements "$APP_PATH"
+
+          codesign --verify --deep --strict "$APP_PATH"
+          echo "APP_PATH=$(pwd)/$APP_PATH" >> $GITHUB_ENV
+          echo "Signing verified"
+
+      - name: Set APP_PATH for unsigned builds
+        if: env.CODESIGN_IDENTITY == ''
+        working-directory: centroid-hmi
+        run: |
+          APP_PATH=$(find build/macos/Build/Products/Release -name "*.app" -maxdepth 1 | head -1)
+          echo "APP_PATH=$(pwd)/$APP_PATH" >> $GITHUB_ENV
+
+      - name: Create DMG
+        run: |
+          DMG_NAME="centroidx_darwin_arm64.dmg"
+          DMG_DIR=$RUNNER_TEMP/dmg-contents
+          mkdir -p "$DMG_DIR"
+          cp -R "$APP_PATH" "$DMG_DIR/CentroidX.app"
+          ln -s /Applications "$DMG_DIR/Applications"
+
+          hdiutil create -volname "CentroidX" -srcfolder "$DMG_DIR" \
+            -ov -format UDZO "$DMG_NAME"
+          echo "DMG_NAME=$DMG_NAME" >> $GITHUB_ENV
+          ls -lh "$DMG_NAME"
+
+      - name: Sign the DMG
+        if: env.CODESIGN_IDENTITY != ''
+        run: |
+          codesign --force --sign "$CODESIGN_IDENTITY" --timestamp "$DMG_NAME"
+          codesign --verify --strict "$DMG_NAME"
+          echo "DMG signed"
+
+      - name: Notarize the DMG
+        if: env.CODESIGN_IDENTITY != ''
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          xcrun notarytool submit "$DMG_NAME" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_ID_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait
+          echo "Notarization complete"
+
+          xcrun stapler staple "$DMG_NAME"
+          echo "Stapled notarization ticket"
+
+      - name: Cleanup keychain
+        if: always() && env.KEYCHAIN_PATH != ''
+        run: security delete-keychain "$KEYCHAIN_PATH" || true
+
+      - name: Upload DMG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: centroidx_darwin_arm64.dmg
+          path: ${{ env.DMG_NAME }}

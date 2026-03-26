@@ -43,6 +43,9 @@ timescale_certs/
 .mcp.json
 page-editor.json
 
+# CentroidX sideload certificate — private key, never commit
+centroidx-sideload.pfx
+
 # Local marionette fork (use upstream pub.dev package)
 packages/marionette_flutter/
 

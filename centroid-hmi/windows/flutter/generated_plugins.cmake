@@ -5,7 +5,6 @@
 list(APPEND FLUTTER_PLUGIN_LIST
   desktop_drop
   flutter_secure_storage_windows
-  microsoft_store_upgrader
   sqlite3_flutter_libs
   url_launcher_windows
 )

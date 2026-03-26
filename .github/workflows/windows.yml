@@ -29,6 +29,28 @@ jobs:
         with:
           ref: ${{ inputs.ref || github.ref }}
 
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+
+      - name: Embed Windows icon resource
+        working-directory: tools/centroidx-manager
+        shell: bash
+        run: windres --use-temp-file -o centroidx.syso centroidx.rc
+
+      - name: Build centroidx-manager for Windows
+        working-directory: tools/centroidx-manager
+        run: go build -o centroidx-manager_windows_amd64.exe .
+
+      - name: Bundle manager binary into Flutter assets
+        shell: bash
+        run: |
+          mkdir -p centroid-hmi/assets/manager
+          cp tools/centroidx-manager/centroidx-manager_windows_amd64.exe \
+             centroid-hmi/assets/manager/centroidx-manager_windows_amd64.exe
+          ls -la centroid-hmi/assets/manager/
+
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
@@ -42,10 +64,24 @@ jobs:
         working-directory: centroid-hmi
         run: flutter build windows --release
 
-      - name: Create MSIX for Store
+      - name: Write certificate PFX from secret
+        shell: powershell
+        run: |
+          $bytes = [Convert]::FromBase64String("${{ secrets.MSIX_CERT_PFX_BASE64 }}")
+          [IO.File]::WriteAllBytes("${{ github.workspace }}/centroid-hmi/centroidx-sideload.pfx", $bytes)
+
+      - name: Build MSIX (sideload, signed)
         working-directory: centroid-hmi
         shell: powershell
-        run: dart run msix:create --store
+        run: echo "n" | dart run msix:create --certificate-password "${{ secrets.MSIX_CERT_PASSWORD }}"
+
+      - name: Verify MSIX is signed
+        working-directory: centroid-hmi
+        shell: powershell
+        run: |
+          $msix = Get-ChildItem -Recurse -Filter *.msix | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if (-not $msix) { throw "No .msix file found after build" }
+          Write-Host "MSIX built: $($msix.FullName) ($([math]::Round($msix.Length/1MB, 1)) MB)"
 
       - name: Locate MSIX
         working-directory: centroid-hmi

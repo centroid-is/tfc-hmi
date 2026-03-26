@@ -33,6 +33,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.0.3"
+  anthropic_sdk_dart:
+    dependency: transitive
+    description:
+      name: anthropic_sdk_dart
+      sha256: ab9fb1aaf866e2de7b2f86cdb81221763e7559e42abfd6e345588df55e2150dc
+      url: "https://pub.dev"
+    source: hosted
+    version: "1.3.2"
   archive:
     dependency: transitive
     description:
@@ -170,6 +178,13 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "8.12.3"
+  centroidx_upgrader:
+    dependency: "direct main"
+    description:
+      path: "../packages/centroidx_upgrader"
+      relative: true
+    source: path
+    version: "0.1.0"
   change_case:
     dependency: transitive
     description:
@@ -355,6 +370,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "0.7.12"
+  desktop_drop:
+    dependency: transitive
+    description:
+      name: desktop_drop
+      sha256: e70b46b2d61f1af7a81a40d1f79b43c28a879e30a4ef31e87e9c27bea4d784e8
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.7.0"
   device_info_plus:
     dependency: transitive
     description:
@@ -603,7 +626,7 @@ packages:
     source: hosted
     version: "0.15.6"
   http:
-    dependency: transitive
+    dependency: "direct main"
     description:
       name: http
       sha256: "87721a4a50b19c7f1d49001e51409bddc46303966ce89a65af4f4e6004896412"
@@ -745,6 +768,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.3.0"
+  marionette_flutter:
+    dependency: "direct main"
+    description:
+      name: marionette_flutter
+      sha256: "41d8222fad7d311121f7d7487f45f86004164520765417f83c4037bea057ff0a"
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.4.0"
   matcher:
     dependency: transitive
     description:
@@ -761,6 +792,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "0.13.0"
+  mcp_dart:
+    dependency: transitive
+    description:
+      name: mcp_dart
+      sha256: "30ab03147fec3fd72e98172475cd720cd4e3aec7d5f8944ef36dbfabc75a353c"
+      url: "https://pub.dev"
+    source: hosted
+    version: "2.1.0"
   meta:
     dependency: transitive
     description:
@@ -769,15 +808,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.17.0"
-  microsoft_store_upgrader:
-    dependency: "direct main"
-    description:
-      path: "."
-      ref: main
-      resolved-ref: "9309cf8e0a2a0c7851a386b2f73402f0067408d1"
-      url: "https://github.com/centroid-is/microsoft-store-upgrader.git"
-    source: git
-    version: "0.0.1"
   mime:
     dependency: transitive
     description:
@@ -786,6 +816,20 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.0.0"
+  modbus_client:
+    dependency: transitive
+    description:
+      path: "../packages/modbus_client"
+      relative: true
+    source: path
+    version: "1.4.4"
+  modbus_client_tcp:
+    dependency: transitive
+    description:
+      path: "../packages/modbus_client_tcp"
+      relative: true
+    source: path
+    version: "1.2.3"
   msix:
     dependency: "direct dev"
     description:
@@ -835,6 +879,14 @@ packages:
       url: "https://github.com/centroid-is/open62541_dart.git"
     source: git
     version: "1.5.2-1"
+  openai_dart:
+    dependency: transitive
+    description:
+      name: openai_dart
+      sha256: "4731f94ea9a09cd9e92333debcfb87efda2764718e506538206df9f540e9ab60"
+      url: "https://pub.dev"
+    source: hosted
+    version: "1.4.0"
   os_detect:
     dependency: transitive
     description:
@@ -884,7 +936,7 @@ packages:
     source: hosted
     version: "1.1.0"
   path_provider:
-    dependency: transitive
+    dependency: "direct main"
     description:
       name: path_provider
       sha256: "50c5dd5b6e1aaf6fb3a78b33f6aa3afca52bf903a8a5298f53101fdaee55bbcd"
@@ -931,6 +983,38 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.3.0"
+  pdfium_dart:
+    dependency: transitive
+    description:
+      name: pdfium_dart
+      sha256: f1683b9070ddc5c9189c6ee008c285791da66328ce1b882c7162d3393f3a4a74
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.1.3"
+  pdfium_flutter:
+    dependency: transitive
+    description:
+      name: pdfium_flutter
+      sha256: "0c8b7d5d11d20a1486eade599648e907067568955bd14a1b06de076a968b60a1"
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.1.9"
+  pdfrx:
+    dependency: transitive
+    description:
+      name: pdfrx
+      sha256: e32e0c786528eec2b3c56b43f59ef1debce3a27c7accd862b95413f949afcfa9
+      url: "https://pub.dev"
+    source: hosted
+    version: "2.2.24"
+  pdfrx_engine:
+    dependency: transitive
+    description:
+      name: pdfrx_engine
+      sha256: a8914433d1f6188b903c53d36b9d7dc908bfa89131591a9db22f1a22470d3a48
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.3.9"
   petitparser:
     dependency: transitive
     description:
@@ -1209,6 +1293,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.4.1"
+  synchronized:
+    dependency: transitive
+    description:
+      name: synchronized
+      sha256: c254ade258ec8282947a0acbbc90b9575b4f19673533ee46f2f6e9b3aeefd7c0
+      url: "https://pub.dev"
+    source: hosted
+    version: "3.4.0"
   term_glyph:
     dependency: transitive
     description:
@@ -1239,6 +1331,13 @@ packages:
       relative: true
     source: path
     version: "1.0.0"
+  tfc_mcp_server:
+    dependency: transitive
+    description:
+      path: "../packages/tfc_mcp_server"
+      relative: true
+    source: path
+    version: "0.1.0"
   tuple:
     dependency: transitive
     description:
@@ -1271,6 +1370,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.3.1"
+  universal_platform:
+    dependency: transitive
+    description:
+      name: universal_platform
+      sha256: "64e16458a0ea9b99260ceb5467a214c1f298d647c659af1bff6d3bf82536b1ec"
+      url: "https://pub.dev"
+    source: hosted
+    version: "1.1.0"
   upgrader:
     dependency: "direct main"
     description:
