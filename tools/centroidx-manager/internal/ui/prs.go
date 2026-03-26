@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"image"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -109,11 +110,18 @@ func layoutPRPicker(gtx layout.Context, th *material.Theme, state *prPickerState
 		}()
 	}
 
-	// Handle install — pick first MSIX artifact, fall back to first available
+	// Handle install — pick platform-appropriate artifact
 	if state.installBtn.Clicked(gtx) && state.selected >= 0 && !state.installing {
 		state.installing = true
 		pr := state.prs[state.selected]
-		art := pickBestArtifact(pr.Artifacts)
+		art, pickErr := pickBestArtifact(pr.Artifacts)
+		if pickErr != nil {
+			state.statusMsg = pickErr.Error()
+			state.err = pickErr
+			state.installing = false
+			w.Invalidate()
+		}
+		log.Printf("PR #%d: picked artifact %q from %d available", pr.Number, art.Name, len(pr.Artifacts))
 		state.statusMsg = fmt.Sprintf("Downloading %s from PR #%d...", art.Name, pr.Number)
 		go func() {
 			err := downloadAndInstallArtifact(client, installer, art, func(msg string, pct float32) {
@@ -284,23 +292,31 @@ type PRInstaller interface {
 	Uninstall() error
 }
 
-// pickBestArtifact selects the best artifact to install for the current platform.
-// On macOS prefers DMG, on Windows prefers MSIX, falls back to first.
-func pickBestArtifact(artifacts []ghclient.PRArtifact) ghclient.PRArtifact {
+// pickBestArtifact selects the platform-appropriate artifact to install.
+func pickBestArtifact(artifacts []ghclient.PRArtifact) (ghclient.PRArtifact, error) {
 	for _, a := range artifacts {
 		name := strings.ToLower(a.Name)
-		if strings.Contains(name, "darwin") || strings.Contains(name, "dmg") {
-			if runtime.GOOS == "darwin" {
-				return a
+		log.Printf("  artifact: %q (checking for %s)", a.Name, runtime.GOOS)
+		switch runtime.GOOS {
+		case "darwin":
+			if strings.Contains(name, "darwin") || strings.Contains(name, "dmg") || strings.Contains(name, "macos") {
+				return a, nil
 			}
-		}
-		if strings.Contains(name, "msix") || strings.Contains(name, "windows") {
-			if runtime.GOOS == "windows" {
-				return a
+		case "windows":
+			if strings.Contains(name, "msix") || strings.Contains(name, "windows") {
+				return a, nil
+			}
+		case "linux":
+			if strings.Contains(name, "linux") || strings.Contains(name, "deb") {
+				return a, nil
 			}
 		}
 	}
-	return artifacts[0]
+	names := make([]string, len(artifacts))
+	for i, a := range artifacts {
+		names[i] = a.Name
+	}
+	return ghclient.PRArtifact{}, fmt.Errorf("no artifact for %s in: %v", runtime.GOOS, names)
 }
 
 // downloadAndInstallArtifact downloads a GitHub Actions artifact zip, extracts
@@ -357,9 +373,9 @@ func downloadAndInstallArtifact(client ghclient.PRCapableClient, installer PRIns
 		return fmt.Errorf("artifact zip was empty")
 	}
 
-	onProgress("Installing...", 0.8)
+	onProgress(fmt.Sprintf("Installing %s...", extractedPath), 0.8)
 	if err := installer.Install(extractedPath); err != nil {
-		return fmt.Errorf("install: %w", err)
+		return fmt.Errorf("install %s: %w", extractedPath, err)
 	}
 
 	onProgress("Done!", 1.0)
