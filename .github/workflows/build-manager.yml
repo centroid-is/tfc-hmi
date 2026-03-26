@@ -6,6 +6,7 @@ on:
     branches:
       - main
       - 'feat/centroidx-manager'
+      - 'fix/manager-macos-app-bundle'
     paths:
       - 'tools/centroidx-manager/**'
       - '.github/workflows/build-manager.yml'
@@ -37,7 +38,8 @@ jobs:
           - os: macos-latest
             goos: darwin
             goarch: arm64
-            artifact_name: centroidx-manager_darwin_arm64
+            binary_name: centroidx-manager
+            artifact_name: centroidx-manager_darwin_arm64.dmg
             cgo: '1'
     runs-on: ${{ matrix.os }}
     steps:
@@ -65,11 +67,26 @@ jobs:
 
       - name: Build manager binary
         working-directory: tools/centroidx-manager
+        shell: bash
         env:
           CGO_ENABLED: ${{ matrix.cgo }}
-        run: go build -o ${{ matrix.artifact_name }} .
+        run: go build -o "${{ matrix.binary_name || matrix.artifact_name }}" .
 
-      - name: Sign and notarize macOS binary
+      - name: Package macOS .app bundle and DMG
+        if: matrix.os == 'macos-latest'
+        working-directory: tools/centroidx-manager
+        run: |
+          APP="CentroidX-Manager.app"
+          mkdir -p "$APP/Contents/MacOS"
+          mkdir -p "$APP/Contents/Resources"
+          cp centroidx-manager "$APP/Contents/MacOS/centroidx-manager"
+          cp Info.plist "$APP/Contents/Info.plist"
+          cp icon.icns "$APP/Contents/Resources/icon.icns"
+          chmod +x "$APP/Contents/MacOS/centroidx-manager"
+          echo "App bundle created:"
+          find "$APP" -type f
+
+      - name: Sign and notarize macOS app bundle
         if: matrix.os == 'macos-latest' && env.APPLE_CERTIFICATE_P12_BASE64 != ''
         working-directory: tools/centroidx-manager
         env:
@@ -79,6 +96,8 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
         run: |
+          APP="CentroidX-Manager.app"
+
           # Import certificate into temporary keychain
           KEYCHAIN_PATH=$RUNNER_TEMP/signing.keychain-db
           KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
@@ -96,25 +115,52 @@ jobs:
           IDENTITY=$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" | grep "Developer ID Application" | head -1 | sed 's/.*"\(.*\)".*/\1/')
           echo "Signing with: $IDENTITY"
 
-          # Sign with hardened runtime + timestamp (required for notarization)
-          codesign --force --options runtime --sign "$IDENTITY" --timestamp ${{ matrix.artifact_name }}
-          codesign --verify --deep --strict ${{ matrix.artifact_name }}
-          echo "Signing verified"
+          # Sign the .app bundle with hardened runtime + timestamp
+          codesign --force --options runtime --sign "$IDENTITY" --timestamp --deep "$APP"
+          codesign --verify --deep --strict "$APP"
+          echo "App bundle signing verified"
 
-          # Notarize
-          zip ${{ matrix.artifact_name }}.zip ${{ matrix.artifact_name }}
-          xcrun notarytool submit ${{ matrix.artifact_name }}.zip \
+          # Create DMG
+          mkdir -p dmg-staging
+          cp -R "$APP" dmg-staging/
+          hdiutil create -volname "CentroidX Manager" -srcfolder dmg-staging -ov -format UDZO \
+            "${{ matrix.artifact_name }}"
+          rm -rf dmg-staging
+
+          # Sign the DMG
+          codesign --force --sign "$IDENTITY" --timestamp "${{ matrix.artifact_name }}"
+          echo "DMG signed"
+
+          # Notarize the DMG
+          xcrun notarytool submit "${{ matrix.artifact_name }}" \
             --apple-id "$APPLE_ID" \
             --password "$APPLE_ID_PASSWORD" \
             --team-id "$APPLE_TEAM_ID" \
             --wait
           echo "Notarization complete"
-          rm ${{ matrix.artifact_name }}.zip
+
+          # Staple the notarization ticket to the DMG
+          xcrun stapler staple "${{ matrix.artifact_name }}"
+          echo "Stapled notarization ticket"
 
           # Cleanup keychain
           security delete-keychain "$KEYCHAIN_PATH"
 
-      - name: Verify binary
+      - name: Create unsigned DMG (when signing is not available)
+        if: matrix.os == 'macos-latest' && env.APPLE_CERTIFICATE_P12_BASE64 == ''
+        working-directory: tools/centroidx-manager
+        env:
+          APPLE_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
+        run: |
+          APP="CentroidX-Manager.app"
+          mkdir -p dmg-staging
+          cp -R "$APP" dmg-staging/
+          hdiutil create -volname "CentroidX Manager" -srcfolder dmg-staging -ov -format UDZO \
+            "${{ matrix.artifact_name }}"
+          rm -rf dmg-staging
+          echo "Unsigned DMG created"
+
+      - name: Verify artifact
         working-directory: tools/centroidx-manager
         shell: bash
         run: |
