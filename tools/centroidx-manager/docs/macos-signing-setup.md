@@ -101,33 +101,47 @@ Before pushing to CI, you can test signing and notarization locally:
 cd tools/centroidx-manager
 
 # Build the binary
-CGO_ENABLED=1 go build -o centroidx-manager_darwin_arm64 .
+CGO_ENABLED=1 go build -o centroidx-manager .
 
-# Sign it
+# Create .app bundle
+APP="CentroidX-Manager.app"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+cp centroidx-manager "$APP/Contents/MacOS/centroidx-manager"
+cp Info.plist "$APP/Contents/Info.plist"
+cp icon.icns "$APP/Contents/Resources/icon.icns"
+chmod +x "$APP/Contents/MacOS/centroidx-manager"
+
+# Sign the .app bundle
 codesign --force --options runtime --sign "Developer ID Application: YOUR NAME (TEAM_ID)" \
-  --timestamp centroidx-manager_darwin_arm64
+  --timestamp --deep "$APP"
 
 # Verify signature
-codesign --verify --deep --strict centroidx-manager_darwin_arm64
+codesign --verify --deep --strict "$APP"
 echo "Signing OK"
 
-# Create a zip for notarization
-zip centroidx-manager_darwin_arm64.zip centroidx-manager_darwin_arm64
+# Create DMG
+mkdir -p dmg-staging
+cp -R "$APP" dmg-staging/
+hdiutil create -volname "CentroidX Manager" -srcfolder dmg-staging -ov -format UDZO \
+  centroidx-manager_darwin_arm64.dmg
+rm -rf dmg-staging
+
+# Sign the DMG
+codesign --force --sign "Developer ID Application: YOUR NAME (TEAM_ID)" \
+  --timestamp centroidx-manager_darwin_arm64.dmg
 
 # Submit for notarization
-xcrun notarytool submit centroidx-manager_darwin_arm64.zip \
+xcrun notarytool submit centroidx-manager_darwin_arm64.dmg \
   --apple-id "you@example.com" \
   --password "app-specific-password" \
   --team-id "TEAM_ID" \
   --wait
 
-# Staple the notarization ticket (optional for standalone binaries)
-# xcrun stapler staple centroidx-manager_darwin_arm64
-# Note: stapler only works on .app, .dmg, .pkg — not standalone binaries.
-# For standalone binaries, Gatekeeper checks notarization online.
+# Staple the notarization ticket to the DMG
+xcrun stapler staple centroidx-manager_darwin_arm64.dmg
 
 # Test Gatekeeper
-spctl --assess --type execute centroidx-manager_darwin_arm64
+spctl --assess --type open --context context:primary-signature centroidx-manager_darwin_arm64.dmg
 echo "Gatekeeper OK"
 ```
 
@@ -137,12 +151,14 @@ Once the secrets are configured, the CI pipeline (`.github/workflows/build-manag
 
 1. Import the .p12 certificate into a temporary macOS keychain
 2. Build the Go binary with CGO_ENABLED=1
-3. Sign it with `codesign --options runtime --timestamp`
-4. Create a zip and submit to Apple's notary service via `notarytool`
-5. Wait for notarization to complete (~2-5 minutes)
-6. Upload the signed+notarized binary as a CI artifact
+3. Package it as a `.app` bundle with icon and Info.plist
+4. Sign the `.app` bundle with `codesign --options runtime --timestamp --deep`
+5. Create a DMG containing the `.app` bundle
+6. Sign the DMG and submit to Apple's notary service via `notarytool`
+7. Staple the notarization ticket to the DMG
+8. Upload the signed+notarized DMG as a CI artifact
 
-Users downloading from GitHub Releases will be able to run the binary without any Gatekeeper warnings.
+Users downloading the `.dmg` from GitHub Releases can double-click to mount, drag the app to Applications, and run it without any Gatekeeper warnings.
 
 ## Troubleshooting
 
