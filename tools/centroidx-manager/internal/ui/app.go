@@ -53,7 +53,7 @@ func Run(opts Options) {
 		case "update":
 			runUpdateMode(w, th, eng, opts)
 		case "picker":
-			runPickerMode(w, th, eng)
+			runPickerMode(w, th, eng, installer)
 		case "prs":
 			prClient, ok := ghclient.AsPRClient(client)
 			if !ok {

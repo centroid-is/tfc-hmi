@@ -18,6 +18,12 @@ import (
 	"github.com/centroid-is/centroidx-manager/internal/update"
 )
 
+// PickerInstaller abstracts the platform install check for the picker.
+type PickerInstaller interface {
+	IsInstalled() bool
+	Uninstall() error
+}
+
 // pickerState holds all mutable state for the version picker UI.
 type pickerState struct {
 	releases       []update.ReleaseInfo
@@ -26,18 +32,21 @@ type pickerState struct {
 	notesListState widget.List
 	itemClicks     []widget.Clickable
 	installBtn     widget.Clickable
+	uninstallBtn   widget.Clickable
 	loading        bool
 	err            error
 	installing     bool
 	progress       float32
 	statusMsg      string
+	isInstalled    bool
 }
 
 // runPickerMode fetches versions and runs the picker event loop.
-func runPickerMode(w *app.Window, th *material.Theme, eng *update.Engine) {
+func runPickerMode(w *app.Window, th *material.Theme, eng *update.Engine, installer PickerInstaller) {
 	state := &pickerState{
-		loading:  true,
-		selected: -1,
+		loading:     true,
+		selected:    -1,
+		isInstalled: installer.IsInstalled(),
 	}
 	state.listState.List.Axis = layout.Vertical
 	state.notesListState.List.Axis = layout.Vertical
@@ -64,14 +73,14 @@ func runPickerMode(w *app.Window, th *material.Theme, eng *update.Engine) {
 		case app.FrameEvent:
 			gtx := app.NewContext(&ops, e)
 			fillBackground(gtx, th.Palette.Bg)
-			layoutPicker(gtx, th, state, eng, w)
+			layoutPicker(gtx, th, state, eng, installer, w)
 			e.Frame(gtx.Ops)
 		}
 	}
 }
 
 // layoutPicker renders the split list + detail view.
-func layoutPicker(gtx layout.Context, th *material.Theme, state *pickerState, eng *update.Engine, w *app.Window) layout.Dimensions {
+func layoutPicker(gtx layout.Context, th *material.Theme, state *pickerState, eng *update.Engine, installer PickerInstaller, w *app.Window) layout.Dimensions {
 	if state.loading {
 		return layout.Center.Layout(gtx, material.H6(th, "Loading versions...").Layout)
 	}
@@ -105,6 +114,24 @@ func layoutPicker(gtx layout.Context, th *material.Theme, state *pickerState, en
 				state.statusMsg = userFriendlyMessage(err)
 			} else {
 				state.statusMsg = fmt.Sprintf("CentroidX v%s installed!", selected.Version)
+				state.isInstalled = true
+			}
+			state.installing = false
+			w.Invalidate()
+		}()
+	}
+
+	// Handle uninstall button click
+	if state.uninstallBtn.Clicked(gtx) && state.isInstalled && !state.installing {
+		state.installing = true
+		state.statusMsg = "Uninstalling..."
+		go func() {
+			if err := installer.Uninstall(); err != nil {
+				state.statusMsg = userFriendlyMessage(err)
+				state.err = err
+			} else {
+				state.statusMsg = "Uninstalled!"
+				state.isInstalled = false
 			}
 			state.installing = false
 			w.Invalidate()
@@ -236,15 +263,38 @@ func layoutDetail(gtx layout.Context, th *material.Theme, state *pickerState) la
 				)
 			}),
 
-			// Install button
+			// Installed status
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				if !state.isInstalled {
+					return layout.Dimensions{}
+				}
+				lbl := material.Body2(th, "CentroidX is installed")
+				lbl.Color = ColorSuccess()
+				return layout.Inset{Bottom: unit.Dp(8)}.Layout(gtx, lbl.Layout)
+			}),
+
+			// Install / Uninstall buttons
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 				if state.selected < 0 || state.installing {
 					return layout.Dimensions{}
 				}
 				return layout.Inset{Bottom: unit.Dp(12)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-					btn := material.Button(th, &state.installBtn, "Install this version")
-					btn.Background = ColorAccent()
-					return btn.Layout(gtx)
+					return layout.Flex{Spacing: layout.SpaceStart}.Layout(gtx,
+						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+							btn := material.Button(th, &state.installBtn, "Install this version")
+							btn.Background = ColorAccent()
+							return btn.Layout(gtx)
+						}),
+						layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
+						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+							if !state.isInstalled {
+								return layout.Dimensions{}
+							}
+							btn := material.Button(th, &state.uninstallBtn, "Uninstall")
+							btn.Background = ColorError()
+							return btn.Layout(gtx)
+						}),
+					)
 				})
 			}),
 		)
