@@ -324,12 +324,22 @@ void main() {
     await client.connect("opc.tcp://127.0.0.1:$serverPort");
 
     try {
-      // Very short-lived subscription (same as test B)
-      final subId = await client.subscriptionCreate(
-        requestedPublishingInterval: Duration(milliseconds: 10),
-        requestedLifetimeCount: 3,
-        requestedMaxKeepAliveCount: 1,
-      );
+      // Retry subscription creation — on Windows CI the previous test's
+      // server socket may linger briefly, causing BadSessionClosed.
+      late int subId;
+      for (var attempt = 0; attempt < 5; attempt++) {
+        try {
+          subId = await client.subscriptionCreate(
+            requestedPublishingInterval: Duration(milliseconds: 10),
+            requestedLifetimeCount: 3,
+            requestedMaxKeepAliveCount: 1,
+          );
+          break;
+        } catch (e) {
+          if (attempt == 4) rethrow;
+          await Future.delayed(Duration(milliseconds: 200));
+        }
+      }
 
       // Wire up ClientWrapper with the real client and start heartbeat
       final config = OpcUAConfig()
