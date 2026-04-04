@@ -1,11 +1,10 @@
 import 'dart:async';
-import 'dart:io';
+import 'package:tfc/core/platform_io.dart';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:beamer/beamer.dart';
-import 'package:dbus/dbus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:amplify_secure_storage_dart/amplify_secure_storage_dart.dart';
@@ -22,20 +21,23 @@ import 'package:tfc/pages/not_found.dart';
 import 'package:tfc/pages/preferences.dart';
 import 'package:tfc/pages/alarm_editor.dart';
 import 'package:tfc/pages/alarm_view.dart';
-import 'package:tfc/pages/ip_settings.dart';
-import 'package:tfc/pages/dbus_login.dart';
+import 'package:tfc/pages/ip_settings.dart'
+    if (dart.library.js_interop) 'package:tfc/pages/ip_settings_stub.dart';
+import 'package:tfc/pages/dbus_login.dart'
+    if (dart.library.js_interop) 'package:tfc/pages/dbus_login_stub.dart';
 import 'package:tfc/pages/history_view.dart';
 import 'package:tfc/pages/server_config.dart';
 import 'package:tfc/pages/key_repository.dart';
-import 'package:tfc/pages/about_linux.dart';
+import 'package:tfc/pages/about_linux.dart'
+    if (dart.library.js_interop) 'package:tfc/pages/about_linux_stub.dart';
 import 'package:tfc/pages/tech_doc_library.dart';
 import 'package:tfc/transition_delegate.dart';
 import 'package:tfc/providers/theme.dart';
+import 'package:tfc/core/config_loader.dart';
 import 'package:tfc/core/preferences.dart';
 import 'package:tfc/page_creator/page.dart';
 
 import 'package:tfc/theme.dart';
-import 'package:tfc/page_creator/assets/registry.dart';
 import 'package:tfc/widgets/base_scaffold.dart';
 import 'package:tfc/widgets/nav_dropdown.dart';
 import 'package:mcp_dart/mcp_dart.dart' show ElicitResult;
@@ -109,6 +111,10 @@ void main() {
   if (_enableMarionette) {
     initMarionette();
     _startApp(debugMode);
+  } else if (kIsWeb) {
+    // On web, runZonedGuarded + stderr are unavailable.
+    WidgetsFlutterBinding.ensureInitialized();
+    _startApp();
   } else {
     runZonedGuarded(() {
       WidgetsFlutterBinding.ensureInitialized();
@@ -128,7 +134,7 @@ void main() {
 /// through to [runApp].  Called from the same zone that initialised the
 /// binding so that Flutter's zone-check in [runApp] is satisfied.
 Future<void> _startApp([bool debugMode = false]) async {
-  if (debugMode) {
+  if (!kIsWeb && debugMode) {
     print('[CentroidX] v${Platform.version} starting...');
     print('[CentroidX] Platform: ${Platform.operatingSystem} ${Platform.operatingSystemVersion}');
     print('[CentroidX] Executable: ${Platform.resolvedExecutable}');
@@ -138,10 +144,12 @@ Future<void> _startApp([bool debugMode = false]) async {
         'CENTROID_OPCUA_LOG_LEVEL=${Platform.environment['CENTROID_OPCUA_LOG_LEVEL'] ?? 'unset'}');
   }
 
-  pdfrxFlutterInitialize();
-  AmplifySecureStorageDart.registerWith();
-  if (Platform.isWindows) {
-    SecureStorage.setInstance(OtherSecureStorage());
+  if (!kIsWeb) {
+    pdfrxFlutterInitialize();
+    AmplifySecureStorageDart.registerWith();
+    if (Platform.isWindows) {
+      SecureStorage.setInstance(OtherSecureStorage());
+    }
   }
 
   // Register your custom asset type
@@ -165,16 +173,36 @@ Future<void> _startApp([bool debugMode = false]) async {
 
   final registry = RouteRegistry();
 
-  final environmentVariableIsGod = Platform.environment['TFC_GOD'] == 'true';
+  final environmentVariableIsGod =
+      !kIsWeb && Platform.environment['TFC_GOD'] == 'true';
+
+  // Static config mode: on web always, on native when CENTROID_CONFIG_DIR is set.
+  // Hides config editing pages (Server Config, Key Repository, Page Editor).
+  final isStaticMode =
+      kIsWeb || Platform.environment['CENTROID_CONFIG_DIR'] != null;
 
   registry.addMenuItem(const MenuItem(label: 'Home', path: '/', icon: Icons.home));
 
   registry.addMenuItem(const MenuItem(label: 'Alarm View', path: '/alarm-view', icon: Icons.alarm));
 
-  // This is not ideal, if a second HMI adds a page, we will need to restart the app twice
-  final prefs = SharedPreferencesWrapper(SharedPreferencesAsync());
-  final pageManager = PageManager(pages: {}, prefs: prefs);
-  await pageManager.load();
+  // Load pages: from static config when available, otherwise from SharedPreferences.
+  final PageManager pageManager;
+  if (isStaticMode) {
+    final staticCfg = await loadStaticConfig();
+    if (staticCfg?.pageEditorJson != null) {
+      final prefs = SharedPreferencesWrapper(SharedPreferencesAsync());
+      pageManager = PageManager(pages: {}, prefs: prefs);
+      pageManager.fromJson(staticCfg!.pageEditorJson!);
+    } else {
+      final prefs = SharedPreferencesWrapper(SharedPreferencesAsync());
+      pageManager = PageManager(pages: {}, prefs: prefs);
+      await pageManager.load();
+    }
+  } else {
+    final prefs = SharedPreferencesWrapper(SharedPreferencesAsync());
+    pageManager = PageManager(pages: {}, prefs: prefs);
+    await pageManager.load();
+  }
 
   final extraMenuItems = pageManager.getRootMenuItems();
 
@@ -188,18 +216,19 @@ Future<void> _startApp([bool debugMode = false]) async {
       path: '/advanced',
       icon: Icons.settings,
       children: [
-        if (Platform.isLinux)
+        if (!kIsWeb && Platform.isLinux)
           MenuItem(label: 'IP Settings', path: '/advanced/ip-settings', icon: Icons.settings_ethernet),
-        if (Platform.isLinux) MenuItem(label: 'About Linux', path: '/advanced/about-linux', icon: Icons.info),
-        if (environmentVariableIsGod) MenuItem(label: 'Page Editor', path: '/advanced/page-editor', icon: Icons.edit),
+        if (!kIsWeb && Platform.isLinux)
+          MenuItem(label: 'About Linux', path: '/advanced/about-linux', icon: Icons.info),
+        if (!isStaticMode && environmentVariableIsGod) MenuItem(label: 'Page Editor', path: '/advanced/page-editor', icon: Icons.edit),
         if (environmentVariableIsGod)
           MenuItem(label: 'Preferences', path: '/advanced/preferences', icon: Icons.settings),
         if (environmentVariableIsGod)
           MenuItem(label: 'Alarm Editor', path: '/advanced/alarm-editor', icon: Icons.alarm),
         MenuItem(label: 'History View', path: '/advanced/history-view', icon: Icons.history),
-        MenuItem(label: 'Server Config', path: '/advanced/server-config', icon: FontAwesomeIcons.server),
-        MenuItem(label: 'Key Repository', path: '/advanced/key-repository', icon: FontAwesomeIcons.key),
-        MenuItem(label: 'Version Manager', path: '/advanced/version-manager', icon: Icons.update),
+        if (!isStaticMode) MenuItem(label: 'Server Config', path: '/advanced/server-config', icon: FontAwesomeIcons.server),
+        if (!isStaticMode) MenuItem(label: 'Key Repository', path: '/advanced/key-repository', icon: FontAwesomeIcons.key),
+        if (!kIsWeb) MenuItem(label: 'Version Manager', path: '/advanced/version-manager', icon: Icons.update),
         MenuItem(label: 'Knowledge Base', path: '/advanced/knowledge-base', icon: Icons.library_books),
       ],
     ),
@@ -207,37 +236,46 @@ Future<void> _startApp([bool debugMode = false]) async {
 
   final locationBuilder = createLocationBuilder(extraMenuItems);
 
-  final upgrader = Upgrader(
-    storeController: UpgraderStoreController(
-      onWindows: () => GitHubReleaseStore(owner: 'centroid-is', repo: 'tfc-hmi'),
-      onLinux: () => GitHubReleaseStore(owner: 'centroid-is', repo: 'tfc-hmi'),
-      onMacOS: () => GitHubReleaseStore(owner: 'centroid-is', repo: 'tfc-hmi'),
-    ),
-    debugLogging: true,
-  );
-
-  runApp(ProviderScope(
-    child: UpgradeAlert(
-      upgrader: upgrader,
-      onUpdate: () {
-        final targetVersion =
-            upgrader.state.versionInfo?.appStoreVersion?.toString() ?? '';
-        unawaited(
-          managerLauncher
-              .launchForUpdate(
-                version: targetVersion,
-                flutterPid: pid,
-              )
-              .then((_) => exit(0)),
-        );
-        return false;
-      },
+  Widget app;
+  if (kIsWeb) {
+    app = ProviderScope(
       child: MyApp(locationBuilder: locationBuilder),
-    ),
-  ));
+    );
+  } else {
+    final upgrader = Upgrader(
+      storeController: UpgraderStoreController(
+        onWindows: () => GitHubReleaseStore(owner: 'centroid-is', repo: 'tfc-hmi'),
+        onLinux: () => GitHubReleaseStore(owner: 'centroid-is', repo: 'tfc-hmi'),
+        onMacOS: () => GitHubReleaseStore(owner: 'centroid-is', repo: 'tfc-hmi'),
+      ),
+      debugLogging: true,
+    );
+
+    app = ProviderScope(
+      child: UpgradeAlert(
+        upgrader: upgrader,
+        onUpdate: () {
+          final targetVersion =
+              upgrader.state.versionInfo?.appStoreVersion?.toString() ?? '';
+          unawaited(
+            managerLauncher
+                .launchForUpdate(
+                  version: targetVersion,
+                  flutterPid: pid,
+                )
+                .then((_) => exit(0)),
+          );
+          return false;
+        },
+        child: MyApp(locationBuilder: locationBuilder),
+      ),
+    );
+  }
+
+  runApp(app);
 }
 
-Completer<DBusClient> dbusCompleter = Completer();
+Completer<dynamic> dbusCompleter = Completer();
 
 final managerLauncher = ManagerLauncher(
   assetLoader: (key) async {
@@ -266,7 +304,7 @@ RoutesLocationBuilder createLocationBuilder(List<MenuItem> extraMenuItems) {
           child: Consumer(
             builder: (context, ref, _) {
               // I dont like this but lets continue
-              return FutureBuilder<DBusClient>(
+              return FutureBuilder<dynamic>(
                 future: dbusCompleter.future,
                 builder: (context, snapshot) {
                   if (!snapshot.hasData) {
@@ -297,7 +335,7 @@ RoutesLocationBuilder createLocationBuilder(List<MenuItem> extraMenuItems) {
           child: Consumer(
             builder: (context, ref, _) {
               // I dont like this but lets continue
-              return FutureBuilder<DBusClient>(
+              return FutureBuilder<dynamic>(
                 future: dbusCompleter.future,
                 builder: (context, snapshot) {
                   if (!snapshot.hasData) {

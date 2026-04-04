@@ -1,3 +1,6 @@
+@Tags(['integration'])
+library;
+
 import 'dart:async';
 import 'dart:convert';
 
@@ -1088,7 +1091,7 @@ void main() {
           testTableName2: 'value',
         });
 
-        final result = await database.queryTimeseriesData(mvName, base);
+        await database.queryTimeseriesData(mvName, base);
 
         // Query MV
         final rows = await database.db.customSelect('''

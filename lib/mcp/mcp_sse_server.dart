@@ -1,7 +1,10 @@
-import 'dart:io' as io;
+import 'package:tfc/core/platform_io.dart' as io;
 
-import 'package:mcp_dart/mcp_dart.dart';
+import 'package:flutter/foundation.dart' show debugPrint;
+import 'package:mcp_dart/mcp_dart.dart'
+    if (dart.library.js_interop) '../core/mcp_dart_stub.dart';
 import 'package:tfc_mcp_server/tfc_mcp_server.dart'
+    if (dart.library.js_interop) 'package:tfc_mcp_server/tfc_mcp_server_web.dart'
     show
         TfcMcpServer,
         McpDatabase,
@@ -44,6 +47,28 @@ class McpSseServer {
   }) async {
     if (isRunning) return;
 
+    // Try to kill any stale process holding the port from a previous crash
+    try {
+      final result = await io.Process.run('lsof', ['-ti:$port']);
+      final pids = result.stdout.toString().trim();
+      if (pids.isNotEmpty) {
+        for (final pid in pids.split('\n')) {
+          final trimmed = pid.trim();
+          if (trimmed.isNotEmpty) {
+            debugPrint(
+              'McpSseServer: killing stale process $trimmed on port $port',
+            );
+            io.Process.killPid(int.parse(trimmed));
+          }
+        }
+        // Brief delay to let the OS release the port
+        await Future<void>.delayed(const Duration(milliseconds: 500));
+      }
+    } catch (_) {
+      // lsof may not exist on all platforms; ignore errors
+    }
+
+
     final server = StreamableMcpServer(
       serverFactory: (sessionId) {
         final tfcServer = TfcMcpServer(
@@ -70,7 +95,7 @@ class McpSseServer {
     _streamableServer = server;
     _port = port;
 
-    io.stderr.writeln('McpSseServer: listening on http://localhost:$_port/mcp');
+    debugPrint('McpSseServer: listening on http://localhost:$_port/mcp');
   }
 
   /// Stop the server and clean up resources.
@@ -81,7 +106,7 @@ class McpSseServer {
 
     if (server != null) {
       await server.stop();
-      io.stderr.writeln('McpSseServer: stopped');
+      debugPrint('McpSseServer: stopped');
     }
   }
 }

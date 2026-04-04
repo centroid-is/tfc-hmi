@@ -1,7 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
+import 'package:tfc/core/platform_io.dart';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
@@ -11,11 +12,10 @@ import 'package:path/path.dart' as path;
 import '../widgets/base_scaffold.dart';
 import '../widgets/proposal_visual.dart';
 import '../providers/proposal_state.dart';
-import 'package:tfc_dart/core/state_man.dart';
-import 'package:tfc_dart/core/modbus_client_wrapper.dart' show ModbusDataType;
-import 'package:tfc_dart/core/collector.dart';
-import 'package:tfc_dart/core/database.dart';
-import 'package:jbtm/src/m2400.dart' show M2400RecordType;
+import 'package:tfc_dart/tfc_dart.dart';
+import 'package:jbtm/src/m2400.dart'
+    if (dart.library.js_interop) 'package:tfc_dart/core/web_stubs/jbtm_m2400_stub.dart'
+    show M2400RecordType;
 import '../widgets/fuzzy_search_bar.dart';
 import '../widgets/bit_mask_grid.dart';
 import '../widgets/key_mapping_sections.dart';
@@ -41,7 +41,7 @@ class KeyRepositoryPage extends ConsumerWidget {
   /// Optional proposal JSON passed via Beamer route data.
   final String? proposalData;
 
-  KeyRepositoryPage({super.key, this.proposalData});
+  const KeyRepositoryPage({super.key, this.proposalData});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -1256,6 +1256,7 @@ class _KeyMappingsImportExportCard extends ConsumerWidget {
   }
 
   Future<void> _onExport(BuildContext context, WidgetRef ref) async {
+    if (kIsWeb) return; // File I/O not available on web
     try {
       final prefs = await ref.read(preferencesProvider.future);
       final keyMappings = await KeyMappings.fromPrefs(prefs);
@@ -1263,7 +1264,8 @@ class _KeyMappingsImportExportCard extends ConsumerWidget {
           const JsonEncoder.withIndent('  ').convert(keyMappings.toJson());
 
       String? savePath;
-      if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+      if (!kIsWeb &&
+          (Platform.isWindows || Platform.isLinux || Platform.isMacOS)) {
         savePath = await FilePicker.platform.saveFile(
           dialogTitle: 'Export Key Mappings',
           fileName: 'key_mappings.json',
@@ -1298,6 +1300,7 @@ class _KeyMappingsImportExportCard extends ConsumerWidget {
   }
 
   Future<void> _onImport(BuildContext context, WidgetRef ref) async {
+    if (kIsWeb) return; // File I/O not available on web
     try {
       final pick = await FilePicker.platform.pickFiles(
         type: FileType.custom,

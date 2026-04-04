@@ -1,4 +1,4 @@
-import 'package:open62541/open62541.dart' show DynamicValue, NodeId;
+import 'dynamic_value.dart';
 import 'package:modbus_client/modbus_client.dart' show ModbusEndianness;
 import 'package:tfc_dart/core/modbus_client_wrapper.dart';
 import 'package:tfc_dart/core/state_man.dart'

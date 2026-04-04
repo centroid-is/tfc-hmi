@@ -2,7 +2,9 @@ import 'dart:async';
 
 import 'package:test/test.dart';
 import 'package:open62541/open62541.dart'
-    show ClientApi, DynamicValue, Inactivity, SecureChannelClosed, SubscriptionDeleted;
+    show ClientApi, Inactivity, SecureChannelClosed, SubscriptionDeleted;
+import 'package:tfc_dart/core/dynamic_value.dart' show DynamicValue;
+import 'package:tfc_dart/core/opcua_device_client.dart' show ClientWrapper;
 import 'package:tfc_dart/core/state_man.dart';
 
 /// Minimal fake ClientApi that doesn't load native code.

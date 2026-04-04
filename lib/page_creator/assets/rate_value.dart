@@ -12,7 +12,7 @@ import '../../providers/current_page_assets.dart';
 import '../../providers/database.dart';
 import '../../widgets/graph.dart';
 import 'package:tfc/converter/color_converter.dart';
-import 'package:tfc_dart/core/database.dart';
+import 'package:tfc_dart/tfc_dart.dart';
 
 part 'rate_value.g.dart';
 
@@ -118,7 +118,7 @@ class _RateValueConfigEditorState
     final optionVars = pageAssets.whereType<OptionVariableConfig>().toList();
 
     return DropdownButtonFormField<String?>(
-      value: widget.config.intervalVariable,
+      initialValue: widget.config.intervalVariable,
       decoration: const InputDecoration(
         labelText: 'Interval Variable',
         helperText: 'Link to an OptionVariable to control interval',

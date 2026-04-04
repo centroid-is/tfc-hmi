@@ -1,9 +1,11 @@
 import 'dart:async';
-import 'dart:io';
+import 'dart:io'
+    if (dart.library.js_interop) 'web_stubs/io_stub.dart';
 
 import 'package:drift/drift.dart' show Variable;
 
-import 'database.dart';
+import 'database.dart'
+    if (dart.library.js_interop) 'web_stubs/database_stub.dart';
 import 'secure_storage/secure_storage.dart';
 
 class PreferencesException implements Exception {

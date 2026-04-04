@@ -1,7 +1,5 @@
-import 'dart:io' show stderr;
-
 import 'package:flutter/material.dart';
-import 'package:open62541/open62541.dart' show DynamicValue;
+import 'package:tfc_dart/core/dynamic_value.dart' show DynamicValue;
 
 class DynamicValueWidget extends StatelessWidget {
   final DynamicValue _value;
@@ -230,7 +228,7 @@ class DynamicValueWidget extends StatelessWidget {
           ],
         );
       } catch (e) {
-        stderr.writeln("Error building enum dropdown: $e");
+        debugPrint("Error building enum dropdown: $e");
       }
     }
 
