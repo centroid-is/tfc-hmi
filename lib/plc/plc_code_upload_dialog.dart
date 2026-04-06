@@ -1,7 +1,8 @@
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
-import 'package:tfc_mcp_server/tfc_mcp_server.dart';
+import 'package:tfc_mcp_server/tfc_mcp_server.dart'
+    if (dart.library.js_interop) 'package:tfc_mcp_server/tfc_mcp_server_web.dart';
 
 import 'plc_code_upload_service.dart';
 
@@ -241,7 +242,7 @@ class _PlcCodeUploadDialogState extends State<PlcCodeUploadDialog> {
               const SizedBox(height: 4),
               DropdownButtonFormField<PlcVendor>(
                 key: const ValueKey('plc-vendor-dropdown'),
-                value: _selectedVendor,
+                initialValue: _selectedVendor,
                 isExpanded: true,
                 decoration: const InputDecoration(
                   border: OutlineInputBorder(),
@@ -288,7 +289,7 @@ class _PlcCodeUploadDialogState extends State<PlcCodeUploadDialog> {
               const SizedBox(height: 4),
               DropdownButtonFormField<String>(
                 key: const ValueKey('plc-server-alias-dropdown'),
-                value: _selectedServerAlias,
+                initialValue: _selectedServerAlias,
                 isExpanded: true,
                 decoration: const InputDecoration(
                   border: OutlineInputBorder(),

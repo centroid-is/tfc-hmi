@@ -1,7 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
-import '../../lib/mcp/mcp_lifecycle_state.dart';
+import 'package:tfc/mcp/mcp_lifecycle_state.dart';
 
 /// Minimal stub implementing the same dispose() contract as StateManStateReader.
 class _FakeStateReader {

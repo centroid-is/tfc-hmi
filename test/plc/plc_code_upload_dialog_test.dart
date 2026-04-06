@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:tfc_mcp_server/tfc_mcp_server.dart';
+import 'package:tfc_mcp_server/tfc_mcp_server.dart'
+    if (dart.library.js_interop) 'package:tfc_mcp_server/tfc_mcp_server_web.dart';
 
 import 'package:tfc/plc/plc_code_upload_dialog.dart';
 import 'package:tfc/plc/plc_code_upload_service.dart';

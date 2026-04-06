@@ -1,10 +1,10 @@
 import 'dart:convert';
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:logger/logger.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:tfc/core/preferences.dart';
 import 'package:tfc/page_creator/page.dart';
@@ -19,17 +19,6 @@ import '../widgets/base_scaffold.dart';
 import '../widgets/zoomable_canvas.dart';
 
 part 'page_view.g.dart';
-
-final _log = Logger(
-  printer: PrettyPrinter(
-    methodCount: 0,
-    errorMethodCount: 8,
-    lineLength: 120,
-    colors: true,
-    printEmojis: true,
-    dateTimeFormat: DateTimeFormat.onlyTimeAndSinceStart,
-  ),
-);
 
 @JsonSerializable()
 class AssetStackConfig {
@@ -97,7 +86,7 @@ class AssetStack extends ConsumerStatefulWidget {
   final Set<Asset> proposedAssets;
 
   const AssetStack({
-    Key? key,
+    super.key,
     required this.assets,
     required this.constraints,
     this.onTap,
@@ -107,7 +96,7 @@ class AssetStack extends ConsumerStatefulWidget {
     required this.selectedAssets,
     required this.mirroringDisabled,
     this.proposedAssets = const {},
-  }) : super(key: key);
+  });
 
   @override
   ConsumerState<AssetStack> createState() => _AssetStackState();
@@ -162,8 +151,8 @@ class _AssetStackState extends ConsumerState<AssetStack> {
           final halfW = assetW / 2;
           final halfH = assetH / 2;
 
-          final textScaler = TextScaler.linear(
-              math.min(asset.size.width * W, asset.size.height * H) / 25);
+          final rawScale = math.min(asset.size.width * W, asset.size.height * H) / 25;
+          final textScaler = TextScaler.linear(math.min(rawScale, 2.0));
           final labelStyle = DefaultTextStyle.of(context).style.copyWith(
                 fontSize: textScaler
                     .scale(DefaultTextStyle.of(context).style.fontSize ?? 16),
@@ -346,7 +335,7 @@ class _AssetStackState extends ConsumerState<AssetStack> {
 
 class AssetView extends ConsumerWidget {
   final String pageName;
-  const AssetView({Key? key, required this.pageName}) : super(key: key);
+  const AssetView({super.key, required this.pageName});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -354,7 +343,8 @@ class AssetView extends ConsumerWidget {
       title: 'Asset View',
       body: ZoomableCanvas(
         child: LayoutBuilder(
-          builder: (context, constraints) => FutureBuilder<PageManager>(
+          builder: (context, constraints) {
+            return FutureBuilder<PageManager>(
             future: ref.watch(pageManagerProvider.future),
             builder: (context, snap) {
               final pageManager = snap.data;
@@ -366,8 +356,10 @@ class AssetView extends ConsumerWidget {
                   child: Text('Page: "$pageName" not found'),
                 );
               }
+              final assets = pageManager.pages[pageName]?.assets ?? [];
+              debugPrint('[AssetView] rendering AssetStack with ${assets.length} assets');
               return AssetStack(
-                assets: pageManager.pages[pageName]?.assets ?? [],
+                assets: assets,
                 constraints: constraints,
                 absorb: false,
                 selectedAssets: const {},
@@ -375,7 +367,8 @@ class AssetView extends ConsumerWidget {
                     pageManager.pages[pageName]?.mirroringDisabled ?? false,
               );
             },
-          ),
+          );
+          },
         ),
       ),
     );

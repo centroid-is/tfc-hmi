@@ -1,4 +1,6 @@
-import 'package:tfc_dart/core/modbus_client_wrapper.dart' show ModbusDataType;
+import 'package:tfc_dart/core/modbus_client_wrapper.dart'
+    if (dart.library.js_interop) 'package:tfc_dart/core/web_stubs/modbus_client_wrapper_stub.dart'
+    show ModbusDataType;
 
 /// Maps a UMAS data type name to the corresponding Modbus data type.
 ///

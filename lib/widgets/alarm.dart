@@ -1,8 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import 'package:tfc_dart/core/alarm.dart';
-import 'package:tfc_dart/core/boolean_expression.dart';
+import 'package:tfc_dart/tfc_dart.dart';
 import '../chat/ai_context_action.dart';
 import '../chat/asset_context_menu.dart' show buildAlarmContextBlock;
 import '../chat/chat_overlay.dart' show ChatContextType;
@@ -318,7 +317,7 @@ class _AlarmFormState extends ConsumerState<AlarmForm> {
                     children: [
                       const SizedBox(height: 16),
                       DropdownButtonFormField<AlarmLevel>(
-                        value: rule.level,
+                        initialValue: rule.level,
                         decoration: InputDecoration(
                           labelText: 'Alarm Level',
                           border: const OutlineInputBorder(),
@@ -521,7 +520,7 @@ class _ListActiveAlarmsState extends ConsumerState<ListActiveAlarms> {
                   alarmMan,
                   history
                       .where((h) => h != null)
-                      .map((h) => (h!, h!.deactivated))
+                      .map((h) => (h!, h.deactivated))
                       .toList()
                     ..sort((a, b) => b.$2!.compareTo(a.$2!))
                 ))

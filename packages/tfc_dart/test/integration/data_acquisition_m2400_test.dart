@@ -1,3 +1,6 @@
+@Tags(['integration'])
+library;
+
 // Integration tests: M2400 data acquisition through Collector → StateMan → DB
 //
 // Verifies the full pipeline: M2400StubServer → M2400ClientWrapper →
@@ -8,11 +11,10 @@
 import 'dart:async';
 
 import 'package:jbtm/jbtm.dart' hide ConnectionStatus;
-import 'package:jbtm/src/m2400.dart' show M2400RecordType;
-import 'package:open62541/open62541.dart' show DynamicValue;
 import 'package:test/test.dart';
 import 'package:tfc_dart/core/collector.dart';
 import 'package:tfc_dart/core/database.dart';
+import 'package:tfc_dart/core/m2400_device_client.dart' show createM2400DeviceClients;
 import 'package:tfc_dart/core/state_man.dart';
 
 import 'docker_compose.dart';

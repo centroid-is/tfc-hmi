@@ -1,3 +1,6 @@
+@Tags(['integration'])
+library;
+
 // TDD Tests for Data Acquisition Resilience (Issue #60)
 //
 // These tests verify that the data acquisition system properly handles:
@@ -11,7 +14,7 @@
 import 'dart:async';
 import 'dart:isolate';
 
-import 'package:open62541/open62541.dart';
+import 'package:tfc_dart/core/dynamic_value.dart';
 import 'package:test/test.dart';
 import 'package:tfc_dart/core/collector.dart';
 import 'package:tfc_dart/core/database.dart';

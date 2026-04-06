@@ -3,7 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:rxdart/rxdart.dart';
-import 'package:tfc_dart/core/database.dart';
+import 'package:tfc_dart/tfc_dart.dart';
 
 import '../providers/collector.dart';
 import '../models/history_models.dart';
@@ -119,7 +119,7 @@ class _HistoryTablePaneState extends ConsumerState<HistoryTablePane> {
             // Use extended range for fetching
             return Stream.fromFuture(collector.database.queryTimeseriesData(
                 k, fetchRange!.end,
-                from: fetchRange!.start));
+                from: fetchRange.start));
           }
         }).toList();
 

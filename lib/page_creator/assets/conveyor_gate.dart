@@ -5,7 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_colorpicker/flutter_colorpicker.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:json_annotation/json_annotation.dart';
-import 'package:open62541/open62541.dart' show DynamicValue, NodeId;
+import 'package:tfc_dart/core/dynamic_value.dart' show DynamicValue, NodeId;
 import 'package:rxdart/rxdart.dart';
 import 'package:tfc_dart/core/state_man.dart';
 

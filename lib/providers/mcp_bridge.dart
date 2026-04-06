@@ -1,11 +1,10 @@
 import 'dart:async';
-import 'dart:io' as io;
+import 'package:tfc/core/platform_io.dart' as io;
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:tfc_dart/core/preferences.dart' show Preferences;
-import 'package:tfc_dart/core/alarm.dart' show AlarmMan;
-import 'package:tfc_dart/core/state_man.dart' show StateMan;
+import 'package:tfc_dart/tfc_dart.dart' show Preferences;
 import 'package:tfc_mcp_server/tfc_mcp_server.dart'
+    if (dart.library.js_interop) 'package:tfc_mcp_server/tfc_mcp_server_web.dart'
     show
         AlarmReader,
         DriftDrawingIndex,
@@ -13,7 +12,6 @@ import 'package:tfc_mcp_server/tfc_mcp_server.dart'
         EnvOperatorIdentity,
         McpConfig,
         McpDatabase,
-        McpToolToggles,
         StateReader,
         readMcpConfigFromPreferences;
 

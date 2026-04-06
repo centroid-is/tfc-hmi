@@ -1,8 +1,11 @@
+@Tags(['integration'])
+library;
+
 import 'dart:async';
 import 'dart:collection';
 
 import 'package:test/test.dart';
-import 'package:open62541/open62541.dart' show DynamicValue;
+import 'package:tfc_dart/core/dynamic_value.dart' show DynamicValue;
 import 'package:tfc_dart/core/collector.dart';
 import 'package:tfc_dart/core/state_man.dart';
 import 'package:tfc_dart/core/database.dart';

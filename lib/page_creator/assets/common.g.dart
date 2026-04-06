@@ -29,24 +29,3 @@ Map<String, dynamic> _$RelativeSizeToJson(RelativeSize instance) =>
       'width': instance.width,
       'height': instance.height,
     };
-
-Map<String, dynamic> _$BaseAssetToJson(BaseAsset instance) => <String, dynamic>{
-      'assetName': instance.assetName,
-      'asset_name': instance.variant,
-      'displayName': instance.displayName,
-      'category': instance.category,
-      'coordinates': instance.coordinates.toJson(),
-      'size': instance.size.toJson(),
-      'text': instance.text,
-      'textPos': _$TextPosEnumMap[instance.textPos],
-      'techDocId': instance.techDocId,
-      'plcAssetKey': instance.plcAssetKey,
-    };
-
-const _$TextPosEnumMap = {
-  TextPos.above: 'above',
-  TextPos.below: 'below',
-  TextPos.left: 'left',
-  TextPos.right: 'right',
-  TextPos.inside: 'inside',
-};

@@ -1,15 +1,13 @@
 import 'dart:convert';
-import 'dart:io';
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
-import 'package:tfc_dart/core/modbus_device_client.dart';
-import 'package:tfc_dart/core/state_man.dart';
-import 'package:tfc_dart/core/preferences.dart';
+import 'package:tfc_dart/tfc_dart.dart';
 import 'preferences.dart';
+import 'static_config.dart';
 import 'collector.dart';
 
 part 'state_man.g.dart';
@@ -29,6 +27,12 @@ Future<KeyMappings> fetchKeyMappings(PreferencesApi prefs) async {
 
 @Riverpod(keepAlive: true)
 Future<StateMan> stateMan(Ref ref) async {
+  // Check for static config first — bypasses preferences entirely
+  final staticCfg = await ref.read(staticConfigProvider.future);
+  if (staticCfg != null) {
+    return _createFromStaticConfig(ref, staticCfg);
+  }
+
   // Use ref.read instead of ref.watch to break the reactive dependency chain.
   // StateMan reads config once at init; DB reconnects should NOT cascade here
   // and destroy all OPC-UA connections/isolates.
@@ -49,14 +53,22 @@ Future<StateMan> stateMan(Ref ref) async {
       }
     },
     onError: (error) {
-      stderr.writeln('Error in preferences listener: $error');
+      debugPrint('Error in preferences listener: $error');
     },
   );
 
   try {
-    final m2400Clients = createM2400DeviceClients(config.jbtm);
-    final modbusClients = buildModbusDeviceClients(config.modbus, keyMappings);
-    final deviceClients = [...m2400Clients, ...modbusClients];
+    final m2400Clients = kIsWeb
+        ? <DeviceClient>[]
+        : createM2400DeviceClients(config.jbtm);
+    final modbusClients = kIsWeb
+        ? <DeviceClient>[]
+        : buildModbusDeviceClients(config.modbus, keyMappings);
+    // MQTT clients always created (work on all platforms)
+    final mqttClients = config.mqtt
+        .map((mqttConfig) => MqttDeviceClientAdapter(mqttConfig, keyMappings))
+        .toList();
+    final deviceClients = [...m2400Clients, ...modbusClients, ...mqttClients];
     final stateMan = await StateMan.create(
         config: config,
         keyMappings: keyMappings,
@@ -72,9 +84,35 @@ Future<StateMan> stateMan(Ref ref) async {
     return stateMan;
   } catch (e) {
     listener.cancel();
-    stderr.writeln('Error parsing key mappings: $e');
+    debugPrint('Error parsing key mappings: $e');
     rethrow;
   }
+}
+
+/// Creates StateMan from static config, bypassing preferences entirely.
+/// Only MQTT device clients are created (no OPC UA, M2400, Modbus).
+Future<StateMan> _createFromStaticConfig(
+    Ref ref, StaticConfig staticCfg) async {
+  final config = staticCfg.stateManConfig;
+  final keyMappings = staticCfg.keyMappings;
+
+  final mqttClients = config.mqtt
+      .map((mqttConfig) => MqttDeviceClientAdapter(mqttConfig, keyMappings))
+      .toList();
+
+  final stateMan = await StateMan.create(
+    config: config,
+    keyMappings: keyMappings,
+    deviceClients: mqttClients,
+  );
+
+  // Initialize collector (matches normal path behavior at line 84)
+  ref.read(collectorProvider.future);
+
+  ref.onDispose(() async {
+    await stateMan.close();
+  });
+  return stateMan;
 }
 
 final substitutionsChangedProvider =

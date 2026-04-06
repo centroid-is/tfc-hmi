@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:tfc_dart/core/state_man.dart'
     show KeyMappingEntry, KeyMappings, OpcUANodeConfig;
 import 'package:tfc_mcp_server/tfc_mcp_server.dart'
+    if (dart.library.js_interop) 'package:tfc_mcp_server/tfc_mcp_server_web.dart'
     show CallGraphBuilder, CallGraphData, PlcCodeBlock, PlcVariable, PlcAssetSummary;
 
 import 'package:tfc/plc/plc_detail_panel.dart';

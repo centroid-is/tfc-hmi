@@ -1,10 +1,12 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io' as io;
+import 'package:tfc/core/platform_io.dart' as io;
 
 import 'package:flutter/foundation.dart';
-import 'package:mcp_dart/mcp_dart.dart';
+import 'package:mcp_dart/mcp_dart.dart'
+    if (dart.library.js_interop) '../core/mcp_dart_stub.dart';
 import 'package:tfc_mcp_server/tfc_mcp_server.dart'
+    if (dart.library.js_interop) 'package:tfc_mcp_server/tfc_mcp_server_web.dart'
     show
         TfcMcpServer,
         McpConfig,
@@ -119,7 +121,7 @@ class McpBridgeNotifier extends ChangeNotifier {
     try {
       _proposalController.add(jsonEncode(wrapped));
     } catch (e) {
-      io.stderr.writeln('McpBridgeNotifier._onProposal: failed to emit: $e');
+      debugPrint('McpBridgeNotifier._onProposal: failed to emit: $e');
     }
   }
 
@@ -297,7 +299,7 @@ class McpBridgeNotifier extends ChangeNotifier {
         connectionState: McpConnectionState.error,
         error: e.toString(),
       ));
-      io.stderr.writeln('McpBridgeNotifier: Failed to connect in-process: $e');
+      debugPrint('McpBridgeNotifier: Failed to connect in-process: $e');
       // Clean up partial connection
       _cleanupInProcessResources();
     }
@@ -372,7 +374,7 @@ class McpBridgeNotifier extends ChangeNotifier {
         connectionState: McpConnectionState.error,
         error: e.toString(),
       ));
-      io.stderr.writeln('McpBridgeNotifier: Failed to connect: $e');
+      debugPrint('McpBridgeNotifier: Failed to connect: $e');
       // Clean up partial connection
       _client = null;
       try {
@@ -449,7 +451,7 @@ class McpBridgeNotifier extends ChangeNotifier {
         await _transport?.close();
       }
     } catch (e) {
-      io.stderr.writeln('McpBridgeNotifier: Error during disconnect: $e');
+      debugPrint('McpBridgeNotifier: Error during disconnect: $e');
     }
 
     _client = null;
@@ -590,7 +592,7 @@ class McpBridgeNotifier extends ChangeNotifier {
         connectionState: McpConnectionState.error,
         error: e.toString(),
       ));
-      io.stderr.writeln('McpBridgeNotifier: Failed to start SSE server: $e');
+      debugPrint('McpBridgeNotifier: Failed to start SSE server: $e');
     }
   }
 
@@ -604,7 +606,7 @@ class McpBridgeNotifier extends ChangeNotifier {
     try {
       await _sseServer.stop();
     } catch (e) {
-      io.stderr.writeln('McpBridgeNotifier: Error stopping SSE server: $e');
+      debugPrint('McpBridgeNotifier: Error stopping SSE server: $e');
     }
     // Preserve the in-process bridge state when stopping the SSE server.
     // Only reset to initial if there is no in-process connection alive.
