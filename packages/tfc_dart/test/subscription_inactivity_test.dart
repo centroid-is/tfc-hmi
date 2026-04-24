@@ -1,3 +1,4 @@
+@Tags(['integration'])
 // TODO: These tests belong in the open62541_dart bindings package, not here.
 // They test raw OPC UA subscription/monitor behaviour (Inactivity,
 // SubscriptionDeleted, SecureChannelClosed) using a real Server + Client.
@@ -15,6 +16,7 @@ import 'dart:async';
 import 'dart:math';
 
 import 'package:open62541/open62541.dart';
+import 'package:tfc_dart/core/opcua_device_client.dart' show ClientWrapper;
 import 'package:tfc_dart/core/state_man.dart';
 import 'package:test/test.dart';
 

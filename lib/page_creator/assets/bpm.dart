@@ -12,7 +12,7 @@ import '../../providers/current_page_assets.dart';
 import '../../providers/database.dart';
 import '../../widgets/graph.dart';
 import 'package:tfc/converter/color_converter.dart';
-import 'package:tfc_dart/core/database.dart';
+import 'package:tfc_dart/tfc_dart.dart';
 
 part 'bpm.g.dart';
 
@@ -70,6 +70,7 @@ class BpmConfig extends BaseAsset {
 
   factory BpmConfig.fromJson(Map<String, dynamic> json) =>
       _$BpmConfigFromJson(json);
+  @override
   Map<String, dynamic> toJson() => _$BpmConfigToJson(this);
 
   @override
@@ -110,7 +111,7 @@ class _BpmConfigEditorState extends ConsumerState<_BpmConfigEditor> {
     final optionVars = pageAssets.whereType<OptionVariableConfig>().toList();
 
     return DropdownButtonFormField<String?>(
-      value: widget.config.intervalVariable,
+      initialValue: widget.config.intervalVariable,
       decoration: const InputDecoration(
         labelText: 'Interval Variable',
         helperText: 'Link to an OptionVariable to control interval',

@@ -1,5 +1,3 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:beamer/beamer.dart';
 import '../models/menu_item.dart';
@@ -229,7 +227,7 @@ void beamSafelyKids(BuildContext context, MenuItem item) {
   if (item.path != null) {
     context.beamToNamed(item.path.toString());
   } else {
-    stderr.writeln('Item pressed and navigated does not have a page $item');
+    debugPrint('Item pressed and navigated does not have a page $item');
     showDialog(
         context: context,
         builder: (BuildContext context) {

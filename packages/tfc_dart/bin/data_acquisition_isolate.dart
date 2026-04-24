@@ -4,9 +4,15 @@ import 'dart:isolate';
 import 'package:logger/logger.dart';
 import 'package:tfc_dart/core/collector.dart';
 import 'package:tfc_dart/core/database.dart';
-import 'package:tfc_dart/core/log_config.dart';
+import 'package:tfc_dart/core/m2400_device_client.dart';
 import 'package:tfc_dart/core/modbus_device_client.dart';
+import 'package:tfc_dart/core/opcua_device_client.dart';
 import 'package:tfc_dart/core/state_man.dart';
+
+class _TraceFilter extends LogFilter {
+  @override
+  bool shouldLog(LogEvent event) => true;
+}
 
 /// Configuration for spawning a DataAcquisition isolate.
 class DataAcquisitionIsolateConfig {
@@ -34,7 +40,7 @@ class DataAcquisitionIsolateConfig {
 @pragma('vm:entry-point')
 Future<void> dataAcquisitionIsolateEntry(
     DataAcquisitionIsolateConfig config) async {
-  initLogConfig();
+  Logger.defaultFilter = () => _TraceFilter();
   final logger = Logger();
 
   final dbConfig = DatabaseConfig.fromJson(config.dbConfigJson);
@@ -68,6 +74,16 @@ Future<void> dataAcquisitionIsolateEntry(
   final smConfig = StateManConfig(
       opcua: opcuaServers, jbtm: jbtmConfigs, modbus: modbusConfigs);
 
+  // Create OPC UA device clients
+  final opcuaClients = opcuaServers.isNotEmpty
+      ? [await OpcUaDeviceClientAdapter.create(
+          opcuaConfigs: opcuaServers,
+          keyMappings: keyMappings,
+          useIsolate: false, // Already in isolate, no need for nested isolates
+          alias: 'data_acq',
+        )]
+      : <DeviceClient>[];
+
   // Create M2400 device clients
   final m2400Clients = createM2400DeviceClients(jbtmConfigs);
 
@@ -75,12 +91,11 @@ Future<void> dataAcquisitionIsolateEntry(
   final modbusClients = buildModbusDeviceClients(modbusConfigs, keyMappings);
 
   // Combine all device clients
-  final deviceClients = [...m2400Clients, ...modbusClients];
+  final deviceClients = [...opcuaClients, ...m2400Clients, ...modbusClients];
 
   final stateMan = await StateMan.create(
     config: smConfig,
     keyMappings: keyMappings,
-    useIsolate: false, // Already in isolate, no need for nested isolates
     alias: 'data_acq',
     deviceClients: deviceClients,
   );

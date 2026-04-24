@@ -127,6 +127,23 @@ jobs:
         & "$env:PGBIN\createdb.exe" -U postgres -O testuser testdb
         & "$env:PGBIN\psql.exe" -U postgres -d testdb -c "CREATE EXTENSION IF NOT EXISTS timescaledb CASCADE;"
 
+    - name: Install Mosquitto natively (macOS)
+      if: runner.os == 'macOS'
+      run: |
+        brew install mosquitto
+        /opt/homebrew/opt/mosquitto/sbin/mosquitto -c packages/tfc_dart/test/integration/mosquitto.conf -d
+        sleep 2
+
+    - name: Install Mosquitto natively (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $url = "https://mosquitto.org/files/binary/win64/mosquitto-2.0.21-install-windows-x64.exe"
+        Invoke-WebRequest -Uri $url -OutFile mosquitto-install.exe
+        Start-Process -FilePath .\mosquitto-install.exe -ArgumentList "/S" -Wait
+        Start-Process -FilePath "C:\Program Files\mosquitto\mosquitto.exe" -ArgumentList "-c","packages\tfc_dart\test\integration\mosquitto.conf" -NoNewWindow
+        Start-Sleep -Seconds 2
+
     - name: Get dependencies
       working-directory: packages/tfc_dart
       run: dart pub get
@@ -135,6 +152,7 @@ jobs:
       working-directory: packages/tfc_dart
       env:
         TIMESCALEDB_EXTERNAL: ${{ matrix.timescaledb_external }}
+        MOSQUITTO_EXTERNAL: ${{ runner.os != 'Linux' && '1' || '' }}
       run: dart test
 
     - name: Upload test results

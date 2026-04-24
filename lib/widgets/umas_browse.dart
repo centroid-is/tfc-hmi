@@ -1,8 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:tfc_dart/core/umas_client.dart';
-import 'package:tfc_dart/core/umas_types.dart';
-import 'package:tfc_dart/core/state_man.dart';
-import 'package:tfc_dart/core/modbus_device_client.dart';
+import 'package:tfc_dart/tfc_dart.dart';
 
 import 'browse_panel.dart';
 

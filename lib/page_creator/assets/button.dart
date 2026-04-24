@@ -7,7 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:logger/logger.dart';
 import 'package:flutter_colorpicker/flutter_colorpicker.dart';
 import 'package:rxdart/rxdart.dart';
-import 'package:open62541/open62541.dart' show DynamicValue, NodeId;
+import 'package:tfc_dart/core/dynamic_value.dart' show DynamicValue, NodeId;
 
 import 'common.dart';
 import 'icon.dart'; // Reuse IconConfig + IconAsset
@@ -141,6 +141,7 @@ class ButtonConfig extends BaseAsset {
 
   factory ButtonConfig.fromJson(Map<String, dynamic> json) =>
       _$ButtonConfigFromJson(json);
+  @override
   Map<String, dynamic> toJson() => _$ButtonConfigToJson(this);
 }
 

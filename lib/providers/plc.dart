@@ -1,12 +1,15 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:tfc_dart/core/state_man.dart' show KeyMappings;
-import 'package:tfc_mcp_server/tfc_mcp_server.dart';
+import 'package:tfc_mcp_server/tfc_mcp_server.dart'
+    if (dart.library.js_interop) 'package:tfc_mcp_server/tfc_mcp_server_web.dart';
 
 import '../plc/plc_code_upload_service.dart';
 import 'server_database.dart';
 import 'state_man.dart';
 
-export 'package:tfc_mcp_server/tfc_mcp_server.dart' show PlcContextService, PlcContext;
+export 'package:tfc_mcp_server/tfc_mcp_server.dart'
+    if (dart.library.js_interop) 'package:tfc_mcp_server/tfc_mcp_server_web.dart'
+    show PlcContextService, PlcContext;
 
 /// Cached [DriftPlcCodeIndex] instance.
 ///

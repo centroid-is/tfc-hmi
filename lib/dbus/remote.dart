@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'dart:io';
+import 'package:tfc/core/platform_io.dart';
 
 import 'package:dbus/dbus.dart';
 import 'package:dartssh2/dartssh2.dart';

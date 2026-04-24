@@ -1,4 +1,3 @@
-import 'dart:ui' show Size;
 import 'dart:math' as math;
 
 import 'dart:convert';
@@ -8,12 +7,10 @@ import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import 'package:tfc_dart/core/state_man.dart';
-import 'package:tfc_dart/core/modbus_client_wrapper.dart' show ModbusDataType;
-import 'package:tfc_dart/core/collector.dart';
-import 'package:tfc_dart/core/database.dart';
-import 'package:tfc_dart/core/boolean_expression.dart';
-import 'package:jbtm/src/m2400.dart' show M2400RecordType;
+import 'package:tfc_dart/tfc_dart.dart';
+import 'package:jbtm/src/m2400.dart'
+    if (dart.library.js_interop) 'package:tfc_dart/core/web_stubs/jbtm_m2400_stub.dart'
+    show M2400RecordType;
 import '../../providers/state_man.dart';
 import '../../providers/preferences.dart';
 import '../../widgets/boolean_expression.dart';
@@ -96,7 +93,7 @@ abstract class Asset {
   Map<String, dynamic> toJson();
 }
 
-@JsonSerializable(createFactory: false, explicitToJson: true)
+@JsonSerializable(createFactory: false, createToJson: false, explicitToJson: true)
 abstract class BaseAsset implements Asset {
   @override
   String get assetName => variant;
@@ -454,9 +451,9 @@ class _KeySearchDialogState extends ConsumerState<KeySearchDialog> {
 }
 
 class _KeyFieldDialog extends StatefulWidget {
-  final String? initialValue;
+  const _KeyFieldDialog();
 
-  const _KeyFieldDialog({this.initialValue});
+  String? get initialValue => null;
 
   @override
   State<_KeyFieldDialog> createState() => _KeyFieldDialogState();
@@ -1251,9 +1248,9 @@ class LayoutRotatedBox extends SingleChildRenderObjectWidget {
   final double angle;
   const LayoutRotatedBox({
     required this.angle,
-    Widget? child,
-    Key? key,
-  }) : super(key: key, child: child);
+    super.child,
+    super.key,
+  });
 
   @override
   RenderObject createRenderObject(BuildContext context) {

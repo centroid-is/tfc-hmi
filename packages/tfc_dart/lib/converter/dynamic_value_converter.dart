@@ -2,8 +2,7 @@ import 'dart:collection';
 
 import 'package:json_annotation/json_annotation.dart';
 
-import 'package:open62541/open62541.dart'
-    show DynamicValue, NodeId, LocalizedText, EnumField;
+import '../core/dynamic_value.dart';
 
 // JSON converter for DynamicValue
 class DynamicValueConverter implements JsonConverter<DynamicValue, dynamic> {

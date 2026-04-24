@@ -40,7 +40,7 @@ dependencies:
     # path: ../../open62541_dart
     git:
       url: https://github.com/centroid-is/open62541_dart.git
-      ref: main
+      ref: make-dynamic-value-pure-dart
   tfc:
     path: ../
   flutter_riverpod: ^2.6.1
@@ -55,7 +55,11 @@ dependencies:
   centroidx_upgrader:
     path: ../packages/centroidx_upgrader
   marionette_flutter: ^0.4.0
-
+  font_awesome_flutter: any
+  mcp_dart: any
+  tfc_dart:
+    path: ../packages/tfc_dart
+  pdfrx: any
 dev_dependencies:
   flutter_native_splash: ^2.4.6
   flutter_test:
@@ -115,7 +119,7 @@ dependency_overrides:
   open62541:
     git:
       url: https://github.com/centroid-is/open62541_dart.git
-      ref: main
+      ref: make-dynamic-value-pure-dart
   postgres:
     git:
       url: https://github.com/centroid-is/postgresql-dart.git

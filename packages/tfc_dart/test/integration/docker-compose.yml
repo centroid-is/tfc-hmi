@@ -9,3 +9,13 @@ services:
       - POSTGRES_PASSWORD=testpass
     ports:
       - 5432:5432
+
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: test-mosquitto
+    restart: unless-stopped
+    ports:
+      - "1883:1883"
+      - "9001:9001"
+    volumes:
+      - ./mosquitto.conf:/mosquitto/config/mosquitto.conf
