@@ -12,7 +12,7 @@ class FakeUmasClient extends UmasClient {
   FakeUmasClient(this._tree) : super(sendFn: (_) => throw UnimplementedError());
 
   @override
-  Future<List<UmasVariableTreeNode>> browse() async => _tree;
+  Future<List<UmasVariableTreeNode>> browse({int maxDepth = 6}) async => _tree;
 }
 
 /// Builds a sample variable tree for testing:
