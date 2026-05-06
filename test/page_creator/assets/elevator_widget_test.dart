@@ -43,10 +43,17 @@ void main() {
       final config = ElevatorConfig(positionKey: '');
       await tester.pumpWidget(wrap(Elevator(config: config)));
       await tester.pump(Duration.zero);
-      final painter =
-          tester.widget<CustomPaint>(find.byType(CustomPaint).first).painter;
-      expect(painter, isA<ElevatorPainter>());
-      expect((painter as ElevatorPainter).isStale, isTrue);
+      // Descend into the Elevator subtree so we don't pick up the
+      // CustomPaint instances belonging to the MaterialApp chrome
+      // (Scaffold / Overlay), which have no painter set.
+      final cp = tester.widget<CustomPaint>(
+        find.descendant(
+          of: find.byType(Elevator),
+          matching: find.byType(CustomPaint),
+        ),
+      );
+      expect(cp.painter, isA<ElevatorPainter>());
+      expect((cp.painter as ElevatorPainter).isStale, isTrue);
     });
   });
 }
