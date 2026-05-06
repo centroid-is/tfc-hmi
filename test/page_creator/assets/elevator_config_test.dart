@@ -278,4 +278,130 @@ void main() {
       expect(elevator.children, isEmpty); // ELEV-18 surface: empty in Phase 2
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // allKeys flat-map (ELEV-13)
+  //
+  // Locks the contract: ElevatorConfig.allKeys returns positionKey (if
+  // non-empty) concatenated with every child's allKeys flat-mapped, with
+  // duplicates removed. This is required because the default
+  // BaseAsset.allKeys (common.dart) only introspects top-level JSON field
+  // names and does NOT recurse into the children wrapper list — so without
+  // an override, alarms/collectors silently miss every key configured on
+  // a child asset (ARCHITECTURE Anti-Pattern 6).
+  //
+  // Sensor field names hardcoded from sensor.dart (Phase 1):
+  //   - detectionKey, risingEdgeDelayKey, fallingEdgeDelayKey
+  // ---------------------------------------------------------------------------
+  group('allKeys flat-map (ELEV-13)', () {
+    test('empty config returns empty list (back-compat)', () {
+      // Default ElevatorConfig: positionKey='', children=[]. The allKeys
+      // result must be empty — locking back-compat for Phase-2 saved pages
+      // that have no children and no positionKey configured yet.
+      final cfg = ElevatorConfig();
+      expect(cfg.allKeys, isEmpty);
+    });
+
+    test('positionKey only — no children', () {
+      // Trivial case: only positionKey set. The override must include it.
+      final cfg = ElevatorConfig(positionKey: 'lift.position');
+      expect(cfg.allKeys, equals(['lift.position']));
+    });
+
+    test('one Sensor child surfaces all sensor keys', () {
+      // The critical RED case: default BaseAsset.allKeys does NOT recurse
+      // into the children list, so without the override the sensor's
+      // detection/risingEdgeDelay/fallingEdgeDelay keys are dropped.
+      final cfg = ElevatorConfig(
+        positionKey: 'lift.pos',
+        children: [
+          ElevatorChildEntry(
+            child: SensorConfig(
+              detectionKey: 'sensor.detect',
+              risingEdgeDelayKey: 'sensor.rising',
+              fallingEdgeDelayKey: 'sensor.falling',
+            ),
+          ),
+        ],
+      );
+      expect(
+        cfg.allKeys,
+        unorderedEquals(<String>[
+          'lift.pos',
+          'sensor.detect',
+          'sensor.rising',
+          'sensor.falling',
+        ]),
+      );
+    });
+
+    test('multiple children flat-map all keys, parent first', () {
+      // Ordering rule per CONTEXT §Editor & allKeys:
+      //   [positionKey?, ...children[0].allKeys, ...children[1].allKeys, ...]
+      final childA = SensorConfig(
+        detectionKey: 'a.detect',
+        risingEdgeDelayKey: 'a.rising',
+        fallingEdgeDelayKey: 'a.falling',
+      );
+      final childB = SensorConfig(
+        detectionKey: 'b.detect',
+        risingEdgeDelayKey: 'b.rising',
+        fallingEdgeDelayKey: 'b.falling',
+      );
+      final cfg = ElevatorConfig(
+        positionKey: 'lift.pos',
+        children: [
+          ElevatorChildEntry(child: childA),
+          ElevatorChildEntry(child: childB),
+        ],
+      );
+      // Parent positionKey appears first.
+      expect(cfg.allKeys.first, 'lift.pos');
+      // Length: positionKey + every key from both children, no truncation.
+      expect(
+        cfg.allKeys.length,
+        1 + childA.allKeys.length + childB.allKeys.length,
+      );
+      // All expected keys present (set semantics — order beyond first is
+      // implementation-incidental within insertion order).
+      expect(
+        cfg.allKeys,
+        unorderedEquals(<String>[
+          'lift.pos',
+          ...childA.allKeys,
+          ...childB.allKeys,
+        ]),
+      );
+    });
+
+    test('duplicate keys are deduplicated', () {
+      // Same key configured on parent positionKey AND a child detectionKey
+      // must appear exactly once in the result — locks the dedup invariant
+      // (T-03-06 mitigation).
+      final cfg = ElevatorConfig(
+        positionKey: 'shared',
+        children: [
+          ElevatorChildEntry(
+            child: SensorConfig(detectionKey: 'shared'),
+          ),
+        ],
+      );
+      expect(cfg.allKeys.where((k) => k == 'shared').length, 1);
+    });
+
+    test('empty positionKey is filtered out', () {
+      // A blank positionKey must NOT appear in the result — alarms/collectors
+      // would otherwise try to subscribe to '' (T-03-06 mitigation).
+      final cfg = ElevatorConfig(
+        positionKey: '',
+        children: [
+          ElevatorChildEntry(
+            child: SensorConfig(detectionKey: 'd'),
+          ),
+        ],
+      );
+      expect(cfg.allKeys, isNot(contains('')));
+      expect(cfg.allKeys, contains('d'));
+    });
+  });
 }
