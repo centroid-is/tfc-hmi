@@ -1,0 +1,170 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import 'package:tfc/page_creator/assets/elevator.dart';
+import 'package:tfc/page_creator/assets/elevator_painter.dart';
+
+void main() {
+  Widget wrap(Widget child) => ProviderScope(
+        child: MaterialApp(
+          home: Scaffold(
+            body: Center(
+              child: SizedBox(width: 200, height: 300, child: child),
+            ),
+          ),
+        ),
+      );
+
+  group('Tap to configure', () {
+    testWidgets('tap opens placeholder config dialog', (tester) async {
+      final config = ElevatorConfig();
+      await tester.pumpWidget(wrap(Elevator(config: config)));
+      await tester.pump(Duration.zero);
+      await tester.tap(find.byType(GestureDetector).first);
+      await tester.pump();
+      expect(find.byType(AlertDialog), findsOneWidget);
+      expect(find.text('Configure Elevator'), findsOneWidget);
+    });
+
+    testWidgets('GestureDetector exists with HitTestBehavior.opaque',
+        (tester) async {
+      final config = ElevatorConfig();
+      await tester.pumpWidget(wrap(Elevator(config: config)));
+      await tester.pump(Duration.zero);
+      // Find the GestureDetector child of the Elevator subtree.
+      final gd = tester.widget<GestureDetector>(find.byType(GestureDetector).first);
+      expect(gd.behavior, HitTestBehavior.opaque);
+    });
+  });
+
+  group('Stale paths', () {
+    testWidgets('empty positionKey → painter.isStale=true', (tester) async {
+      final config = ElevatorConfig(positionKey: '');
+      await tester.pumpWidget(wrap(Elevator(config: config)));
+      await tester.pump(Duration.zero);
+      // Descend into the Elevator subtree so we don't pick up the
+      // CustomPaint instances belonging to the MaterialApp chrome
+      // (Scaffold / Overlay), which have no painter set.
+      final cp = tester.widget<CustomPaint>(
+        find.descendant(
+          of: find.byType(Elevator),
+          matching: find.byType(CustomPaint),
+        ),
+      );
+      expect(cp.painter, isA<ElevatorPainter>());
+      expect((cp.painter as ElevatorPainter).isStale, isTrue);
+    });
+  });
+
+  group('Stream lifecycle (Pitfall 2)', () {
+    testWidgets('positionStream is non-null when positionKey is set',
+        (tester) async {
+      final config = ElevatorConfig(positionKey: '/elev/01/position');
+      await tester.pumpWidget(wrap(Elevator(config: config)));
+      await tester.pump(Duration.zero);
+      final state = tester.state<State<Elevator>>(find.byType(Elevator))
+          as dynamic;
+      expect(state.debugPositionStream, isNotNull);
+    });
+
+    testWidgets('100 rebuilds with same positionKey: stream identity preserved',
+        (tester) async {
+      final config = ElevatorConfig(positionKey: '/elev/01/position');
+      await tester.pumpWidget(wrap(Elevator(config: config)));
+      await tester.pump(Duration.zero);
+      final state = tester.state<State<Elevator>>(find.byType(Elevator))
+          as dynamic;
+      final streamA = state.debugPositionStream;
+      for (int i = 0; i < 100; i++) {
+        await tester.pumpWidget(wrap(Elevator(config: config)));
+      }
+      final streamB = state.debugPositionStream;
+      expect(identical(streamA, streamB), isTrue,
+          reason:
+              'positionStream must not be re-created across rebuilds with same positionKey (Pitfall 2)');
+    });
+
+    testWidgets('changing positionKey re-hoists stream (different identity)',
+        (tester) async {
+      final configA = ElevatorConfig(positionKey: '/elev/01/position');
+      final configB = ElevatorConfig(positionKey: '/elev/02/position');
+      await tester.pumpWidget(wrap(Elevator(config: configA)));
+      await tester.pump(Duration.zero);
+      final state = tester.state<State<Elevator>>(find.byType(Elevator))
+          as dynamic;
+      final streamA = state.debugPositionStream;
+      await tester.pumpWidget(wrap(Elevator(config: configB)));
+      await tester.pump(Duration.zero);
+      final streamB = state.debugPositionStream;
+      expect(identical(streamA, streamB), isFalse,
+          reason:
+              'positionStream must be re-hoisted when positionKey changes');
+    });
+
+    testWidgets('unmount disposes ValueNotifier and cancels subscription',
+        (tester) async {
+      final config = ElevatorConfig(positionKey: '/elev/01/position');
+      await tester.pumpWidget(wrap(Elevator(config: config)));
+      await tester.pump(Duration.zero);
+      // Replace with empty widget — forces unmount and dispose.
+      await tester.pumpWidget(wrap(const SizedBox()));
+      await tester.pump(Duration.zero);
+      // No exceptions during unmount means dispose ran cleanly. The
+      // framework will throw "ValueNotifier was disposed" if a listener
+      // tries to read after dispose; the absence of exceptions here is
+      // the regression guard.
+      expect(tester.takeException(), isNull);
+    });
+  });
+
+  group('Rotation', () {
+    testWidgets('coordinates.angle=90° applied via LayoutRotatedBox',
+        (tester) async {
+      final config = ElevatorConfig(positionKey: '');
+      config.coordinates.angle = 90.0;
+      await tester.pumpWidget(wrap(Elevator(config: config)));
+      await tester.pump(Duration.zero);
+      // LayoutRotatedBox lives in lib/page_creator/assets/common.dart;
+      // verify presence via runtimeType lookup (the type is private to
+      // the assets layer — we don't import it directly here to mirror
+      // the conveyor_gate_test.dart precedent).
+      final lrb = find.byWidgetPredicate(
+        (w) => w.runtimeType.toString() == 'LayoutRotatedBox',
+      );
+      expect(lrb, findsOneWidget);
+    });
+  });
+
+  group('Animation pipeline (ELEV-06)', () {
+    testWidgets('TweenAnimationBuilder<double> exists in widget tree',
+        (tester) async {
+      final config = ElevatorConfig(positionKey: '');
+      await tester.pumpWidget(wrap(Elevator(config: config)));
+      await tester.pump(Duration.zero);
+      expect(find.byType(TweenAnimationBuilder<double>), findsOneWidget);
+    });
+
+    testWidgets('TweenAnimationBuilder duration matches config.tweenDurationMs',
+        (tester) async {
+      final config = ElevatorConfig(tweenDurationMs: 500);
+      await tester.pumpWidget(wrap(Elevator(config: config)));
+      await tester.pump(Duration.zero);
+      final tab = tester.widget<TweenAnimationBuilder<double>>(
+        find.byType(TweenAnimationBuilder<double>),
+      );
+      expect(tab.duration, const Duration(milliseconds: 500));
+    });
+
+    testWidgets('default tweenDurationMs=250 → duration=250ms',
+        (tester) async {
+      final config = ElevatorConfig();
+      await tester.pumpWidget(wrap(Elevator(config: config)));
+      await tester.pump(Duration.zero);
+      final tab = tester.widget<TweenAnimationBuilder<double>>(
+        find.byType(TweenAnimationBuilder<double>),
+      );
+      expect(tab.duration, const Duration(milliseconds: 250));
+    });
+  });
+}
