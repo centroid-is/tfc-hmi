@@ -28,4 +28,20 @@ void main() {
       expect(platformOffsetTop(1.0, 100.0, 100.0), 0.0);
     });
   });
+
+  group('platformProgress', () {
+    test('rawValue=0.0 -> 0.0', () => expect(platformProgress(0.0), 0.0));
+    test('rawValue=50.0 -> 0.5', () => expect(platformProgress(50.0), 0.5));
+    test('rawValue=100.0 -> 1.0', () => expect(platformProgress(100.0), 1.0));
+    test('rawValue=-5.0 (low OOR) -> 0.0 (clamped)', () =>
+        expect(platformProgress(-5.0), 0.0));
+    test('rawValue=125.0 (high OOR) -> 1.0 (clamped)', () =>
+        expect(platformProgress(125.0), 1.0));
+    test('rawValue=NaN -> 0.0 (defensive)', () =>
+        expect(platformProgress(double.nan), 0.0));
+    test('rawValue=+Infinity -> 1.0 (clamped)', () =>
+        expect(platformProgress(double.infinity), 1.0));
+    test('rawValue=-Infinity -> 0.0 (clamped)', () =>
+        expect(platformProgress(double.negativeInfinity), 0.0));
+  });
 }
