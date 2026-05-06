@@ -85,7 +85,7 @@
 /// Resume signal: report "approved" or describe issues for triage.
 library;
 
-import 'dart:io' show File;
+import 'dart:io' show File, Platform;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -576,6 +576,101 @@ void main() {
               'Elevator Stack must use Clip.none so children may extend '
               'outside the elevator bbox during translation '
               '(D-CONTEXT §Child Layout & Identity).');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Goldens — elevator + Sensor + Conveyor children at progress {0, 0.5, 1.0}
+  //
+  // QUAL-03 lock: 3 PNG goldens captured deterministically on macOS via
+  // RepaintBoundary. The harness uses positionKey='' so the painter
+  // renders in its stale (grey) palette — this avoids any Theme /
+  // primary-colour dependency in the captured pixels (Pitfall 6
+  // determinism). The progress is driven directly through the
+  // `debugProgress` test seam, so no StateMan stub is required.
+  //
+  // Skipped on non-macOS to mirror sensor_painter_test.dart and
+  // conveyor_gate_golden_test.dart (the project's locked golden
+  // platform-skip convention).
+  // ---------------------------------------------------------------------------
+  group('Goldens — elevator with children at progress {0, 0.5, 1.0} (QUAL-03)',
+      skip: !Platform.isMacOS ? 'Golden tests only run on macOS' : null, () {
+    const goldenKey = Key('elevator_with_children_golden');
+
+    Future<void> pumpElevatorAtProgress(
+      WidgetTester tester,
+      double targetProgress,
+    ) async {
+      // Sensors and conveyors get explicit sizes so they're visible in
+      // the captured pixels (the BaseAsset 0.03×0.03 default is too
+      // small to be meaningful in a 200×300 bbox).
+      final sensor = SensorConfig.preview()
+        ..size = const RelativeSize(width: 0.35, height: 0.18);
+      final conveyor = ConveyorConfig.preview()
+        ..size = const RelativeSize(width: 0.35, height: 0.18);
+
+      final config = ElevatorConfig(
+        positionKey: '',
+        children: [
+          ElevatorChildEntry(
+              id: 'sensor-fixed', offsetX: 0.3, child: sensor),
+          ElevatorChildEntry(
+              id: 'conveyor-fixed', offsetX: 0.7, child: conveyor),
+        ],
+      );
+
+      await tester.pumpWidget(
+        ProviderScope(
+          child: MaterialApp(
+            home: Scaffold(
+              body: Center(
+                child: RepaintBoundary(
+                  key: goldenKey,
+                  child: SizedBox(
+                    width: 200,
+                    height: 300,
+                    child: Elevator(config: config),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump(Duration.zero);
+
+      // Drive progress to target via the debugProgress test seam, then
+      // settle the tween animation so the rendered _animProgress
+      // reaches the target deterministically.
+      final state =
+          tester.state<State<Elevator>>(find.byType(Elevator)) as dynamic;
+      final progress = state.debugProgress as ValueNotifier<double>;
+      progress.value = targetProgress;
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('progress 0.0', (tester) async {
+      await pumpElevatorAtProgress(tester, 0.0);
+      await expectLater(
+        find.byKey(goldenKey),
+        matchesGoldenFile('goldens/elevator_with_children_progress_0.png'),
+      );
+    });
+
+    testWidgets('progress 0.5', (tester) async {
+      await pumpElevatorAtProgress(tester, 0.5);
+      await expectLater(
+        find.byKey(goldenKey),
+        matchesGoldenFile('goldens/elevator_with_children_progress_50.png'),
+      );
+    });
+
+    testWidgets('progress 1.0', (tester) async {
+      await pumpElevatorAtProgress(tester, 1.0);
+      await expectLater(
+        find.byKey(goldenKey),
+        matchesGoldenFile('goldens/elevator_with_children_progress_100.png'),
+      );
     });
   });
 }
