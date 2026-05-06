@@ -36,6 +36,69 @@ void main() {
       expect(elevator.shouldRepaint(other), isTrue);
     });
   });
+
+  group('ElevatorPainter goldens', () {
+    Future<void> pumpElevator(
+      WidgetTester tester, {
+      required double progress,
+      required bool isStale,
+    }) async {
+      final notifier = ValueNotifier<double>(progress);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Center(
+              child: SizedBox(
+                width: 200,
+                height: 300,
+                child: CustomPaint(
+                  size: const Size(200, 300),
+                  painter: ElevatorPainter(
+                    progress: notifier,
+                    isStale: isStale,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      // Pin to a deterministic frame — no pumpAndSettle (Pitfall 6).
+      await tester.pump(Duration.zero);
+    }
+
+    testWidgets('stale.png', (tester) async {
+      await pumpElevator(tester, progress: 0.5, isStale: true);
+      await expectLater(
+        find.byType(CustomPaint).first,
+        matchesGoldenFile('goldens/elevator/stale.png'),
+      );
+    });
+
+    testWidgets('position_0.png', (tester) async {
+      await pumpElevator(tester, progress: 0.0, isStale: false);
+      await expectLater(
+        find.byType(CustomPaint).first,
+        matchesGoldenFile('goldens/elevator/position_0.png'),
+      );
+    });
+
+    testWidgets('position_50.png', (tester) async {
+      await pumpElevator(tester, progress: 0.5, isStale: false);
+      await expectLater(
+        find.byType(CustomPaint).first,
+        matchesGoldenFile('goldens/elevator/position_50.png'),
+      );
+    });
+
+    testWidgets('position_100.png', (tester) async {
+      await pumpElevator(tester, progress: 1.0, isStale: false);
+      await expectLater(
+        find.byType(CustomPaint).first,
+        matchesGoldenFile('goldens/elevator/position_100.png'),
+      );
+    });
+  });
 }
 
 class _DummyPainter extends CustomPainter {
