@@ -882,9 +882,14 @@ void main() {
       await tester.pumpAndSettle();
 
       // Topmost-paint = 'B' (index 1). It is displayed at the TOP of the
-      // editor list (reversed convention) — so it's the FIRST tooltip in
-      // document order.
-      final upBtns = find.byTooltip('Move forward (paint on top)');
+      // editor list (reversed convention) — so it's the FIRST IconButton
+      // with the Move-forward tooltip in document order.
+      // `find.byTooltip` matches the Tooltip widget; walk up to the
+      // owning IconButton via `find.ancestor`.
+      final upBtns = find.ancestor(
+        of: find.byTooltip('Move forward (paint on top)'),
+        matching: find.byType(IconButton),
+      );
       expect(upBtns, findsNWidgets(2));
       final firstBtn = tester.widget<IconButton>(upBtns.first);
       expect(firstBtn.onPressed, isNull,
@@ -909,8 +914,13 @@ void main() {
 
       // Bottommost-paint = 'A' (index 0). It is displayed at the BOTTOM
       // of the editor list (reversed convention) — so it's the LAST
-      // tooltip in document order.
-      final downBtns = find.byTooltip('Move backward (paint behind)');
+      // IconButton with the Move-backward tooltip in document order.
+      // `find.byTooltip` matches the Tooltip widget; walk up to the
+      // owning IconButton via `find.ancestor`.
+      final downBtns = find.ancestor(
+        of: find.byTooltip('Move backward (paint behind)'),
+        matching: find.byType(IconButton),
+      );
       expect(downBtns, findsNWidgets(2));
       final lastBtn = tester.widget<IconButton>(downBtns.last);
       expect(lastBtn.onPressed, isNull,

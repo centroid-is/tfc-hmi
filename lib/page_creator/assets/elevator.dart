@@ -759,6 +759,29 @@ class _ElevatorConfigEditorState extends State<_ElevatorConfigEditor> {
     });
   }
 
+  /// Swaps `entry` with its `delta`-neighbour in `widget.config.children`.
+  /// `delta = +1` raises z (moves later in the list = paints on top).
+  /// `delta = -1` lowers z (moves earlier in the list = paints behind).
+  ///
+  /// Looks up the index by `entry.id` (not by widget order) so the handler
+  /// is robust against display reversal — the editor displays
+  /// `children.reversed`, but mutations are always on the underlying list.
+  /// No-op if the entry is missing or the swap target is out of bounds
+  /// (defensive — UI buttons disable at the boundary, but the handler is
+  /// the safety net per T-04-03-A).
+  void _onReorderChildPressed(ElevatorChildEntry entry, int delta) {
+    final list = widget.config.children;
+    final i = list.indexWhere((e) => e.id == entry.id);
+    if (i < 0) return;
+    final j = i + delta;
+    if (j < 0 || j >= list.length) return;
+    setState(() {
+      final tmp = list[i];
+      list[i] = list[j];
+      list[j] = tmp;
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final config = widget.config;
@@ -837,7 +860,23 @@ class _ElevatorConfigEditorState extends State<_ElevatorConfigEditor> {
                 style: Theme.of(context).textTheme.bodyMedium,
               )
             else
-              ...config.children.map((entry) {
+              // Display children in REVERSED order (Photoshop / Figma
+              // convention) — topmost paint (highest z =
+              // config.children[N-1]) appears at the TOP of the editor
+              // list. The actual index in config.children is computed
+              // from the display index so the reorder handler still
+              // mutates the underlying list correctly. Stack composition
+              // in build() iterates config.children directly, so
+              // reordering the list naturally re-orders paint order
+              // without touching the runtime widget.
+              ...config.children.reversed.toList().asMap().entries.map(
+                  (displayed) {
+                final displayIndex = displayed.key;
+                final entry = displayed.value;
+                final actualIndex =
+                    config.children.length - 1 - displayIndex;
+                final isTopmost = actualIndex == config.children.length - 1;
+                final isBottommost = actualIndex == 0;
                 return Card(
                   margin: const EdgeInsets.symmetric(vertical: 4),
                   child: Padding(
@@ -852,6 +891,23 @@ class _ElevatorConfigEditorState extends State<_ElevatorConfigEditor> {
                                 entry.child.displayName,
                                 style: Theme.of(context).textTheme.bodyMedium,
                               ),
+                            ),
+                            IconButton(
+                              icon: const Icon(Icons.arrow_upward, size: 20),
+                              tooltip: 'Move forward (paint on top)',
+                              onPressed: isTopmost
+                                  ? null
+                                  : () =>
+                                      _onReorderChildPressed(entry, 1),
+                            ),
+                            IconButton(
+                              icon:
+                                  const Icon(Icons.arrow_downward, size: 20),
+                              tooltip: 'Move backward (paint behind)',
+                              onPressed: isBottommost
+                                  ? null
+                                  : () =>
+                                      _onReorderChildPressed(entry, -1),
                             ),
                             IconButton(
                               icon: const Icon(Icons.edit, size: 20),
