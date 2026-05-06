@@ -3,6 +3,7 @@ import 'dart:math' show pi;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:open62541/open62541.dart' show DynamicValue;
@@ -164,19 +165,13 @@ class ElevatorConfig extends BaseAsset {
     return Elevator(config: this);
   }
 
-  /// Returns the body of the configure dialog. Plan 02-04 ships a
-  /// placeholder so the tap-to-configure widget test has SOMETHING to
-  /// assert against (`find.byType(AlertDialog)` + the `'Configure
-  /// Elevator'` title). Plan 02-05 will replace this body with the real
-  /// `_ElevatorConfigEditor` and update the tap test from
-  /// `find.byType(AlertDialog)` to a unique-to-editor finder
-  /// (precedent: Plan 01-05 swapped to `SegmentedButton<SensorKind>`).
+  /// Returns the body of the configure dialog. The dialog chrome is
+  /// applied by `_ElevatorState._openConfigDialog` (a `Dialog`) so the
+  /// `TextFormField`/`KeyField`/etc. inside the editor find a `Material`
+  /// ancestor — mirrors the `Sensor` precedent.
   @override
   Widget configure(BuildContext context) {
-    return const AlertDialog(
-      title: Text('Configure Elevator'),
-      content: Text('Replaced by Plan 02-05 with the real editor.'),
-    );
+    return _ElevatorConfigEditor(config: this);
   }
 }
 
@@ -443,6 +438,119 @@ class _ElevatorState extends ConsumerState<Elevator> {
               },
             );
           },
+        ),
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Config editor — the body of the configure dialog.
+// ---------------------------------------------------------------------------
+
+/// Editor body for `ElevatorConfig`. Mirrors `_SensorConfigEditor` but
+/// skips colour/kind/preview controls (elevator has only one variant
+/// and no per-instance colour overrides in this phase). The "Children"
+/// section is a read-only placeholder in Phase 2 — the schema is locked
+/// (Plan 02-02) but the list-management UI lands in Phase 3.
+///
+/// All edits are mutations on the live `widget.config` instance — the
+/// page editor reuses the same config object across rebuilds, so the
+/// parent's page model picks the changes up automatically (see
+/// `Elevator.didUpdateWidget` for the matching invariant on the runtime
+/// side — re-hoists position stream when `positionKey` changes).
+class _ElevatorConfigEditor extends StatefulWidget {
+  final ElevatorConfig config;
+  const _ElevatorConfigEditor({required this.config});
+
+  @override
+  State<_ElevatorConfigEditor> createState() => _ElevatorConfigEditorState();
+}
+
+class _ElevatorConfigEditorState extends State<_ElevatorConfigEditor> {
+  late TextEditingController _tweenController;
+
+  @override
+  void initState() {
+    super.initState();
+    _tweenController =
+        TextEditingController(text: widget.config.tweenDurationMs.toString());
+  }
+
+  @override
+  void dispose() {
+    _tweenController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final config = widget.config;
+
+    return Container(
+      width: 360,
+      padding: const EdgeInsets.all(24), // mirrors sensor.dart UI-SPEC lg = 24
+      child: SingleChildScrollView(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // -- Position State Key (ELEV-04 surface) --
+            KeyField(
+              label: 'Position State Key (0-100%)',
+              initialValue: config.positionKey,
+              onChanged: (v) => setState(() => config.positionKey = v),
+            ),
+            const SizedBox(height: 16),
+
+            // -- Tween Duration (ms) --
+            TextFormField(
+              controller: _tweenController,
+              keyboardType: TextInputType.number,
+              inputFormatters: [
+                FilteringTextInputFormatter.digitsOnly,
+              ],
+              decoration: const InputDecoration(
+                labelText: 'Tween Duration (ms)',
+                hintText: '250',
+                helperText: 'Smoothing for platform position changes',
+              ),
+              onChanged: (v) {
+                final parsed = int.tryParse(v);
+                if (parsed != null && parsed >= 0) {
+                  setState(() => config.tweenDurationMs = parsed);
+                }
+                // Empty / non-numeric input: leave config.tweenDurationMs
+                // unchanged so the runtime keeps the last valid value.
+              },
+            ),
+            const SizedBox(height: 16),
+
+            // -- Size --
+            SizeField(
+              initialValue: config.size,
+              onChanged: (v) => setState(() => config.size = v),
+            ),
+            const SizedBox(height: 16),
+
+            // -- Coordinates (includes angle slider — enableAngle: true,
+            //    same as Sensor / Conveyor) --
+            CoordinatesField(
+              initialValue: config.coordinates,
+              onChanged: (c) => setState(() => config.coordinates = c),
+              enableAngle: true,
+            ),
+            const SizedBox(height: 16),
+            const Divider(),
+
+            // -- Children (read-only placeholder; Phase 3 replaces with
+            //    add/edit/delete UI per the conveyor.dart precedent) --
+            Text('Children', style: Theme.of(context).textTheme.titleSmall),
+            const SizedBox(height: 8),
+            Text(
+              'Children: ${config.children.length} (managed in Phase 3)',
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
+          ],
         ),
       ),
     );
