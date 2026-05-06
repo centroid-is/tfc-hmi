@@ -53,14 +53,17 @@ Decimal phases appear between their surrounding integers in numeric order.
 ### Phase 3: Elevator Child Embedding
 **Goal**: Operators can attach sensor and conveyor child assets to the elevator via a dropdown in the config dialog, edit and remove them through the same dialog, and watch every child physically ride the platform up and down — with stable widget identity across position changes, polymorphic `BaseAsset.build`, and the elevator's `allKeys` override surfacing nested keys to alarms and collectors.
 **Depends on**: Phase 2 (also requires Phase 1's Sensor for the integration golden test)
-**Requirements**: ELEV-07, ELEV-08, ELEV-09, ELEV-10, ELEV-11, ELEV-12, ELEV-13, QUAL-03
+**Requirements**: ELEV-07, ELEV-08, ELEV-09, ELEV-10, ELEV-11, ELEV-12, ELEV-13, ELEV-19, QUAL-03, QUAL-08
 **Success Criteria** (what must be TRUE):
   1. Operator can open the elevator config dialog, add a child via a dropdown filtered to Sensor and Conveyor kinds, set its lateral platform offset (0..1), and see it appear on the platform; existing children can be edited or removed via the same dialog.
   2. As the platform's Y position changes, every assigned child's `Positioned.top` follows in real time, the child renders via its own polymorphic `BaseAsset.build(context)` (the elevator never switches on child runtime type), and the child's `State.initState` fires exactly once per page load — never on position changes.
   3. Each child entry carries a stable UUID used as a `ValueKey<String>`, ensuring widget identity (and therefore stream subscriptions, animation controllers, and dialog state) survives every position change unchanged.
   4. The elevator's `allKeys` override flat-maps each child's `allKeys` plus its own `positionKey`, so alarms and collectors discover nested state keys without the operator having to register them separately.
   5. Golden tests cover the elevator at progress {0.0, 0.5, 1.0} with one Sensor and one Conveyor child attached, demonstrating end-to-end correctness of identity, layout, and translation.
-**Plans**: TBD
+**Plans**: 3 plans
+- [ ] 03-01-PLAN.md — Stack composition + Positioned children with ValueKey + hit-test-through-translation widget tests + 3 integration goldens (TDD)
+- [ ] 03-02-PLAN.md — ElevatorConfig.allKeys override flat-mapping children's keys (TDD)
+- [ ] 03-03-PLAN.md — Editor add/edit/remove/offsetX child management UI (filtered to Sensor + Conveyor)
 **UI hint**: yes
 
 ### Phase 4: Polish, Error UX & CI Hardening
