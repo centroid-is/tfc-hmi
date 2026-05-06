@@ -812,6 +812,198 @@ void main() {
   });
 
   // ---------------------------------------------------------------------------
+  // Phase 4 — Editor z-order reordering (Plan 04-03)
+  //
+  // Locks the editor surface for child z-order reorder controls (ELEV-08
+  // extension; QUAL-08 TDD discipline).
+  //
+  // CONVENTION (locked by user): the editor list is REVERSED relative to
+  //   config.children — topmost-paint child appears at the TOP of the
+  //   editor list (Photoshop / Figma). Up arrow raises z (later in
+  //   config.children, paints on top). Down arrow lowers z (earlier in
+  //   config.children, paints behind).
+  //
+  // Stack semantics (Flutter): config.children[0] is painted first
+  //   (lowest z); config.children[N-1] is painted last (highest z).
+  // ---------------------------------------------------------------------------
+  group('Editor — child reorder (z-order)', () {
+    testWidgets(
+        'two children, tap "Move forward" on the bottommost-paint row swaps list order',
+        (tester) async {
+      final config = ElevatorConfig(
+        children: [
+          // index 0 = bottommost paint (lowest z); displayed at BOTTOM of
+          //   the editor list (Photoshop convention).
+          ElevatorChildEntry(id: 'A', child: SensorConfig.preview()),
+          // index 1 = topmost paint (highest z); displayed at TOP of the
+          //   editor list.
+          ElevatorChildEntry(id: 'B', child: ConveyorConfig.preview()),
+        ],
+      );
+      await tester.pumpWidget(wrap(Elevator(config: config)));
+      await tester.pump(Duration.zero);
+      await tester.tap(find.byType(GestureDetector).first);
+      await tester.pumpAndSettle();
+
+      // Find Move-forward IconButtons by tooltip and pick the one for
+      // child 'A' (Sensor). Since editor is reversed, Sensor (id='A',
+      // actualIndex=0) is the LAST 'Move forward' button in document
+      // order — display index 1 in a 2-row reversed list.
+      final upBtns = find.byTooltip('Move forward (paint on top)');
+      expect(upBtns, findsNWidgets(2),
+          reason: 'Each child row must have a Move-forward IconButton.');
+
+      // Tap the second one (the bottommost-paint child's row, displayed
+      // at the BOTTOM of the reversed editor list — that's child 'A').
+      await tester.ensureVisible(upBtns.last);
+      await tester.pumpAndSettle();
+      await tester.tap(upBtns.last);
+      await tester.pumpAndSettle();
+
+      // After swap: 'A' moved to higher index, 'B' moved to lower index.
+      expect(config.children[0].id, 'B',
+          reason: 'After moving A forward, B should now be at index 0.');
+      expect(config.children[1].id, 'A',
+          reason: 'After moving A forward, A should now be at index 1.');
+    });
+
+    testWidgets(
+        'topmost-paint child has "Move forward" disabled (onPressed == null)',
+        (tester) async {
+      final config = ElevatorConfig(
+        children: [
+          ElevatorChildEntry(id: 'A', child: SensorConfig.preview()),
+          ElevatorChildEntry(id: 'B', child: ConveyorConfig.preview()),
+        ],
+      );
+      await tester.pumpWidget(wrap(Elevator(config: config)));
+      await tester.pump(Duration.zero);
+      await tester.tap(find.byType(GestureDetector).first);
+      await tester.pumpAndSettle();
+
+      // Topmost-paint = 'B' (index 1). It is displayed at the TOP of the
+      // editor list (reversed convention) — so it's the FIRST tooltip in
+      // document order.
+      final upBtns = find.byTooltip('Move forward (paint on top)');
+      expect(upBtns, findsNWidgets(2));
+      final firstBtn = tester.widget<IconButton>(upBtns.first);
+      expect(firstBtn.onPressed, isNull,
+          reason:
+              'Topmost-paint child cannot be moved further forward — '
+              'its Move-forward button must be disabled.');
+    });
+
+    testWidgets(
+        'bottommost-paint child has "Move backward" disabled (onPressed == null)',
+        (tester) async {
+      final config = ElevatorConfig(
+        children: [
+          ElevatorChildEntry(id: 'A', child: SensorConfig.preview()),
+          ElevatorChildEntry(id: 'B', child: ConveyorConfig.preview()),
+        ],
+      );
+      await tester.pumpWidget(wrap(Elevator(config: config)));
+      await tester.pump(Duration.zero);
+      await tester.tap(find.byType(GestureDetector).first);
+      await tester.pumpAndSettle();
+
+      // Bottommost-paint = 'A' (index 0). It is displayed at the BOTTOM
+      // of the editor list (reversed convention) — so it's the LAST
+      // tooltip in document order.
+      final downBtns = find.byTooltip('Move backward (paint behind)');
+      expect(downBtns, findsNWidgets(2));
+      final lastBtn = tester.widget<IconButton>(downBtns.last);
+      expect(lastBtn.onPressed, isNull,
+          reason:
+              'Bottommost-paint child cannot be moved further backward — '
+              'its Move-backward button must be disabled.');
+    });
+
+    testWidgets(
+        'paint order in Stack matches list order; reordering swaps it',
+        (tester) async {
+      final config = ElevatorConfig(
+        positionKey: '',
+        children: [
+          ElevatorChildEntry(id: 'A', child: SensorConfig.preview()),
+          ElevatorChildEntry(id: 'B', child: ConveyorConfig.preview()),
+        ],
+      );
+      await tester.pumpWidget(wrap(Elevator(config: config)));
+      await tester.pump(Duration.zero);
+
+      // Locate the elevator's Stack and verify Sensor's KeyedSubtree
+      // ('A') comes BEFORE Conveyor's KeyedSubtree ('B') in document
+      // order — Stack child[0] paints first (lowest z), child[N-1]
+      // paints last (highest z).
+      List<String> idOrder() => find
+          .descendant(
+            of: find.byType(Elevator),
+            matching: find.byWidgetPredicate(
+              (w) =>
+                  w is KeyedSubtree &&
+                  (w.key == const ValueKey<String>('A') ||
+                      w.key == const ValueKey<String>('B')),
+            ),
+          )
+          .evaluate()
+          .map((e) => (e.widget as KeyedSubtree).key)
+          .map((k) => (k as ValueKey<String>).value)
+          .toList();
+
+      expect(idOrder(), ['A', 'B'],
+          reason:
+              'Initially: child A at index 0 paints first (lowest z); '
+              'child B at index 1 paints last (highest z).');
+
+      // Swap via direct list mutation — same effect the editor handler
+      // would produce. Pump to let the build run.
+      final tmp = config.children[0];
+      config.children[0] = config.children[1];
+      config.children[1] = tmp;
+      await tester.pumpWidget(wrap(Elevator(config: config)));
+      await tester.pump(Duration.zero);
+
+      expect(idOrder(), ['B', 'A'],
+          reason:
+              'After swap: B at index 0 paints first; A at index 1 paints last.');
+    });
+
+    testWidgets('reorder preserves keyed subtree identity (ValueKey)',
+        (tester) async {
+      final config = ElevatorConfig(
+        children: [
+          ElevatorChildEntry(id: 'A', child: SensorConfig.preview()),
+          ElevatorChildEntry(id: 'B', child: ConveyorConfig.preview()),
+        ],
+      );
+      await tester.pumpWidget(wrap(Elevator(config: config)));
+      await tester.pump(Duration.zero);
+      await tester.tap(find.byType(GestureDetector).first);
+      await tester.pumpAndSettle();
+
+      // Both ValueKey wrappers exist before reorder.
+      expect(find.byKey(const ValueKey<String>('A')), findsOneWidget);
+      expect(find.byKey(const ValueKey<String>('B')), findsOneWidget);
+
+      // Tap Move-forward on 'A' (last upBtn — bottommost-paint, displayed
+      // at bottom of reversed editor list).
+      final upBtns = find.byTooltip('Move forward (paint on top)');
+      await tester.ensureVisible(upBtns.last);
+      await tester.pumpAndSettle();
+      await tester.tap(upBtns.last);
+      await tester.pumpAndSettle();
+
+      // Both ValueKey wrappers still exist after reorder — identity
+      // preserved by the entry.id-based ValueKey contract (ELEV-12).
+      expect(find.byKey(const ValueKey<String>('A')), findsOneWidget,
+          reason: 'ValueKey<String>("A") wrapper must survive reorder.');
+      expect(find.byKey(const ValueKey<String>('B')), findsOneWidget,
+          reason: 'ValueKey<String>("B") wrapper must survive reorder.');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
   // Goldens — elevator + Sensor + Conveyor children at progress {0, 0.5, 1.0}
   //
   // QUAL-03 lock: 3 PNG goldens captured deterministically on macOS via
