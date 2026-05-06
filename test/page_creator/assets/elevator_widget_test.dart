@@ -455,13 +455,19 @@ void main() {
     testWidgets(
         'tap during translation lands on the child, opens child config dialog (ELEV-19, Pitfall 7)',
         (tester) async {
+      // SensorConfig with a generous size so the GestureDetector hit-target
+      // is a comfortable rectangle rather than the 0.03×0.03 default tiny
+      // box (which would leave the tap centre on a 6-pixel target — too
+      // brittle). The test locks the hit-test-through-translation
+      // contract, not painter-pixel coverage.
+      final sensor = SensorConfig.preview();
+      sensor.size = const RelativeSize(width: 0.4, height: 0.2);
+
       final config = ElevatorConfig(
         positionKey: '',
         children: [
           ElevatorChildEntry(
-              id: 'sensor-tap',
-              offsetX: 0.5,
-              child: SensorConfig.preview()),
+              id: 'sensor-tap', offsetX: 0.5, child: sensor),
         ],
       );
       await tester.pumpWidget(wrap(Elevator(config: config)));
@@ -479,10 +485,7 @@ void main() {
       // Tap the Sensor child — the tap should land on the Sensor's own
       // GestureDetector and open its dialog (locked KeyField label
       // 'Detection State Key' from sensor.dart:_SensorConfigEditor).
-      // warnIfMissed: false because the tween animation is mid-flight,
-      // and Flutter's Sensor sometimes doesn't perfectly cover the centre
-      // of the bbox; we let the tap dispatcher pick the right widget.
-      await tester.tap(find.byType(Sensor), warnIfMissed: false);
+      await tester.tap(find.byType(Sensor));
       await tester.pumpAndSettle();
 
       // Sensor's editor surface (locked).

@@ -1335,10 +1335,25 @@ class _RenderLayoutRotatedBox extends RenderProxyBox {
     if (child == null) return false;
 
     if (_angle == 0.0) {
+      // At zero rotation, the rotated box is a no-op proxy: forward the
+      // hit test to the child so descendant GestureDetectors receive
+      // taps. Without this, any GestureDetector mounted INSIDE a
+      // LayoutRotatedBox is unreachable — see Phase 3 Plan 01
+      // ELEV-19 / Pitfall 7 lock (children riding the elevator
+      // platform must continue receiving taps mid-translation).
+      // Without forwarding, the elevator's `LayoutRotatedBox` would
+      // swallow taps before the embedded Sensor/Conveyor children's
+      // own GestureDetectors could fire. We still add ourselves so
+      // that consumers wrapping `LayoutRotatedBox` in their own outer
+      // GestureDetector (Sensor.dart, Elevator.dart, Conveyor.dart)
+      // continue to receive taps at the painter's pixels.
       if (position.dx >= 0 &&
           position.dx <= child!.size.width &&
           position.dy >= 0 &&
           position.dy <= child!.size.height) {
+        // Probe the child first so deeper GestureDetectors record
+        // entries in the arena ahead of ours.
+        child!.hitTest(result, position: position);
         result.add(BoxHitTestEntry(this, position));
         return true;
       }
@@ -1357,6 +1372,11 @@ class _RenderLayoutRotatedBox extends RenderProxyBox {
         x0 <= child!.size.width &&
         y0 >= 0 &&
         y0 <= child!.size.height) {
+      // Forward the hit to the child in the child's local (un-rotated)
+      // coordinate frame. Without this, descendant GestureDetectors
+      // would never fire when the rotated box contains tappable
+      // children (mirrors the angle=0 fix above). See ELEV-19.
+      child!.hitTest(result, position: Offset(x0, y0));
       result.add(BoxHitTestEntry(this, position));
       return true;
     }
