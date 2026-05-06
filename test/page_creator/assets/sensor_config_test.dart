@@ -156,4 +156,35 @@ void main() {
       expect(keys, isNot(contains('PE-101A')));
     });
   });
+
+  group('sensorIsActive polarity inversion', () {
+    test(
+      'rawBool=true,  invert=false -> true',
+      () => expect(
+        sensorIsActive(rawBool: true, invertActivePolarity: false),
+        isTrue,
+      ),
+    );
+    test(
+      'rawBool=false, invert=false -> false',
+      () => expect(
+        sensorIsActive(rawBool: false, invertActivePolarity: false),
+        isFalse,
+      ),
+    );
+    test(
+      'rawBool=true,  invert=true  -> false',
+      () => expect(
+        sensorIsActive(rawBool: true, invertActivePolarity: true),
+        isFalse,
+      ),
+    );
+    test(
+      'rawBool=false, invert=true  -> true',
+      () => expect(
+        sensorIsActive(rawBool: false, invertActivePolarity: true),
+        isTrue,
+      ),
+    );
+  });
 }
