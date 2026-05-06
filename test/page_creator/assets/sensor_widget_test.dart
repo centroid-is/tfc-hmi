@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -159,6 +161,52 @@ void main() {
       );
       expect(rotated, isNotEmpty);
       expect(rotated.first.angle, 0.0);
+    });
+  });
+
+  group('Polarity through widget', () {
+    testWidgets(
+        'rawBool=true with invertActivePolarity=false yields isActive=true',
+        (tester) async {
+      // Use detectionKey '/k' to exercise the stream path; the test reads
+      // the @visibleForTesting helper directly so the widget tree never
+      // actually pumps a value (StateMan is unconfigured under ProviderScope
+      // with no overrides — its provider Future never completes in this
+      // synchronous test pump). The helper itself is pure.
+      final config = SensorConfig(
+        detectionKey: '/k',
+        invertActivePolarity: false,
+      );
+      await tester.pumpWidget(_wrap(
+        SizedBox(width: 80, height: 40, child: Sensor(config: config)),
+      ));
+      final dynamic state = tester.state(find.byType(Sensor));
+      expect(state.resolveIsActive(true), isTrue);
+      expect(state.resolveIsActive(false), isFalse);
+    });
+
+    testWidgets('invertActivePolarity=true flips both directions',
+        (tester) async {
+      final config = SensorConfig(
+        detectionKey: '/k',
+        invertActivePolarity: true,
+      );
+      await tester.pumpWidget(_wrap(
+        SizedBox(width: 80, height: 40, child: Sensor(config: config)),
+      ));
+      final dynamic state = tester.state(find.byType(Sensor));
+      expect(state.resolveIsActive(true), isFalse);
+      expect(state.resolveIsActive(false), isTrue);
+    });
+
+    test(
+        'Sensor widget file contains no AnimationController or Tween references (SENS-05 immediate-flip guard)',
+        () async {
+      final source =
+          await File('lib/page_creator/assets/sensor.dart').readAsString();
+      expect(source, isNot(contains('AnimationController')));
+      expect(source, isNot(contains('TweenAnimationBuilder')));
+      expect(source, isNot(contains('animateTo')));
     });
   });
 }
