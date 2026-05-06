@@ -86,6 +86,7 @@
 library;
 
 import 'dart:io' show File, Platform;
+import 'dart:math' show max;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -543,15 +544,56 @@ void main() {
               'Child Positioned.top must decrease as platform rises '
               '(progress 0 → 1) — ELEV-10.');
 
-      // Numerical: child's bottom edge sits on platform's top edge.
+      // Numerical: child's bottom edge sits on platform's top edge —
+      // unless the platform is so close to the bbox top that there is no
+      // room for the child above it, in which case the child clamps to
+      // top=0 (visual safety clamp introduced in Plan 04-02; see
+      // `_buildPositionedChild` in elevator.dart).
       // bbox is 200x300 (from `wrap`). platformH = 300 * 0.08 = 24.
       const bboxH = 300.0;
       const platformH = bboxH * kPlatformHeightFraction;
       const childH = 40.0;
-      final expectedTopAt0 = platformOffsetTop(0.0, bboxH, platformH) - childH;
-      final expectedTopAt1 = platformOffsetTop(1.0, bboxH, platformH) - childH;
+      final expectedTopAt0 =
+          max(0.0, platformOffsetTop(0.0, bboxH, platformH) - childH);
+      final expectedTopAt1 =
+          max(0.0, platformOffsetTop(1.0, bboxH, platformH) - childH);
       expect(topAt0, closeTo(expectedTopAt0, 1.0));
       expect(topAt1, closeTo(expectedTopAt1, 1.0));
+    });
+
+    testWidgets(
+        'children Positioned.top clamps to >= 0 at progress=1.0 '
+        '(child remains inside bbox)',
+        (tester) async {
+      final config = ElevatorConfig(
+        positionKey: '',
+        children: [
+          ElevatorChildEntry(
+              id: 'fixed-size',
+              offsetX: 0.5,
+              child: _FixedSizeChildConfig(width: 40, height: 40)),
+        ],
+      );
+      await tester.pumpWidget(wrap(Elevator(config: config)));
+      await tester.pump(Duration.zero);
+      final state =
+          tester.state<State<Elevator>>(find.byType(Elevator)) as dynamic;
+      final progress = state.debugProgress as ValueNotifier<double>;
+
+      progress.value = 1.0;
+      await tester.pumpAndSettle();
+
+      final positionedFinder = find.ancestor(
+        of: find.byType(_FixedSizeChild),
+        matching: find.byType(Positioned),
+      );
+      expect(positionedFinder, findsOneWidget);
+      final top = (tester.widget(positionedFinder) as Positioned).top!;
+      expect(top, greaterThanOrEqualTo(0.0),
+          reason:
+              'Child must remain visible inside the elevator bbox at '
+              'progress=1.0 — top must clamp to >= 0 (visual safety '
+              'clamp introduced in Plan 04-02).');
     });
 
     testWidgets('Stack uses Clip.none so children may overhang bbox',
