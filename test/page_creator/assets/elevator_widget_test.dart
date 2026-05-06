@@ -1388,6 +1388,200 @@ void main() {
               'controllers (QUAL-07).');
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // Plan 04-04 — Simulate motion toggle (QUAL-08)
+  //
+  // Locks the simulate-motion contract:
+  //   - Editor exposes a SwitchListTile titled "Simulate motion" wired to
+  //     `widget.config.simulate ?? false`.
+  //   - Toggling simulate ON starts a 50ms-period Timer that increments
+  //     `_progress.value` by 0.01 each tick (≈5s for 0→1, 10s round trip).
+  //   - Toggling simulate OFF cancels the timer; `_progress.value` freezes
+  //     at the last simulated value until the next stream emission.
+  //   - While simulate is ON, the PLC stream listener MUST NOT overwrite
+  //     `_progress.value` — the simulation owns the notifier (early-return
+  //     guard in _onStreamData).
+  //   - The simulation oscillates between 0 and 1 — direction reverses at
+  //     each end (locked sweep, not a saw-tooth jump).
+  //
+  // TDD discipline: tests RED first, implementation GREEN follows.
+  // ---------------------------------------------------------------------------
+  group('Simulation toggle (QUAL-08)', () {
+    testWidgets('editor exposes Simulate motion switch reflecting config.simulate',
+        (tester) async {
+      final config = ElevatorConfig(simulate: true);
+      await tester.pumpWidget(wrap(Elevator(config: config)));
+      await tester.pump(Duration.zero);
+      await tester.tap(find.byType(GestureDetector).first);
+      await tester.pumpAndSettle();
+
+      final switchTile = find.widgetWithText(SwitchListTile, 'Simulate motion');
+      expect(switchTile, findsOneWidget,
+          reason:
+              'Editor must expose a SwitchListTile titled "Simulate motion" '
+              '(QUAL-08).');
+      final tile = tester.widget<SwitchListTile>(switchTile);
+      expect(tile.value, isTrue,
+          reason:
+              'SwitchListTile.value must reflect widget.config.simulate '
+              '(simulate=true → switch ON).');
+    });
+
+    testWidgets('Simulate motion switch defaults to OFF when config.simulate is null',
+        (tester) async {
+      final config = ElevatorConfig();
+      await tester.pumpWidget(wrap(Elevator(config: config)));
+      await tester.pump(Duration.zero);
+      await tester.tap(find.byType(GestureDetector).first);
+      await tester.pumpAndSettle();
+
+      final switchTile = find.widgetWithText(SwitchListTile, 'Simulate motion');
+      expect(switchTile, findsOneWidget);
+      final tile = tester.widget<SwitchListTile>(switchTile);
+      expect(tile.value, isFalse,
+          reason: 'simulate=null must surface as switch OFF (default).');
+    });
+
+    testWidgets('toggling simulate to true starts the sim timer (progress advances)',
+        (tester) async {
+      final config = ElevatorConfig(simulate: false);
+      await tester.pumpWidget(wrap(Elevator(config: config)));
+      await tester.pump(Duration.zero);
+
+      final state = tester.state<State<Elevator>>(find.byType(Elevator))
+          as dynamic;
+      final progress = state.debugProgress as ValueNotifier<double>;
+      progress.value = 0.0;
+      expect(progress.value, 0.0);
+
+      // Flip the simulate flag and rebuild — didUpdateWidget must spin up
+      // the simulation timer.
+      config.simulate = true;
+      await tester.pumpWidget(wrap(Elevator(config: config)));
+      await tester.pump(Duration.zero);
+
+      // Advance virtual clock through 4 ticks of 50ms = 200ms. With +0.01
+      // per tick the notifier should reach roughly 0.04.
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(progress.value, greaterThan(0.0),
+          reason:
+              'Simulate ON must drive _progress upward via the periodic '
+              'timer (QUAL-08).');
+    });
+
+    testWidgets(
+        'toggling simulate to false stops the sim timer (progress freezes)',
+        (tester) async {
+      final config = ElevatorConfig(simulate: true);
+      await tester.pumpWidget(wrap(Elevator(config: config)));
+      await tester.pump(Duration.zero);
+
+      final state = tester.state<State<Elevator>>(find.byType(Elevator))
+          as dynamic;
+      final progress = state.debugProgress as ValueNotifier<double>;
+
+      // Let the simulation move a few ticks so we have a non-zero baseline.
+      await tester.pump(const Duration(milliseconds: 200));
+      final movedTo = progress.value;
+      expect(movedTo, greaterThan(0.0));
+
+      // Flip simulate off.
+      config.simulate = false;
+      await tester.pumpWidget(wrap(Elevator(config: config)));
+      await tester.pump(Duration.zero);
+
+      // Capture frozen value (allow one tick for the cancel to settle).
+      final frozen = progress.value;
+      await tester.pump(const Duration(milliseconds: 500));
+      expect(progress.value, equals(frozen),
+          reason:
+              'Simulate OFF must cancel the periodic timer; _progress must '
+              'freeze (QUAL-08).');
+    });
+
+    testWidgets(
+        'PLC stream emission does not override _progress while simulating (QUAL-08)',
+        (tester) async {
+      final config = ElevatorConfig(
+        positionKey: '/elev/sim/position',
+        simulate: true,
+      );
+      await tester.pumpWidget(wrap(Elevator(config: config)));
+      await tester.pump(Duration.zero);
+
+      final state = tester.state<State<Elevator>>(find.byType(Elevator))
+          as dynamic;
+      final progress = state.debugProgress as ValueNotifier<double>;
+
+      // Let the sim move forward.
+      await tester.pump(const Duration(milliseconds: 200));
+      final beforeInject = progress.value;
+      expect(beforeInject, greaterThan(0.0));
+
+      // Inject a stream emission of 0% — without the early-return guard
+      // the simulation value would be overwritten.
+      state.debugInjectRaw(DynamicValue(value: 0.0));
+      await tester.pump(const Duration(milliseconds: 50));
+
+      // The simulation continued ticking (≥1 tick after inject), so
+      // _progress must be >= the simulated baseline value, NOT 0.
+      expect(progress.value, greaterThan(0.0),
+          reason:
+              'While simulating, PLC stream emissions MUST NOT overwrite '
+              '_progress (QUAL-08 — simulation owns the notifier).');
+    });
+
+    testWidgets('simulation oscillates between 0 and 1 (sweep, not saw-tooth)',
+        (tester) async {
+      final config = ElevatorConfig(simulate: true);
+      await tester.pumpWidget(wrap(Elevator(config: config)));
+      await tester.pump(Duration.zero);
+
+      final state = tester.state<State<Elevator>>(find.byType(Elevator))
+          as dynamic;
+      final progress = state.debugProgress as ValueNotifier<double>;
+
+      // 0 → 1 takes ~5000ms (100 ticks of 50ms × 0.01 step).
+      // We pump past the peak to observe the reversal: 6000ms in is well
+      // past 1.0 and the value should now be on the way back down.
+      double peak = 0.0;
+      for (int i = 0; i < 120; i++) {
+        await tester.pump(const Duration(milliseconds: 50));
+        if (progress.value > peak) peak = progress.value;
+      }
+      expect(peak, closeTo(1.0, 0.05),
+          reason: 'Simulation must reach approximately 1.0 at the top of the sweep.');
+
+      // Continue another 60 ticks (3000ms) — the value must now have
+      // descended below the captured peak (i.e., the direction reversed).
+      for (int i = 0; i < 60; i++) {
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+      expect(progress.value, lessThan(peak),
+          reason:
+              'Simulation must reverse direction at the top of the sweep '
+              '(QUAL-08 — oscillation contract).');
+    });
+
+    testWidgets('simulation timer is cancelled on unmount (no leak — QUAL-07)',
+        (tester) async {
+      // Mount with simulate ON, then replace tree with empty SizedBox to
+      // force unmount/dispose. If the timer is not cancelled in dispose,
+      // subsequent pump-and-settle would either leak the periodic ticks
+      // or throw "X used after dispose" on the disposed _progress notifier.
+      final config = ElevatorConfig(simulate: true);
+      await tester.pumpWidget(wrap(Elevator(config: config)));
+      await tester.pump(const Duration(milliseconds: 100));
+
+      await tester.pumpWidget(wrap(const SizedBox()));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull,
+          reason:
+              'Simulation timer must be cancelled in dispose (QUAL-07 + '
+              'QUAL-08 — no leak on unmount).');
+    });
+  });
 }
 
 // ---------------------------------------------------------------------------
