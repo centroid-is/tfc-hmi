@@ -20,7 +20,7 @@ void main() {
   }
 
   group('Tap to configure', () {
-    testWidgets('tap on sensor with empty detectionKey opens AlertDialog',
+    testWidgets('tap on sensor with empty detectionKey opens config dialog',
         (tester) async {
       final config = SensorConfig(detectionKey: '');
       await tester.pumpWidget(wrap(
@@ -30,8 +30,10 @@ void main() {
       await tester.tap(find.byType(Sensor));
       await tester.pumpAndSettle();
 
-      expect(find.byType(AlertDialog), findsOneWidget);
-      expect(find.text('Configure Sensor'), findsOneWidget);
+      // _SensorConfigEditor is the dialog body (private — found by its
+      // rendered SegmentedButton<SensorKind>, which is unique to this
+      // editor in the widget tree).
+      expect(find.byType(SegmentedButton<SensorKind>), findsOneWidget);
     });
 
     testWidgets(
@@ -55,8 +57,7 @@ void main() {
       await tester.tap(find.byType(Sensor));
       await tester.pumpAndSettle();
 
-      expect(find.byType(AlertDialog), findsOneWidget);
-      expect(find.text('Configure Sensor'), findsOneWidget);
+      expect(find.byType(SegmentedButton<SensorKind>), findsOneWidget);
     });
   });
 
@@ -459,6 +460,76 @@ void main() {
           reason: 'Could not locate build() method in sensor.dart');
       expect(buildSection, isNot(contains('stateManProvider')));
       expect(buildSection, isNot(contains('subscribe(')));
+    });
+  });
+
+  group('Config dialog smoke', () {
+    // Each test taps the Sensor to open the config dialog, then asserts on
+    // a specific UI-SPEC §Copywriting Contract string or widget. The
+    // dialog body is `_SensorConfigEditor` (private) — found indirectly
+    // through its rendered children.
+
+    testWidgets('config dialog renders all locked field-labels',
+        (tester) async {
+      final config = SensorConfig();
+      await tester.pumpWidget(wrap(
+        SizedBox(width: 80, height: 40, child: Sensor(config: config)),
+      ));
+      await tester.tap(find.byType(Sensor));
+      await tester.pumpAndSettle();
+
+      // Locked copy from UI-SPEC §Copywriting Contract — verbatim.
+      expect(find.text('Sensor Kind'), findsOneWidget);
+      expect(find.text('Red Light'), findsOneWidget);
+      expect(find.text('Optic Field'), findsOneWidget);
+      expect(find.text('Inductive Field'), findsOneWidget);
+      expect(find.text('Invert Active Polarity'), findsOneWidget);
+      expect(find.text('Active Color'), findsOneWidget);
+      expect(find.text('Inactive Color'), findsOneWidget);
+    });
+
+    testWidgets(
+        'Invert Active Polarity subtitle copy reflects current value',
+        (tester) async {
+      final config = SensorConfig(invertActivePolarity: false);
+      await tester.pumpWidget(wrap(
+        SizedBox(width: 80, height: 40, child: Sensor(config: config)),
+      ));
+      await tester.tap(find.byType(Sensor));
+      await tester.pumpAndSettle();
+      expect(find.text('Active when state is true'), findsOneWidget);
+
+      // Toggle the switch — subtitle copy must flip per UI-SPEC.
+      await tester.tap(find.byType(SwitchListTile));
+      await tester.pumpAndSettle();
+      expect(find.text('Active when state is false'), findsOneWidget);
+    });
+
+    testWidgets('changing kind via SegmentedButton updates config.kind',
+        (tester) async {
+      final config = SensorConfig(kind: SensorKind.redLight);
+      await tester.pumpWidget(wrap(
+        SizedBox(width: 80, height: 40, child: Sensor(config: config)),
+      ));
+      await tester.tap(find.byType(Sensor));
+      await tester.pumpAndSettle();
+
+      // Tap the "Optic Field" segment.
+      await tester.tap(find.text('Optic Field'));
+      await tester.pumpAndSettle();
+      expect(config.kind, SensorKind.opticField);
+    });
+
+    testWidgets(
+        'CoordinatesField is in the config dialog (SENS-15 — angle is part of CoordinatesField)',
+        (tester) async {
+      final config = SensorConfig();
+      await tester.pumpWidget(wrap(
+        SizedBox(width: 80, height: 40, child: Sensor(config: config)),
+      ));
+      await tester.tap(find.byType(Sensor));
+      await tester.pumpAndSettle();
+      expect(find.byType(CoordinatesField), findsOneWidget);
     });
   });
 }

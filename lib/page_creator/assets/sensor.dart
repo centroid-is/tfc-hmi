@@ -1,6 +1,7 @@
 import 'dart:math' show pi;
 
 import 'package:flutter/material.dart';
+import 'package:flutter_colorpicker/flutter_colorpicker.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:tfc/converter/color_converter.dart';
@@ -85,17 +86,13 @@ class SensorConfig extends BaseAsset {
     return Sensor(config: this);
   }
 
-  /// Returns the body of the configure dialog. Plan 05 will replace this
-  /// placeholder with the real editor (kind selector, key fields, colour
-  /// pickers, polarity switch). Today this exists only so Plan 03's
-  /// tap-to-configure widget test can assert that an `AlertDialog` with the
-  /// title "Configure Sensor" appears on tap.
+  /// Returns the body of the configure dialog. The dialog chrome is
+  /// supplied by the page editor's `showDialog` caller — this method
+  /// returns the editor *body* only (matches `_ConveyorGateConfigEditor`
+  /// pattern in `conveyor_gate.dart`).
   @override
   Widget configure(BuildContext context) {
-    return const AlertDialog(
-      title: Text('Configure Sensor'),
-      content: Text('Configuration UI — Plan 05'),
-    );
+    return _SensorConfigEditor(config: this);
   }
 }
 
@@ -252,10 +249,16 @@ class _SensorState extends ConsumerState<Sensor> {
     }
   }
 
+  /// Opens the config dialog. Wraps the asset's `configure(context)` body
+  /// in a `Dialog` so the editor's `TextField`/`SwitchListTile`/etc. find
+  /// a `Material` ancestor — mirrors the wrapping that `page_editor.dart`
+  /// applies when it opens the same dialog via the editor sidebar.
   void _openConfigDialog(BuildContext context) {
     showDialog<void>(
       context: context,
-      builder: (_) => widget.config.configure(context),
+      builder: (_) => Dialog(
+        child: widget.config.configure(context),
+      ),
     );
   }
 
@@ -421,6 +424,252 @@ class _DelayRow extends ConsumerWidget {
         }
         return Text('$label: ${snapshot.data}ms');
       },
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Config editor — the body of the configure dialog.
+// ---------------------------------------------------------------------------
+
+/// Editor body for `SensorConfig`. Mirrors `_ConveyorGateConfigEditor` but
+/// without animation (sensor has no animated state) and with the locked
+/// field order from `01-UI-SPEC.md` §Config Dialog Layout.
+///
+/// All edits are mutations on the live `widget.config` instance — the page
+/// editor reuses the same config object across rebuilds, so the parent's
+/// page model picks the changes up automatically (see `Sensor.didUpdateWidget`
+/// for the matching invariant on the runtime side).
+class _SensorConfigEditor extends StatefulWidget {
+  final SensorConfig config;
+  const _SensorConfigEditor({required this.config});
+
+  @override
+  State<_SensorConfigEditor> createState() => _SensorConfigEditorState();
+}
+
+class _SensorConfigEditorState extends State<_SensorConfigEditor> {
+  late TextEditingController _tagController;
+
+  @override
+  void initState() {
+    super.initState();
+    _tagController = TextEditingController(text: widget.config.tag ?? '');
+  }
+
+  @override
+  void dispose() {
+    _tagController.dispose();
+    super.dispose();
+  }
+
+  void _showColorPicker(
+    BuildContext context,
+    Color current,
+    ValueChanged<Color> onChanged,
+  ) {
+    showDialog<void>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Select Color'),
+        content: SingleChildScrollView(
+          child: ColorPicker(
+            pickerColor: current,
+            onColorChanged: onChanged,
+            pickerAreaHeightPercent: 0.8,
+          ),
+        ),
+        actions: [
+          ElevatedButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Done'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _colorSwatch(Color color) {
+    return Container(
+      width: 24,
+      height: 24,
+      decoration: BoxDecoration(
+        color: color,
+        shape: BoxShape.circle,
+        border: Border.all(color: Colors.grey.shade600),
+      ),
+    );
+  }
+
+  /// Per-kind painter dispatch for the live preview. Mirrors the runtime
+  /// dispatch in `_SensorState._createPainter` but always renders
+  /// `isActive: true` so the preview shows the active visual.
+  CustomPainter _previewPainter(SensorConfig config) {
+    switch (config.kind) {
+      case SensorKind.redLight:
+        return RedLightBeamPainter(
+          isActive: true,
+          activeColor: config.activeColor,
+          inactiveColor: config.inactiveColor,
+          label: config.tag,
+        );
+      case SensorKind.opticField:
+        return OpticFieldPainter(
+          isActive: true,
+          activeColor: config.activeColor,
+          inactiveColor: config.inactiveColor,
+          label: config.tag,
+        );
+      case SensorKind.inductiveField:
+        return InductiveFieldPainter(
+          isActive: true,
+          activeColor: config.activeColor,
+          inactiveColor: config.inactiveColor,
+          label: config.tag,
+        );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final config = widget.config;
+
+    return Container(
+      width: 360,
+      padding: const EdgeInsets.all(24), // UI-SPEC lg = 24
+      child: SingleChildScrollView(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // -- Live preview (150x150) — no Play button (sensor has no animation) --
+            Center(
+              child: SizedBox(
+                width: 150,
+                height: 150,
+                child: CustomPaint(painter: _previewPainter(config)),
+              ),
+            ),
+            const Divider(),
+
+            // -- Sensor Kind --
+            Text('Sensor Kind', style: Theme.of(context).textTheme.bodySmall),
+            const SizedBox(height: 4),
+            SegmentedButton<SensorKind>(
+              segments: const [
+                ButtonSegment(
+                    value: SensorKind.redLight, label: Text('Red Light')),
+                ButtonSegment(
+                    value: SensorKind.opticField, label: Text('Optic Field')),
+                ButtonSegment(
+                    value: SensorKind.inductiveField,
+                    label: Text('Inductive Field')),
+              ],
+              selected: {config.kind},
+              onSelectionChanged: (selection) {
+                setState(() => config.kind = selection.first);
+              },
+            ),
+            const SizedBox(height: 16),
+
+            // -- Detection State Key --
+            KeyField(
+              label: 'Detection State Key',
+              initialValue: config.detectionKey,
+              onChanged: (v) => setState(() => config.detectionKey = v),
+            ),
+            const SizedBox(height: 16),
+
+            // -- Invert Active Polarity (locked subtitle copy contract) --
+            SwitchListTile(
+              title: const Text('Invert Active Polarity'),
+              subtitle: Text(
+                config.invertActivePolarity
+                    ? 'Active when state is false'
+                    : 'Active when state is true',
+              ),
+              value: config.invertActivePolarity,
+              onChanged: (v) =>
+                  setState(() => config.invertActivePolarity = v),
+              contentPadding: EdgeInsets.zero,
+            ),
+            const SizedBox(height: 16),
+
+            // -- Rising / Falling Edge Delay Keys (paired — 8px between) --
+            KeyField(
+              label: 'Rising Edge Delay Key',
+              initialValue: config.risingEdgeDelayKey,
+              onChanged: (v) => setState(() => config.risingEdgeDelayKey = v),
+            ),
+            const SizedBox(height: 8),
+            KeyField(
+              label: 'Falling Edge Delay Key',
+              initialValue: config.fallingEdgeDelayKey,
+              onChanged: (v) => setState(() => config.fallingEdgeDelayKey = v),
+            ),
+            const SizedBox(height: 16),
+
+            // -- Active Color --
+            GestureDetector(
+              onTap: () => _showColorPicker(
+                context,
+                config.activeColor,
+                (c) => setState(() => config.activeColor = c),
+              ),
+              child: Row(children: [
+                _colorSwatch(config.activeColor),
+                const SizedBox(width: 8),
+                const Text('Active Color'),
+              ]),
+            ),
+            const SizedBox(height: 8),
+
+            // -- Inactive Color --
+            GestureDetector(
+              onTap: () => _showColorPicker(
+                context,
+                config.inactiveColor,
+                (c) => setState(() => config.inactiveColor = c),
+              ),
+              child: Row(children: [
+                _colorSwatch(config.inactiveColor),
+                const SizedBox(width: 8),
+                const Text('Inactive Color'),
+              ]),
+            ),
+            const SizedBox(height: 16),
+
+            // -- Tag --
+            TextFormField(
+              controller: _tagController,
+              decoration: const InputDecoration(
+                labelText: 'Tag (e.g. PE-101A)',
+                hintText: 'Optional',
+              ),
+              onChanged: (v) {
+                setState(() {
+                  config.tag = v.isEmpty ? null : v;
+                });
+              },
+            ),
+            const SizedBox(height: 16),
+
+            // -- Size --
+            SizeField(
+              initialValue: config.size,
+              onChanged: (v) => setState(() => config.size = v),
+            ),
+            const SizedBox(height: 16),
+
+            // -- Coordinates (includes angle field — SENS-15;
+            //    enableAngle: true exposes the angle slider) --
+            CoordinatesField(
+              initialValue: config.coordinates,
+              onChanged: (c) => setState(() => config.coordinates = c),
+              enableAngle: true,
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

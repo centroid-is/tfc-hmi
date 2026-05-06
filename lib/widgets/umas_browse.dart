@@ -44,9 +44,48 @@ class UmasBrowseDataSource implements BrowseDataSource {
 
   @override
   Future<BrowseNodeDetail> fetchDetail(BrowseNode node) async {
+    String? value;
+    final dataTypeIdStr = node.metadata['dataTypeId'];
+    final blockNoStr = node.metadata['blockNo'];
+    // Only attempt to read if this is a leaf scalar variable. Folders
+    // (struct/FB nodes whose children expose the actual scalars) and
+    // arrays cannot be read directly via ReadVariable; trying to do so
+    // returns 0x94 from the PLC. Reading is only meaningful for leaves.
+    final isReadable = node.type == BrowseNodeType.variable &&
+        blockNoStr != null &&
+        dataTypeIdStr != null;
+    if (isReadable) {
+      try {
+        if (_client.blockCrcs == null || _client.blockCrcs!.isEmpty) {
+          await _client.readPlcStatus();
+        }
+        final blockNo = int.parse(blockNoStr);
+        final offset = int.parse(node.metadata['offset'] ?? '0');
+        final byteSize = int.tryParse(node.metadata['byteSize'] ?? '') ?? 2;
+        final dataTypeName = node.metadata['dataTypeName'] ?? '';
+        final variable = UmasVariable(
+          name: node.displayName,
+          blockNo: blockNo,
+          offset: offset,
+          dataTypeId: int.parse(dataTypeIdStr),
+        );
+        final dtRef = UmasDataTypeRef(
+          id: int.parse(dataTypeIdStr),
+          name: dataTypeName,
+          byteSize: byteSize,
+        );
+        final typed = await _client.readVariables([(variable, dtRef)]);
+        if (typed.isNotEmpty) {
+          value = '${typed.first.value}';
+        }
+      } catch (e) {
+        value = 'read error: $e';
+      }
+    }
     return BrowseNodeDetail(
       dataType: node.dataType,
       description: node.metadata['path'],
+      value: value,
     );
   }
 
@@ -96,6 +135,23 @@ BrowseErrorInfo? _umasErrorMapper(Object error) {
             '5. Retry browsing\n\n'
             'Also check that your PLC firmware is v2.60 or newer '
             '(older firmware has known UMAS issues).',
+      );
+    }
+    if (error.errorCode == 0xC0) {
+      return (
+        summary: 'Data Dictionary not available on this PLC ($hex)',
+        detail: 'The PLC connection works (session established) but the '
+            'Data Dictionary is not accessible. Error $hex means the PLC '
+            'project does not have variable browsing enabled.\n\n'
+            'To fix this in EcoStruxure Control Expert:\n\n'
+            '1. Open your PLC project\n'
+            '2. Go to Tools \u2192 Project Settings \u2192 PLC embedded data\n'
+            '3. Check "Allow Data Dictionary Read"\n'
+            '4. Rebuild and download the project to the PLC\n'
+            '5. Retry browsing\n\n'
+            'Note: Without the Data Dictionary, you can still use '
+            'direct register addressing (holding registers, coils) '
+            'by entering addresses manually.',
       );
     }
     return (

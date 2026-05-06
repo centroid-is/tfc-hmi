@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:tfc/page_creator/assets/registry.dart';
 import 'package:tfc/page_creator/assets/sensor.dart';
 
 void main() {
@@ -154,6 +155,62 @@ void main() {
       expect(keys, containsAll({'/d', '/r', '/f'}));
       // T-01-03 (Information Disclosure): tag must NOT be classified as a key.
       expect(keys, isNot(contains('PE-101A')));
+    });
+  });
+
+  group('AssetRegistry round-trip', () {
+    test(
+        'AssetRegistry.parse extracts a registered SensorConfig from a saved page JSON',
+        () {
+      final source = SensorConfig(
+        kind: SensorKind.opticField,
+        detectionKey: '/foo',
+        tag: 'PE-202B',
+      );
+      final pageJson = {
+        'page': {
+          'assets': [source.toJson()],
+        },
+      };
+      final parsed = AssetRegistry.parse(pageJson);
+      expect(parsed, hasLength(1));
+      expect(parsed.first, isA<SensorConfig>());
+      final sensor = parsed.first as SensorConfig;
+      expect(sensor.kind, SensorKind.opticField);
+      expect(sensor.detectionKey, '/foo');
+      expect(sensor.tag, 'PE-202B');
+    });
+
+    test(
+        'Saved page WITHOUT a SensorConfig still loads cleanly (back-compat — SENS-16)',
+        () {
+      // A page saved before this asset existed — only contains an LEDConfig.
+      // We seed the JSON via LEDConfig.preview().toJson() so the shape is
+      // guaranteed identical to a real persisted page (avoids handcrafted
+      // JSON drifting from the actual ColorConverter contract).
+      final legacyPageJson = {
+        'page': {
+          'assets': [
+            AssetRegistry.createDefaultAsset(
+                    AssetRegistry.defaultFactories.keys.firstWhere(
+                        (t) => t.toString() == 'LEDConfig'))
+                .toJson(),
+          ],
+        },
+      };
+      final parsed = AssetRegistry.parse(legacyPageJson);
+      expect(parsed, hasLength(1));
+      // Critically: parse did NOT throw and returned exactly the LED — the
+      // registry's SensorConfig entry did not interfere with non-Sensor JSON.
+      expect(parsed.first.runtimeType.toString(), 'LEDConfig');
+    });
+
+    test(
+        'AssetRegistry.createDefaultAsset(SensorConfig) returns a fresh SensorConfig (palette path — SENS-01)',
+        () {
+      final fresh = AssetRegistry.createDefaultAsset(SensorConfig);
+      expect(fresh, isA<SensorConfig>());
+      expect((fresh as SensorConfig).kind, SensorKind.redLight); // default kind
     });
   });
 
