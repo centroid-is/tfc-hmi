@@ -83,6 +83,8 @@
 ///     manual safeguard).
 ///
 /// Resume signal: report "approved" or describe issues for triage.
+library;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
