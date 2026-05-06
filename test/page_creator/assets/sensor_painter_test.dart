@@ -618,4 +618,88 @@ void main() {
       );
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // Sensor label visibility (SENS-13)
+  //
+  // Caught by Plan 04-02 visual review: the painter painted labels in
+  // `inactiveColor`, which defaults to a light grey and therefore blended
+  // into the panel background — the operator-facing tag (e.g. 'PE-101A')
+  // was effectively invisible. Locked label colour is now `Colors.black87`
+  // when not stale, `Colors.grey` when stale. The test assertions exercise
+  // the locked formula via `debugLabelColour`, a `@visibleForTesting` hook
+  // that mirrors the inlined site in `paint()`.
+  // ---------------------------------------------------------------------------
+  group('Sensor label visibility (SENS-13)', () {
+    test('RedLightBeamPainter label colour is contrasting (not inactiveColor)',
+        () {
+      const lowContrastInactive = Color(0xFFEEEEEE); // very light grey
+      final painter = RedLightBeamPainter(
+        isActive: false,
+        activeColor: Colors.green,
+        inactiveColor: lowContrastInactive,
+        label: 'PE-101A',
+      );
+      expect(painter.debugLabelColour, isNot(equals(lowContrastInactive)),
+          reason:
+              'Label colour must contrast against the panel — must NOT '
+              'inherit the (potentially low-contrast) inactiveColor when '
+              'isStale is false (SENS-13 readability lock).');
+      expect(painter.debugLabelColour, equals(Colors.black87),
+          reason:
+              'Locked label colour for non-stale rendering is '
+              'Colors.black87 (high contrast against typical light '
+              'panel backgrounds).');
+    });
+
+    test('OpticFieldPainter label colour is Colors.black87 when not stale',
+        () {
+      final painter = OpticFieldPainter(
+        isActive: false,
+        activeColor: Colors.green,
+        inactiveColor: const Color(0xFFEEEEEE),
+        label: 'OPT-1',
+      );
+      expect(painter.debugLabelColour, equals(Colors.black87));
+    });
+
+    test(
+        'InductiveFieldPainter label colour is Colors.black87 when not stale',
+        () {
+      final painter = InductiveFieldPainter(
+        isActive: false,
+        activeColor: Colors.green,
+        inactiveColor: const Color(0xFFEEEEEE),
+        label: 'IND-1',
+      );
+      expect(painter.debugLabelColour, equals(Colors.black87));
+    });
+
+    test('All three painters fall back to Colors.grey when stale', () {
+      final r = RedLightBeamPainter(
+        isActive: false,
+        activeColor: Colors.green,
+        inactiveColor: const Color(0xFFBDBDBD),
+        label: 'X',
+        isStale: true,
+      );
+      final o = OpticFieldPainter(
+        isActive: false,
+        activeColor: Colors.green,
+        inactiveColor: const Color(0xFFBDBDBD),
+        label: 'X',
+        isStale: true,
+      );
+      final i = InductiveFieldPainter(
+        isActive: false,
+        activeColor: Colors.green,
+        inactiveColor: const Color(0xFFBDBDBD),
+        label: 'X',
+        isStale: true,
+      );
+      expect(r.debugLabelColour, Colors.grey);
+      expect(o.debugLabelColour, Colors.grey);
+      expect(i.debugLabelColour, Colors.grey);
+    });
+  });
 }
