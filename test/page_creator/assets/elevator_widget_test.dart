@@ -1414,7 +1414,11 @@ void main() {
       await tester.pumpWidget(wrap(Elevator(config: config)));
       await tester.pump(Duration.zero);
       await tester.tap(find.byType(GestureDetector).first);
-      await tester.pumpAndSettle();
+      // Cannot use `pumpAndSettle` here because the simulation timer is a
+      // never-ending Timer.periodic — it would deadlock the settle loop.
+      // Pump fixed-duration frames instead so the dialog open-animation
+      // completes (default Material dialog transition is ~150ms).
+      await tester.pump(const Duration(milliseconds: 300));
 
       final switchTile = find.widgetWithText(SwitchListTile, 'Simulate motion');
       expect(switchTile, findsOneWidget,
