@@ -29,7 +29,12 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. Operator can configure rising-edge and falling-edge delay state keys, an active-polarity inversion toggle, a per-instance label/tag, and active/inactive colours; the tooltip on hover reveals the resolved edge-delay values.
   4. Sensor renders neutral grey when the state stream is stale or disconnected, honours `Coordinates.angle` rotation, and saved pages without sensor instances continue to load (back-compat).
   5. JSON serialization round-trips for every field with defensible defaults, and golden tests pass for each `SensorKind` × {active, inactive} combination with `shouldRepaint` returning true on `runtimeType` change.
-**Plans**: TBD
+**Plans**: 5 plans
+- [ ] 01-01-PLAN.md — SensorConfig data model + JSON round-trip + polarity helper (TDD)
+- [ ] 01-02-PLAN.md — Three CustomPainter classes + 8-golden matrix + stale golden (TDD)
+- [ ] 01-03-PLAN.md — Sensor widget: GestureDetector tap, hoisted stream, stale-grey, rotation (TDD)
+- [ ] 01-04-PLAN.md — Tooltip wrapper + per-tooltip-open subscription + label golden (TDD)
+- [ ] 01-05-PLAN.md — Config dialog + AssetRegistry registration + back-compat test
 **UI hint**: yes
 
 ### Phase 2: Elevator Foundation
