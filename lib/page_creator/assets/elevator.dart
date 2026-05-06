@@ -213,6 +213,12 @@ class _ElevatorState extends ConsumerState<Elevator> {
   /// listens via super(repaint:).
   late final ValueNotifier<double> _progress;
 
+  /// Per-frame animation notifier. The painter's super(repaint:) listens
+  /// to this; the TweenAnimationBuilder writes to it on every frame so
+  /// the painter sees smooth motion without rebuilding above the
+  /// CustomPaint subtree (ARCHITECTURE Pattern 3).
+  late final ValueNotifier<double> _animProgress;
+
   /// The double stream constructed once per mount (or per positionKey
   /// change). Null when positionKey is empty (stale path 1).
   Stream<DynamicValue>? _positionStream;
@@ -237,6 +243,7 @@ class _ElevatorState extends ConsumerState<Elevator> {
   void initState() {
     super.initState();
     _progress = ValueNotifier<double>(0.0);
+    _animProgress = ValueNotifier<double>(0.0);
     _hoistStream();
   }
 
@@ -374,6 +381,7 @@ class _ElevatorState extends ConsumerState<Elevator> {
   void dispose() {
     _streamSub?.cancel();
     _progress.dispose();
+    _animProgress.dispose();
     super.dispose();
   }
 
@@ -395,13 +403,44 @@ class _ElevatorState extends ConsumerState<Elevator> {
               paintSize =
                   widget.config.size.toSize(MediaQuery.of(context).size);
             }
-            return CustomPaint(
-              size: paintSize,
-              painter: ElevatorPainter(
-                progress: _progress,
-                isStale: _isStaleEffective,
-                activeColor: activeColor,
-              ),
+            // Animation pipeline (ELEV-06):
+            //   _progress (target 0..1, written by stream listener)
+            //   → ValueListenableBuilder<double>
+            //     → TweenAnimationBuilder<double>
+            //       → _animProgress (per-frame interpolated value)
+            //         → ElevatorPainter.progress (super(repaint:))
+            //
+            // The Tween's `Tween(begin: target, end: target)` idiom (per
+            // CONTEXT decisions §Visual & Position Pipeline) lets each
+            // change in _progress.value drive a fresh interpolation toward
+            // the new target — no animation while values are equal, smooth
+            // glide when the target moves. Curves.linear matches operator
+            // expectation for industrial position lifts (no overshoot).
+            return ValueListenableBuilder<double>(
+              valueListenable: _progress,
+              builder: (ctx, target, _) {
+                return TweenAnimationBuilder<double>(
+                  tween: Tween<double>(begin: target, end: target),
+                  duration: Duration(
+                    milliseconds: widget.config.tweenDurationMs,
+                  ),
+                  curve: Curves.linear,
+                  builder: (ctx, animValue, _) {
+                    // Push the animated value into the per-frame notifier
+                    // so the painter's super(repaint:) sees changes
+                    // without rebuilding the CustomPaint subtree itself.
+                    _animProgress.value = animValue;
+                    return CustomPaint(
+                      size: paintSize,
+                      painter: ElevatorPainter(
+                        progress: _animProgress,
+                        isStale: _isStaleEffective,
+                        activeColor: activeColor,
+                      ),
+                    );
+                  },
+                );
+              },
             );
           },
         ),
