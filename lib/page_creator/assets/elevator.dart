@@ -18,8 +18,21 @@ part 'elevator.g.dart';
 ///
 /// The `{'wrapped_child': json}` envelope makes [AssetRegistry.parse]'s
 /// JSON-tree crawl find exactly one asset (the child) without bare-Map
-/// ambiguity — locked by the polymorphic round-trip tests in
-/// `elevator_config_test.dart` ('Polymorphic child round-trip' group).
+/// ambiguity — `parse` skips the outer Map (no `asset_name` key on it)
+/// and recurses into the single value, where it finds the registered
+/// `asset_name` and dispatches to the matching factory.
+///
+/// REGRESSION GUARD: Locked by the polymorphic round-trip tests in
+/// `test/page_creator/assets/elevator_config_test.dart` group
+/// 'Polymorphic child round-trip' (3 tests, including a heterogeneous
+/// SensorConfig + ConveyorGateConfig fixture). If you change this
+/// helper, those tests must continue to pass.
+///
+/// FAIL-LOUD CONTRACT (T-02-04): When [AssetRegistry.parse] returns an
+/// empty list — meaning the JSON's `asset_name` is not registered in
+/// [AssetRegistry] — this throws [FormatException] with the offending
+/// name. This is intentional: silent drop would let saved pages lose
+/// children invisibly (counter to Pitfall 5).
 BaseAsset _childFromJson(Map<String, dynamic> json) {
   final assets = AssetRegistry.parse(<String, dynamic>{'wrapped_child': json});
   if (assets.isEmpty) {
