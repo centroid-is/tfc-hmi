@@ -34,6 +34,14 @@ const Color _kDefaultActive = Color(0xFF1976D2); // Material blue 700
 /// conveyor_gate.dart:325.
 const Color _kStaleColor = Color(0xFF9E9E9E); // Colors.grey shade500
 
+/// Out-of-range outline colour (ISA-101 abnormal state — amber).
+/// Locked by ELEV-15 + 04-CONTEXT §Out-of-Range Outline.
+const Color kOutOfRangeColor = Color(0xFFFFA500);
+
+/// Out-of-range outline stroke width in logical pixels. Constant-time
+/// draw — fixed at 2px regardless of bbox size (T-04-01 mitigation).
+const double kOutOfRangeStrokeWidth = 2.0;
+
 class ElevatorPainter extends CustomPainter {
   /// Live progress 0..1, tween-driven by the widget. Painter rebuilds
   /// scoped to this notifier via super(repaint:).
@@ -43,6 +51,12 @@ class ElevatorPainter extends CustomPainter {
   /// `activeColor`. Closes ELEV-14.
   final bool isStale;
 
+  /// When true, overlay an amber outline (Color(0xFFFFA500), 2px stroke)
+  /// around the bbox to signal that the position stream emitted a value
+  /// outside [0, 100]. Mutually exclusive with [isStale] in the widget
+  /// pipeline — the widget never sets both at once. Closes ELEV-15.
+  final bool isOutOfRange;
+
   /// Active render colour for rails + deck. Defaults to a fixed test
   /// fixture; widget passes Theme.colorScheme.primary at runtime.
   final Color activeColor;
@@ -50,6 +64,7 @@ class ElevatorPainter extends CustomPainter {
   ElevatorPainter({
     required this.progress,
     this.isStale = false,
+    this.isOutOfRange = false,
     this.activeColor = _kDefaultActive,
   }) : super(repaint: progress);
 
@@ -106,6 +121,17 @@ class ElevatorPainter extends CustomPainter {
       ..style = PaintingStyle.stroke
       ..strokeWidth = railStroke * 0.5;
     canvas.drawRect(deckRect, deckBorder);
+
+    // Out-of-range outline (ELEV-15) — amber rectangle hugging the bbox.
+    // Drawn last so it overlays rails+deck. Constant-time (one rect, no
+    // per-progress allocations) — T-04-01 DoS disposition mitigated.
+    if (isOutOfRange) {
+      final outlinePaint = Paint()
+        ..color = kOutOfRangeColor
+        ..strokeWidth = kOutOfRangeStrokeWidth
+        ..style = PaintingStyle.stroke;
+      canvas.drawRect(Offset.zero & size, outlinePaint);
+    }
   }
 
   @override
@@ -114,6 +140,7 @@ class ElevatorPainter extends CustomPainter {
     final o = old as ElevatorPainter;
     return !identical(progress, o.progress) ||
         isStale != o.isStale ||
+        isOutOfRange != o.isOutOfRange ||
         activeColor != o.activeColor;
   }
 }
