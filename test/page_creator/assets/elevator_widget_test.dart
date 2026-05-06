@@ -135,4 +135,36 @@ void main() {
       expect(lrb, findsOneWidget);
     });
   });
+
+  group('Animation pipeline (ELEV-06)', () {
+    testWidgets('TweenAnimationBuilder<double> exists in widget tree',
+        (tester) async {
+      final config = ElevatorConfig(positionKey: '');
+      await tester.pumpWidget(wrap(Elevator(config: config)));
+      await tester.pump(Duration.zero);
+      expect(find.byType(TweenAnimationBuilder<double>), findsOneWidget);
+    });
+
+    testWidgets('TweenAnimationBuilder duration matches config.tweenDurationMs',
+        (tester) async {
+      final config = ElevatorConfig(tweenDurationMs: 500);
+      await tester.pumpWidget(wrap(Elevator(config: config)));
+      await tester.pump(Duration.zero);
+      final tab = tester.widget<TweenAnimationBuilder<double>>(
+        find.byType(TweenAnimationBuilder<double>),
+      );
+      expect(tab.duration, const Duration(milliseconds: 500));
+    });
+
+    testWidgets('default tweenDurationMs=250 → duration=250ms',
+        (tester) async {
+      final config = ElevatorConfig();
+      await tester.pumpWidget(wrap(Elevator(config: config)));
+      await tester.pump(Duration.zero);
+      final tab = tester.widget<TweenAnimationBuilder<double>>(
+        find.byType(TweenAnimationBuilder<double>),
+      );
+      expect(tab.duration, const Duration(milliseconds: 250));
+    });
+  });
 }
