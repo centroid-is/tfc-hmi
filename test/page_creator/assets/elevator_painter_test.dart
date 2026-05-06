@@ -26,6 +26,16 @@ void main() {
       expect(a.shouldRepaint(b), isTrue);
     });
 
+    test('different isOutOfRange → shouldRepaint=true (ELEV-15)', () {
+      final n = ValueNotifier<double>(0.5);
+      final a = ElevatorPainter(progress: n, isStale: false, isOutOfRange: false);
+      final b = ElevatorPainter(progress: n, isStale: false, isOutOfRange: true);
+      expect(a.shouldRepaint(b), isTrue,
+          reason:
+              'Toggling isOutOfRange must trigger a repaint so the amber '
+              'outline appears/disappears (ELEV-15).');
+    });
+
     test('cross-runtimeType → shouldRepaint=true (Pitfall 3 guard)', () {
       final n = ValueNotifier<double>(0.5);
       final elevator = ElevatorPainter(progress: n, isStale: false);
@@ -100,6 +110,50 @@ void main() {
       await expectLater(
         find.byKey(elevatorKey),
         matchesGoldenFile('goldens/elevator/position_100.png'),
+      );
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Phase 4 — Out-of-range golden (ELEV-15)
+  //
+  // CONTEXT §Out-of-Range Outline lock: a 2px amber outline (Color(0xFFFFA500))
+  // hugs the bbox when isOutOfRange=true. The golden captures the rails+deck
+  // at progress=0.5 with the outline overlaid — visually validates the locked
+  // amber colour and stroke width without depending on Theme.colorScheme.
+  // ---------------------------------------------------------------------------
+  group('Out-of-range golden (ELEV-15)', () {
+    const elevatorKey = Key('elevator_painter_oor_golden');
+
+    testWidgets('position_50_out_of_range.png', (tester) async {
+      final notifier = ValueNotifier<double>(0.5);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Center(
+              child: RepaintBoundary(
+                key: elevatorKey,
+                child: SizedBox(
+                  width: 200,
+                  height: 300,
+                  child: CustomPaint(
+                    size: const Size(200, 300),
+                    painter: ElevatorPainter(
+                      progress: notifier,
+                      isStale: false,
+                      isOutOfRange: true,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump(Duration.zero);
+      await expectLater(
+        find.byKey(elevatorKey),
+        matchesGoldenFile('goldens/elevator/position_50_out_of_range.png'),
       );
     });
   });
