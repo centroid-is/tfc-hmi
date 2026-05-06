@@ -1,8 +1,13 @@
+import 'dart:math' show pi;
+
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:tfc/converter/color_converter.dart';
 
+import '../../providers/state_man.dart';
 import 'common.dart';
+import 'sensor_painter.dart';
 
 part 'sensor.g.dart';
 
@@ -77,12 +82,20 @@ class SensorConfig extends BaseAsset {
 
   @override
   Widget build(BuildContext context) {
-    throw UnimplementedError('Sensor widget — Plan 03');
+    return Sensor(config: this);
   }
 
+  /// Returns the body of the configure dialog. Plan 05 will replace this
+  /// placeholder with the real editor (kind selector, key fields, colour
+  /// pickers, polarity switch). Today this exists only so Plan 03's
+  /// tap-to-configure widget test can assert that an `AlertDialog` with the
+  /// title "Configure Sensor" appears on tap.
   @override
   Widget configure(BuildContext context) {
-    throw UnimplementedError('Sensor config dialog — Plan 05');
+    return const AlertDialog(
+      title: Text('Configure Sensor'),
+      content: Text('Configuration UI — Plan 05'),
+    );
   }
 }
 
@@ -98,4 +111,183 @@ bool sensorIsActive({
   required bool invertActivePolarity,
 }) {
   return invertActivePolarity ? !rawBool : rawBool;
+}
+
+// ---------------------------------------------------------------------------
+// Sensor widget — runtime entry point.
+// ---------------------------------------------------------------------------
+
+/// Live sensor widget driven by a bool detection state key.
+///
+/// Subscribes to `config.detectionKey` via `stateManProvider`. The stream is
+/// hoisted to `initState` (Pitfall 2 — no resubscribe storm under high-
+/// frequency rebuilds). Visual flips immediately on bool change (no
+/// AnimationController, no debounce, no client-side smoothing — SENS-05).
+/// Renders neutral grey when the key is empty, the stream has no value yet,
+/// or the stream errors (SENS-14, three stale paths).
+///
+/// Honours `Coordinates.angle` via `LayoutRotatedBox`. Tap opens the config
+/// dialog through a real `GestureDetector` with `HitTestBehavior.opaque`
+/// (UI-SPEC §Interaction Contract); this survives a translating ancestor
+/// (Phase 3 forward-compat — sensor as elevator child).
+class Sensor extends ConsumerStatefulWidget {
+  final SensorConfig config;
+  const Sensor({super.key, required this.config});
+
+  @override
+  ConsumerState<Sensor> createState() => _SensorState();
+}
+
+class _SensorState extends ConsumerState<Sensor> {
+  /// The bool stream constructed once per mount (or per detectionKey change).
+  /// `null` indicates the stale path: empty detectionKey — no stream needed.
+  Stream<bool>? _detectionStream;
+
+  @override
+  void initState() {
+    super.initState();
+    _hoistStream();
+  }
+
+  @override
+  void didUpdateWidget(covariant Sensor oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Re-hoist only when the key actually changes — preserves stream identity
+    // across rebuilds with same config (Pitfall 2 invariant).
+    if (oldWidget.config.detectionKey != widget.config.detectionKey) {
+      _hoistStream();
+    }
+  }
+
+  /// Construct the bool stream once. Called from `initState` and from
+  /// `didUpdateWidget` only when `detectionKey` changes. NEVER called from
+  /// `build()` — that would recreate the stream every frame and trigger an
+  /// OPC UA monitored-item create/cancel storm (Pitfall 2).
+  void _hoistStream() {
+    final key = widget.config.detectionKey;
+    if (key.isEmpty) {
+      _detectionStream = null;
+      return;
+    }
+    _detectionStream = ref
+        .read(stateManProvider.future)
+        .asStream()
+        .asyncExpand((sm) => sm.subscribe(key).asStream())
+        .asyncExpand((s) => s)
+        .map((dv) => dv.asBool);
+  }
+
+  /// Per-kind painter dispatch — exhaustive switch (no `default` clause so
+  /// adding a future SensorKind value is a compile error here, not a runtime
+  /// surprise). One painter class per kind closes Pitfall 3.
+  CustomPainter _createPainter({
+    required bool isActive,
+    required bool isStale,
+  }) {
+    switch (widget.config.kind) {
+      case SensorKind.redLight:
+        return RedLightBeamPainter(
+          isActive: isActive,
+          activeColor: widget.config.activeColor,
+          inactiveColor: widget.config.inactiveColor,
+          label: widget.config.tag,
+          isStale: isStale,
+        );
+      case SensorKind.opticField:
+        return OpticFieldPainter(
+          isActive: isActive,
+          activeColor: widget.config.activeColor,
+          inactiveColor: widget.config.inactiveColor,
+          label: widget.config.tag,
+          isStale: isStale,
+        );
+      case SensorKind.inductiveField:
+        return InductiveFieldPainter(
+          isActive: isActive,
+          activeColor: widget.config.activeColor,
+          inactiveColor: widget.config.inactiveColor,
+          label: widget.config.tag,
+          isStale: isStale,
+        );
+    }
+  }
+
+  void _openConfigDialog(BuildContext context) {
+    showDialog<void>(
+      context: context,
+      builder: (_) => widget.config.configure(context),
+    );
+  }
+
+  /// Wraps the painter in a tap-receiving GestureDetector and a rotating
+  /// layout box. The GestureDetector is the single tap source — never
+  /// painter hit-testing (UI-SPEC §Interaction Contract).
+  ///
+  /// Layering order (outer → inner):
+  ///   GestureDetector → LayoutRotatedBox → LayoutBuilder → CustomPaint
+  ///
+  /// The GestureDetector lives OUTSIDE LayoutRotatedBox because
+  /// `LayoutRotatedBox._RenderLayoutRotatedBox.hitTest` (in `common.dart`)
+  /// does not forward hits to its child — it only adds a self-entry. This
+  /// matches the existing `_buildGate` pattern in `conveyor_gate.dart` where
+  /// every `GestureDetector` wraps `LayoutRotatedBox` from the outside, not
+  /// the inside. Tap-through-`Transform.translate` (UI-SPEC §Interaction
+  /// Contract — Phase 3 forward-compat) is unaffected: `Transform.translate`
+  /// defaults `transformHitTests: true`.
+  ///
+  /// The inner `LayoutBuilder` propagates the parent's bounded constraints
+  /// into `CustomPaint.size:` so the painter fills the asset rect — and so
+  /// the GestureDetector has a non-zero hit-test box. Mirrors the
+  /// `_buildGate` pattern in `conveyor_gate.dart`.
+  Widget _buildPaint(CustomPainter painter) {
+    final angleDeg = widget.config.coordinates.angle ?? 0.0;
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () => _openConfigDialog(context),
+      child: LayoutRotatedBox(
+        angle: angleDeg * pi / 180,
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            // When placed inside a parent with bounded constraints (the
+            // asset rect), use them directly. Otherwise fall back to the
+            // config size resolved against the screen — standalone path.
+            final Size paintSize;
+            if (constraints.hasBoundedWidth && constraints.hasBoundedHeight) {
+              paintSize = Size(constraints.maxWidth, constraints.maxHeight);
+            } else {
+              paintSize =
+                  widget.config.size.toSize(MediaQuery.of(context).size);
+            }
+            return CustomPaint(
+              size: paintSize,
+              painter: painter,
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // Stale path #1: empty key — no stream constructed in initState.
+    if (_detectionStream == null) {
+      return _buildPaint(_createPainter(isActive: false, isStale: true));
+    }
+
+    return StreamBuilder<bool>(
+      stream: _detectionStream,
+      builder: (context, snapshot) {
+        // Stale path #2 + #3: stream emitted nothing yet, or errored.
+        if (!snapshot.hasData || snapshot.hasError) {
+          return _buildPaint(_createPainter(isActive: false, isStale: true));
+        }
+        final isActive = sensorIsActive(
+          rawBool: snapshot.data!,
+          invertActivePolarity: widget.config.invertActivePolarity,
+        );
+        return _buildPaint(_createPainter(isActive: isActive, isStale: false));
+      },
+    );
+  }
 }
