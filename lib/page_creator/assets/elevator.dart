@@ -160,6 +160,41 @@ class ElevatorConfig extends BaseAsset {
   @override
   Map<String, dynamic> toJson() => _$ElevatorConfigToJson(this);
 
+  /// Returns positionKey (if non-empty) + each child's allKeys flat-mapped,
+  /// deduplicated.
+  ///
+  /// Required override (ARCHITECTURE Anti-Pattern 6 — default
+  /// `BaseAsset.allKeys` introspects only top-level JSON field names matching
+  /// the key pattern. It does NOT recurse into the children wrapper list, so
+  /// without this override alarms and collectors silently miss every state
+  /// key configured on a child asset (sensor detection keys, conveyor
+  /// batches keys, etc.).
+  ///
+  /// Order: positionKey first (if non-empty), then children in declaration
+  /// order. Duplicates are removed (a key configured on both parent and a
+  /// child appears exactly once).
+  ///
+  /// REGRESSION GUARD: locked by
+  /// `test/page_creator/assets/elevator_config_test.dart` group
+  /// 'allKeys flat-map (ELEV-13)' (6 tests). If you change the order or
+  /// dedup semantics, those tests must continue to pass.
+  @override
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  List<String> get allKeys {
+    // Order: positionKey first, then each child's allKeys flat-mapped via
+    // `children.expand((e) => e.child.allKeys)` — recursive walk into the
+    // polymorphic child without any switch on runtimeType.
+    //
+    // Dedup + empty-filter via a Set<String> literal (LinkedHashSet, so
+    // insertion order is preserved → parent first, then children in
+    // declaration order).
+    return <String>{
+      if (positionKey.isNotEmpty) positionKey,
+      for (final k in children.expand((e) => e.child.allKeys))
+        if (k.isNotEmpty) k,
+    }.toList(growable: false);
+  }
+
   @override
   Widget build(BuildContext context) {
     return Elevator(config: this);
