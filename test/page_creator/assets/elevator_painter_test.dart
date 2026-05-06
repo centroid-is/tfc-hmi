@@ -46,6 +46,18 @@ void main() {
     });
   });
 
+  group('CONTEXT compliance — default active colour (ELEV-02)', () {
+    test('default activeColor is neutral grey (Color(0xFF757575))', () {
+      final notifier = ValueNotifier<double>(0.5);
+      final painter = ElevatorPainter(progress: notifier);
+      expect(painter.activeColor, const Color(0xFF757575),
+          reason:
+              '02-CONTEXT §Visual & Position Pipeline locks rails+platform '
+              'as neutral grey. Default active colour MUST match '
+              'Colors.grey.shade600 (#757575), not Material blue.');
+    });
+  });
+
   group('ElevatorPainter goldens', () {
     const elevatorKey = Key('elevator_painter_golden');
 
