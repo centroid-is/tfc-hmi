@@ -94,54 +94,60 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| SENS-01 | TBD | Pending |
-| SENS-02 | TBD | Pending |
-| SENS-03 | TBD | Pending |
-| SENS-04 | TBD | Pending |
-| SENS-05 | TBD | Pending |
-| SENS-06 | TBD | Pending |
-| SENS-07 | TBD | Pending |
-| SENS-08 | TBD | Pending |
-| SENS-09 | TBD | Pending |
-| SENS-10 | TBD | Pending |
-| SENS-11 | TBD | Pending |
-| SENS-12 | TBD | Pending |
-| SENS-13 | TBD | Pending |
-| SENS-14 | TBD | Pending |
-| SENS-15 | TBD | Pending |
-| SENS-16 | TBD | Pending |
-| SENS-17 | TBD | Pending |
-| ELEV-01 | TBD | Pending |
-| ELEV-02 | TBD | Pending |
-| ELEV-03 | TBD | Pending |
-| ELEV-04 | TBD | Pending |
-| ELEV-05 | TBD | Pending |
-| ELEV-06 | TBD | Pending |
-| ELEV-07 | TBD | Pending |
-| ELEV-08 | TBD | Pending |
-| ELEV-09 | TBD | Pending |
-| ELEV-10 | TBD | Pending |
-| ELEV-11 | TBD | Pending |
-| ELEV-12 | TBD | Pending |
-| ELEV-13 | TBD | Pending |
-| ELEV-14 | TBD | Pending |
-| ELEV-15 | TBD | Pending |
-| ELEV-16 | TBD | Pending |
-| ELEV-17 | TBD | Pending |
-| ELEV-18 | TBD | Pending |
-| QUAL-01 | TBD | Pending |
-| QUAL-02 | TBD | Pending |
-| QUAL-03 | TBD | Pending |
-| QUAL-04 | TBD | Pending |
-| QUAL-05 | TBD | Pending |
-| QUAL-06 | TBD | Pending |
-| QUAL-07 | TBD | Pending |
+| SENS-01 | Phase 1 | Pending |
+| SENS-02 | Phase 1 | Pending |
+| SENS-03 | Phase 1 | Pending |
+| SENS-04 | Phase 1 | Pending |
+| SENS-05 | Phase 1 | Pending |
+| SENS-06 | Phase 1 | Pending |
+| SENS-07 | Phase 1 | Pending |
+| SENS-08 | Phase 1 | Pending |
+| SENS-09 | Phase 1 | Pending |
+| SENS-10 | Phase 1 | Pending |
+| SENS-11 | Phase 1 | Pending |
+| SENS-12 | Phase 1 | Pending |
+| SENS-13 | Phase 1 | Pending |
+| SENS-14 | Phase 1 | Pending |
+| SENS-15 | Phase 1 | Pending |
+| SENS-16 | Phase 1 | Pending |
+| SENS-17 | Phase 1 | Pending |
+| ELEV-01 | Phase 2 | Pending |
+| ELEV-02 | Phase 2 | Pending |
+| ELEV-03 | Phase 2 | Pending |
+| ELEV-04 | Phase 2 | Pending |
+| ELEV-05 | Phase 2 | Pending |
+| ELEV-06 | Phase 2 | Pending |
+| ELEV-07 | Phase 3 | Pending |
+| ELEV-08 | Phase 3 | Pending |
+| ELEV-09 | Phase 3 | Pending |
+| ELEV-10 | Phase 3 | Pending |
+| ELEV-11 | Phase 3 | Pending |
+| ELEV-12 | Phase 3 | Pending |
+| ELEV-13 | Phase 3 | Pending |
+| ELEV-14 | Phase 2 | Pending |
+| ELEV-15 | Phase 4 | Pending |
+| ELEV-16 | Phase 2 | Pending |
+| ELEV-17 | Phase 2 | Pending |
+| ELEV-18 | Phase 2 | Pending |
+| QUAL-01 | Phase 1 | Pending |
+| QUAL-02 | Phase 1 | Pending |
+| QUAL-03 | Phase 3 | Pending |
+| QUAL-04 | Phase 2 | Pending |
+| QUAL-05 | Phase 1 | Pending |
+| QUAL-06 | Phase 4 | Pending |
+| QUAL-07 | Phase 4 | Pending |
 
 **Coverage:**
 - v1 requirements: 42 total
-- Mapped to phases: 0 (will be filled by roadmapper)
-- Unmapped: 42 ⚠️ (expected — roadmap creates the mapping)
+- Mapped to phases: 42
+- Unmapped: 0
+
+**Phase distribution:**
+- Phase 1 (Sensor Asset): 20 requirements (17 SENS + QUAL-01, QUAL-02, QUAL-05)
+- Phase 2 (Elevator Foundation): 11 requirements (10 ELEV + QUAL-04)
+- Phase 3 (Elevator Child Embedding): 8 requirements (7 ELEV + QUAL-03)
+- Phase 4 (Polish, Error UX & CI Hardening): 3 requirements (1 ELEV + QUAL-06, QUAL-07)
 
 ---
 *Requirements defined: 2026-05-06*
-*Last updated: 2026-05-06 after initial definition*
+*Last updated: 2026-05-05 — traceability mapped to roadmap phases (4 phases, 42/42 covered)*
