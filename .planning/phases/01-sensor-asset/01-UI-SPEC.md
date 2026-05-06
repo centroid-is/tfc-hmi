@@ -256,7 +256,7 @@ SizedBox(height: 16)
 
 GestureDetector(onTap: _showColorPicker(activeColor))
   Row [ swatch · 8px gap · "Active Color" ]
-SizedBox(height: 12)
+SizedBox(height: 8)  // sm — paired colour rows, matching key-pair convention
 GestureDetector(onTap: _showColorPicker(inactiveColor))
   Row [ swatch · 8px gap · "Inactive Color" ]
 SizedBox(height: 16)
