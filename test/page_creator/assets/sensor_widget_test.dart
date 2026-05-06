@@ -11,7 +11,7 @@ void main() {
   // Wraps a widget in ProviderScope + MaterialApp so showDialog has a
   // Navigator. No provider overrides — tests use the empty-detectionKey path
   // so no real StateMan is needed for tap / stale / rotation assertions.
-  Widget _wrap(Widget child) {
+  Widget wrap(Widget child) {
     return ProviderScope(
       child: MaterialApp(
         home: Scaffold(body: Center(child: child)),
@@ -23,7 +23,7 @@ void main() {
     testWidgets('tap on sensor with empty detectionKey opens AlertDialog',
         (tester) async {
       final config = SensorConfig(detectionKey: '');
-      await tester.pumpWidget(_wrap(
+      await tester.pumpWidget(wrap(
         SizedBox(width: 80, height: 40, child: Sensor(config: config)),
       ));
 
@@ -38,7 +38,7 @@ void main() {
         'tap survives Transform.translate ancestor (Phase 3 forward-compat)',
         (tester) async {
       final config = SensorConfig(detectionKey: '');
-      await tester.pumpWidget(_wrap(
+      await tester.pumpWidget(wrap(
         Transform.translate(
           offset: const Offset(0, 100),
           child: SizedBox(
@@ -67,7 +67,7 @@ void main() {
         detectionKey: '',
         kind: SensorKind.redLight,
       );
-      await tester.pumpWidget(_wrap(
+      await tester.pumpWidget(wrap(
         SizedBox(width: 80, height: 40, child: Sensor(config: config)),
       ));
 
@@ -88,7 +88,7 @@ void main() {
         detectionKey: '',
         kind: SensorKind.opticField,
       );
-      await tester.pumpWidget(_wrap(
+      await tester.pumpWidget(wrap(
         SizedBox(width: 80, height: 40, child: Sensor(config: config)),
       ));
 
@@ -109,7 +109,7 @@ void main() {
         detectionKey: '',
         kind: SensorKind.inductiveField,
       );
-      await tester.pumpWidget(_wrap(
+      await tester.pumpWidget(wrap(
         SizedBox(width: 80, height: 40, child: Sensor(config: config)),
       ));
 
@@ -129,7 +129,7 @@ void main() {
         (tester) async {
       final config = SensorConfig(detectionKey: '')
         ..coordinates = Coordinates(x: 0.5, y: 0.5, angle: 90.0);
-      await tester.pumpWidget(_wrap(
+      await tester.pumpWidget(wrap(
         SizedBox(width: 80, height: 40, child: Sensor(config: config)),
       ));
 
@@ -149,7 +149,7 @@ void main() {
     testWidgets('null angle defaults to 0 radians', (tester) async {
       final config = SensorConfig(detectionKey: '')
         ..coordinates = Coordinates(x: 0.5, y: 0.5);
-      await tester.pumpWidget(_wrap(
+      await tester.pumpWidget(wrap(
         SizedBox(width: 80, height: 40, child: Sensor(config: config)),
       ));
 
@@ -177,7 +177,7 @@ void main() {
         detectionKey: '/k',
         invertActivePolarity: false,
       );
-      await tester.pumpWidget(_wrap(
+      await tester.pumpWidget(wrap(
         SizedBox(width: 80, height: 40, child: Sensor(config: config)),
       ));
       final dynamic state = tester.state(find.byType(Sensor));
@@ -191,7 +191,7 @@ void main() {
         detectionKey: '/k',
         invertActivePolarity: true,
       );
-      await tester.pumpWidget(_wrap(
+      await tester.pumpWidget(wrap(
         SizedBox(width: 80, height: 40, child: Sensor(config: config)),
       ));
       final dynamic state = tester.state(find.byType(Sensor));
@@ -214,7 +214,7 @@ void main() {
     testWidgets('rebuilds with same detectionKey do not re-hoist the stream',
         (tester) async {
       final config = SensorConfig(detectionKey: '/k1');
-      await tester.pumpWidget(_wrap(
+      await tester.pumpWidget(wrap(
         SizedBox(width: 80, height: 40, child: Sensor(config: config)),
       ));
       final dynamic state = tester.state(find.byType(Sensor));
@@ -223,7 +223,7 @@ void main() {
 
       // Trigger a rebuild WITHOUT changing the config — same SensorConfig
       // instance, same detectionKey. didUpdateWidget must NOT re-hoist.
-      await tester.pumpWidget(_wrap(
+      await tester.pumpWidget(wrap(
         SizedBox(width: 80, height: 40, child: Sensor(config: config)),
       ));
       final streamRef2 = state.debugDetectionStream;
@@ -237,7 +237,7 @@ void main() {
 
     testWidgets('changing detectionKey re-hoists the stream', (tester) async {
       final config1 = SensorConfig(detectionKey: '/k1');
-      await tester.pumpWidget(_wrap(
+      await tester.pumpWidget(wrap(
         SizedBox(width: 80, height: 40, child: Sensor(config: config1)),
       ));
       final dynamic state = tester.state(find.byType(Sensor));
@@ -246,7 +246,7 @@ void main() {
       // Mutate config to a different key — this is the path the editor
       // dialog takes (config object is reused across rebuilds; keys mutate).
       config1.detectionKey = '/k2';
-      await tester.pumpWidget(_wrap(
+      await tester.pumpWidget(wrap(
         SizedBox(width: 80, height: 40, child: Sensor(config: config1)),
       ));
       final streamRef2 = state.debugDetectionStream;
