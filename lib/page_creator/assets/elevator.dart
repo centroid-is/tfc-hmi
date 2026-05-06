@@ -361,14 +361,16 @@ class _ElevatorState extends ConsumerState<Elevator> {
       widget.config.positionKey.isEmpty || _isStreamStale;
 
   /// Opens the config dialog. Wraps the asset's `configure(context)`
-  /// in a `Dialog` so the editor's Material widgets find a Material
-  /// ancestor (mirrors sensor.dart's _openConfigDialog precedent).
-  /// In Plan 02-04 the body is an `AlertDialog` placeholder — Plan
-  /// 02-05 replaces it with the real editor.
+  /// in a `Dialog` so the editor's Material widgets (TextField,
+  /// KeyField, SizeField, CoordinatesField — all inheriting TextField
+  /// somewhere) find a Material ancestor. Mirrors sensor.dart's
+  /// _openConfigDialog precedent (sensor.dart:256-263).
   void _openConfigDialog(BuildContext context) {
     showDialog<void>(
       context: context,
-      builder: (_) => widget.config.configure(context),
+      builder: (_) => Dialog(
+        child: widget.config.configure(context),
+      ),
     );
   }
 
