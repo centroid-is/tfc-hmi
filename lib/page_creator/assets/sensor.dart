@@ -1,5 +1,6 @@
 import 'dart:math' show pi;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:json_annotation/json_annotation.dart';
@@ -121,8 +122,10 @@ bool sensorIsActive({
 ///
 /// Subscribes to `config.detectionKey` via `stateManProvider`. The stream is
 /// hoisted to `initState` (Pitfall 2 — no resubscribe storm under high-
-/// frequency rebuilds). Visual flips immediately on bool change (no
-/// AnimationController, no debounce, no client-side smoothing — SENS-05).
+/// frequency rebuilds). Visual flips immediately on bool change — no client-
+/// side animation, no tween, no debounce, no smoothing (SENS-05). The
+/// `StreamBuilder` rebuild is the entire flip mechanism; this property is
+/// grep-guarded by a regression test on the source text.
 /// Renders neutral grey when the key is empty, the stream has no value yet,
 /// or the stream errors (SENS-14, three stale paths).
 ///
@@ -176,6 +179,19 @@ class _SensorState extends ConsumerState<Sensor> {
         .asyncExpand((s) => s)
         .map((dv) => dv.asBool);
   }
+
+  /// Test-only window: resolves the painter `isActive` from a raw stream
+  /// bool by applying `widget.config.invertActivePolarity` via
+  /// [sensorIsActive]. Public-via-annotation only — production code should
+  /// continue to read polarity through the `StreamBuilder` path in
+  /// [build]. Used by polarity-through-widget tests in
+  /// `test/page_creator/assets/sensor_widget_test.dart` to assert that the
+  /// widget honours the polarity flag without a real `StateMan`.
+  @visibleForTesting
+  bool resolveIsActive(bool rawBool) => sensorIsActive(
+        rawBool: rawBool,
+        invertActivePolarity: widget.config.invertActivePolarity,
+      );
 
   /// Per-kind painter dispatch — exhaustive switch (no `default` clause so
   /// adding a future SensorKind value is a compile error here, not a runtime
