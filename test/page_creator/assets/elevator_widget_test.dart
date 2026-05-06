@@ -139,7 +139,7 @@ void main() {
     });
 
     testWidgets(
-        'config dialog renders all locked Phase-2 fields + Children placeholder',
+        'config dialog renders all locked Phase-2 fields + Add child button (Phase 3 replaces placeholder)',
         (tester) async {
       final config = ElevatorConfig(
         positionKey: '/elev/01/position',
@@ -153,9 +153,14 @@ void main() {
       // Locked field surface (mirror Plan 01-05 smoke test pattern):
       expect(find.text('Position State Key (0-100%)'), findsOneWidget);
       expect(find.text('Tween Duration (ms)'), findsOneWidget);
-      // Children placeholder uses runtime length so the assertion is robust
-      // to Phase 3's eventual replacement (children=0 here in Phase 2).
-      expect(find.text('Children: 0 (managed in Phase 3)'), findsOneWidget);
+      // Phase 3 (Plan 03-03) replaces the Phase-2 'Children: X (managed in
+      // Phase 3)' read-only placeholder with a full add/edit/remove UI.
+      // Lock the new surface: an 'Add child' FilledButton + the empty-state
+      // text 'No children configured' (children=0 here).
+      expect(find.widgetWithText(FilledButton, 'Add child'), findsOneWidget);
+      expect(find.text('No children configured'), findsOneWidget);
+      // Negative: the Phase-2 placeholder text MUST NOT appear anymore.
+      expect(find.text('Children: 0 (managed in Phase 3)'), findsNothing);
       // Coordinates angle slider surface — CoordinatesField is unique to
       // the editor (placed widget tree does not contain it). Phase 1 used
       // the same finder (sensor_widget_test 'CoordinatesField is in the
@@ -576,6 +581,176 @@ void main() {
               'Elevator Stack must use Clip.none so children may extend '
               'outside the elevator bbox during translation '
               '(D-CONTEXT §Child Layout & Identity).');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Phase 3 — Editor add/edit/remove/offsetX UI (Plan 03-03)
+  //
+  // Locks the editor surface for child management:
+  //   ELEV-07: Add child via dropdown filtered to {SensorConfig, ConveyorConfig}
+  //   ELEV-08: Edit child opens recursive configure() dialog; remove deletes entry
+  //   QUAL-08: TDD discipline — these tests are written BEFORE the implementation
+  //
+  // The dropdown is hard-coded to {Sensor, Conveyor} per CONTEXT §specifics +
+  // ELEV-07. The negative assertions (LED, Number, Button) lock the filter so
+  // any future drift to AssetRegistry.defaultFactories iteration is caught.
+  // ---------------------------------------------------------------------------
+  group('Editor — child management (ELEV-07, ELEV-08)', () {
+    testWidgets(
+        'Add child opens dropdown filtered to Sensor and Conveyor only (ELEV-07)',
+        (tester) async {
+      final config = ElevatorConfig();
+      await tester.pumpWidget(wrap(Elevator(config: config)));
+      await tester.pump(Duration.zero);
+      await tester.tap(find.byType(GestureDetector).first);
+      await tester.pumpAndSettle();
+
+      // Tap the 'Add child' button to open the picker.
+      await tester.tap(find.widgetWithText(FilledButton, 'Add child'));
+      await tester.pumpAndSettle();
+
+      // Positive: Sensor + Conveyor options surface.
+      expect(find.text('Sensor'), findsOneWidget,
+          reason: 'Sensor must be in the add-child picker (ELEV-07).');
+      expect(find.text('Conveyor'), findsOneWidget,
+          reason: 'Conveyor must be in the add-child picker (ELEV-07).');
+
+      // Negative: registered assets that are NOT allowed children must NOT
+      // appear. Three negative locks per CONTEXT — guards against future
+      // drift to AssetRegistry.defaultFactories iteration.
+      expect(find.text('LED'), findsNothing,
+          reason: 'LED is not an allowed child (ELEV-07 lock).');
+      expect(find.text('Number'), findsNothing,
+          reason: 'Number is not an allowed child (ELEV-07 lock).');
+      expect(find.text('Button'), findsNothing,
+          reason: 'Button is not an allowed child (ELEV-07 lock).');
+    });
+
+    testWidgets(
+        'Selecting Sensor appends ElevatorChildEntry with UUID and offsetX 0.5 (ELEV-07)',
+        (tester) async {
+      final config = ElevatorConfig();
+      await tester.pumpWidget(wrap(Elevator(config: config)));
+      await tester.pump(Duration.zero);
+      await tester.tap(find.byType(GestureDetector).first);
+      await tester.pumpAndSettle();
+
+      expect(config.children, isEmpty);
+
+      await tester.tap(find.widgetWithText(FilledButton, 'Add child'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Sensor'));
+      await tester.pumpAndSettle();
+
+      expect(config.children.length, 1,
+          reason: 'Selecting Sensor must append exactly one child.');
+      expect(config.children[0].child, isA<SensorConfig>(),
+          reason: 'Appended child must be a SensorConfig.');
+      expect(config.children[0].id.isNotEmpty, isTrue,
+          reason: 'Appended child must have an auto-generated UUID.');
+      expect(config.children[0].offsetX, 0.5,
+          reason: 'Default offsetX is 0.5 per CONTEXT §specifics.');
+    });
+
+    testWidgets(
+        'Selecting Conveyor appends a ConveyorConfig child',
+        (tester) async {
+      final config = ElevatorConfig();
+      await tester.pumpWidget(wrap(Elevator(config: config)));
+      await tester.pump(Duration.zero);
+      await tester.tap(find.byType(GestureDetector).first);
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.widgetWithText(FilledButton, 'Add child'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Conveyor'));
+      await tester.pumpAndSettle();
+
+      expect(config.children.length, 1);
+      expect(config.children[0].child, isA<ConveyorConfig>());
+    });
+
+    testWidgets('Edit button opens child config dialog (ELEV-08)',
+        (tester) async {
+      final config = ElevatorConfig(
+        children: [
+          ElevatorChildEntry(id: 'edit-test', child: SensorConfig.preview()),
+        ],
+      );
+      await tester.pumpWidget(wrap(Elevator(config: config)));
+      await tester.pump(Duration.zero);
+      await tester.tap(find.byType(GestureDetector).first);
+      await tester.pumpAndSettle();
+
+      // Tap the edit IconButton on the child's row.
+      await tester.tap(find.byTooltip('Edit child'));
+      await tester.pumpAndSettle();
+
+      // Sensor's editor surface (locked label from sensor.dart).
+      expect(find.text('Detection State Key'), findsOneWidget,
+          reason:
+              'Edit button must open the child\'s configure() dialog (ELEV-08).');
+      // The elevator's own KeyField label must still be in the tree — the
+      // sub-dialog is layered on top, not replacing the elevator dialog.
+      expect(find.text('Position State Key (0-100%)'), findsOneWidget,
+          reason: 'Elevator dialog remains open beneath the child sub-dialog.');
+    });
+
+    testWidgets(
+        'Remove button deletes child and shows empty-state text (ELEV-08)',
+        (tester) async {
+      final config = ElevatorConfig(
+        children: [
+          ElevatorChildEntry(id: 'remove-test', child: SensorConfig.preview()),
+        ],
+      );
+      await tester.pumpWidget(wrap(Elevator(config: config)));
+      await tester.pump(Duration.zero);
+      await tester.tap(find.byType(GestureDetector).first);
+      await tester.pumpAndSettle();
+
+      expect(config.children.length, 1);
+
+      // Tap the remove IconButton on the child's row.
+      await tester.tap(find.byTooltip('Remove child'));
+      await tester.pumpAndSettle();
+
+      expect(config.children, isEmpty,
+          reason: 'Remove must delete the entry from config.children.');
+      expect(find.text('No children configured'), findsOneWidget,
+          reason:
+              'Empty children list must show the "No children configured" '
+              'graceful empty state (CONTEXT §Removing the last child).');
+    });
+
+    testWidgets('offsetX Slider mutates entry.offsetX in real time',
+        (tester) async {
+      final config = ElevatorConfig(
+        children: [
+          ElevatorChildEntry(
+              id: 'slider-test',
+              offsetX: 0.5,
+              child: SensorConfig.preview()),
+        ],
+      );
+      await tester.pumpWidget(wrap(Elevator(config: config)));
+      await tester.pump(Duration.zero);
+      await tester.tap(find.byType(GestureDetector).first);
+      await tester.pumpAndSettle();
+
+      expect(config.children[0].offsetX, 0.5);
+
+      // The Slider lives inside the editor (per-entry slider for offsetX).
+      // Drag rightward to bump value above 0.5.
+      final slider = find.byType(Slider).first;
+      await tester.drag(slider, const Offset(50, 0));
+      await tester.pump();
+
+      expect(config.children[0].offsetX != 0.5, isTrue,
+          reason: 'Slider drag must mutate entry.offsetX.');
+      expect(config.children[0].offsetX, greaterThan(0.5),
+          reason: 'Rightward drag should increase offsetX.');
     });
   });
 
