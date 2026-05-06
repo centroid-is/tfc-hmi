@@ -24,6 +24,7 @@ ElevatorConfig _$ElevatorConfigFromJson(Map<String, dynamic> json) =>
     ElevatorConfig(
       positionKey: json['positionKey'] as String? ?? '',
       tweenDurationMs: (json['tweenDurationMs'] as num?)?.toInt() ?? 250,
+      simulate: json['simulate'] as bool?,
       children: _childrenFromJson(json['children'] as List?),
     )
       ..variant = json['asset_name'] as String
@@ -47,6 +48,7 @@ Map<String, dynamic> _$ElevatorConfigToJson(ElevatorConfig instance) =>
       'positionKey': instance.positionKey,
       'tweenDurationMs': instance.tweenDurationMs,
       'children': _childrenToJson(instance.children),
+      if (instance.simulate case final value?) 'simulate': value,
     };
 
 const _$TextPosEnumMap = {

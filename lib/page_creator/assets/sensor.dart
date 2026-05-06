@@ -249,15 +249,72 @@ class _SensorState extends ConsumerState<Sensor> {
     }
   }
 
-  /// Opens the config dialog. Wraps the asset's `configure(context)` body
-  /// in a `Dialog` so the editor's `TextField`/`SwitchListTile`/etc. find
-  /// a `Material` ancestor — mirrors the wrapping that `page_editor.dart`
-  /// applies when it opens the same dialog via the editor sidebar.
-  void _openConfigDialog(BuildContext context) {
+  /// Opens the read-only details dialog (Plan 04-05 / SENS-01).
+  ///
+  /// Operators tap the sensor at runtime to inspect current state — kind,
+  /// detection key, polarity, edge-delay keys, tag. The dialog is purely
+  /// informational: no PLC writes, no config edits. Configuration is
+  /// editor-only and routed through `page_editor.dart` →
+  /// `SensorConfig.configure(context)`. Mirrors the
+  /// `_ConveyorState._showDetailsDialog` precedent (conveyor.dart:902)
+  /// in spirit while staying simpler — sensors have no jog buttons or
+  /// other operator actions.
+  ///
+  /// Dialog content uses [_DetailRow] for label/value layout. The
+  /// "Detection state" row falls back to a placeholder string rather
+  /// than re-plumbing the live stream into the dialog (the painter glyph
+  /// already surfaces live state visually — wiring it twice is not worth
+  /// the complexity for a polish-phase feature).
+  void _showDetailsDialog(BuildContext context) {
     showDialog<void>(
       context: context,
-      builder: (_) => Dialog(
-        child: widget.config.configure(context),
+      builder: (ctx) => AlertDialog(
+        title: Text('Sensor: ${widget.config.kind.name}'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _DetailRow('Kind', widget.config.kind.name),
+              _DetailRow(
+                'Detection key',
+                widget.config.detectionKey.isEmpty
+                    ? '—'
+                    : widget.config.detectionKey,
+              ),
+              _DetailRow(
+                'Detection state',
+                widget.config.detectionKey.isEmpty
+                    ? 'no key configured'
+                    : '(see glyph)',
+              ),
+              _DetailRow(
+                'Active polarity inverted',
+                widget.config.invertActivePolarity ? 'yes' : 'no',
+              ),
+              _DetailRow(
+                'Rising edge delay key',
+                widget.config.risingEdgeDelayKey.isEmpty
+                    ? '—'
+                    : widget.config.risingEdgeDelayKey,
+              ),
+              _DetailRow(
+                'Falling edge delay key',
+                widget.config.fallingEdgeDelayKey.isEmpty
+                    ? '—'
+                    : widget.config.fallingEdgeDelayKey,
+              ),
+              if (widget.config.tag != null && widget.config.tag!.isNotEmpty)
+                _DetailRow('Tag', widget.config.tag!),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Close'),
+          ),
+        ],
       ),
     );
   }
@@ -298,7 +355,7 @@ class _SensorState extends ConsumerState<Sensor> {
       ),
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
-        onTap: () => _openConfigDialog(context),
+        onTap: () => _showDetailsDialog(context),
         child: LayoutRotatedBox(
           angle: angleDeg * pi / 180,
           child: LayoutBuilder(
@@ -426,6 +483,40 @@ class _DelayRow extends ConsumerWidget {
       },
     );
   }
+}
+
+// ---------------------------------------------------------------------------
+// Details dialog row helper (Plan 04-05 / SENS-01)
+// ---------------------------------------------------------------------------
+
+/// Single label/value row for the runtime details dialog.
+///
+/// Used exclusively by `_SensorState._showDetailsDialog`. The label sits
+/// in a fixed-width column so multiple rows align vertically; the value
+/// is a [SelectableText] so operators can copy state-key strings out of
+/// the dialog (a recurring request when troubleshooting PLC tag mappings).
+class _DetailRow extends StatelessWidget {
+  const _DetailRow(this.label, this.value);
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 4),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SizedBox(
+              width: 200,
+              child: Text(
+                label,
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ),
+            Expanded(child: SelectableText(value)),
+          ],
+        ),
+      );
 }
 
 // ---------------------------------------------------------------------------

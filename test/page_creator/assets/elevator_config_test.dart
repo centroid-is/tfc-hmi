@@ -138,6 +138,41 @@ void main() {
       expect((restored.child as SensorConfig).detectionKey, '/k');
     });
 
+    test('ElevatorConfig with simulate=true round-trips and preserves field (QUAL-08)',
+        () {
+      // Plan 04-04 — simulate motion toggle. The field is `bool?` with
+      // `@JsonKey(includeIfNull: false)` so the JSON round-trip must:
+      //   - emit `simulate: true` when set
+      //   - restore `simulate == true` after fromJson
+      //   - omit the key entirely when null (default)
+      final original = ElevatorConfig(
+        positionKey: '/elev/pos',
+        simulate: true,
+      );
+      final json1 = original.toJson();
+      expect(json1['simulate'], true,
+          reason: 'simulate=true must serialise as the boolean literal true.');
+      final restored = ElevatorConfig.fromJson(json1);
+      expect(restored.simulate, true,
+          reason: 'fromJson must restore simulate=true after round-trip.');
+      // Round-trip stability — second toJson must deep-equal the first.
+      expect(restored.toJson(), equals(json1));
+    });
+
+    test('ElevatorConfig with simulate=null omits the key from toJson (QUAL-08)',
+        () {
+      // Default null state: includeIfNull:false means the JSON map MUST NOT
+      // carry a `simulate` key at all. Locks the back-compat contract — old
+      // saved pages that pre-date Plan 04-04 keep round-tripping bit-perfectly.
+      final cfg = ElevatorConfig(positionKey: '/elev/pos');
+      expect(cfg.simulate, isNull);
+      final json = cfg.toJson();
+      expect(json.containsKey('simulate'), isFalse,
+          reason:
+              'simulate=null must be omitted from toJson (back-compat with '
+              'pre-Plan-04-04 saved pages).');
+    });
+
     test('ElevatorConfig with two heterogeneous children round-trips deep-equal',
         () {
       final original = ElevatorConfig(

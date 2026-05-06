@@ -146,9 +146,21 @@ class ElevatorConfig extends BaseAsset {
   @JsonKey(fromJson: _childrenFromJson, toJson: _childrenToJson)
   List<ElevatorChildEntry> children;
 
+  /// Plan 04-04 (QUAL-08) — when true, the runtime ignores the live PLC
+  /// stream and animates `_progress` smoothly between 0% and 100% on a
+  /// fixed cycle (50ms tick × 0.01 step → ~5s up, ~5s down). Useful for
+  /// previewing elevator pages without a live PLC.
+  ///
+  /// Nullable + `includeIfNull: false` so legacy saved pages (pre-Plan
+  /// 04-04) round-trip bit-perfectly: omitting the field yields `null`,
+  /// which surfaces as "off" via the `simulate ?? false` guards.
+  @JsonKey(includeIfNull: false)
+  bool? simulate;
+
   ElevatorConfig({
     this.positionKey = '',
     this.tweenDurationMs = 250,
+    this.simulate,
     List<ElevatorChildEntry>? children,
   }) : children =
             children != null ? List<ElevatorChildEntry>.of(children) : [];
@@ -279,12 +291,40 @@ class _ElevatorState extends ConsumerState<Elevator> {
   /// painter never shows both grey AND amber at once.
   bool _isOutOfRange = false;
 
+  /// Plan 04-04 (QUAL-08) — periodic timer that drives `_progress` between
+  /// 0 and 1 when `widget.config.simulate == true`. Null when simulation is
+  /// off (the default). Cancelled in `dispose()` and when the simulate
+  /// flag flips back to false in `didUpdateWidget`.
+  Timer? _simTimer;
+
+  /// Current simulation progress (0..1). Held separately from
+  /// `_progress.value` so reversal direction can be tracked without
+  /// reading the public notifier (which the painter also writes through).
+  double _simProgress = 0.0;
+
+  /// True while the simulation sweep is ascending (0 → 1). Flipped to
+  /// false at the top of the sweep and back to true at the bottom.
+  bool _simAscending = true;
+
+  /// Tick step for the simulation. 0.01 per 50ms tick → ~5s for 0→1
+  /// and ~10s for a full round trip (matches the conveyor.dart precedent
+  /// for a comfortable preview cadence).
+  static const double _kSimStep = 0.01;
+  static const Duration _kSimTick = Duration(milliseconds: 50);
+
   @override
   void initState() {
     super.initState();
     _progress = ValueNotifier<double>(0.0);
     _animProgress = ValueNotifier<double>(0.0);
     _hoistStream();
+    // Plan 04-04 — kick off the simulation immediately if the saved config
+    // has simulate=true. Done after the stream hoist so the early-return
+    // guard in _onStreamData sees the same `widget.config.simulate` flag
+    // any subsequent emissions will see.
+    if (widget.config.simulate ?? false) {
+      _handleSimulationChange(true);
+    }
   }
 
   @override
@@ -298,6 +338,62 @@ class _ElevatorState extends ConsumerState<Elevator> {
     // `widget.config` are the same reference.
     if (_hoistedKey != widget.config.positionKey) {
       _hoistStream();
+    }
+    // Plan 04-04 — start/stop the simulation timer when the simulate
+    // flag flips. Compare against the actual timer presence rather than
+    // the old widget's flag because the editor mutates `widget.config`
+    // in place (oldWidget.config and widget.config are the same
+    // reference, mirroring the positionKey precedent above).
+    final wantSim = widget.config.simulate ?? false;
+    final hasSim = _simTimer != null;
+    if (wantSim != hasSim) {
+      _handleSimulationChange(wantSim);
+    }
+  }
+
+  /// Starts or stops the simulation timer based on `simOn`.
+  ///
+  /// ON: spins up a `Timer.periodic` ticking every 50ms that nudges
+  /// `_simProgress` by ±0.01 and writes the clamped value into the
+  /// public `_progress` notifier. Direction reverses at each end so the
+  /// platform sweeps 0 → 1 → 0 forever.
+  ///
+  /// OFF: cancels the timer and leaves `_progress.value` at the last
+  /// simulated reading. The next live PLC emission resumes ownership of
+  /// the notifier (the early-return guard in `_onStreamData` consults
+  /// `widget.config.simulate` before each write).
+  void _handleSimulationChange(bool simOn) {
+    if (simOn) {
+      // Idempotent: only start if not already ticking.
+      if (_simTimer != null) return;
+      _simProgress = _progress.value.clamp(0.0, 1.0);
+      _simAscending = _simProgress < 1.0;
+      _simTimer = Timer.periodic(_kSimTick, (_) {
+        if (!mounted) {
+          _simTimer?.cancel();
+          _simTimer = null;
+          return;
+        }
+        if (_simAscending) {
+          _simProgress += _kSimStep;
+          if (_simProgress >= 1.0) {
+            _simProgress = 1.0;
+            _simAscending = false;
+          }
+        } else {
+          _simProgress -= _kSimStep;
+          if (_simProgress <= 0.0) {
+            _simProgress = 0.0;
+            _simAscending = true;
+          }
+        }
+        _progress.value = _simProgress;
+      });
+    } else {
+      _simTimer?.cancel();
+      _simTimer = null;
+      // Leave _progress.value as-is (frozen) — the next stream emission
+      // will overwrite it via the existing _onStreamData path.
     }
   }
 
@@ -368,6 +464,14 @@ class _ElevatorState extends ConsumerState<Elevator> {
   }
 
   void _onStreamData(DynamicValue dv) {
+    // Plan 04-04 (QUAL-08) — when simulate is ON the simulation owns
+    // `_progress`. Early-return so a live PLC emission can't fight the
+    // periodic timer. We still let the stale/out-of-range flags stay
+    // accurate against the live stream (handled by the timer path) so
+    // the painter visuals reflect simulated state, not stream state.
+    if (widget.config.simulate ?? false) {
+      return;
+    }
     // Guard for non-double / non-integer values (per analog_box.dart
     // precedent). `.asDouble` throws or coerces depending on type;
     // require explicit guard.
@@ -451,23 +555,86 @@ class _ElevatorState extends ConsumerState<Elevator> {
   bool get _isStaleEffective =>
       widget.config.positionKey.isEmpty || _isStreamStale;
 
-  /// Opens the config dialog. Wraps the asset's `configure(context)`
-  /// in a `Dialog` so the editor's Material widgets (TextField,
-  /// KeyField, SizeField, CoordinatesField — all inheriting TextField
-  /// somewhere) find a Material ancestor. Mirrors sensor.dart's
-  /// _openConfigDialog precedent (sensor.dart:256-263).
-  void _openConfigDialog(BuildContext context) {
+  /// Opens the read-only details dialog (Plan 04-05 / ELEV-01).
+  ///
+  /// Operators tap the elevator at runtime to inspect current state —
+  /// position key, current progress, tween duration, simulate flag,
+  /// out-of-range/stale flags, child count. The dialog is purely
+  /// informational: no PLC writes, no config edits. Configuration is
+  /// editor-only and routed through `page_editor.dart` →
+  /// `ElevatorConfig.configure(context)`. Mirrors the
+  /// `_ConveyorState._showDetailsDialog` precedent (conveyor.dart:902)
+  /// in spirit while staying simpler — elevators have no jog buttons or
+  /// other operator actions.
+  ///
+  /// Reads the live `_progress` notifier directly so the displayed
+  /// percentage reflects the most recent stream emission (or simulator
+  /// tick). The notifier is owned by this State instance, so the dialog
+  /// captures the value at open-time — operators close+reopen to refresh.
+  /// This avoids running a ValueListenableBuilder inside the AlertDialog
+  /// route which would force the dialog itself to rebuild on every
+  /// 50ms simulator tick or PLC emission.
+  void _showDetailsDialog(BuildContext context) {
     showDialog<void>(
       context: context,
-      builder: (_) => Dialog(
-        child: widget.config.configure(context),
-      ),
+      builder: (ctx) {
+        final pct = (_progress.value.clamp(0.0, 1.0) * 100).round();
+        final positionText = (widget.config.simulate ?? false)
+            ? 'simulating ($pct%)'
+            : (_isStaleEffective ? '— (stale)' : '$pct%');
+        return AlertDialog(
+          title: const Text('Elevator'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _DetailRow(
+                  'Position key',
+                  widget.config.positionKey.isEmpty
+                      ? '—'
+                      : widget.config.positionKey,
+                ),
+                _DetailRow('Current position', positionText),
+                _DetailRow(
+                  'Tween duration',
+                  '${widget.config.tweenDurationMs} ms',
+                ),
+                _DetailRow(
+                  'Out-of-range',
+                  _isOutOfRange && !_isStaleEffective ? 'yes' : 'no',
+                ),
+                _DetailRow('Stale', _isStaleEffective ? 'yes' : 'no'),
+                _DetailRow(
+                  'Simulate motion',
+                  (widget.config.simulate ?? false) ? 'on' : 'off',
+                ),
+                _DetailRow(
+                  'Children',
+                  '${widget.config.children.length} attached',
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('Close'),
+            ),
+          ],
+        );
+      },
     );
   }
 
   @override
   void dispose() {
     _streamSub?.cancel();
+    // Plan 04-04 — cancel the simulation timer (if running) BEFORE
+    // disposing the progress notifier so a final tick can't fire on
+    // the disposed notifier (QUAL-07 + QUAL-08 leak contract).
+    _simTimer?.cancel();
+    _simTimer = null;
     _progress.dispose();
     _animProgress.dispose();
     super.dispose();
@@ -591,7 +758,7 @@ class _ElevatorState extends ConsumerState<Elevator> {
     final activeColor = Theme.of(context).colorScheme.primary;
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
-      onTap: () => _openConfigDialog(context),
+      onTap: () => _showDetailsDialog(context),
       child: LayoutRotatedBox(
         angle: angleDeg * pi / 180,
         child: LayoutBuilder(
@@ -648,6 +815,40 @@ class _ElevatorState extends ConsumerState<Elevator> {
       ),
     );
   }
+}
+
+// ---------------------------------------------------------------------------
+// Details dialog row helper (Plan 04-05 / ELEV-01)
+// ---------------------------------------------------------------------------
+
+/// Single label/value row for the runtime details dialog.
+///
+/// Used exclusively by `_ElevatorState._showDetailsDialog`. Duplicated
+/// from sensor.dart on purpose — keeping the helper private to its file
+/// avoids a cross-file public-API surface for what is a one-screen polish
+/// feature. If a third call site emerges, promote this to common.dart.
+class _DetailRow extends StatelessWidget {
+  const _DetailRow(this.label, this.value);
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 4),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SizedBox(
+              width: 200,
+              child: Text(
+                label,
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ),
+            Expanded(child: SelectableText(value)),
+          ],
+        ),
+      );
 }
 
 // ---------------------------------------------------------------------------
@@ -759,6 +960,29 @@ class _ElevatorConfigEditorState extends State<_ElevatorConfigEditor> {
     });
   }
 
+  /// Swaps `entry` with its `delta`-neighbour in `widget.config.children`.
+  /// `delta = +1` raises z (moves later in the list = paints on top).
+  /// `delta = -1` lowers z (moves earlier in the list = paints behind).
+  ///
+  /// Looks up the index by `entry.id` (not by widget order) so the handler
+  /// is robust against display reversal — the editor displays
+  /// `children.reversed`, but mutations are always on the underlying list.
+  /// No-op if the entry is missing or the swap target is out of bounds
+  /// (defensive — UI buttons disable at the boundary, but the handler is
+  /// the safety net per T-04-03-A).
+  void _onReorderChildPressed(ElevatorChildEntry entry, int delta) {
+    final list = widget.config.children;
+    final i = list.indexWhere((e) => e.id == entry.id);
+    if (i < 0) return;
+    final j = i + delta;
+    if (j < 0 || j >= list.length) return;
+    setState(() {
+      final tmp = list[i];
+      list[i] = list[j];
+      list[j] = tmp;
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final config = widget.config;
@@ -776,7 +1000,30 @@ class _ElevatorConfigEditorState extends State<_ElevatorConfigEditor> {
               initialValue: config.positionKey,
               onChanged: (v) => setState(() => config.positionKey = v),
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 8),
+
+            // -- Plan 04-04 (QUAL-08): Simulate motion --
+            //   When ON, the runtime ignores the live PLC stream and
+            //   animates the platform smoothly between 0% and 100% on a
+            //   fixed cycle. Useful for previewing pages without a live
+            //   PLC. The `simulate` field on ElevatorConfig is nullable
+            //   with `includeIfNull:false` so legacy saved pages omit
+            //   the key entirely (back-compat).
+            //
+            //   Using a SwitchListTile with `dense: true` and zero
+            //   contentPadding so it fits compactly into the editor
+            //   alongside the existing fields without pushing the
+            //   "Add child" button below the default 600-px test
+            //   viewport. Tests still find it via
+            //   `find.widgetWithText(SwitchListTile, 'Simulate motion')`.
+            SwitchListTile(
+              title: const Text('Simulate motion'),
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              value: config.simulate ?? false,
+              onChanged: (v) => setState(() => config.simulate = v),
+            ),
+            const SizedBox(height: 8),
 
             // -- Tween Duration (ms) --
             TextFormField(
@@ -837,7 +1084,23 @@ class _ElevatorConfigEditorState extends State<_ElevatorConfigEditor> {
                 style: Theme.of(context).textTheme.bodyMedium,
               )
             else
-              ...config.children.map((entry) {
+              // Display children in REVERSED order (Photoshop / Figma
+              // convention) — topmost paint (highest z =
+              // config.children[N-1]) appears at the TOP of the editor
+              // list. The actual index in config.children is computed
+              // from the display index so the reorder handler still
+              // mutates the underlying list correctly. Stack composition
+              // in build() iterates config.children directly, so
+              // reordering the list naturally re-orders paint order
+              // without touching the runtime widget.
+              ...config.children.reversed.toList().asMap().entries.map(
+                  (displayed) {
+                final displayIndex = displayed.key;
+                final entry = displayed.value;
+                final actualIndex =
+                    config.children.length - 1 - displayIndex;
+                final isTopmost = actualIndex == config.children.length - 1;
+                final isBottommost = actualIndex == 0;
                 return Card(
                   margin: const EdgeInsets.symmetric(vertical: 4),
                   child: Padding(
@@ -852,6 +1115,23 @@ class _ElevatorConfigEditorState extends State<_ElevatorConfigEditor> {
                                 entry.child.displayName,
                                 style: Theme.of(context).textTheme.bodyMedium,
                               ),
+                            ),
+                            IconButton(
+                              icon: const Icon(Icons.arrow_upward, size: 20),
+                              tooltip: 'Move forward (paint on top)',
+                              onPressed: isTopmost
+                                  ? null
+                                  : () =>
+                                      _onReorderChildPressed(entry, 1),
+                            ),
+                            IconButton(
+                              icon:
+                                  const Icon(Icons.arrow_downward, size: 20),
+                              tooltip: 'Move backward (paint behind)',
+                              onPressed: isBottommost
+                                  ? null
+                                  : () =>
+                                      _onReorderChildPressed(entry, -1),
                             ),
                             IconButton(
                               icon: const Icon(Icons.edit, size: 20),
