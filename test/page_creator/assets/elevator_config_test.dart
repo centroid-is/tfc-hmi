@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tfc/page_creator/assets/conveyor_gate.dart';
 import 'package:tfc/page_creator/assets/elevator.dart';
+import 'package:tfc/page_creator/assets/registry.dart';
 import 'package:tfc/page_creator/assets/sensor.dart';
 
 void main() {
@@ -214,6 +215,67 @@ void main() {
     test('allKeys excludes empty positionKey', () {
       final cfg = ElevatorConfig(positionKey: '');
       expect(cfg.allKeys, isNot(contains('')));
+    });
+  });
+
+  group('AssetRegistry round-trip', () {
+    test(
+        'AssetRegistry.parse extracts a registered ElevatorConfig from a saved page JSON',
+        () {
+      final source = ElevatorConfig(
+        positionKey: '/elev/01/position',
+        tweenDurationMs: 400,
+      );
+      final pageJson = {
+        'page': {
+          'assets': [source.toJson()],
+        },
+      };
+      final parsed = AssetRegistry.parse(pageJson);
+      expect(parsed, hasLength(1));
+      expect(parsed.first, isA<ElevatorConfig>());
+      final elevator = parsed.first as ElevatorConfig;
+      expect(elevator.positionKey, '/elev/01/position');
+      expect(elevator.tweenDurationMs, 400);
+      expect(elevator.children, isEmpty);
+    });
+
+    test(
+        'Saved page WITHOUT an ElevatorConfig still loads cleanly (back-compat — ELEV-18)',
+        () {
+      // A page saved before this asset existed — only contains an LEDConfig.
+      // We seed the JSON via LEDConfig.preview().toJson() (mirrors the
+      // sensor_config_test.dart precedent) so the shape is guaranteed
+      // identical to a real persisted page (avoids handcrafted JSON
+      // drifting from the actual ColorConverter contract).
+      // Locks Pitfall 5 §"register-in-both silent failure" by exercising
+      // the negative path: a registry crawl that finds ZERO ElevatorConfigs
+      // MUST NOT fail, and MUST find the LEDConfig that IS present.
+      final legacyPageJson = {
+        'page': {
+          'assets': [
+            AssetRegistry.createDefaultAsset(
+                    AssetRegistry.defaultFactories.keys.firstWhere(
+                        (t) => t.toString() == 'LEDConfig'))
+                .toJson(),
+          ],
+        },
+      };
+      final parsed = AssetRegistry.parse(legacyPageJson);
+      expect(parsed, hasLength(1));
+      // Critically: parse did NOT throw and returned exactly the LED.
+      expect(parsed.first.runtimeType.toString(), 'LEDConfig');
+    });
+
+    test(
+        'AssetRegistry.createDefaultAsset(ElevatorConfig) returns a fresh ElevatorConfig (palette path — ELEV-16)',
+        () {
+      final fresh = AssetRegistry.createDefaultAsset(ElevatorConfig);
+      expect(fresh, isA<ElevatorConfig>());
+      final elevator = fresh as ElevatorConfig;
+      expect(elevator.positionKey, ''); // default empty (stale)
+      expect(elevator.tweenDurationMs, 250); // CONTEXT specifics default
+      expect(elevator.children, isEmpty); // ELEV-18 surface: empty in Phase 2
     });
   });
 }
