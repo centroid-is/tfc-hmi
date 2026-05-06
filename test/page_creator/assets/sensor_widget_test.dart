@@ -327,6 +327,68 @@ void main() {
     });
   });
 
+  group('Tooltip subscription lifecycle', () {
+    // Locks CONTEXT.md decision: "Edge-delay tooltip subscriptions: subscribe
+    // to the rising/falling keys only while the tooltip is open; cancel on
+    // close (avoids persistent per-instance subscription overhead)." The
+    // implementation satisfies this implicitly — _DelayRow.build invokes
+    // ref.read(stateManProvider.future)…subscribe(stateKey) only when the
+    // tooltip's content widget is mounted; Flutter mounts the content widget
+    // on tooltip open and unmounts on close.
+
+    testWidgets('Tooltip content is not mounted when tooltip is closed',
+        (tester) async {
+      final config = SensorConfig(
+        detectionKey: '',
+        risingEdgeDelayKey: '/r',
+        fallingEdgeDelayKey: '/f',
+      );
+      await tester.pumpWidget(wrap(
+        SizedBox(width: 80, height: 40, child: Sensor(config: config)),
+      ));
+      await tester.pumpAndSettle();
+
+      // No long-press yet — _SensorTooltipContent must NOT be mounted, so
+      // its rendered "Detection key not set" copy must be absent from the
+      // widget tree.
+      expect(find.text('Detection key not set'), findsNothing,
+          reason:
+              'Tooltip content widget must remain unmounted while the tooltip is closed');
+    });
+
+    testWidgets('Tooltip content unmounts when tooltip is dismissed',
+        (tester) async {
+      final config = SensorConfig(
+        detectionKey: '/d',
+        risingEdgeDelayKey: '',
+        fallingEdgeDelayKey: '',
+      );
+      await tester.pumpWidget(wrap(
+        SizedBox(width: 80, height: 40, child: Sensor(config: config)),
+      ));
+
+      // Open tooltip via long-press.
+      final gesture =
+          await tester.startGesture(tester.getCenter(find.byType(Sensor)));
+      await tester.pump(const Duration(milliseconds: 600));
+      await tester.pumpAndSettle();
+      // Tooltip content visible.
+      expect(find.text('Rising: —'), findsOneWidget);
+      expect(find.text('Falling: —'), findsOneWidget);
+
+      // Release + dismiss (Tooltip auto-dismisses after its show-duration on
+      // touch; pumping past it triggers the unmount).
+      await gesture.up();
+      await tester.pump(const Duration(seconds: 3));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Rising: —'), findsNothing,
+          reason:
+              'Tooltip content should unmount after dismissal (subscription scope ends here)');
+      expect(find.text('Falling: —'), findsNothing);
+    });
+  });
+
   group('Stream lifecycle', () {
     testWidgets('rebuilds with same detectionKey do not re-hoist the stream',
         (tester) async {
