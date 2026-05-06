@@ -20,7 +20,7 @@ void main() {
   }
 
   group('Tap to configure', () {
-    testWidgets('tap on sensor with empty detectionKey opens AlertDialog',
+    testWidgets('tap on sensor with empty detectionKey opens config dialog',
         (tester) async {
       final config = SensorConfig(detectionKey: '');
       await tester.pumpWidget(wrap(
@@ -30,8 +30,10 @@ void main() {
       await tester.tap(find.byType(Sensor));
       await tester.pumpAndSettle();
 
-      expect(find.byType(AlertDialog), findsOneWidget);
-      expect(find.text('Configure Sensor'), findsOneWidget);
+      // _SensorConfigEditor is the dialog body (private — found by its
+      // rendered SegmentedButton<SensorKind>, which is unique to this
+      // editor in the widget tree).
+      expect(find.byType(SegmentedButton<SensorKind>), findsOneWidget);
     });
 
     testWidgets(
@@ -55,8 +57,7 @@ void main() {
       await tester.tap(find.byType(Sensor));
       await tester.pumpAndSettle();
 
-      expect(find.byType(AlertDialog), findsOneWidget);
-      expect(find.text('Configure Sensor'), findsOneWidget);
+      expect(find.byType(SegmentedButton<SensorKind>), findsOneWidget);
     });
   });
 
