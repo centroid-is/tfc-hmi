@@ -29,7 +29,6 @@ packages/*/pubspec.lock
 .dart_tool/
 build/
 .direnv
-.planning/
 .flutter-plugins-dependencies
 **/test/**/failures/
 
