@@ -60,6 +60,36 @@ void main() {
     });
   });
 
+  group('Tag pass-through', () {
+    testWidgets('config.tag is passed to painter as label', (tester) async {
+      final config = SensorConfig(detectionKey: '', tag: 'PE-101A');
+      await tester.pumpWidget(wrap(
+        SizedBox(width: 80, height: 40, child: Sensor(config: config)),
+      ));
+      final cp = tester.widget<CustomPaint>(
+        find.descendant(
+          of: find.byType(Sensor),
+          matching: find.byType(CustomPaint),
+        ),
+      );
+      expect((cp.painter as RedLightBeamPainter).label, 'PE-101A');
+    });
+
+    testWidgets('null tag flows through as null label', (tester) async {
+      final config = SensorConfig(detectionKey: '');
+      await tester.pumpWidget(wrap(
+        SizedBox(width: 80, height: 40, child: Sensor(config: config)),
+      ));
+      final cp = tester.widget<CustomPaint>(
+        find.descendant(
+          of: find.byType(Sensor),
+          matching: find.byType(CustomPaint),
+        ),
+      );
+      expect((cp.painter as RedLightBeamPainter).label, isNull);
+    });
+  });
+
   group('Stale rendering', () {
     testWidgets('empty detectionKey causes painter to receive isStale=true',
         (tester) async {
@@ -207,6 +237,155 @@ void main() {
       expect(source, isNot(contains('AnimationController')));
       expect(source, isNot(contains('TweenAnimationBuilder')));
       expect(source, isNot(contains('animateTo')));
+    });
+  });
+
+  group('Tooltip presence', () {
+    testWidgets(
+        'Sensor widget tree contains a Tooltip ancestor of GestureDetector',
+        (tester) async {
+      final config = SensorConfig(detectionKey: '');
+      await tester.pumpWidget(wrap(
+        SizedBox(width: 80, height: 40, child: Sensor(config: config)),
+      ));
+      // Use find.descendant rooted at Sensor to avoid matching the dialog
+      // chrome's own internal Tooltip widgets if they ever appear.
+      final tooltip = find.descendant(
+        of: find.byType(Sensor),
+        matching: find.byType(Tooltip),
+      );
+      expect(tooltip, findsOneWidget);
+      // Tooltip must be an ancestor (outer) of GestureDetector — UI-SPEC
+      // §Tooltip trigger requires Tooltip(child: GestureDetector(...)).
+      final gesture = find.descendant(
+        of: tooltip,
+        matching: find.byType(GestureDetector),
+      );
+      expect(gesture, findsAtLeastNWidgets(1));
+    });
+  });
+
+  group('Tooltip content (copy contract)', () {
+    testWidgets(
+        'Tooltip content shows "Detection key not set" when detectionKey empty',
+        (tester) async {
+      final config = SensorConfig(detectionKey: '');
+      await tester.pumpWidget(wrap(
+        SizedBox(width: 80, height: 40, child: Sensor(config: config)),
+      ));
+      final gesture =
+          await tester.startGesture(tester.getCenter(find.byType(Sensor)));
+      // Long-press threshold: ~500ms; pump 600 to be safe.
+      await tester.pump(const Duration(milliseconds: 600));
+      await tester.pumpAndSettle();
+      expect(find.text('Detection key not set'), findsOneWidget);
+      await gesture.up();
+    });
+
+    testWidgets(
+        'Tooltip content shows "Rising: —\\nFalling: —" when both delay keys empty',
+        (tester) async {
+      final config = SensorConfig(
+        detectionKey: '/some/key',
+        risingEdgeDelayKey: '',
+        fallingEdgeDelayKey: '',
+      );
+      await tester.pumpWidget(wrap(
+        SizedBox(width: 80, height: 40, child: Sensor(config: config)),
+      ));
+      final gesture =
+          await tester.startGesture(tester.getCenter(find.byType(Sensor)));
+      await tester.pump(const Duration(milliseconds: 600));
+      await tester.pumpAndSettle();
+      expect(find.text('Rising: —'), findsOneWidget);
+      expect(find.text('Falling: —'), findsOneWidget);
+      await gesture.up();
+    });
+
+    testWidgets(
+        'Tooltip content shows "Rising: —" portion when rising key empty and falling key set',
+        (tester) async {
+      final config = SensorConfig(
+        detectionKey: '/some/key',
+        risingEdgeDelayKey: '',
+        fallingEdgeDelayKey: '/falling',
+      );
+      await tester.pumpWidget(wrap(
+        SizedBox(width: 80, height: 40, child: Sensor(config: config)),
+      ));
+      final gesture =
+          await tester.startGesture(tester.getCenter(find.byType(Sensor)));
+      await tester.pump(const Duration(milliseconds: 600));
+      await tester.pumpAndSettle();
+      // Rising key empty → em-dash row.
+      expect(find.text('Rising: —'), findsOneWidget);
+      // Falling key configured but no value emitted yet → ellipsis.
+      // (Without StateMan provider override the Future never completes
+      // synchronously, so snapshot.hasData stays false → '…' shown.)
+      expect(find.text('Falling: …'), findsOneWidget);
+      await gesture.up();
+    });
+  });
+
+  group('Tooltip subscription lifecycle', () {
+    // Locks CONTEXT.md decision: "Edge-delay tooltip subscriptions: subscribe
+    // to the rising/falling keys only while the tooltip is open; cancel on
+    // close (avoids persistent per-instance subscription overhead)." The
+    // implementation satisfies this implicitly — _DelayRow.build invokes
+    // ref.read(stateManProvider.future)…subscribe(stateKey) only when the
+    // tooltip's content widget is mounted; Flutter mounts the content widget
+    // on tooltip open and unmounts on close.
+
+    testWidgets('Tooltip content is not mounted when tooltip is closed',
+        (tester) async {
+      final config = SensorConfig(
+        detectionKey: '',
+        risingEdgeDelayKey: '/r',
+        fallingEdgeDelayKey: '/f',
+      );
+      await tester.pumpWidget(wrap(
+        SizedBox(width: 80, height: 40, child: Sensor(config: config)),
+      ));
+      await tester.pumpAndSettle();
+
+      // No long-press yet — _SensorTooltipContent must NOT be mounted, so
+      // its rendered "Detection key not set" copy must be absent from the
+      // widget tree.
+      expect(find.text('Detection key not set'), findsNothing,
+          reason:
+              'Tooltip content widget must remain unmounted while the tooltip is closed');
+    });
+
+    testWidgets('Tooltip content unmounts when tooltip is dismissed',
+        (tester) async {
+      final config = SensorConfig(
+        detectionKey: '/d',
+        risingEdgeDelayKey: '',
+        fallingEdgeDelayKey: '',
+      );
+      await tester.pumpWidget(wrap(
+        SizedBox(width: 80, height: 40, child: Sensor(config: config)),
+      ));
+
+      // Open tooltip via long-press.
+      final gesture =
+          await tester.startGesture(tester.getCenter(find.byType(Sensor)));
+      await tester.pump(const Duration(milliseconds: 600));
+      await tester.pumpAndSettle();
+      // Tooltip content visible.
+      expect(find.text('Rising: —'), findsOneWidget);
+      expect(find.text('Falling: —'), findsOneWidget);
+
+      // Release + dismiss (Tooltip auto-dismisses after its show-duration on
+      // touch; pumping past it triggers the unmount).
+      await gesture.up();
+      await tester.pump(const Duration(seconds: 3));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Rising: —'), findsNothing,
+          reason:
+              'Tooltip content should unmount after dismissal (subscription scope ends here)');
+      expect(find.text('Falling: —'), findsNothing);
     });
   });
 

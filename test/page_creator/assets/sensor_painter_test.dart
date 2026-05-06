@@ -583,5 +583,39 @@ void main() {
         matchesGoldenFile('goldens/sensor/stale.png'),
       );
     });
+
+    // 10. Red light — broken (active) with a non-empty label.
+    //    Verifies the painter's `_paintLabel` helper renders the tag in
+    //    inactiveColor (UI-SPEC §Color matrix, label colour rule) below the
+    //    glyph, semibold, without overlapping the beam. The label parameter
+    //    is the only difference from #2 (red_light_broken).
+    testWidgets('red_light_with_label', (tester) async {
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          backgroundColor: const Color(0xFF1A1A2E),
+          body: Center(
+            child: RepaintBoundary(
+              key: goldenKey,
+              child: SizedBox(
+                width: 256,
+                height: 128,
+                child: CustomPaint(
+                  painter: RedLightBeamPainter(
+                    isActive: true,
+                    activeColor: Colors.green,
+                    inactiveColor: Colors.grey.shade400,
+                    label: 'PE-101A',
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ));
+      await expectLater(
+        find.byKey(goldenKey),
+        matchesGoldenFile('goldens/sensor/red_light_with_label.png'),
+      );
+    });
   });
 }
