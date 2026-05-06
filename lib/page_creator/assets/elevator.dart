@@ -555,17 +555,75 @@ class _ElevatorState extends ConsumerState<Elevator> {
   bool get _isStaleEffective =>
       widget.config.positionKey.isEmpty || _isStreamStale;
 
-  /// Opens the config dialog. Wraps the asset's `configure(context)`
-  /// in a `Dialog` so the editor's Material widgets (TextField,
-  /// KeyField, SizeField, CoordinatesField — all inheriting TextField
-  /// somewhere) find a Material ancestor. Mirrors sensor.dart's
-  /// _openConfigDialog precedent (sensor.dart:256-263).
-  void _openConfigDialog(BuildContext context) {
+  /// Opens the read-only details dialog (Plan 04-05 / ELEV-01).
+  ///
+  /// Operators tap the elevator at runtime to inspect current state —
+  /// position key, current progress, tween duration, simulate flag,
+  /// out-of-range/stale flags, child count. The dialog is purely
+  /// informational: no PLC writes, no config edits. Configuration is
+  /// editor-only and routed through `page_editor.dart` →
+  /// `ElevatorConfig.configure(context)`. Mirrors the
+  /// `_ConveyorState._showDetailsDialog` precedent (conveyor.dart:902)
+  /// in spirit while staying simpler — elevators have no jog buttons or
+  /// other operator actions.
+  ///
+  /// Reads the live `_progress` notifier directly so the displayed
+  /// percentage reflects the most recent stream emission (or simulator
+  /// tick). The notifier is owned by this State instance, so the dialog
+  /// captures the value at open-time — operators close+reopen to refresh.
+  /// This avoids running a ValueListenableBuilder inside the AlertDialog
+  /// route which would force the dialog itself to rebuild on every
+  /// 50ms simulator tick or PLC emission.
+  void _showDetailsDialog(BuildContext context) {
     showDialog<void>(
       context: context,
-      builder: (_) => Dialog(
-        child: widget.config.configure(context),
-      ),
+      builder: (ctx) {
+        final pct = (_progress.value.clamp(0.0, 1.0) * 100).round();
+        final positionText = (widget.config.simulate ?? false)
+            ? 'simulating ($pct%)'
+            : (_isStaleEffective ? '— (stale)' : '$pct%');
+        return AlertDialog(
+          title: const Text('Elevator'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _DetailRow(
+                  'Position key',
+                  widget.config.positionKey.isEmpty
+                      ? '—'
+                      : widget.config.positionKey,
+                ),
+                _DetailRow('Current position', positionText),
+                _DetailRow(
+                  'Tween duration',
+                  '${widget.config.tweenDurationMs} ms',
+                ),
+                _DetailRow(
+                  'Out-of-range',
+                  _isOutOfRange && !_isStaleEffective ? 'yes' : 'no',
+                ),
+                _DetailRow('Stale', _isStaleEffective ? 'yes' : 'no'),
+                _DetailRow(
+                  'Simulate motion',
+                  (widget.config.simulate ?? false) ? 'on' : 'off',
+                ),
+                _DetailRow(
+                  'Children',
+                  '${widget.config.children.length} attached',
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('Close'),
+            ),
+          ],
+        );
+      },
     );
   }
 
@@ -700,7 +758,7 @@ class _ElevatorState extends ConsumerState<Elevator> {
     final activeColor = Theme.of(context).colorScheme.primary;
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
-      onTap: () => _openConfigDialog(context),
+      onTap: () => _showDetailsDialog(context),
       child: LayoutRotatedBox(
         angle: angleDeg * pi / 180,
         child: LayoutBuilder(
@@ -757,6 +815,40 @@ class _ElevatorState extends ConsumerState<Elevator> {
       ),
     );
   }
+}
+
+// ---------------------------------------------------------------------------
+// Details dialog row helper (Plan 04-05 / ELEV-01)
+// ---------------------------------------------------------------------------
+
+/// Single label/value row for the runtime details dialog.
+///
+/// Used exclusively by `_ElevatorState._showDetailsDialog`. Duplicated
+/// from sensor.dart on purpose — keeping the helper private to its file
+/// avoids a cross-file public-API surface for what is a one-screen polish
+/// feature. If a third call site emerges, promote this to common.dart.
+class _DetailRow extends StatelessWidget {
+  const _DetailRow(this.label, this.value);
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 4),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SizedBox(
+              width: 200,
+              child: Text(
+                label,
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ),
+            Expanded(child: SelectableText(value)),
+          ],
+        ),
+      );
 }
 
 // ---------------------------------------------------------------------------

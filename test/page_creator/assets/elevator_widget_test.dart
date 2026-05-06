@@ -1066,13 +1066,53 @@ void main() {
 
     testWidgets('reorder preserves keyed subtree identity (ValueKey)',
         (tester) async {
+      // Plan 04-05: this test asserts on the runtime Elevator widget
+      // tree's ValueKey wrappers (Stack children inside _buildStack). It
+      // needs both the Elevator runtime AND the editor open at once —
+      // the editor's reorder buttons mutate config.children, the runtime
+      // Stack reflects the swap. Render Elevator at the root and open
+      // the editor as an overlay dialog (page_editor.dart pattern).
       final config = ElevatorConfig(
         children: [
           ElevatorChildEntry(id: 'A', child: SensorConfig.preview()),
           ElevatorChildEntry(id: 'B', child: ConveyorConfig.preview()),
         ],
       );
-      await openConfigEditor(tester, config);
+      await tester.pumpWidget(ProviderScope(
+        child: MaterialApp(
+          home: Scaffold(
+            body: Builder(
+              builder: (context) => Stack(
+                children: [
+                  // Runtime Elevator — provides the ValueKey<String>('A'/'B')
+                  // wrappers under test.
+                  Center(
+                    child: SizedBox(
+                      width: 200,
+                      height: 300,
+                      child: Elevator(config: config),
+                    ),
+                  ),
+                  Align(
+                    alignment: Alignment.topRight,
+                    child: ElevatedButton(
+                      onPressed: () => showDialog<void>(
+                        context: context,
+                        builder: (_) =>
+                            Dialog(child: config.configure(context)),
+                      ),
+                      child: const Text('open'),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ));
+      await tester.pump(Duration.zero);
+      await tester.tap(find.text('open'));
+      await tester.pumpAndSettle();
 
       // Both ValueKey wrappers exist before reorder.
       expect(find.byKey(const ValueKey<String>('A')), findsOneWidget);
