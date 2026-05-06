@@ -17,14 +17,21 @@ void main() {
       );
 
   group('Tap to configure', () {
-    testWidgets('tap opens placeholder config dialog', (tester) async {
+    testWidgets(
+        'tap opens config dialog (Position State Key field is unique-to-editor finder)',
+        (tester) async {
       final config = ElevatorConfig();
       await tester.pumpWidget(wrap(Elevator(config: config)));
       await tester.pump(Duration.zero);
       await tester.tap(find.byType(GestureDetector).first);
-      await tester.pump();
-      expect(find.byType(AlertDialog), findsOneWidget);
-      expect(find.text('Configure Elevator'), findsOneWidget);
+      await tester.pumpAndSettle();
+      // _ElevatorConfigEditor is the dialog body (private — found indirectly
+      // by the unique 'Position State Key (0-100%)' KeyField label which only
+      // exists inside this dialog). Mirrors Plan 01-05 Task 3's swap from
+      // find.byType(AlertDialog) to a unique-to-editor finder. Once Phase 3
+      // adds child-management UI to the dialog, this assertion stays stable
+      // because the positionKey label is in the field-ordering frozen surface.
+      expect(find.text('Position State Key (0-100%)'), findsOneWidget);
     });
 
     testWidgets('GestureDetector exists with HitTestBehavior.opaque',
@@ -35,6 +42,50 @@ void main() {
       // Find the GestureDetector child of the Elevator subtree.
       final gd = tester.widget<GestureDetector>(find.byType(GestureDetector).first);
       expect(gd.behavior, HitTestBehavior.opaque);
+    });
+
+    testWidgets(
+        'config dialog renders all locked Phase-2 fields + Children placeholder',
+        (tester) async {
+      final config = ElevatorConfig(
+        positionKey: '/elev/01/position',
+        tweenDurationMs: 333,
+      );
+      await tester.pumpWidget(wrap(Elevator(config: config)));
+      await tester.pump(Duration.zero);
+      await tester.tap(find.byType(GestureDetector).first);
+      await tester.pumpAndSettle();
+
+      // Locked field surface (mirror Plan 01-05 smoke test pattern):
+      expect(find.text('Position State Key (0-100%)'), findsOneWidget);
+      expect(find.text('Tween Duration (ms)'), findsOneWidget);
+      // Children placeholder uses runtime length so the assertion is robust
+      // to Phase 3's eventual replacement (children=0 here in Phase 2).
+      expect(find.text('Children: 0 (managed in Phase 3)'), findsOneWidget);
+      // Coordinates angle slider surface — CoordinatesField is unique to
+      // the editor (placed widget tree does not contain it). Phase 1 used
+      // the same finder (sensor_widget_test 'CoordinatesField is in the
+      // config dialog' precedent). Pull the type from common.dart by name.
+      final coordsField = find.byWidgetPredicate(
+        (w) => w.runtimeType.toString() == 'CoordinatesField',
+      );
+      expect(coordsField, findsOneWidget);
+    });
+
+    testWidgets('editing Tween Duration field mutates config.tweenDurationMs',
+        (tester) async {
+      final config = ElevatorConfig(tweenDurationMs: 250);
+      await tester.pumpWidget(wrap(Elevator(config: config)));
+      await tester.pump(Duration.zero);
+      await tester.tap(find.byType(GestureDetector).first);
+      await tester.pumpAndSettle();
+
+      // Find the Tween Duration TextFormField by its labelText.
+      final tweenField = find.widgetWithText(TextFormField, 'Tween Duration (ms)');
+      expect(tweenField, findsOneWidget);
+      await tester.enterText(tweenField, '500');
+      await tester.pump();
+      expect(config.tweenDurationMs, 500);
     });
   });
 
