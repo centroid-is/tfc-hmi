@@ -88,10 +88,14 @@ class SensorConfig extends BaseAsset {
 
 /// Apply polarity inversion to a raw detection bool.
 ///
-/// Implementation in Task 4 (TDD).
+/// Locked formula (per `01-UI-SPEC.md` §Polarity inversion semantics):
+/// `isActive = invertActivePolarity ? !rawBool : rawBool`.
+///
+/// The tooltip and label are NOT affected by polarity inversion — polarity is
+/// purely a visual-mapping concern.
 bool sensorIsActive({
   required bool rawBool,
   required bool invertActivePolarity,
 }) {
-  throw UnimplementedError('sensorIsActive — Task 4');
+  return invertActivePolarity ? !rawBool : rawBool;
 }
