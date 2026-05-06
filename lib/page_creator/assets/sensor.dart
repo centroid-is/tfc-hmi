@@ -215,17 +215,22 @@ class _SensorState extends ConsumerState<Sensor> {
   /// Per-kind painter dispatch — exhaustive switch (no `default` clause so
   /// adding a future SensorKind value is a compile error here, not a runtime
   /// surprise). One painter class per kind closes Pitfall 3.
+  ///
+  /// `config.tag` flows through `label:` on every painter; the painter's
+  /// `_paintLabel` helper short-circuits when the value is null/empty, so
+  /// passing it unconditionally is safe (SENS-13).
   CustomPainter _createPainter({
     required bool isActive,
     required bool isStale,
   }) {
+    final label = widget.config.tag;
     switch (widget.config.kind) {
       case SensorKind.redLight:
         return RedLightBeamPainter(
           isActive: isActive,
           activeColor: widget.config.activeColor,
           inactiveColor: widget.config.inactiveColor,
-          label: widget.config.tag,
+          label: label,
           isStale: isStale,
         );
       case SensorKind.opticField:
@@ -233,7 +238,7 @@ class _SensorState extends ConsumerState<Sensor> {
           isActive: isActive,
           activeColor: widget.config.activeColor,
           inactiveColor: widget.config.inactiveColor,
-          label: widget.config.tag,
+          label: label,
           isStale: isStale,
         );
       case SensorKind.inductiveField:
@@ -241,7 +246,7 @@ class _SensorState extends ConsumerState<Sensor> {
           isActive: isActive,
           activeColor: widget.config.activeColor,
           inactiveColor: widget.config.inactiveColor,
-          label: widget.config.tag,
+          label: label,
           isStale: isStale,
         );
     }

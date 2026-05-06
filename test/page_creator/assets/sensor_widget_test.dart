@@ -60,6 +60,36 @@ void main() {
     });
   });
 
+  group('Tag pass-through', () {
+    testWidgets('config.tag is passed to painter as label', (tester) async {
+      final config = SensorConfig(detectionKey: '', tag: 'PE-101A');
+      await tester.pumpWidget(wrap(
+        SizedBox(width: 80, height: 40, child: Sensor(config: config)),
+      ));
+      final cp = tester.widget<CustomPaint>(
+        find.descendant(
+          of: find.byType(Sensor),
+          matching: find.byType(CustomPaint),
+        ),
+      );
+      expect((cp.painter as RedLightBeamPainter).label, 'PE-101A');
+    });
+
+    testWidgets('null tag flows through as null label', (tester) async {
+      final config = SensorConfig(detectionKey: '');
+      await tester.pumpWidget(wrap(
+        SizedBox(width: 80, height: 40, child: Sensor(config: config)),
+      ));
+      final cp = tester.widget<CustomPaint>(
+        find.descendant(
+          of: find.byType(Sensor),
+          matching: find.byType(CustomPaint),
+        ),
+      );
+      expect((cp.painter as RedLightBeamPainter).label, isNull);
+    });
+  });
+
   group('Stale rendering', () {
     testWidgets('empty detectionKey causes painter to receive isStale=true',
         (tester) async {
