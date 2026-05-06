@@ -45,6 +45,7 @@
 - [ ] **ELEV-16**: Elevator registers with `AssetRegistry` such that older saved pages without elevator instances continue to load
 - [ ] **ELEV-17**: Elevator JSON round-trips through `_$ElevatorConfigFromJson` / `_$ElevatorConfigToJson` with defensible defaults on every field; child list defaults to empty
 - [ ] **ELEV-18**: `_childrenFromJson` legacy shim handles future schema evolution (mirror of `conveyor.dart:_gatesFromJson`)
+- [ ] **ELEV-19**: Children's GestureDetectors continue to receive taps while the platform is mid-translation (hit-test region follows the rendered position, not the layout-time position)
 
 ### Quality
 
@@ -55,6 +56,7 @@
 - [ ] **QUAL-05**: JSON round-trip tests for both assets, including legacy / missing-field tolerance
 - [ ] **QUAL-06**: Multi-elevator smoke test verifies independent state subscriptions (no shared-mutable-state regression)
 - [ ] **QUAL-07**: `LeakTesting.enable()` mount/unmount test verifies AnimationControllers and stream subscriptions are disposed cleanly
+- [ ] **QUAL-08**: All implementation work follows TDD — test (golden / widget / unit) is written and committed before the production code that satisfies it
 
 ## v2 Requirements
 
@@ -136,17 +138,20 @@
 | QUAL-05 | Phase 1 | Pending |
 | QUAL-06 | Phase 4 | Pending |
 | QUAL-07 | Phase 4 | Pending |
+| ELEV-19 | Phase 3 | Pending |
+| QUAL-08 | All phases | Pending |
 
 **Coverage:**
-- v1 requirements: 42 total
-- Mapped to phases: 42
+- v1 requirements: 44 total (added ELEV-19 and QUAL-08 on 2026-05-06)
+- Mapped to phases: 44
 - Unmapped: 0
 
 **Phase distribution:**
 - Phase 1 (Sensor Asset): 20 requirements (17 SENS + QUAL-01, QUAL-02, QUAL-05)
 - Phase 2 (Elevator Foundation): 11 requirements (10 ELEV + QUAL-04)
-- Phase 3 (Elevator Child Embedding): 8 requirements (7 ELEV + QUAL-03)
+- Phase 3 (Elevator Child Embedding): 9 requirements (8 ELEV + QUAL-03)
 - Phase 4 (Polish, Error UX & CI Hardening): 3 requirements (1 ELEV + QUAL-06, QUAL-07)
+- All phases: 1 cross-cutting (QUAL-08 TDD discipline)
 
 ---
 *Requirements defined: 2026-05-06*
