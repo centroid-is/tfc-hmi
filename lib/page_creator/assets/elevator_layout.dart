@@ -31,3 +31,18 @@ double platformOffsetTop(
 ) {
   return (1.0 - progress) * (bboxHeight - platformHeight);
 }
+
+/// Maps a raw 0..100 PLC value to a clamped 0..1 progress.
+///
+/// Locked semantics (CONTEXT §Position interpretation):
+///   - Clamp to [0, 100] before dividing — out-of-range values silently
+///     pin to the legal range. (ELEV-15 amber-outline fault rendering is
+///     a Phase 4 concern and is intentionally NOT triggered here.)
+///   - NaN is treated as 0.0 (defensive — caller should already guard,
+///     but Dart's `clamp` returns NaN for NaN inputs which would break
+///     downstream tween math).
+double platformProgress(double rawValue) {
+  if (rawValue.isNaN) return 0.0;
+  final clamped = rawValue.clamp(0.0, 100.0);
+  return clamped / 100.0;
+}
