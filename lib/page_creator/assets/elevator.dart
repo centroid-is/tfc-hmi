@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'dart:math' show pi;
+import 'dart:math' show pi, max;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -564,9 +564,16 @@ class _ElevatorState extends ConsumerState<Elevator> {
         ),
       ),
       builder: (ctx, animProgress, builtChild) {
-        final top =
-            platformOffsetTop(animProgress, paintSize.height, platformH) -
-                childH;
+        final platformY =
+            platformOffsetTop(animProgress, paintSize.height, platformH);
+        // Children "ride on" the platform — bottom edge sits on platform's
+        // top edge. Clamp to keep them visible inside the bbox at high
+        // progress (where the platform reaches the top): when there is no
+        // room above the platform, children stop translating upward and
+        // rest at the bbox top edge. This is a visual safety clamp; the
+        // platform itself still reaches its true position.
+        // (Plan 04-02 — caught by visual review of progress=100% golden.)
+        final top = max(0.0, platformY - childH);
         return Positioned(
           left: left,
           top: top,

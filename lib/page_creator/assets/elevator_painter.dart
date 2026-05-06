@@ -28,7 +28,14 @@ const double kRightRailFraction = 0.90;
 
 /// Default render colour when active (test fixture default; widgets
 /// override per Theme.colorScheme.primary in Plan 02-04).
-const Color _kDefaultActive = Color(0xFF1976D2); // Material blue 700
+///
+/// 02-CONTEXT §Visual & Position Pipeline locks rails+platform as a
+/// neutral grey (mirroring sensor inactive convention which mirrors
+/// `conveyor_gate.dart`). Earlier drift to Material blue 700
+/// (`0xFF1976D2`) was caught by Plan 04-02 visual review and corrected
+/// to `Colors.grey.shade600` here.
+const Color _kDefaultActive =
+    Color(0xFF757575); // Colors.grey.shade600 — neutral grey per CONTEXT
 
 /// Stale render colour. Mirrors sensor convention which mirrors
 /// conveyor_gate.dart:325.

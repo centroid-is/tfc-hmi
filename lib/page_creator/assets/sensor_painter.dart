@@ -178,10 +178,19 @@ class RedLightBeamPainter extends CustomPainter {
     canvas.drawCircle(receiverCentre, puckRadius, housingFill);
     canvas.drawCircle(receiverCentre, puckRadius, housingBorder);
 
-    // Label (if any) — coloured per UI-SPEC: stale → grey, else inactiveColor.
-    final labelColour = isStale ? Colors.grey : inactiveColor;
+    // Label (if any) — operator-facing tag must contrast against the
+    // panel. Plan 04-02 visual review caught labels disappearing into
+    // grey panels when this used `inactiveColor`. SENS-13 lock:
+    // stale → grey, else `Colors.black87`.
+    final labelColour = isStale ? Colors.grey : Colors.black87;
     _paintLabel(canvas, size, label, labelColour);
   }
+
+  /// Test-visibility hook for the locked label-colour formula
+  /// (SENS-13). NOT used by paint() — paint() inlines the same
+  /// expression. Kept in sync with the inlined site.
+  @visibleForTesting
+  Color get debugLabelColour => isStale ? Colors.grey : Colors.black87;
 
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) {
@@ -284,9 +293,15 @@ class OpticFieldPainter extends CustomPainter {
       );
     }
 
-    final labelColour = isStale ? Colors.grey : inactiveColor;
+    // SENS-13: label must contrast against the panel — see Plan 04-02.
+    final labelColour = isStale ? Colors.grey : Colors.black87;
     _paintLabel(canvas, size, label, labelColour);
   }
+
+  /// Test-visibility hook for the locked label-colour formula
+  /// (SENS-13). Mirrors the inlined paint() expression.
+  @visibleForTesting
+  Color get debugLabelColour => isStale ? Colors.grey : Colors.black87;
 
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) {
@@ -386,9 +401,15 @@ class InductiveFieldPainter extends CustomPainter {
       );
     }
 
-    final labelColour = isStale ? Colors.grey : inactiveColor;
+    // SENS-13: label must contrast against the panel — see Plan 04-02.
+    final labelColour = isStale ? Colors.grey : Colors.black87;
     _paintLabel(canvas, size, label, labelColour);
   }
+
+  /// Test-visibility hook for the locked label-colour formula
+  /// (SENS-13). Mirrors the inlined paint() expression.
+  @visibleForTesting
+  Color get debugLabelColour => isStale ? Colors.grey : Colors.black87;
 
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) {
