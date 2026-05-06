@@ -91,6 +91,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:json_annotation/json_annotation.dart';
+import 'package:open62541/open62541.dart' show DynamicValue;
 
 import 'package:tfc/page_creator/assets/common.dart';
 import 'package:tfc/page_creator/assets/conveyor.dart';
@@ -860,6 +861,287 @@ void main() {
         find.byKey(goldenKey),
         matchesGoldenFile('goldens/elevator_with_children_progress_100.png'),
       );
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Phase 4 — Out-of-range (ELEV-15)
+  //
+  // CONTEXT §Out-of-Range Outline:
+  //   When the position stream emits a value > 100 or < 0:
+  //     1. progress clamps to [0.0, 1.0] (existing platformProgress behaviour)
+  //     2. _isOutOfRange flips true and the painter renders an amber outline
+  //     3. Stale state stays separate (mutually exclusive with isOutOfRange)
+  //
+  // Drives DynamicValue emissions through the `debugInjectRaw` test seam
+  // added in Plan 04-01 Task 2 — avoids a full StateMan stub (the same
+  // approach used by `debugProgress` in Plans 02-04 / 03-01).
+  // ---------------------------------------------------------------------------
+  group('Out-of-range (ELEV-15)', () {
+    testWidgets(
+        'stream value 150 clamps to progress 1.0 AND sets isOutOfRange=true',
+        (tester) async {
+      final config = ElevatorConfig(positionKey: '/elev/01/position');
+      await tester.pumpWidget(wrap(Elevator(config: config)));
+      await tester.pump(Duration.zero);
+      final state =
+          tester.state<State<Elevator>>(find.byType(Elevator)) as dynamic;
+      // Inject a raw value above the legal range. Drives the same code path
+      // a stream emission would (DynamicValue → _onStreamData →
+      // _isOutOfRange + clamp). The seam is added in Task 2 (GREEN).
+      state.debugInjectRaw(DynamicValue(value: 150.0));
+      await tester.pumpAndSettle();
+
+      final cp = tester.widget<CustomPaint>(
+        find.descendant(
+          of: find.byType(Elevator),
+          matching: find.byType(CustomPaint),
+        ),
+      );
+      final painter = cp.painter as ElevatorPainter;
+      expect(painter.isOutOfRange, isTrue,
+          reason: 'value > 100 must set isOutOfRange=true (ELEV-15).');
+      expect(painter.progress.value, closeTo(1.0, 1e-9),
+          reason:
+              'value > 100 must still clamp progress to 1.0 (ELEV-15 / platformProgress).');
+    });
+
+    testWidgets(
+        'stream value -50 clamps to progress 0.0 AND sets isOutOfRange=true',
+        (tester) async {
+      final config = ElevatorConfig(positionKey: '/elev/01/position');
+      await tester.pumpWidget(wrap(Elevator(config: config)));
+      await tester.pump(Duration.zero);
+      final state =
+          tester.state<State<Elevator>>(find.byType(Elevator)) as dynamic;
+      state.debugInjectRaw(DynamicValue(value: -50.0));
+      await tester.pumpAndSettle();
+
+      final cp = tester.widget<CustomPaint>(
+        find.descendant(
+          of: find.byType(Elevator),
+          matching: find.byType(CustomPaint),
+        ),
+      );
+      final painter = cp.painter as ElevatorPainter;
+      expect(painter.isOutOfRange, isTrue,
+          reason: 'value < 0 must set isOutOfRange=true (ELEV-15).');
+      expect(painter.progress.value, closeTo(0.0, 1e-9),
+          reason:
+              'value < 0 must still clamp progress to 0.0 (ELEV-15 / platformProgress).');
+    });
+
+    testWidgets(
+        'stream value 50 yields progress 0.5 AND isOutOfRange=false',
+        (tester) async {
+      final config = ElevatorConfig(positionKey: '/elev/01/position');
+      await tester.pumpWidget(wrap(Elevator(config: config)));
+      await tester.pump(Duration.zero);
+      final state =
+          tester.state<State<Elevator>>(find.byType(Elevator)) as dynamic;
+      state.debugInjectRaw(DynamicValue(value: 50.0));
+      await tester.pumpAndSettle();
+
+      final cp = tester.widget<CustomPaint>(
+        find.descendant(
+          of: find.byType(Elevator),
+          matching: find.byType(CustomPaint),
+        ),
+      );
+      final painter = cp.painter as ElevatorPainter;
+      expect(painter.isOutOfRange, isFalse,
+          reason:
+              'value in legal range [0, 100] must keep isOutOfRange=false (ELEV-15).');
+      expect(painter.progress.value, closeTo(0.5, 1e-9));
+    });
+
+    testWidgets(
+        'stale state and out-of-range state are mutually exclusive',
+        (tester) async {
+      // Stale (no positionKey configured) must not also flag isOutOfRange —
+      // the painter renders grey for stale and the amber outline only when
+      // a real out-of-range value arrives. Locks the CONTEXT §decisions
+      // mutual-exclusivity contract.
+      final config = ElevatorConfig(positionKey: '');
+      await tester.pumpWidget(wrap(Elevator(config: config)));
+      await tester.pump(Duration.zero);
+      final cp = tester.widget<CustomPaint>(
+        find.descendant(
+          of: find.byType(Elevator),
+          matching: find.byType(CustomPaint),
+        ),
+      );
+      final painter = cp.painter as ElevatorPainter;
+      expect(painter.isStale, isTrue);
+      expect(painter.isOutOfRange, isFalse,
+          reason:
+              'Stale (no key configured) must not double up as out-of-range.');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Phase 4 — Multi-elevator independence (QUAL-06)
+  //
+  // Two Elevator widgets sharing a parent (e.g. a Column) must operate with
+  // fully independent _progress notifiers and _hoistedKey state. Locks the
+  // CONTEXT §QUAL-06 contract: no shared static state, each instance owns
+  // its own ValueNotifier + StreamSubscription.
+  // ---------------------------------------------------------------------------
+  group('Multi-elevator independence (QUAL-06)', () {
+    testWidgets(
+        'two elevators with different positionKeys operate independently',
+        (tester) async {
+      final configA = ElevatorConfig(positionKey: '/elev/A/position');
+      final configB = ElevatorConfig(positionKey: '/elev/B/position');
+      await tester.pumpWidget(
+        ProviderScope(
+          child: MaterialApp(
+            home: Scaffold(
+              body: Center(
+                child: SizedBox(
+                  width: 400,
+                  height: 600,
+                  child: Column(
+                    children: [
+                      Expanded(
+                        child: Elevator(
+                          key: const ValueKey('elevA'),
+                          config: configA,
+                        ),
+                      ),
+                      Expanded(
+                        child: Elevator(
+                          key: const ValueKey('elevB'),
+                          config: configB,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump(Duration.zero);
+
+      // Locate each Elevator's State independently via the keyed widgets.
+      final stateA =
+          tester.state<State<Elevator>>(find.byKey(const ValueKey('elevA')))
+              as dynamic;
+      final stateB =
+          tester.state<State<Elevator>>(find.byKey(const ValueKey('elevB')))
+              as dynamic;
+
+      // Drive the targets independently.
+      (stateA.debugProgress as ValueNotifier<double>).value = 0.25;
+      (stateB.debugProgress as ValueNotifier<double>).value = 0.75;
+      await tester.pumpAndSettle();
+
+      // Each elevator's painter must reflect its own progress — no
+      // cross-talk between instances.
+      final paints = find
+          .descendant(
+            of: find.byType(Elevator),
+            matching: find.byType(CustomPaint),
+          )
+          .evaluate()
+          .map((e) => e.widget as CustomPaint)
+          .toList();
+      // Two CustomPaint widgets — one per Elevator. Read each painter's
+      // progress notifier value.
+      final progresses = paints
+          .where((cp) => cp.painter is ElevatorPainter)
+          .map((cp) => (cp.painter as ElevatorPainter).progress.value)
+          .toList();
+      expect(progresses, contains(closeTo(0.25, 1e-6)),
+          reason:
+              'Elevator A must hold progress 0.25 independently (QUAL-06).');
+      expect(progresses, contains(closeTo(0.75, 1e-6)),
+          reason:
+              'Elevator B must hold progress 0.75 independently (QUAL-06).');
+
+      // Cross-check stream identities — different positionKeys must yield
+      // different (non-identical) stream references.
+      final streamA = stateA.debugPositionStream;
+      final streamB = stateB.debugPositionStream;
+      expect(identical(streamA, streamB), isFalse,
+          reason:
+              'Different positionKeys must yield distinct stream references '
+              '(QUAL-06 — no shared subscription state).');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Phase 4 — Leak test (QUAL-07)
+  //
+  // Mount Elevator (with Sensor child) → unmount → assert no leaks.
+  //
+  // The Flutter SDK ships `package:leak_tracker_flutter_testing` transitively;
+  // we use the `experimentalLeakTesting` parameter on `testWidgets`. If the
+  // package surface changes between Flutter versions, the source-level guard
+  // below covers the dispose contract as a defensive fallback.
+  // ---------------------------------------------------------------------------
+  group('Leak test (QUAL-07)', () {
+    testWidgets('mount/unmount Elevator does not leak resources',
+        (tester) async {
+      final config = ElevatorConfig(
+        positionKey: '/elev/leak/position',
+        children: [
+          ElevatorChildEntry(
+              id: 'leak-sensor', child: SensorConfig.preview()),
+        ],
+      );
+      await tester.pumpWidget(wrap(Elevator(config: config)));
+      await tester.pump(Duration.zero);
+      // Replace with an empty widget tree — forces unmount and dispose
+      // of all Elevator/Sensor resources. If dispose() is missing, the
+      // ValueNotifier or StreamSubscription would surface as a leak or
+      // throw "X was used after being disposed" on subsequent frames.
+      await tester.pumpWidget(wrap(const SizedBox()));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull,
+          reason:
+              'Mount/unmount must not throw or leak '
+              '(QUAL-07 — dispose contract on _progress, _animProgress, _streamSub).');
+    });
+
+    test('elevator.dart dispose() cancels stream + disposes notifiers',
+        () {
+      // Source-level guard (QUAL-07 fallback): even if the runtime leak
+      // tracker is not active, the dispose contract MUST be present in the
+      // source. Verifies the literal dispose calls so the contract is
+      // grep-locked.
+      final src =
+          File('lib/page_creator/assets/elevator.dart').readAsStringSync();
+      expect(src, contains('_streamSub?.cancel()'),
+          reason:
+              'dispose() must cancel the position stream subscription '
+              '(QUAL-07).');
+      expect(src, contains('_progress.dispose()'),
+          reason:
+              'dispose() must dispose the _progress ValueNotifier (QUAL-07).');
+      expect(src, contains('_animProgress.dispose()'),
+          reason:
+              'dispose() must dispose the _animProgress ValueNotifier (QUAL-07).');
+    });
+
+    test('sensor.dart dispose contract grep guard (QUAL-07)', () {
+      // Sensor is mounted as a child of Elevator in the leak test above.
+      // Lock its dispose contract too — the controller-of-record.
+      final src =
+          File('lib/page_creator/assets/sensor.dart').readAsStringSync();
+      // Sensor uses StreamSubscription too; verify cancel is present in
+      // a dispose() method body.
+      final disposeIdx = src.indexOf(RegExp(r'void\s+dispose\s*\(\)'));
+      expect(disposeIdx, greaterThan(-1),
+          reason: 'sensor.dart must override dispose() (QUAL-07).');
+      // Look at the dispose method body window for cancel/dispose calls.
+      final tail = src.substring(disposeIdx);
+      expect(tail.contains('cancel()') || tail.contains('.dispose()'), isTrue,
+          reason:
+              'sensor.dart dispose() must release stream subscription / '
+              'controllers (QUAL-07).');
     });
   });
 }

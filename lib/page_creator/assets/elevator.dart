@@ -271,6 +271,14 @@ class _ElevatorState extends ConsumerState<Elevator> {
   /// receives this OR'd with `config.positionKey.isEmpty`.
   bool _isStreamStale = true;
 
+  /// True when the most recent stream emission was outside [0, 100]
+  /// (ELEV-15). The painter renders an amber outline when this is true.
+  /// Mutually exclusive with [_isStaleEffective]: an out-of-range value
+  /// is also a valid emission, so it flips [_isStreamStale] to false.
+  /// Stale paths (no key, no data, error) leave this false — the
+  /// painter never shows both grey AND amber at once.
+  bool _isOutOfRange = false;
+
   @override
   void initState() {
     super.initState();
@@ -323,8 +331,16 @@ class _ElevatorState extends ConsumerState<Elevator> {
       // Empty key — stale path 1 — no setState needed during initState
       // because _isStreamStale is already true. didUpdateWidget guards
       // the redundant flip via the equality check inside the listener.
-      if (mounted && !_isStreamStale) {
-        setState(() => _isStreamStale = true);
+      // Re-hoisting from a non-empty key MUST also clear any prior
+      // _isOutOfRange flag (mutual-exclusivity contract — ELEV-15).
+      if (mounted && (!_isStreamStale || _isOutOfRange)) {
+        setState(() {
+          _isStreamStale = true;
+          _isOutOfRange = false;
+        });
+      } else {
+        _isStreamStale = true;
+        _isOutOfRange = false;
       }
       return;
     }
@@ -338,9 +354,16 @@ class _ElevatorState extends ConsumerState<Elevator> {
       _onStreamData,
       onError: _onStreamError,
     );
-    // Initial state: stale until first emission.
-    if (mounted && !_isStreamStale) {
-      setState(() => _isStreamStale = true);
+    // Initial state: stale until first emission. Also clear any prior
+    // out-of-range flag carried over from the previous positionKey.
+    if (mounted && (!_isStreamStale || _isOutOfRange)) {
+      setState(() {
+        _isStreamStale = true;
+        _isOutOfRange = false;
+      });
+    } else {
+      _isStreamStale = true;
+      _isOutOfRange = false;
     }
   }
 
@@ -355,15 +378,46 @@ class _ElevatorState extends ConsumerState<Elevator> {
       }
       return;
     }
+    // Out-of-range detection (ELEV-15) — flag BEFORE clamping so the
+    // painter can surface the amber outline. NaN is also flagged so the
+    // operator sees a fault rather than a silent grey-stale render.
+    final outOfRange = raw.isNaN || raw < 0.0 || raw > 100.0;
     _progress.value = platformProgress(raw);
-    if (_isStreamStale && mounted) {
-      setState(() => _isStreamStale = false);
+    final wasStale = _isStreamStale;
+    final wasOutOfRange = _isOutOfRange;
+    if (mounted && (wasStale || wasOutOfRange != outOfRange)) {
+      setState(() {
+        _isStreamStale = false;
+        _isOutOfRange = outOfRange;
+      });
+    } else {
+      // No setState needed (mounted=false or no flag changes) — but
+      // keep the field in sync for any future reads.
+      _isStreamStale = false;
+      _isOutOfRange = outOfRange;
     }
   }
 
+  /// Test seam — drive a synthetic [DynamicValue] through the same
+  /// listener path a real stream would. Used by the ELEV-15 widget tests
+  /// in `elevator_widget_test.dart` so out-of-range behaviour can be
+  /// asserted without a full StateMan stub. Production code MUST NOT
+  /// depend on this method.
+  @visibleForTesting
+  void debugInjectRaw(DynamicValue dv) => _onStreamData(dv);
+
   void _onStreamError(Object error, StackTrace st) {
-    if (!_isStreamStale && mounted) {
-      setState(() => _isStreamStale = true);
+    // Stale and out-of-range are mutually exclusive (CONTEXT §decisions /
+    // ELEV-15). Errors fall back to the grey stale palette — clear the
+    // amber outline if it was previously raised.
+    if (mounted && (!_isStreamStale || _isOutOfRange)) {
+      setState(() {
+        _isStreamStale = true;
+        _isOutOfRange = false;
+      });
+    } else {
+      _isStreamStale = true;
+      _isOutOfRange = false;
     }
   }
 
@@ -445,7 +499,12 @@ class _ElevatorState extends ConsumerState<Elevator> {
   /// index 0, then one Positioned per ElevatorChildEntry. Driven by
   /// `_animProgress` so children translate in lock-step with the
   /// platform.
-  Widget _buildStack(Size paintSize, bool isStale, Color activeColor) {
+  Widget _buildStack(
+    Size paintSize,
+    bool isStale,
+    bool isOutOfRange,
+    Color activeColor,
+  ) {
     // Platform deck height — MUST match `kPlatformHeightFraction` in
     // elevator_painter.dart so children anchor exactly to the painted
     // platform's top edge. The fraction is the painter's source of
@@ -458,6 +517,7 @@ class _ElevatorState extends ConsumerState<Elevator> {
         painter: ElevatorPainter(
           progress: _animProgress,
           isStale: isStale,
+          isOutOfRange: isOutOfRange,
           activeColor: activeColor,
         ),
       ),
@@ -566,6 +626,10 @@ class _ElevatorState extends ConsumerState<Elevator> {
                     return _buildStack(
                       paintSize,
                       _isStaleEffective,
+                      // Stale and out-of-range are mutually exclusive
+                      // (ELEV-15) — never raise the amber outline while
+                      // the painter is also rendering grey.
+                      _isOutOfRange && !_isStaleEffective,
                       activeColor,
                     );
                   },
