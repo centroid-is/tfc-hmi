@@ -38,6 +38,8 @@ void main() {
   });
 
   group('ElevatorPainter goldens', () {
+    const elevatorKey = Key('elevator_painter_golden');
+
     Future<void> pumpElevator(
       WidgetTester tester, {
       required double progress,
@@ -48,14 +50,17 @@ void main() {
         MaterialApp(
           home: Scaffold(
             body: Center(
-              child: SizedBox(
-                width: 200,
-                height: 300,
-                child: CustomPaint(
-                  size: const Size(200, 300),
-                  painter: ElevatorPainter(
-                    progress: notifier,
-                    isStale: isStale,
+              child: RepaintBoundary(
+                key: elevatorKey,
+                child: SizedBox(
+                  width: 200,
+                  height: 300,
+                  child: CustomPaint(
+                    size: const Size(200, 300),
+                    painter: ElevatorPainter(
+                      progress: notifier,
+                      isStale: isStale,
+                    ),
                   ),
                 ),
               ),
@@ -70,7 +75,7 @@ void main() {
     testWidgets('stale.png', (tester) async {
       await pumpElevator(tester, progress: 0.5, isStale: true);
       await expectLater(
-        find.byType(CustomPaint).first,
+        find.byKey(elevatorKey),
         matchesGoldenFile('goldens/elevator/stale.png'),
       );
     });
@@ -78,7 +83,7 @@ void main() {
     testWidgets('position_0.png', (tester) async {
       await pumpElevator(tester, progress: 0.0, isStale: false);
       await expectLater(
-        find.byType(CustomPaint).first,
+        find.byKey(elevatorKey),
         matchesGoldenFile('goldens/elevator/position_0.png'),
       );
     });
@@ -86,7 +91,7 @@ void main() {
     testWidgets('position_50.png', (tester) async {
       await pumpElevator(tester, progress: 0.5, isStale: false);
       await expectLater(
-        find.byType(CustomPaint).first,
+        find.byKey(elevatorKey),
         matchesGoldenFile('goldens/elevator/position_50.png'),
       );
     });
@@ -94,7 +99,7 @@ void main() {
     testWidgets('position_100.png', (tester) async {
       await pumpElevator(tester, progress: 1.0, isStale: false);
       await expectLater(
-        find.byType(CustomPaint).first,
+        find.byKey(elevatorKey),
         matchesGoldenFile('goldens/elevator/position_100.png'),
       );
     });
