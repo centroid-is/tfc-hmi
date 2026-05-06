@@ -259,10 +259,19 @@ class _ElevatorState extends ConsumerState<Elevator> {
   /// from `build()` — that would recreate the stream every frame and
   /// trigger an OPC UA monitored-item create/cancel storm (Pitfall 2).
   ///
-  /// Locked under widget-test regression guard: 100 rebuilds with the
-  /// same positionKey MUST preserve `_positionStream` reference identity
-  /// (`elevator_widget_test.dart` 'Stream lifecycle' group, test
-  /// '100 rebuilds with same positionKey: stream identity preserved').
+  /// LOCKED — Pitfall 2 regression guard:
+  ///   100 rebuilds with the same positionKey MUST preserve
+  ///   `_positionStream` reference identity. Enforced by
+  ///   `test/page_creator/assets/elevator_widget_test.dart`,
+  ///   group 'Stream lifecycle (Pitfall 2)', test
+  ///   '100 rebuilds with same positionKey: stream identity preserved'.
+  ///   If you change this method, that test must continue to pass.
+  ///
+  ///   Equally locked: 'changing positionKey re-hoists stream
+  ///   (different identity)' — re-hoist guard via `_hoistedKey`.
+  ///
+  ///   And: 'unmount disposes ValueNotifier and cancels subscription'
+  ///   — `_streamSub.cancel()` before re-hoisting closes Pitfall 10.
   void _hoistStream() {
     // Cancel any prior subscription before re-hoisting.
     _streamSub?.cancel();
