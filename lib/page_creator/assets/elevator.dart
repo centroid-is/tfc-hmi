@@ -382,6 +382,105 @@ class _ElevatorState extends ConsumerState<Elevator> {
     super.dispose();
   }
 
+  // ---------------------------------------------------------------------------
+  // Phase 3 — child composition
+  //
+  // CONTEXT §Hit-Test Through Translation: children's hit-test follows
+  // their `Positioned.top` value — Flutter's hit-test walks the layout
+  // tree, so Positioned-driven layout means taps land on the rendered
+  // glyph regardless of platform position. This is the user's locked
+  // directive (ELEV-19 / Pitfall 7) — DO NOT replace Positioned with
+  // Transform.translate around children.
+  //
+  // CONTEXT §Child Layout & Identity:
+  //   - Stack(clipBehavior: Clip.none) so children may extend outside
+  //     the elevator bbox during translation without being clipped.
+  //   - Each child wrapper carries ValueKey<String>(entry.id) — the UUID
+  //     locked in Plan 02-02's ElevatorChildEntry schema (ELEV-12).
+  //   - Each child renders via entry.child.build(context) — the elevator
+  //     NEVER switches on child runtime type (ELEV-11, ARCHITECTURE
+  //     Anti-Pattern 1).
+  //   - Each child's bottom edge sits on the platform's top edge:
+  //     `top = platformOffsetTop(progress, bboxH, platformH) - childH`.
+  // ---------------------------------------------------------------------------
+
+  /// Builds the Stack that composes the elevator visuals: painter at
+  /// index 0, then one Positioned per ElevatorChildEntry. Driven by
+  /// `_animProgress` so children translate in lock-step with the
+  /// platform.
+  Widget _buildStack(Size paintSize, bool isStale, Color activeColor) {
+    // Platform deck height — MUST match `kPlatformHeightFraction` in
+    // elevator_painter.dart so children anchor exactly to the painted
+    // platform's top edge. The fraction is the painter's source of
+    // truth; we import the constant directly to keep the two values
+    // welded together.
+    final platformH = paintSize.height * kPlatformHeightFraction;
+    final children = <Widget>[
+      CustomPaint(
+        size: paintSize,
+        painter: ElevatorPainter(
+          progress: _animProgress,
+          isStale: isStale,
+          activeColor: activeColor,
+        ),
+      ),
+      for (final entry in widget.config.children)
+        _buildPositionedChild(entry, paintSize, platformH),
+    ];
+    return SizedBox(
+      width: paintSize.width,
+      height: paintSize.height,
+      child: Stack(clipBehavior: Clip.none, children: children),
+    );
+  }
+
+  /// Builds a Positioned wrapper for a single child entry. The child
+  /// subtree is built ONCE and cached as the inner ValueListenableBuilder's
+  /// `child:` parameter — only the Positioned (and its `top`) rebuilds
+  /// per `_animProgress` change. This preserves the child's State
+  /// identity across frames (Pitfall 1: 50 progress changes → 1 initState
+  /// call). The KeyedSubtree carrying the `ValueKey<String>(entry.id)`
+  /// is what Flutter's element-reconciliation algorithm uses to
+  /// recognise the subtree as the same instance even if the child list
+  /// is mutated.
+  Widget _buildPositionedChild(
+    ElevatorChildEntry entry,
+    Size paintSize,
+    double platformH,
+  ) {
+    final intrinsic = entry.child.size.toSize(paintSize);
+    final childW = intrinsic.width <= 0
+        ? paintSize.shortestSide / 4
+        : intrinsic.width;
+    final childH = intrinsic.height <= 0
+        ? paintSize.shortestSide / 4
+        : intrinsic.height;
+    final left = entry.offsetX * paintSize.width - childW / 2;
+    return ValueListenableBuilder<double>(
+      valueListenable: _animProgress,
+      child: KeyedSubtree(
+        key: ValueKey<String>(entry.id),
+        child: SizedBox(
+          width: childW,
+          height: childH,
+          child: entry.child.build(context),
+        ),
+      ),
+      builder: (ctx, animProgress, builtChild) {
+        final top =
+            platformOffsetTop(animProgress, paintSize.height, platformH) -
+                childH;
+        return Positioned(
+          left: left,
+          top: top,
+          width: childW,
+          height: childH,
+          child: builtChild!,
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final angleDeg = widget.config.coordinates.angle ?? 0.0;
@@ -427,13 +526,10 @@ class _ElevatorState extends ConsumerState<Elevator> {
                     // so the painter's super(repaint:) sees changes
                     // without rebuilding the CustomPaint subtree itself.
                     _animProgress.value = animValue;
-                    return CustomPaint(
-                      size: paintSize,
-                      painter: ElevatorPainter(
-                        progress: _animProgress,
-                        isStale: _isStaleEffective,
-                        activeColor: activeColor,
-                      ),
+                    return _buildStack(
+                      paintSize,
+                      _isStaleEffective,
+                      activeColor,
                     );
                   },
                 );

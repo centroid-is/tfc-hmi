@@ -85,12 +85,19 @@
 /// Resume signal: report "approved" or describe issues for triage.
 library;
 
+import 'dart:io' show File, Platform;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:json_annotation/json_annotation.dart';
 
+import 'package:tfc/page_creator/assets/common.dart';
+import 'package:tfc/page_creator/assets/conveyor.dart';
 import 'package:tfc/page_creator/assets/elevator.dart';
+import 'package:tfc/page_creator/assets/elevator_layout.dart';
 import 'package:tfc/page_creator/assets/elevator_painter.dart';
+import 'package:tfc/page_creator/assets/sensor.dart';
 
 void main() {
   Widget wrap(Widget child) => ProviderScope(
@@ -305,4 +312,460 @@ void main() {
       expect(tab.duration, const Duration(milliseconds: 250));
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // Phase 3 — Children riding the platform
+  // ---------------------------------------------------------------------------
+  //
+  // Locks the four CONTEXT contracts (D-CONTEXT §Child Layout & Identity,
+  // §Hit-Test Through Translation):
+  //   1. Polymorphic dispatch via entry.child.build(context) — no switch on
+  //      runtime type (ELEV-11 / ARCHITECTURE Anti-Pattern 1).
+  //   2. ValueKey<String>(entry.id) wraps each child for identity preservation
+  //      across _animProgress changes (ELEV-12 / Pitfall 1).
+  //   3. Children's GestureDetectors keep working while the platform is
+  //      mid-translation — hit-test follows rendered Positioned.top, not
+  //      layout-time position (ELEV-19 / Pitfall 7 — the user's locked
+  //      directive in feedback_gesture_through_translation.md).
+  //   4. Stack uses Clip.none so children may overhang the elevator bbox
+  //      during translation (D-CONTEXT §Child Layout & Identity).
+  group('Children riding the platform (Phase 3)', () {
+    testWidgets(
+        'children render via polymorphic BaseAsset.build (no switch on runtimeType)',
+        (tester) async {
+      final config = ElevatorConfig(
+        positionKey: '',
+        children: [
+          ElevatorChildEntry(
+              id: 'sensor-poly', child: SensorConfig.preview()),
+          ElevatorChildEntry(
+              id: 'conveyor-poly', child: ConveyorConfig.preview()),
+        ],
+      );
+      await tester.pumpWidget(wrap(Elevator(config: config)));
+      await tester.pump(Duration.zero);
+
+      // Both children rendered through their own build() method — no
+      // runtime-type switch needed in elevator.dart.
+      expect(find.byType(Sensor), findsOneWidget);
+      expect(find.byType(Conveyor), findsOneWidget);
+    });
+
+    test(
+        'source has no runtime-type switching on elevator children (ELEV-11)',
+        () {
+      // Source-level grep gate: elevator.dart must not use `is SensorConfig`,
+      // `is ConveyorConfig`, `child.runtimeType ==`, or
+      // `switch (... .runtimeType)` for child dispatch. This is the locked
+      // ARCHITECTURE Anti-Pattern 1 enforcement — children render
+      // polymorphically through entry.child.build(context).
+      final src =
+          File('lib/page_creator/assets/elevator.dart').readAsStringSync();
+      // Strip line and block comments so commentary like "no `is X`
+      // dispatch" doesn't trip the gate.
+      final stripped = src
+          .replaceAll(RegExp(r'/\*.*?\*/', dotAll: true), '')
+          .split('\n')
+          .map((line) {
+            // Strip trailing line comment, but only if the slashes are not
+            // inside a string. Naive approach is good enough for our
+            // own production source.
+            final idx = line.indexOf('//');
+            return idx >= 0 ? line.substring(0, idx) : line;
+          })
+          .join('\n');
+      final patterns = RegExp(
+        r'is\s+SensorConfig|is\s+ConveyorConfig|'
+        r'child\.runtimeType\s*==|'
+        r'switch\s*\(\s*[A-Za-z_][A-Za-z0-9_]*\.runtimeType\s*\)',
+      );
+      final matches = patterns.allMatches(stripped).toList();
+      expect(matches, isEmpty,
+          reason:
+              'elevator.dart must dispatch children polymorphically via '
+              'entry.child.build(context) — no runtime-type switching '
+              '(ELEV-11, ARCHITECTURE Anti-Pattern 1). Found: '
+              '${matches.map((m) => m.group(0)).toList()}');
+    });
+
+    testWidgets('each child wrapper carries ValueKey<String>(entry.id)',
+        (tester) async {
+      const lockedId = 'test-child-aaa';
+      final config = ElevatorConfig(
+        positionKey: '',
+        children: [
+          ElevatorChildEntry(id: lockedId, child: SensorConfig.preview()),
+        ],
+      );
+      await tester.pumpWidget(wrap(Elevator(config: config)));
+      await tester.pump(Duration.zero);
+
+      final keyFinder = find.byKey(const ValueKey<String>(lockedId));
+      expect(keyFinder, findsOneWidget,
+          reason:
+              'A ValueKey<String>(entry.id) wrapper must exist for each child '
+              '(ELEV-12 / Pitfall 1)');
+
+      // The keyed wrapper must be an ancestor of the rendered child widget.
+      final descendantSensor = find.descendant(
+        of: keyFinder,
+        matching: find.byType(Sensor),
+      );
+      expect(descendantSensor, findsOneWidget,
+          reason:
+              'The ValueKey<String>(entry.id) wrapper must be an ancestor '
+              'of the rendered child widget so identity is preserved across '
+              'rebuilds.');
+    });
+
+    testWidgets(
+        'child State.initState fires exactly once across 50 progress changes (Pitfall 1)',
+        (tester) async {
+      _CountingChildState.initStateCount = 0;
+      final config = ElevatorConfig(
+        positionKey: '',
+        children: [
+          ElevatorChildEntry(
+              id: 'counting-1', child: _CountingChildConfig()),
+        ],
+      );
+      await tester.pumpWidget(wrap(Elevator(config: config)));
+      await tester.pump(Duration.zero);
+      expect(_CountingChildState.initStateCount, 1,
+          reason: 'Initial mount should fire initState exactly once.');
+
+      // Drive _progress.value through 50 distinct values; the inner
+      // ValueListenableBuilder/Positioned.top should rebuild while the
+      // child subtree (its State) stays alive — ValueKey + KeyedSubtree
+      // preserve identity (ELEV-12 / Pitfall 1).
+      final state =
+          tester.state<State<Elevator>>(find.byType(Elevator)) as dynamic;
+      final progress = state.debugProgress as ValueNotifier<double>;
+      for (int i = 0; i < 50; i++) {
+        progress.value = i / 49.0;
+        await tester.pump(const Duration(milliseconds: 1));
+      }
+
+      expect(_CountingChildState.initStateCount, 1,
+          reason:
+              '50 progress changes must NOT recreate the child State '
+              '(Pitfall 1 — widget identity loss on position updates).');
+    });
+
+    testWidgets(
+        'tap during translation lands on the child, opens child config dialog (ELEV-19, Pitfall 7)',
+        (tester) async {
+      // SensorConfig with a generous size so the GestureDetector hit-target
+      // is a comfortable rectangle rather than the 0.03×0.03 default tiny
+      // box (which would leave the tap centre on a 6-pixel target — too
+      // brittle). The test locks the hit-test-through-translation
+      // contract, not painter-pixel coverage.
+      final sensor = SensorConfig.preview();
+      sensor.size = const RelativeSize(width: 0.4, height: 0.2);
+
+      final config = ElevatorConfig(
+        positionKey: '',
+        children: [
+          ElevatorChildEntry(
+              id: 'sensor-tap', offsetX: 0.5, child: sensor),
+        ],
+      );
+      await tester.pumpWidget(wrap(Elevator(config: config)));
+      await tester.pump(Duration.zero);
+
+      // Drive progress mid-translation. We don't pumpAndSettle — the
+      // tween is intentionally still in flight so the test exercises the
+      // hit-test-while-moving contract.
+      final state =
+          tester.state<State<Elevator>>(find.byType(Elevator)) as dynamic;
+      final progress = state.debugProgress as ValueNotifier<double>;
+      progress.value = 0.5;
+      await tester.pump(const Duration(milliseconds: 1));
+
+      // Tap the Sensor child — the tap should land on the Sensor's own
+      // GestureDetector and open its dialog (locked KeyField label
+      // 'Detection State Key' from sensor.dart:_SensorConfigEditor).
+      await tester.tap(find.byType(Sensor));
+      await tester.pumpAndSettle();
+
+      // Sensor's editor surface (locked).
+      expect(find.text('Detection State Key'), findsOneWidget,
+          reason:
+              'Tap on a child during translation must reach the child\'s '
+              'GestureDetector and open its config dialog (ELEV-19).');
+      // The Elevator's own editor must NOT have opened.
+      expect(find.text('Position State Key (0-100%)'), findsNothing,
+          reason:
+              'Elevator editor must not steal taps that land on a child.');
+    });
+
+    testWidgets('children Positioned.top follows _animProgress (ELEV-10)',
+        (tester) async {
+      final config = ElevatorConfig(
+        positionKey: '',
+        children: [
+          ElevatorChildEntry(
+              id: 'fixed-size',
+              offsetX: 0.5,
+              child: _FixedSizeChildConfig(width: 40, height: 40)),
+        ],
+      );
+      await tester.pumpWidget(wrap(Elevator(config: config)));
+      await tester.pump(Duration.zero);
+      final state =
+          tester.state<State<Elevator>>(find.byType(Elevator)) as dynamic;
+      final progress = state.debugProgress as ValueNotifier<double>;
+
+      // Drive to 0.0, settle, read.
+      progress.value = 0.0;
+      await tester.pumpAndSettle();
+      final positionedFinder = find.ancestor(
+        of: find.byType(_FixedSizeChild),
+        matching: find.byType(Positioned),
+      );
+      expect(positionedFinder, findsOneWidget);
+      final topAt0 = (tester.widget(positionedFinder) as Positioned).top!;
+
+      // Drive to 1.0, settle, read.
+      progress.value = 1.0;
+      await tester.pumpAndSettle();
+      final topAt1 = (tester.widget(positionedFinder) as Positioned).top!;
+
+      // Child rises (smaller `top`) as progress increases.
+      expect(topAt0 > topAt1, isTrue,
+          reason:
+              'Child Positioned.top must decrease as platform rises '
+              '(progress 0 → 1) — ELEV-10.');
+
+      // Numerical: child's bottom edge sits on platform's top edge.
+      // bbox is 200x300 (from `wrap`). platformH = 300 * 0.08 = 24.
+      const bboxH = 300.0;
+      const platformH = bboxH * kPlatformHeightFraction;
+      const childH = 40.0;
+      final expectedTopAt0 = platformOffsetTop(0.0, bboxH, platformH) - childH;
+      final expectedTopAt1 = platformOffsetTop(1.0, bboxH, platformH) - childH;
+      expect(topAt0, closeTo(expectedTopAt0, 1.0));
+      expect(topAt1, closeTo(expectedTopAt1, 1.0));
+    });
+
+    testWidgets('Stack uses Clip.none so children may overhang bbox',
+        (tester) async {
+      final config = ElevatorConfig(
+        positionKey: '',
+        children: [
+          ElevatorChildEntry(
+              id: 'overhanger',
+              offsetX: 0.5,
+              child: _FixedSizeChildConfig(width: 80, height: 200)),
+        ],
+      );
+      await tester.pumpWidget(wrap(Elevator(config: config)));
+      await tester.pump(Duration.zero);
+
+      // Locate the Stack inside the Elevator subtree (the elevator's own
+      // composition Stack — not any Stack the Material chrome may host).
+      final stackFinder = find
+          .descendant(
+            of: find.byType(Elevator),
+            matching: find.byType(Stack),
+          )
+          .first;
+      final stack = tester.widget<Stack>(stackFinder);
+      expect(stack.clipBehavior, Clip.none,
+          reason:
+              'Elevator Stack must use Clip.none so children may extend '
+              'outside the elevator bbox during translation '
+              '(D-CONTEXT §Child Layout & Identity).');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Goldens — elevator + Sensor + Conveyor children at progress {0, 0.5, 1.0}
+  //
+  // QUAL-03 lock: 3 PNG goldens captured deterministically on macOS via
+  // RepaintBoundary. The harness uses positionKey='' so the painter
+  // renders in its stale (grey) palette — this avoids any Theme /
+  // primary-colour dependency in the captured pixels (Pitfall 6
+  // determinism). The progress is driven directly through the
+  // `debugProgress` test seam, so no StateMan stub is required.
+  //
+  // Skipped on non-macOS to mirror sensor_painter_test.dart and
+  // conveyor_gate_golden_test.dart (the project's locked golden
+  // platform-skip convention).
+  // ---------------------------------------------------------------------------
+  group('Goldens — elevator with children at progress {0, 0.5, 1.0} (QUAL-03)',
+      skip: !Platform.isMacOS ? 'Golden tests only run on macOS' : null, () {
+    const goldenKey = Key('elevator_with_children_golden');
+
+    Future<void> pumpElevatorAtProgress(
+      WidgetTester tester,
+      double targetProgress,
+    ) async {
+      // Sensors and conveyors get explicit sizes so they're visible in
+      // the captured pixels (the BaseAsset 0.03×0.03 default is too
+      // small to be meaningful in a 200×300 bbox).
+      final sensor = SensorConfig.preview()
+        ..size = const RelativeSize(width: 0.35, height: 0.18);
+      final conveyor = ConveyorConfig.preview()
+        ..size = const RelativeSize(width: 0.35, height: 0.18);
+
+      final config = ElevatorConfig(
+        positionKey: '',
+        children: [
+          ElevatorChildEntry(
+              id: 'sensor-fixed', offsetX: 0.3, child: sensor),
+          ElevatorChildEntry(
+              id: 'conveyor-fixed', offsetX: 0.7, child: conveyor),
+        ],
+      );
+
+      await tester.pumpWidget(
+        ProviderScope(
+          child: MaterialApp(
+            home: Scaffold(
+              body: Center(
+                child: RepaintBoundary(
+                  key: goldenKey,
+                  child: SizedBox(
+                    width: 200,
+                    height: 300,
+                    child: Elevator(config: config),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump(Duration.zero);
+
+      // Drive progress to target via the debugProgress test seam, then
+      // settle the tween animation so the rendered _animProgress
+      // reaches the target deterministically.
+      final state =
+          tester.state<State<Elevator>>(find.byType(Elevator)) as dynamic;
+      final progress = state.debugProgress as ValueNotifier<double>;
+      progress.value = targetProgress;
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('progress 0.0', (tester) async {
+      await pumpElevatorAtProgress(tester, 0.0);
+      await expectLater(
+        find.byKey(goldenKey),
+        matchesGoldenFile('goldens/elevator_with_children_progress_0.png'),
+      );
+    });
+
+    testWidgets('progress 0.5', (tester) async {
+      await pumpElevatorAtProgress(tester, 0.5);
+      await expectLater(
+        find.byKey(goldenKey),
+        matchesGoldenFile('goldens/elevator_with_children_progress_50.png'),
+      );
+    });
+
+    testWidgets('progress 1.0', (tester) async {
+      await pumpElevatorAtProgress(tester, 1.0);
+      await expectLater(
+        find.byKey(goldenKey),
+        matchesGoldenFile('goldens/elevator_with_children_progress_100.png'),
+      );
+    });
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Test-only BaseAsset subclasses
+//
+// _CountingChildConfig — counts how many times its State is constructed
+// (initStateCount). Used to lock Pitfall 1 across 50 progress changes.
+//
+// _FixedSizeChildConfig — emits a child with a fixed pixel size irrespective
+// of the parent bbox, so layout assertions can be numerical.
+//
+// Both subclasses provide just enough surface to satisfy the BaseAsset
+// contract for in-tree rendering. They are NEVER serialised to JSON in
+// these tests — fromJson/toJson are not exercised — but the json_serializable
+// machinery requires the methods to exist.
+// ---------------------------------------------------------------------------
+
+class _CountingChildConfig extends BaseAsset {
+  @override
+  String get displayName => 'CountingChild';
+  @override
+  String get category => 'Test';
+
+  _CountingChildConfig() : super();
+
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  @override
+  RelativeSize get size => const RelativeSize(width: 0.2, height: 0.2);
+
+  @override
+  Widget build(BuildContext context) => const _CountingChild();
+  @override
+  Widget configure(BuildContext context) => const SizedBox.shrink();
+  @override
+  Map<String, dynamic> toJson() => <String, dynamic>{};
+}
+
+class _CountingChild extends StatefulWidget {
+  const _CountingChild();
+  @override
+  State<_CountingChild> createState() => _CountingChildState();
+}
+
+class _CountingChildState extends State<_CountingChild> {
+  static int initStateCount = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    initStateCount++;
+  }
+
+  @override
+  Widget build(BuildContext context) =>
+      const ColoredBox(color: Color(0xFF000000));
+}
+
+class _FixedSizeChildConfig extends BaseAsset {
+  final double widthPx;
+  final double heightPx;
+
+  _FixedSizeChildConfig({required double width, required double height})
+      : widthPx = width,
+        heightPx = height,
+        super();
+
+  @override
+  String get displayName => 'FixedSizeChild';
+  @override
+  String get category => 'Test';
+
+  /// Returns a RelativeSize that, given the elevator's 200x300 bbox in the
+  /// `wrap` harness, produces the requested absolute pixel size via
+  /// RelativeSize.toSize. The hard-coded harness size is the contract of
+  /// the test wrapper.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  @override
+  RelativeSize get size => RelativeSize(
+        width: widthPx / 200.0,
+        height: heightPx / 300.0,
+      );
+
+  @override
+  Widget build(BuildContext context) => const _FixedSizeChild();
+  @override
+  Widget configure(BuildContext context) => const SizedBox.shrink();
+  @override
+  Map<String, dynamic> toJson() => <String, dynamic>{};
+}
+
+class _FixedSizeChild extends StatelessWidget {
+  const _FixedSizeChild();
+  @override
+  Widget build(BuildContext context) =>
+      const ColoredBox(color: Color(0xFF00FF00));
 }
