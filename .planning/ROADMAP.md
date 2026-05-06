@@ -12,10 +12,10 @@ Two new HMI assets — a vertical-lift elevator carrying child assets and a mult
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 1: Sensor Asset** - Multi-kind sensor renders detection state from a bool state key, with config dialog, painters, and goldens
-- [ ] **Phase 2: Elevator Foundation** - Elevator config + static visuals + position-driven platform pipeline (no children yet)
-- [ ] **Phase 3: Elevator Child Embedding** - Children translate with the platform; editor dropdown adds/removes/edits children
-- [ ] **Phase 4: Polish, Error UX & CI Hardening** - Out-of-range fault outline, leak tests, multi-elevator smoke
+- [x] **Phase 1: Sensor Asset** - Multi-kind sensor renders detection state from a bool state key, with config dialog, painters, and goldens ✅ 80 tests
+- [x] **Phase 2: Elevator Foundation** - Elevator config + static visuals + position-driven platform pipeline (no children yet) ✅ 63 tests
+- [x] **Phase 3: Elevator Child Embedding** - Children translate with the platform; editor dropdown adds/removes/edits children ✅ 61 tests (+ LayoutRotatedBox.hitTest bug fix)
+- [x] **Phase 4: Polish, Error UX & CI Hardening** - Out-of-range fault outline, leak tests, multi-elevator smoke ✅ Closes milestone
 
 ## Phase Details
 
