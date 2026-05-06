@@ -683,8 +683,15 @@ void main() {
       await tester.tap(find.byType(GestureDetector).first);
       await tester.pumpAndSettle();
 
-      // Tap the edit IconButton on the child's row.
-      await tester.tap(find.byTooltip('Edit child'));
+      // Editor body is scrollable (SingleChildScrollView in
+      // _ElevatorConfigEditor). The Card's IconButton can sit below the
+      // 600-pixel default test viewport, so ensureVisible scrolls it in
+      // before tapping. Mirrors `tester.ensureVisible` precedent in
+      // sensor_widget_test for narrow-viewport assertions.
+      final editBtn = find.byTooltip('Edit child');
+      await tester.ensureVisible(editBtn);
+      await tester.pumpAndSettle();
+      await tester.tap(editBtn);
       await tester.pumpAndSettle();
 
       // Sensor's editor surface (locked label from sensor.dart).
@@ -712,8 +719,12 @@ void main() {
 
       expect(config.children.length, 1);
 
-      // Tap the remove IconButton on the child's row.
-      await tester.tap(find.byTooltip('Remove child'));
+      // Tap the remove IconButton on the child's row (scroll into view first
+      // — see Edit-button test for narrow-viewport rationale).
+      final removeBtn = find.byTooltip('Remove child');
+      await tester.ensureVisible(removeBtn);
+      await tester.pumpAndSettle();
+      await tester.tap(removeBtn);
       await tester.pumpAndSettle();
 
       expect(config.children, isEmpty,
@@ -742,8 +753,11 @@ void main() {
       expect(config.children[0].offsetX, 0.5);
 
       // The Slider lives inside the editor (per-entry slider for offsetX).
-      // Drag rightward to bump value above 0.5.
+      // Drag rightward to bump value above 0.5. ensureVisible scrolls the
+      // Slider into the test viewport (narrow 800x600 default).
       final slider = find.byType(Slider).first;
+      await tester.ensureVisible(slider);
+      await tester.pumpAndSettle();
       await tester.drag(slider, const Offset(50, 0));
       await tester.pump();
 
