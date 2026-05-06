@@ -209,4 +209,77 @@ void main() {
       expect(source, isNot(contains('animateTo')));
     });
   });
+
+  group('Stream lifecycle', () {
+    testWidgets('rebuilds with same detectionKey do not re-hoist the stream',
+        (tester) async {
+      final config = SensorConfig(detectionKey: '/k1');
+      await tester.pumpWidget(_wrap(
+        SizedBox(width: 80, height: 40, child: Sensor(config: config)),
+      ));
+      final dynamic state = tester.state(find.byType(Sensor));
+      // Stream identity at t=0 (after initState).
+      final streamRef1 = state.debugDetectionStream;
+
+      // Trigger a rebuild WITHOUT changing the config — same SensorConfig
+      // instance, same detectionKey. didUpdateWidget must NOT re-hoist.
+      await tester.pumpWidget(_wrap(
+        SizedBox(width: 80, height: 40, child: Sensor(config: config)),
+      ));
+      final streamRef2 = state.debugDetectionStream;
+
+      expect(
+        identical(streamRef1, streamRef2),
+        isTrue,
+        reason: 'Stream identity must persist across rebuilds (Pitfall 2)',
+      );
+    });
+
+    testWidgets('changing detectionKey re-hoists the stream', (tester) async {
+      final config1 = SensorConfig(detectionKey: '/k1');
+      await tester.pumpWidget(_wrap(
+        SizedBox(width: 80, height: 40, child: Sensor(config: config1)),
+      ));
+      final dynamic state = tester.state(find.byType(Sensor));
+      final streamRef1 = state.debugDetectionStream;
+
+      // Mutate config to a different key — this is the path the editor
+      // dialog takes (config object is reused across rebuilds; keys mutate).
+      config1.detectionKey = '/k2';
+      await tester.pumpWidget(_wrap(
+        SizedBox(width: 80, height: 40, child: Sensor(config: config1)),
+      ));
+      final streamRef2 = state.debugDetectionStream;
+
+      expect(
+        identical(streamRef1, streamRef2),
+        isFalse,
+        reason:
+            'Stream must re-hoist when detectionKey changes (didUpdateWidget guard)',
+      );
+    });
+
+    test(
+        'build() does not construct a stream inline (Pitfall 2 source-level guard)',
+        () async {
+      final source =
+          await File('lib/page_creator/assets/sensor.dart').readAsString();
+      // Strip line-comments to avoid false positives from doc-comments.
+      final stripped = source
+          .split('\n')
+          .where((l) => !l.trimLeft().startsWith('//'))
+          .join('\n');
+      // Find the _SensorState.build(...) method body and check no stream
+      // construction expressions live inside it.
+      final buildSection =
+          RegExp(r'Widget build\(BuildContext context\) \{[\s\S]*?\n  \}')
+                  .firstMatch(stripped)
+                  ?.group(0) ??
+              '';
+      expect(buildSection, isNotEmpty,
+          reason: 'Could not locate build() method in sensor.dart');
+      expect(buildSection, isNot(contains('stateManProvider')));
+      expect(buildSection, isNot(contains('subscribe(')));
+    });
+  });
 }

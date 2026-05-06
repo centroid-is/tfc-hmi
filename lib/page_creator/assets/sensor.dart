@@ -146,6 +146,14 @@ class _SensorState extends ConsumerState<Sensor> {
   /// `null` indicates the stale path: empty detectionKey — no stream needed.
   Stream<bool>? _detectionStream;
 
+  /// The detectionKey that `_detectionStream` was constructed for. Compared
+  /// against `widget.config.detectionKey` in `didUpdateWidget` so we re-hoist
+  /// even when the editor mutates the same `SensorConfig` instance in-place
+  /// (the case where `oldWidget.config` and `widget.config` are identical
+  /// references and we cannot rely on `oldWidget.config.detectionKey` to
+  /// reflect the previous value).
+  String? _hoistedKey;
+
   @override
   void initState() {
     super.initState();
@@ -156,8 +164,11 @@ class _SensorState extends ConsumerState<Sensor> {
   void didUpdateWidget(covariant Sensor oldWidget) {
     super.didUpdateWidget(oldWidget);
     // Re-hoist only when the key actually changes — preserves stream identity
-    // across rebuilds with same config (Pitfall 2 invariant).
-    if (oldWidget.config.detectionKey != widget.config.detectionKey) {
+    // across rebuilds with same config (Pitfall 2 invariant). Compare against
+    // the stored `_hoistedKey` rather than `oldWidget.config.detectionKey`
+    // because the editor mutates the same config instance in-place, so
+    // `oldWidget.config` and `widget.config` are the same reference.
+    if (_hoistedKey != widget.config.detectionKey) {
       _hoistStream();
     }
   }
@@ -168,6 +179,7 @@ class _SensorState extends ConsumerState<Sensor> {
   /// OPC UA monitored-item create/cancel storm (Pitfall 2).
   void _hoistStream() {
     final key = widget.config.detectionKey;
+    _hoistedKey = key;
     if (key.isEmpty) {
       _detectionStream = null;
       return;
@@ -192,6 +204,14 @@ class _SensorState extends ConsumerState<Sensor> {
         rawBool: rawBool,
         invertActivePolarity: widget.config.invertActivePolarity,
       );
+
+  /// Test-only window onto the hoisted stream identity. Production code
+  /// must NOT depend on this — it exists so the Pitfall 2 stream-lifecycle
+  /// regression tests can assert `identical(oldStream, newStream)` across
+  /// rebuilds (no resubscribe storm) and a fresh stream after a
+  /// `detectionKey` change.
+  @visibleForTesting
+  Stream<bool>? get debugDetectionStream => _detectionStream;
 
   /// Per-kind painter dispatch — exhaustive switch (no `default` clause so
   /// adding a future SensorKind value is a compile error here, not a runtime
