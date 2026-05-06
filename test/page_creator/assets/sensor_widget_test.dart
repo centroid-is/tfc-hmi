@@ -19,8 +19,49 @@ void main() {
     );
   }
 
-  group('Tap to configure', () {
-    testWidgets('tap on sensor with empty detectionKey opens config dialog',
+  group('Tap to show details (Plan 04-05)', () {
+    // Plan 04-05: tapping a Sensor at runtime opens a READ-ONLY details
+    // dialog — NOT the config editor. Config remains editor-only via
+    // page_editor.dart's _showConfigDialog → asset.configure(context).
+    //
+    // Locks the SENS-01 contract: operators can inspect runtime state
+    // (kind, detection key, polarity, edge-delay keys, tag) but must
+    // never mutate page configuration via runtime taps.
+
+    testWidgets('tap on sensor opens details dialog (NOT config dialog)',
+        (tester) async {
+      final config = SensorConfig(
+        detectionKey: 'sensor/01/det',
+        kind: SensorKind.opticField,
+      );
+      await tester.pumpWidget(wrap(
+        SizedBox(width: 80, height: 40, child: Sensor(config: config)),
+      ));
+
+      await tester.tap(find.byType(Sensor));
+      await tester.pumpAndSettle();
+
+      // Details dialog is an AlertDialog with read-only labels.
+      expect(find.byType(AlertDialog), findsOneWidget,
+          reason: 'Tap must open an AlertDialog (the details dialog).');
+      // Locked field labels — these identify the dialog without coupling
+      // to private widget types.
+      expect(find.text('Detection key'), findsOneWidget,
+          reason: 'Details dialog must show "Detection key" label.');
+      expect(find.text('Kind'), findsOneWidget,
+          reason: 'Details dialog must show "Kind" label.');
+
+      // Negative locks — no editor controls in the runtime details dialog.
+      expect(find.byType(SegmentedButton<SensorKind>), findsNothing,
+          reason: 'Runtime tap must NOT open the config editor '
+              '(no SensorKind SegmentedButton).');
+      // The locked editor label "Detection State Key" (capital S, plus
+      // "Key" suffix) is unique to _SensorConfigEditor and MUST NOT appear.
+      expect(find.text('Detection State Key'), findsNothing,
+          reason: 'Runtime tap must NOT render the editor KeyField label.');
+    });
+
+    testWidgets('details dialog has Close button that dismisses it',
         (tester) async {
       final config = SensorConfig(detectionKey: '');
       await tester.pumpWidget(wrap(
@@ -30,10 +71,53 @@ void main() {
       await tester.tap(find.byType(Sensor));
       await tester.pumpAndSettle();
 
-      // _SensorConfigEditor is the dialog body (private — found by its
-      // rendered SegmentedButton<SensorKind>, which is unique to this
-      // editor in the widget tree).
-      expect(find.byType(SegmentedButton<SensorKind>), findsOneWidget);
+      expect(find.byType(AlertDialog), findsOneWidget);
+      // The Close action — locked copy.
+      final closeBtn = find.widgetWithText(TextButton, 'Close');
+      expect(closeBtn, findsOneWidget,
+          reason: 'Details dialog must have a TextButton labelled "Close".');
+
+      await tester.tap(closeBtn);
+      await tester.pumpAndSettle();
+      expect(find.byType(AlertDialog), findsNothing,
+          reason: 'Tapping Close must dismiss the details dialog.');
+    });
+
+    testWidgets('details dialog does NOT contain editable fields',
+        (tester) async {
+      final config = SensorConfig(detectionKey: 'sensor/01/det');
+      await tester.pumpWidget(wrap(
+        SizedBox(width: 80, height: 40, child: Sensor(config: config)),
+      ));
+
+      await tester.tap(find.byType(Sensor));
+      await tester.pumpAndSettle();
+
+      // Editor-specific widgets MUST NOT appear in the runtime details
+      // dialog. These are the unique surface markers of _SensorConfigEditor.
+      expect(find.byType(SegmentedButton<SensorKind>), findsNothing);
+      expect(find.byType(SwitchListTile), findsNothing,
+          reason: 'No SwitchListTile (Invert Active Polarity is editor-only).');
+      // No "Save" button (the editor has no save button either, but this
+      // negative lock guards against future drift towards editor surface).
+      expect(find.widgetWithText(TextButton, 'Save'), findsNothing);
+    });
+
+    testWidgets('details dialog shows tag when configured',
+        (tester) async {
+      final config = SensorConfig(
+        detectionKey: 'sensor/01/det',
+        tag: 'PE-101A',
+      );
+      await tester.pumpWidget(wrap(
+        SizedBox(width: 80, height: 40, child: Sensor(config: config)),
+      ));
+
+      await tester.tap(find.byType(Sensor));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Tag'), findsOneWidget);
+      expect(find.text('PE-101A'), findsOneWidget);
     });
 
     testWidgets(
@@ -54,10 +138,14 @@ void main() {
       // find.byType locates the Sensor regardless of translation; the tap
       // is dispatched at the translated position because Transform.translate
       // sets transformHitTests=true by default (UI-SPEC §Interaction Contract).
+      // ELEV-19 lock: hit-test geometry survives translation. Plan 04-05
+      // changes WHAT the gesture does (details dialog), not WHETHER it
+      // works through translation.
       await tester.tap(find.byType(Sensor));
       await tester.pumpAndSettle();
 
-      expect(find.byType(SegmentedButton<SensorKind>), findsOneWidget);
+      expect(find.byType(AlertDialog), findsOneWidget);
+      expect(find.text('Detection key'), findsOneWidget);
     });
   });
 
@@ -463,20 +551,45 @@ void main() {
     });
   });
 
-  group('Config dialog smoke', () {
-    // Each test taps the Sensor to open the config dialog, then asserts on
-    // a specific UI-SPEC §Copywriting Contract string or widget. The
-    // dialog body is `_SensorConfigEditor` (private) — found indirectly
-    // through its rendered children.
+  group('Config dialog smoke (editor path — configure())', () {
+    // Plan 04-05: the config dialog is now editor-only. Tests invoke
+    // SensorConfig.configure(context) directly inside a Dialog — same
+    // pattern as page_editor.dart:_showConfigDialog (which is the only
+    // production caller that opens this dialog).
+    //
+    // This bypasses the runtime tap path (which now opens a read-only
+    // details dialog per Plan 04-05 / SENS-01) while preserving the
+    // UI-SPEC §Copywriting Contract assertions on the editor body itself.
+
+    /// Pumps a SensorConfig editor wrapped in the same Dialog chrome that
+    /// page_editor.dart uses. Returns immediately so the caller can
+    /// pumpAndSettle().
+    Future<void> openConfigEditor(WidgetTester tester, SensorConfig config) async {
+      await tester.pumpWidget(ProviderScope(
+        child: MaterialApp(
+          home: Scaffold(
+            body: Builder(
+              builder: (context) => Center(
+                child: ElevatedButton(
+                  onPressed: () => showDialog<void>(
+                    context: context,
+                    builder: (_) => Dialog(child: config.configure(context)),
+                  ),
+                  child: const Text('open'),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ));
+      await tester.tap(find.text('open'));
+      await tester.pumpAndSettle();
+    }
 
     testWidgets('config dialog renders all locked field-labels',
         (tester) async {
       final config = SensorConfig();
-      await tester.pumpWidget(wrap(
-        SizedBox(width: 80, height: 40, child: Sensor(config: config)),
-      ));
-      await tester.tap(find.byType(Sensor));
-      await tester.pumpAndSettle();
+      await openConfigEditor(tester, config);
 
       // Locked copy from UI-SPEC §Copywriting Contract — verbatim.
       expect(find.text('Sensor Kind'), findsOneWidget);
@@ -492,11 +605,7 @@ void main() {
         'Invert Active Polarity subtitle copy reflects current value',
         (tester) async {
       final config = SensorConfig(invertActivePolarity: false);
-      await tester.pumpWidget(wrap(
-        SizedBox(width: 80, height: 40, child: Sensor(config: config)),
-      ));
-      await tester.tap(find.byType(Sensor));
-      await tester.pumpAndSettle();
+      await openConfigEditor(tester, config);
       expect(find.text('Active when state is true'), findsOneWidget);
 
       // Toggle the switch — subtitle copy must flip per UI-SPEC.
@@ -508,11 +617,7 @@ void main() {
     testWidgets('changing kind via SegmentedButton updates config.kind',
         (tester) async {
       final config = SensorConfig(kind: SensorKind.redLight);
-      await tester.pumpWidget(wrap(
-        SizedBox(width: 80, height: 40, child: Sensor(config: config)),
-      ));
-      await tester.tap(find.byType(Sensor));
-      await tester.pumpAndSettle();
+      await openConfigEditor(tester, config);
 
       // Tap the "Optic Field" segment.
       await tester.tap(find.text('Optic Field'));
@@ -524,11 +629,7 @@ void main() {
         'CoordinatesField is in the config dialog (SENS-15 — angle is part of CoordinatesField)',
         (tester) async {
       final config = SensorConfig();
-      await tester.pumpWidget(wrap(
-        SizedBox(width: 80, height: 40, child: Sensor(config: config)),
-      ));
-      await tester.tap(find.byType(Sensor));
-      await tester.pumpAndSettle();
+      await openConfigEditor(tester, config);
       expect(find.byType(CoordinatesField), findsOneWidget);
     });
   });

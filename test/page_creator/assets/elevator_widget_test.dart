@@ -112,22 +112,127 @@ void main() {
         ),
       );
 
-  group('Tap to configure', () {
-    testWidgets(
-        'tap opens config dialog (Position State Key field is unique-to-editor finder)',
+  // Plan 04-05 (ELEV-01): runtime taps now open a READ-ONLY details
+  // dialog. Config editing is editor-only via page_editor.dart. The
+  // helper below mirrors page_editor.dart:_showConfigDialog so the
+  // editor-surface tests can still exercise `_ElevatorConfigEditor`
+  // directly without going through the runtime tap path.
+  Future<void> openConfigEditor(WidgetTester tester, ElevatorConfig config) async {
+    await tester.pumpWidget(ProviderScope(
+      child: MaterialApp(
+        home: Scaffold(
+          body: Builder(
+            builder: (context) => Center(
+              child: ElevatedButton(
+                onPressed: () => showDialog<void>(
+                  context: context,
+                  builder: (_) => Dialog(child: config.configure(context)),
+                ),
+                child: const Text('open'),
+              ),
+            ),
+          ),
+        ),
+      ),
+    ));
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+  }
+
+  group('Tap to show details (Plan 04-05)', () {
+    // Plan 04-05: tapping an Elevator at runtime opens a READ-ONLY details
+    // dialog — NOT the config editor. Config remains editor-only via
+    // page_editor.dart's _showConfigDialog → asset.configure(context).
+    //
+    // Locks the ELEV-01 contract: operators can inspect runtime state
+    // (position key, current progress, tween duration, simulate flag,
+    // out-of-range/stale flags, child count) but must never mutate page
+    // configuration via runtime taps.
+
+    testWidgets('tap on elevator opens details dialog (NOT config dialog)',
         (tester) async {
-      final config = ElevatorConfig();
+      final config = ElevatorConfig(
+        positionKey: '/elev/01/position',
+        tweenDurationMs: 250,
+      );
       await tester.pumpWidget(wrap(Elevator(config: config)));
       await tester.pump(Duration.zero);
       await tester.tap(find.byType(GestureDetector).first);
       await tester.pumpAndSettle();
-      // _ElevatorConfigEditor is the dialog body (private — found indirectly
-      // by the unique 'Position State Key (0-100%)' KeyField label which only
-      // exists inside this dialog). Mirrors Plan 01-05 Task 3's swap from
-      // find.byType(AlertDialog) to a unique-to-editor finder. Once Phase 3
-      // adds child-management UI to the dialog, this assertion stays stable
-      // because the positionKey label is in the field-ordering frozen surface.
-      expect(find.text('Position State Key (0-100%)'), findsOneWidget);
+
+      // Details dialog is an AlertDialog with read-only labels.
+      expect(find.byType(AlertDialog), findsOneWidget,
+          reason: 'Tap must open an AlertDialog (the details dialog).');
+      expect(find.text('Position key'), findsOneWidget,
+          reason: 'Details dialog must show "Position key" label.');
+
+      // Negative locks — runtime tap must NOT open the editor.
+      expect(find.text('Position State Key (0-100%)'), findsNothing,
+          reason: 'Runtime tap must NOT render the editor KeyField label.');
+      expect(find.widgetWithText(FilledButton, 'Add child'), findsNothing,
+          reason: 'Runtime tap must NOT render editor controls.');
+    });
+
+    testWidgets('details dialog has Close button that dismisses it',
+        (tester) async {
+      final config = ElevatorConfig(positionKey: '');
+      await tester.pumpWidget(wrap(Elevator(config: config)));
+      await tester.pump(Duration.zero);
+      await tester.tap(find.byType(GestureDetector).first);
+      await tester.pumpAndSettle();
+
+      expect(find.byType(AlertDialog), findsOneWidget);
+      final closeBtn = find.widgetWithText(TextButton, 'Close');
+      expect(closeBtn, findsOneWidget,
+          reason: 'Details dialog must have a TextButton labelled "Close".');
+      await tester.tap(closeBtn);
+      await tester.pumpAndSettle();
+      expect(find.byType(AlertDialog), findsNothing,
+          reason: 'Tapping Close must dismiss the details dialog.');
+    });
+
+    testWidgets('details dialog does NOT contain editable fields',
+        (tester) async {
+      final config = ElevatorConfig(
+        positionKey: '/elev/01/position',
+        children: [
+          ElevatorChildEntry(id: 'sense', child: SensorConfig.preview()),
+        ],
+      );
+      await tester.pumpWidget(wrap(Elevator(config: config)));
+      await tester.pump(Duration.zero);
+      await tester.tap(find.byType(GestureDetector).first);
+      await tester.pumpAndSettle();
+
+      // Editor-specific widgets MUST NOT appear in the runtime details
+      // dialog. These are the unique surface markers of _ElevatorConfigEditor.
+      expect(find.byType(SegmentedButton), findsNothing);
+      expect(find.byType(SwitchListTile), findsNothing,
+          reason: 'No SwitchListTile (Simulate motion is editor-only).');
+      expect(find.widgetWithText(FilledButton, 'Add child'), findsNothing);
+      // The locked editor label "Position State Key (0-100%)" is unique
+      // to _ElevatorConfigEditor and MUST NOT appear in the details
+      // dialog (Plan 04-05 lock).
+      expect(find.text('Position State Key (0-100%)'), findsNothing);
+    });
+
+    testWidgets('details dialog shows children count', (tester) async {
+      final config = ElevatorConfig(
+        positionKey: '',
+        children: [
+          ElevatorChildEntry(id: 'a', child: SensorConfig.preview()),
+          ElevatorChildEntry(id: 'b', child: ConveyorConfig.preview()),
+        ],
+      );
+      await tester.pumpWidget(wrap(Elevator(config: config)));
+      await tester.pump(Duration.zero);
+      await tester.tap(find.byType(GestureDetector).first);
+      await tester.pumpAndSettle();
+      expect(find.text('Children'), findsOneWidget);
+      // The count text must include "2" — phrased flexibly so future
+      // copy tweaks don't break this lock. The literal "2 attached" is
+      // the planned phrasing in elevator.dart.
+      expect(find.textContaining('2'), findsAtLeastNWidgets(1));
     });
 
     testWidgets('GestureDetector exists with HitTestBehavior.opaque',
@@ -136,10 +241,16 @@ void main() {
       await tester.pumpWidget(wrap(Elevator(config: config)));
       await tester.pump(Duration.zero);
       // Find the GestureDetector child of the Elevator subtree.
-      final gd = tester.widget<GestureDetector>(find.byType(GestureDetector).first);
+      final gd =
+          tester.widget<GestureDetector>(find.byType(GestureDetector).first);
       expect(gd.behavior, HitTestBehavior.opaque);
     });
+  });
 
+  group('Config dialog smoke (editor path — configure())', () {
+    // Plan 04-05: editor surface tests now go through configure() directly,
+    // mirroring page_editor.dart:_showConfigDialog. This bypasses the
+    // runtime tap path (which now opens a read-only details dialog).
     testWidgets(
         'config dialog renders all locked Phase-2 fields + Add child button (Phase 3 replaces placeholder)',
         (tester) async {
@@ -147,26 +258,14 @@ void main() {
         positionKey: '/elev/01/position',
         tweenDurationMs: 333,
       );
-      await tester.pumpWidget(wrap(Elevator(config: config)));
-      await tester.pump(Duration.zero);
-      await tester.tap(find.byType(GestureDetector).first);
-      await tester.pumpAndSettle();
+      await openConfigEditor(tester, config);
 
       // Locked field surface (mirror Plan 01-05 smoke test pattern):
       expect(find.text('Position State Key (0-100%)'), findsOneWidget);
       expect(find.text('Tween Duration (ms)'), findsOneWidget);
-      // Phase 3 (Plan 03-03) replaces the Phase-2 'Children: X (managed in
-      // Phase 3)' read-only placeholder with a full add/edit/remove UI.
-      // Lock the new surface: an 'Add child' FilledButton + the empty-state
-      // text 'No children configured' (children=0 here).
       expect(find.widgetWithText(FilledButton, 'Add child'), findsOneWidget);
       expect(find.text('No children configured'), findsOneWidget);
-      // Negative: the Phase-2 placeholder text MUST NOT appear anymore.
       expect(find.text('Children: 0 (managed in Phase 3)'), findsNothing);
-      // Coordinates angle slider surface — CoordinatesField is unique to
-      // the editor (placed widget tree does not contain it). Phase 1 used
-      // the same finder (sensor_widget_test 'CoordinatesField is in the
-      // config dialog' precedent). Pull the type from common.dart by name.
       final coordsField = find.byWidgetPredicate(
         (w) => w.runtimeType.toString() == 'CoordinatesField',
       );
@@ -176,12 +275,8 @@ void main() {
     testWidgets('editing Tween Duration field mutates config.tweenDurationMs',
         (tester) async {
       final config = ElevatorConfig(tweenDurationMs: 250);
-      await tester.pumpWidget(wrap(Elevator(config: config)));
-      await tester.pump(Duration.zero);
-      await tester.tap(find.byType(GestureDetector).first);
-      await tester.pumpAndSettle();
+      await openConfigEditor(tester, config);
 
-      // Find the Tween Duration TextFormField by its labelText.
       final tweenField = find.widgetWithText(TextFormField, 'Tween Duration (ms)');
       expect(tweenField, findsOneWidget);
       await tester.enterText(tweenField, '500');
@@ -460,14 +555,17 @@ void main() {
     });
 
     testWidgets(
-        'tap during translation lands on the child, opens child config dialog (ELEV-19, Pitfall 7)',
+        'tap during translation lands on the child, opens child details dialog '
+        '(ELEV-19, Pitfall 7; Plan 04-05)',
         (tester) async {
       // SensorConfig with a generous size so the GestureDetector hit-target
       // is a comfortable rectangle rather than the 0.03×0.03 default tiny
       // box (which would leave the tap centre on a 6-pixel target — too
       // brittle). The test locks the hit-test-through-translation
-      // contract, not painter-pixel coverage.
-      final sensor = SensorConfig.preview();
+      // contract — Plan 04-05 changes WHAT the gesture does (details
+      // dialog) but NOT whether it survives translation.
+      final sensor = SensorConfig.preview()
+        ..detectionKey = 'sensor/01/det';
       sensor.size = const RelativeSize(width: 0.4, height: 0.2);
 
       final config = ElevatorConfig(
@@ -490,20 +588,34 @@ void main() {
       await tester.pump(const Duration(milliseconds: 1));
 
       // Tap the Sensor child — the tap should land on the Sensor's own
-      // GestureDetector and open its dialog (locked KeyField label
-      // 'Detection State Key' from sensor.dart:_SensorConfigEditor).
+      // GestureDetector and open ITS details dialog (sensor.dart:
+      // _showDetailsDialog — Plan 04-05 / SENS-01). The locked label
+      // 'Detection key' is unique to the sensor details dialog.
       await tester.tap(find.byType(Sensor));
       await tester.pumpAndSettle();
 
-      // Sensor's editor surface (locked).
-      expect(find.text('Detection State Key'), findsOneWidget,
+      // Sensor's details dialog surface (locked Plan 04-05 surface).
+      expect(find.text('Detection key'), findsOneWidget,
           reason:
               'Tap on a child during translation must reach the child\'s '
-              'GestureDetector and open its config dialog (ELEV-19).');
-      // The Elevator's own editor must NOT have opened.
+              'GestureDetector and open its details dialog (ELEV-19 + '
+              'Plan 04-05).');
+      // The Elevator's own details dialog must NOT have opened — its
+      // unique label "Position key" must not appear.
+      expect(find.text('Position key'), findsNothing,
+          reason:
+              'Elevator details dialog must not steal taps that land on a '
+              'child (Plan 04-05).');
+      // Editor surfaces from BOTH widgets must be absent — runtime tap
+      // must NEVER open editor.
+      expect(find.text('Detection State Key'), findsNothing,
+          reason:
+              'Runtime tap must not open the sensor config editor '
+              '(Plan 04-05).');
       expect(find.text('Position State Key (0-100%)'), findsNothing,
           reason:
-              'Elevator editor must not steal taps that land on a child.');
+              'Runtime tap must not open the elevator config editor '
+              '(Plan 04-05).');
     });
 
     testWidgets('children Positioned.top follows _animProgress (ELEV-10)',
@@ -644,10 +756,7 @@ void main() {
         'Add child opens dropdown filtered to Sensor and Conveyor only (ELEV-07)',
         (tester) async {
       final config = ElevatorConfig();
-      await tester.pumpWidget(wrap(Elevator(config: config)));
-      await tester.pump(Duration.zero);
-      await tester.tap(find.byType(GestureDetector).first);
-      await tester.pumpAndSettle();
+      await openConfigEditor(tester, config);
 
       // Tap the 'Add child' button to open the picker.
       await tester.tap(find.widgetWithText(FilledButton, 'Add child'));
@@ -674,10 +783,7 @@ void main() {
         'Selecting Sensor appends ElevatorChildEntry with UUID and offsetX 0.5 (ELEV-07)',
         (tester) async {
       final config = ElevatorConfig();
-      await tester.pumpWidget(wrap(Elevator(config: config)));
-      await tester.pump(Duration.zero);
-      await tester.tap(find.byType(GestureDetector).first);
-      await tester.pumpAndSettle();
+      await openConfigEditor(tester, config);
 
       expect(config.children, isEmpty);
 
@@ -700,10 +806,7 @@ void main() {
         'Selecting Conveyor appends a ConveyorConfig child',
         (tester) async {
       final config = ElevatorConfig();
-      await tester.pumpWidget(wrap(Elevator(config: config)));
-      await tester.pump(Duration.zero);
-      await tester.tap(find.byType(GestureDetector).first);
-      await tester.pumpAndSettle();
+      await openConfigEditor(tester, config);
 
       await tester.tap(find.widgetWithText(FilledButton, 'Add child'));
       await tester.pumpAndSettle();
@@ -721,10 +824,7 @@ void main() {
           ElevatorChildEntry(id: 'edit-test', child: SensorConfig.preview()),
         ],
       );
-      await tester.pumpWidget(wrap(Elevator(config: config)));
-      await tester.pump(Duration.zero);
-      await tester.tap(find.byType(GestureDetector).first);
-      await tester.pumpAndSettle();
+      await openConfigEditor(tester, config);
 
       // Editor body is scrollable (SingleChildScrollView in
       // _ElevatorConfigEditor). The Card's IconButton can sit below the
@@ -755,10 +855,7 @@ void main() {
           ElevatorChildEntry(id: 'remove-test', child: SensorConfig.preview()),
         ],
       );
-      await tester.pumpWidget(wrap(Elevator(config: config)));
-      await tester.pump(Duration.zero);
-      await tester.tap(find.byType(GestureDetector).first);
-      await tester.pumpAndSettle();
+      await openConfigEditor(tester, config);
 
       expect(config.children.length, 1);
 
@@ -788,10 +885,7 @@ void main() {
               child: SensorConfig.preview()),
         ],
       );
-      await tester.pumpWidget(wrap(Elevator(config: config)));
-      await tester.pump(Duration.zero);
-      await tester.tap(find.byType(GestureDetector).first);
-      await tester.pumpAndSettle();
+      await openConfigEditor(tester, config);
 
       expect(config.children[0].offsetX, 0.5);
 
@@ -840,10 +934,7 @@ void main() {
           ElevatorChildEntry(id: 'B', child: ConveyorConfig.preview()),
         ],
       );
-      await tester.pumpWidget(wrap(Elevator(config: config)));
-      await tester.pump(Duration.zero);
-      await tester.tap(find.byType(GestureDetector).first);
-      await tester.pumpAndSettle();
+      await openConfigEditor(tester, config);
 
       // Find Move-forward IconButtons by tooltip and pick the one for
       // child 'A' (Sensor). Since editor is reversed, Sensor (id='A',
@@ -876,10 +967,7 @@ void main() {
           ElevatorChildEntry(id: 'B', child: ConveyorConfig.preview()),
         ],
       );
-      await tester.pumpWidget(wrap(Elevator(config: config)));
-      await tester.pump(Duration.zero);
-      await tester.tap(find.byType(GestureDetector).first);
-      await tester.pumpAndSettle();
+      await openConfigEditor(tester, config);
 
       // Topmost-paint = 'B' (index 1). It is displayed at the TOP of the
       // editor list (reversed convention) — so it's the FIRST IconButton
@@ -907,10 +995,7 @@ void main() {
           ElevatorChildEntry(id: 'B', child: ConveyorConfig.preview()),
         ],
       );
-      await tester.pumpWidget(wrap(Elevator(config: config)));
-      await tester.pump(Duration.zero);
-      await tester.tap(find.byType(GestureDetector).first);
-      await tester.pumpAndSettle();
+      await openConfigEditor(tester, config);
 
       // Bottommost-paint = 'A' (index 0). It is displayed at the BOTTOM
       // of the editor list (reversed convention) — so it's the LAST
@@ -987,10 +1072,7 @@ void main() {
           ElevatorChildEntry(id: 'B', child: ConveyorConfig.preview()),
         ],
       );
-      await tester.pumpWidget(wrap(Elevator(config: config)));
-      await tester.pump(Duration.zero);
-      await tester.tap(find.byType(GestureDetector).first);
-      await tester.pumpAndSettle();
+      await openConfigEditor(tester, config);
 
       // Both ValueKey wrappers exist before reorder.
       expect(find.byKey(const ValueKey<String>('A')), findsOneWidget);
@@ -1410,14 +1492,34 @@ void main() {
   group('Simulation toggle (QUAL-08)', () {
     testWidgets('editor exposes Simulate motion switch reflecting config.simulate',
         (tester) async {
+      // Plan 04-05: editor opened via configure() directly — runtime tap
+      // now opens the read-only details dialog (which has no SwitchListTile).
       final config = ElevatorConfig(simulate: true);
-      await tester.pumpWidget(wrap(Elevator(config: config)));
-      await tester.pump(Duration.zero);
-      await tester.tap(find.byType(GestureDetector).first);
-      // Cannot use `pumpAndSettle` here because the simulation timer is a
-      // never-ending Timer.periodic — it would deadlock the settle loop.
-      // Pump fixed-duration frames instead so the dialog open-animation
-      // completes (default Material dialog transition is ~150ms).
+      // Cannot use openConfigEditor here because it pumpAndSettles, which
+      // would deadlock against the simulation Timer.periodic. Build the
+      // same fixture inline and use fixed-duration pumps.
+      await tester.pumpWidget(ProviderScope(
+        child: MaterialApp(
+          home: Scaffold(
+            body: Builder(
+              builder: (context) => Center(
+                child: ElevatedButton(
+                  onPressed: () => showDialog<void>(
+                    context: context,
+                    builder: (_) => Dialog(child: config.configure(context)),
+                  ),
+                  child: const Text('open'),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ));
+      // Need a Scaffold + Elevator in tree to keep didUpdateWidget paths
+      // alive for the config simulate flag — but the editor surface lives
+      // inside the dialog opened by tapping 'open'. Pump fixed durations
+      // for the open animation (~150ms default Material dialog transition).
+      await tester.tap(find.text('open'));
       await tester.pump(const Duration(milliseconds: 300));
 
       final switchTile = find.widgetWithText(SwitchListTile, 'Simulate motion');
@@ -1435,10 +1537,7 @@ void main() {
     testWidgets('Simulate motion switch defaults to OFF when config.simulate is null',
         (tester) async {
       final config = ElevatorConfig();
-      await tester.pumpWidget(wrap(Elevator(config: config)));
-      await tester.pump(Duration.zero);
-      await tester.tap(find.byType(GestureDetector).first);
-      await tester.pumpAndSettle();
+      await openConfigEditor(tester, config);
 
       final switchTile = find.widgetWithText(SwitchListTile, 'Simulate motion');
       expect(switchTile, findsOneWidget);
