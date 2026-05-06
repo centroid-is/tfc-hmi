@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:tfc/page_creator/assets/conveyor_gate.dart';
 import 'package:tfc/page_creator/assets/elevator.dart';
 import 'package:tfc/page_creator/assets/sensor.dart';
 
@@ -100,6 +101,119 @@ void main() {
       };
       final cfg = ElevatorConfig.fromJson(partialJson);
       expect(cfg.children, isEmpty);
+    });
+  });
+
+  group('Polymorphic child round-trip', () {
+    test('ElevatorChildEntry with SensorConfig child round-trips deep-equal',
+        () {
+      final original = ElevatorChildEntry(
+        id: 'fixed-id-100',
+        offsetX: 0.25,
+        child: SensorConfig(
+          kind: SensorKind.opticField,
+          detectionKey: '/foo/bar',
+          tag: 'PE-101A',
+        ),
+      );
+      final json1 = original.toJson();
+      final restored = ElevatorChildEntry.fromJson(json1);
+      final json2 = restored.toJson();
+      expect(json2, equals(json1));
+    });
+
+    test(
+        'decoded child runtimeType is concrete SensorConfig (polymorphic restoration)',
+        () {
+      final original = ElevatorChildEntry(
+        child: SensorConfig(
+          detectionKey: '/k',
+          kind: SensorKind.inductiveField,
+        ),
+      );
+      final restored = ElevatorChildEntry.fromJson(original.toJson());
+      expect(restored.child, isA<SensorConfig>());
+      expect((restored.child as SensorConfig).kind, SensorKind.inductiveField);
+      expect((restored.child as SensorConfig).detectionKey, '/k');
+    });
+
+    test('ElevatorConfig with two heterogeneous children round-trips deep-equal',
+        () {
+      final original = ElevatorConfig(
+        positionKey: '/elev/pos',
+        children: [
+          ElevatorChildEntry(
+            id: 'a',
+            offsetX: 0.25,
+            child: SensorConfig(
+              kind: SensorKind.redLight,
+              detectionKey: '/d1',
+            ),
+          ),
+          ElevatorChildEntry(
+            id: 'b',
+            offsetX: 0.75,
+            child: ConveyorGateConfig(stateKey: '/g1'),
+          ),
+        ],
+      );
+      final json1 = original.toJson();
+      final restored = ElevatorConfig.fromJson(json1);
+      final json2 = restored.toJson();
+      expect(json2, equals(json1));
+      expect(restored.children, hasLength(2));
+      expect(restored.children[0].child, isA<SensorConfig>());
+      expect(restored.children[1].child, isA<ConveyorGateConfig>());
+    });
+  });
+
+  group('_childrenFromJson legacy / future tolerance', () {
+    test('children=null in JSON yields []', () {
+      final json = <String, dynamic>{
+        'asset_name': 'ElevatorConfig',
+        'positionKey': '/k',
+        'tweenDurationMs': 250,
+        'children': null,
+        'coordinates': {'x': 0.0, 'y': 0.0},
+        'size': {'width': 0.1, 'height': 0.4},
+      };
+      expect(ElevatorConfig.fromJson(json).children, isEmpty);
+    });
+
+    test('children key entirely absent yields []', () {
+      // Already covered in group "JSON round-trip"; locked here for the
+      // legacy shim regression-guard contract.
+      final json = <String, dynamic>{
+        'asset_name': 'ElevatorConfig',
+        'positionKey': '/k',
+        'tweenDurationMs': 250,
+        'coordinates': {'x': 0.0, 'y': 0.0},
+        'size': {'width': 0.1, 'height': 0.4},
+      };
+      expect(ElevatorConfig.fromJson(json).children, isEmpty);
+    });
+
+    test('children=[] empty array yields []', () {
+      final json = <String, dynamic>{
+        'asset_name': 'ElevatorConfig',
+        'positionKey': '/k',
+        'tweenDurationMs': 250,
+        'children': <dynamic>[],
+        'coordinates': {'x': 0.0, 'y': 0.0},
+        'size': {'width': 0.1, 'height': 0.4},
+      };
+      expect(ElevatorConfig.fromJson(json).children, isEmpty);
+    });
+
+    test('allKeys includes positionKey when non-empty (BaseAsset *Key pattern)',
+        () {
+      final cfg = ElevatorConfig(positionKey: '/elev/01/position');
+      expect(cfg.allKeys, contains('/elev/01/position'));
+    });
+
+    test('allKeys excludes empty positionKey', () {
+      final cfg = ElevatorConfig(positionKey: '');
+      expect(cfg.allKeys, isNot(contains('')));
     });
   });
 }
