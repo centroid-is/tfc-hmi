@@ -240,6 +240,93 @@ void main() {
     });
   });
 
+  group('Tooltip presence', () {
+    testWidgets(
+        'Sensor widget tree contains a Tooltip ancestor of GestureDetector',
+        (tester) async {
+      final config = SensorConfig(detectionKey: '');
+      await tester.pumpWidget(wrap(
+        SizedBox(width: 80, height: 40, child: Sensor(config: config)),
+      ));
+      // Use find.descendant rooted at Sensor to avoid matching the dialog
+      // chrome's own internal Tooltip widgets if they ever appear.
+      final tooltip = find.descendant(
+        of: find.byType(Sensor),
+        matching: find.byType(Tooltip),
+      );
+      expect(tooltip, findsOneWidget);
+      // Tooltip must be an ancestor (outer) of GestureDetector — UI-SPEC
+      // §Tooltip trigger requires Tooltip(child: GestureDetector(...)).
+      final gesture = find.descendant(
+        of: tooltip,
+        matching: find.byType(GestureDetector),
+      );
+      expect(gesture, findsAtLeastNWidgets(1));
+    });
+  });
+
+  group('Tooltip content (copy contract)', () {
+    testWidgets(
+        'Tooltip content shows "Detection key not set" when detectionKey empty',
+        (tester) async {
+      final config = SensorConfig(detectionKey: '');
+      await tester.pumpWidget(wrap(
+        SizedBox(width: 80, height: 40, child: Sensor(config: config)),
+      ));
+      final gesture =
+          await tester.startGesture(tester.getCenter(find.byType(Sensor)));
+      // Long-press threshold: ~500ms; pump 600 to be safe.
+      await tester.pump(const Duration(milliseconds: 600));
+      await tester.pumpAndSettle();
+      expect(find.text('Detection key not set'), findsOneWidget);
+      await gesture.up();
+    });
+
+    testWidgets(
+        'Tooltip content shows "Rising: —\\nFalling: —" when both delay keys empty',
+        (tester) async {
+      final config = SensorConfig(
+        detectionKey: '/some/key',
+        risingEdgeDelayKey: '',
+        fallingEdgeDelayKey: '',
+      );
+      await tester.pumpWidget(wrap(
+        SizedBox(width: 80, height: 40, child: Sensor(config: config)),
+      ));
+      final gesture =
+          await tester.startGesture(tester.getCenter(find.byType(Sensor)));
+      await tester.pump(const Duration(milliseconds: 600));
+      await tester.pumpAndSettle();
+      expect(find.text('Rising: —'), findsOneWidget);
+      expect(find.text('Falling: —'), findsOneWidget);
+      await gesture.up();
+    });
+
+    testWidgets(
+        'Tooltip content shows "Rising: —" portion when rising key empty and falling key set',
+        (tester) async {
+      final config = SensorConfig(
+        detectionKey: '/some/key',
+        risingEdgeDelayKey: '',
+        fallingEdgeDelayKey: '/falling',
+      );
+      await tester.pumpWidget(wrap(
+        SizedBox(width: 80, height: 40, child: Sensor(config: config)),
+      ));
+      final gesture =
+          await tester.startGesture(tester.getCenter(find.byType(Sensor)));
+      await tester.pump(const Duration(milliseconds: 600));
+      await tester.pumpAndSettle();
+      // Rising key empty → em-dash row.
+      expect(find.text('Rising: —'), findsOneWidget);
+      // Falling key configured but no value emitted yet → ellipsis.
+      // (Without StateMan provider override the Future never completes
+      // synchronously, so snapshot.hasData stays false → '…' shown.)
+      expect(find.text('Falling: …'), findsOneWidget);
+      await gesture.up();
+    });
+  });
+
   group('Stream lifecycle', () {
     testWidgets('rebuilds with same detectionKey do not re-hoist the stream',
         (tester) async {
