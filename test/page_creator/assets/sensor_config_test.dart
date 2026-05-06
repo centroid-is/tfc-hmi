@@ -91,4 +91,69 @@ void main() {
       expect(config.toJson()['asset_name'], 'SensorConfig');
     });
   });
+
+  group('Legacy JSON tolerance', () {
+    test('loads with sensible defaults when invertActivePolarity is missing',
+        () {
+      final legacyJson = <String, dynamic>{
+        'asset_name': 'SensorConfig',
+        'kind': 'redLight',
+        'detectionKey': '/legacy/key',
+        // no invertActivePolarity
+        // no risingEdgeDelayKey / fallingEdgeDelayKey
+        // no tag
+        // no activeColor / inactiveColor
+        'coordinates': {'x': 0.0, 'y': 0.0},
+        'size': {'width': 0.03, 'height': 0.03},
+      };
+      final config = SensorConfig.fromJson(legacyJson);
+      expect(config.invertActivePolarity, isFalse);
+      expect(config.risingEdgeDelayKey, '');
+      expect(config.fallingEdgeDelayKey, '');
+      expect(config.tag, isNull);
+      expect(config.activeColor, Colors.green);
+      expect(config.inactiveColor.value, Colors.grey.shade400.value);
+    });
+
+    test('unknown SensorKind value falls back to redLight (forward-compat)',
+        () {
+      final futureKindJson = <String, dynamic>{
+        'asset_name': 'SensorConfig',
+        'kind': 'thermalSensor', // hypothetical future kind
+        'detectionKey': '/k',
+        'invertActivePolarity': false,
+        'risingEdgeDelayKey': '',
+        'fallingEdgeDelayKey': '',
+        'activeColor': {
+          'red': 0.298,
+          'green': 0.686,
+          'blue': 0.314,
+          'alpha': 1.0,
+        },
+        'inactiveColor': {
+          'red': 0.741,
+          'green': 0.741,
+          'blue': 0.741,
+          'alpha': 1.0,
+        },
+        'coordinates': {'x': 0.0, 'y': 0.0},
+        'size': {'width': 0.03, 'height': 0.03},
+      };
+      final config = SensorConfig.fromJson(futureKindJson);
+      expect(config.kind, SensorKind.redLight); // unknownEnumValue fallback
+    });
+
+    test('allKeys returns detection + edge-delay keys', () {
+      final config = SensorConfig(
+        detectionKey: '/d',
+        risingEdgeDelayKey: '/r',
+        fallingEdgeDelayKey: '/f',
+        tag: 'PE-101A',
+      );
+      final keys = config.allKeys.toSet();
+      expect(keys, containsAll({'/d', '/r', '/f'}));
+      // T-01-03 (Information Disclosure): tag must NOT be classified as a key.
+      expect(keys, isNot(contains('PE-101A')));
+    });
+  });
 }
