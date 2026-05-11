@@ -1,445 +1,409 @@
-# Pitfalls Research
+# Pitfalls Research — v2.0 Modicon Momentum I/O Assets
 
-**Domain:** Industrial HMI — vertical-translation parent assets carrying child widgets, multi-kind sensor visualisers driven by state keys
-**Researched:** 2026-05-05
-**Confidence:** HIGH (grounded in existing codebase: `conveyor.dart`, `conveyor_gate.dart`, `common.dart`, `state_man.dart`; ConveyorGate milestone post-mortem in `.claude/...gate-visual-feedback.md`; CONCERNS audit dated 2026-05-05)
+**Domain:** Industrial HMI — multi-module fieldbus I/O stacks (head adapter + power module + 16-channel DI + 16-channel DO), with force overrides, per-channel filters, and per-channel descriptions, all driven by Modbus-resident PLC state keys.
+**Pattern source of truth:** `lib/page_creator/assets/beckhoff.dart` (BeckhoffCX5010/EK1100 stack + EL1008/EL2008 modules) and `lib/painter/beckhoff/io8.dart`.
+**Researched:** 2026-05-11
+**Confidence:** HIGH for items grounded in current beckhoff.dart / io8.dart / conveyor.dart code; MEDIUM for Modbus-specific items (Schneider Momentum register layout cited from training data + Schneider portal hit, not verified against a live device — flagged inline); user photo at `/Users/jonb/.claude/image-cache/fe2be5fa-6578-40a7-bc7b-7475838556e9/3.png` consulted for actual physical layout (16-channel modules are vertical strips with two columns of channel terminals).
 
-This file enumerates the failure modes the elevator + sensor milestone must guard against. Each pitfall is keyed to an implementation phase. None are generic Flutter advice — every pitfall cites the specific tfc-hmi2 file it would manifest in.
+This file enumerates failure modes the v2.0 Momentum milestone must guard against. Each pitfall cites the specific tfc-hmi2 file where it would manifest in, the warning signs an operator/developer would see, the prevention strategy, and the phase that owns the mitigation.
 
 ---
 
 ## Critical Pitfalls
 
-### Pitfall 1: Child-widget identity loss when elevator position changes
+### Pitfall M-01: `MomentumStack.allKeys` silently drops sub-module keys when a child fails to override the getter
 
 **What goes wrong:**
-Each frame, the elevator wraps its assigned children inside a `Positioned` (or `Transform.translate`) whose `top`/`y` is computed from the live PLC 0–100% value. If the implementation rebuilds the child subtree and the `Positioned` ancestry changes — even subtly, e.g. swapping between `Transform.translate` and `Positioned` or wrapping/unwrapping a parent based on `position == 0.0` — Flutter's element-tree reconciliation cannot match the new element to the old one, so the child's `State` is destroyed and rebuilt. The visible symptom is a sensor light "blinking" each tick, the gate animation snapping back to closed every position update, or `StreamBuilder.connectionState` resetting to `waiting` mid-flight.
+The Beckhoff stack works because `BeckhoffCX5010Config.allKeys` walks `subdevices` and unions each child's `allKeys` (beckhoff.dart:42-50). The default `BaseAsset.allKeys` (common.dart:218) introspects `toJson()` for fields matching `^key$|^key\d+$|Key$|_key$` — so the EL1008's `rawStateKey`, `forceValuesKey`, `onFiltersKey`, `offFiltersKey` etc. are auto-discovered by suffix.
+
+If a new Modicon module is added with a field name that does NOT match that regex — e.g. `inputWordTag`, `forces`, `description_map` — the default `allKeys` silently returns an empty list. `MomentumStackConfig.allKeys` would then expose the head module's keys but not the DI/DO module's keys. The alarm engine and collector skip the module. Operators don't see any error — alarms just never fire and history is empty for those channels.
 
 **Why it happens:**
-The rebuild reordering is invisible: `_ConveyorGateState`'s `AnimationController` lives in `State`, and it gets reconstructed on element re-mounting. Without an explicit `Key` keyed on the child's identity, Flutter falls back to widget-type + position matching — which is fragile across structural rebuilds. The conveyor's existing child-gate code at `lib/page_creator/assets/conveyor.dart:846–899` does NOT pass a `Key` to the inner `ConveyorGate`; it gets away with it only because the Stack children list is stable per build.
-
-**How to avoid:**
-- Give every child of the elevator a stable `ValueKey<String>` derived from a per-child identity (e.g. `ValueKey('elevator-child-${entry.id}')` or `ValueKey(entry.gate.runtimeType.toString() + entry.position.toString())` — but prefer an opaque assignment id). Add an `id` field to the `ChildEntry` wrapper and back it with a UUID created in the constructor.
-- Keep the wrapping widget structure constant across all position values. Do not conditionally wrap with `Transform` / `Positioned` based on `position == 0`. If a translation is zero, still emit the same `Positioned`/`Transform.translate` node.
-- Drive the position with a `ValueListenableBuilder<double>` whose `child:` parameter holds the child subtree (so the subtree is built once and only the wrapping `Transform` rebuilds per tick). See `auger_conveyor_painter.dart` ValueNotifier pattern at `lib/page_creator/assets/conveyor.dart:494–495` for prior art.
+`BaseAsset.allKeys` is opt-out (regex-based) rather than explicit. The regex was tuned for EL1008/EL2008's naming. New module developers don't know the regex exists until alarms go quiet.
 
 **Warning signs:**
-- Sensor LED visually flickers when the PLC position oscillates by ±0.1%.
-- Force-open dialog closes spontaneously when the elevator position changes.
-- `StreamBuilder.snapshot.connectionState` is `waiting` more than once for the same child after initial mount.
-- A `print` added to a child's `initState` fires more than once per page load.
+- Alarm Editor shows no entries when filtered to the new module's keys.
+- `Collector` PostgreSQL table is empty for the module's channels even though the page renders correctly.
+- `lib/chat/asset_context_menu.dart` "Ask Claude about this asset" includes no PLC values for the new module — Claude says "no PLC context available."
+- A `print(config.allKeys)` in tests returns `[]` for a module that obviously has tag keys configured.
 
-**Phase to address:** Phase that implements elevator child-rendering (likely Phase 2 or 3). Acceptance criterion: a smoke test that drives the position notifier through 100 frames and asserts a child widget's `State.initState` was called exactly once.
+**Prevention:**
+1. **Name every state-key field with the `*Key` suffix** to stay in the regex's happy path: `rawStateKey`, `forceValuesKey`, `onFiltersKey`, `offFiltersKey`, `descriptionsKey` — mirror EL1008 verbatim.
+2. **Override `allKeys` on every new config that has nested children or non-String key storage** (e.g. `MomentumStackConfig`, `DDI3725Config` if it gains a list of per-channel descriptions). Always test the override via a unit test that constructs a fully-configured instance and asserts `allKeys` contains every expected key.
+3. **Add an `allKeys` regression test per module config** in `test/page_creator/assets/modicon_<module>_allkeys_test.dart` that hardcodes the expected key set — drift becomes a failing test, not a silent alarm outage.
+
+**Phase:** Every phase that adds a new `BaseAsset` subclass — DI module phase, DO module phase, NIP head phase, PDT power phase, MomentumStack composition phase. The stack-composition phase MUST add an integration test that constructs a populated MomentumStack and asserts `allKeys` contains keys from every child.
 
 ---
 
-### Pitfall 2: StateKey resubscribe storm when elevator rebuilds children
+### Pitfall M-02: 16-channel bit-extraction off-by-one and bit-order ambiguity (DDI3725 / DDO3705)
 
 **What goes wrong:**
-The existing `_ConveyorGateState.build` calls `ref.watch(stateManProvider.future).asStream().asyncExpand((sm) => sm.subscribe(key).asStream().switchMap((s) => s))` directly inside the `StreamBuilder.stream:` argument (`lib/page_creator/assets/conveyor_gate.dart:336–342`). This is already flagged in `CONCERNS.md` as a fragile area. If the elevator child's `build()` runs on every position tick (~10–50 Hz from the PLC), each rebuild constructs a brand-new outer stream, which causes `AutoDisposingStream`'s ref-counting to churn: cancel → recreate the OPC UA monitored item → resubscribe. Under load this can produce dropped values (because the underlying `ReplaySubject` holds at most 1) and a high-frequency monitoring-item create/cancel storm against the OPC UA server.
+EL1008 packs 8 channels into one Modbus/OPC-UA integer using LSB-first ordering: `(map["raw"]!.asInt & (1 << i)) != 0` where `i ∈ 0..7` and `i==0` is channel 1 (beckhoff.dart:1374, 1378, 1290-1300). Cloning this pattern for 16 channels at a glance gives:
 
-**Why it happens:**
-`asStream().asyncExpand(...)` is an inline expression. Stream literals returned from `build()` are not memoised by Flutter — a new instance is allocated each frame. `StreamBuilder` compares by `identical(oldStream, newStream)` and unsubscribes/resubscribes on mismatch.
+```dart
+List.generate(16, (i) => (raw.asInt & (1 << i)) != 0)
+```
 
-**How to avoid:**
-- Hoist stream construction to `initState`/`didChangeDependencies` and store it in a `State` field. Pass that field to `StreamBuilder.stream:`.
-- For the elevator parent, subscribe to the position key ONCE in `initState`; convert the stream's emissions into `_positionNotifier.value = v.asDouble`. Children read the notifier, not the stream.
-- For each sensor child, subscribe to the bool state key ONCE in `initState`, store the subscription in `cancelOnDispose`, and feed a local `ValueNotifier<bool>` that the painter listens to.
-- Do NOT call `ref.watch(stateManProvider.future)` inside child `build()` — call it once in `initState` via `ref.read(stateManProvider.future)` and stash the result.
+Two failure modes:
+
+1. **Off-by-one in the label/channel mapping.** Schneider's Momentum docs number channels 1..16 (and the DDI3725 datasheet labels terminals `I1..I16`). If the painter labels `ioLabels = ['I0', ..., 'I15']` (zero-indexed) but operators see `I1..I16` on the physical module, the visible "I3 is on" doesn't match the actual energised terminal. The opposite is also a trap — `['I1', ..., 'I16']` on the painter while internal arrays are `0..15` is fine for display but the per-channel description/force/filter arrays must use the SAME indexing convention end-to-end.
+
+2. **Word ordering / endianness.** Schneider Modicon by historical convention is big-endian (Motorola format). Modbus/TCP transports each register as a 2-byte big-endian word, but the bit-within-word ordering inside that word is NOT standardised across vendors. Some Schneider modules pack channel 1 → bit 0 of the low byte; others pack channel 1 → bit 15 (MSB). The Beckhoff EL1008 LSB-first assumption is NOT portable to Momentum. (MEDIUM confidence: training data + Schneider portal references the bit-mapping but I have not verified against the DDI3725 datasheet at this session — see [Modicon Momentum I/O Base User Guide](https://iportal2.schneider-electric.com/Contents/docs/MODICON%20MOMENTUM%20_IO_%20BASE%20USER%20GUIDE.PDF), and the [Momentum 170ENT11001/170ENT11002 Ethernet Communications Adapter](https://igate.alamedaelectric.com/Modicon%20Documents/PLC%20Momentum%20PLC%20Ethernet%20(ENT)%20Adapter%20User%20Guide%20v2.0.pdf) which is the NIP family adapter manual.) If the PLC backend pre-normalises bit order before publishing to StateMan, the HMI can stay LSB-first; if it does NOT, the HMI is silently inverted (channel 16 shows when channel 1 is energised).
 
 **Warning signs:**
-- OPC UA logs show monitored-item create/cancel pairs per UI frame.
-- `state_man.dart` `_AutoDisposingStream` listener-count traces oscillate.
-- CPU profiler shows `_resolveSubscription` hot during steady-state operation (no PLC change should trigger it).
-- Network capture shows redundant OPC UA `CreateMonitoredItems` / `DeleteMonitoredItems` requests.
+- During on-site commissioning the operator energises terminal `I1` and the WRONG LED lights up (e.g. `I16`, or `I9` if the high/low byte is swapped).
+- All 16 LEDs light in a coherent pattern but mirrored compared to the physical wiring.
+- Unit tests pass (because they pass the same bit ordering both directions) but goldens look fine to the developer and wrong to the operator.
 
-**Phase to address:** Phase that builds the elevator widget and the sensor widget. This is the same shape of bug as the existing `_ConveyorGateState` issue — fix the new code AND consider opening a follow-up for the gate.
+**Prevention:**
+1. **Make the bit-ordering decision an explicit constant in `lib/painter/modicon/io16.dart`**, e.g. `const _channelOrder = ChannelBitOrder.lsbFirst;` (or `msbFirst`). Document the chosen convention in a comment block referencing the Schneider datasheet section.
+2. **Add an explicit unit test** `test/page_creator/assets/modicon/ddi3725_bit_mapping_test.dart` that constructs a raw state value `0x0001` and asserts the painter draws channel 1 (and only channel 1) as `IOState.high`. Then `0x8000` → channel 16. Then `0xAAAA` → alternating LEDs. The test fails the moment someone swaps the constant.
+3. **Add an alignment assert in the config class:** `assert(ioLabels.length == 16 && forceValues.length <= 16)`. EL1008 does this at io8.dart:37 — copy the pattern.
+4. **In the configure dialog, expose a "Bit order" debug toggle** (only when `TFC_GOD=true`) so a commissioning engineer can flip it without a rebuild. Persist to JSON with a default that matches the documented Schneider convention.
+5. **Confirm the bit convention with backend / PLC team before locking the golden tests**, so goldens encode the correct truth — not the developer's first guess.
+
+**Phase:** DI module phase (DDI3725) — owns the bit-order decision. DO module phase (DDO3705) — must reuse the same convention. MomentumStack phase — no new exposure, but the stack-composition golden test will catch a regression if either module flips its convention.
 
 ---
 
-### Pitfall 3: Painter state leakage between sensor kinds
+### Pitfall M-03: Stream resubscribe storm when 16-channel painter rebuilds — N keys × N modules × N rebuilds
 
 **What goes wrong:**
-The sensor asset has a `kind` enum (red light beam, optic field, inductive field). When the operator changes the kind in the config dialog, the visible widget often retains residual paint artefacts from the previous kind: the beam still renders behind the new optic field, or the inductive coil's animation continues even though the painter is supposedly different. Symptoms include duplicated icons after kind change, stuck animations from the previous painter, and "ghost" geometry that disappears only after a full page reload.
+The EL1008 widget already uses `CombineLatestStream` over 2 keys (`raw`, `force`) for the painter and 6 keys (`raw`, `processed`, `force`, `descriptions`, `on_filters`, `off_filters`) for the dialog (beckhoff.dart:1272-1288). Each call to `stateMan.subscribe(key)` returns a `Future<Stream<DynamicValue>>` whose underlying OPC UA subscription is ref-counted via `AutoDisposingStream` with a 10-minute idle timeout.
 
-**Why it happens:**
-- A single `CustomPainter` reads `widget.config.kind` and switches inside `paint()` — but the painter caches state (e.g. `Path` objects, last-drawn positions) in instance fields that are not reset on `kind` change.
-- `shouldRepaint` returns `false` for the new kind because only the kind enum changed, but the painter compares by `progress` notifier identity.
-- A factory like `_createPainter()` returns the wrong subclass after kind switch because `setState` was called BEFORE the config mutation actually committed.
-- Animation controllers spun up for the "red light beam" pulsing animation are not stopped/disposed when the kind changes to "inductive field", so two animations run simultaneously.
+If a 16-channel Momentum module is built naively — e.g. one `StreamBuilder` per channel — that's 16 subscriptions per module × 2 modules (DI + DO) = 32 subscriptions per stack on a single page. Worse, if the StreamBuilder lives inside a function called during `build()` (e.g. inside `LayoutBuilder.builder` or a list-builder closure), every Flutter rebuild creates a fresh stream subscription, fires the AutoDisposingStream listener count up to 2, then disposes the old one. The OPC UA / Modbus stack sees a churn of monitored-item add/remove operations. Symptoms: PLC CPU climbs, latency spikes, eventually subscriptions time out and LEDs go grey.
 
-The `ConveyorGate._createPainter` switch (`lib/page_creator/assets/conveyor_gate.dart:240–266`) is the closest analog — it returns a different painter per `gateVariant`, but because the gate's progress is controlled by a single boolean state key with the same animation semantics, this hides the kind-leakage problem. Sensor kinds will be more divergent (beams have geometry; fields have radial pulses), so the bug surfaces more clearly.
-
-**How to avoid:**
-- Use ONE painter class per sensor kind. Do not branch inside `paint()`. Select the painter in `_createPainter(kind)` exactly the way the gate does.
-- Override `shouldRepaint(oldDelegate)` to return `true` when `oldDelegate.runtimeType != runtimeType` (different kind) OR when colour / geometry-affecting params changed.
-- When `kind` changes in `setState`, dispose any animation controller specific to the old kind and recreate it for the new kind. Hold a per-kind `AnimationController?` field.
-- Write a behavioural unit test that constructs the widget with kind=A, pumps a few frames, then rebuilds with kind=B, and asserts the painter type via `find.byType(<NewPainter>)` and that no `<OldPainter>` is in the tree.
+For a Modbus device specifically: every monitored-item creation forces a backoff-retry handshake. The Momentum NIP2311 is documented for hundreds of registers/sec but not for hundreds of subscribe/unsubscribe cycles/sec.
 
 **Warning signs:**
-- After changing kind in the config dialog the preview shows two overlapping shapes.
-- An animation controller leak warning appears in `flutter_test` ("AnimationController was not disposed").
-- `shouldRepaint` is called but the canvas content does not change.
-- Golden tests pass for kind A and kind B in isolation but fail when run sequentially in the same test.
+- Open a page with several MomentumStack instances and watch the OPC UA log spam `MonitoredItem created/deleted/created/deleted` for the same NodeId.
+- Flutter DevTools shows the same StreamSubscription being disposed and re-allocated every animation frame.
+- CPU usage on the HMI machine climbs over 50% with one elevator page open.
+- After ~10 minutes idle the LEDs go grey (AutoDisposingStream timeout fired because the last listener was disposed before a new one attached).
 
-**Phase to address:** Phase that implements the multi-kind sensor painter. Mandate a `shouldRepaint` test and a kind-switch widget test before merge.
+**Prevention:**
+1. **Hoist subscriptions to the OUTERMOST stable widget.** The painter must NOT subscribe — it receives a `List<IOState>` already computed. Subscribe at the level of `_BeckhoffEL1008` / `_ModiconDDI3725`, which is a `ConsumerWidget` that is identity-stable across rebuilds.
+2. **Combine multi-key reads with ONE `CombineLatestStream`**, not multiple `StreamBuilder`s. Copy the `_combinedStream` helper at beckhoff.dart:1272 verbatim into `lib/page_creator/assets/modicon.dart`. Each module exposes ONE state stream to its widget.
+3. **Cache the stream in `initState` or memoize per-config-instance.** A `StatefulWidget` with `late final Stream<...> _stream = _combinedStream(...)` in initState (or a `useMemoized` analogue) prevents per-build resubscription. EL1008 currently gets away with rebuilding the stream because StateMan's `AutoDisposingStream` deduplicates, but with 32 keys per stack the dedup overhead compounds.
+4. **Add a leak test** `test/page_creator/assets/modicon/ddi3725_subscription_lifecycle_test.dart` that mounts the widget, drives 100 rebuilds, and asserts the count of `StateMan.subscribe` calls is `O(1)`, not `O(rebuilds)`.
+5. **Dialog subscriptions are scoped to the dialog.** When the operator opens the per-channel detail dialog with 6 keys, those subscriptions must end when the dialog closes — `showDialog` already handles this because the StreamBuilder lives inside the route. Verify by closing/reopening the dialog repeatedly and asserting no listener leak.
+
+**Phase:** DI module phase (16-ch DI is the worst offender — 6 streams × 16 channels worth of detail). DO module phase (same pattern). NIP head phase (only 1 synthetic "comm OK" stream — minor exposure). MomentumStack phase: end-to-end leak test on a populated stack.
 
 ---
 
-### Pitfall 4: Tween/animation jitter when PLC position oscillates within deadband
+### Pitfall M-04: Force-override semantics drop the underlying raw state — painter shows `forcedHigh` but operator can't see whether the wire is actually live
 
 **What goes wrong:**
-The PLC reports the elevator position as a 0–100% double, often via OPC UA from a servo encoder. Real hardware is noisy: at rest, the value can dither by ±0.05% every 100 ms. If the elevator widget naively plugs the live value into a `Tween` or animation controller (`controller.animateTo(newValue)`), the controller restarts on every minor change, causing visible jitter and excessive repaints. Worse, if the implementation uses `TweenAnimationBuilder<double>(value: livePosition, duration: 200ms)`, every dither restart creates a 200 ms interpolation that is interrupted before completion.
+EL1008's `_ledStates` (beckhoff.dart:1290-1300) collapses raw + force into a single `IOState`:
 
-**Why it happens:**
-- Servo encoders return raw measurements without HMI-side filtering. The HMI is mirroring PLC truth (per the milestone's design — "PLC owns debouncing"), but for visual smoothness a small client-side deadband is appropriate.
-- Animation controllers are designed for discrete state transitions, not continuous smooth tracking.
-- `Curves.easeOut` on a constantly-changing target produces a juddering visual.
+```dart
+if (forceValue == 1) return IOState.forcedLow;
+if (forceValue == 2) return IOState.forcedHigh;
+if (data["raw"] == null) return IOState.low;
+return (raw & (1 << i)) != 0 ? IOState.high : IOState.low;
+```
 
-**How to avoid:**
-- Drive the position through a `ValueNotifier<double>` (no tween). Set `_positionNotifier.value = newValue` directly on each PLC tick. Flutter's repaint batching is sufficient for a smooth visual at 30+ fps.
-- Apply a small client-side deadband (e.g. 0.2% of travel) ONLY to suppress repaints, not to mask the value: `if ((newValue - _lastNotified).abs() < 0.002) return;`. Document this is purely a render optimisation, not data filtering.
-- Do NOT use `AnimationController.animateTo(livePosition)` for tracking — controllers are for predetermined transitions (open/close), not for continuous-target smoothing.
-- If smoothing is desired (e.g. PLC reports at 1 Hz and visuals at 60 Hz), use a single low-pass filter or a one-shot `Tween` between the previous and current PLC sample with a duration matching the PLC update interval. Never restart an in-flight tween on each new sample without considering the previous tween's progress.
+The painter then draws `forcedHigh` as solid green with a red animated border (io8.dart:407-411). This is correct UX for an 8-channel module — the operator knows the channel is forced AND the border tells them so.
+
+But the underlying physical wire state is lost: if `force == forcedLow` but the actual sensor on `I3` is energised, the operator sees a green-with-red-border LED that says "I'm forced low" — they CANNOT tell whether the input is actually present or not. For commissioning and fault diagnosis this is a non-trivial gap. The Momentum dialog needs to surface BOTH raw and forced state side-by-side, which is what EL1008's `RowIOView` does for the dialog (beckhoff.dart:1647-1670) via the `TriangleBoxPainter` showing left-half-raw / right-half-processed.
+
+**The pitfall when adding Momentum:** because the milestone goal is "functionally on par with Beckhoff," the implementer copies the IOState enum verbatim and ships the same single-channel-state collapse. Operators then complain that they can't see the underlying input on a forced channel. Fixing this AFTER the painter / golden tests are locked is a much bigger rework than designing for it day 1.
 
 **Warning signs:**
-- Elevator visually shudders even when the PLC value is constant per logs.
-- Frame rate drops (visible in DevTools > Performance) when an idle elevator is on screen.
-- `paint()` is called 60+ times per second despite the PLC updating at 10 Hz.
+- Operator asks "is I3 actually energised right now, or just forced?" and there's no answer on the panel — only the dialog shows it.
+- Goldens were taken at `force == auto, raw == high` and `force == forcedHigh, raw == low` but no golden exists for `force == forcedLow, raw == high` (the case where reality and operator intent diverge).
+- The PLC code service or maintenance team needs to override-test wiring and finds the HMI useless for confirming the underlying input.
 
-**Phase to address:** Phase that wires the elevator's vertical translation. Add a unit test that injects a synthetic position stream with ±0.05% noise around 50% and asserts the notifier's emission count is bounded.
+**Prevention:**
+1. **Design a 4-state-per-channel struct from day 1**, not a single enum: `({bool raw, bool? processed, ForceMode force})`. The painter's IO state enum stays, but the data model preserves both axes.
+2. **Painter visual decision: add a small dot or stripe inside the forced LED that reflects the underlying raw state.** E.g. a forced-low LED shows red border + green corner pip if the underlying input is actually high. This is one extra painter call per channel and one extra golden per (force × raw) combination = 6 goldens per module (auto/forcedLow/forcedHigh × raw low/high), not 5.
+3. **Dialog ALWAYS shows raw + processed + force as three separate visual elements per channel** — copy the `TriangleBoxPainter` pattern (beckhoff.dart:1647) and scale it to 16 rows. Operators rely on this for commissioning.
+4. **Confirm the four-state intent with the user before locking goldens.** This is a UX call; ship the wrong choice and rework costs are high.
+
+**Phase:** DI module phase (the only phase where this matters — DO module has the same force-override mechanic but no "raw" axis since the output IS the forced value). The dialog covering all three axes must ship in the DI module phase; the painter pip / corner indicator is a separate decision that the phase plan should explicitly call out.
 
 ---
 
-### Pitfall 5: Backwards-compat traps with JSON migration
+### Pitfall M-05: NIP2311 status LEDs (RUN / PWR / ERR / ST / TEST) are NOT Modbus-addressable — wiring them to PLC state keys produces meaningless renderings
 
 **What goes wrong:**
-Existing saved pages contain old asset shapes that lack the new fields. Two specific traps from this codebase:
-1. **`json_serializable` requires non-nullable fields to have defaults.** If you add a new required field (e.g. `List<ChildEntry> children`) to `ElevatorConfig` without a default, generated `_$ElevatorConfigFromJson` will throw `TypeError: type 'Null' is not a subtype of type 'List<dynamic>'` for any old saved page.
-2. **Wrapper-promotion ambiguity.** The conveyor gate already had to handle "old format: gate config at root level with `asset_name`" vs "new format: `ChildGateEntry` with `gate` sub-object" (`lib/page_creator/assets/conveyor.dart:26–48`). The elevator + sensor milestone WILL hit the same shape: someone will start by storing `List<BaseAsset> children`, then realise they need per-child placement metadata (offset, attachment point), and need a `ChildElevatorEntry` wrapper. Without a custom `fromJson` migration, the upgrade silently drops existing children.
-3. **Enum forward-compat.** Adding a new `SensorKind.someNewKind` later will break old apps reading new pages unless `@JsonKey(unknownEnumValue: SensorKind.fallback)` is set on every enum-typed field. The codebase already does this (e.g. `GateVariant`, `GateSide`); failing to follow the pattern silently corrupts.
-4. **AssetRegistry-not-registered silent drop.** `centroid-hmi/lib/main.dart` lines 151–165 contain commented-out registry calls that the architecture doc explicitly warns about. If the elevator and sensor are not registered in `lib/page_creator/assets/registry.dart`, JSON loading silently skips them with no error.
+A NIP2311 (Ethernet Modbus/TCP adapter) head module on a Modicon Momentum has a row of status LEDs on its faceplate. These reflect the adapter's INTERNAL state — Ethernet link status, Modbus protocol activity, comm error count, self-test state. They are driven by firmware inside the adapter ASIC, not by PLC application code. (MEDIUM confidence — per the [Momentum 170ENT11001/170ENT11002 Ethernet Communications Adapter](https://igate.alamedaelectric.com/Modicon%20Documents/PLC%20Momentum%20PLC%20Ethernet%20(ENT)%20Adapter%20User%20Guide%20v2.0.pdf) which is the NIP family doc. The newer NIP2311 follows the same conventions.)
 
-**Why it happens:**
-- `json_serializable`'s default null-handling is unforgiving for list/map fields.
-- Iterating from "single child" to "list of children with metadata" is a natural mid-implementation refactor; the migration is easy to forget.
-- Registry registration is in a different file than the asset, so it's easy to merge an asset PR without the registry update.
+Naively the implementer adds a `runStatusKey`, `pwrStatusKey`, `errStatusKey` etc. to NIP2311Config and exposes them in the configure dialog. Two failure modes:
 
-**How to avoid:**
-- For every list field, use `@JsonKey(defaultValue: <const empty list>)` AND default to `[]` in the constructor. For nullable/optional new fields, use `T?` plus `?? sensibleDefault` at read sites — or `@JsonKey(defaultValue: ...)`.
-- For every enum field, use `@JsonKey(unknownEnumValue: EnumType.firstSafeValue)`.
-- Anticipate the wrapper promotion: design `ChildElevatorEntry { String id; double offsetX; double offsetY; BaseAsset child; }` from day one, even if the milestone only uses `child`. Codify the JSON format in a unit test on day one.
-- Write a "load old golden page" regression test: check in a sample JSON that represents the pre-milestone state and assert it loads with sensible defaults.
-- Immediately add elevator/sensor registrations to `AssetRegistry._fromJsonFactories` AND `defaultFactories` in the same PR; cross-link from the asset file to the registry file with a comment.
+1. **Operator misconfigures them with arbitrary PLC tags.** The HMI then renders LEDs that have NO causal relationship to the actual adapter state — they reflect whatever bool tag the operator picked. This is dangerous because operators will trust the visual.
+2. **The keys are left empty.** The painter renders 5 grey LEDs forever. Operators don't know whether the module is healthy or whether the keys just aren't wired. The asset looks broken.
 
 **Warning signs:**
-- An end-to-end "open existing page" test starts failing only on environments with old saved pages.
-- New asset works in a fresh page but not when added to a page that was saved before the asset existed.
-- `AssetRegistry.parse` returns assets in a different order than the JSON list (silent drop reorders).
+- The configure dialog has fields for status LEDs whose default values are unclear and whose intent is undocumented.
+- Operator reports "the RUN LED on the NIP is green on the panel but red on the HMI" — because they're disconnected.
+- Onsite engineer says "where do I get the NIP status from?" and there's no answer in the backend.
 
-**Phase to address:** Phase that introduces the elevator config (children list) and the sensor config (kind enum). Migration test must land in the same PR as the schema change.
+**Prevention:**
+1. **Make the NIP status LEDs decorative by default.** Render them statically as a faithful visual of a powered, running adapter: RUN green solid, PWR green solid, ERR off, ST off, TEST off. No state keys. This matches the physical module 99% of the time and avoids the misconfiguration trap.
+2. **Optionally accept ONE "comm OK" boolean state key** that the backend synthesizes from "have I received a valid Modbus response in the last N seconds." When that key is configured, RUN goes red and ERR goes red if comm is down. All other LEDs remain decorative. Document this clearly in the configure dialog: "Synthetic comm-OK boolean from backend — leave empty to render as healthy."
+3. **Do NOT expose five separate status-LED keys in the configure dialog.** Surface only the one synthetic key, with a docstring tooltip explaining why.
+4. **Render the dual Ethernet port LEDs (link / activity) statically** unless / until the backend offers a "Ethernet up" boolean per port. Same rationale.
+
+**Phase:** NIP head phase — owns this decision entirely. Must NOT add five `*Key` fields to NIP2311Config (which would dirty `allKeys` with meaningless tags). The configure dialog spec is the deliverable.
 
 ---
 
-### Pitfall 6: Goldens drift / brittle visual tests
+### Pitfall M-06: JSON round-trip breaks when v2.0 introduces a new field on a config that exists in v1.0 saved pages
 
 **What goes wrong:**
-Golden tests for the elevator and sensor painters fail intermittently:
-- On CI, because the macOS-only guard at `test/page_creator/assets/conveyor_gate_golden_test.dart:67` (`skip: !Platform.isMacOS`) means Linux CI never enforces them — and the next change made on Linux silently breaks the goldens. This is already flagged in `CONCERNS.md`.
-- Because the elevator's vertical position appears in goldens — one frame at 47% vs another at 47.001% produces pixel diffs.
-- Because the sensor's animated detection ring has phase-dependent rendering.
-- Because one test mutates a shared `ValueNotifier` and the next test sees that state.
+v1.0 has shipped saved pages with `BeckhoffEL1008Config`, `ElevatorConfig`, `SensorConfig`, etc. If the v2.0 milestone touches a shared base class (e.g. `BaseAsset`, or adds a field to `BaseAsset.toJson`), or modifies an existing asset's schema (e.g. adds a per-channel description to EL1008), saved JSON without the new field will fail to deserialize.
 
-**Why it happens:**
-- Animations: pumping `WidgetTester.pumpAndSettle` does NOT settle infinite animations (e.g. a perpetually-pulsing field sensor). Tests time out or capture an arbitrary frame.
-- Floating-point position: representing position as a double makes pixel-perfect goldens impossible without snapping.
-- Shared painter state: `ValueNotifier`s declared as top-level variables persist across tests in the same file.
+The conveyor's `_gatesFromJson` legacy shim (conveyor.dart:26-48) is the prior-art pattern: it accepts BOTH the old schema (flat `ConveyorGateConfig` with `asset_name` at root) AND the new schema (`ChildGateEntry` wrapping the gate) and produces the new representation. The cost is that EVERY new field needs a `defaultValue:` annotation OR a custom `fromJson` helper that tolerates absence.
 
-**How to avoid:**
-- Pin `progress.value` and `position.value` to deterministic values in tests (e.g. `0.0`, `0.5`, `1.0`). Use `tester.pump(Duration.zero)` after setting the notifier; do NOT use `pumpAndSettle` if the painter has any infinite animation.
-- Disable infinite sensor animations in tests via a config flag (e.g. `disableAmbientAnimations: bool`) set in `ConveyorGate` already implicitly via `_progress`. Make the same explicit on the sensor painter.
-- Round the `position` to discrete steps (e.g. nearest 1%) in goldens by snapping the notifier value before passing to the painter under test.
-- Add Linux/macOS matrix to `flutter_goldens` or relax the macOS-only guard with a known-bad-platform skip. Track a follow-up to make this CI-enforced.
-- Reset all top-level/static state in `setUp`. Prefer per-test painter construction.
-- Co-locate goldens by feature subdirectory (`test/page_creator/assets/goldens/elevator/`, `.../sensor/`).
+**Two concrete failure modes for v2.0:**
+
+1. **MomentumStack borrows the BeckhoffCX5010 `subdevices: List<Asset>` field via `AssetListConverter`.** This works for new MomentumStacks but if an operator's saved page somehow contains a Momentum-prototype stack with a different field name (e.g. `modules` from an earlier prototype), deserialization throws. Prevention: pin the field name to `subdevices` from day 1 and don't rename it.
+
+2. **`*.g.dart` not regenerated after schema change.** Build runner caches aggressively. A developer adds a field, edits an existing fromJson by hand, and forgets to `flutter pub run build_runner build`. CI passes because the test harness regenerates, but operator pages saved before the change fail to load — and the failure is silent (asset just disappears from the page) because `AssetRegistry.parse` swallows per-asset deserialization errors.
 
 **Warning signs:**
-- Golden test passes locally on macOS, fails on Linux (or vice versa).
-- Same test passes when run alone, fails when run as part of the suite.
-- Tiny refactor that doesn't change painter logic causes 0.0001% pixel diff.
+- After pulling latest, opening an existing page shows fewer assets than before — silently dropped.
+- `flutter analyze` or test runs locally pass but a teammate's machine fails because their `*.g.dart` is stale.
+- A field added to `BeckhoffEL1008Config` last week is `null` even though the saved JSON contains a value (because the `fromJson` was hand-edited and the field was missed).
+- The codegen log shows `Skipping: file already up to date` — but it isn't, because build_runner's freshness check is `mtime`-based, not content-based.
 
-**Phase to address:** Phase that adds painters. Establish golden-test contract (deterministic-only, no infinite animations during golden capture) before any goldens are committed.
+**Prevention:**
+1. **Every new field on an existing config gets `@JsonKey(defaultValue: <sensible default>)`** or is nullable (`String?`). This is the v1.0 convention — keep it.
+2. **Every new field on a NEW config (e.g. `DDI3725Config`)** can use required initializers, but the constructor must accept null/default for forward compat with future v2.1 additions.
+3. **Add a JSON round-trip test per new module** (`test/page_creator/assets/modicon/ddi3725_json_test.dart`) that: (a) constructs a fully-populated config, (b) toJson, (c) fromJson the result, (d) asserts deep equality.
+4. **Add a "legacy JSON" test** — paste a hand-written JSON snippet that omits future fields and assert it loads cleanly with sensible defaults.
+5. **Pre-commit or CI gate: run `flutter pub run build_runner build --delete-conflicting-outputs` and assert no uncommitted `*.g.dart` changes.** This catches stale-codegen drift.
+6. **Polymorphic child wrappers (per the v1.0 elevator's `ChildGateEntry` lesson):** if MomentumStack ever needs per-child metadata (e.g. a slot number or position-on-DIN-rail), wrap children in a `ModuleSlotEntry { String id, int slot, Asset module }` from DAY 1 — never retrofit. Mid-milestone schema changes to `subdevices: List<Asset>` will break v1.0 + early-v2.0 saved pages.
+
+**Phase:** Every phase. Phase plans must include a JSON round-trip test as a "definition of done" checkbox. The MomentumStack composition phase owns the decision on whether children are bare `Asset` or wrapped `ModuleSlotEntry` — make the call once and stick to it.
 
 ---
 
-### Pitfall 7: Hit-test issues for assets riding the elevator
+### Pitfall M-07: Hit-testing through the stack — child module's GestureDetector doesn't fire when it's inside a `FittedBox`/`Row` MomentumStack composition
 
 **What goes wrong:**
-A sensor placed on the elevator is interactive (e.g. tap-to-show details). When the elevator moves to 95%, the sensor's hit area is offset by the parent's `Transform.translate` — but if the implementation uses raw `Transform.translate(offset: Offset(0, dy), child: child)`, hit-testing works correctly. If instead the implementation uses `Transform(transform: Matrix4.translationValues(0, dy, 0), transformHitTests: false)`, taps land where the child WAS at 0%, not where it now is. Same problem for overlap with `RotatedBox`-style ancestors.
+`feedback_gesture_through_translation.md` from v1.0 documents that gestures must survive parent translation. The Beckhoff CX5010 stack composes children inside a `FittedBox(fit: BoxFit.contain, child: Row(...))` (beckhoff.dart:64-91) and each subdevice is `_SubdeviceNormalized(child: sub.build(context), ...)`. `FittedBox` applies a scale transform — the painted glyph and the hit-test region BOTH scale together because `FittedBox` is a real layout widget (uses a `Transform.scale` under the hood, which DOES correctly propagate hit-tests).
 
-The conveyor's existing pattern uses a custom `LayoutRotatedBox` with manual hit-test code (`lib/page_creator/assets/common.dart:1334–1360`). This is a hand-rolled implementation that already needed special hit-test handling to work — proof that the codebase's transform pattern is non-standard and needs care.
-
-**Why it happens:**
-- `Transform.translate` defaults to `transformHitTests: true`. `Transform()` constructor defaults to `true` as well, but custom `RenderObject`s might not honour the contract.
-- Wrapping the child in `IgnorePointer` to disable hit-testing during animation is sometimes copy-pasted without removing `IgnorePointer` for the at-rest case.
-
-**How to avoid:**
-- Use `Transform.translate(offset: Offset(0, -dy), child: child)` — the named constructor — not the raw `Transform` constructor. Verify that `transformHitTests` is left at default `true`.
-- For positioned children inside a `Stack`, mutate the `Positioned.top`/`bottom` in lockstep with the position notifier. Hit-testing on `Positioned` is correct by construction.
-- Write a hit-test integration test: place a sensor on an elevator at 80%, simulate a tap at the on-screen position, assert the sensor's `onTap` fired.
-- If extending `LayoutRotatedBox`-style custom render objects, ensure `hitTest` is overridden and respects the inverse transform. Reference `_RenderLayoutRotatedBox.hitTest` at `lib/page_creator/assets/common.dart:1334`.
+The v2.0 MomentumStack will replicate this pattern. The risk: if the implementer reaches for an optimization like `Transform(transform: Matrix4.scale, child: ...)` WITHOUT `transformHitTests: true` (the default IS true, but readable code is one CustomPainter offset away from the wrong choice), or composes children via `CustomPaint(painter: ..., child: child)` with manual offsets, the hit-test region detaches from the painted region. Operator taps on the DDI3725 LED and the GestureDetector on the NIP fires instead. Subtler: at certain stack widths the FittedBox shrinks the modules below their gesture-detector minimums and taps land on the parent.
 
 **Warning signs:**
-- Tapping a sensor on a moving elevator opens the wrong sensor (or no sensor).
-- Tap target is correct at position 0% but offset at position 100%.
-- Long-press / drag-to-rearrange in the editor works only when the elevator is at rest.
+- Tapping a module mid-stack opens the wrong module's dialog.
+- Tapping a module at a non-default stack scale opens NO dialog (tap lands in the FittedBox's empty letterbox area).
+- Manual test: shrink the page-creator viewport to half-size — module taps stop firing.
 
-**Phase to address:** Phase that wires interactive sensor children. Acceptance test must include a hit-test at non-zero positions.
+**Prevention:**
+1. **Use `FittedBox` + `Row` (the existing pattern).** Do NOT introduce `Transform` or `CustomPaint(child: ...)` with manual offsets.
+2. **Add a widget test per module** `test/page_creator/assets/modicon/<module>_tap_in_stack_test.dart` that wraps the module in a `MomentumStack`, scales the parent to 50% and 200%, and asserts a tap on the module fires its specific dialog (not the stack's, not a sibling's).
+3. **Each module's tappable area uses `GestureDetector` with `HitTestBehavior.opaque`** — copy the EL1008 pattern at beckhoff.dart:1337. `opaque` ensures the tap doesn't fall through to siblings or the parent stack.
+4. **No painter-only hit detection.** A `CustomPainter` does NOT participate in hit-testing — the `GestureDetector` MUST be a separate widget wrapping the `CustomPaint`.
+
+**Phase:** Each module phase (DI, DO, NIP, PDT) owns its own gesture wiring. MomentumStack phase owns the composition test that scales the stack and asserts taps still land correctly.
 
 ---
 
-### Pitfall 8: Off-by-one with bbox-based travel range (top/bottom interpretation)
+## Moderate Pitfalls
+
+### Pitfall M-08: `shouldRepaint` misses a new field — stale paint on force-mode change
 
 **What goes wrong:**
-The milestone defines: "Elevator travel range = its bounding box (0% = bottom, 100% = top)." Two off-by-one traps:
-1. **Y-axis inversion.** Flutter's coordinate system has `y=0` at the top. A naive implementation translates the platform by `position * height` — which produces 0% at TOP, not bottom (the opposite of the spec). The fix is `dy = (1 - position) * height` for the platform's `top` offset, or `bottom = position * height` for `Positioned.bottom`.
-2. **Platform thickness.** The "platform" widget has finite height. At 100%, does the platform's top edge align with the bbox's top, or does the platform's bottom edge align? If you forget to subtract `platformHeight` at 100%, the platform overhangs the bbox. This was effectively the same class of bug as the gate's `outsideOverhang` calculation at `lib/page_creator/assets/conveyor.dart:855–859`.
-3. **Children attached to the platform** must move WITH the platform, not relative to the bbox top. The reference frame for the child's offset is the platform's current Y, not the bbox's coordinate space — easy to confuse when reading the code months later.
+`IO8Painter.shouldRepaint` (io8.dart:335-343) compares every field. If the v2.0 painter adds a field (e.g. `bitOrder` enum or per-channel description list) and the developer forgets to add it to `shouldRepaint`, the painter caches stale frames. The force-override animation flickers because the animation field IS in shouldRepaint but the new field's changes are ignored — the painter sees "nothing changed" for several frames, then a force change re-triggers and the new field's last-known value appears.
 
-**Why it happens:**
-- Y-down coordinate system trips up everyone occasionally.
-- "Travel range = bbox" is ambiguous about whether the bbox is the SHAFT extent or the PLATFORM travel extent (they differ by platform height).
-- Specs that say "0% = bottom, 100% = top" don't address platform-thickness deltas.
-
-**How to avoid:**
-- Define a single helper: `double platformOffsetTop(double position, double bboxHeight, double platformHeight) => (1 - position) * (bboxHeight - platformHeight);`. Use it everywhere. Unit-test it with three samples: (0%, h=100, ph=20) → 80, (100%, h=100, ph=20) → 0, (50%, h=100, ph=20) → 40.
-- Add a visual debug overlay (toggleable via a config flag) that draws the bbox edges and the platform extent so operators can verify visually.
-- Document the "0% = platform-bottom-touches-bbox-bottom" or "0% = platform-centre-at-bbox-bottom" convention prominently in the asset's class doc comment, with an ASCII diagram.
-- Children are positioned relative to the platform (`platformOffsetTop + childRelativeOffset`), NOT relative to the bbox.
+The opposite is worse: returning `true` unconditionally from `shouldRepaint` repaints every frame. Combined with the 32 streams per stack from Pitfall M-03, the GPU runs flat-out.
 
 **Warning signs:**
-- At position=1.0, the platform extends above the bbox.
-- At position=0.0, the children appear at the top of the bbox instead of the bottom.
-- Children appear slightly out of sync with the platform (drift = platform thickness).
-- Position 50% does not visually correspond to the geometric centre of the travel range.
+- Per-channel descriptions changed in StateMan don't update on the painter until something else triggers a rebuild.
+- DevTools "rebuild stats" or the rendering overlay shows the painter rebuilding 60 fps even when nothing visible changed.
+- Memory grows monotonically (painter caches Picture objects per repaint).
 
-**Phase to address:** Phase that wires the elevator's vertical translation. Mandate a unit test for the `platformOffsetTop` helper before any visuals are built.
+**Prevention:**
+1. **`shouldRepaint` is a covariant `==` check.** Add every painter field. If a field is a `List`, use `listEquals` (already imported via `flutter/foundation.dart` at io8.dart:2). If it's a custom struct, implement `==` on the struct first.
+2. **Add a golden test that verifies repaint on each field change** — change one field at a time, re-render, and confirm the golden differs. A field that doesn't affect the golden when it should is a missing shouldRepaint clause OR a missing painter call.
+3. **Lint check:** consider a custom `dart analyze` rule (or just a code-review checklist) — "every field in the painter's constructor must appear in `shouldRepaint` OR be marked `@immutable` and prove it doesn't affect paint."
+
+**Phase:** Every painter phase.
 
 ---
 
-### Pitfall 9: Rotation handling for sensors placed on rotated conveyors / elevators
+### Pitfall M-09: 16-channel layout doesn't scale gracefully below ~80 px wide
 
 **What goes wrong:**
-The codebase's `BaseAsset.coordinates.angle` allows assets to be rotated (`lib/page_creator/assets/common.dart` Coordinates struct). The conveyor's `_buildConveyorVisual` already rotates via `LayoutRotatedBox(angle: (config.coordinates.angle ?? 0.0) * pi / 180, ...)`. If a sensor is placed on a 90°-rotated conveyor or a tilted elevator, multiple subtle bugs surface:
-1. The sensor's own painter draws "horizontally" but the parent rotation makes it appear vertical — fine if the child is rotation-aware, broken otherwise.
-2. The sensor's beam (red light kind) has a sender-and-receiver pair connected by a beam path. If the child computes that path in its local coordinate system but the parent rotates the result, the beam path can end up off-axis or reversed.
-3. Hit-testing through nested rotations: a tap at screen position S must inverse-transform through ALL ancestor rotations to find the child. The custom `LayoutRotatedBox` already had to special-case this (`common.dart:1334–1360`).
-4. Animation directions become reversed depending on the rotation: a "pulse outward" animation in the painter's local space pulses inward when the parent applies a 180° flip. The gate diverter's animation-direction-vs-side bug (`CONCERNS.md` BUG-Gate-animation) is a smaller version of this trap.
+`IO8Painter` lays out 8 LEDs in a 2×4 grid plus terminal blocks (io8.dart:432-452). At small sizes (height ~150 px) the LED rectangles are ~8 px each and the channel labels become unreadable but still legible. For 16 channels on the same footprint (107×152 mm physical), the grid is 2×8 — each LED is half the height. At 80 px wide × 160 px tall (small page-creator placement) the LEDs are 4×8 px and the channel labels degrade into a blob.
 
-**Why it happens:**
-- The asset system has TWO rotation mechanisms: per-asset `coordinates.angle` AND `Transform.rotate` inside the conveyor's child positioning (`conveyor.dart:876–880`). The elevator will be a third stacking layer.
-- Painters draw in their local Size, ignoring ancestor transforms.
-- "Direction" in animation code is implicit — sign of an offset in painter space.
-
-**How to avoid:**
-- Decide at the architecture level: is the elevator a "screen-aligned" widget (its content always renders upright regardless of `coordinates.angle`) or a "frame-aligned" widget (content rotates with the asset)? Document the choice in the asset's class doc.
-- For sensor painters: NEVER assume a particular orientation in `paint()`. Read `Size`'s aspect ratio and adapt; or expose a `painterAngleDegrees` parameter the parent fills in based on the effective rotation it knows.
-- For the red-light-beam kind: paint the sender at a relative position `(0, h/2)` and the receiver at `(w, h/2)`. The beam is always a horizontal line in the painter's frame. Whatever rotation gets applied externally is the parent's responsibility.
-- Write a widget test that places a sensor on a 90°-rotated parent and asserts the rendered output (golden) AND a tap at the rotated position lands on the child.
+The user's photo confirms the physical layout: a vertical strip with two columns of terminal blocks running floor-to-ceiling, channels numbered down the left then down the right. The painter's column-major layout (channels 1-8 in left column, 9-16 in right column) matches the physical module. Row-major (channels 1, 9, 2, 10, ...) does NOT match the physical and will confuse operators during commissioning.
 
 **Warning signs:**
-- Sensor visually appears rotated incorrectly when parent is rotated.
-- Beam between sender and receiver appears vertical when the conveyor is horizontal (and vice versa).
-- Tap target is offset from visual when nested rotations are present.
-- Pulsing animation appears to contract instead of expand on a 180°-rotated parent.
+- Operators say "the panel is unreadable when the page is shrunk for the overview."
+- The painter draws "16" / "I16" as just a coloured block — text painter clips.
+- Channel labels overlap with terminal block visuals at small sizes.
+- Goldens at one size look fine; goldens at half size look like garbage.
 
-**Phase to address:** Phase that integrates sensors with rotated parents (likely after the standalone painter phase). Test matrix must include 0°, 90°, 180°, 270° parent rotation × sensor on/off elevator.
+**Prevention:**
+1. **Column-major LED ordering per the photo.** Channels 1-8 in the left column top-to-bottom, channels 9-16 in the right column top-to-bottom. Match the physical terminal-block layout. Add a comment in the painter referencing the photo path.
+2. **Two-tier rendering: above a size threshold (e.g. width >= 100 px), draw labels; below, draw the LED grid only without labels.** Operators at a small overview size only need to see whether anything is energised, not which channel. Copy the io8.dart `disconnected` icon-render pattern at lines 126-147 for the conditional rendering.
+3. **Add goldens at three sizes** — full (e.g. 200×400), medium (100×200), small (60×120) — per module. A regression at any size fails CI.
+4. **DXF proportions are guidance, not gospel.** The IO_BASE DXF gives 107×152 mm (`.planning/research/dxf/README.md`), so the painter aspect ratio is ~0.7:1. But the LED block within that should be proportionally LARGER than DXF if the LEDs need to be visible at small sizes. Document the deviation in the painter file.
+
+**Phase:** DI module phase, DO module phase. The same painter file (or shared base painter) services both — the DXF mapping is `IO_BASE_DDI3725_DDO3705_mcadid0005033.dxf` shared between DI and DO.
 
 ---
 
-### Pitfall 10: Memory leaks from animation controllers not disposed when child detaches
+### Pitfall M-10: Hard-coded colours don't survive theme changes — Schneider cream looks like dirty grey on dark theme
 
 **What goes wrong:**
-The sensor with red-light-beam kind has an ambient pulsing animation (the beam shimmers). If the operator removes a sensor from an elevator (unassigns it from the children list), the sensor widget unmounts — but if the `AnimationController` is held by a top-level provider, a pre-cached controller, or a static cache keyed by sensor id, it survives unmount. Symptoms: progressive memory growth on a long-running HMI session as operators reconfigure pages; eventually frame drops or OOM on the embedded Linux target.
+The Beckhoff painter hard-codes `bodyColor = Color(0xFFF7F5E6)` (io8.dart:102) and `ioLabelColor = Color(0xFFC0C040)` (io8.dart:5). On dark theme the cream module body sits against a dark canvas and looks fine. The Schneider cream `~Color(0xFFE8E2D0)` (typical Schneider Electric Momentum chassis colour) is similar.
 
-The codebase already had two near-misses:
-- `_ConveyorGateState` correctly disposes its controller in `dispose()` (`conveyor_gate.dart:213–218`). Good.
-- BUT the `_ConveyorGateConfigEditorState` also has a controller (line 540–571) — also correctly disposed. Good. These set the precedent the new code must follow.
-- `CONCERNS.md` flags "Animation controller disposal" as untested in the gate painters: "no test verifies ... animation controller disposal". A future refactor could break this silently.
+Hardcoding is correct for module-body recognition — operators recognize the colour. But the BORDER colours, terminal-block colours, and text colour DO need to respond to theme. EL1008's text is hardcoded black (`color: Colors.black` at io8.dart:165, 313) — on a light theme this is fine; on a dark theme overlaid against a dark page background OUTSIDE the module, the bottom labels "EL1008" / "BECKHOFF" become invisible because they're black-on-dark-canvas at the boundary.
 
-**Why it happens:**
-- Developers add an animation controller to a `State`, forget the `dispose()`, and the leak is invisible until production sessions run for hours.
-- Cached painters in a top-level map outlive their widgets.
-- A `ValueNotifier` constructed at top level (file scope) is never disposed.
-
-**How to avoid:**
-- ALL `AnimationController`s in elevator/sensor widget code MUST be disposed in `State.dispose()`. Code review checklist item.
-- Add a behavioural unit test for each new `Stateful` widget: pump it, then `tester.pumpWidget(SizedBox())` to unmount, then assert no controllers remain (use Flutter's `LeakTesting` mode or count via `ServicesBinding.instance` introspection).
-- Any `ValueNotifier` created in `initState` MUST be disposed in `dispose()`.
-- Avoid top-level static caches of painters/controllers. If caching is needed (for performance), ref-count by widget id and dispose on zero refcount.
-- If a painter holds a `ValueNotifier` via `super(repaint: progress)`, the notifier MUST belong to the State that constructs the painter, not be passed in from outside without ownership clarity.
+The new Momentum module text "DDI3725" / "Schneider" has the same risk if cloned verbatim.
 
 **Warning signs:**
-- `flutter test` reports "AnimationController was not disposed" warnings (set `LeakTesting.enable()`).
-- Memory monitor shows growth correlating with sensor add/remove cycles.
-- DevTools "Object Inspector" shows orphan `_AnimationController` instances after page navigation.
+- Operator switches to dark theme and "the labels disappeared on the new modules" — actually they're outside the cream body and now blend into the dark canvas.
+- The module body's outer border is the same colour as the page background — module merges into the canvas.
 
-**Phase to address:** Phase that introduces ambient animations on the sensor (red-light beam shimmer). Acceptance test: leak-test mount/unmount cycle.
+**Prevention:**
+1. **Module body colour is FIXED** — Schneider cream, Beckhoff cream. Operator recognition wins.
+2. **Text INSIDE the cream body is FIXED black** — high contrast on cream, regardless of theme.
+3. **Text OUTSIDE the cream body** (e.g. labels below the module) **uses `Theme.of(context).colorScheme.onSurface`** — passed into the painter as a parameter, NOT hardcoded.
+4. **Outer border of the module uses `Theme.of(context).colorScheme.outline` or similar** so the module separates from the canvas in both themes.
+5. **Add a "dark theme golden" pair for every module** — `<module>_light.png` and `<module>_dark.png`. Catches the theme-drift bug.
 
----
-
-## Technical Debt Patterns
-
-| Shortcut | Immediate Benefit | Long-term Cost | When Acceptable |
-|----------|-------------------|----------------|-----------------|
-| Inline `ref.watch(stateManProvider.future).asStream()...` in `StreamBuilder.stream` (gate's existing pattern at `conveyor_gate.dart:336`) | Compact code; no `initState` boilerplate | Stream resubscribe storm under high-frequency parent rebuilds (Pitfall 2) | Never for elevator children — rebuild rate is too high |
-| Single painter that switches on `kind` in `paint()` | One file, less indirection | Painter-state leakage between kinds (Pitfall 3); harder testing | Never — always one painter class per kind |
-| `setState` inside `_onStateChanged` driven by stream emission | Easy to write | Excessive rebuilds on noisy PLC; loses notifier-based optimisation | Only for the rare-event boolean (sensor detected → not detected). Position MUST use `ValueNotifier` |
-| Hardcoded preview duration (gate had `1200ms` hardcoded — fixed in last milestone) | Quick to ship | Diverges from runtime behaviour; UI feels off | Never — read from config |
-| Skip backwards-compat migration test ("we'll add it later") | Saves a day | Silent data loss for existing users | Never for any schema-affecting change |
-| Skip `ValueKey` on children inside the elevator's child list | Simpler `Stack` builder | Identity loss on reorder / position change (Pitfall 1) | Never for stateful children |
-| Register asset only in `AssetRegistry`, forget `defaultFactories` | One-line fix | Asset doesn't appear in palette but loads from JSON — confusing | Never |
-| Read PLC position with no client-side deadband | Mirrors PLC truth | Excessive repaints from 0.05% encoder dither (Pitfall 4) | Never — render-only deadband does not affect data |
+**Phase:** Each module's painter phase. The shared `lib/painter/modicon/io16.dart` should accept the on-surface colour as a constructor param.
 
 ---
 
-## Integration Gotchas
+### Pitfall M-11: Stack-composition golden fails on CI because of font rendering differences
 
-| Integration | Common Mistake | Correct Approach |
-|-------------|----------------|------------------|
-| `StateMan.subscribe(key)` for position | Treat as stream of `bool` and call `.asBool` (silently returns false for double values) | Read `.asDouble` (`number.dart:316` reference); guard with `value.isDouble \|\| value.isInteger` (per `analog_box.dart:516`) |
-| `StateMan.subscribe(key)` for sensor bool | Forget that `subscribe` returns `Future<Stream<DynamicValue>>` (not `Stream<DynamicValue>` directly) | `await sm.subscribe(key)` then operate on the returned stream — store in `State`, do NOT inline in `build()` |
-| `AssetRegistry` registration | Register only in `_fromJsonFactories`, forget `defaultFactories` (palette) | Register in BOTH maps in the SAME PR; cross-link with comments |
-| Key substitution (`$varName`) | Subscribe BEFORE `resolveKey`, key not substituted | Use `stateMan.resolveKey(key)` before `subscribe` if assets reference dynamic positions |
-| `json_serializable` enum field | Add new enum value in this version → old versions crash on read | Always `@JsonKey(unknownEnumValue: SafeFallback)` from the FIRST commit |
-| `ChildEntry`-style wrappers | Store the child as a typed `BaseAsset` field without a custom `fromJson`/`toJson` | Use `@JsonKey(fromJson: _xFromJson, toJson: _xToJson)` (mirror `_gateFromJson` pattern in `conveyor_gate.dart:63–65`) |
-| Riverpod inside `keepAlive` providers | `ref.watch(otherProvider)` cascades invalidation | `ref.read(otherProvider.future)` for one-shot init (per `ARCHITECTURE.md` anti-pattern) |
-| OPC UA `DynamicValue.asDouble` | Crash if value is a String / NULL during reconnect | Guard with `if (snap.hasData && snap.data!.isDouble)` and grey out otherwise (per `analog_box.dart:737` pattern) |
+**What goes wrong:**
+EL1008's painter draws "1" through "8" + "EL1008" / "BECKHOFF" via `TextPainter` with `FontWeight.bold` and the platform default font (io8.dart:163-175). On a developer's macOS machine the SF Pro / Helvetica metrics produce one pixel layout; on the Linux CI container (typically running headless rendering via the test framework's Skia backend), font metrics differ by 1-2 pixels. Goldens generated on the dev machine fail on CI with `mismatchedPixels: ~80`.
 
----
+Adding labels "1" through "16" for the Momentum module DOUBLES the surface area where this can fail.
 
-## Performance Traps
+**Warning signs:**
+- CI shows golden failures with tiny pixel diffs concentrated around text glyphs.
+- Re-running CI on the same commit sometimes passes, sometimes fails.
+- `--update-goldens` locally produces a file that fails on CI.
 
-| Trap | Symptoms | Prevention | When It Breaks |
-|------|----------|------------|----------------|
-| Position drives `setState` instead of `ValueNotifier` | Whole subtree rebuilds at PLC rate; CPU pegged | Hold position in `ValueNotifier<double>`, use `ValueListenableBuilder` with stable `child:` | At 30+ Hz PLC update rate, or with multiple elevators on one page |
-| New stream constructed inside `build()` (Pitfall 2) | OPC UA monitored items churn; dropped values | Hoist to `initState` | Always — even at 1 Hz this is wrong |
-| `pumpAndSettle` on infinite ambient animations | Tests time out at 10 minutes | Pin `progress` to a deterministic value; use `pump(Duration.zero)` | Always in tests with sensor pulses |
-| Goldens with floating-point position | Pixel diffs on every commit | Snap to discrete steps in tests | At any non-zero position |
-| Stack with N children rebuilds entire stack on position change | Sensor LEDs flicker; FPS drops with many children | `RepaintBoundary` per child + stable `Key`s + `ValueListenableBuilder` with `child:` cached subtree | At 5+ children per elevator |
-| `unawaited(stateMan.write(...))` in tap handler called on every animation tick | Network saturation; OPC UA write queue overflow | Bind writes to genuine user actions only; no writes from `paint()` or animation listeners | Always |
-| Painter holding non-trivial state in instance fields rebuilt each frame | `paint()` allocates Path / Paint per call | Allocate Paint objects once in painter constructor; cache Paths keyed by progress | At 60 fps with complex geometry |
+**Prevention:**
+1. **Goldens are generated on CI, not the dev machine.** Project convention should be: developer writes the test, sees it fail, generates a placeholder, pushes; CI runs `--update-goldens` and the developer pulls the canonical golden. (See `dart_test.yaml` — golden tests are skipped unless `--update-goldens`; verify the project's golden CI flow before assuming.)
+2. **Pin a font family explicitly** — bundle a small fixed font (e.g. Roboto via pubspec assets) and use it in the TextPainter. Removes the platform-default-font variance.
+3. **Set `textScaleFactor: 1.0` explicitly** in the painter's `TextPainter` setup and in the test wrapper widget. The default can drift with system accessibility settings.
+4. **Use `matchesGoldenFile` with a fault tolerance** ONLY as a last resort — exact-match goldens are the strong signal.
+
+**Phase:** Every painter phase that uses `TextPainter`. The DI module phase will hit this first; the fix (pinned font) carries over to DO + NIP + PDT.
 
 ---
 
-## Security Mistakes
+### Pitfall M-12: Stack child filter — what happens if a non-Momentum asset ends up in `MomentumStack.subdevices`?
 
-| Mistake | Risk | Prevention |
-|---------|------|------------|
-| Allow operator to type any OPC UA key into the elevator's "force position" write field, no validation | Operator types a critical-safety key by accident; widget writes to it | Force keys for elevator should be display-only in this milestone (write is out of scope per spec). For future milestones, validate against a write-allow-list in `StateManConfig` |
-| Sensor "force-detected" debug feature | Operator forces a sensor true to bypass interlocks | Out of scope for this milestone. If added later, gate behind PAM auth via `lib/pages/dbus_login.dart` |
-| Position write capability via tap on the elevator visual | Inadvertent jog causes equipment crash | Spec is read-only for position. Do not add tap-to-drive in this milestone. If added, route through `ElicitationDialog` for confirmation (`lib/chat/elicitation_dialog.dart` precedent) |
-| Sensor edge-delay state keys exposed to MCP / LLM as writable | LLM agent silently changes PLC config | Spec is display-only. Do not expose write capability to MCP tool surface |
-| State-key field accepts substitution syntax (`$varName`) without validation | Malformed substitution silently no-ops, operator thinks the key is bound | Validate that resolved key is non-empty at config-save time; warn in the editor if substitution variable is undefined |
+**What goes wrong:**
+`BeckhoffCX5010Config.subdevices` is `List<Asset>` (beckhoff.dart:37-38), not `List<BeckhoffSubdeviceAsset>`. Any asset can be added — and the configure dialog filters via `_availableSubdevices` (beckhoff.dart:21-28) for the "add" button. But the JSON layer accepts whatever's there.
 
----
+If an operator hand-edits page JSON to inject, say, a `SensorConfig` into a CX5010's subdevices, the build() at beckhoff.dart:81-86 calls `sub.build(context)` and wraps in `_SubdeviceNormalized` (height-normalized). The Sensor renders in the stack — wrong scale, weird placement, but no crash.
 
-## UX Pitfalls
+For MomentumStack the same vulnerability applies. The pitfall is twofold:
 
-| Pitfall | User Impact | Better Approach |
-|---------|-------------|-----------------|
-| Elevator at 0% renders identical to "no data" (both at bottom) | Operator can't tell if PLC is offline or genuinely at 0 | Mirror gate's grey-when-disconnected pattern (`conveyor_gate.dart:325`). At 0%, render in normal colour; on disconnect, render grey or with a fault indicator |
-| Sensor kind icons indistinguishable at small sizes | Operator can't tell red-light from optic field on a dense page | Each kind gets a distinctive silhouette readable at min size (e.g. 32×32 px); test by rendering a 32×32 thumbnail and asking a non-author to identify the kind |
-| Sensor edge-delay state-key fields mixed with rising-edge / falling-edge fields with no clear pairing | Operator types delay key into wrong slot | Group rising/falling edge fields visually with sub-headers; use the `KeyField` widget pattern from gate's force-control section (`conveyor_gate.dart:876–900`) for consistency |
-| Removing a child from the elevator silently drops its config | Operator loses force keys / state keys configured on the child | Confirmation dialog before removing a child; or "Hide" vs "Delete" semantics |
-| Child appears outside elevator bbox visually (overflow) | Operator confused why a sensor is "floating" | Wrap the elevator's child stack in `Clip.hardEdge` or visualise the bbox in the editor mode |
-| Force-position controls appear in editor preview | Operator triggers writes while editing | Disable interactivity in editor mode; mirror gate's preview-only mode in `_ConveyorGateConfigEditor` |
-| Multiple elevators with the same PLC position key indistinguishable | Operator confuses two elevators feeding from one position signal | This is intended (one PLC drives multiple visualisations) but warn in the editor when the same key is used by N visible elevators on the page |
-| Sensor's ambient pulsing animation runs in the asset palette | Distracting in the palette dropdown | Disable ambient animations in palette/preview mode (`_buildPreview` should pass a `static: true` flag to the painter) |
-| Edge-delay values hidden from operator | Operator wants to see "what delay is the PLC using right now?" but the milestone says display-only | Show the delay values prominently as text overlay on the sensor when both keys are configured; do not hide |
+1. **Defensive vs strict — pick one and document it.** Strict: filter in `build()` to only the four Momentum types; render an error placeholder for anything else. Defensive: render anything but warn in a debug log.
+2. **`allKeys` flattening on a foreign child** — if a `SensorConfig` is in the subdevices, its `detectionStateKey` etc. are included in the stack's `allKeys`. Alarms wire up correctly, but the operator's mental model says "this is a Momentum stack, why is there a sensor key here?" — confusing during alarm investigation.
+
+**Warning signs:**
+- The Add Subdevice dropdown only lists Momentum modules, but a saved page contains a non-Momentum subdevice (set in a previous editor version or hand-edited).
+- A non-Momentum child renders at the wrong scale because `_SubdeviceNormalized` normalizes to the head's height.
+
+**Prevention:**
+1. **Decision (recommended): permissive render, restrictive add.** Mirror CX5010's behavior — the "add" dropdown only offers Momentum types, but build() renders whatever's in the list. Reduces brittleness when an operator restores a page from an older format.
+2. **In `MomentumStack.build()`, wrap each child in a try/catch and render a "unknown subdevice" placeholder on exception.** Prevents one bad child from killing the whole stack.
+3. **Add a unit test** that constructs a MomentumStack with a foreign child (e.g. SensorConfig) and asserts it round-trips through JSON cleanly AND renders without crashing.
+
+**Phase:** MomentumStack composition phase.
 
 ---
 
-## "Looks Done But Isn't" Checklist
+## Minor Pitfalls
 
-- [ ] **Elevator vertical translation:** Often missing the platform-thickness offset — verify position 0% has platform's BOTTOM at bbox bottom AND position 100% has platform's TOP at bbox top.
-- [ ] **Sensor kind switch:** Often missing `shouldRepaint` returning true on `runtimeType` change — verify by switching kinds in editor and watching for stale frame artefacts.
-- [ ] **Children riding the elevator:** Often missing stable `Key`s — verify by adding `print('initState')` to a child and confirming it logs exactly once on page load, not on every position change.
-- [ ] **Backwards compat:** Often missing the migration test for old saved pages — verify by checking in a sample legacy JSON and running it through `AssetRegistry.parse` in a test.
-- [ ] **AssetRegistry registration:** Often missing in BOTH `_fromJsonFactories` AND `defaultFactories` — verify the new asset appears in the palette AND a saved page round-trips.
-- [ ] **Animation controller disposal:** Often missing — verify with `LeakTesting.enable()` in widget tests.
-- [ ] **PLC position deadband:** Often missing render-only deadband — verify by injecting noisy synthetic position and counting `paint()` calls (should be < update rate × 1.1).
-- [ ] **Hit-testing on moving elevator:** Often missing — verify by tapping a sensor at non-zero elevator position and confirming the correct sensor's `onTap` fires.
-- [ ] **Goldens determinism:** Often missing — verify by running the goldens test 10 times in a row; any flake is a determinism bug.
-- [ ] **Disconnected state visual:** Often missing — verify by stopping the OPC UA server and confirming the elevator + sensor both render grey (not last-known position / state).
-- [ ] **Force-control editor-mode disable:** Often missing — verify by entering the page editor; tapping a sensor should not write to PLC.
-- [ ] **Enum forward-compat:** Often missing `unknownEnumValue` — verify by editing JSON to a fictional `kind: "futureKind"` and confirming the asset loads with a sensible fallback.
-- [ ] **Multi-elevator on one page:** Often missing — verify by placing 5 elevators with the same position key and confirming smooth animation, no stuttering.
-- [ ] **Edge-delay display:** Often missing — verify the values from the rising/falling-edge state keys are shown to the operator (display-only per spec) AND the visual flips immediately on the bool key (delays do NOT affect the visual).
-- [ ] **Rotation pass-through:** Often missing — verify a sensor on a 90°-rotated conveyor renders correctly AND is tappable.
+### Pitfall M-13: ValueKey on stack children — required for stable identity
+
+**What goes wrong:**
+The CX5010 ReorderableListView in the dialog uses `ObjectKey(sub)` (beckhoff.dart:255). This works because subdevice instances are stable across the dialog's lifetime. If MomentumStack ever supports drag-reorder of modules on the canvas (not in the dialog), child identity loss during reorder will reset `AnimatedWidget` animations (the IOForcedHigh red-border animation will restart on every reorder).
+
+**Prevention:**
+- Use `ValueKey<String>` keyed on a stable UUID per subdevice (echoing the v1.0 `ElevatorChildEntry` lesson). Add `String id;` to `MomentumModuleSlotEntry` from day 1 OR generate one lazily from `sub.hashCode`.
+
+**Phase:** MomentumStack composition phase, only if reorder UX is added — otherwise defer.
 
 ---
 
-## Recovery Strategies
+### Pitfall M-14: AnimationController and stream subscription leaks across 4+ new widget classes
 
-| Pitfall | Recovery Cost | Recovery Steps |
-|---------|---------------|----------------|
-| Backwards-compat broken in shipped release | HIGH | (1) Hotfix `_*FromJson` to accept both old and new shapes; (2) emit telemetry on which path was taken; (3) auto-migrate on save by writing the new shape; (4) post-mortem on missing migration test |
-| Memory leak from undisposed controllers | MEDIUM | Identify via DevTools; add `dispose()` calls; backport `LeakTesting.enable()` to widget test suite; ship a follow-up |
-| Resubscribe storm | MEDIUM | Hoist stream construction out of `build()`; verify with OPC UA server logs; add a test that pumps frames at 60 Hz and asserts subscription count is bounded |
-| Painter state leakage | LOW | One painter per kind; per-kind controller; ship as a single PR; add kind-switch widget test |
-| Goldens broken after a Linux PR landed | LOW | Regenerate goldens on macOS; investigate why Linux CI didn't catch it (per `CONCERNS.md` golden-CI gap); add CI matrix as follow-up |
-| Hit-test offset on rotated parent | LOW | Replace bare `Transform()` with `Transform.translate()`; verify `transformHitTests: true`; add an integration test |
-| Y-axis off-by-one (top vs bottom interpretation) | LOW | Localise to the `platformOffsetTop` helper; flip the formula; update unit tests |
-| Animation jitter on PLC dither | LOW | Add render-only deadband (0.2%); document the value; visual is unaffected |
+**What goes wrong:**
+EL1008 uses `AlwaysStoppedAnimation(0)` (beckhoff.dart:1305) as a static animation — no controller to leak. The new Momentum modules will need an active `AnimationController` for the forced-LED red-border pulse (matching io8.dart:408-411). That's one per module instance per page.
 
----
+Failure mode: `AnimationController` created in `initState` of a `StatefulWidget` and not disposed in `dispose()`. Symptom: hot-reload spams "AnimationController disposed by GC" warnings; over a long session memory and ticker count grow.
 
-## Pitfall-to-Phase Mapping
+**Prevention:**
+- `with SingleTickerProviderStateMixin` on the State; `_controller = AnimationController(...)` in initState; `_controller.dispose()` in dispose. Standard pattern, not Momentum-specific.
+- Add a leak-tracking test using `flutter_test`'s `tester.binding.dispatchEnabled` and `LeakTracker` (Flutter 3.16+) for the new module widgets.
 
-(Phase numbers are placeholders. The roadmap will assign real numbers; this mapping records WHICH phase is responsible.)
-
-| Pitfall | Prevention Phase | Verification |
-|---------|------------------|--------------|
-| 1. Child identity loss | Elevator-rendering phase | Widget test asserts `initState` called once across 100 position frames |
-| 2. Resubscribe storm | Elevator + sensor data-binding phase | OPC UA server log shows monitored-item create/cancel rate ≤ 1 per genuine config change |
-| 3. Painter state leakage | Sensor multi-kind painter phase | Kind-switch widget test asserts new painter type and old painter unmount |
-| 4. Animation jitter | Elevator-rendering phase | Synthetic-noise position test asserts paint count bounded |
-| 5. JSON migration | Config-schema phase (likely first phase) | Legacy-JSON regression test; registry round-trip test |
-| 6. Goldens drift | Each painter phase | Determinism test (run goldens 10× in CI); CI matrix includes Linux |
-| 7. Hit-test issues | Sensor-on-elevator integration phase | Tap-at-non-zero-position integration test |
-| 8. Bbox off-by-one | Elevator-rendering phase | Unit test on `platformOffsetTop` helper at 0 / 50 / 100 |
-| 9. Rotation handling | Sensor-on-rotated-parent integration phase | Test matrix: rotation × on-elevator × off-elevator |
-| 10. Animation controller leaks | Sensor ambient-animation phase | `LeakTesting.enable()` mount/unmount test |
+**Phase:** Each module phase.
 
 ---
 
-## Codebase References
+### Pitfall M-15: PostgreSQL collector explosion on a 4-module stack — 16 + 16 = 32 channels × poll rate
 
-Key files cited (paths absolute under `/Users/jonb/Projects/tfc-hmi2`):
+**What goes wrong:**
+Once `allKeys` is wired correctly (per Pitfall M-01), the `Collector` will subscribe to every key the stack exposes. A populated stack: 1 head sync key + 16 DI raw + 16 DO raw + force/filter keys = potentially 100+ keys per stack. Collecting them all into TimescaleDB at default rates floods the hypertable.
 
-- `lib/page_creator/assets/conveyor_gate.dart` — animation controller pattern (lines 195–218); inline-stream anti-pattern (lines 336–342); `_createPainter` switch (240–266); force-key pattern (291–302); config editor with preview (525–615)
-- `lib/page_creator/assets/conveyor.dart` — `_positionedChildGate` (846–899); `_gatesFromJson` legacy migration (26–48); `_gatesToJson` (50–51); auger ValueNotifier pattern (494–495); LayoutRotatedBox usage (792, 840)
-- `lib/page_creator/assets/conveyor_gate_painter.dart` — painter-with-progress-notifier pattern (108–127)
-- `lib/page_creator/assets/common.dart` — `BaseAsset` (100), `Coordinates` (37), `RelativeSize` (54), `LayoutRotatedBox` (1250), `_RenderLayoutRotatedBox.hitTest` (1334–1360)
-- `lib/page_creator/assets/registry.dart` — `registerFromJsonFactory` (113), `registerDefaultFactory` (118)
-- `lib/page_creator/assets/analog_box.dart` — typed-value guards (`isDouble || isInteger`) at line 516
-- `lib/providers/state_man.dart` — `stateManProvider` usage with `ref.read(...future)` precedent (line 35)
-- `packages/tfc_dart/lib/core/state_man.dart` — `AutoDisposingStream` ref-counting (the entity that suffers under Pitfall 2)
-- `.planning/codebase/CONCERNS.md` — `_ConveyorGateState` fragile pattern at lines 163–167; macOS-only goldens at lines 168–172; gate animation direction bug at lines 100–104
-- `.claude/...gate-visual-feedback.md` — slider painter rotation hack failure; diverter animation-direction-vs-side bug; gate top/bottom positioning UX gap (the prior milestone's open issues)
+**Prevention:**
+- The collector configuration is OUT OF SCOPE for v2.0 (PROJECT.md confirms: "Backend Modbus key plumbing — assumes StateMan keys already exist"). But the milestone owner should call out to the backend team that 100+ new keys per stack will be exposed, so they can dial the collector rates appropriately.
+- Document this in `.planning/research/SUMMARY.md` as an "operational note for backend team."
+
+**Phase:** MomentumStack composition phase — surface it in the phase plan's "downstream impacts" section.
+
+---
+
+### Pitfall M-16: Modbus polling cadence vs operator perception — a 100 ms LED flash at the PLC may not surface
+
+**What goes wrong:**
+StateMan's Modbus client polls at a backend-configured cadence (commonly 100-500 ms per device). A sensor wired to DDI3725 channel 3 that pulses for 50 ms may NEVER appear in the HMI — the poll cycle misses it. For commissioning, this is misleading: the operator says "the sensor isn't working" when the input IS being received by the PLC.
+
+**Prevention:**
+- Surface a small "last updated" timestamp on the per-channel detail dialog (the EL1008 dialog doesn't have one — copy the pattern from `lib/widgets/...` if one exists, or add it as a new feature).
+- Document the poll cadence in a tooltip on the configure dialog: "Channel state polled every ~200 ms from PLC. Sub-100ms pulses may not be visible."
+- OUT OF SCOPE to fix the cadence — but the asset must not LIE about pulse fidelity. Documenting it on the asset surface is the minimum.
+
+**Phase:** DI module phase (DDI3725 — the only place this surfaces; DO outputs don't have an external pulse-source so the operator's mental model is different).
+
+---
+
+## Phase-Specific Warnings Summary
+
+| Phase | Top three pitfalls to bake in | Mitigation in plan |
+|-------|------------------------------|--------------------|
+| NIP2311 head module | M-05 (status LEDs not addressable), M-07 (gesture in stack), M-10 (theme colours) | Configure dialog spec must explicitly limit to one synthetic comm-OK key; widget test for tap-in-stack at multiple scales; theme golden pairs. |
+| PDT3100 power module | M-07 (gesture in stack), M-10 (theme), M-08 (shouldRepaint) | Same tap-in-stack widget test; light + dark goldens; if it has a `power_ok` bool, painter must include in shouldRepaint. |
+| DDI3725 (16-ch DI) | M-02 (bit mapping), M-03 (subscription storm), M-04 (force vs raw), M-09 (small-size legibility), M-16 (poll cadence) | Bit-mapping unit test before painter is implemented; single combined-stream subscription; 4-state-per-channel data model; goldens at three sizes; cadence note in dialog. |
+| DDO3705 (16-ch DO) | M-02 (must match DI convention), M-03 (subscription storm), M-09 (small-size legibility) | Reuse DI's bit-mapping constant verbatim; same combined-stream pattern. |
+| MomentumStack composition | M-01 (allKeys flattening), M-06 (JSON schema), M-12 (foreign child), M-15 (collector load) | allKeys integration test; JSON round-trip + legacy-JSON test; permissive-render-restrictive-add convention; documented downstream impact. |
+| Asset Registry registration | M-06 (codegen drift) | CI gate that fails on uncommitted *.g.dart; round-trip test per new config. |
 
 ---
 
 ## Sources
 
-- Existing tfc-hmi2 codebase (HIGH confidence — direct citations above)
-- `.planning/codebase/CONCERNS.md` (2026-05-05)
-- `.planning/codebase/ARCHITECTURE.md` (2026-05-05) — anti-patterns section
-- `.planning/codebase/CONVENTIONS.md` (2026-05-05) — `@JsonKey(unknownEnumValue:)` and `keepAlive` provider conventions
-- `.claude/projects/-Users-jonb-Projects-tfc-hmi2/memory/gate-visual-feedback.md` (2026-03-07; flagged stale by system reminder, but the open-issue items match `CONCERNS.md` BUG entries dated 2026-05-05, so the post-mortem signal is still valid)
-- Flutter framework knowledge: `Transform.translate` hit-testing semantics, `ValueListenableBuilder.child` rebuild optimisation, `AnimationController.dispose` contract, `json_serializable` null-handling for collection fields (HIGH confidence — standard framework behaviour)
-
----
-*Pitfalls research for: industrial HMI vertical-translation parent assets and multi-kind sensor visualisers*
-*Researched: 2026-05-05*
+- **Authoritative (HIGH confidence — current codebase):**
+  - `/Users/jonb/Projects/tfc-hmi2/lib/page_creator/assets/beckhoff.dart` — pattern source of truth for stack, EL1008, EL2008, EL3054, and the `_combinedStream` + `_ledStates` helpers
+  - `/Users/jonb/Projects/tfc-hmi2/lib/painter/beckhoff/io8.dart` — painter pattern + `shouldRepaint` reference
+  - `/Users/jonb/Projects/tfc-hmi2/lib/page_creator/assets/common.dart` — `BaseAsset.allKeys` regex (lines 217-243) and `BaseAsset` contract
+  - `/Users/jonb/Projects/tfc-hmi2/lib/page_creator/assets/conveyor.dart` — `_gatesFromJson` legacy shim (lines 26-48) as prior art for backwards-compat
+  - `/Users/jonb/Projects/tfc-hmi2/.planning/research/dxf/README.md` — DXF bounding boxes and DI/DO base sharing
+  - `/Users/jonb/Projects/tfc-hmi2/.planning/PROJECT.md` — v2.0 scope and out-of-scope decisions
+  - `/Users/jonb/.claude/image-cache/fe2be5fa-6578-40a7-bc7b-7475838556e9/3.png` — user-provided photo confirming the physical Momentum module layout (vertical strip with two columns of terminals)
+  - `.claude/...feedback_gesture_through_translation.md` — v1.0 lesson about hit-test through translation
+  - v1.0 elevator phase context (Pitfalls 1, 5, 7) — `.planning/milestones/v1.0/03-elevator-child-embedding/03-CONTEXT.md`
+- **Schneider Momentum docs (MEDIUM confidence — referenced but not exhaustively cross-checked against the DDI3725 datasheet at this session):**
+  - [Modicon Momentum I/O Base User Guide (31001697.22)](https://iportal2.schneider-electric.com/Contents/docs/MODICON%20MOMENTUM%20_IO_%20BASE%20USER%20GUIDE.PDF)
+  - [Momentum 170ENT11001/170ENT11002 Ethernet Communications Adapter](https://igate.alamedaelectric.com/Modicon%20Documents/PLC%20Momentum%20PLC%20Ethernet%20(ENT)%20Adapter%20User%20Guide%20v2.0.pdf) (NIP family adapter manual — the newer NIP2311 follows the same conventions)
+  - [STBDDI3725 product page (Schneider Electric)](https://www.se.com/us/en/product/STBDDI3725/basic-digital-input-module-modicon-stb-24v-dc-16i/)
+  - [Modicon TSX Momentum Modbus to Ethernet Bridge User Guide 890 USE 155 00](https://igate.alamedaelectric.com/Modicon%20Documents/PLC%20Modbus%20Ethernet%20Bridge%20(CEV30010)%20User%20Manual.pdf)
