@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'dart:math' show pi, max;
+import 'dart:math' show pi;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -149,6 +149,20 @@ class ElevatorConfig extends BaseAsset {
   /// Tween animation duration in ms. Default 250 (CONTEXT specifics).
   int tweenDurationMs;
 
+  /// Fraction of bbox height for the platform's vertical travel range.
+  /// 0.0 = pinned at bottom; 1.0 = full headroom climb (default).
+  /// Clamped to [0, 1] at runtime; the effective travel is further
+  /// clamped to `bboxH - platformH` so the platform never overhangs the
+  /// bbox top.
+  ///
+  /// Plan 260511-fd6 — replaces the auto-deduce from child heights that
+  /// shipped in Plan 260511-dxa. Operator picks the travel range
+  /// explicitly via a Slider in the config editor; the runtime no longer
+  /// reads child sizes when computing platform motion. See the plan
+  /// SUMMARY for the width-bug reproducer that motivated the change.
+  @JsonKey(defaultValue: 1.0)
+  double travelRange;
+
   /// Child assets riding the platform. Phase 2 ships with [] —
   /// Phase 3 fills the list via the config-dialog dropdown.
   @JsonKey(fromJson: _childrenFromJson, toJson: _childrenToJson)
@@ -169,6 +183,7 @@ class ElevatorConfig extends BaseAsset {
     this.positionKey = '',
     this.tweenDurationMs = 250,
     this.simulate,
+    this.travelRange = 1.0,
     List<ElevatorChildEntry>? children,
   }) : children =
             children != null ? List<ElevatorChildEntry>.of(children) : [];
@@ -686,17 +701,17 @@ class _ElevatorState extends ConsumerState<Elevator> {
     // truth; we import the constant directly to keep the two values
     // welded together.
     final platformH = paintSize.height * kPlatformHeightFraction;
-    // Travel range driver (Plan 260511-dxa / ELEV-10): the tallest
-    // attached child's height. The same intrinsic-height fallback used by
-    // [_buildPositionedChild] keeps the two formulas welded so the
-    // structural invariant `top >= 0` holds even when a child reports a
-    // non-positive intrinsic size.
-    final maxChildHeight = widget.config.children.isEmpty
-        ? 0.0
-        : widget.config.children.map((e) {
-            final s = e.child.size.toSize(paintSize);
-            return s.height <= 0 ? paintSize.shortestSide / 4 : s.height;
-          }).reduce(max);
+    // Travel range driver (Plan 260511-fd6 / ELEV-10): `config.travelRange`
+    // fraction of bbox height, clamped to headroom so the platform never
+    // overhangs the bbox top. Replaces the auto-deduce from children's
+    // heights (Plan 260511-dxa) — see plan SUMMARY for rationale. The
+    // local name `maxChildHeight` is preserved so downstream callers
+    // (ElevatorPainter + _buildPositionedChild) need no rename; it now
+    // means "effective travel in pixels" rather than "tallest child
+    // height".
+    final maxChildHeight =
+        (widget.config.travelRange.clamp(0.0, 1.0) * paintSize.height)
+            .clamp(0.0, paintSize.height - platformH);
     final children = <Widget>[
       CustomPaint(
         size: paintSize,
@@ -1021,6 +1036,31 @@ class _ElevatorConfigEditorState extends State<_ElevatorConfigEditor> {
               label: 'Position State Key (0-100%)',
               initialValue: config.positionKey,
               onChanged: (v) => setState(() => config.positionKey = v),
+            ),
+            const SizedBox(height: 8),
+
+            // -- Plan 260511-fd6: Travel range (fraction of bbox height) --
+            //   Operator-explicit fraction [0..1] of bbox height for the
+            //   platform's vertical travel range. Replaces the auto-deduce
+            //   from child heights (Plan 260511-dxa). Sits between the
+            //   position key and the simulate switch so it is visible
+            //   without scrolling on the default 600px test viewport.
+            Text(
+              'Travel range: ${(config.travelRange * 100).round()}% of bbox height',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            Slider(
+              min: 0.0,
+              max: 1.0,
+              divisions: 100,
+              value: config.travelRange.clamp(0.0, 1.0),
+              label: '${(config.travelRange * 100).round()}%',
+              onChanged: (v) => setState(() => config.travelRange = v),
+            ),
+            Text(
+              'Higher = platform travels more vertically. '
+              'Children may overshoot the bbox at high values.',
+              style: Theme.of(context).textTheme.bodySmall,
             ),
             const SizedBox(height: 8),
 

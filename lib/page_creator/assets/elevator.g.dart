@@ -27,6 +27,7 @@ ElevatorConfig _$ElevatorConfigFromJson(Map<String, dynamic> json) =>
       positionKey: json['positionKey'] as String? ?? '',
       tweenDurationMs: (json['tweenDurationMs'] as num?)?.toInt() ?? 250,
       simulate: json['simulate'] as bool?,
+      travelRange: (json['travelRange'] as num?)?.toDouble() ?? 1.0,
       children: _childrenFromJson(json['children'] as List?),
     )
       ..variant = json['asset_name'] as String
@@ -49,6 +50,7 @@ Map<String, dynamic> _$ElevatorConfigToJson(ElevatorConfig instance) =>
       'plcAssetKey': instance.plcAssetKey,
       'positionKey': instance.positionKey,
       'tweenDurationMs': instance.tweenDurationMs,
+      'travelRange': instance.travelRange,
       'children': _childrenToJson(instance.children),
       if (instance.simulate case final value?) 'simulate': value,
     };

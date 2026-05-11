@@ -68,11 +68,13 @@ class ElevatorPainter extends CustomPainter {
   /// fixture; widget passes Theme.colorScheme.primary at runtime.
   final Color activeColor;
 
-  /// Travel range driver — equals the tallest attached child's height
-  /// (clamped to `bboxH - platformH` internally by [platformOffsetTop]).
-  /// Defaults to 0.0: with no children, the platform stays at the
-  /// bottom for all progress values. Set by [Elevator] from
-  /// `config.children` once per build. (Plan 260511-dxa / ELEV-10.)
+  /// Travel range driver — derived by the widget from
+  /// `config.travelRange × bboxHeight`, internally clamped to
+  /// `bboxH - platformH` by [platformOffsetTop]. Defaults to 0.0:
+  /// the platform stays pinned at the bottom for all progress values.
+  /// Set by [Elevator] from `config.travelRange` once per build.
+  /// (Plan 260511-fd6 / ELEV-10. Replaces the child-height auto-deduce
+  /// from Plan 260511-dxa — see plan SUMMARY for rationale.)
   final double maxChildHeight;
 
   ElevatorPainter({

@@ -21,19 +21,20 @@ library;
 ///   effectiveTravel = clamp(maxChildHeight, 0, headroom)
 ///   platformY       = headroom - progress * effectiveTravel
 ///
-/// Travel range now equals the TALLEST attached child's height (clamped
-/// to `bboxHeight - platformHeight` so the platform never overhangs the
-/// bbox top). This closes the visual "freeze at top" bug from Plan 04-02:
-/// children no longer need a defensive `max(0.0, ...)` clamp on their
-/// `Positioned.top` because the range is sized to keep them inside the
-/// bbox by construction.
+/// As of Plan 260511-fd6, the 4th argument is semantically "the platform's
+/// vertical travel range" — derived by the [Elevator] widget from
+/// `config.travelRange × bboxHeight` (an operator-explicit fraction of
+/// bbox height). The math here is bit-identical to the 260511-dxa formula;
+/// only the meaning of the parameter shifted (no longer "tallest child
+/// height"). The internal clamp to headroom protects against
+/// `travelRange * bboxH > headroom` from the caller side.
 ///
 /// Edge cases (verified by unit tests):
-///   - `maxChildHeight=0` (no children): travel=0, platform pinned at the
-///     bottom for all progress values. This is the safe default for the
-///     painter when constructed without children (e.g., bare goldens).
+///   - `maxChildHeight=0` (travelRange=0): travel=0, platform pinned at
+///     the bottom for all progress values. This is the safe default for
+///     the painter when constructed standalone (e.g., bare goldens).
 ///   - `maxChildHeight >= headroom`: travel clamps to headroom →
-///     reproduces the old full-range behaviour exactly.
+///     reproduces the full-range behaviour (default travelRange=1.0).
 ///   - `maxChildHeight < 0`: defensively clamped to 0.
 ///
 /// At `progress=0.0` the platform always sits at `headroom` (bottom)

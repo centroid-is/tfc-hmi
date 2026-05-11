@@ -743,16 +743,26 @@ void main() {
     const bboxH = 300.0;
     const platformH = bboxH * kPlatformHeightFraction;
     const childH = 40.0;
-    const maxChildHeight = childH; // single-child fixture
+    // Plan 260511-fd6: the runtime no longer auto-deduces travel range from
+    // children. To keep these regression-guard fixtures locked to the same
+    // "tallest-child = childH" geometry the offsetY contract was originally
+    // written against, set `travelRange = childH / bboxH`. This isolates the
+    // offsetY tests from the default-travelRange change (which would
+    // otherwise pull `top` toward -childH at progress=1).
+    const travelRangeFor40pxChild = childH / bboxH; // ≈ 0.1333
+    const maxChildHeight = childH; // effective travel = 40px (matches fixture)
 
     testWidgets(
         'offsetY = 0 produces top = platformY - childH (regression guard)',
         (tester) async {
       // Regression guard: offsetY=0 must reproduce the pre-260511-ehy
-      // geometry exactly. This passes today AND after the change — locking
-      // the invariant from Plan 260511-dxa.
+      // geometry exactly. The fixture pins travelRange to the child's height
+      // (as a fraction of bbox) so this guard holds bit-identically across
+      // both Plan 260511-dxa (auto-deduce) and Plan 260511-fd6 (operator-
+      // explicit travelRange).
       final config = ElevatorConfig(
         positionKey: '',
+        travelRange: travelRangeFor40pxChild,
         children: [
           ElevatorChildEntry(
               id: 'y0',
@@ -788,6 +798,7 @@ void main() {
         (tester) async {
       final config = ElevatorConfig(
         positionKey: '',
+        travelRange: travelRangeFor40pxChild,
         children: [
           ElevatorChildEntry(
               id: 'y-up',
@@ -828,6 +839,7 @@ void main() {
         (tester) async {
       final config = ElevatorConfig(
         positionKey: '',
+        travelRange: travelRangeFor40pxChild,
         children: [
           ElevatorChildEntry(
               id: 'y-down',
@@ -1053,8 +1065,14 @@ void main() {
       final config = ElevatorConfig();
       await openConfigEditor(tester, config);
 
-      // Tap the 'Add child' button to open the picker.
-      await tester.tap(find.widgetWithText(FilledButton, 'Add child'));
+      // Tap the 'Add child' button to open the picker. As of Plan
+      // 260511-fd6 the editor has additional widgets above this button
+      // (travel-range slider + helper text), so we ensureVisible before
+      // tapping to handle the narrow 600px default test viewport.
+      final addBtn = find.widgetWithText(FilledButton, 'Add child');
+      await tester.ensureVisible(addBtn);
+      await tester.pumpAndSettle();
+      await tester.tap(addBtn);
       await tester.pumpAndSettle();
 
       // Positive: Sensor + Conveyor options surface.
@@ -1082,7 +1100,10 @@ void main() {
 
       expect(config.children, isEmpty);
 
-      await tester.tap(find.widgetWithText(FilledButton, 'Add child'));
+      final addBtn = find.widgetWithText(FilledButton, 'Add child');
+      await tester.ensureVisible(addBtn);
+      await tester.pumpAndSettle();
+      await tester.tap(addBtn);
       await tester.pumpAndSettle();
       await tester.tap(find.text('Sensor'));
       await tester.pumpAndSettle();
@@ -1103,7 +1124,10 @@ void main() {
       final config = ElevatorConfig();
       await openConfigEditor(tester, config);
 
-      await tester.tap(find.widgetWithText(FilledButton, 'Add child'));
+      final addBtn = find.widgetWithText(FilledButton, 'Add child');
+      await tester.ensureVisible(addBtn);
+      await tester.pumpAndSettle();
+      await tester.tap(addBtn);
       await tester.pumpAndSettle();
       await tester.tap(find.text('Conveyor'));
       await tester.pumpAndSettle();
@@ -1187,7 +1211,15 @@ void main() {
       // The Slider lives inside the editor (per-entry slider for offsetX).
       // Drag rightward to bump value above 0.5. ensureVisible scrolls the
       // Slider into the test viewport (narrow 800x600 default).
-      final slider = find.byType(Slider).first;
+      //
+      // Slider order in editor as of Plan 260511-fd6:
+      //   index 0 → travel-range slider (config-level, range 0..1)
+      //   index 1 → per-child offsetX slider (range 0..1)
+      //   index 2 → per-child offsetY slider (range -1..1)
+      // The travel-range slider is unique by `min=0 && max=1 && divisions=100`
+      // — but so are the per-child offsetX sliders. To unambiguously target
+      // the offsetX slider, skip the first Slider (travel-range).
+      final slider = find.byType(Slider).at(1);
       await tester.ensureVisible(slider);
       await tester.pumpAndSettle();
       await tester.drag(slider, const Offset(50, 0));
@@ -1203,8 +1235,12 @@ void main() {
         'offsetY Slider mutates entry.offsetY in real time [260511-ehy]',
         (tester) async {
       // Plan 260511-ehy: a SECOND per-entry slider (offsetY, range -1.0..1.0)
-      // sits directly below the existing offsetX slider. Locator order is
-      // offsetX then offsetY, so the offsetY slider is at index 1.
+      // sits directly below the existing offsetX slider.
+      //
+      // Slider order in editor as of Plan 260511-fd6:
+      //   index 0 → travel-range slider (config-level, range 0..1)
+      //   index 1 → per-child offsetX slider (range 0..1)
+      //   index 2 → per-child offsetY slider (range -1..1)
       final config = ElevatorConfig(
         children: [
           ElevatorChildEntry(
@@ -1218,8 +1254,9 @@ void main() {
 
       expect(config.children[0].offsetY, 0.0);
 
-      // Per-entry sliders are ordered offsetX (index 0), offsetY (index 1).
-      final slider = find.byType(Slider).at(1);
+      // Per-entry sliders are ordered offsetX (index 1), offsetY (index 2)
+      // after the config-level travel-range slider at index 0 (Plan 260511-fd6).
+      final slider = find.byType(Slider).at(2);
       await tester.ensureVisible(slider);
       await tester.pumpAndSettle();
       await tester.drag(slider, const Offset(50, 0));
