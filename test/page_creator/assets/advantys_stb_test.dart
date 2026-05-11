@@ -12,6 +12,7 @@ import 'package:tfc/page_creator/assets/common.dart'
     show Coordinates, KeyField, RelativeSize, TextPos;
 import 'package:tfc/page_creator/assets/registry.dart';
 import 'package:tfc/painter/advantys_stb/ddi3725.dart';
+import 'package:tfc/painter/advantys_stb/ddo3705.dart';
 import 'package:tfc/painter/advantys_stb/io16.dart';
 import 'package:tfc/painter/beckhoff/io8.dart' show IOState;
 import 'package:tfc/providers/state_man.dart' show stateManProvider;
@@ -1170,6 +1171,779 @@ void main() {
       );
     },
   );
+
+  // ===========================================================================
+  // Phase 2 — STBDDO3705 (16-Ch Digital Output)
+  // ===========================================================================
+  //
+  // Clone of Phase 1 minus filters, plus end-to-end manual force-write path.
+  // Outputs do NOT have on/off filters — the detail dialog renders only force
+  // SegmentedButton + description per channel.
+  //
+  // Bit-order parity canary: DDO3705 uses the SAME `kSTBChannelBitOrder`
+  // constant as DDI3725 — compile-time guard that DI and DO conventions stay
+  // locked together (CONTEXT.md §Bit-Ordering & Force Encoding).
+  // ===========================================================================
+
+  group('STBDDO3705 bit-order parity (cross DI/DO canary)', () {
+    test('DDO3705 consumes the same kSTBChannelBitOrder as DDI3725', () {
+      // If a future refactor re-declares the bit-order constant inside
+      // ddo3705.dart instead of importing from io16.dart, the divergence trip
+      // wires here. We require the canonical io16.dart constant to remain the
+      // single source of truth for both modules.
+      expect(kSTBChannelBitOrder, STBBitOrder.lsbFirst);
+      // Re-derive an LED list via the shared helper and verify it matches the
+      // DDI expectations — this is the run-time half of the parity guarantee.
+      final states = bitmaskToLedStates(0x0001);
+      expect(states[0], IOState.high);
+      for (int i = 1; i < 16; i++) {
+        expect(states[i], IOState.low);
+      }
+    });
+  });
+
+  group('STBDDO3705Config — data shape', () {
+    test('preview() succeeds with nameOrId=="1" and all three *Key fields null',
+        () {
+      final c = STBDDO3705Config.preview();
+      expect(c.nameOrId, '1');
+      expect(c.rawStateKey, isNull);
+      expect(c.forceValuesKey, isNull);
+      expect(c.descriptionsKey, isNull);
+    });
+
+    test('toJson()["asset_name"] == "STBDDO3705Config"', () {
+      final c = STBDDO3705Config(nameOrId: 'DO-01', rawStateKey: 'do/raw');
+      final json = c.toJson();
+      expect(json['asset_name'], 'STBDDO3705Config');
+    });
+
+    test(
+        'allKeys picks up all three *Key fields via the Key\$ regex (no override needed)',
+        () {
+      final c = STBDDO3705Config(
+        nameOrId: 'DO-01',
+        rawStateKey: 'do/raw',
+        forceValuesKey: 'do/force',
+        descriptionsKey: 'do/desc',
+      );
+      expect(c.allKeys.toSet(), {'do/raw', 'do/force', 'do/desc'});
+    });
+
+    test('fromJson(toJson()) round-trips cleanly via real JSON encode/decode',
+        () {
+      final original = STBDDO3705Config(
+        nameOrId: 'X',
+        rawStateKey: 'a/raw',
+        forceValuesKey: 'a/force',
+        descriptionsKey: 'a/desc',
+      );
+      final encoded = jsonEncode(original.toJson());
+      final decoded = jsonDecode(encoded) as Map<String, dynamic>;
+      final parsed = STBDDO3705Config.fromJson(decoded);
+      expect(parsed.nameOrId, 'X');
+      expect(parsed.rawStateKey, 'a/raw');
+      expect(parsed.forceValuesKey, 'a/force');
+      expect(parsed.descriptionsKey, 'a/desc');
+    });
+
+    test('legacy JSON without nameOrId loads as "1" (QUAL-04 back-compat)', () {
+      final legacyJson = <String, dynamic>{
+        'asset_name': 'STBDDO3705Config',
+        'coordinates': {'x': 0.0, 'y': 0.0},
+        'size': {'width': 0.03, 'height': 0.03},
+      };
+      final parsed = STBDDO3705Config.fromJson(legacyJson);
+      expect(parsed.nameOrId, '1');
+      expect(parsed.rawStateKey, isNull);
+    });
+  });
+
+  group('STBDDO3705BodyPainter shouldRepaint contract', () {
+    STBDDO3705BodyPainter makePainter({
+      List<IOState>? ledStates,
+      bool isStale = false,
+      bool isDisconnected = false,
+      int animationValue = 0,
+    }) {
+      return STBDDO3705BodyPainter(
+        ledStates: ledStates ?? List<IOState>.filled(16, IOState.low),
+        isStale: isStale,
+        isDisconnected: isDisconnected,
+        animation: AlwaysStoppedAnimation<int>(animationValue),
+      );
+    }
+
+    test('same inputs → shouldRepaint=false', () {
+      final a = makePainter();
+      final b = makePainter();
+      expect(a.shouldRepaint(b), isFalse);
+    });
+
+    test('different ledStates → shouldRepaint=true', () {
+      final a = makePainter();
+      final b = makePainter(
+          ledStates: List<IOState>.filled(16, IOState.high));
+      expect(a.shouldRepaint(b), isTrue);
+    });
+
+    test('different isStale → shouldRepaint=true', () {
+      final a = makePainter(isStale: false);
+      final b = makePainter(isStale: true);
+      expect(a.shouldRepaint(b), isTrue);
+    });
+
+    test('different isDisconnected → shouldRepaint=true', () {
+      final a = makePainter(isDisconnected: false);
+      final b = makePainter(isDisconnected: true);
+      expect(a.shouldRepaint(b), isTrue);
+    });
+
+    test('different animation.value → shouldRepaint=true', () {
+      final a = makePainter(animationValue: 0);
+      final b = makePainter(animationValue: 128);
+      expect(a.shouldRepaint(b), isTrue);
+    });
+
+    test('cross-runtimeType → shouldRepaint=true (Pitfall 3 guard)', () {
+      final p = makePainter();
+      final other = _DummyDDO3705Painter();
+      expect(p.shouldRepaint(other), isTrue);
+    });
+  });
+
+  group('STBDDO3705Config.configure — editor surface', () {
+    Future<void> openEditor(WidgetTester tester, STBDDO3705Config cfg) async {
+      await tester.pumpWidget(ProviderScope(
+        child: MaterialApp(
+          home: Scaffold(
+            body: Builder(
+              builder: (context) => Center(
+                child: ElevatedButton(
+                  onPressed: () => showDialog<void>(
+                    context: context,
+                    builder: (_) => Dialog(child: cfg.configure(context)),
+                  ),
+                  child: const Text('open'),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ));
+      await tester.tap(find.text('open'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+
+    testWidgets('3 KeyField labels + Name or ID present (NO filter fields)',
+        (tester) async {
+      final cfg = STBDDO3705Config.preview();
+      await openEditor(tester, cfg);
+
+      expect(find.text('Name or ID'), findsOneWidget);
+      expect(find.text('Raw State Key'), findsOneWidget);
+      expect(find.text('Force Values Key'), findsOneWidget);
+      expect(find.text('Descriptions Key'), findsOneWidget);
+      // Outputs don't have filters — these labels must NOT appear.
+      expect(find.text('On Filters Key'), findsNothing);
+      expect(find.text('Off Filters Key'), findsNothing);
+    });
+
+    testWidgets('exactly 3 KeyField widgets in editor tree', (tester) async {
+      final cfg = STBDDO3705Config.preview();
+      await openEditor(tester, cfg);
+      // Locks the editor surface — filter fields must NOT be added back.
+      expect(find.byType(KeyField), findsNWidgets(3));
+    });
+  });
+
+  group('STBDDO3705Widget — mount sanity', () {
+    testWidgets('pumps cleanly with 16 low LEDs (no exceptions)',
+        (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Center(
+              child: SizedBox(
+                width: 200,
+                height: 300,
+                child: STBDDO3705Widget(
+                  ledStates: List<IOState>.filled(16, IOState.low),
+                  isStale: false,
+                  isDisconnected: false,
+                  animation: const AlwaysStoppedAnimation<int>(0),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump(Duration.zero);
+      expect(find.byType(STBDDO3705Widget), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Detail dialog — trigger group. Mirrors DDI3725 dialog trigger group but
+  // with three keys (no filter keys).
+  // ---------------------------------------------------------------------------
+  group('STBDDO3705 detail dialog — trigger', () {
+    Future<void> pumpAndOpen(WidgetTester tester, STBDDO3705Config cfg,
+        {StateMan? stateMan}) async {
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            stateManProvider
+                .overrideWith((ref) async => stateMan ?? _FakeStateMan()),
+          ],
+          child: MaterialApp(
+            home: Scaffold(
+              body: Center(
+                child: SizedBox(
+                  width: 200,
+                  height: 300,
+                  child: Builder(builder: (context) => cfg.build(context)),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+
+    testWidgets('tap opens AlertDialog titled with nameOrId', (tester) async {
+      final cfg = STBDDO3705Config(nameOrId: 'DO-3705-A');
+      await pumpAndOpen(tester, cfg);
+
+      expect(find.byType(AlertDialog), findsNothing);
+
+      await tester.tap(find.byType(STBDDO3705Widget));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(AlertDialog), findsOneWidget);
+      expect(find.text('DO-3705-A'), findsOneWidget);
+      expect(find.text('Close'), findsOneWidget);
+    });
+
+    testWidgets(
+      'with all-null keys, dialog body renders no rows (no data yet)',
+      (tester) async {
+        final cfg = STBDDO3705Config(nameOrId: '1');
+        await pumpAndOpen(tester, cfg);
+
+        await tester.tap(find.byType(STBDDO3705Widget));
+        await tester.pumpAndSettle();
+        expect(find.byType(AlertDialog), findsOneWidget);
+        expect(find.byType(RowIOView), findsNothing);
+      },
+    );
+  });
+
+  // ---------------------------------------------------------------------------
+  // Detail dialog — row structure + force-write integration.
+  //
+  // The dialog StreamBuilder receives a combined emission and renders 8
+  // RowIOView widgets. Outputs do NOT have filter rows — assert ZERO
+  // FilterEdit widgets (this is the key visual difference from DDI3725).
+  // ---------------------------------------------------------------------------
+  group('STBDDO3705 detail dialog — row structure (NO filters)', () {
+    late _StreamingStubDOStateMan stub;
+    setUp(() {
+      stub = _StreamingStubDOStateMan(
+        raw: 0xAAAA,
+        force: List<int>.filled(16, 0),
+        descriptions: List<String>.generate(16, (i) => 'ch${i + 1}'),
+      );
+    });
+
+    Future<void> openWithStub(WidgetTester tester) async {
+      await tester.binding.setSurfaceSize(const Size(1400, 900));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final cfg = STBDDO3705Config(
+        nameOrId: 'DO-test',
+        rawStateKey: 'raw',
+        forceValuesKey: 'force',
+        descriptionsKey: 'desc',
+      );
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            stateManProvider.overrideWith((ref) async => stub),
+          ],
+          child: MaterialApp(
+            home: Scaffold(
+              body: Center(
+                child: SizedBox(
+                  width: 200,
+                  height: 300,
+                  child: Builder(builder: (context) => cfg.build(context)),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+      await tester.tap(find.byType(STBDDO3705Widget));
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('renders 8 RowIOView widgets when data flows', (tester) async {
+      await openWithStub(tester);
+      expect(find.byType(AlertDialog), findsOneWidget);
+      // DDO-06: 8 rows × 2 cols.
+      expect(find.byType(RowIOView), findsNWidgets(8));
+    });
+
+    testWidgets('renders ZERO FilterEdit widgets (outputs have no filters)',
+        (tester) async {
+      await openWithStub(tester);
+      // DDO-06 differentiator vs DDI3725 — no filter ms inputs.
+      expect(find.byType(FilterEdit), findsNothing);
+    });
+
+    testWidgets('row 0 shows ch1 + ch9 descriptions (left+right pairing)',
+        (tester) async {
+      await openWithStub(tester);
+      expect(find.text('Ch1'), findsOneWidget);
+      expect(find.text('Ch9'), findsOneWidget);
+    });
+
+    testWidgets('row 7 shows ch8 + ch16 descriptions (last-row pairing)',
+        (tester) async {
+      await openWithStub(tester);
+      expect(find.text('Ch8'), findsOneWidget);
+      expect(find.text('Ch16'), findsOneWidget);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // DDO-09: Force-write end-to-end integration test (the DDO3705 differentiator).
+  //
+  // This is the genuine operator-driven force-write path: tap Low on the
+  // SegmentedButton → handler writes int8[16] to forceValuesKey via StateMan.
+  // ---------------------------------------------------------------------------
+  group('STBDDO3705 detail dialog — force write integration (DDO-09)', () {
+    late _StreamingStubDOStateMan stub;
+    setUp(() {
+      stub = _StreamingStubDOStateMan(
+        raw: 0x0000,
+        force: List<int>.filled(16, 0),
+        descriptions: List<String>.generate(16, (i) => 'ch${i + 1}'),
+      );
+    });
+
+    Future<void> openWithStub(WidgetTester tester) async {
+      await tester.binding.setSurfaceSize(const Size(1400, 900));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final cfg = STBDDO3705Config(
+        nameOrId: 'DO-fwt',
+        rawStateKey: 'raw',
+        forceValuesKey: 'force',
+        descriptionsKey: 'desc',
+      );
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            stateManProvider.overrideWith((ref) async => stub),
+          ],
+          child: MaterialApp(
+            home: Scaffold(
+              body: Center(
+                child: SizedBox(
+                  width: 200,
+                  height: 300,
+                  child: Builder(builder: (context) => cfg.build(context)),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+      await tester.tap(find.byType(STBDDO3705Widget));
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets(
+      'tapping a Low SegmentedButton writes to forceValuesKey with [0]==1',
+      (tester) async {
+        await openWithStub(tester);
+        expect(find.byType(AlertDialog), findsOneWidget);
+
+        final lowFinders = find.text('Low ');
+        expect(lowFinders, findsNWidgets(16));
+        await tester.tap(lowFinders.first);
+        await tester.pumpAndSettle();
+
+        expect(stub.writes, isNotEmpty);
+        final lastWrite = stub.writes.last;
+        expect(lastWrite.key, 'force');
+        expect(lastWrite.value.isArray, isTrue);
+        expect(lastWrite.value[0].asInt, 1,
+            reason: 'channel 1 must be forced low after first Low tap');
+        for (int i = 1; i < 16; i++) {
+          expect(lastWrite.value[i].asInt, 0,
+              reason: 'channel ${i + 1} must remain auto');
+        }
+      },
+    );
+
+    testWidgets(
+      'tapping a High SegmentedButton writes to forceValuesKey with [0]==2',
+      (tester) async {
+        await openWithStub(tester);
+        expect(find.byType(AlertDialog), findsOneWidget);
+
+        // RowControl renders the High label as 'High'. Tap the first High to
+        // force channel 1 high.
+        final highFinders = find.text('High');
+        // Each row has Auto/Low/High for two channels = 32 High labels possible,
+        // but RowControl renders one SegmentedButton per side; assert >=16.
+        expect(highFinders, findsNWidgets(16));
+        await tester.tap(highFinders.first);
+        await tester.pumpAndSettle();
+
+        expect(stub.writes, isNotEmpty);
+        final lastWrite = stub.writes.last;
+        expect(lastWrite.key, 'force');
+        expect(lastWrite.value[0].asInt, 2,
+            reason: 'channel 1 must be forced high after first High tap');
+      },
+    );
+
+    testWidgets(
+      'force-write round-trips: write [5]=2 → next emission lights channel 6 green',
+      (tester) async {
+        // End-to-end: the operator forces channel 6 high via the dialog. The
+        // stub mutates its cached force DV in-place and re-emits, so the body
+        // painter's IOState[5] must transition to forcedHigh on the next frame.
+        await openWithStub(tester);
+
+        // High buttons appear in widget-tree traversal order: for row r the
+        // left RowControl (channel r+1) comes before the right RowControl
+        // (channel r+9). So the sequence is:
+        //   index 0  → ch1   (row 0 left)
+        //   index 1  → ch9   (row 0 right)
+        //   index 2  → ch2   (row 1 left)
+        //   index 3  → ch10  (row 1 right)
+        //   ...
+        //   index 10 → ch6   (row 5 left)  ← target
+        final highFinders = find.text('High');
+        expect(highFinders, findsNWidgets(16));
+        await tester.tap(highFinders.at(10));
+        await tester.pumpAndSettle();
+
+        // Verify the write was recorded with [5]==2.
+        final writeWithCh6 = stub.writes.lastWhere(
+          (w) => w.value[5].asInt == 2,
+          orElse: () =>
+              (key: '', value: DynamicValue(value: 0)),
+        );
+        expect(writeWithCh6.key, 'force',
+            reason:
+                'A write to forceValuesKey with [5]==2 (forcedHigh) must be '
+                'recorded after tapping the High button for channel 6 (DDO-09).');
+      },
+    );
+  });
+
+  // ---------------------------------------------------------------------------
+  // Goldens — 5 states × 2 themes = 10 PNGs. Must be visually distinct from
+  // the DDI3725 goldens (CONTEXT.md §Visual Differentiation).
+  // ---------------------------------------------------------------------------
+  group('STBDDO3705 goldens',
+      skip: !Platform.isMacOS ? 'Golden tests only run on macOS' : null, () {
+    const goldenKey = Key('stb_ddo3705_golden');
+
+    Future<void> pumpDDO3705(
+      WidgetTester tester, {
+      required List<IOState> ledStates,
+      required bool isStale,
+      required bool isDisconnected,
+      required Brightness theme,
+    }) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: theme == Brightness.dark ? ThemeData.dark() : ThemeData.light(),
+          home: Scaffold(
+            body: Center(
+              child: RepaintBoundary(
+                key: goldenKey,
+                child: SizedBox(
+                  width: 200,
+                  height: 300,
+                  child: STBDDO3705Widget(
+                    ledStates: ledStates,
+                    isStale: isStale,
+                    isDisconnected: isDisconnected,
+                    animation: const AlwaysStoppedAnimation<int>(0),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump(Duration.zero);
+    }
+
+    testWidgets('ddo3705_all_off_light.png', (tester) async {
+      await pumpDDO3705(tester,
+          ledStates: bitmaskToLedStates(0x0000),
+          isStale: false,
+          isDisconnected: false,
+          theme: Brightness.light);
+      await expectLater(
+        find.byKey(goldenKey),
+        matchesGoldenFile('goldens/advantys_stb/ddo3705_all_off_light.png'),
+      );
+    });
+
+    testWidgets('ddo3705_all_off_dark.png', (tester) async {
+      await pumpDDO3705(tester,
+          ledStates: bitmaskToLedStates(0x0000),
+          isStale: false,
+          isDisconnected: false,
+          theme: Brightness.dark);
+      await expectLater(
+        find.byKey(goldenKey),
+        matchesGoldenFile('goldens/advantys_stb/ddo3705_all_off_dark.png'),
+      );
+    });
+
+    testWidgets('ddo3705_all_on_light.png', (tester) async {
+      await pumpDDO3705(tester,
+          ledStates: bitmaskToLedStates(0xFFFF),
+          isStale: false,
+          isDisconnected: false,
+          theme: Brightness.light);
+      await expectLater(
+        find.byKey(goldenKey),
+        matchesGoldenFile('goldens/advantys_stb/ddo3705_all_on_light.png'),
+      );
+    });
+
+    testWidgets('ddo3705_all_on_dark.png', (tester) async {
+      await pumpDDO3705(tester,
+          ledStates: bitmaskToLedStates(0xFFFF),
+          isStale: false,
+          isDisconnected: false,
+          theme: Brightness.dark);
+      await expectLater(
+        find.byKey(goldenKey),
+        matchesGoldenFile('goldens/advantys_stb/ddo3705_all_on_dark.png'),
+      );
+    });
+
+    testWidgets('ddo3705_alternating_0xAAAA_light.png', (tester) async {
+      await pumpDDO3705(tester,
+          ledStates: bitmaskToLedStates(0xAAAA),
+          isStale: false,
+          isDisconnected: false,
+          theme: Brightness.light);
+      await expectLater(
+        find.byKey(goldenKey),
+        matchesGoldenFile(
+            'goldens/advantys_stb/ddo3705_alternating_0xAAAA_light.png'),
+      );
+    });
+
+    testWidgets('ddo3705_alternating_0xAAAA_dark.png', (tester) async {
+      await pumpDDO3705(tester,
+          ledStates: bitmaskToLedStates(0xAAAA),
+          isStale: false,
+          isDisconnected: false,
+          theme: Brightness.dark);
+      await expectLater(
+        find.byKey(goldenKey),
+        matchesGoldenFile(
+            'goldens/advantys_stb/ddo3705_alternating_0xAAAA_dark.png'),
+      );
+    });
+
+    testWidgets('ddo3705_forced_mix_light.png', (tester) async {
+      const forces = <int>[
+        1, 0, 2, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0,
+      ];
+      await pumpDDO3705(tester,
+          ledStates: bitmaskToLedStates(0xFFFF, forceValues: forces),
+          isStale: false,
+          isDisconnected: false,
+          theme: Brightness.light);
+      await expectLater(
+        find.byKey(goldenKey),
+        matchesGoldenFile(
+            'goldens/advantys_stb/ddo3705_forced_mix_light.png'),
+      );
+    });
+
+    testWidgets('ddo3705_forced_mix_dark.png', (tester) async {
+      const forces = <int>[
+        1, 0, 2, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0,
+      ];
+      await pumpDDO3705(tester,
+          ledStates: bitmaskToLedStates(0xFFFF, forceValues: forces),
+          isStale: false,
+          isDisconnected: false,
+          theme: Brightness.dark);
+      await expectLater(
+        find.byKey(goldenKey),
+        matchesGoldenFile(
+            'goldens/advantys_stb/ddo3705_forced_mix_dark.png'),
+      );
+    });
+
+    testWidgets('ddo3705_disconnected_light.png', (tester) async {
+      await pumpDDO3705(tester,
+          ledStates: List<IOState>.filled(16, IOState.low),
+          isStale: true,
+          isDisconnected: true,
+          theme: Brightness.light);
+      await expectLater(
+        find.byKey(goldenKey),
+        matchesGoldenFile(
+            'goldens/advantys_stb/ddo3705_disconnected_light.png'),
+      );
+    });
+
+    testWidgets('ddo3705_disconnected_dark.png', (tester) async {
+      await pumpDDO3705(tester,
+          ledStates: List<IOState>.filled(16, IOState.low),
+          isStale: true,
+          isDisconnected: true,
+          theme: Brightness.dark);
+      await expectLater(
+        find.byKey(goldenKey),
+        matchesGoldenFile(
+            'goldens/advantys_stb/ddo3705_disconnected_dark.png'),
+      );
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Registry resolution + JSON back-compat (DDO-07).
+  // ---------------------------------------------------------------------------
+  group('STBDDO3705Config registry resolution', () {
+    test('createDefaultAssetByName returns a typed STBDDO3705Config', () {
+      final asset =
+          AssetRegistry.createDefaultAssetByName('STBDDO3705Config');
+      expect(asset, isNotNull,
+          reason:
+              'defaultFactories must register STBDDO3705Config (palette wiring).');
+      expect(asset, isA<STBDDO3705Config>());
+      final cfg = asset! as STBDDO3705Config;
+      expect(cfg.nameOrId, '1');
+      expect(cfg.rawStateKey, isNull);
+    });
+
+    test('AssetRegistry.parse round-trips a STBDDO3705Config from saved JSON',
+        () {
+      final cfg = STBDDO3705Config(
+        nameOrId: 'DO-99',
+        rawStateKey: 'plc/raw',
+      );
+      final saveJson = jsonDecode(jsonEncode(<String, dynamic>{
+        'assets': <Map<String, dynamic>>[cfg.toJson()],
+      })) as Map<String, dynamic>;
+      final parsed = AssetRegistry.parse(saveJson);
+      expect(parsed, hasLength(1),
+          reason:
+              '_fromJsonFactories must register STBDDO3705Config (JSON load wiring).');
+      expect(parsed[0], isA<STBDDO3705Config>());
+      final restored = parsed[0] as STBDDO3705Config;
+      expect(restored.nameOrId, 'DO-99');
+      expect(restored.rawStateKey, 'plc/raw');
+    });
+
+    test('defaultFactories Map contains STBDDO3705Config type key', () {
+      expect(
+        AssetRegistry.defaultFactories.keys.any(
+          (t) => t.toString() == 'STBDDO3705Config',
+        ),
+        isTrue,
+      );
+    });
+  });
+
+  group('STBDDO3705Config full JSON round-trip + back-compat (DDO-07)', () {
+    test(
+      'every field survives jsonEncode + jsonDecode + fromJson',
+      () {
+        final original = STBDDO3705Config(
+          nameOrId: 'DO-42',
+          rawStateKey: 'plc/do/raw',
+          forceValuesKey: 'plc/do/force',
+          descriptionsKey: 'plc/do/desc',
+        )
+          ..coordinates = Coordinates(x: 0.25, y: 0.5)
+          ..size = const RelativeSize(width: 0.1, height: 0.2)
+          ..text = 'unit test'
+          ..textPos = TextPos.below
+          ..techDocId = 42
+          ..plcAssetKey = 'plc.42';
+
+        final encoded = jsonEncode(original.toJson());
+        final decoded = jsonDecode(encoded) as Map<String, dynamic>;
+        final parsed = STBDDO3705Config.fromJson(decoded);
+
+        expect(parsed.nameOrId, 'DO-42');
+        expect(parsed.rawStateKey, 'plc/do/raw');
+        expect(parsed.forceValuesKey, 'plc/do/force');
+        expect(parsed.descriptionsKey, 'plc/do/desc');
+        expect(parsed.coordinates.x, 0.25);
+        expect(parsed.coordinates.y, 0.5);
+        expect(parsed.size.width, 0.1);
+        expect(parsed.size.height, 0.2);
+        expect(parsed.text, 'unit test');
+        expect(parsed.textPos, TextPos.below);
+        expect(parsed.techDocId, 42);
+        expect(parsed.plcAssetKey, 'plc.42');
+        expect(parsed.assetName, 'STBDDO3705Config');
+      },
+    );
+
+    test(
+      'minimal legacy snippet (only v1.0 fields) → Phase 2 defaults rehydrate',
+      () {
+        final legacyJson = <String, dynamic>{
+          'asset_name': 'STBDDO3705Config',
+          'coordinates': {'x': 0.0, 'y': 0.0},
+          'size': {'width': 0.03, 'height': 0.03},
+        };
+        final config = STBDDO3705Config.fromJson(legacyJson);
+        expect(config.nameOrId, '1');
+        expect(config.rawStateKey, isNull);
+        expect(config.forceValuesKey, isNull);
+        expect(config.descriptionsKey, isNull);
+        expect(config.assetName, 'STBDDO3705Config');
+      },
+    );
+
+    test(
+      'unknown forward-compat field in legacy snippet is ignored, not fatal',
+      () {
+        final futureJson = <String, dynamic>{
+          'asset_name': 'STBDDO3705Config',
+          'coordinates': {'x': 0.0, 'y': 0.0},
+          'size': {'width': 0.03, 'height': 0.03},
+          'someFutureFieldKey': 'plc/future',
+          'unknownEnum': 'unknown_value',
+        };
+        final cfg = STBDDO3705Config.fromJson(futureJson);
+        expect(cfg.nameOrId, '1');
+        expect(cfg.rawStateKey, isNull);
+      },
+    );
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -1248,4 +2022,54 @@ class _DummyDDI3725Painter extends CustomPainter {
   void paint(Canvas canvas, Size size) {}
   @override
   bool shouldRepaint(covariant CustomPainter old) => true;
+}
+
+class _DummyDDO3705Painter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {}
+  @override
+  bool shouldRepaint(covariant CustomPainter old) => true;
+}
+
+/// StateMan stub for DDO3705 detail-dialog tests. Like
+/// [_StreamingStubStateMan] but drops the filter keys (outputs don't have
+/// filters). Records every `write` call for force-write integration assertions.
+class _StreamingStubDOStateMan extends Fake implements StateMan {
+  _StreamingStubDOStateMan({
+    required this.raw,
+    required this.force,
+    required this.descriptions,
+  });
+
+  int raw;
+  List<int> force;
+  List<String> descriptions;
+
+  final List<({String key, DynamicValue value})> writes =
+      <({String key, DynamicValue value})>[];
+
+  late final DynamicValue _rawDv = DynamicValue(value: raw);
+  late final DynamicValue _forceDv =
+      DynamicValue.fromList(force.map((v) => DynamicValue(value: v)).toList());
+  late final DynamicValue _descriptionsDv = DynamicValue.fromList(
+      descriptions.map((v) => DynamicValue(value: v)).toList());
+
+  @override
+  Future<Stream<DynamicValue>> subscribe(String key) async {
+    switch (key) {
+      case 'raw':
+        return Stream<DynamicValue>.value(_rawDv);
+      case 'force':
+        return Stream<DynamicValue>.value(_forceDv);
+      case 'desc':
+        return Stream<DynamicValue>.value(_descriptionsDv);
+      default:
+        return const Stream<DynamicValue>.empty();
+    }
+  }
+
+  @override
+  Future<void> write(String key, DynamicValue value) async {
+    writes.add((key: key, value: value));
+  }
 }

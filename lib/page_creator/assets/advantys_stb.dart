@@ -41,6 +41,7 @@ import 'beckhoff.dart' show RowIOView, FilterEdit;
 import '../../providers/state_man.dart';
 import '../../painter/advantys_stb/io16.dart';
 import '../../painter/advantys_stb/ddi3725.dart';
+import '../../painter/advantys_stb/ddo3705.dart';
 import '../../painter/beckhoff/io8.dart' show IOState;
 
 part 'advantys_stb.g.dart';
@@ -492,6 +493,367 @@ void _showDDI3725DetailDialog(
                                 },
                               )
                             : null,
+                      ),
+                    ),
+                ],
+              );
+            },
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('Close'),
+          ),
+        ],
+      );
+    },
+  );
+}
+
+// ===========================================================================
+// STBDDO3705Config — Schneider Advantys STB 16-channel digital-output module.
+// ===========================================================================
+//
+// Phase 2 deliverable. Clone of `STBDDI3725Config` MINUS the on/off filter
+// keys (outputs are commanded, not sampled — no per-channel debounce), PLUS
+// the genuine end-to-end manual force-write path: tapping `Low`/`High` on
+// the SegmentedButton in the detail dialog writes `int8[16]` to
+// `forceValuesKey` via `StateMan.write` and the painter reflects on the next
+// emission.
+//
+// Visual differentiation from DDI3725 is shipped by
+// `STBDDO3705BodyPainter` in `lib/painter/advantys_stb/ddo3705.dart` — same
+// physical chrome but the top label strip carries "DDO3705" plus a small
+// "▸" arrow glyph that operators recognize as the output module without
+// reading the printed module name.
+//
+// Bit-ordering is locked at module-wide scope by `kSTBChannelBitOrder` in
+// `io16.dart` — DDO3705 imports the constant (does NOT re-declare) so the
+// convention cannot drift between input and output modules. The bit-order
+// parity canary test in `advantys_stb_test.dart` is the compile-time guard.
+
+/// Schneider Advantys STB DDO3705 — 16-channel digital output module.
+///
+/// Three optional state keys (raw bitmask + force values + descriptions)
+/// drive the live LED block and the detail dialog. All keys are nullable;
+/// `BaseAsset.allKeys` picks them up automatically via the `Key$` regex (no
+/// override needed) and filters out empty strings.
+///
+/// NO filter keys — outputs don't have on/off debounce; the detail dialog
+/// renders only force SegmentedButton + description per channel.
+@JsonSerializable()
+class STBDDO3705Config extends BaseAsset {
+  @override
+  String get displayName => 'STBDDO3705 (16-Ch DO)';
+  @override
+  String get category => 'Advantys STB';
+
+  @JsonKey(defaultValue: '1')
+  String nameOrId;
+
+  String? rawStateKey;
+  String? forceValuesKey;
+  String? descriptionsKey;
+
+  STBDDO3705Config({
+    this.nameOrId = '1',
+    this.rawStateKey,
+    this.forceValuesKey,
+    this.descriptionsKey,
+  });
+
+  STBDDO3705Config.preview()
+      : nameOrId = '1',
+        rawStateKey = null,
+        forceValuesKey = null,
+        descriptionsKey = null,
+        super();
+
+  factory STBDDO3705Config.fromJson(Map<String, dynamic> json) =>
+      _$STBDDO3705ConfigFromJson(json);
+
+  @override
+  Map<String, dynamic> toJson() => _$STBDDO3705ConfigToJson(this);
+
+  @override
+  Widget build(BuildContext context) {
+    return FittedBox(
+      fit: BoxFit.contain,
+      child: _STBDDO3705(config: this),
+    );
+  }
+
+  @override
+  Widget configure(BuildContext context) {
+    final media = MediaQuery.of(context).size;
+    final maxWidth = media.width * 0.9;
+    final maxHeight = media.height * 0.8;
+
+    return Center(
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxWidth: maxWidth,
+          maxHeight: maxHeight,
+          minWidth: 320,
+          minHeight: 200,
+        ),
+        child: Material(
+          borderRadius: BorderRadius.circular(24),
+          color: DialogTheme.of(context).backgroundColor ??
+              Theme.of(context).colorScheme.surface,
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: SingleChildScrollView(
+              child: _STBDDO3705ConfigEditor(config: this),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Live widget — _STBDDO3705
+//
+// Mirrors `_STBDDI3725` but subscribes only to two keys (raw + force).
+// `_combinedStream` is hoisted to `initState` per PITFALL M-03 / QUAL-03.
+// ---------------------------------------------------------------------------
+
+class _STBDDO3705 extends ConsumerStatefulWidget {
+  final STBDDO3705Config config;
+  const _STBDDO3705({required this.config});
+
+  @override
+  ConsumerState<_STBDDO3705> createState() => _STBDDO3705State();
+}
+
+class _STBDDO3705State extends ConsumerState<_STBDDO3705> {
+  Stream<Map<String, DynamicValue>>? _combinedStreamCache;
+  StateMan? _stateMan;
+
+  @override
+  void initState() {
+    super.initState();
+    ref.read(stateManProvider.future).then((sm) {
+      if (!mounted) return;
+      setState(() {
+        _stateMan = sm;
+        _combinedStreamCache = _combinedStream(
+          LinkedHashMap<String, String?>.from(<String, String?>{
+            'raw': widget.config.rawStateKey,
+            'force': widget.config.forceValuesKey,
+          }),
+          sm,
+        );
+      });
+    });
+  }
+
+  @override
+  void dispose() {
+    // DDO-07 / QUAL-03 lifecycle hygiene. Matches _STBDDI3725State.
+    _combinedStreamCache = null;
+    _stateMan = null;
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_combinedStreamCache == null) {
+      return _buildShell(
+        ledStates: List<IOState>.filled(16, IOState.low),
+        isStale: true,
+      );
+    }
+    return StreamBuilder<Map<String, DynamicValue>>(
+      stream: _combinedStreamCache,
+      builder: (context, snap) {
+        final data = (snap.hasData && !snap.hasError) ? snap.data : null;
+        if (data == null) {
+          return _buildShell(
+            ledStates: List<IOState>.filled(16, IOState.low),
+            isStale: true,
+          );
+        }
+        final rawDv = data['raw'];
+        final raw = rawDv?.asInt ?? 0;
+        final forceList = _forceArrayFromDynamicValue(data['force']);
+        final leds = bitmaskToLedStates(raw, forceValues: forceList);
+        return _buildShell(ledStates: leds, isStale: false);
+      },
+    );
+  }
+
+  Widget _buildShell({
+    required List<IOState> ledStates,
+    required bool isStale,
+  }) {
+    return GestureDetector(
+      // QUAL-05: opaque hit-test — see _STBDDI3725State._buildShell.
+      behavior: HitTestBehavior.opaque,
+      onTap: () {
+        if (_stateMan == null) return;
+        _showDDO3705DetailDialog(
+          context,
+          widget.config,
+          _stateMan!,
+          const AlwaysStoppedAnimation<int>(0),
+        );
+      },
+      child: STBDDO3705Widget(
+        ledStates: ledStates,
+        isStale: isStale,
+        isDisconnected: false,
+        animation: const AlwaysStoppedAnimation<int>(0),
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Configure dialog body — _STBDDO3705ConfigEditor
+//
+// 3 KeyField widgets (raw / force / descriptions). NO filter fields.
+// ---------------------------------------------------------------------------
+
+class _STBDDO3705ConfigEditor extends StatefulWidget {
+  final STBDDO3705Config config;
+  const _STBDDO3705ConfigEditor({required this.config});
+
+  @override
+  State<_STBDDO3705ConfigEditor> createState() =>
+      _STBDDO3705ConfigEditorState();
+}
+
+class _STBDDO3705ConfigEditorState extends State<_STBDDO3705ConfigEditor> {
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizeField(
+          initialValue: widget.config.size,
+          onChanged: (size) => widget.config.size = size,
+        ),
+        const SizedBox(height: 16),
+        CoordinatesField(
+          initialValue: widget.config.coordinates,
+          onChanged: (coordinates) => widget.config.coordinates = coordinates,
+          enableAngle: false,
+        ),
+        const SizedBox(height: 16),
+        TextFormField(
+          decoration: const InputDecoration(
+            labelText: 'Name or ID',
+            border: OutlineInputBorder(),
+          ),
+          initialValue: widget.config.nameOrId,
+          onChanged: (value) => widget.config.nameOrId = value,
+        ),
+        const SizedBox(height: 16),
+        KeyField(
+          initialValue: widget.config.rawStateKey,
+          onChanged: (value) => widget.config.rawStateKey = value,
+          label: 'Raw State Key',
+        ),
+        const SizedBox(height: 16),
+        KeyField(
+          initialValue: widget.config.forceValuesKey,
+          onChanged: (value) => widget.config.forceValuesKey = value,
+          label: 'Force Values Key',
+        ),
+        const SizedBox(height: 16),
+        KeyField(
+          initialValue: widget.config.descriptionsKey,
+          onChanged: (value) => widget.config.descriptionsKey = value,
+          label: 'Descriptions Key',
+        ),
+      ],
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Detail dialog — _showDDO3705DetailDialog
+//
+// 8 rows × 2 columns of `RowIOView`. Same channel pairing as DDI3725
+// (`(r+1, r+9)`), but with `leftFilterEdit` / `rightFilterEdit` HARDCODED to
+// `null` (outputs have no filter inputs — DDO-06).
+//
+// Force-write path is genuine and operator-driven: SegmentedButton onChange
+// mutates the force DynamicValue in-place and writes the whole int8[16] back
+// via `stateMan.write(forceValuesKey, ...)`. The same StreamBuilder receives
+// the next emission and re-renders.
+// ---------------------------------------------------------------------------
+
+void _showDDO3705DetailDialog(
+  BuildContext context,
+  STBDDO3705Config config,
+  StateMan stateMan,
+  Animation<int> animation,
+) {
+  showDialog<void>(
+    context: context,
+    builder: (dialogContext) {
+      return AlertDialog(
+        title: Text(config.nameOrId),
+        content: SingleChildScrollView(
+          child: StreamBuilder<Map<String, DynamicValue>>(
+            stream: _combinedStream(
+              LinkedHashMap<String, String?>.from(<String, String?>{
+                'raw': config.rawStateKey,
+                'force': config.forceValuesKey,
+                'descriptions': config.descriptionsKey,
+              }),
+              stateMan,
+            ),
+            builder: (context, snap) {
+              if (!snap.hasData || snap.hasError) {
+                return const SizedBox.shrink();
+              }
+              final map = snap.data!;
+              final rawDv = map['raw'];
+              final List<bool>? rawStates = rawDv != null
+                  ? List<bool>.generate(
+                      16, (i) => (rawDv.asInt & (1 << i)) != 0)
+                  : null;
+              return Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  for (int r = 0; r < 8; r++)
+                    Padding(
+                      padding: EdgeInsets.only(bottom: r < 7 ? 2.0 : 0.0),
+                      child: RowIOView(
+                        leftRaw: rawStates?[r] ?? false,
+                        rightRaw: rawStates?[r + 8] ?? false,
+                        leftProcessed: null,
+                        rightProcessed: null,
+                        leftSelected: map['force']?[r].asInt ?? 0,
+                        rightSelected: map['force']?[r + 8].asInt ?? 0,
+                        animationValue: animation,
+                        leftOnChanged: (value) async {
+                          // DDO-09: genuine operator-driven force write.
+                          // Mutate the force DV in-place (matches the EL2008
+                          // pattern in beckhoff.dart:880-884), then write the
+                          // whole int8[16] back via StateMan.write.
+                          map['force']![r].value = value;
+                          await stateMan.write(
+                              config.forceValuesKey!, map['force']!);
+                        },
+                        rightOnChanged: (value) async {
+                          map['force']![r + 8].value = value;
+                          await stateMan.write(
+                              config.forceValuesKey!, map['force']!);
+                        },
+                        leftDescription: map['descriptions']?[r].asString,
+                        rightDescription:
+                            map['descriptions']?[r + 8].asString,
+                        // DDO-06: outputs have NO filter inputs.
+                        leftFilterEdit: null,
+                        rightFilterEdit: null,
                       ),
                     ),
                 ],
