@@ -65,6 +65,7 @@ void main() {
       WidgetTester tester, {
       required double progress,
       required bool isStale,
+      double maxChildHeight = 0.0,
     }) async {
       final notifier = ValueNotifier<double>(progress);
       await tester.pumpWidget(
@@ -81,6 +82,7 @@ void main() {
                     painter: ElevatorPainter(
                       progress: notifier,
                       isStale: isStale,
+                      maxChildHeight: maxChildHeight,
                     ),
                   ),
                 ),
@@ -94,6 +96,10 @@ void main() {
     }
 
     testWidgets('stale.png', (tester) async {
+      // Plan 260511-dxa: with no children the platform pins at the
+      // bottom, so the stale golden captures rails + deck at the bottom.
+      // Semantically still "stale grey" — the colour assertion is the
+      // value here, not the platform height.
       await pumpElevator(tester, progress: 0.5, isStale: true);
       await expectLater(
         find.byKey(elevatorKey),
@@ -102,7 +108,11 @@ void main() {
     });
 
     testWidgets('position_0.png', (tester) async {
-      await pumpElevator(tester, progress: 0.0, isStale: false);
+      // bbox=200x300 → platformH=24, headroom=276. maxChildHeight=100
+      // gives a clearly visible 100px travel range (vs the saturated old
+      // full-bbox range). progress=0 → platform at bottom (276).
+      await pumpElevator(tester, progress: 0.0, isStale: false,
+          maxChildHeight: 100.0);
       await expectLater(
         find.byKey(elevatorKey),
         matchesGoldenFile('goldens/elevator/position_0.png'),
@@ -110,7 +120,10 @@ void main() {
     });
 
     testWidgets('position_50.png', (tester) async {
-      await pumpElevator(tester, progress: 0.5, isStale: false);
+      // progress=0.5, travel=100 → platform at 276 - 50 = 226 (50px up
+      // from the bottom — visibly risen, well below bbox top).
+      await pumpElevator(tester, progress: 0.5, isStale: false,
+          maxChildHeight: 100.0);
       await expectLater(
         find.byKey(elevatorKey),
         matchesGoldenFile('goldens/elevator/position_50.png'),
@@ -118,7 +131,11 @@ void main() {
     });
 
     testWidgets('position_100.png', (tester) async {
-      await pumpElevator(tester, progress: 1.0, isStale: false);
+      // progress=1.0, travel=100 → platform at 276 - 100 = 176 (100px
+      // up from the bottom — clearly above position_50, still well
+      // below bbox top because travel is 100/276 of the headroom).
+      await pumpElevator(tester, progress: 1.0, isStale: false,
+          maxChildHeight: 100.0);
       await expectLater(
         find.byKey(elevatorKey),
         matchesGoldenFile('goldens/elevator/position_100.png'),

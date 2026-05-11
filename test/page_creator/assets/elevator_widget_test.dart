@@ -86,7 +86,6 @@
 library;
 
 import 'dart:io' show File, Platform;
-import 'dart:math' show max;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -656,19 +655,23 @@ void main() {
               'Child Positioned.top must decrease as platform rises '
               '(progress 0 → 1) — ELEV-10.');
 
-      // Numerical: child's bottom edge sits on platform's top edge —
-      // unless the platform is so close to the bbox top that there is no
-      // room for the child above it, in which case the child clamps to
-      // top=0 (visual safety clamp introduced in Plan 04-02; see
-      // `_buildPositionedChild` in elevator.dart).
+      // Numerical: child's bottom edge sits on platform's top edge.
+      // With the travel range now equal to the tallest child's height
+      // (Plan 260511-dxa / ELEV-10), `platformY - childH >= 0` is
+      // structural — no clamp needed.
+      //
       // bbox is 200x300 (from `wrap`). platformH = 300 * 0.08 = 24.
+      // Fixture has a single 40x40 child → maxChildHeight = 40.
+      //   progress=0 → platformY = 276,         top = 276 - 40 = 236.
+      //   progress=1 → platformY = 276 - 40 = 236, top = 236 - 40 = 196.
       const bboxH = 300.0;
       const platformH = bboxH * kPlatformHeightFraction;
       const childH = 40.0;
+      const maxChildHeight = childH; // single child
       final expectedTopAt0 =
-          max(0.0, platformOffsetTop(0.0, bboxH, platformH) - childH);
+          platformOffsetTop(0.0, bboxH, platformH, maxChildHeight) - childH;
       final expectedTopAt1 =
-          max(0.0, platformOffsetTop(1.0, bboxH, platformH) - childH);
+          platformOffsetTop(1.0, bboxH, platformH, maxChildHeight) - childH;
       expect(topAt0, closeTo(expectedTopAt0, 1.0));
       expect(topAt1, closeTo(expectedTopAt1, 1.0));
     });
@@ -704,8 +707,12 @@ void main() {
       expect(top, greaterThanOrEqualTo(0.0),
           reason:
               'Child must remain visible inside the elevator bbox at '
-              'progress=1.0 — top must clamp to >= 0 (visual safety '
-              'clamp introduced in Plan 04-02).');
+              'progress=1.0 — top must remain >= 0. With the travel range '
+              'now equal to the tallest child (Plan 260511-dxa), this '
+              'invariant is structural: '
+              'top = platformY - childH = (bboxH - platformH) - progress * '
+              'min(maxChildHeight, headroom) - childH, which is >= 0 when '
+              'childH <= maxChildHeight.');
     });
 
     testWidgets('Stack uses Clip.none so children may overhang bbox',
