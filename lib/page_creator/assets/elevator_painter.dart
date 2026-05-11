@@ -68,11 +68,19 @@ class ElevatorPainter extends CustomPainter {
   /// fixture; widget passes Theme.colorScheme.primary at runtime.
   final Color activeColor;
 
+  /// Travel range driver — equals the tallest attached child's height
+  /// (clamped to `bboxH - platformH` internally by [platformOffsetTop]).
+  /// Defaults to 0.0: with no children, the platform stays at the
+  /// bottom for all progress values. Set by [Elevator] from
+  /// `config.children` once per build. (Plan 260511-dxa / ELEV-10.)
+  final double maxChildHeight;
+
   ElevatorPainter({
     required this.progress,
     this.isStale = false,
     this.isOutOfRange = false,
     this.activeColor = _kDefaultActive,
+    this.maxChildHeight = 0.0,
   }) : super(repaint: progress);
 
   @override
@@ -106,6 +114,7 @@ class ElevatorPainter extends CustomPainter {
       progress.value.clamp(0.0, 1.0),
       size.height,
       platformHeight,
+      maxChildHeight,
     );
 
     // Inset slightly past each rail's outer edge (visually ON the rails).
@@ -148,6 +157,7 @@ class ElevatorPainter extends CustomPainter {
     return !identical(progress, o.progress) ||
         isStale != o.isStale ||
         isOutOfRange != o.isOutOfRange ||
-        activeColor != o.activeColor;
+        activeColor != o.activeColor ||
+        maxChildHeight != o.maxChildHeight;
   }
 }

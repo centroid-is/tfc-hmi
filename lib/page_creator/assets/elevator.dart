@@ -678,6 +678,17 @@ class _ElevatorState extends ConsumerState<Elevator> {
     // truth; we import the constant directly to keep the two values
     // welded together.
     final platformH = paintSize.height * kPlatformHeightFraction;
+    // Travel range driver (Plan 260511-dxa / ELEV-10): the tallest
+    // attached child's height. The same intrinsic-height fallback used by
+    // [_buildPositionedChild] keeps the two formulas welded so the
+    // structural invariant `top >= 0` holds even when a child reports a
+    // non-positive intrinsic size.
+    final maxChildHeight = widget.config.children.isEmpty
+        ? 0.0
+        : widget.config.children.map((e) {
+            final s = e.child.size.toSize(paintSize);
+            return s.height <= 0 ? paintSize.shortestSide / 4 : s.height;
+          }).reduce(max);
     final children = <Widget>[
       CustomPaint(
         size: paintSize,
@@ -686,10 +697,11 @@ class _ElevatorState extends ConsumerState<Elevator> {
           isStale: isStale,
           isOutOfRange: isOutOfRange,
           activeColor: activeColor,
+          maxChildHeight: maxChildHeight,
         ),
       ),
       for (final entry in widget.config.children)
-        _buildPositionedChild(entry, paintSize, platformH),
+        _buildPositionedChild(entry, paintSize, platformH, maxChildHeight),
     ];
     return SizedBox(
       width: paintSize.width,
@@ -711,6 +723,7 @@ class _ElevatorState extends ConsumerState<Elevator> {
     ElevatorChildEntry entry,
     Size paintSize,
     double platformH,
+    double maxChildHeight,
   ) {
     final intrinsic = entry.child.size.toSize(paintSize);
     final childW = intrinsic.width <= 0
@@ -731,16 +744,19 @@ class _ElevatorState extends ConsumerState<Elevator> {
         ),
       ),
       builder: (ctx, animProgress, builtChild) {
-        final platformY =
-            platformOffsetTop(animProgress, paintSize.height, platformH);
-        // Children "ride on" the platform — bottom edge sits on platform's
-        // top edge. Clamp to keep them visible inside the bbox at high
-        // progress (where the platform reaches the top): when there is no
-        // room above the platform, children stop translating upward and
-        // rest at the bbox top edge. This is a visual safety clamp; the
-        // platform itself still reaches its true position.
-        // (Plan 04-02 — caught by visual review of progress=100% golden.)
-        final top = max(0.0, platformY - childH);
+        final platformY = platformOffsetTop(
+          animProgress,
+          paintSize.height,
+          platformH,
+          maxChildHeight,
+        );
+        // Unclamped: the travel range is sized to maxChildHeight so
+        // `platformY - childH` is guaranteed >= 0 when childH <=
+        // maxChildHeight (which holds by construction — maxChildHeight is
+        // the max of all child heights). See Plan 260511-dxa for the
+        // derivation. Children taller than the bbox headroom may overhang
+        // (Stack uses Clip.none — Pitfall 7).
+        final top = platformY - childH;
         return Positioned(
           left: left,
           top: top,
