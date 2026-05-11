@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-05-05)
 Phase: 01 — COMPLETE
 Plan: 1 of 5
 Status: Phase 01 complete
-Last activity: 2026-05-11 - Completed quick task 260511-ehy: elevator child Y-axis anchor offset
+Last activity: 2026-05-11 - Completed quick task 260511-fd6: elevator travel range as configurable fraction of bbox height
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -74,6 +74,7 @@ None yet.
 |---|-------------|------|--------|-----------|
 | 260511-dxa | Elevator travel range equals tallest child height (remove clamp that pins child to top=0) | 2026-05-11 | 212dce1 | [260511-dxa-elevator-travel-range-equals-tallest-chi](./quick/260511-dxa-elevator-travel-range-equals-tallest-chi/) |
 | 260511-ehy | Elevator child Y-axis anchor offset (offsetY raises/lowers child relative to platform top) | 2026-05-11 | 8e4fd8c | [260511-ehy-elevator-child-y-axis-anchor-offset-offs](./quick/260511-ehy-elevator-child-y-axis-anchor-offset-offs/) |
+| 260511-fd6 | Elevator travel range as configurable fraction of bbox height (replace auto-deduce from child sizes) | 2026-05-11 | 1d5dce4 | [260511-fd6-elevator-travel-range-as-configurable-fr](./quick/260511-fd6-elevator-travel-range-as-configurable-fr/) |
 
 ### Blockers/Concerns
 
