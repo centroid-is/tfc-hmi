@@ -1,8 +1,10 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tfc/page_creator/assets/advantys_stb.dart';
+import 'package:tfc/page_creator/assets/common.dart' show KeyField;
 import 'package:tfc/painter/advantys_stb/ddi3725.dart';
 import 'package:tfc/painter/advantys_stb/io16.dart';
 import 'package:tfc/painter/beckhoff/io8.dart' show IOState;
@@ -211,6 +213,57 @@ void main() {
       final p = makePainter();
       final other = _DummyDDI3725Painter();
       expect(p.shouldRepaint(other), isTrue);
+    });
+  });
+
+  group('STBDDI3725Config.configure — editor surface', () {
+    // Mirrors elevator_widget_test's `openConfigEditor` pattern: stage the
+    // dialog behind an ElevatedButton + showDialog so the editor body resolves
+    // its Material/Theme ancestors. KeyField is a ConsumerStatefulWidget that
+    // futures-on stateManProvider — under ProviderScope without overrides the
+    // future never completes, but the widget tree is still pumped and findable
+    // (KeyField renders a placeholder while waiting). That's enough to verify
+    // the editor surface locks the 5-KeyField shape.
+    Future<void> openEditor(WidgetTester tester, STBDDI3725Config cfg) async {
+      await tester.pumpWidget(ProviderScope(
+        child: MaterialApp(
+          home: Scaffold(
+            body: Builder(
+              builder: (context) => Center(
+                child: ElevatedButton(
+                  onPressed: () => showDialog<void>(
+                    context: context,
+                    builder: (_) => Dialog(child: cfg.configure(context)),
+                  ),
+                  child: const Text('open'),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ));
+      await tester.tap(find.text('open'));
+      await tester.pump(); // open dialog frame
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+
+    testWidgets('all 5 KeyField labels + Name or ID present', (tester) async {
+      final cfg = STBDDI3725Config.preview();
+      await openEditor(tester, cfg);
+
+      expect(find.text('Name or ID'), findsOneWidget);
+      expect(find.text('Raw State Key'), findsOneWidget);
+      expect(find.text('Force Values Key'), findsOneWidget);
+      expect(find.text('On Filters Key'), findsOneWidget);
+      expect(find.text('Off Filters Key'), findsOneWidget);
+      expect(find.text('Descriptions Key'), findsOneWidget);
+    });
+
+    testWidgets('exactly 5 KeyField widgets in editor tree', (tester) async {
+      final cfg = STBDDI3725Config.preview();
+      await openEditor(tester, cfg);
+      // Locks the editor surface — Phase 3 will not silently drop a field.
+      expect(find.byType(KeyField), findsNWidgets(5));
     });
   });
 
