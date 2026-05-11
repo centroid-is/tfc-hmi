@@ -14,6 +14,7 @@ import 'package:tfc/page_creator/assets/registry.dart';
 import 'package:tfc/painter/advantys_stb/ddi3725.dart';
 import 'package:tfc/painter/advantys_stb/ddo3705.dart';
 import 'package:tfc/painter/advantys_stb/nip2311.dart';
+import 'package:tfc/painter/advantys_stb/pdt3100.dart';
 import 'package:tfc/painter/advantys_stb/io16.dart';
 import 'package:tfc/painter/beckhoff/io8.dart' show IOState;
 import 'package:tfc/providers/state_man.dart' show stateManProvider;
@@ -2229,6 +2230,438 @@ void main() {
       expect(cfg.nameOrId, '1');
     });
   });
+
+  // ===========================================================================
+  // PHASE 4 — STBPDT3100Config (24 VDC power distribution module).
+  //
+  // Single optional bool key (`inputOkKey`) drives ONE LED in the body painter:
+  //   - stream emits true  → LED green
+  //   - stream emits false → LED dim grey
+  //   - stream errored / not yet emitted / key null → LED dim grey
+  //
+  // Configure dialog exposes ONLY `nameOrId` + `inputOkKey` + Coordinates + Size
+  // (no detail dialog — single bool is too narrow to warrant one). Requirements:
+  // PDT-01..03. Locked by 04-CONTEXT.md.
+  // ===========================================================================
+
+  group('STBPDT3100Config — data shape', () {
+    test('preview() succeeds with nameOrId=="1" and inputOkKey null', () {
+      final c = STBPDT3100Config.preview();
+      expect(c.nameOrId, '1');
+      expect(c.inputOkKey, isNull);
+      expect(c.assetName, 'STBPDT3100Config');
+    });
+
+    test('toJson()["asset_name"] == "STBPDT3100Config"', () {
+      final c = STBPDT3100Config(nameOrId: 'PDT-01', inputOkKey: 'pdt/ok');
+      final json = c.toJson();
+      expect(json['asset_name'], 'STBPDT3100Config');
+      expect(json['nameOrId'], 'PDT-01');
+      expect(json['inputOkKey'], 'pdt/ok');
+    });
+
+    test('allKeys picks up inputOkKey via the Key\$ regex', () {
+      final c = STBPDT3100Config(nameOrId: 'PDT-A', inputOkKey: 'pdt/ok');
+      expect(c.allKeys.toSet(), {'pdt/ok'});
+    });
+
+    test('allKeys is empty when inputOkKey is null (optional binding)', () {
+      final c = STBPDT3100Config(nameOrId: 'PDT-B');
+      expect(c.allKeys, isEmpty);
+    });
+
+    test('explicit nameOrId is honored', () {
+      final c = STBPDT3100Config(nameOrId: 'power-A');
+      expect(c.nameOrId, 'power-A');
+    });
+  });
+
+  group('STBPDT3100BodyPainter shouldRepaint contract', () {
+    STBPDT3100BodyPainter makePainter({
+      String nameOrId = '1',
+      bool? inputOk,
+    }) {
+      return STBPDT3100BodyPainter(nameOrId: nameOrId, inputOk: inputOk);
+    }
+
+    test('same inputs → shouldRepaint=false', () {
+      final a = makePainter();
+      final b = makePainter();
+      expect(a.shouldRepaint(b), isFalse);
+    });
+
+    test('different nameOrId → shouldRepaint=true', () {
+      final a = makePainter(nameOrId: 'A');
+      final b = makePainter(nameOrId: 'B');
+      expect(a.shouldRepaint(b), isTrue);
+    });
+
+    test('different inputOk → shouldRepaint=true', () {
+      final a = makePainter(inputOk: true);
+      final b = makePainter(inputOk: false);
+      expect(a.shouldRepaint(b), isTrue);
+    });
+
+    test('null vs false inputOk → shouldRepaint=true', () {
+      // null (stale/disconnected) and false render the same color (dim grey),
+      // but the painter is conservative: the input field changed, repaint.
+      final a = makePainter(inputOk: null);
+      final b = makePainter(inputOk: false);
+      expect(a.shouldRepaint(b), isTrue);
+    });
+
+    test('cross-runtimeType → shouldRepaint=true (Pitfall 3 guard)', () {
+      final p = makePainter();
+      final other = _DummyPDT3100Painter();
+      expect(p.shouldRepaint(other), isTrue);
+    });
+  });
+
+  group('STBPDT3100 aspect ratio (PDT3100 DXF bounding box)', () {
+    test('kPDT3100AspectRatio is the DXF width/height ratio (≈ 0.7071)', () {
+      // DXF EXTMAX: 114.5914794492 × 162.0650923639 mm. The painter MUST lock
+      // to this ratio so the module reads as the slim cream PDT module beside
+      // the wider IO modules in a stack.
+      const expected = 114.5914794492 / 162.0650923639;
+      expect(kPDT3100AspectRatio, closeTo(expected, 1e-6));
+    });
+  });
+
+  group('STBPDT3100Config.configure — editor surface', () {
+    Future<void> openEditor(WidgetTester tester, STBPDT3100Config cfg) async {
+      await tester.pumpWidget(ProviderScope(
+        child: MaterialApp(
+          home: Scaffold(
+            body: Builder(
+              builder: (context) => Center(
+                child: ElevatedButton(
+                  onPressed: () => showDialog<void>(
+                    context: context,
+                    builder: (_) => Dialog(child: cfg.configure(context)),
+                  ),
+                  child: const Text('open'),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ));
+      await tester.tap(find.text('open'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+
+    testWidgets(
+      'editor exposes Name or ID + Input OK Key (and NO other KeyFields)',
+      (tester) async {
+        final cfg = STBPDT3100Config.preview();
+        await openEditor(tester, cfg);
+
+        expect(find.text('Name or ID'), findsOneWidget);
+        // Single KeyField for inputOkKey only — no force/raw/filter fields.
+        expect(find.byType(KeyField), findsOneWidget);
+        expect(find.text('Input OK Key'), findsOneWidget);
+        expect(find.text('Raw State Key'), findsNothing);
+        expect(find.text('Force Values Key'), findsNothing);
+      },
+    );
+  });
+
+  group('STBPDT3100Widget — mount sanity', () {
+    testWidgets('pumps cleanly with inputOk=null (no exceptions)',
+        (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Center(
+              child: SizedBox(
+                width: 200,
+                height: 280,
+                child: STBPDT3100Widget(nameOrId: 'PDT-01', inputOk: null),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump(Duration.zero);
+      expect(find.byType(STBPDT3100Widget), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('pumps cleanly with inputOk=true', (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Center(
+              child: SizedBox(
+                width: 200,
+                height: 280,
+                child: STBPDT3100Widget(nameOrId: 'PDT-01', inputOk: true),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump(Duration.zero);
+      expect(find.byType(STBPDT3100Widget), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('pumps cleanly with inputOk=false', (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Center(
+              child: SizedBox(
+                width: 200,
+                height: 280,
+                child: STBPDT3100Widget(nameOrId: 'PDT-01', inputOk: false),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump(Duration.zero);
+      expect(find.byType(STBPDT3100Widget), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets(
+      'config.build mounts STBPDT3100Widget when inputOkKey is null',
+      (tester) async {
+        final cfg = STBPDT3100Config(nameOrId: 'PDT-mount');
+        await tester.pumpWidget(
+          ProviderScope(
+            overrides: [
+              stateManProvider
+                  .overrideWith((ref) async => _FakeStateMan()),
+            ],
+            child: MaterialApp(
+              home: Scaffold(
+                body: Center(
+                  child: SizedBox(
+                    width: 200,
+                    height: 280,
+                    child: Builder(builder: (context) => cfg.build(context)),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 100));
+        expect(find.byType(STBPDT3100Widget), findsOneWidget);
+        expect(tester.takeException(), isNull);
+      },
+    );
+
+    testWidgets(
+      'config.build reflects inputOkKey=true emission (green LED state)',
+      (tester) async {
+        final cfg = STBPDT3100Config(nameOrId: 'PDT-live', inputOkKey: 'ok');
+        final stateMan = _StreamingStubPDTStateMan(inputOk: true);
+        await tester.pumpWidget(
+          ProviderScope(
+            overrides: [
+              stateManProvider.overrideWith((ref) async => stateMan),
+            ],
+            child: MaterialApp(
+              home: Scaffold(
+                body: Center(
+                  child: SizedBox(
+                    width: 200,
+                    height: 280,
+                    child: Builder(builder: (context) => cfg.build(context)),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 100));
+
+        // The underlying STBPDT3100Widget should receive the bool from the
+        // stream and propagate to its painter via the `inputOk` field.
+        final widget =
+            tester.widget<STBPDT3100Widget>(find.byType(STBPDT3100Widget));
+        expect(widget.inputOk, isTrue);
+        expect(tester.takeException(), isNull);
+      },
+    );
+  });
+
+  // ---------------------------------------------------------------------------
+  // Goldens — 2 states (input_ok / fault) × 2 themes (light / dark).
+  //
+  // `fault` is the union semantic class for false / stale / disconnected /
+  // errored — all collapse to dim grey per CONTEXT.md §Single LED State
+  // Mapping. We render `fault` via inputOk=null (no PLC binding) which is
+  // pixel-equivalent to inputOk=false on the painter's color branch. macOS-
+  // only per project golden convention (font rendering parity).
+  // ---------------------------------------------------------------------------
+  group('STBPDT3100 goldens',
+      skip: !Platform.isMacOS ? 'Golden tests only run on macOS' : null, () {
+    const goldenKey = Key('stb_pdt3100_golden');
+
+    Future<void> pumpPDT3100(
+      WidgetTester tester, {
+      required Brightness theme,
+      required bool? inputOk,
+    }) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          theme:
+              theme == Brightness.dark ? ThemeData.dark() : ThemeData.light(),
+          home: Scaffold(
+            body: Center(
+              child: RepaintBoundary(
+                key: goldenKey,
+                child: SizedBox(
+                  width: 200,
+                  height: 280,
+                  child: STBPDT3100Widget(
+                    nameOrId: 'PDT-01',
+                    inputOk: inputOk,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump(Duration.zero);
+    }
+
+    testWidgets('pdt3100_input_ok_light.png', (tester) async {
+      await pumpPDT3100(tester, theme: Brightness.light, inputOk: true);
+      await expectLater(
+        find.byKey(goldenKey),
+        matchesGoldenFile('goldens/advantys_stb/pdt3100_input_ok_light.png'),
+      );
+    });
+
+    testWidgets('pdt3100_input_ok_dark.png', (tester) async {
+      await pumpPDT3100(tester, theme: Brightness.dark, inputOk: true);
+      await expectLater(
+        find.byKey(goldenKey),
+        matchesGoldenFile('goldens/advantys_stb/pdt3100_input_ok_dark.png'),
+      );
+    });
+
+    testWidgets('pdt3100_fault_light.png', (tester) async {
+      await pumpPDT3100(tester, theme: Brightness.light, inputOk: null);
+      await expectLater(
+        find.byKey(goldenKey),
+        matchesGoldenFile('goldens/advantys_stb/pdt3100_fault_light.png'),
+      );
+    });
+
+    testWidgets('pdt3100_fault_dark.png', (tester) async {
+      await pumpPDT3100(tester, theme: Brightness.dark, inputOk: null);
+      await expectLater(
+        find.byKey(goldenKey),
+        matchesGoldenFile('goldens/advantys_stb/pdt3100_fault_dark.png'),
+      );
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Registry resolution + JSON back-compat (PDT-01, PDT-03).
+  // ---------------------------------------------------------------------------
+  group('STBPDT3100Config registry resolution', () {
+    test('createDefaultAssetByName returns a typed STBPDT3100Config', () {
+      final asset =
+          AssetRegistry.createDefaultAssetByName('STBPDT3100Config');
+      expect(asset, isNotNull,
+          reason:
+              'defaultFactories must register STBPDT3100Config (palette wiring).');
+      expect(asset, isA<STBPDT3100Config>());
+      final cfg = asset! as STBPDT3100Config;
+      expect(cfg.nameOrId, '1');
+      expect(cfg.inputOkKey, isNull);
+    });
+
+    test('AssetRegistry.parse round-trips a STBPDT3100Config from saved JSON',
+        () {
+      final cfg = STBPDT3100Config(nameOrId: 'PDT-99', inputOkKey: 'pdt/ok');
+      final saveJson = jsonDecode(jsonEncode(<String, dynamic>{
+        'assets': <Map<String, dynamic>>[cfg.toJson()],
+      })) as Map<String, dynamic>;
+      final parsed = AssetRegistry.parse(saveJson);
+      expect(parsed, hasLength(1),
+          reason:
+              '_fromJsonFactories must register STBPDT3100Config (JSON load wiring).');
+      expect(parsed[0], isA<STBPDT3100Config>());
+      final restored = parsed[0] as STBPDT3100Config;
+      expect(restored.nameOrId, 'PDT-99');
+      expect(restored.inputOkKey, 'pdt/ok');
+    });
+
+    test('defaultFactories Map contains STBPDT3100Config type key', () {
+      expect(
+        AssetRegistry.defaultFactories.keys.any(
+          (t) => t.toString() == 'STBPDT3100Config',
+        ),
+        isTrue,
+      );
+    });
+  });
+
+  group('STBPDT3100Config full JSON round-trip + back-compat (PDT-03)', () {
+    test('every field survives jsonEncode + jsonDecode + fromJson', () {
+      final original = STBPDT3100Config(nameOrId: 'PDT-42', inputOkKey: 'plc/ok')
+        ..coordinates = Coordinates(x: 0.25, y: 0.5)
+        ..size = const RelativeSize(width: 0.1, height: 0.2)
+        ..text = 'unit test'
+        ..textPos = TextPos.below
+        ..techDocId = 42
+        ..plcAssetKey = 'plc.42';
+
+      final encoded = jsonEncode(original.toJson());
+      final decoded = jsonDecode(encoded) as Map<String, dynamic>;
+      final parsed = STBPDT3100Config.fromJson(decoded);
+
+      expect(parsed.nameOrId, 'PDT-42');
+      expect(parsed.inputOkKey, 'plc/ok');
+      expect(parsed.coordinates.x, 0.25);
+      expect(parsed.coordinates.y, 0.5);
+      expect(parsed.size.width, 0.1);
+      expect(parsed.size.height, 0.2);
+      expect(parsed.text, 'unit test');
+      expect(parsed.textPos, TextPos.below);
+      expect(parsed.techDocId, 42);
+      expect(parsed.plcAssetKey, 'plc.42');
+      expect(parsed.assetName, 'STBPDT3100Config');
+    });
+
+    test(
+        'minimal legacy snippet (only base fields) → STBPDT3100 defaults rehydrate (inputOkKey null)',
+        () {
+      final legacyJson = <String, dynamic>{
+        'asset_name': 'STBPDT3100Config',
+        'coordinates': {'x': 0.0, 'y': 0.0},
+        'size': {'width': 0.03, 'height': 0.03},
+      };
+      final config = STBPDT3100Config.fromJson(legacyJson);
+      expect(config.nameOrId, '1');
+      expect(config.inputOkKey, isNull);
+      expect(config.assetName, 'STBPDT3100Config');
+    });
+
+    test('unknown forward-compat field is ignored, not fatal', () {
+      final futureJson = <String, dynamic>{
+        'asset_name': 'STBPDT3100Config',
+        'coordinates': {'x': 0.0, 'y': 0.0},
+        'size': {'width': 0.03, 'height': 0.03},
+        'someFutureFieldKey': 'plc/future',
+      };
+      final cfg = STBPDT3100Config.fromJson(futureJson);
+      expect(cfg.nameOrId, '1');
+      expect(cfg.inputOkKey, isNull);
+    });
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -2321,6 +2754,35 @@ class _DummyNIP2311Painter extends CustomPainter {
   void paint(Canvas canvas, Size size) {}
   @override
   bool shouldRepaint(covariant CustomPainter old) => true;
+}
+
+class _DummyPDT3100Painter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {}
+  @override
+  bool shouldRepaint(covariant CustomPainter old) => true;
+}
+
+/// StateMan stub for STBPDT3100 widget tests. Emits a single canned bool
+/// DynamicValue when `subscribe('ok')` is called; any other key returns the
+/// empty stream (the PDT3100 widget only ever subscribes to `inputOkKey`).
+class _StreamingStubPDTStateMan extends Fake implements StateMan {
+  _StreamingStubPDTStateMan({required this.inputOk});
+
+  bool inputOk;
+
+  late final DynamicValue _inputOkDv = DynamicValue(value: inputOk);
+
+  @override
+  Future<Stream<DynamicValue>> subscribe(String key) async {
+    if (key == 'ok') {
+      return Stream<DynamicValue>.value(_inputOkDv);
+    }
+    return const Stream<DynamicValue>.empty();
+  }
+
+  @override
+  Future<void> write(String key, DynamicValue value) async {}
 }
 
 /// StateMan stub for DDO3705 detail-dialog tests. Like

@@ -104,3 +104,30 @@ Map<String, dynamic> _$STBNIP2311ConfigToJson(STBNIP2311Config instance) =>
       'plcAssetKey': instance.plcAssetKey,
       'nameOrId': instance.nameOrId,
     };
+
+STBPDT3100Config _$STBPDT3100ConfigFromJson(Map<String, dynamic> json) =>
+    STBPDT3100Config(
+      nameOrId: json['nameOrId'] as String? ?? '1',
+      inputOkKey: json['inputOkKey'] as String?,
+    )
+      ..variant = json['asset_name'] as String
+      ..coordinates =
+          Coordinates.fromJson(json['coordinates'] as Map<String, dynamic>)
+      ..size = RelativeSize.fromJson(json['size'] as Map<String, dynamic>)
+      ..text = json['text'] as String?
+      ..textPos = $enumDecodeNullable(_$TextPosEnumMap, json['textPos'])
+      ..techDocId = (json['techDocId'] as num?)?.toInt()
+      ..plcAssetKey = json['plcAssetKey'] as String?;
+
+Map<String, dynamic> _$STBPDT3100ConfigToJson(STBPDT3100Config instance) =>
+    <String, dynamic>{
+      'asset_name': instance.variant,
+      'coordinates': instance.coordinates,
+      'size': instance.size,
+      'text': instance.text,
+      'textPos': _$TextPosEnumMap[instance.textPos],
+      'techDocId': instance.techDocId,
+      'plcAssetKey': instance.plcAssetKey,
+      'nameOrId': instance.nameOrId,
+      'inputOkKey': instance.inputOkKey,
+    };
