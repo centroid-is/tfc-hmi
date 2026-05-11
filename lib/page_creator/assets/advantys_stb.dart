@@ -43,6 +43,7 @@ import '../../painter/advantys_stb/io16.dart';
 import '../../painter/advantys_stb/ddi3725.dart';
 import '../../painter/advantys_stb/ddo3705.dart';
 import '../../painter/advantys_stb/nip2311.dart';
+import '../../painter/advantys_stb/pdt3100.dart';
 import '../../painter/beckhoff/io8.dart' show IOState;
 
 part 'advantys_stb.g.dart';
@@ -1020,6 +1021,227 @@ class _STBNIP2311ConfigEditorState extends State<_STBNIP2311ConfigEditor> {
           ),
           initialValue: widget.config.nameOrId,
           onChanged: (value) => widget.config.nameOrId = value,
+        ),
+      ],
+    );
+  }
+}
+
+// ===========================================================================
+// STBPDT3100Config — Schneider Advantys STB 24 VDC power distribution module.
+// ===========================================================================
+//
+// Phase 4 deliverable: a slim cream-bodied module that distributes 24 VDC
+// power to the STB I/O bus. Single optional bool key (`inputOkKey`) drives
+// the front-panel "INPUT" LED via the body painter:
+//   - stream emits true  → LED green
+//   - stream emits false → LED dim grey
+//   - stream errored / not yet emitted / key null → LED dim grey
+//
+// No detail dialog (single bool is too narrow to warrant one — the configure
+// dialog handles the inputOkKey binding directly). Tap behaviour: harmless
+// no-op (no GestureDetector wrapper).
+//
+// Locked by 04-CONTEXT.md. Requirements: PDT-01..03.
+
+/// Schneider Advantys STB PDT3100 — 24 VDC power distribution module.
+///
+/// One optional bool state key (`inputOkKey`) drives the single front-panel
+/// "INPUT" LED. When the key is null, the LED renders dim grey (consistent
+/// with the stale/disconnected treatment used by the I/O modules). When the
+/// key is configured AND the stream emits `true`, the LED renders green;
+/// any other state (false, stale, errored) renders dim grey.
+///
+/// `BaseAsset.allKeys` picks up `inputOkKey` automatically via the `Key$`
+/// regex (no override needed) and filters out empty strings.
+@JsonSerializable()
+class STBPDT3100Config extends BaseAsset {
+  @override
+  String get displayName => 'STBPDT3100 (24 VDC PDM)';
+  @override
+  String get category => 'Advantys STB';
+
+  @JsonKey(defaultValue: '1')
+  String nameOrId;
+
+  String? inputOkKey;
+
+  STBPDT3100Config({
+    this.nameOrId = '1',
+    this.inputOkKey,
+  });
+
+  STBPDT3100Config.preview()
+      : nameOrId = '1',
+        inputOkKey = null,
+        super();
+
+  factory STBPDT3100Config.fromJson(Map<String, dynamic> json) =>
+      _$STBPDT3100ConfigFromJson(json);
+
+  @override
+  Map<String, dynamic> toJson() => _$STBPDT3100ConfigToJson(this);
+
+  @override
+  Widget build(BuildContext context) {
+    return FittedBox(
+      fit: BoxFit.contain,
+      child: _STBPDT3100(config: this),
+    );
+  }
+
+  @override
+  Widget configure(BuildContext context) {
+    final media = MediaQuery.of(context).size;
+    final maxWidth = media.width * 0.9;
+    final maxHeight = media.height * 0.8;
+
+    return Center(
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxWidth: maxWidth,
+          maxHeight: maxHeight,
+          minWidth: 320,
+          minHeight: 200,
+        ),
+        child: Material(
+          borderRadius: BorderRadius.circular(24),
+          color: DialogTheme.of(context).backgroundColor ??
+              Theme.of(context).colorScheme.surface,
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: SingleChildScrollView(
+              child: _STBPDT3100ConfigEditor(config: this),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Live widget — _STBPDT3100
+//
+// ConsumerStatefulWidget so the bool stream is hoisted to `initState` (no
+// resubscribe storm on parent rebuild — matches `_STBDDI3725`/`_STBDDO3705`
+// hoisting contract per QUAL-03 / PITFALL M-03). When `inputOkKey` is null,
+// the widget renders the static dim-grey LED state without subscribing.
+// ---------------------------------------------------------------------------
+
+class _STBPDT3100 extends ConsumerStatefulWidget {
+  final STBPDT3100Config config;
+  const _STBPDT3100({required this.config});
+
+  @override
+  ConsumerState<_STBPDT3100> createState() => _STBPDT3100State();
+}
+
+class _STBPDT3100State extends ConsumerState<_STBPDT3100> {
+  Stream<DynamicValue>? _inputOkStreamCache;
+
+  @override
+  void initState() {
+    super.initState();
+    // Resolve StateMan once. If `inputOkKey` is null, no subscription is
+    // built — the widget renders the dim-grey LED forever (consistent with
+    // CONTEXT.md §Single LED State Mapping).
+    final key = widget.config.inputOkKey;
+    if (key == null || key.isEmpty) return;
+    ref.read(stateManProvider.future).then((sm) {
+      if (!mounted) return;
+      setState(() {
+        _inputOkStreamCache =
+            sm.subscribe(key).asStream().asyncExpand((s) => s);
+      });
+    });
+  }
+
+  @override
+  void dispose() {
+    // QUAL-03 lifecycle hygiene — drop the cached stream to release the
+    // closure-captured `StateMan` reference. The underlying StreamSubscription
+    // is owned + cancelled by the framework's StreamBuilder on unmount.
+    _inputOkStreamCache = null;
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_inputOkStreamCache == null) {
+      return STBPDT3100Widget(
+        nameOrId: widget.config.nameOrId,
+        inputOk: null,
+      );
+    }
+    return StreamBuilder<DynamicValue>(
+      stream: _inputOkStreamCache,
+      builder: (context, snap) {
+        final bool? inputOk;
+        if (snap.hasError || !snap.hasData || snap.data == null) {
+          inputOk = null;
+        } else {
+          // CONTEXT.md §Single LED State Mapping: only `true` lights green;
+          // false / errored / stale all collapse to null (dim grey).
+          inputOk = snap.data!.asBool == true ? true : false;
+        }
+        return STBPDT3100Widget(
+          nameOrId: widget.config.nameOrId,
+          inputOk: inputOk,
+        );
+      },
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Configure dialog body — _STBPDT3100ConfigEditor
+//
+// Surfaces: Size + Coordinates + nameOrId + Input OK Key (the single optional
+// state-key field). The `editor surface` test in advantys_stb_test.dart locks
+// the count to exactly one KeyField — accidental state-key growth fails CI.
+// ---------------------------------------------------------------------------
+
+class _STBPDT3100ConfigEditor extends StatefulWidget {
+  final STBPDT3100Config config;
+  const _STBPDT3100ConfigEditor({required this.config});
+
+  @override
+  State<_STBPDT3100ConfigEditor> createState() =>
+      _STBPDT3100ConfigEditorState();
+}
+
+class _STBPDT3100ConfigEditorState extends State<_STBPDT3100ConfigEditor> {
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizeField(
+          initialValue: widget.config.size,
+          onChanged: (size) => widget.config.size = size,
+        ),
+        const SizedBox(height: 16),
+        CoordinatesField(
+          initialValue: widget.config.coordinates,
+          onChanged: (coordinates) => widget.config.coordinates = coordinates,
+          enableAngle: false,
+        ),
+        const SizedBox(height: 16),
+        TextFormField(
+          decoration: const InputDecoration(
+            labelText: 'Name or ID',
+            border: OutlineInputBorder(),
+          ),
+          initialValue: widget.config.nameOrId,
+          onChanged: (value) => widget.config.nameOrId = value,
+        ),
+        const SizedBox(height: 16),
+        KeyField(
+          initialValue: widget.config.inputOkKey,
+          onChanged: (value) => widget.config.inputOkKey = value,
+          label: 'Input OK Key',
         ),
       ],
     );
