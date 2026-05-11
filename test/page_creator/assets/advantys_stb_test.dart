@@ -1626,11 +1626,18 @@ void main() {
         // painter's IOState[5] must transition to forcedHigh on the next frame.
         await openWithStub(tester);
 
-        // Tap the High button for channel 6. Row 5 left is channel 6 (rows
-        // pair (1,9), (2,10), ..., (6,14), (7,15), (8,16) — row 5 left = ch6).
-        // The 6th 'High' label in the dialog corresponds to channel 6.
+        // High buttons appear in widget-tree traversal order: for row r the
+        // left RowControl (channel r+1) comes before the right RowControl
+        // (channel r+9). So the sequence is:
+        //   index 0  → ch1   (row 0 left)
+        //   index 1  → ch9   (row 0 right)
+        //   index 2  → ch2   (row 1 left)
+        //   index 3  → ch10  (row 1 right)
+        //   ...
+        //   index 10 → ch6   (row 5 left)  ← target
         final highFinders = find.text('High');
-        await tester.tap(highFinders.at(5));
+        expect(highFinders, findsNWidgets(16));
+        await tester.tap(highFinders.at(10));
         await tester.pumpAndSettle();
 
         // Verify the write was recorded with [5]==2.
@@ -1642,7 +1649,7 @@ void main() {
         expect(writeWithCh6.key, 'force',
             reason:
                 'A write to forceValuesKey with [5]==2 (forcedHigh) must be '
-                'recorded after tapping the 6th High button (DDO-09).');
+                'recorded after tapping the High button for channel 6 (DDO-09).');
       },
     );
   });
