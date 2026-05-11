@@ -92,6 +92,30 @@ void main() {
       // progress.
       expect(platformOffsetTop(1.0, 200.0, 10.0, -5.0), 190.0);
     });
+
+    // ---------------------------------------------------------------------
+    // Plan 260511-fd6 — semantic-rename documentation lock.
+    //
+    // The 4th argument is no longer "tallest child height" but "the
+    // platform's vertical travel range" — derived by the widget from
+    // `config.travelRange × bboxHeight` and passed in here, internally
+    // clamped to headroom. The math is bit-identical to the 260511-dxa
+    // formula — this test exists so future readers grep-locking
+    // "travelRange" in tests find a reference to the helper's semantics.
+    // ---------------------------------------------------------------------
+    test(
+        'effective-travel semantics: 4th arg is travel range, not child height '
+        '[260511-fd6]', () {
+      // bbox=300, ph=24 → headroom=276. Travel range = 276 (full climb)
+      // at progress=1 → platformY=0.
+      expect(platformOffsetTop(1.0, 300.0, 24.0, 276.0), 0.0);
+      // At progress=0, the platform always sits at the bottom regardless of
+      // the travel range — locked invariant from Plan 260511-dxa.
+      expect(platformOffsetTop(0.0, 300.0, 24.0, 276.0), 276.0);
+      // Travel range = 150 (half) at progress=0.5 → platformY = 276 - 75
+      // = 201. (effectiveTravel clamps to 150, not to headroom.)
+      expect(platformOffsetTop(0.5, 300.0, 24.0, 150.0), 201.0);
+    });
   });
 
   group('platformProgress', () {

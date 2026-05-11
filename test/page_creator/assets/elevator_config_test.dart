@@ -120,6 +120,65 @@ void main() {
       final cfg = ElevatorConfig.fromJson(partialJson);
       expect(cfg.children, isEmpty);
     });
+
+    // -----------------------------------------------------------------
+    // Plan 260511-fd6 — travelRange field (fraction of bbox height).
+    //
+    // Default 1.0 = full headroom climb (pre-260511-dxa visual). Field is
+    // operator-explicit — replaces the brittle auto-deduce that read
+    // child heights at runtime. Locks back-compat: legacy JSON without
+    // the `travelRange` key restores to 1.0 via @JsonKey(defaultValue:).
+    // -----------------------------------------------------------------
+    test('ElevatorConfig.travelRange default is 1.0 [260511-fd6]', () {
+      expect(ElevatorConfig().travelRange, 1.0,
+          reason:
+              'Default travelRange must be 1.0 (full headroom climb — the '
+              'pre-260511-dxa visual).');
+    });
+
+    test('ElevatorConfig with travelRange=0.7 round-trips [260511-fd6]', () {
+      // Round-trip stability: toJson -> fromJson -> toJson is a fixed point
+      // and the field value survives verbatim. Mirrors the offsetY round-trip
+      // precedent at 260511-ehy.
+      final original = ElevatorConfig(travelRange: 0.7);
+      final json1 = original.toJson();
+      expect(json1['travelRange'], 0.7,
+          reason:
+              'toJson must emit travelRange:0.7 (canonical shape always '
+              'carries the field).');
+      final restored = ElevatorConfig.fromJson(json1);
+      final json2 = restored.toJson();
+      expect(json2, equals(json1),
+          reason: 'toJson(fromJson(toJson)) must be a fixed point.');
+      expect(restored.travelRange, 0.7,
+          reason: 'fromJson must restore travelRange=0.7 verbatim.');
+    });
+
+    test(
+        'legacy JSON without travelRange restores to 1.0 (back-compat) '
+        '[260511-fd6]', () {
+      // Saved pages predating Plan 260511-fd6 do NOT carry a `travelRange`
+      // key. The `@JsonKey(defaultValue: 1.0)` annotation must fill the gap
+      // so those pages keep loading without errors and behave as
+      // travelRange=1.0 (full headroom climb).
+      final legacyJson = <String, dynamic>{
+        'asset_name': 'ElevatorConfig',
+        'positionKey': '/k',
+        'tweenDurationMs': 250,
+        'coordinates': {'x': 0.0, 'y': 0.0},
+        'size': {'width': 0.1, 'height': 0.4},
+        // no 'travelRange' key — back-compat surface.
+      };
+      final cfg = ElevatorConfig.fromJson(legacyJson);
+      expect(cfg.travelRange, 1.0,
+          reason: 'Legacy JSON without travelRange must default to 1.0.');
+      // And a subsequent toJson must emit the canonical key.
+      final reJson = cfg.toJson();
+      expect(reJson['travelRange'], 1.0,
+          reason:
+              'toJson must emit travelRange:1.0 after a legacy fromJson — '
+              'the canonical schema now always carries the field.');
+    });
   });
 
   group('Polymorphic child round-trip', () {

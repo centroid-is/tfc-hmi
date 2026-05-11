@@ -656,64 +656,42 @@ void main() {
               '(progress 0 → 1) — ELEV-10.');
 
       // Numerical: child's bottom edge sits on platform's top edge.
-      // With the travel range now equal to the tallest child's height
-      // (Plan 260511-dxa / ELEV-10), `platformY - childH >= 0` is
-      // structural — no clamp needed.
+      // As of Plan 260511-fd6, the travel range is no longer auto-deduced
+      // from child heights — it's an operator-explicit fraction of bbox
+      // height stored on ElevatorConfig.travelRange (default 1.0). With
+      // the default 1.0, effectiveTravel = min(1.0 * bboxH, headroom) =
+      // headroom = 276 (full headroom climb — the pre-260511-dxa visual).
       //
       // bbox is 200x300 (from `wrap`). platformH = 300 * 0.08 = 24.
-      // Fixture has a single 40x40 child → maxChildHeight = 40.
+      // Fixture has a single 40x40 child, but the child's height is
+      // IRRELEVANT to the platform's travel range — the operator picks it
+      // explicitly via config.travelRange.
       //   progress=0 → platformY = 276,         top = 276 - 40 = 236.
-      //   progress=1 → platformY = 276 - 40 = 236, top = 236 - 40 = 196.
+      //   progress=1 → platformY = 276 - 276 = 0, top = 0 - 40 = -40
+      //                (child overhangs above bbox — Stack(Clip.none)
+      //                tolerates overhang; locked operator tradeoff).
       const bboxH = 300.0;
       const platformH = bboxH * kPlatformHeightFraction;
       const childH = 40.0;
-      const maxChildHeight = childH; // single child
+      // effectiveTravel = clamp(travelRange=1.0 * bboxH, 0, headroom)
+      //                 = clamp(300, 0, 276) = 276 (default config).
+      const effectiveTravel = bboxH - platformH; // 276
       final expectedTopAt0 =
-          platformOffsetTop(0.0, bboxH, platformH, maxChildHeight) - childH;
+          platformOffsetTop(0.0, bboxH, platformH, effectiveTravel) - childH;
       final expectedTopAt1 =
-          platformOffsetTop(1.0, bboxH, platformH, maxChildHeight) - childH;
+          platformOffsetTop(1.0, bboxH, platformH, effectiveTravel) - childH;
       expect(topAt0, closeTo(expectedTopAt0, 1.0));
       expect(topAt1, closeTo(expectedTopAt1, 1.0));
     });
 
-    testWidgets(
-        'children Positioned.top clamps to >= 0 at progress=1.0 '
-        '(child remains inside bbox)',
-        (tester) async {
-      final config = ElevatorConfig(
-        positionKey: '',
-        children: [
-          ElevatorChildEntry(
-              id: 'fixed-size',
-              offsetX: 0.5,
-              child: _FixedSizeChildConfig(width: 40, height: 40)),
-        ],
-      );
-      await tester.pumpWidget(wrap(Elevator(config: config)));
-      await tester.pump(Duration.zero);
-      final state =
-          tester.state<State<Elevator>>(find.byType(Elevator)) as dynamic;
-      final progress = state.debugProgress as ValueNotifier<double>;
-
-      progress.value = 1.0;
-      await tester.pumpAndSettle();
-
-      final positionedFinder = find.ancestor(
-        of: find.byType(_FixedSizeChild),
-        matching: find.byType(Positioned),
-      );
-      expect(positionedFinder, findsOneWidget);
-      final top = (tester.widget(positionedFinder) as Positioned).top!;
-      expect(top, greaterThanOrEqualTo(0.0),
-          reason:
-              'Child must remain visible inside the elevator bbox at '
-              'progress=1.0 — top must remain >= 0. With the travel range '
-              'now equal to the tallest child (Plan 260511-dxa), this '
-              'invariant is structural: '
-              'top = platformY - childH = (bboxH - platformH) - progress * '
-              'min(maxChildHeight, headroom) - childH, which is >= 0 when '
-              'childH <= maxChildHeight.');
-    });
+    // NOTE [260511-fd6]: the 'children Positioned.top clamps to >= 0 at
+    // progress=1.0' test was DELETED here. Its invariant (top >= 0 at
+    // default config) was a side-effect of the now-removed auto-deduce
+    // (Plan 260511-dxa: travel = tallest-child height). Plan 260511-fd6
+    // makes travelRange operator-explicit (default 1.0 = full headroom),
+    // which means child overhang IS possible at default — the operator's
+    // call. The new "TravelRange (260511-fd6)" group below locks the new
+    // geometry instead.
 
     testWidgets('Stack uses Clip.none so children may overhang bbox',
         (tester) async {
@@ -885,6 +863,174 @@ void main() {
       final baseline = platformY - childH;
       expect(top, greaterThan(baseline),
           reason: 'Negative offsetY must lower the child (larger top).');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // TravelRange (260511-fd6)
+  //
+  // Locks the operator-explicit travel-range contract. The platform's vertical
+  // travel range is no longer auto-deduced from child heights — it's a
+  // fraction [0..1] of bbox height stored on ElevatorConfig.travelRange.
+  // Default 1.0 = full headroom climb (the pre-260511-dxa visual).
+  //
+  // Numerics: bbox=200×300, platformH = 300 × 0.08 = 24, headroom = 276.
+  // Child is a 40×40 _FixedSizeChild. At all four travelRange values below
+  // the child has bottom-on-platform anchor (offsetY=0 default).
+  // ---------------------------------------------------------------------------
+  group('TravelRange (260511-fd6)', () {
+    const bboxH = 300.0;
+    const platformH = bboxH * kPlatformHeightFraction; // 24
+    const childH = 40.0;
+    const headroom = bboxH - platformH; // 276
+
+    testWidgets(
+        'travelRange=1.0 default → progress=1 puts platform top at 0 '
+        '(full headroom climb)', (tester) async {
+      // Default ElevatorConfig — travelRange defaults to 1.0. Effective
+      // travel = clamp(1.0 * 300, 0, 276) = 276. At progress=1 the platform
+      // top is at y=0, so the child's top is at -childH (overhang). Matches
+      // the pre-260511-dxa visual where the platform climbs the full bbox.
+      final config = ElevatorConfig(
+        positionKey: '',
+        children: [
+          ElevatorChildEntry(
+              id: 'tr-default-1',
+              offsetX: 0.5,
+              child: _FixedSizeChildConfig(width: 40, height: 40)),
+        ],
+      );
+      await tester.pumpWidget(wrap(Elevator(config: config)));
+      await tester.pump(Duration.zero);
+      final state =
+          tester.state<State<Elevator>>(find.byType(Elevator)) as dynamic;
+      final progress = state.debugProgress as ValueNotifier<double>;
+      progress.value = 1.0;
+      await tester.pumpAndSettle();
+
+      final positioned = find.ancestor(
+        of: find.byType(_FixedSizeChild),
+        matching: find.byType(Positioned),
+      );
+      expect(positioned, findsOneWidget);
+      final top = (tester.widget(positioned) as Positioned).top!;
+      final expectedTop =
+          platformOffsetTop(1.0, bboxH, platformH, headroom) - childH;
+      expect(top, closeTo(expectedTop, 1.0),
+          reason:
+              'travelRange=1.0 default must produce full headroom climb '
+              '— platform top = 0 at progress=1, so child top = -childH '
+              '(overhang permitted).');
+      expect(top, closeTo(-40.0, 1.0),
+          reason:
+              'Numerical lock: progress=1 + travelRange=1.0 + 40px child → '
+              'child top = 0 - 40 = -40.');
+    });
+
+    testWidgets(
+        'travelRange=0.5 → progress=1 puts platform halfway up',
+        (tester) async {
+      // Effective travel = clamp(0.5 * 300, 0, 276) = 150.
+      // platformY = 276 - 150 = 126. child top = 126 - 40 = 86.
+      final config = ElevatorConfig(
+        positionKey: '',
+        travelRange: 0.5,
+        children: [
+          ElevatorChildEntry(
+              id: 'tr-half',
+              offsetX: 0.5,
+              child: _FixedSizeChildConfig(width: 40, height: 40)),
+        ],
+      );
+      await tester.pumpWidget(wrap(Elevator(config: config)));
+      await tester.pump(Duration.zero);
+      final state =
+          tester.state<State<Elevator>>(find.byType(Elevator)) as dynamic;
+      final progress = state.debugProgress as ValueNotifier<double>;
+      progress.value = 1.0;
+      await tester.pumpAndSettle();
+
+      final positioned = find.ancestor(
+        of: find.byType(_FixedSizeChild),
+        matching: find.byType(Positioned),
+      );
+      expect(positioned, findsOneWidget);
+      final top = (tester.widget(positioned) as Positioned).top!;
+      expect(top, closeTo(86.0, 1.0),
+          reason:
+              'travelRange=0.5: effectiveTravel=150 → platformY=126 → '
+              'child top=86 (no overhang at default child height).');
+    });
+
+    testWidgets(
+        'travelRange=0.0 → platform pinned at bottom for all progress',
+        (tester) async {
+      // Effective travel = 0. platformY = 276 regardless of progress.
+      // child top = 276 - 40 = 236.
+      final config = ElevatorConfig(
+        positionKey: '',
+        travelRange: 0.0,
+        children: [
+          ElevatorChildEntry(
+              id: 'tr-zero',
+              offsetX: 0.5,
+              child: _FixedSizeChildConfig(width: 40, height: 40)),
+        ],
+      );
+      await tester.pumpWidget(wrap(Elevator(config: config)));
+      await tester.pump(Duration.zero);
+      final state =
+          tester.state<State<Elevator>>(find.byType(Elevator)) as dynamic;
+      final progress = state.debugProgress as ValueNotifier<double>;
+      progress.value = 1.0;
+      await tester.pumpAndSettle();
+
+      final positioned = find.ancestor(
+        of: find.byType(_FixedSizeChild),
+        matching: find.byType(Positioned),
+      );
+      expect(positioned, findsOneWidget);
+      final top = (tester.widget(positioned) as Positioned).top!;
+      expect(top, closeTo(236.0, 1.0),
+          reason:
+              'travelRange=0.0: platform pinned at bottom (276) regardless of '
+              'progress → child top = 276 - 40 = 236.');
+    });
+
+    testWidgets(
+        'clamp: travelRange=1.5 behaves like 1.0 (defensive)',
+        (tester) async {
+      // Defensive clamp: travelRange > 1.0 must not push the platform past
+      // the bbox top. clamp(1.5, 0, 1) * 300 = 300, then clamp to headroom
+      // = 276 — same result as default travelRange=1.0.
+      final config = ElevatorConfig(
+        positionKey: '',
+        travelRange: 1.5,
+        children: [
+          ElevatorChildEntry(
+              id: 'tr-oor',
+              offsetX: 0.5,
+              child: _FixedSizeChildConfig(width: 40, height: 40)),
+        ],
+      );
+      await tester.pumpWidget(wrap(Elevator(config: config)));
+      await tester.pump(Duration.zero);
+      final state =
+          tester.state<State<Elevator>>(find.byType(Elevator)) as dynamic;
+      final progress = state.debugProgress as ValueNotifier<double>;
+      progress.value = 1.0;
+      await tester.pumpAndSettle();
+
+      final positioned = find.ancestor(
+        of: find.byType(_FixedSizeChild),
+        matching: find.byType(Positioned),
+      );
+      expect(positioned, findsOneWidget);
+      final top = (tester.widget(positioned) as Positioned).top!;
+      expect(top, closeTo(-40.0, 1.0),
+          reason:
+              'travelRange=1.5 must be defensively clamped to 1.0 — same '
+              'top=-40 as the default fixture.');
     });
   });
 
@@ -1083,6 +1229,64 @@ void main() {
           reason: 'Drag on the offsetY slider must mutate entry.offsetY.');
       expect(config.children[0].offsetY, greaterThan(0.0),
           reason: 'Rightward drag should increase offsetY (raise the child).');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Travel range editor slider (260511-fd6)
+  //
+  // Locks the editor surface for the new operator-explicit travel-range
+  // control: a Slider [0..1, divisions=100] with a percentage label, sitting
+  // in the body of `_ElevatorConfigEditor`. Mutates config.travelRange in
+  // real time via setState. Mirrors the offsetY/offsetX slider precedents.
+  // ---------------------------------------------------------------------------
+  group('Travel range editor slider (260511-fd6)', () {
+    testWidgets(
+        'Travel range slider mutates config.travelRange in real time',
+        (tester) async {
+      // Construct a config with a non-default travelRange so the slider's
+      // initial value is unambiguous. Locate the travel-range slider by its
+      // min=0, max=1, divisions=100 signature (the per-child offsetX slider
+      // shares min/max/divisions but lives inside a Card and there are no
+      // children here — so the only matching Slider is the travel-range one).
+      final config = ElevatorConfig(travelRange: 0.25);
+      await openConfigEditor(tester, config);
+
+      final sliderFinder = find.byWidgetPredicate(
+        (w) =>
+            w is Slider &&
+            w.min == 0.0 &&
+            w.max == 1.0 &&
+            (w.divisions ?? 0) == 100,
+      );
+      expect(sliderFinder, findsOneWidget,
+          reason:
+              'Editor must expose exactly one Slider with '
+              '(min=0, max=1, divisions=100) for travelRange (260511-fd6).');
+
+      // Drive the slider's onChanged directly (mirrors the precedent in
+      // sensor/conveyor editor tests — avoids drag-coordinate fragility on
+      // narrow viewports).
+      final slider = tester.widget<Slider>(sliderFinder);
+      slider.onChanged!(0.42);
+      await tester.pump();
+      expect(config.travelRange, closeTo(0.42, 1e-9),
+          reason: 'Slider.onChanged must mutate config.travelRange in real time.');
+    });
+
+    testWidgets(
+        'Travel range label reflects the slider value as a percentage',
+        (tester) async {
+      // After setting travelRange=0.42, the label above the slider must
+      // read "Travel range: 42% of bbox height" exactly — locks the
+      // formatter for grep stability.
+      final config = ElevatorConfig(travelRange: 0.42);
+      await openConfigEditor(tester, config);
+
+      expect(find.text('Travel range: 42% of bbox height'), findsOneWidget,
+          reason:
+              'Editor must label the slider with the travelRange value as a '
+              'percentage of bbox height (260511-fd6).');
     });
   });
 
