@@ -1,7 +1,9 @@
 import 'dart:convert';
 
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tfc/page_creator/assets/advantys_stb.dart';
+import 'package:tfc/painter/advantys_stb/ddi3725.dart';
 import 'package:tfc/painter/advantys_stb/io16.dart';
 import 'package:tfc/painter/beckhoff/io8.dart' show IOState;
 
@@ -158,4 +160,91 @@ void main() {
       expect(parsed.rawStateKey, isNull);
     });
   });
+
+  group('STBDDI3725BodyPainter shouldRepaint contract', () {
+    STBDDI3725BodyPainter makePainter({
+      List<IOState>? ledStates,
+      bool isStale = false,
+      bool isDisconnected = false,
+      int animationValue = 0,
+    }) {
+      return STBDDI3725BodyPainter(
+        ledStates: ledStates ?? List<IOState>.filled(16, IOState.low),
+        isStale: isStale,
+        isDisconnected: isDisconnected,
+        animation: AlwaysStoppedAnimation<int>(animationValue),
+      );
+    }
+
+    test('same inputs → shouldRepaint=false', () {
+      final a = makePainter();
+      final b = makePainter();
+      expect(a.shouldRepaint(b), isFalse);
+    });
+
+    test('different ledStates → shouldRepaint=true', () {
+      final a = makePainter();
+      final b = makePainter(
+          ledStates: List<IOState>.filled(16, IOState.high));
+      expect(a.shouldRepaint(b), isTrue);
+    });
+
+    test('different isStale → shouldRepaint=true', () {
+      final a = makePainter(isStale: false);
+      final b = makePainter(isStale: true);
+      expect(a.shouldRepaint(b), isTrue);
+    });
+
+    test('different isDisconnected → shouldRepaint=true', () {
+      final a = makePainter(isDisconnected: false);
+      final b = makePainter(isDisconnected: true);
+      expect(a.shouldRepaint(b), isTrue);
+    });
+
+    test('different animation.value → shouldRepaint=true', () {
+      final a = makePainter(animationValue: 0);
+      final b = makePainter(animationValue: 128);
+      expect(a.shouldRepaint(b), isTrue);
+    });
+
+    test('cross-runtimeType → shouldRepaint=true (Pitfall 3 guard)', () {
+      final p = makePainter();
+      final other = _DummyDDI3725Painter();
+      expect(p.shouldRepaint(other), isTrue);
+    });
+  });
+
+  group('STBDDI3725Widget — mount sanity', () {
+    testWidgets('pumps cleanly with 16 low LEDs (no exceptions)',
+        (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Center(
+              child: SizedBox(
+                width: 200,
+                height: 300,
+                child: STBDDI3725Widget(
+                  ledStates: List<IOState>.filled(16, IOState.low),
+                  isStale: false,
+                  isDisconnected: false,
+                  animation: const AlwaysStoppedAnimation<int>(0),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump(Duration.zero);
+      expect(find.byType(STBDDI3725Widget), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+  });
+}
+
+class _DummyDDI3725Painter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {}
+  @override
+  bool shouldRepaint(covariant CustomPainter old) => true;
 }
