@@ -2493,6 +2493,81 @@ void main() {
   });
 
   // ---------------------------------------------------------------------------
+  // Goldens — 2 states (input_ok / fault) × 2 themes (light / dark).
+  //
+  // `fault` is the union semantic class for false / stale / disconnected /
+  // errored — all collapse to dim grey per CONTEXT.md §Single LED State
+  // Mapping. We render `fault` via inputOk=null (no PLC binding) which is
+  // pixel-equivalent to inputOk=false on the painter's color branch. macOS-
+  // only per project golden convention (font rendering parity).
+  // ---------------------------------------------------------------------------
+  group('STBPDT3100 goldens',
+      skip: !Platform.isMacOS ? 'Golden tests only run on macOS' : null, () {
+    const goldenKey = Key('stb_pdt3100_golden');
+
+    Future<void> pumpPDT3100(
+      WidgetTester tester, {
+      required Brightness theme,
+      required bool? inputOk,
+    }) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          theme:
+              theme == Brightness.dark ? ThemeData.dark() : ThemeData.light(),
+          home: Scaffold(
+            body: Center(
+              child: RepaintBoundary(
+                key: goldenKey,
+                child: SizedBox(
+                  width: 200,
+                  height: 280,
+                  child: STBPDT3100Widget(
+                    nameOrId: 'PDT-01',
+                    inputOk: inputOk,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump(Duration.zero);
+    }
+
+    testWidgets('pdt3100_input_ok_light.png', (tester) async {
+      await pumpPDT3100(tester, theme: Brightness.light, inputOk: true);
+      await expectLater(
+        find.byKey(goldenKey),
+        matchesGoldenFile('goldens/advantys_stb/pdt3100_input_ok_light.png'),
+      );
+    });
+
+    testWidgets('pdt3100_input_ok_dark.png', (tester) async {
+      await pumpPDT3100(tester, theme: Brightness.dark, inputOk: true);
+      await expectLater(
+        find.byKey(goldenKey),
+        matchesGoldenFile('goldens/advantys_stb/pdt3100_input_ok_dark.png'),
+      );
+    });
+
+    testWidgets('pdt3100_fault_light.png', (tester) async {
+      await pumpPDT3100(tester, theme: Brightness.light, inputOk: null);
+      await expectLater(
+        find.byKey(goldenKey),
+        matchesGoldenFile('goldens/advantys_stb/pdt3100_fault_light.png'),
+      );
+    });
+
+    testWidgets('pdt3100_fault_dark.png', (tester) async {
+      await pumpPDT3100(tester, theme: Brightness.dark, inputOk: null);
+      await expectLater(
+        find.byKey(goldenKey),
+        matchesGoldenFile('goldens/advantys_stb/pdt3100_fault_dark.png'),
+      );
+    });
+  });
+
+  // ---------------------------------------------------------------------------
   // Registry resolution + JSON back-compat (PDT-01, PDT-03).
   // ---------------------------------------------------------------------------
   group('STBPDT3100Config registry resolution', () {
