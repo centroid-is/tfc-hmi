@@ -32,7 +32,11 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. Tapping the module body opens a detail dialog with 8 rows × 2-column `RowIOView` (one row per channel-pair) showing channel state + force segmented-button + ON/OFF filter ms inputs + description text field; closing/reopening the dialog 10× leaks no listeners (verified via leak test on `stateMan.subscriberCount`).
   4. Golden tests pass for `all_off`, `all_on`, `alternating_0xAAAA`, `forced_mix`, `disconnected` × {light, dark} themes against the DXF body proportions and photo terminal-block geometry (2×18-pin per `DDI3725_front_clean.png`, NOT the inaccurate DXF). The combined StateMan stream is hoisted to `initState` (cached in `late final`) and disposed in `dispose` — `flutter analyze` reports zero issues across new files.
   5. JSON round-trips every field via codegen with `@JsonKey(defaultValue: ...)` or nullable, and a legacy-JSON test (hand-written snippet omitting all v2.0 fields) loads cleanly into the default config — backward compatibility verified on a v1.0-era saved-page round-trip.
-**Plans**: TBD
+**Plans**: 4 plans
+- [ ] 01-01-PLAN.md — IO16LedBlockPainter + kSTBChannelBitOrder + bit-mapping unit test (TDD foundation)
+- [ ] 01-02-PLAN.md — STBDDI3725Config + body painter + live ConsumerWidget + 10-PNG golden matrix
+- [ ] 01-03-PLAN.md — Tap-to-open detail dialog (8 rows × 2 RowIOView with force/filter/description)
+- [ ] 01-04-PLAN.md — AssetRegistry registration + JSON round-trip + back-compat + mount/dialog leak tests
 **UI hint**: yes
 **Research flag**: YES — Plan 01 must confirm (a) Modbus bit-ordering convention with the backend team (Beckhoff's LSB-first is NOT portable to STB), and (b) Schneider force-encoding semantics (Beckhoff's `1=forcedLow / 2=forcedHigh` single-byte may differ from STB's parallel bitmask convention) before goldens lock.
 
@@ -93,7 +97,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. STBDDI3725 (16-Ch DI) | 0/TBD | Not started | - |
+| 1. STBDDI3725 (16-Ch DI) | 0/4 | Not started | - |
 | 2. STBDDO3705 (16-Ch DO) | 0/TBD | Not started | - |
 | 3. STBNIP2311 (Ethernet Head) | 0/TBD | Not started | - |
 | 4. STBPDT3100 (Power) | 0/TBD | Not started | - |
