@@ -177,6 +177,21 @@ class _STBDDI3725State extends ConsumerState<_STBDDI3725> {
   }
 
   @override
+  void dispose() {
+    // DDI-10 / QUAL-03 lifecycle hygiene. The body stream uses
+    // `StreamBuilder` exclusively, so the `StreamSubscription` is
+    // owned + cancelled by the framework on unmount. We still null out
+    // `_combinedStreamCache` defensively to release the closure-captured
+    // reference to `StateMan` (prevents the cached cold stream from
+    // keeping `StateMan` reachable through GC roots if the page is
+    // long-lived but the widget cycles in/out). The `_stateMan` field
+    // is similarly cleared to drop the strong ref.
+    _combinedStreamCache = null;
+    _stateMan = null;
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     if (_combinedStreamCache == null) {
       return _buildShell(

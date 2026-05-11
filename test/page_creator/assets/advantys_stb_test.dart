@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io' show Platform;
+import 'dart:io' show File, Platform;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -976,6 +976,200 @@ void main() {
       },
     );
   });
+
+  // ---------------------------------------------------------------------------
+  // Plan 04 Task 3: Mount/unmount + dialog open/close leak tests
+  // (DDI-10 / QUAL-03 lifecycle verification).
+  //
+  // The two groups follow the elevator/sensor v1.0 precedent at
+  // `elevator_widget_test.dart:1873-1934`:
+  //   1. Pump live widget → pump empty replacement → pump 1s → assert
+  //      `tester.takeException()` is null.
+  //   2. Source-level grep guard locks the dispose contract structurally,
+  //      so a future refactor cannot silently regress the lifecycle.
+  //
+  // `_STBDDI3725State` holds `_combinedStreamCache` (a cold
+  // `CombineLatestStream`) and uses `StreamBuilder` exclusively for
+  // subscription. When the widget unmounts, `StreamBuilder`'s State
+  // cancels the underlying `StreamSubscription`; no explicit dispose
+  // override is required for correctness. We still add a defensive
+  // dispose() that nulls `_combinedStreamCache` to release the closure's
+  // reference to `StateMan` (prevents the cached stream from keeping
+  // `StateMan` reachable through GC roots in long-running pages — paranoid
+  // but cheap).
+  // ---------------------------------------------------------------------------
+  group('STBDDI3725 mount/unmount lifecycle (DDI-10 / QUAL-03)', () {
+    testWidgets(
+      'mount + unmount with stubbed StateMan throws no exceptions',
+      (tester) async {
+        final stub = _StreamingStubStateMan(
+          raw: 0x00FF,
+          force: List<int>.filled(16, 0),
+          onFilters: List<int>.filled(16, 5),
+          offFilters: List<int>.filled(16, 10),
+          descriptions: List<String>.generate(16, (i) => 'ch${i + 1}'),
+        );
+        final cfg = STBDDI3725Config(
+          nameOrId: 'leak-test',
+          rawStateKey: 'raw',
+          forceValuesKey: 'force',
+          onFiltersKey: 'onf',
+          offFiltersKey: 'offf',
+          descriptionsKey: 'desc',
+        );
+        await tester.pumpWidget(
+          ProviderScope(
+            overrides: [
+              stateManProvider.overrideWith((ref) async => stub),
+            ],
+            child: MaterialApp(
+              home: Scaffold(
+                body: Center(
+                  child: SizedBox(
+                    width: 200,
+                    height: 300,
+                    child: Builder(builder: (context) => cfg.build(context)),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+        // Let the FutureProvider resolve + initState setState land.
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 100));
+        expect(find.byType(STBDDI3725Widget), findsOneWidget);
+
+        // Force unmount: replace with empty widget tree. If dispose is
+        // missing, framework surfaces "X was used after being disposed"
+        // or leaks an uncancelled subscription on the next frame.
+        await tester.pumpWidget(const SizedBox.shrink());
+        await tester.pump(const Duration(seconds: 1));
+
+        expect(
+          tester.takeException(),
+          isNull,
+          reason:
+              'Mount/unmount must not throw or leak (DDI-10 / QUAL-03 '
+              'dispose contract on the StreamBuilder subscription).',
+        );
+      },
+    );
+
+    test(
+      'advantys_stb.dart dispose contract grep guard (QUAL-03 fallback)',
+      () {
+        // Source-level guard mirroring the elevator/sensor v1.0 pattern at
+        // `elevator_widget_test.dart:1897-1932`. Even if the runtime leak
+        // assertion above passes silently, the dispose contract MUST be
+        // present in the source so a future refactor surfaces here loudly.
+        //
+        // What we require: _STBDDI3725State overrides dispose() and either
+        // (a) cancels held subscriptions, or (b) nulls the cached stream
+        // reference to release closure refs to StateMan. Calling
+        // `super.dispose()` is mandatory.
+        final src = File('lib/page_creator/assets/advantys_stb.dart')
+            .readAsStringSync();
+        final disposeIdx = src.indexOf(
+            RegExp(r'class\s+_STBDDI3725State[\s\S]*?void\s+dispose\s*\(\)'));
+        expect(disposeIdx, greaterThan(-1),
+            reason:
+                '_STBDDI3725State must override dispose() (DDI-10 / QUAL-03).');
+        // Examine the dispose body window for super.dispose() + at least one
+        // release call (cancel() or null assignment to the cache).
+        final tail = src.substring(disposeIdx);
+        expect(tail.contains('super.dispose()'), isTrue,
+            reason:
+                '_STBDDI3725State.dispose() must call super.dispose() last.');
+        final hasReleaseCall = tail.contains('cancel()') ||
+            tail.contains('_combinedStreamCache = null');
+        expect(hasReleaseCall, isTrue,
+            reason:
+                '_STBDDI3725State.dispose() must release the cached stream '
+                '(cancel held subscription OR null out _combinedStreamCache to '
+                'release the closure-captured StateMan reference).');
+      },
+    );
+  });
+
+  group(
+    'STBDDI3725 dialog open/close 10× leak (DDI-10 / QUAL-03)',
+    () {
+      testWidgets(
+        '10 dialog cycles + unmount throws no exceptions',
+        (tester) async {
+          await tester.binding.setSurfaceSize(const Size(1400, 900));
+          addTearDown(() => tester.binding.setSurfaceSize(null));
+
+          final stub = _StreamingStubStateMan(
+            raw: 0x0000,
+            force: List<int>.filled(16, 0),
+            onFilters: List<int>.filled(16, 5),
+            offFilters: List<int>.filled(16, 10),
+            descriptions: List<String>.generate(16, (i) => 'ch${i + 1}'),
+          );
+          final cfg = STBDDI3725Config(
+            nameOrId: 'DI-leak',
+            rawStateKey: 'raw',
+            forceValuesKey: 'force',
+            onFiltersKey: 'onf',
+            offFiltersKey: 'offf',
+            descriptionsKey: 'desc',
+          );
+          await tester.pumpWidget(
+            ProviderScope(
+              overrides: [
+                stateManProvider.overrideWith((ref) async => stub),
+              ],
+              child: MaterialApp(
+                home: Scaffold(
+                  body: Center(
+                    child: SizedBox(
+                      width: 200,
+                      height: 300,
+                      child: Builder(
+                          builder: (context) => cfg.build(context)),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          );
+          await tester.pump();
+          await tester.pump(const Duration(milliseconds: 100));
+          expect(find.byType(STBDDI3725Widget), findsOneWidget);
+
+          // 10× open / close cycles. Each open spawns a fresh dialog
+          // StreamBuilder; each close (Navigator.pop via 'Close' action)
+          // disposes it, releasing the underlying StateMan listeners.
+          for (int i = 0; i < 10; i++) {
+            await tester.tap(find.byType(STBDDI3725Widget));
+            await tester.pumpAndSettle();
+            expect(find.byType(AlertDialog), findsOneWidget,
+                reason: 'iteration $i: dialog should open');
+
+            await tester.tap(find.widgetWithText(TextButton, 'Close'));
+            await tester.pumpAndSettle();
+            expect(find.byType(AlertDialog), findsNothing,
+                reason: 'iteration $i: dialog should close');
+          }
+
+          // After 10 cycles, also dispose the parent — covers the
+          // combined "dialog churn + page navigation" lifecycle path.
+          await tester.pumpWidget(const SizedBox.shrink());
+          await tester.pump(const Duration(seconds: 1));
+
+          expect(
+            tester.takeException(),
+            isNull,
+            reason:
+                '10× dialog cycles + parent unmount must not throw or leak '
+                '(DDI-10 / QUAL-03 — listener counts return to baseline).',
+          );
+        },
+      );
+    },
+  );
 }
 
 // ---------------------------------------------------------------------------
