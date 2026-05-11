@@ -9,6 +9,7 @@ import 'package:open62541/open62541.dart' show DynamicValue;
 import 'package:tfc/page_creator/assets/advantys_stb.dart';
 import 'package:tfc/page_creator/assets/beckhoff.dart' show RowIOView, FilterEdit;
 import 'package:tfc/page_creator/assets/common.dart' show KeyField;
+import 'package:tfc/page_creator/assets/registry.dart';
 import 'package:tfc/painter/advantys_stb/ddi3725.dart';
 import 'package:tfc/painter/advantys_stb/io16.dart';
 import 'package:tfc/painter/beckhoff/io8.dart' show IOState;
@@ -754,6 +755,71 @@ void main() {
         }
       },
     );
+  });
+
+  // ---------------------------------------------------------------------------
+  // Plan 04 Task 1: AssetRegistry resolution.
+  //
+  // Two factory maps in `lib/page_creator/assets/registry.dart`:
+  //   - `_fromJsonFactories`: drives `AssetRegistry.parse(saveJson)` —
+  //     missing entry = legacy JSON crashes on load.
+  //   - `defaultFactories`: drives the page-editor palette via
+  //     `AssetRegistry.createDefaultAssetByName(name)` — missing entry =
+  //     palette doesn't list the asset.
+  //
+  // Both maps key on `Type` and the resolution code compares
+  // `factory.key.toString()` against the JSON `asset_name` (i.e. the Dart
+  // class name string). The dual-map convention is the PITFALL §9.2 lock.
+  // ---------------------------------------------------------------------------
+  group('STBDDI3725Config registry resolution', () {
+    test('createDefaultAssetByName returns a typed STBDDI3725Config', () {
+      final asset =
+          AssetRegistry.createDefaultAssetByName('STBDDI3725Config');
+      expect(asset, isNotNull,
+          reason:
+              'defaultFactories must register STBDDI3725Config (palette wiring).');
+      expect(asset, isA<STBDDI3725Config>());
+      final cfg = asset! as STBDDI3725Config;
+      expect(cfg.nameOrId, '1');
+      expect(cfg.rawStateKey, isNull);
+    });
+
+    test('AssetRegistry.parse round-trips a STBDDI3725Config from saved JSON',
+        () {
+      // Real production save flow round-trips through jsonEncode/jsonDecode
+      // (see `lib/page_creator/page.dart`), which invokes nested
+      // `Coordinates.toJson` / `RelativeSize.toJson` along the way. Going
+      // through `Map<String, dynamic>` directly leaves those nested fields
+      // as Dart objects — same shape as the existing `fromJson(toJson())`
+      // test at line 132 (matches Beckhoff EL1008 codegen).
+      final cfg = STBDDI3725Config(
+        nameOrId: 'DI-99',
+        rawStateKey: 'plc/raw',
+      );
+      final saveJson = jsonDecode(jsonEncode(<String, dynamic>{
+        'assets': <Map<String, dynamic>>[cfg.toJson()],
+      })) as Map<String, dynamic>;
+      final parsed = AssetRegistry.parse(saveJson);
+      expect(parsed, hasLength(1),
+          reason:
+              '_fromJsonFactories must register STBDDI3725Config (JSON load wiring).');
+      expect(parsed[0], isA<STBDDI3725Config>());
+      final restored = parsed[0] as STBDDI3725Config;
+      expect(restored.nameOrId, 'DI-99');
+      expect(restored.rawStateKey, 'plc/raw');
+    });
+
+    test('defaultFactories Map contains STBDDI3725Config type key', () {
+      expect(
+        AssetRegistry.defaultFactories.keys.any(
+          (t) => t.toString() == 'STBDDI3725Config',
+        ),
+        isTrue,
+        reason:
+            'STBDDI3725Config must be enumerable through defaultFactories '
+            'for the palette to list it.',
+      );
+    });
   });
 }
 

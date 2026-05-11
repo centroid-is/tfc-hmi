@@ -14,6 +14,7 @@ import 'analog_box.dart';
 import 'option_variable.dart';
 import 'text.dart';
 import 'beckhoff.dart';
+import 'advantys_stb.dart';
 import 'schneider.dart';
 import 'icon.dart';
 import 'table.dart';
@@ -62,6 +63,7 @@ class AssetRegistry {
     BeckhoffEL9187Config: BeckhoffEL9187Config.fromJson,
     BeckhoffEK1100Config: BeckhoffEK1100Config.fromJson,
     BeckhoffEL3054Config: BeckhoffEL3054Config.fromJson,
+    STBDDI3725Config: STBDDI3725Config.fromJson,
     SchneiderATV320Config: SchneiderATV320Config.fromJson,
     IconConfig: IconConfig.fromJson,
     TableAssetConfig: TableAssetConfig.fromJson,
@@ -103,6 +105,7 @@ class AssetRegistry {
     BeckhoffEL9187Config: BeckhoffEL9187Config.preview,
     BeckhoffEK1100Config: BeckhoffEK1100Config.preview,
     BeckhoffEL3054Config: BeckhoffEL3054Config.preview,
+    STBDDI3725Config: STBDDI3725Config.preview,
     SchneiderATV320Config: SchneiderATV320Config.preview,
     IconConfig: IconConfig.preview,
     DrawnBoxConfig: DrawnBoxConfig.preview,
