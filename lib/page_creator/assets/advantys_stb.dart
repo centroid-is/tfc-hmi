@@ -42,6 +42,7 @@ import '../../providers/state_man.dart';
 import '../../painter/advantys_stb/io16.dart';
 import '../../painter/advantys_stb/ddi3725.dart';
 import '../../painter/advantys_stb/ddo3705.dart';
+import '../../painter/advantys_stb/nip2311.dart';
 import '../../painter/beckhoff/io8.dart' show IOState;
 
 part 'advantys_stb.g.dart';
@@ -870,4 +871,157 @@ void _showDDO3705DetailDialog(
       );
     },
   );
+}
+
+// ===========================================================================
+// STBNIP2311Config — Schneider Advantys STB Ethernet network interface.
+// ===========================================================================
+//
+// Phase 3 deliverable: a DECORATIVE Ethernet head adapter. The body painter
+// renders the five front-panel status LEDs (RUN / PWR / ERR / ST / TEST) in
+// a fixed "normal" state (RUN+PWR green, ERR+ST+TEST dim grey) and the
+// dual RJ45 ports via cross-vendor reuse of `EthernetPortPainter` from
+// `lib/painter/beckhoff/ek1100.dart`.
+//
+// LOCKED in 03-CONTEXT.md §Status LEDs — Decorative-Only:
+//   - NO per-LED PLC keys (firmware-driven on real hardware; NOT addressable
+//     as Modbus coils). The HMI asset is the visual identity anchor, not a
+//     live status surface.
+//   - The configure dialog exposes ONLY `nameOrId` + standard
+//     `Coordinates` + `Size`. No `KeyField` widgets.
+//   - Single render state — no stale/disconnected variant either.
+//
+// Future deferred work (NIP-FUT-01, NIP-FUT-02) would add a synthetic
+// comm-OK key + per-port link/activity LEDs; not in v2.0.
+
+/// Schneider Advantys STB NIP2311 — Ethernet Modbus/TCP network interface.
+///
+/// Decorative-only: no state keys. The configure dialog exposes only the
+/// `nameOrId` text field plus standard `Coordinates`/`Size` widgets.
+@JsonSerializable()
+class STBNIP2311Config extends BaseAsset {
+  @override
+  String get displayName => 'STBNIP2311 (Ethernet Head)';
+  @override
+  String get category => 'Advantys STB';
+
+  @JsonKey(defaultValue: '1')
+  String nameOrId;
+
+  STBNIP2311Config({
+    this.nameOrId = '1',
+  });
+
+  STBNIP2311Config.preview()
+      : nameOrId = '1',
+        super();
+
+  factory STBNIP2311Config.fromJson(Map<String, dynamic> json) =>
+      _$STBNIP2311ConfigFromJson(json);
+
+  @override
+  Map<String, dynamic> toJson() => _$STBNIP2311ConfigToJson(this);
+
+  @override
+  Widget build(BuildContext context) {
+    return FittedBox(
+      fit: BoxFit.contain,
+      child: _STBNIP2311(config: this),
+    );
+  }
+
+  @override
+  Widget configure(BuildContext context) {
+    final media = MediaQuery.of(context).size;
+    final maxWidth = media.width * 0.9;
+    final maxHeight = media.height * 0.8;
+
+    return Center(
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxWidth: maxWidth,
+          maxHeight: maxHeight,
+          minWidth: 320,
+          minHeight: 200,
+        ),
+        child: Material(
+          borderRadius: BorderRadius.circular(24),
+          color: DialogTheme.of(context).backgroundColor ??
+              Theme.of(context).colorScheme.surface,
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: SingleChildScrollView(
+              child: _STBNIP2311ConfigEditor(config: this),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Live widget — _STBNIP2311
+//
+// Decorative-only: the underlying `STBNIP2311Widget` already renders the
+// fixed-state status LEDs and dual RJ45 ports. There is no StateMan
+// subscription, no stream, no tap handler — taps fall through harmlessly.
+// ---------------------------------------------------------------------------
+
+class _STBNIP2311 extends StatelessWidget {
+  final STBNIP2311Config config;
+  const _STBNIP2311({required this.config});
+
+  @override
+  Widget build(BuildContext context) {
+    return STBNIP2311Widget(nameOrId: config.nameOrId);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Configure dialog body — _STBNIP2311ConfigEditor
+//
+// Surfaces ONLY: Size + Coordinates + nameOrId. No KeyField widgets — the
+// `editor surface` test in advantys_stb_test.dart is the compile-time guard
+// against accidental state-key growth.
+// ---------------------------------------------------------------------------
+
+class _STBNIP2311ConfigEditor extends StatefulWidget {
+  final STBNIP2311Config config;
+  const _STBNIP2311ConfigEditor({required this.config});
+
+  @override
+  State<_STBNIP2311ConfigEditor> createState() =>
+      _STBNIP2311ConfigEditorState();
+}
+
+class _STBNIP2311ConfigEditorState extends State<_STBNIP2311ConfigEditor> {
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizeField(
+          initialValue: widget.config.size,
+          onChanged: (size) => widget.config.size = size,
+        ),
+        const SizedBox(height: 16),
+        CoordinatesField(
+          initialValue: widget.config.coordinates,
+          onChanged: (coordinates) => widget.config.coordinates = coordinates,
+          enableAngle: false,
+        ),
+        const SizedBox(height: 16),
+        TextFormField(
+          decoration: const InputDecoration(
+            labelText: 'Name or ID',
+            border: OutlineInputBorder(),
+          ),
+          initialValue: widget.config.nameOrId,
+          onChanged: (value) => widget.config.nameOrId = value,
+        ),
+      ],
+    );
+  }
 }

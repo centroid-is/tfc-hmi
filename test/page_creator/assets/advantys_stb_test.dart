@@ -13,6 +13,7 @@ import 'package:tfc/page_creator/assets/common.dart'
 import 'package:tfc/page_creator/assets/registry.dart';
 import 'package:tfc/painter/advantys_stb/ddi3725.dart';
 import 'package:tfc/painter/advantys_stb/ddo3705.dart';
+import 'package:tfc/painter/advantys_stb/nip2311.dart';
 import 'package:tfc/painter/advantys_stb/io16.dart';
 import 'package:tfc/painter/beckhoff/io8.dart' show IOState;
 import 'package:tfc/providers/state_man.dart' show stateManProvider;
@@ -1944,6 +1945,290 @@ void main() {
       },
     );
   });
+
+  // ===========================================================================
+  // PHASE 3 — STBNIP2311Config (decorative Ethernet head adapter).
+  //
+  // Decorative-only module: NO PLC state keys. The configure dialog exposes
+  // only `nameOrId` + `Coordinates` + `Size`. The status LEDs (RUN/PWR/ERR/
+  // ST/TEST) render in a fixed "normal" state in the body painter (RUN+PWR
+  // green; ERR+ST+TEST dim grey) — driven by firmware on real hardware, NOT
+  // by Modbus. Requirements: NIP-01..04. Locked by 03-CONTEXT.md.
+  // ===========================================================================
+
+  group('STBNIP2311Config — data shape', () {
+    test('preview() succeeds with nameOrId=="1" and no key fields', () {
+      final c = STBNIP2311Config.preview();
+      expect(c.nameOrId, '1');
+      expect(c.assetName, 'STBNIP2311Config');
+    });
+
+    test('toJson()["asset_name"] == "STBNIP2311Config"', () {
+      final c = STBNIP2311Config(nameOrId: 'NIP-01');
+      final json = c.toJson();
+      expect(json['asset_name'], 'STBNIP2311Config');
+      expect(json['nameOrId'], 'NIP-01');
+      // NIP2311 has NO state-key fields. Round-trip must not silently grow them.
+      expect(json.containsKey('runKey'), isFalse);
+      expect(json.containsKey('pwrKey'), isFalse);
+      expect(json.containsKey('errKey'), isFalse);
+      expect(json.containsKey('stKey'), isFalse);
+      expect(json.containsKey('testKey'), isFalse);
+      expect(json.containsKey('rawStateKey'), isFalse);
+    });
+
+    test('explicit nameOrId is honored', () {
+      final c = STBNIP2311Config(nameOrId: 'head-A');
+      expect(c.nameOrId, 'head-A');
+    });
+  });
+
+  group('STBNIP2311BodyPainter shouldRepaint contract', () {
+    STBNIP2311BodyPainter makePainter({String nameOrId = '1'}) {
+      return STBNIP2311BodyPainter(nameOrId: nameOrId);
+    }
+
+    test('same inputs → shouldRepaint=false', () {
+      final a = makePainter();
+      final b = makePainter();
+      expect(a.shouldRepaint(b), isFalse);
+    });
+
+    test('different nameOrId → shouldRepaint=true', () {
+      final a = makePainter(nameOrId: 'head-A');
+      final b = makePainter(nameOrId: 'head-B');
+      expect(a.shouldRepaint(b), isTrue);
+    });
+
+    test('cross-runtimeType → shouldRepaint=true (Pitfall 3 guard)', () {
+      final p = makePainter();
+      final other = _DummyNIP2311Painter();
+      expect(p.shouldRepaint(other), isTrue);
+    });
+  });
+
+  group('STBNIP2311Config.configure — editor surface', () {
+    Future<void> openEditor(WidgetTester tester, STBNIP2311Config cfg) async {
+      await tester.pumpWidget(ProviderScope(
+        child: MaterialApp(
+          home: Scaffold(
+            body: Builder(
+              builder: (context) => Center(
+                child: ElevatedButton(
+                  onPressed: () => showDialog<void>(
+                    context: context,
+                    builder: (_) => Dialog(child: cfg.configure(context)),
+                  ),
+                  child: const Text('open'),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ));
+      await tester.tap(find.text('open'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+
+    testWidgets('Name or ID is present, NO KeyField widgets (decorative only)',
+        (tester) async {
+      final cfg = STBNIP2311Config.preview();
+      await openEditor(tester, cfg);
+
+      expect(find.text('Name or ID'), findsOneWidget);
+      // NIP2311 is decorative — the editor must NOT expose any state keys.
+      expect(find.byType(KeyField), findsNothing);
+      expect(find.text('Raw State Key'), findsNothing);
+      expect(find.text('RUN Key'), findsNothing);
+      expect(find.text('PWR Key'), findsNothing);
+    });
+  });
+
+  group('STBNIP2311Widget — mount sanity', () {
+    testWidgets('pumps cleanly (no exceptions)', (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Center(
+              child: SizedBox(
+                width: 200,
+                height: 280,
+                child: STBNIP2311Widget(nameOrId: 'NIP-01'),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump(Duration.zero);
+      expect(find.byType(STBNIP2311Widget), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('config.build mounts the underlying STBNIP2311Widget',
+        (tester) async {
+      final cfg = STBNIP2311Config(nameOrId: 'NIP-mount');
+      await tester.pumpWidget(
+        ProviderScope(
+          child: MaterialApp(
+            home: Scaffold(
+              body: Center(
+                child: SizedBox(
+                  width: 200,
+                  height: 280,
+                  child: Builder(builder: (context) => cfg.build(context)),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(find.byType(STBNIP2311Widget), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Goldens — single "normal" state (RUN/PWR green, ERR/ST/TEST dim grey)
+  // rendered in light + dark themes. macOS-only per project convention.
+  // ---------------------------------------------------------------------------
+  group('STBNIP2311 goldens',
+      skip: !Platform.isMacOS ? 'Golden tests only run on macOS' : null, () {
+    const goldenKey = Key('stb_nip2311_golden');
+
+    Future<void> pumpNIP2311(
+      WidgetTester tester, {
+      required Brightness theme,
+    }) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: theme == Brightness.dark ? ThemeData.dark() : ThemeData.light(),
+          home: Scaffold(
+            body: Center(
+              child: RepaintBoundary(
+                key: goldenKey,
+                child: SizedBox(
+                  width: 200,
+                  height: 280,
+                  child: STBNIP2311Widget(nameOrId: 'NIP-01'),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump(Duration.zero);
+    }
+
+    testWidgets('nip2311_normal_light.png', (tester) async {
+      await pumpNIP2311(tester, theme: Brightness.light);
+      await expectLater(
+        find.byKey(goldenKey),
+        matchesGoldenFile('goldens/advantys_stb/nip2311_normal_light.png'),
+      );
+    });
+
+    testWidgets('nip2311_normal_dark.png', (tester) async {
+      await pumpNIP2311(tester, theme: Brightness.dark);
+      await expectLater(
+        find.byKey(goldenKey),
+        matchesGoldenFile('goldens/advantys_stb/nip2311_normal_dark.png'),
+      );
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Registry resolution + JSON back-compat (NIP-04).
+  // ---------------------------------------------------------------------------
+  group('STBNIP2311Config registry resolution', () {
+    test('createDefaultAssetByName returns a typed STBNIP2311Config', () {
+      final asset =
+          AssetRegistry.createDefaultAssetByName('STBNIP2311Config');
+      expect(asset, isNotNull,
+          reason:
+              'defaultFactories must register STBNIP2311Config (palette wiring).');
+      expect(asset, isA<STBNIP2311Config>());
+      final cfg = asset! as STBNIP2311Config;
+      expect(cfg.nameOrId, '1');
+    });
+
+    test('AssetRegistry.parse round-trips a STBNIP2311Config from saved JSON',
+        () {
+      final cfg = STBNIP2311Config(nameOrId: 'NIP-99');
+      final saveJson = jsonDecode(jsonEncode(<String, dynamic>{
+        'assets': <Map<String, dynamic>>[cfg.toJson()],
+      })) as Map<String, dynamic>;
+      final parsed = AssetRegistry.parse(saveJson);
+      expect(parsed, hasLength(1),
+          reason:
+              '_fromJsonFactories must register STBNIP2311Config (JSON load wiring).');
+      expect(parsed[0], isA<STBNIP2311Config>());
+      final restored = parsed[0] as STBNIP2311Config;
+      expect(restored.nameOrId, 'NIP-99');
+    });
+
+    test('defaultFactories Map contains STBNIP2311Config type key', () {
+      expect(
+        AssetRegistry.defaultFactories.keys.any(
+          (t) => t.toString() == 'STBNIP2311Config',
+        ),
+        isTrue,
+      );
+    });
+  });
+
+  group('STBNIP2311Config full JSON round-trip + back-compat (NIP-04)', () {
+    test('every field survives jsonEncode + jsonDecode + fromJson', () {
+      final original = STBNIP2311Config(nameOrId: 'NIP-42')
+        ..coordinates = Coordinates(x: 0.25, y: 0.5)
+        ..size = const RelativeSize(width: 0.1, height: 0.2)
+        ..text = 'unit test'
+        ..textPos = TextPos.below
+        ..techDocId = 42
+        ..plcAssetKey = 'plc.42';
+
+      final encoded = jsonEncode(original.toJson());
+      final decoded = jsonDecode(encoded) as Map<String, dynamic>;
+      final parsed = STBNIP2311Config.fromJson(decoded);
+
+      expect(parsed.nameOrId, 'NIP-42');
+      expect(parsed.coordinates.x, 0.25);
+      expect(parsed.coordinates.y, 0.5);
+      expect(parsed.size.width, 0.1);
+      expect(parsed.size.height, 0.2);
+      expect(parsed.text, 'unit test');
+      expect(parsed.textPos, TextPos.below);
+      expect(parsed.techDocId, 42);
+      expect(parsed.plcAssetKey, 'plc.42');
+      expect(parsed.assetName, 'STBNIP2311Config');
+    });
+
+    test(
+        'minimal legacy snippet (only base fields) → STBNIP2311 defaults rehydrate',
+        () {
+      final legacyJson = <String, dynamic>{
+        'asset_name': 'STBNIP2311Config',
+        'coordinates': {'x': 0.0, 'y': 0.0},
+        'size': {'width': 0.03, 'height': 0.03},
+      };
+      final config = STBNIP2311Config.fromJson(legacyJson);
+      expect(config.nameOrId, '1');
+      expect(config.assetName, 'STBNIP2311Config');
+    });
+
+    test('unknown forward-compat field is ignored, not fatal', () {
+      final futureJson = <String, dynamic>{
+        'asset_name': 'STBNIP2311Config',
+        'coordinates': {'x': 0.0, 'y': 0.0},
+        'size': {'width': 0.03, 'height': 0.03},
+        'someFutureFieldKey': 'plc/future',
+      };
+      final cfg = STBNIP2311Config.fromJson(futureJson);
+      expect(cfg.nameOrId, '1');
+    });
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -2025,6 +2310,13 @@ class _DummyDDI3725Painter extends CustomPainter {
 }
 
 class _DummyDDO3705Painter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {}
+  @override
+  bool shouldRepaint(covariant CustomPainter old) => true;
+}
+
+class _DummyNIP2311Painter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {}
   @override
