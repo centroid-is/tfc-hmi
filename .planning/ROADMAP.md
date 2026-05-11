@@ -16,7 +16,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: STBDDI3725 (16-Ch Digital Input)** - Highest-risk module first: 16-LED painter + force overlay + 16-row detail dialog; locks bit-ordering + golden harness + cream-body discipline for the milestone ✅ 51 tests + 10 goldens; LSB-first bit-order locked
 - [x] **Phase 2: STBDDO3705 (16-Ch Digital Output)** - Clones DDI3725 minus filters; reuses `IO16LedBlockPainter` and proves DI/DO symmetry with manual force-write end-to-end ✅ 91 tests total + 10 goldens; force-write end-to-end verified
-- [ ] **Phase 3: STBNIP2311 (Ethernet Head Adapter)** - Module body + dual RJ45 (reuse `EthernetPortPainter`) + decorative-only status LEDs (no per-LED PLC keys)
+- [x] **Phase 3: STBNIP2311 (Ethernet Head Adapter)** - Module body + dual RJ45 (reuse `EthernetPortPainter`) + decorative-only status LEDs (no per-LED PLC keys) ✅ 108 tests total + 2 goldens
 - [ ] **Phase 4: STBPDT3100 (Power Distribution)** - Smallest module: body + single `inputOkKey` LED + JSON round-trip
 - [ ] **Phase 5: AdvantysSTBStack (Composite Parent)** - Compose all four module types with `allKeys` flat-map + filtered Add dropdown + permissive-render-restrictive-add sanitiser + full-stack integration test
 
@@ -99,6 +99,6 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 |-------|----------------|--------|-----------|
 | 1. STBDDI3725 (16-Ch DI) | 4/4 | ✅ Complete | 2026-05-11 |
 | 2. STBDDO3705 (16-Ch DO) | 1/1 | ✅ Complete | 2026-05-11 |
-| 3. STBNIP2311 (Ethernet Head) | 0/TBD | Not started | - |
+| 3. STBNIP2311 (Ethernet Head) | 1/1 | ✅ Complete | 2026-05-11 |
 | 4. STBPDT3100 (Power) | 0/TBD | Not started | - |
 | 5. AdvantysSTBStack (Composite) | 0/TBD | Not started | - |
