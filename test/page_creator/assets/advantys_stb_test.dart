@@ -1,14 +1,19 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io' show Platform;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:open62541/open62541.dart' show DynamicValue;
 import 'package:tfc/page_creator/assets/advantys_stb.dart';
+import 'package:tfc/page_creator/assets/beckhoff.dart' show RowIOView, FilterEdit;
 import 'package:tfc/page_creator/assets/common.dart' show KeyField;
 import 'package:tfc/painter/advantys_stb/ddi3725.dart';
 import 'package:tfc/painter/advantys_stb/io16.dart';
 import 'package:tfc/painter/beckhoff/io8.dart' show IOState;
+import 'package:tfc/providers/state_man.dart' show stateManProvider;
+import 'package:tfc_dart/core/state_man.dart' show StateMan;
 
 void main() {
   group('kSTBChannelBitOrder + bitmaskToLedStates', () {
@@ -493,6 +498,323 @@ void main() {
       );
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // Plan 03: detail dialog — trigger group.
+  //
+  // With all five `*Key` fields null, `_combinedStream` emits nothing, so the
+  // `StreamBuilder` inside the dialog stays in the no-data state. The dialog
+  // still opens with its title (`config.nameOrId`) and `Close` action — that's
+  // enough to lock the onTap-handler shape replaced from the Plan 02 stub.
+  //
+  // `_FakeStateMan` lets `stateManProvider.future` resolve so the
+  // `_STBDDI3725State.initState` callback runs to completion. No `subscribe`
+  // or `write` methods are touched on this path (keys are null).
+  // ---------------------------------------------------------------------------
+  group('STBDDI3725 detail dialog — trigger', () {
+    Future<void> pumpAndOpen(WidgetTester tester, STBDDI3725Config cfg,
+        {StateMan? stateMan}) async {
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            stateManProvider
+                .overrideWith((ref) async => stateMan ?? _FakeStateMan()),
+          ],
+          child: MaterialApp(
+            home: Scaffold(
+              body: Center(
+                child: SizedBox(
+                  width: 200,
+                  height: 300,
+                  child: Builder(builder: (context) => cfg.build(context)),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      // Pump once for the FutureProvider to resolve, then settle the
+      // setState() inside `initState.then`.
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+
+    testWidgets('tap opens AlertDialog titled with nameOrId', (tester) async {
+      final cfg = STBDDI3725Config(nameOrId: 'DI-3725-A');
+      await pumpAndOpen(tester, cfg);
+
+      // No dialog up front.
+      expect(find.byType(AlertDialog), findsNothing);
+
+      // Tap the body. With null keys the body renders the stale shell — the
+      // GestureDetector wraps the `STBDDI3725Widget`. Tap the widget directly
+      // to avoid finder ambiguity with the parent SizedBox.
+      await tester.tap(find.byType(STBDDI3725Widget));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(AlertDialog), findsOneWidget);
+      expect(find.text('DI-3725-A'), findsOneWidget);
+      expect(find.text('Close'), findsOneWidget);
+    });
+
+    testWidgets('Close action dismisses the dialog', (tester) async {
+      final cfg = STBDDI3725Config(nameOrId: 'DI-X');
+      await pumpAndOpen(tester, cfg);
+
+      await tester.tap(find.byType(STBDDI3725Widget));
+      await tester.pumpAndSettle();
+      expect(find.byType(AlertDialog), findsOneWidget);
+
+      await tester.tap(find.text('Close'));
+      await tester.pumpAndSettle();
+      expect(find.byType(AlertDialog), findsNothing);
+    });
+
+    testWidgets(
+      'with all-null keys, dialog body renders no rows (no data yet)',
+      (tester) async {
+        // All-null path: `_combinedStream` is empty, so the StreamBuilder
+        // returns `SizedBox.shrink()` (mirrors EL1008 behaviour). RowIOView
+        // count must be zero.
+        final cfg = STBDDI3725Config(nameOrId: '1');
+        await pumpAndOpen(tester, cfg);
+
+        await tester.tap(find.byType(STBDDI3725Widget));
+        await tester.pumpAndSettle();
+        expect(find.byType(AlertDialog), findsOneWidget);
+        expect(find.byType(RowIOView), findsNothing);
+      },
+    );
+  });
+
+  // ---------------------------------------------------------------------------
+  // Plan 03: detail dialog — row structure + force-write integration.
+  //
+  // `_StreamingStubStateMan` returns canned DynamicValues for each *Key. The
+  // dialog StreamBuilder receives a single combined emission and renders the
+  // 8 RowIOView widgets (16 FilterEdits). Force writes round-trip through
+  // the fake's `writes` log so we can assert the mutated `force` list.
+  // ---------------------------------------------------------------------------
+  group('STBDDI3725 detail dialog — row structure', () {
+    late _StreamingStubStateMan stub;
+    setUp(() {
+      stub = _StreamingStubStateMan(
+        raw: 0xAAAA,
+        // forces[0]=1 (auto), all others auto for predictability.
+        force: List<int>.filled(16, 0),
+        onFilters: List<int>.filled(16, 5),
+        offFilters: List<int>.filled(16, 10),
+        descriptions: List<String>.generate(16, (i) => 'ch${i + 1}'),
+      );
+    });
+
+    Future<void> openWithStub(WidgetTester tester) async {
+      final cfg = STBDDI3725Config(
+        nameOrId: 'DI-test',
+        rawStateKey: 'raw',
+        forceValuesKey: 'force',
+        onFiltersKey: 'onf',
+        offFiltersKey: 'offf',
+        descriptionsKey: 'desc',
+      );
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            stateManProvider.overrideWith((ref) async => stub),
+          ],
+          child: MaterialApp(
+            home: Scaffold(
+              body: Center(
+                child: SizedBox(
+                  width: 200,
+                  height: 300,
+                  child: Builder(builder: (context) => cfg.build(context)),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+      await tester.tap(find.byType(STBDDI3725Widget));
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('renders 8 RowIOView widgets when data flows', (tester) async {
+      await openWithStub(tester);
+      expect(find.byType(AlertDialog), findsOneWidget);
+      // DDI-09: 8 rows × 2 cols.
+      expect(find.byType(RowIOView), findsNWidgets(8));
+    });
+
+    testWidgets('renders 16 FilterEdit widgets (2 per row)', (tester) async {
+      await openWithStub(tester);
+      // DDI-06 + DDI-07: ON + OFF filter inputs visible per channel.
+      expect(find.byType(FilterEdit), findsNWidgets(16));
+    });
+
+    testWidgets('row 0 shows ch1 + ch9 descriptions (left+right pairing)',
+        (tester) async {
+      await openWithStub(tester);
+      expect(find.text('Ch1'), findsOneWidget); // RowControl uppercases char 0
+      expect(find.text('Ch9'), findsOneWidget);
+    });
+
+    testWidgets('row 7 shows ch8 + ch16 descriptions (last-row pairing)',
+        (tester) async {
+      await openWithStub(tester);
+      expect(find.text('Ch8'), findsOneWidget);
+      expect(find.text('Ch16'), findsOneWidget);
+    });
+  });
+
+  group('STBDDI3725 detail dialog — force write integration', () {
+    late _StreamingStubStateMan stub;
+    setUp(() {
+      stub = _StreamingStubStateMan(
+        raw: 0x0000,
+        force: List<int>.filled(16, 0),
+        onFilters: List<int>.filled(16, 5),
+        offFilters: List<int>.filled(16, 10),
+        descriptions: List<String>.generate(16, (i) => 'ch${i + 1}'),
+      );
+    });
+
+    Future<void> openWithStub(WidgetTester tester) async {
+      final cfg = STBDDI3725Config(
+        nameOrId: 'DI-fwt',
+        rawStateKey: 'raw',
+        forceValuesKey: 'force',
+        onFiltersKey: 'onf',
+        offFiltersKey: 'offf',
+        descriptionsKey: 'desc',
+      );
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            stateManProvider.overrideWith((ref) async => stub),
+          ],
+          child: MaterialApp(
+            home: Scaffold(
+              body: Center(
+                child: SizedBox(
+                  width: 200,
+                  height: 300,
+                  child: Builder(builder: (context) => cfg.build(context)),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+      await tester.tap(find.byType(STBDDI3725Widget));
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets(
+      'tapping a Low SegmentedButton writes to forceValuesKey with [0]==1',
+      (tester) async {
+        await openWithStub(tester);
+        expect(find.byType(AlertDialog), findsOneWidget);
+
+        // Each of 16 channels has an "Auto / Low / High" SegmentedButton.
+        // Tap the FIRST "Low " label (channel 1, row 0 left). The Low label
+        // contains a trailing space — match exactly.
+        final lowFinders = find.text('Low ');
+        expect(lowFinders, findsNWidgets(16));
+        await tester.tap(lowFinders.first);
+        await tester.pumpAndSettle();
+
+        // The handler does `map['force']![0].value = 1` then writes the
+        // whole force DynamicValue array under `forceValuesKey`.
+        expect(stub.writes, isNotEmpty);
+        final lastWrite = stub.writes.last;
+        expect(lastWrite.key, 'force');
+        expect(lastWrite.value.isArray, isTrue);
+        expect(lastWrite.value[0].asInt, 1,
+            reason: 'channel 1 must be forced low after first Low tap');
+        // Other channels remain auto.
+        for (int i = 1; i < 16; i++) {
+          expect(lastWrite.value[i].asInt, 0,
+              reason: 'channel ${i + 1} must remain auto');
+        }
+      },
+    );
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Test stubs
+// ---------------------------------------------------------------------------
+
+/// Minimal StateMan stub used by the detail-dialog trigger test. All five
+/// `*Key` fields on the config are null, so `_combinedStream` never calls
+/// `subscribe` and the fake's no-op behaviour is sufficient.
+class _FakeStateMan extends Fake implements StateMan {}
+
+/// StateMan stub that emits canned DynamicValues for each subscribed key and
+/// records every `write` call for later assertion. Used by the
+/// row-structure + force-write-integration groups.
+class _StreamingStubStateMan extends Fake implements StateMan {
+  _StreamingStubStateMan({
+    required this.raw,
+    required this.force,
+    required this.onFilters,
+    required this.offFilters,
+    required this.descriptions,
+  });
+
+  int raw;
+  List<int> force;
+  List<int> onFilters;
+  List<int> offFilters;
+  List<String> descriptions;
+
+  /// Round-trip-able log of `write(key, value)` invocations. The value is the
+  /// DynamicValue passed in by the dialog's onChanged handlers; tests inspect
+  /// it via `.isArray`, `[i].asInt`, etc.
+  final List<({String key, DynamicValue value})> writes =
+      <({String key, DynamicValue value})>[];
+
+  // Live DynamicValue instances that the dialog's StreamBuilder mutates
+  // in-place when onChanged handlers fire (see beckhoff.dart:1397-1405 for
+  // the canonical mutation pattern). Cached so successive subscribes return
+  // the same instance (mirrors the BehaviorSubject contract).
+  late final DynamicValue _rawDv = DynamicValue(value: raw);
+  late final DynamicValue _forceDv =
+      DynamicValue.fromList(force.map((v) => DynamicValue(value: v)).toList());
+  late final DynamicValue _onFiltersDv = DynamicValue.fromList(
+      onFilters.map((v) => DynamicValue(value: v)).toList());
+  late final DynamicValue _offFiltersDv = DynamicValue.fromList(
+      offFilters.map((v) => DynamicValue(value: v)).toList());
+  late final DynamicValue _descriptionsDv = DynamicValue.fromList(
+      descriptions.map((v) => DynamicValue(value: v)).toList());
+
+  @override
+  Future<Stream<DynamicValue>> subscribe(String key) async {
+    switch (key) {
+      case 'raw':
+        return Stream<DynamicValue>.value(_rawDv);
+      case 'force':
+        return Stream<DynamicValue>.value(_forceDv);
+      case 'onf':
+        return Stream<DynamicValue>.value(_onFiltersDv);
+      case 'offf':
+        return Stream<DynamicValue>.value(_offFiltersDv);
+      case 'desc':
+        return Stream<DynamicValue>.value(_descriptionsDv);
+      default:
+        return const Stream<DynamicValue>.empty();
+    }
+  }
+
+  @override
+  Future<void> write(String key, DynamicValue value) async {
+    writes.add((key: key, value: value));
+  }
 }
 
 class _DummyDDI3725Painter extends CustomPainter {
