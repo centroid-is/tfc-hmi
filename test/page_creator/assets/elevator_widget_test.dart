@@ -747,6 +747,148 @@ void main() {
   });
 
   // ---------------------------------------------------------------------------
+  // OffsetY anchor (260511-ehy)
+  //
+  // Locks the per-child vertical anchor offset:
+  //   top = platformY - childH * (1.0 + entry.offsetY)
+  //
+  // offsetY = 0.0  → child's bottom sits on the platform top (Plan 260511-dxa
+  //                  invariant — regression-guarded by W1).
+  // offsetY > 0.0  → child is raised above the platform (smaller `top`).
+  // offsetY < 0.0  → child is lowered below the platform (larger `top`).
+  //
+  // Constants are sourced from the canonical wrap()/fixture pair: a 200x300
+  // bbox with a 40x40 _FixedSizeChild. closeTo(_, 1.0) mirrors the precedent
+  // at the ELEV-10 numeric assertion above (line ~675).
+  // ---------------------------------------------------------------------------
+  group('OffsetY anchor (260511-ehy)', () {
+    const bboxH = 300.0;
+    const platformH = bboxH * kPlatformHeightFraction;
+    const childH = 40.0;
+    const maxChildHeight = childH; // single-child fixture
+
+    testWidgets(
+        'offsetY = 0 produces top = platformY - childH (regression guard)',
+        (tester) async {
+      // Regression guard: offsetY=0 must reproduce the pre-260511-ehy
+      // geometry exactly. This passes today AND after the change — locking
+      // the invariant from Plan 260511-dxa.
+      final config = ElevatorConfig(
+        positionKey: '',
+        children: [
+          ElevatorChildEntry(
+              id: 'y0',
+              offsetX: 0.5,
+              offsetY: 0.0,
+              child: _FixedSizeChildConfig(width: 40, height: 40)),
+        ],
+      );
+      await tester.pumpWidget(wrap(Elevator(config: config)));
+      await tester.pump(Duration.zero);
+      final state =
+          tester.state<State<Elevator>>(find.byType(Elevator)) as dynamic;
+      final progress = state.debugProgress as ValueNotifier<double>;
+
+      progress.value = 0.5;
+      await tester.pumpAndSettle();
+
+      final positioned = find.ancestor(
+        of: find.byType(_FixedSizeChild),
+        matching: find.byType(Positioned),
+      );
+      expect(positioned, findsOneWidget);
+      final top = (tester.widget(positioned) as Positioned).top!;
+      final expectedTop =
+          platformOffsetTop(0.5, bboxH, platformH, maxChildHeight) - childH;
+      expect(top, closeTo(expectedTop, 1.0),
+          reason:
+              'offsetY=0 must reproduce the pre-260511-ehy formula '
+              'exactly (Plan 260511-dxa invariant).');
+    });
+
+    testWidgets('offsetY = 0.5 raises the child by half a child height',
+        (tester) async {
+      final config = ElevatorConfig(
+        positionKey: '',
+        children: [
+          ElevatorChildEntry(
+              id: 'y-up',
+              offsetX: 0.5,
+              offsetY: 0.5,
+              child: _FixedSizeChildConfig(width: 40, height: 40)),
+        ],
+      );
+      await tester.pumpWidget(wrap(Elevator(config: config)));
+      await tester.pump(Duration.zero);
+      final state =
+          tester.state<State<Elevator>>(find.byType(Elevator)) as dynamic;
+      final progress = state.debugProgress as ValueNotifier<double>;
+
+      progress.value = 0.0;
+      await tester.pumpAndSettle();
+
+      final positioned = find.ancestor(
+        of: find.byType(_FixedSizeChild),
+        matching: find.byType(Positioned),
+      );
+      expect(positioned, findsOneWidget);
+      final top = (tester.widget(positioned) as Positioned).top!;
+      final platformY =
+          platformOffsetTop(0.0, bboxH, platformH, maxChildHeight);
+      final expectedTop = platformY - childH * 1.5;
+      expect(top, closeTo(expectedTop, 1.0),
+          reason:
+              'offsetY=0.5 must raise the child by 0.5*childH (top is smaller '
+              'than the offsetY=0 baseline by 0.5*childH).');
+      // Direction lock: child rose vs offsetY=0 baseline (smaller `top`).
+      final baseline = platformY - childH;
+      expect(top, lessThan(baseline),
+          reason: 'Positive offsetY must raise the child (smaller top).');
+    });
+
+    testWidgets('offsetY = -0.5 lowers the child by half a child height',
+        (tester) async {
+      final config = ElevatorConfig(
+        positionKey: '',
+        children: [
+          ElevatorChildEntry(
+              id: 'y-down',
+              offsetX: 0.5,
+              offsetY: -0.5,
+              child: _FixedSizeChildConfig(width: 40, height: 40)),
+        ],
+      );
+      await tester.pumpWidget(wrap(Elevator(config: config)));
+      await tester.pump(Duration.zero);
+      final state =
+          tester.state<State<Elevator>>(find.byType(Elevator)) as dynamic;
+      final progress = state.debugProgress as ValueNotifier<double>;
+
+      progress.value = 0.0;
+      await tester.pumpAndSettle();
+
+      final positioned = find.ancestor(
+        of: find.byType(_FixedSizeChild),
+        matching: find.byType(Positioned),
+      );
+      expect(positioned, findsOneWidget);
+      final top = (tester.widget(positioned) as Positioned).top!;
+      final platformY =
+          platformOffsetTop(0.0, bboxH, platformH, maxChildHeight);
+      final expectedTop = platformY - childH * 0.5;
+      expect(top, closeTo(expectedTop, 1.0),
+          reason:
+              'offsetY=-0.5 must lower the child by 0.5*childH (top is larger '
+              'than the offsetY=0 baseline by 0.5*childH; child\'s bottom '
+              'hangs below the platform).');
+      // Direction lock: child fell vs offsetY=0 baseline (larger `top`).
+      final baseline = platformY - childH;
+      expect(top, greaterThan(baseline),
+          reason: 'Negative offsetY must lower the child (larger top).');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
   // Phase 3 — Editor add/edit/remove/offsetX UI (Plan 03-03)
   //
   // Locks the editor surface for child management:
@@ -909,6 +1051,38 @@ void main() {
           reason: 'Slider drag must mutate entry.offsetX.');
       expect(config.children[0].offsetX, greaterThan(0.5),
           reason: 'Rightward drag should increase offsetX.');
+    });
+
+    testWidgets(
+        'offsetY Slider mutates entry.offsetY in real time [260511-ehy]',
+        (tester) async {
+      // Plan 260511-ehy: a SECOND per-entry slider (offsetY, range -1.0..1.0)
+      // sits directly below the existing offsetX slider. Locator order is
+      // offsetX then offsetY, so the offsetY slider is at index 1.
+      final config = ElevatorConfig(
+        children: [
+          ElevatorChildEntry(
+              id: 'slider-y-test',
+              offsetX: 0.5,
+              offsetY: 0.0,
+              child: SensorConfig.preview()),
+        ],
+      );
+      await openConfigEditor(tester, config);
+
+      expect(config.children[0].offsetY, 0.0);
+
+      // Per-entry sliders are ordered offsetX (index 0), offsetY (index 1).
+      final slider = find.byType(Slider).at(1);
+      await tester.ensureVisible(slider);
+      await tester.pumpAndSettle();
+      await tester.drag(slider, const Offset(50, 0));
+      await tester.pump();
+
+      expect(config.children[0].offsetY != 0.0, isTrue,
+          reason: 'Drag on the offsetY slider must mutate entry.offsetY.');
+      expect(config.children[0].offsetY, greaterThan(0.0),
+          reason: 'Rightward drag should increase offsetY (raise the child).');
     });
   });
 

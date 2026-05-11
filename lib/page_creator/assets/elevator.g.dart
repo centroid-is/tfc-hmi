@@ -10,6 +10,7 @@ ElevatorChildEntry _$ElevatorChildEntryFromJson(Map<String, dynamic> json) =>
     ElevatorChildEntry(
       id: json['id'] as String?,
       offsetX: (json['offsetX'] as num?)?.toDouble() ?? 0.5,
+      offsetY: (json['offsetY'] as num?)?.toDouble() ?? 0.0,
       child: _childFromJson(json['child'] as Map<String, dynamic>),
     );
 
@@ -17,6 +18,7 @@ Map<String, dynamic> _$ElevatorChildEntryToJson(ElevatorChildEntry instance) =>
     <String, dynamic>{
       'id': instance.id,
       'offsetX': instance.offsetX,
+      'offsetY': instance.offsetY,
       'child': _childToJson(instance.child),
     };
 
