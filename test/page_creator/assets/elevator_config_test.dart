@@ -40,6 +40,23 @@ void main() {
       expect(entry.offsetX, 0.5);
     });
 
+    // Plan 260511-ehy: vertical anchor offset (offsetY). Default 0.0 keeps the
+    // child's bottom on the platform (Plan 260511-dxa invariant). Positive
+    // raises the child above the platform; negative lowers it below.
+    test('default offsetY is 0.0 (bottom-on-platform anchor) [260511-ehy]', () {
+      final entry = ElevatorChildEntry(child: SensorConfig.preview());
+      expect(entry.offsetY, 0.0);
+    });
+
+    test('constructed offsetY value is preserved on the instance [260511-ehy]',
+        () {
+      final entry = ElevatorChildEntry(
+        child: SensorConfig.preview(),
+        offsetY: 0.7,
+      );
+      expect(entry.offsetY, 0.7);
+    });
+
     test('id is non-empty String when constructed without explicit id', () {
       final entry = ElevatorChildEntry(child: SensorConfig.preview());
       expect(entry.id, isNotEmpty);
@@ -121,6 +138,51 @@ void main() {
       final restored = ElevatorChildEntry.fromJson(json1);
       final json2 = restored.toJson();
       expect(json2, equals(json1));
+    });
+
+    test(
+        'ElevatorChildEntry with non-default offsetY round-trips deep-equal '
+        '[260511-ehy]', () {
+      // offsetY is part of the schema as of Plan 260511-ehy. Round-trip must
+      // be bit-perfect: deep-equal JSON before/after AND the field value must
+      // survive verbatim.
+      final original = ElevatorChildEntry(
+        id: 'fixed-y',
+        offsetX: 0.25,
+        offsetY: 0.7,
+        child: SensorConfig(detectionKey: '/k'),
+      );
+      final json1 = original.toJson();
+      final restored = ElevatorChildEntry.fromJson(json1);
+      final json2 = restored.toJson();
+      expect(json2, equals(json1),
+          reason: 'toJson(fromJson(toJson)) must be a fixed point.');
+      expect(restored.offsetY, 0.7,
+          reason: 'fromJson must restore offsetY=0.7 verbatim.');
+    });
+
+    test(
+        'legacy JSON without offsetY restores to offsetY=0.0 (back-compat) '
+        '[260511-ehy]', () {
+      // Saved pages predating Plan 260511-ehy do NOT carry an `offsetY` key.
+      // The `@JsonKey(defaultValue: 0.0)` annotation must fill the gap so
+      // those pages keep loading bit-identically to the pre-change behaviour.
+      final legacyJson = <String, dynamic>{
+        'id': 'legacy',
+        'offsetX': 0.5,
+        'child': SensorConfig.preview().toJson(),
+        // no 'offsetY' key — this is the back-compat surface.
+      };
+      final entry = ElevatorChildEntry.fromJson(legacyJson);
+      expect(entry.offsetY, 0.0,
+          reason: 'Legacy JSON without offsetY must default to 0.0.');
+      // And a subsequent toJson emits the offsetY key (now part of the
+      // canonical shape), with the default value preserved.
+      final reJson = entry.toJson();
+      expect(reJson['offsetY'], 0.0,
+          reason:
+              'toJson must emit offsetY:0.0 after a legacy fromJson — the '
+              'canonical schema now always carries the field.');
     });
 
     test(
