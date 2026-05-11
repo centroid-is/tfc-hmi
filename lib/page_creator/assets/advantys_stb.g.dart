@@ -79,3 +79,28 @@ Map<String, dynamic> _$STBDDO3705ConfigToJson(STBDDO3705Config instance) =>
       'forceValuesKey': instance.forceValuesKey,
       'descriptionsKey': instance.descriptionsKey,
     };
+
+STBNIP2311Config _$STBNIP2311ConfigFromJson(Map<String, dynamic> json) =>
+    STBNIP2311Config(
+      nameOrId: json['nameOrId'] as String? ?? '1',
+    )
+      ..variant = json['asset_name'] as String
+      ..coordinates =
+          Coordinates.fromJson(json['coordinates'] as Map<String, dynamic>)
+      ..size = RelativeSize.fromJson(json['size'] as Map<String, dynamic>)
+      ..text = json['text'] as String?
+      ..textPos = $enumDecodeNullable(_$TextPosEnumMap, json['textPos'])
+      ..techDocId = (json['techDocId'] as num?)?.toInt()
+      ..plcAssetKey = json['plcAssetKey'] as String?;
+
+Map<String, dynamic> _$STBNIP2311ConfigToJson(STBNIP2311Config instance) =>
+    <String, dynamic>{
+      'asset_name': instance.variant,
+      'coordinates': instance.coordinates,
+      'size': instance.size,
+      'text': instance.text,
+      'textPos': _$TextPosEnumMap[instance.textPos],
+      'techDocId': instance.techDocId,
+      'plcAssetKey': instance.plcAssetKey,
+      'nameOrId': instance.nameOrId,
+    };
