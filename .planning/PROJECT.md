@@ -1,4 +1,32 @@
-# Elevator & Sensor Assets
+# tfc-hmi2 Asset Family
+
+## Current Milestone: v2.0 Modicon Momentum I/O Assets
+
+**Goal:** Add HMI assets representing the Schneider Modicon Momentum stack (NIP2311 Ethernet Modbus/TCP adapter, PDT3100 power distribution, DDI3725 16-ch DI, DDO3705 16-ch DO) so operators can mirror the physical control panel on HMI pages with live PLC state — visually recognizable as Momentum modules, functionally on par with the existing Beckhoff family.
+
+**Target features:**
+- MomentumStack parent asset (mirrors BeckhoffCX5010 pattern; flattens `allKeys` across children for alarms / collectors)
+- NIP2311 head: RUN / PWR / ERR / ST / TEST indicators + dual Ethernet port visuals
+- PDT3100: 24V DC power input visual with INPUT OK state
+- DDI3725: 16-channel digital input strip — channel LEDs, force overrides (auto/low/high), per-channel filters, descriptions, detail dialog
+- DDO3705: 16-channel digital output strip — same surface as DDI3725 (DI/DO share base form factor — confirmed by user; one DXF base covers both)
+- StateMan-driven via standard PLC keys (raw state, force values, filters, descriptions)
+- Asset registry registration + JSON round-trip + golden tests + leak tests
+
+**Painter fidelity (locked):** Operator-recognizable as Momentum modules (body shape, LED layout, Schneider cream colour, port placement). Not chasing dimensional accuracy. References staged at `.planning/research/dxf/` (2 DXF files — one for the I/O base shared by DI/DO, one for the adapter/head). Schneider datasheets + user-provided photo cover the rest.
+
+**Out of scope (v2.0):**
+- Backend Modbus key plumbing — assumes StateMan keys already exist for the physical Momentum stack
+- Per-channel current / diagnostic readbacks beyond bit state
+- Multi-rack composition (multiple stacks on one page) — single stack first
+
+**Pattern source of truth:** `lib/page_creator/assets/beckhoff.dart` (BeckhoffEK1100, BeckhoffEL1008, BeckhoffCX5010) + `lib/painter/beckhoff/` (io8.dart, ek1100.dart). New module assets land at `lib/page_creator/assets/modicon.dart` (or split file per the planner's call) with painters at `lib/painter/modicon/`.
+
+---
+
+## v1.0 — Elevator & Sensor Assets (shipped 2026-05-11)
+
+Two HMI assets for the page creator: an **elevator** that translates child assets vertically based on a PLC-driven 0–100% position, and a **sensor** asset with a configurable kind (paired red light beam, optic field, inductive field) that visualises detection state from a bool state key. Operators can place an elevator on a page, assign sensors and conveyors to it via the config dialog, and watch those children physically ride the platform up and down. Phase artifacts archived to `.planning/milestones/v1.0/`.
 
 ## What This Is
 

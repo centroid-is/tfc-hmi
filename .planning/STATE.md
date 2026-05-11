@@ -1,17 +1,16 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.0
-milestone_name: milestone
-status: completed
-stopped_at: Roadmap created — 4 phases, 42 v1 requirements mapped, success criteria defined
-last_updated: "2026-05-06T12:46:45.553Z"
-last_activity: 2026-05-06 -- Phase 01 marked complete
+milestone: v2.0
+milestone_name: Modicon Momentum I/O Assets
+status: planning
+last_updated: "2026-05-11T14:18:25.928Z"
+last_activity: 2026-05-11
 progress:
-  total_phases: 4
-  completed_phases: 3
-  total_plans: 14
-  completed_plans: 13
-  percent: 93
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # Project State
@@ -20,17 +19,15 @@ progress:
 
 See: .planning/PROJECT.md (updated 2026-05-05)
 
-**Core value:** Operators can place an elevator on a page, assign sensors and conveyors to it via the config dialog, and watch those children physically ride the platform up and down as the PLC's position value changes — with sensor detection states reflected accurately in real time.
-**Current focus:** Phase 01 — Sensor Asset
+**Core value (v2.0):** Operators can drop a Modicon Momentum stack onto an HMI page and see the physical control panel (NIP2311 head + PDT3100 power + DDI3725 16-ch DI + DDO3705 16-ch DO) mirrored with live PLC state — channel LEDs, force overrides, filters, detail dialogs — visually recognizable as Momentum modules.
+**Current focus:** Defining requirements (v2.0 milestone setup)
 
 ## Current Position
 
-Phase: 01 — COMPLETE
-Plan: 1 of 5
-Status: Phase 01 complete
-Last activity: 2026-05-11 - Completed quick task 260511-fd6: elevator travel range as configurable fraction of bbox height
-
-Progress: [░░░░░░░░░░] 0%
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-05-11 — Milestone v2.0 started
 
 ## Performance Metrics
 
