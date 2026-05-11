@@ -357,19 +357,22 @@ abstract class BaseLedBlockPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    _drawBackground(canvas, size);
-    _drawBorder(canvas, size);
-    _drawLeds(canvas, size);
+    drawBackground(canvas, size);
+    drawBorder(canvas, size);
+    drawLeds(canvas, size);
   }
 
-  // Shared methods
-  void _drawBackground(Canvas canvas, Size size) {
+  // Shared methods — library-public (no leading underscore) so sibling
+  // subclasses in other libraries (e.g. lib/painter/advantys_stb/io16.dart)
+  // can override `drawLeds` and reuse `drawLed`. Treat as protected-by-
+  // convention: external callers should still drive the painter via `paint()`.
+  void drawBackground(Canvas canvas, Size size) {
     final backgroundColor = Color(0xFFDDDDDD);
     final blockRect = Rect.fromLTWH(0, 0, size.width, size.height);
     canvas.drawRect(blockRect, Paint()..color = backgroundColor);
   }
 
-  void _drawBorder(Canvas canvas, Size size) {
+  void drawBorder(Canvas canvas, Size size) {
     final borderColor = Colors.grey.shade700;
     final borderPaint = Paint()
       ..color = borderColor
@@ -380,7 +383,7 @@ abstract class BaseLedBlockPainter extends CustomPainter {
     canvas.drawRect(blockRect, borderPaint);
   }
 
-  void _drawLed(Canvas canvas, Rect rect, IOState state, Paint borderPaint) {
+  void drawLed(Canvas canvas, Rect rect, IOState state, Paint borderPaint) {
     final activeColor = Color(0xFF6CA545);
     final inactiveTopColor = Color(0xFFF0F0F0);
     final inactiveBottomColor = Color(0xFFCCCCCC);
@@ -411,8 +414,9 @@ abstract class BaseLedBlockPainter extends CustomPainter {
     canvas.drawRect(rect, thisBorder);
   }
 
-  // Abstract method that each subclass must implement
-  void _drawLeds(Canvas canvas, Size size);
+  // Abstract method that each subclass must implement. Library-public so
+  // subclasses in other libraries can override it (see io16.dart).
+  void drawLeds(Canvas canvas, Size size);
 
   @override
   bool shouldRepaint(covariant BaseLedBlockPainter old) =>
@@ -429,7 +433,7 @@ class IO8LedBlockPainter extends BaseLedBlockPainter {
   }) : assert(ledStates.length == 8);
 
   @override
-  void _drawLeds(Canvas canvas, Size size) {
+  void drawLeds(Canvas canvas, Size size) {
     final pad = size.width * 0.05;
     const cols = 2;
     const rows = 4;
@@ -447,7 +451,7 @@ class IO8LedBlockPainter extends BaseLedBlockPainter {
       double cx = pad + c * (cellW + pad);
       double cy = pad + r * (cellH + pad);
       final cellRect = Rect.fromLTWH(cx, cy, cellW, cellH);
-      _drawLed(canvas, cellRect, ledStates[i], borderPaint);
+      drawLed(canvas, cellRect, ledStates[i], borderPaint);
     }
   }
 }
@@ -461,7 +465,7 @@ class IO6LedBlockPainter extends BaseLedBlockPainter {
   }) : assert(ledStates.length == 6);
 
   @override
-  void _drawLeds(Canvas canvas, Size size) {
+  void drawLeds(Canvas canvas, Size size) {
     final pad = size.width * 0.05;
     final topBottomHeight = size.height * 0.25;
     const cols = 2;
@@ -477,7 +481,7 @@ class IO6LedBlockPainter extends BaseLedBlockPainter {
     // Top LED (big)
     final topRect =
         Rect.fromLTWH(pad, pad, size.width - pad * 2, topBottomHeight - pad);
-    _drawLed(canvas, topRect, ledStates[0], borderPaint);
+    drawLed(canvas, topRect, ledStates[0], borderPaint);
 
     // Middle LEDs (2x2 grid)
     for (int i = 0; i < 4; i++) {
@@ -485,12 +489,12 @@ class IO6LedBlockPainter extends BaseLedBlockPainter {
       double cx = pad + c * (middleCellW + pad);
       double cy = pad + r * (middleCellH + pad);
       final cellRect = Rect.fromLTWH(cx, cy, middleCellW, middleCellH);
-      _drawLed(canvas, cellRect, ledStates[i + 1], borderPaint);
+      drawLed(canvas, cellRect, ledStates[i + 1], borderPaint);
     }
 
     // Bottom LED (big)
     final bottomRect = Rect.fromLTWH(pad, size.height - topBottomHeight,
         size.width - pad * 2, topBottomHeight - pad);
-    _drawLed(canvas, bottomRect, ledStates[5], borderPaint);
+    drawLed(canvas, bottomRect, ledStates[5], borderPaint);
   }
 }
