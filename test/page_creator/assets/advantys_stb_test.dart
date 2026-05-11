@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io' show Platform;
+import 'dart:io' show File, Platform;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -8,7 +8,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:open62541/open62541.dart' show DynamicValue;
 import 'package:tfc/page_creator/assets/advantys_stb.dart';
 import 'package:tfc/page_creator/assets/beckhoff.dart' show RowIOView, FilterEdit;
-import 'package:tfc/page_creator/assets/common.dart' show KeyField;
+import 'package:tfc/page_creator/assets/common.dart'
+    show Coordinates, KeyField, RelativeSize, TextPos;
+import 'package:tfc/page_creator/assets/registry.dart';
 import 'package:tfc/painter/advantys_stb/ddi3725.dart';
 import 'package:tfc/painter/advantys_stb/io16.dart';
 import 'package:tfc/painter/beckhoff/io8.dart' show IOState;
@@ -755,6 +757,419 @@ void main() {
       },
     );
   });
+
+  // ---------------------------------------------------------------------------
+  // Plan 04 Task 1: AssetRegistry resolution.
+  //
+  // Two factory maps in `lib/page_creator/assets/registry.dart`:
+  //   - `_fromJsonFactories`: drives `AssetRegistry.parse(saveJson)` —
+  //     missing entry = legacy JSON crashes on load.
+  //   - `defaultFactories`: drives the page-editor palette via
+  //     `AssetRegistry.createDefaultAssetByName(name)` — missing entry =
+  //     palette doesn't list the asset.
+  //
+  // Both maps key on `Type` and the resolution code compares
+  // `factory.key.toString()` against the JSON `asset_name` (i.e. the Dart
+  // class name string). The dual-map convention is the PITFALL §9.2 lock.
+  // ---------------------------------------------------------------------------
+  group('STBDDI3725Config registry resolution', () {
+    test('createDefaultAssetByName returns a typed STBDDI3725Config', () {
+      final asset =
+          AssetRegistry.createDefaultAssetByName('STBDDI3725Config');
+      expect(asset, isNotNull,
+          reason:
+              'defaultFactories must register STBDDI3725Config (palette wiring).');
+      expect(asset, isA<STBDDI3725Config>());
+      final cfg = asset! as STBDDI3725Config;
+      expect(cfg.nameOrId, '1');
+      expect(cfg.rawStateKey, isNull);
+    });
+
+    test('AssetRegistry.parse round-trips a STBDDI3725Config from saved JSON',
+        () {
+      // Real production save flow round-trips through jsonEncode/jsonDecode
+      // (see `lib/page_creator/page.dart`), which invokes nested
+      // `Coordinates.toJson` / `RelativeSize.toJson` along the way. Going
+      // through `Map<String, dynamic>` directly leaves those nested fields
+      // as Dart objects — same shape as the existing `fromJson(toJson())`
+      // test at line 132 (matches Beckhoff EL1008 codegen).
+      final cfg = STBDDI3725Config(
+        nameOrId: 'DI-99',
+        rawStateKey: 'plc/raw',
+      );
+      final saveJson = jsonDecode(jsonEncode(<String, dynamic>{
+        'assets': <Map<String, dynamic>>[cfg.toJson()],
+      })) as Map<String, dynamic>;
+      final parsed = AssetRegistry.parse(saveJson);
+      expect(parsed, hasLength(1),
+          reason:
+              '_fromJsonFactories must register STBDDI3725Config (JSON load wiring).');
+      expect(parsed[0], isA<STBDDI3725Config>());
+      final restored = parsed[0] as STBDDI3725Config;
+      expect(restored.nameOrId, 'DI-99');
+      expect(restored.rawStateKey, 'plc/raw');
+    });
+
+    test('defaultFactories Map contains STBDDI3725Config type key', () {
+      expect(
+        AssetRegistry.defaultFactories.keys.any(
+          (t) => t.toString() == 'STBDDI3725Config',
+        ),
+        isTrue,
+        reason:
+            'STBDDI3725Config must be enumerable through defaultFactories '
+            'for the palette to list it.',
+      );
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Plan 04 Task 2: JSON full round-trip + legacy-JSON back-compat.
+  //
+  // Full round-trip covers every settable field on `STBDDI3725Config` plus
+  // every BaseAsset field (coordinates / size / text / textPos / techDocId /
+  // plcAssetKey). Encoded through `jsonEncode`/`jsonDecode` to mirror the
+  // real production save path in `lib/page_creator/page.dart`.
+  //
+  // Back-compat covers the QUAL-04 lock:
+  //   - A minimal legacy snippet (only `asset_name`) — every settable
+  //     STBDDI3725 field falls back to its declared default.
+  //   - A v1.0-era save-page-shaped JSON (assets list nested under a `pages`
+  //     map) flows through `AssetRegistry.parse` and the legacy snippet is
+  //     recovered into a typed `STBDDI3725Config` instance.
+  //
+  // Default-handling note: `@JsonKey(defaultValue: '1')` on `nameOrId`
+  // already covers the "missing in JSON" case (verified by the existing
+  // 'legacy JSON without nameOrId loads as "1"' test at the data-shape
+  // group). No factory belt-and-suspenders is required.
+  // ---------------------------------------------------------------------------
+  group('STBDDI3725Config full JSON round-trip', () {
+    test(
+      'every field (incl. BaseAsset coordinates/size/text/textPos/techDocId/plcAssetKey) '
+      'survives jsonEncode + jsonDecode + fromJson',
+      () {
+        final original = STBDDI3725Config(
+          nameOrId: 'DI-42',
+          rawStateKey: 'plc/di/raw',
+          forceValuesKey: 'plc/di/force',
+          onFiltersKey: 'plc/di/on_filter',
+          offFiltersKey: 'plc/di/off_filter',
+          descriptionsKey: 'plc/di/desc',
+        )
+          ..coordinates = Coordinates(x: 0.25, y: 0.5)
+          ..size = const RelativeSize(width: 0.1, height: 0.2)
+          ..text = 'unit test'
+          ..textPos = TextPos.below
+          ..techDocId = 42
+          ..plcAssetKey = 'plc.42';
+
+        // Production round-trip: through jsonEncode/jsonDecode.
+        final encoded = jsonEncode(original.toJson());
+        final decoded = jsonDecode(encoded) as Map<String, dynamic>;
+        final parsed = STBDDI3725Config.fromJson(decoded);
+
+        // STBDDI3725 fields.
+        expect(parsed.nameOrId, 'DI-42');
+        expect(parsed.rawStateKey, 'plc/di/raw');
+        expect(parsed.forceValuesKey, 'plc/di/force');
+        expect(parsed.onFiltersKey, 'plc/di/on_filter');
+        expect(parsed.offFiltersKey, 'plc/di/off_filter');
+        expect(parsed.descriptionsKey, 'plc/di/desc');
+        // BaseAsset fields.
+        expect(parsed.coordinates.x, 0.25);
+        expect(parsed.coordinates.y, 0.5);
+        expect(parsed.size.width, 0.1);
+        expect(parsed.size.height, 0.2);
+        expect(parsed.text, 'unit test');
+        expect(parsed.textPos, TextPos.below);
+        expect(parsed.techDocId, 42);
+        expect(parsed.plcAssetKey, 'plc.42');
+        // assetName is set by BaseAsset's variant logic.
+        expect(parsed.assetName, 'STBDDI3725Config');
+      },
+    );
+  });
+
+  group('STBDDI3725Config JSON back-compat', () {
+    // "v1.0-era" here means: predates Phase 1 (this milestone). The shape
+    // therefore carries the v1.0 BaseAsset baseline (asset_name +
+    // coordinates + size, both always present since the codegen requires
+    // them — verified by inspecting `advantys_stb.g.dart` and all peer
+    // *.g.dart files like `beckhoff.g.dart`). What v1.0-era saved pages
+    // would NOT carry are the Phase 1 additions: `nameOrId` and the five
+    // `*Key` fields. Those must rehydrate to their declared defaults.
+    Map<String, dynamic> baseLegacyJson() => <String, dynamic>{
+          'asset_name': 'STBDDI3725Config',
+          'coordinates': {'x': 0.0, 'y': 0.0},
+          'size': {'width': 0.03, 'height': 0.03},
+        };
+
+    test(
+      'minimal legacy snippet (only v1.0 fields) → Phase 1 defaults rehydrate',
+      () {
+        final legacyJson = baseLegacyJson();
+        final config = STBDDI3725Config.fromJson(legacyJson);
+        // Phase 1 fields fall back to declared defaults.
+        expect(config.nameOrId, '1', reason: 'defaultValue must kick in');
+        expect(config.rawStateKey, isNull);
+        expect(config.forceValuesKey, isNull);
+        expect(config.onFiltersKey, isNull);
+        expect(config.offFiltersKey, isNull);
+        expect(config.descriptionsKey, isNull);
+        // BaseAsset fields fall back to their declared defaults.
+        expect(config.coordinates.x, 0.0);
+        expect(config.coordinates.y, 0.0);
+        expect(config.size.width, 0.03);
+        expect(config.size.height, 0.03);
+        expect(config.text, isNull);
+        expect(config.textPos, isNull);
+        expect(config.techDocId, isNull);
+        expect(config.plcAssetKey, isNull);
+        expect(config.assetName, 'STBDDI3725Config');
+      },
+    );
+
+    test(
+      'v1.0-era saved-page JSON wrapping the legacy snippet '
+      'flows through AssetRegistry.parse',
+      () {
+        // Save-page-shaped JSON: `pages` map → `assets` list → legacy snippet.
+        // Mirrors the shape produced by `PageManager` before Phase 1 existed.
+        // The crawler in `AssetRegistry.parse` must descend through both
+        // nested objects, match `asset_name == 'STBDDI3725Config'`, and call
+        // `STBDDI3725Config.fromJson` on the legacy snippet.
+        final saveJson = <String, dynamic>{
+          'pages': <String, dynamic>{
+            'home': <String, dynamic>{
+              'assets': <Map<String, dynamic>>[
+                baseLegacyJson(),
+              ],
+            },
+          },
+        };
+        final parsed = AssetRegistry.parse(saveJson);
+        expect(parsed, hasLength(1),
+            reason:
+                'AssetRegistry must recover a legacy snippet inside a v1.0-era '
+                'saved-page JSON shape (QUAL-04 end-to-end).');
+        expect(parsed[0], isA<STBDDI3725Config>());
+        final cfg = parsed[0] as STBDDI3725Config;
+        expect(cfg.nameOrId, '1');
+        expect(cfg.rawStateKey, isNull);
+        expect(cfg.coordinates.x, 0.0);
+      },
+    );
+
+    test(
+      'unknown forward-compat field in legacy snippet is ignored, not fatal',
+      () {
+        // QUAL-04 forward-compat: a v3.0-era saved page may carry fields
+        // unknown to this binary. The codegen's `_$STBDDI3725ConfigFromJson`
+        // ignores unknown keys silently — verify the contract so a future
+        // regression that flips it to strict-mode fails this test loudly.
+        final futureJson = baseLegacyJson()
+          ..['someFutureFieldKey'] = 'plc/future'
+          ..['unknownEnum'] = 'unknown_value';
+        final cfg = STBDDI3725Config.fromJson(futureJson);
+        expect(cfg.nameOrId, '1');
+        expect(cfg.rawStateKey, isNull);
+      },
+    );
+  });
+
+  // ---------------------------------------------------------------------------
+  // Plan 04 Task 3: Mount/unmount + dialog open/close leak tests
+  // (DDI-10 / QUAL-03 lifecycle verification).
+  //
+  // The two groups follow the elevator/sensor v1.0 precedent at
+  // `elevator_widget_test.dart:1873-1934`:
+  //   1. Pump live widget → pump empty replacement → pump 1s → assert
+  //      `tester.takeException()` is null.
+  //   2. Source-level grep guard locks the dispose contract structurally,
+  //      so a future refactor cannot silently regress the lifecycle.
+  //
+  // `_STBDDI3725State` holds `_combinedStreamCache` (a cold
+  // `CombineLatestStream`) and uses `StreamBuilder` exclusively for
+  // subscription. When the widget unmounts, `StreamBuilder`'s State
+  // cancels the underlying `StreamSubscription`; no explicit dispose
+  // override is required for correctness. We still add a defensive
+  // dispose() that nulls `_combinedStreamCache` to release the closure's
+  // reference to `StateMan` (prevents the cached stream from keeping
+  // `StateMan` reachable through GC roots in long-running pages — paranoid
+  // but cheap).
+  // ---------------------------------------------------------------------------
+  group('STBDDI3725 mount/unmount lifecycle (DDI-10 / QUAL-03)', () {
+    testWidgets(
+      'mount + unmount with stubbed StateMan throws no exceptions',
+      (tester) async {
+        final stub = _StreamingStubStateMan(
+          raw: 0x00FF,
+          force: List<int>.filled(16, 0),
+          onFilters: List<int>.filled(16, 5),
+          offFilters: List<int>.filled(16, 10),
+          descriptions: List<String>.generate(16, (i) => 'ch${i + 1}'),
+        );
+        final cfg = STBDDI3725Config(
+          nameOrId: 'leak-test',
+          rawStateKey: 'raw',
+          forceValuesKey: 'force',
+          onFiltersKey: 'onf',
+          offFiltersKey: 'offf',
+          descriptionsKey: 'desc',
+        );
+        await tester.pumpWidget(
+          ProviderScope(
+            overrides: [
+              stateManProvider.overrideWith((ref) async => stub),
+            ],
+            child: MaterialApp(
+              home: Scaffold(
+                body: Center(
+                  child: SizedBox(
+                    width: 200,
+                    height: 300,
+                    child: Builder(builder: (context) => cfg.build(context)),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+        // Let the FutureProvider resolve + initState setState land.
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 100));
+        expect(find.byType(STBDDI3725Widget), findsOneWidget);
+
+        // Force unmount: replace with empty widget tree. If dispose is
+        // missing, framework surfaces "X was used after being disposed"
+        // or leaks an uncancelled subscription on the next frame.
+        await tester.pumpWidget(const SizedBox.shrink());
+        await tester.pump(const Duration(seconds: 1));
+
+        expect(
+          tester.takeException(),
+          isNull,
+          reason:
+              'Mount/unmount must not throw or leak (DDI-10 / QUAL-03 '
+              'dispose contract on the StreamBuilder subscription).',
+        );
+      },
+    );
+
+    test(
+      'advantys_stb.dart dispose contract grep guard (QUAL-03 fallback)',
+      () {
+        // Source-level guard mirroring the elevator/sensor v1.0 pattern at
+        // `elevator_widget_test.dart:1897-1932`. Even if the runtime leak
+        // assertion above passes silently, the dispose contract MUST be
+        // present in the source so a future refactor surfaces here loudly.
+        //
+        // What we require: _STBDDI3725State overrides dispose() and either
+        // (a) cancels held subscriptions, or (b) nulls the cached stream
+        // reference to release closure refs to StateMan. Calling
+        // `super.dispose()` is mandatory.
+        final src = File('lib/page_creator/assets/advantys_stb.dart')
+            .readAsStringSync();
+        final disposeIdx = src.indexOf(
+            RegExp(r'class\s+_STBDDI3725State[\s\S]*?void\s+dispose\s*\(\)'));
+        expect(disposeIdx, greaterThan(-1),
+            reason:
+                '_STBDDI3725State must override dispose() (DDI-10 / QUAL-03).');
+        // Examine the dispose body window for super.dispose() + at least one
+        // release call (cancel() or null assignment to the cache).
+        final tail = src.substring(disposeIdx);
+        expect(tail.contains('super.dispose()'), isTrue,
+            reason:
+                '_STBDDI3725State.dispose() must call super.dispose() last.');
+        final hasReleaseCall = tail.contains('cancel()') ||
+            tail.contains('_combinedStreamCache = null');
+        expect(hasReleaseCall, isTrue,
+            reason:
+                '_STBDDI3725State.dispose() must release the cached stream '
+                '(cancel held subscription OR null out _combinedStreamCache to '
+                'release the closure-captured StateMan reference).');
+      },
+    );
+  });
+
+  group(
+    'STBDDI3725 dialog open/close 10× leak (DDI-10 / QUAL-03)',
+    () {
+      testWidgets(
+        '10 dialog cycles + unmount throws no exceptions',
+        (tester) async {
+          await tester.binding.setSurfaceSize(const Size(1400, 900));
+          addTearDown(() => tester.binding.setSurfaceSize(null));
+
+          final stub = _StreamingStubStateMan(
+            raw: 0x0000,
+            force: List<int>.filled(16, 0),
+            onFilters: List<int>.filled(16, 5),
+            offFilters: List<int>.filled(16, 10),
+            descriptions: List<String>.generate(16, (i) => 'ch${i + 1}'),
+          );
+          final cfg = STBDDI3725Config(
+            nameOrId: 'DI-leak',
+            rawStateKey: 'raw',
+            forceValuesKey: 'force',
+            onFiltersKey: 'onf',
+            offFiltersKey: 'offf',
+            descriptionsKey: 'desc',
+          );
+          await tester.pumpWidget(
+            ProviderScope(
+              overrides: [
+                stateManProvider.overrideWith((ref) async => stub),
+              ],
+              child: MaterialApp(
+                home: Scaffold(
+                  body: Center(
+                    child: SizedBox(
+                      width: 200,
+                      height: 300,
+                      child: Builder(
+                          builder: (context) => cfg.build(context)),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          );
+          await tester.pump();
+          await tester.pump(const Duration(milliseconds: 100));
+          expect(find.byType(STBDDI3725Widget), findsOneWidget);
+
+          // 10× open / close cycles. Each open spawns a fresh dialog
+          // StreamBuilder; each close (Navigator.pop via 'Close' action)
+          // disposes it, releasing the underlying StateMan listeners.
+          for (int i = 0; i < 10; i++) {
+            await tester.tap(find.byType(STBDDI3725Widget));
+            await tester.pumpAndSettle();
+            expect(find.byType(AlertDialog), findsOneWidget,
+                reason: 'iteration $i: dialog should open');
+
+            await tester.tap(find.widgetWithText(TextButton, 'Close'));
+            await tester.pumpAndSettle();
+            expect(find.byType(AlertDialog), findsNothing,
+                reason: 'iteration $i: dialog should close');
+          }
+
+          // After 10 cycles, also dispose the parent — covers the
+          // combined "dialog churn + page navigation" lifecycle path.
+          await tester.pumpWidget(const SizedBox.shrink());
+          await tester.pump(const Duration(seconds: 1));
+
+          expect(
+            tester.takeException(),
+            isNull,
+            reason:
+                '10× dialog cycles + parent unmount must not throw or leak '
+                '(DDI-10 / QUAL-03 — listener counts return to baseline).',
+          );
+        },
+      );
+    },
+  );
 }
 
 // ---------------------------------------------------------------------------
