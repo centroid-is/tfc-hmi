@@ -1,4 +1,7 @@
+import 'dart:convert';
+
 import 'package:flutter_test/flutter_test.dart';
+import 'package:tfc/page_creator/assets/advantys_stb.dart';
 import 'package:tfc/painter/advantys_stb/io16.dart';
 import 'package:tfc/painter/beckhoff/io8.dart' show IOState;
 
@@ -83,6 +86,76 @@ void main() {
       for (int i = 2; i < 16; i++) {
         expect(states[i], IOState.low, reason: 'index $i should remain low');
       }
+    });
+  });
+
+  group('STBDDI3725Config — data shape', () {
+    test('preview() succeeds with nameOrId=="1" and all five *Key fields null',
+        () {
+      final c = STBDDI3725Config.preview();
+      expect(c.nameOrId, '1');
+      expect(c.rawStateKey, isNull);
+      expect(c.forceValuesKey, isNull);
+      expect(c.onFiltersKey, isNull);
+      expect(c.offFiltersKey, isNull);
+      expect(c.descriptionsKey, isNull);
+    });
+
+    test('toJson()["asset_name"] == "STBDDI3725Config" (BaseAsset variant auto-set)',
+        () {
+      final c = STBDDI3725Config(nameOrId: 'DI-01', rawStateKey: 'di/raw');
+      final json = c.toJson();
+      expect(json['asset_name'], 'STBDDI3725Config');
+    });
+
+    test('allKeys picks up all five *Key fields via the Key\$ regex (no override needed)',
+        () {
+      final c = STBDDI3725Config(
+        nameOrId: 'DI-01',
+        rawStateKey: 'di/raw',
+        forceValuesKey: 'di/force',
+        descriptionsKey: 'di/desc',
+      );
+      expect(c.allKeys.toSet(), {'di/raw', 'di/force', 'di/desc'});
+    });
+
+    test('fromJson(toJson()) round-trips cleanly via real JSON encode/decode',
+        () {
+      // Real production round-trip goes through `jsonEncode`/`jsonDecode` (see
+      // `lib/page_creator/page.dart`), which invokes nested `Coordinates.toJson`
+      // / `RelativeSize.toJson` via their own `toJson` methods. Going through
+      // `Map<String, dynamic>` directly leaves them as Dart objects (matches
+      // Beckhoff EL1008 — same generated code shape).
+      final original = STBDDI3725Config(
+        nameOrId: 'X',
+        rawStateKey: 'a/raw',
+        forceValuesKey: 'a/force',
+        onFiltersKey: 'a/onf',
+        offFiltersKey: 'a/offf',
+        descriptionsKey: 'a/desc',
+      );
+      final encoded = jsonEncode(original.toJson());
+      final decoded = jsonDecode(encoded) as Map<String, dynamic>;
+      final parsed = STBDDI3725Config.fromJson(decoded);
+      expect(parsed.nameOrId, 'X');
+      expect(parsed.rawStateKey, 'a/raw');
+      expect(parsed.forceValuesKey, 'a/force');
+      expect(parsed.onFiltersKey, 'a/onf');
+      expect(parsed.offFiltersKey, 'a/offf');
+      expect(parsed.descriptionsKey, 'a/desc');
+    });
+
+    test('legacy JSON without nameOrId loads as "1" (QUAL-04 back-compat)', () {
+      // Construct a minimal legacy JSON blob lacking nameOrId — the
+      // @JsonKey(defaultValue: '1') annotation must rehydrate it.
+      final legacyJson = <String, dynamic>{
+        'asset_name': 'STBDDI3725Config',
+        'coordinates': {'x': 0.0, 'y': 0.0},
+        'size': {'width': 0.03, 'height': 0.03},
+      };
+      final parsed = STBDDI3725Config.fromJson(legacyJson);
+      expect(parsed.nameOrId, '1');
+      expect(parsed.rawStateKey, isNull);
     });
   });
 }
