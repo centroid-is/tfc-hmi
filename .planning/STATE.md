@@ -1,9 +1,9 @@
 ---
 gsd_state_version: 1.0
 milestone: v2.0
-milestone_name: Modicon Momentum I/O Assets
+milestone_name: Advantys STB I/O Assets
 status: planning
-last_updated: "2026-05-11T14:18:25.928Z"
+last_updated: "2026-05-11T14:55:43.929Z"
 last_activity: 2026-05-11
 progress:
   total_phases: 0

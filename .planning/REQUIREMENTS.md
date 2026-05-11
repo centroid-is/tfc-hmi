@@ -1,158 +1,155 @@
-# Requirements: Elevator & Sensor Assets
+# Requirements: v2.0 Advantys STB I/O Assets
 
-**Defined:** 2026-05-06
-**Core Value:** Operators can place an elevator on a page, assign sensors and conveyors to it via the config dialog, and watch those children physically ride the platform up and down as the PLC's position value changes — with sensor detection states reflected accurately in real time.
+**Milestone:** v2.0
+**Defined:** 2026-05-11
+**Sources:** `.planning/research/SUMMARY.md` (synthesizing STACK / FEATURES / ARCHITECTURE / PITFALLS) + user-locked decisions from milestone kickoff.
 
-## v1 Requirements
+> **Naming note**: Centroid operators call these "Modicon Momentum" but Schneider's catalog uses the **Advantys STB** family name. All requirements use the catalog-correct `STB...` prefix. Asset-picker label is at the planner's discretion.
 
-### Sensor
+## v1 Requirements (Active scope)
 
-- [ ] **SENS-01**: User can place a Sensor asset from the page-creator palette
-- [ ] **SENS-02**: User can select sensor kind in the config dialog: red light (paired), optic field, inductive field
-- [ ] **SENS-03**: Sensor renders kind-specific glyphs via dedicated `CustomPainter` per kind (no `switch` inside `paint()`)
-- [ ] **SENS-04**: Red light sensor renders as a single instance with emitter + receiver + connecting beam line
-- [ ] **SENS-05**: Sensor visual flips active/inactive immediately on bool state-key change (no client-side smoothing or animation)
-- [ ] **SENS-06**: Beam line for red-light kind changes appearance with state — solid when clear (bool true), dashed/accent when blocked (bool false)
-- [ ] **SENS-07**: Optic field and inductive field kinds render the field shape (cone / bubble) filled when active, outlined when inactive
-- [ ] **SENS-08**: Active and inactive colours are configurable per instance; default active = `Colors.green` (matching `led.dart`), default inactive = neutral grey
-- [ ] **SENS-09**: User can configure rising-edge-delay state key in the dialog (display-only — value shown in tooltip, does not affect visual)
-- [ ] **SENS-10**: User can configure falling-edge-delay state key in the dialog (display-only — value shown in tooltip, does not affect visual)
-- [ ] **SENS-11**: Tooltip on hover/longpress shows rising and falling edge-delay values resolved from their state keys
-- [ ] **SENS-12**: User can toggle "active polarity" per sensor (invert detection bool — supports dark-on through-beam vs light-on diffuse without PLC remap)
-- [ ] **SENS-13**: User can configure a per-sensor label/tag rendered next to the glyph (e.g. "PE-101A")
-- [ ] **SENS-14**: Stale or disconnected stream renders the sensor in neutral grey (matches `conveyor_gate.dart` convention `baseColor = Colors.grey`)
-- [ ] **SENS-15**: Sensor honours rotation via existing `Coordinates.angle` field (no new rotation primitive)
-- [ ] **SENS-16**: Sensor registers with `AssetRegistry` such that older saved pages without sensor instances continue to load
-- [ ] **SENS-17**: Sensor JSON round-trips through `_$SensorConfigFromJson` / `_$SensorConfigToJson` with defensible defaults on every field
+Grouped by module. Every requirement maps to an existing Beckhoff parity surface (per the FEATURES research lane).
 
-### Elevator
+### Stack Composition (5 reqs)
 
-- [ ] **ELEV-01**: User can place an Elevator asset from the page-creator palette
-- [ ] **ELEV-02**: Elevator renders vertical rails + a platform deck (no shaft cage, no cabin glyph)
-- [ ] **ELEV-03**: Elevator's travel range equals its bounding box: 0% = platform at bottom, 100% = platform at top
-- [ ] **ELEV-04**: Platform position is driven by a single 0–100% state key from the PLC (continuous float)
-- [ ] **ELEV-05**: Position pipeline hoists the StateMan stream to `initState` (no inline stream construction in `build()`)
-- [ ] **ELEV-06**: Platform position transitions smoothly via `TweenAnimationBuilder<double>` (or equivalent `AnimationController` + `ValueNotifier<double>`); rebuilds scoped to `ValueListenableBuilder` only
-- [ ] **ELEV-07**: User can add child assets to the elevator via a dropdown in the config dialog (filtered to Sensor and Conveyor kinds)
-- [ ] **ELEV-08**: User can remove and edit child assets via the same dialog
-- [ ] **ELEV-09**: Each child entry stores its lateral platform offset (0..1) and a stable identity (UUID) for `ValueKey` use
-- [ ] **ELEV-10**: Children physically translate with the platform — their `Positioned.top` follows the platform Y in real time
-- [ ] **ELEV-11**: Each child renders via its own polymorphic `BaseAsset.build(context)`; the elevator never switches on child runtime type
-- [ ] **ELEV-12**: Children retain widget identity across position changes (`ValueKey<String>` keyed on the child entry's UUID)
-- [ ] **ELEV-13**: Elevator's `allKeys` override flat-maps children's `allKeys` plus its own `positionKey` so alarms/collectors discover nested keys
-- [ ] **ELEV-14**: Stale or disconnected position stream renders the elevator in subdued grey (consistent with sensor convention)
-- [ ] **ELEV-15**: Out-of-range position (> 100% or < 0%) clamps and surfaces a coloured outline (amber per ISA-101)
-- [ ] **ELEV-16**: Elevator registers with `AssetRegistry` such that older saved pages without elevator instances continue to load
-- [ ] **ELEV-17**: Elevator JSON round-trips through `_$ElevatorConfigFromJson` / `_$ElevatorConfigToJson` with defensible defaults on every field; child list defaults to empty
-- [ ] **ELEV-18**: `_childrenFromJson` legacy shim handles future schema evolution (mirror of `conveyor.dart:_gatesFromJson`)
-- [ ] **ELEV-19**: Children's GestureDetectors continue to receive taps while the platform is mid-translation (hit-test region follows the rendered position, not the layout-time position)
+- [ ] **STACK-01** — `AdvantysSTBStackConfig` extends `BaseAsset`, registered in `AssetRegistry` (both `_fromJsonFactories` and `defaultFactories`)
+- [ ] **STACK-02** — Holds polymorphic `List<Asset> subdevices` via `@AssetListConverter()` (mirror CX5010 verbatim)
+- [ ] **STACK-03** — `allKeys` override flat-maps each subdevice's `allKeys` + recursive subdevices' keys; preserves de-duplication and empty-filter semantics
+- [ ] **STACK-04** — Reorderable subdevice list in the configure dialog with filtered "Add" dropdown — only the 4 STB module types selectable
+- [ ] **STACK-05** — Post-`fromJson` sanitiser rejects foreign child types (whitelist enforcement); permissive renderer, restrictive add
 
-### Quality
+### NIP2311 Head (4 reqs)
 
-- [ ] **QUAL-01**: Per-kind sensor painter has its own `CustomPainter` subclass; `shouldRepaint` returns `true` when `runtimeType` differs (prevents kind-switch leakage)
-- [ ] **QUAL-02**: Golden tests cover each `SensorKind` × {active, inactive} combination
-- [ ] **QUAL-03**: Golden tests cover elevator at progress {0.0, 0.5, 1.0} with one Sensor and one Conveyor child attached
-- [ ] **QUAL-04**: Unit test for the `platformOffsetTop(progress, bboxHeight, platformHeight)` helper at progress {0.0, 0.5, 1.0}
-- [ ] **QUAL-05**: JSON round-trip tests for both assets, including legacy / missing-field tolerance
-- [ ] **QUAL-06**: Multi-elevator smoke test verifies independent state subscriptions (no shared-mutable-state regression)
-- [ ] **QUAL-07**: `LeakTesting.enable()` mount/unmount test verifies AnimationControllers and stream subscriptions are disposed cleanly
-- [ ] **QUAL-08**: All implementation work follows TDD — test (golden / widget / unit) is written and committed before the production code that satisfies it
+- [ ] **NIP-01** — `STBNIP2311Config` extends `BaseAsset` + registered in registry
+- [ ] **NIP-02** — Painter: body + dual RJ45 ports (reuse `EthernetPortPainter` from `lib/painter/beckhoff/ek1100.dart`) + decorative status LED strip
+- [ ] **NIP-03** — Status LEDs (RUN/PWR/ERR/ST/TEST) render decoratively in fixed "normal" state. **No PLC keys configurable per LED** (firmware-driven on real hardware — locked decision)
+- [ ] **NIP-04** — JSON round-trip + JSON back-compat (legacy page without this asset still loads)
 
-## v2 Requirements
+### PDT3100 Power (3 reqs)
 
-### Sensor (deferred)
+- [ ] **PDT-01** — `STBPDT3100Config` extends `BaseAsset` + registered
+- [ ] **PDT-02** — Painter: body + single LED bound to optional `inputOkKey` bool (green = OK, dim = unknown/disconnected)
+- [ ] **PDT-03** — JSON round-trip + back-compat
 
-- **SENS-V2-01**: Position-in-mm readout configurable per sensor (signal-strength tint, per-kind)
-- **SENS-V2-02**: "Last seen" freshness pip showing recency of last edge transition
-- **SENS-V2-03**: Configurable analog signal-strength state key fading the active colour by intensity
+### DDI3725 16-Ch Digital Input (10 reqs)
 
-### Elevator (deferred)
+- [ ] **DDI-01** — `STBDDI3725Config` extends `BaseAsset` + registered
+- [ ] **DDI-02** — Painter: body + 16-LED grid in **2×8 column-major layout** (channels 1–8 LEFT column top-to-bottom, channels 9–16 RIGHT column top-to-bottom) + RDY indicator + dual terminal blocks (A/B, 18 pos each — per photo, NOT the inaccurate DXF)
+- [ ] **DDI-03** — `IO16LedBlockPainter extends BaseLedBlockPainter` at `lib/painter/advantys_stb/io16.dart` (sibling to `io8.dart`, NOT parameterised)
+- [ ] **DDI-04** — Bitmask-driven channel state from `rawStateKey` (uint16; bit i = channel i+1). Bit-ordering convention LOCKED before goldens with a unit test (research-flagged: confirm LSB-first vs MSB-first with backend during Plan 01)
+- [ ] **DDI-05** — Per-channel force-override via `forceValuesKey` (auto / forcedLow / forcedHigh). **Force collapses raw state** in display (matches EL1008 behavior — locked decision; NO corner pip for raw-under-force in v2.0)
+- [ ] **DDI-06** — Per-channel ON filter ms via `onFiltersKey` (uint16[16])
+- [ ] **DDI-07** — Per-channel OFF filter ms via `offFiltersKey` (uint16[16])
+- [ ] **DDI-08** — Per-channel descriptions via `descriptionsKey` (string[16])
+- [ ] **DDI-09** — Tap-to-open detail dialog: 8 rows of 2-column `RowIOView` (vs 4 rows × 2 in EL1008); each row shows channel state, force segmented-button, filter inputs, description text field
+- [ ] **DDI-10** — JSON round-trip + back-compat + leak test (mount/unmount = clean disposal of `AnimationController`, `ValueNotifier`, stream subscription)
 
-- **ELEV-V2-01**: Top/bottom position labels (configurable strings — e.g. "Loading", "Discharge")
-- **ELEV-V2-02**: Position readout in millimetres via configurable `travelRangeMm`
-- **ELEV-V2-03**: Direction arrow / motion pip (computed from position derivative over a small window; arrow only shown when moving)
-- **ELEV-V2-04**: Soft-limit / interlock indicator zones (coloured bands on rails driven by setpoint state keys)
-- **ELEV-V2-05**: Discrete floor/level labels for indexed lifts
+### DDO3705 16-Ch Digital Output (9 reqs)
 
-## Out of Scope
+- [ ] **DDO-01** — `STBDDO3705Config` extends `BaseAsset` + registered
+- [ ] **DDO-02** — Painter reuses `IO16LedBlockPainter` from DDI; module body has its own painter at `lib/painter/advantys_stb/ddo3705.dart` with output-style LED legend
+- [ ] **DDO-03** — Bitmask state from `rawStateKey` (uint16; bit-ordering MUST match the constant locked in DDI-04)
+- [ ] **DDO-04** — Per-channel force-override via `forceValuesKey` (same encoding as DDI). Operator can manually write forced state via the SegmentedButton in detail dialog (existing EL2008 path)
+- [ ] **DDO-05** — Per-channel descriptions via `descriptionsKey`
+- [ ] **DDO-06** — Tap-to-open detail dialog mirrors DDI's structure but omits filter rows (outputs don't have filters)
+- [ ] **DDO-07** — JSON round-trip + back-compat + leak test
+- [ ] **DDO-08** — Visual differentiates output from input (LED legend strip + label color) but shares the base body painter — golden tests confirm visual distinction
+- [ ] **DDO-09** — Manual force-write path verified end-to-end (operator drag-to-force in dialog → StateMan write → painter reflects)
 
-| Feature | Reason |
-|---------|--------|
-| Horizontal or 2D elevator motion | Operators only need vertical lifts in this milestone; revisit if a use case appears |
-| Drag-drop child assignment in the editor | Dropdown is sufficient and avoids hit-testing complexity inherited from the gate work |
-| Auto-attach children by overlap | Implicit attachment is invisible and fragile; explicit assignment required |
-| Client-side debounce / delay smoothing for sensors | HMI shows raw PLC truth; PLC owns debouncing |
-| Three separate sensor asset types in registry | Single asset with kind selector keeps the registry uncluttered |
-| Discrete floor / level positioning | Continuous 0–100% covers servo and indexed mechanisms equally well |
-| Edge-delay configuration as numeric fields in HMI dialog | Delay values come from PLC state keys, not HMI-local config |
-| Animated platform easing tweens that exaggerate motion | ISA-101: no gratuitous animation; motion is reserved for actual abnormal states |
-| Decorative motion (pulsing beam, spinning drum) | ISA-101 anti-pattern — fatigues operators and masks abnormal-condition motion |
-| Red as default active colour for sensors | ISA-101 reserves red for fault/alarm — using red for normal detection drowns real alarms |
-| 3D / isometric lift rendering | Diverges from tfc-hmi2 flat-painter convention |
-| Drag platform to write position back to PLC | Inverts read-only contract — manual jog belongs on a dedicated control widget |
-| Per-asset hand-coded SVG icons | Diverges from CustomPainter convention; harder goldens, no per-state colour control |
+### Cross-cutting / Quality (7 reqs)
+
+- [ ] **QUAL-01** — Golden tests verify painters against DXF + photo references. References at `.planning/research/dxf/` + `.planning/research/photos/`. macOS-gated. Light + dark theme pair per module = ~14 PNGs minimum
+- [ ] **QUAL-02** — Schneider cream body color fixed (NOT theme-driven); text outside the body uses `Theme.of(context).colorScheme.onSurface`
+- [ ] **QUAL-03** — `_combinedStream` hoisted to `initState` (no per-rebuild resubscribe storm); cancelled in `dispose` (Pitfall M-03 prevention)
+- [ ] **QUAL-04** — All new configs use `@JsonKey(defaultValue: ...)` or nullable fields so legacy saved pages round-trip (Pitfall M-06 prevention)
+- [ ] **QUAL-05** — Each module wrapped in `GestureDetector(HitTestBehavior.opaque)` so taps register on the body, not transparent gaps in the painter
+- [ ] **QUAL-06** — `flutter analyze` clean across all new files
+- [ ] **QUAL-07** — Integration test: page with 1× AdvantysSTBStack containing 1× NIP + 1× PDT + 1× DDI + 1× DDO loads cleanly, all child keys discoverable via `stack.allKeys`, every painter renders, taps register
+
+---
+
+**v1 total: 38 requirements** (5 STACK + 4 NIP + 3 PDT + 10 DDI + 9 DDO + 7 QUAL)
+
+## Future Requirements (Deferred to v2.1+)
+
+- **NIP-FUT-01** — NIP MAC ID / IP address readout in detail dialog (string keys, read-only)
+- **NIP-FUT-02** — Per-port Ethernet link/activity dot on RJ45 painter (bool key per port)
+- **DDI-FUT-01** — Corner-pip raw-state-under-force indicator (3× more goldens per module; commissioning win)
+- **STACK-FUT-01** — Multi-stack composition on a single page (multiple AdvantysSTBStack instances) + cross-stack alarm rollup
+- **PAINTER-FUT-01** — Generalised `IONLedBlockPainter` parameterised by channel count; cover 4/8/16/32-channel modules uniformly
+- **STACK-FUT-02** — Stack-level "disconnected" rollup state (any subdevice disconnected → stack frame goes amber)
+- **STACK-FUT-03** — Canonical-layout enforcement (NIP must be first, PDT next to NIP, I/O modules in any order after) — currently free-form
+
+## Out of Scope (explicit)
+
+- **OOS-01** — Backend Modbus key plumbing. Assets consume opaque StateMan keys. The PLC-side address-to-key mapping is owned by whoever configures the Advantys STB device — NOT the HMI asset code
+- **OOS-02** — Pixel-perfect Schneider trademark replication. Painter fidelity is "operator-recognizable" not photorealistic
+- **OOS-03** — Per-channel current readback / wire-break diagnostics. Beckhoff doesn't have it either; would require a new state-key category and dialog row
+- **OOS-04** — Group-of-8 fuse status. Schneider STB doesn't expose this as a standard surface
+- **OOS-05** — Five separately-keyed NIP status LEDs. Real hardware doesn't expose RUN/PWR/ERR/ST/TEST individually over Modbus — they're firmware-internal indicators
+- **OOS-06** — Three-LED-per-channel diagnostic rendering (force + raw + output-state pip). Defer to v2.1 if user demand surfaces
+- **OOS-07** — Cross-cutting `BaseLedBlockPainter` refactor / promotion to `lib/painter/common/`. Brownfield refactor while shipping additive features is the anti-pattern; defer to a dedicated cleanup milestone
 
 ## Traceability
 
-| Requirement | Phase | Status |
-|-------------|-------|--------|
-| SENS-01 | Phase 1 | Pending |
-| SENS-02 | Phase 1 | Pending |
-| SENS-03 | Phase 1 | Pending |
-| SENS-04 | Phase 1 | Pending |
-| SENS-05 | Phase 1 | Pending |
-| SENS-06 | Phase 1 | Pending |
-| SENS-07 | Phase 1 | Pending |
-| SENS-08 | Phase 1 | Pending |
-| SENS-09 | Phase 1 | Pending |
-| SENS-10 | Phase 1 | Pending |
-| SENS-11 | Phase 1 | Pending |
-| SENS-12 | Phase 1 | Pending |
-| SENS-13 | Phase 1 | Pending |
-| SENS-14 | Phase 1 | Pending |
-| SENS-15 | Phase 1 | Pending |
-| SENS-16 | Phase 1 | Pending |
-| SENS-17 | Phase 1 | Pending |
-| ELEV-01 | Phase 2 | Pending |
-| ELEV-02 | Phase 2 | Pending |
-| ELEV-03 | Phase 2 | Pending |
-| ELEV-04 | Phase 2 | Pending |
-| ELEV-05 | Phase 2 | Pending |
-| ELEV-06 | Phase 2 | Pending |
-| ELEV-07 | Phase 3 | Pending |
-| ELEV-08 | Phase 3 | Pending |
-| ELEV-09 | Phase 3 | Pending |
-| ELEV-10 | Phase 3 | Pending |
-| ELEV-11 | Phase 3 | Pending |
-| ELEV-12 | Phase 3 | Pending |
-| ELEV-13 | Phase 3 | Pending |
-| ELEV-14 | Phase 2 | Pending |
-| ELEV-15 | Phase 4 | Pending |
-| ELEV-16 | Phase 2 | Pending |
-| ELEV-17 | Phase 2 | Pending |
-| ELEV-18 | Phase 2 | Pending |
-| QUAL-01 | Phase 1 | Pending |
-| QUAL-02 | Phase 1 | Pending |
-| QUAL-03 | Phase 3 | Pending |
-| QUAL-04 | Phase 2 | Pending |
-| QUAL-05 | Phase 1 | Pending |
-| QUAL-06 | Phase 4 | Pending |
-| QUAL-07 | Phase 4 | Pending |
-| ELEV-19 | Phase 3 | Pending |
-| QUAL-08 | All phases | Pending |
+Every v1 requirement is mapped to exactly one phase. Plans are assigned during `/gsd-plan-phase`.
 
-**Coverage:**
-- v1 requirements: 44 total (added ELEV-19 and QUAL-08 on 2026-05-06)
-- Mapped to phases: 44
-- Unmapped: 0
+| REQ-ID | Phase | Plan | Status |
+|--------|-------|------|--------|
+| DDI-01 | Phase 1 | TBD | Pending |
+| DDI-02 | Phase 1 | TBD | Pending |
+| DDI-03 | Phase 1 | TBD | Pending |
+| DDI-04 | Phase 1 | TBD | Pending |
+| DDI-05 | Phase 1 | TBD | Pending |
+| DDI-06 | Phase 1 | TBD | Pending |
+| DDI-07 | Phase 1 | TBD | Pending |
+| DDI-08 | Phase 1 | TBD | Pending |
+| DDI-09 | Phase 1 | TBD | Pending |
+| DDI-10 | Phase 1 | TBD | Pending |
+| QUAL-01 | Phase 1 | TBD | Pending |
+| QUAL-02 | Phase 1 | TBD | Pending |
+| QUAL-03 | Phase 1 | TBD | Pending |
+| QUAL-04 | Phase 1 | TBD | Pending |
+| QUAL-05 | Phase 1 | TBD | Pending |
+| DDO-01 | Phase 2 | TBD | Pending |
+| DDO-02 | Phase 2 | TBD | Pending |
+| DDO-03 | Phase 2 | TBD | Pending |
+| DDO-04 | Phase 2 | TBD | Pending |
+| DDO-05 | Phase 2 | TBD | Pending |
+| DDO-06 | Phase 2 | TBD | Pending |
+| DDO-07 | Phase 2 | TBD | Pending |
+| DDO-08 | Phase 2 | TBD | Pending |
+| DDO-09 | Phase 2 | TBD | Pending |
+| NIP-01 | Phase 3 | TBD | Pending |
+| NIP-02 | Phase 3 | TBD | Pending |
+| NIP-03 | Phase 3 | TBD | Pending |
+| NIP-04 | Phase 3 | TBD | Pending |
+| PDT-01 | Phase 4 | TBD | Pending |
+| PDT-02 | Phase 4 | TBD | Pending |
+| PDT-03 | Phase 4 | TBD | Pending |
+| STACK-01 | Phase 5 | TBD | Pending |
+| STACK-02 | Phase 5 | TBD | Pending |
+| STACK-03 | Phase 5 | TBD | Pending |
+| STACK-04 | Phase 5 | TBD | Pending |
+| STACK-05 | Phase 5 | TBD | Pending |
+| QUAL-06 | Phase 5 | TBD | Pending |
+| QUAL-07 | Phase 5 | TBD | Pending |
 
-**Phase distribution:**
-- Phase 1 (Sensor Asset): 20 requirements (17 SENS + QUAL-01, QUAL-02, QUAL-05)
-- Phase 2 (Elevator Foundation): 11 requirements (10 ELEV + QUAL-04)
-- Phase 3 (Elevator Child Embedding): 9 requirements (8 ELEV + QUAL-03)
-- Phase 4 (Polish, Error UX & CI Hardening): 3 requirements (1 ELEV + QUAL-06, QUAL-07)
-- All phases: 1 cross-cutting (QUAL-08 TDD discipline)
+**Coverage: 38 / 38 v1 requirements mapped (100%). No orphans, no duplicates.**
+
+### Coverage by Phase
+
+| Phase | Requirement Count | REQ-IDs |
+|-------|-------------------|---------|
+| Phase 1 (STBDDI3725) | 15 | DDI-01..10, QUAL-01..05 |
+| Phase 2 (STBDDO3705) | 9 | DDO-01..09 |
+| Phase 3 (STBNIP2311) | 4 | NIP-01..04 |
+| Phase 4 (STBPDT3100) | 3 | PDT-01..03 |
+| Phase 5 (AdvantysSTBStack) | 7 | STACK-01..05, QUAL-06, QUAL-07 |
+| **Total** | **38** | |
+
+**Rationale for QUAL allocation:** QUAL-01 through QUAL-05 land in Phase 1 because Phase 1 is the convention-locking phase — golden harness, cream-body discipline, combined-stream hoisting, @JsonKey defaults, and GestureDetector wrapping are all established there and inherited by Phases 2–4 automatically. QUAL-06 (`flutter analyze` clean) and QUAL-07 (full-stack integration test) land in Phase 5 because that is the final integration verifier — the integration test requires all four module types to exist, and the analyze gate is enforced once across the complete milestone footprint.
 
 ---
-*Requirements defined: 2026-05-06*
-*Last updated: 2026-05-05 — traceability mapped to roadmap phases (4 phases, 42/42 covered)*
+
+*Generated 2026-05-11 from research SUMMARY.md + 3 user-locked decisions (naming → STB; force LED → collapse; NIP LEDs → decorative-only). Traceability filled 2026-05-11 during roadmapping.*

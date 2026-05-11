@@ -1,90 +1,100 @@
-# Roadmap: Elevator & Sensor Assets
+# Roadmap: Advantys STB I/O Assets (v2.0)
 
 ## Overview
 
-Two new HMI assets — a vertical-lift elevator carrying child assets and a multi-kind sensor visualiser — delivered in four phases. Phase 1 ships the standalone Sensor asset (simpler; establishes per-kind painter and golden-test conventions). Phase 2 ships the elevator's config + static visuals + position pipeline (validates the data path independently of child-embedding risk). Phase 3 wires children onto the platform (highest complexity: identity, hit-testing, allKeys, editor). Phase 4 hardens the assets for production (error UX, leak tests, multi-elevator smoke). Each phase is a verifiable user-facing deliverable; no horizontal layering.
+Five new HMI assets — four Schneider Advantys STB module faceplates (STBDDI3725 16-ch DI, STBDDO3705 16-ch DO, STBNIP2311 Ethernet head, STBPDT3100 power) plus an AdvantysSTBStack composite parent — delivered in five phases, **module-first / stack-last**. Phase 01 ships DDI3725 first: it is the highest-risk technical work (16-LED painter scale-up, bitmask decoding, force-overlay collapse, tap-to-open detail dialog) and the most operator-visible module; locking it first establishes every convention (golden harness, combined-stream hoisting, cream-body discipline, GestureDetector wrapping, @JsonKey defaults) that the remaining four phases reuse. Phase 02 clones DDO3705 (DI minus filters, plus manual force-write path). Phase 03 adds NIP2311 with decorative status LEDs and dual RJ45 reuse. Phase 04 ships PDT3100 (smallest, single bool key). Phase 05 composes everything into AdvantysSTBStack with `allKeys` recursive flattening (CX5010 verbatim) plus full integration test. Two upstream research items are flagged before Phase 01 lands and one before Phase 03 lands. Every phase has goldens against DXF + photo references; every leaf module phase delivers a JSON round-trip + leak test.
 
 ## Phases
 
 **Phase Numbering:**
-- Integer phases (1, 2, 3): Planned milestone work
-- Decimal phases (2.1, 2.2): Urgent insertions (marked with INSERTED)
+- Integer phases (1, 2, 3, 4, 5): Planned milestone work for v2.0
+- Decimal phases (e.g. 2.1, 2.2): Urgent insertions (marked with INSERTED)
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [x] **Phase 1: Sensor Asset** - Multi-kind sensor renders detection state from a bool state key, with config dialog, painters, and goldens ✅ 80 tests
-- [x] **Phase 2: Elevator Foundation** - Elevator config + static visuals + position-driven platform pipeline (no children yet) ✅ 63 tests
-- [x] **Phase 3: Elevator Child Embedding** - Children translate with the platform; editor dropdown adds/removes/edits children ✅ 61 tests (+ LayoutRotatedBox.hitTest bug fix)
-- [x] **Phase 4: Polish, Error UX & CI Hardening** - Out-of-range fault outline, leak tests, multi-elevator smoke ✅ Closes milestone
+> v1.0 phases (Elevator & Sensor Assets) are archived to `.planning/milestones/v1.0/`. Phase numbering RESETS to 1 for v2.0.
+
+- [ ] **Phase 1: STBDDI3725 (16-Ch Digital Input)** - Highest-risk module first: 16-LED painter + force overlay + 16-row detail dialog; locks bit-ordering + golden harness + cream-body discipline for the milestone
+- [ ] **Phase 2: STBDDO3705 (16-Ch Digital Output)** - Clones DDI3725 minus filters; reuses `IO16LedBlockPainter` and proves DI/DO symmetry with manual force-write end-to-end
+- [ ] **Phase 3: STBNIP2311 (Ethernet Head Adapter)** - Module body + dual RJ45 (reuse `EthernetPortPainter`) + decorative-only status LEDs (no per-LED PLC keys)
+- [ ] **Phase 4: STBPDT3100 (Power Distribution)** - Smallest module: body + single `inputOkKey` LED + JSON round-trip
+- [ ] **Phase 5: AdvantysSTBStack (Composite Parent)** - Compose all four module types with `allKeys` flat-map + filtered Add dropdown + permissive-render-restrictive-add sanitiser + full-stack integration test
 
 ## Phase Details
 
-### Phase 1: Sensor Asset
-**Goal**: Operators can place a sensor on a page, pick its kind, and watch its visual flip live with the PLC bool state key — with each kind drawn by its own painter, immediate (un-smoothed) state response, configurable colours, edge-delay tooltips, and full JSON / registry round-trip.
-**Depends on**: Nothing (first phase)
-**Requirements**: SENS-01, SENS-02, SENS-03, SENS-04, SENS-05, SENS-06, SENS-07, SENS-08, SENS-09, SENS-10, SENS-11, SENS-12, SENS-13, SENS-14, SENS-15, SENS-16, SENS-17, QUAL-01, QUAL-02, QUAL-05
+### Phase 1: STBDDI3725 (16-Ch Digital Input)
+**Goal**: Operators can place an STBDDI3725 16-channel digital-input module on a page, point its `rawStateKey` at the PLC uint16 bitmask plus per-channel `forceValuesKey` / `onFiltersKey` / `offFiltersKey` / `descriptionsKey`, watch all 16 channel LEDs reflect live state in a column-major 2×8 grid (channels 1–8 left column, 9–16 right column), and tap the body to open an 8-row × 2-column detail dialog where each row exposes the channel's state, a force segmented-button (auto/low/high), filter ms inputs, and the description text — with bit-ordering locked by a unit test before goldens, force collapsing raw state in the LED (matching EL1008), the combined StateMan stream hoisted to `initState` for zero resubscribe storm, and full JSON round-trip + back-compat + leak test.
+**Depends on**: Nothing (first phase; foundational)
+**Requirements**: DDI-01, DDI-02, DDI-03, DDI-04, DDI-05, DDI-06, DDI-07, DDI-08, DDI-09, DDI-10, QUAL-01, QUAL-02, QUAL-03, QUAL-04, QUAL-05
 **Success Criteria** (what must be TRUE):
-  1. Operator can place a Sensor asset from the palette, choose one of three kinds (red light, optic field, inductive field) in the config dialog, and see the kind-specific glyph render on the page.
-  2. The sensor's active/inactive visual flips immediately when the bool state key changes (red-light beam swaps solid/dashed; field kinds swap filled/outlined), with no client-side smoothing or animation lag.
-  3. Operator can configure rising-edge and falling-edge delay state keys, an active-polarity inversion toggle, a per-instance label/tag, and active/inactive colours; the tooltip on hover reveals the resolved edge-delay values.
-  4. Sensor renders neutral grey when the state stream is stale or disconnected, honours `Coordinates.angle` rotation, and saved pages without sensor instances continue to load (back-compat).
-  5. JSON serialization round-trips for every field with defensible defaults, and golden tests pass for each `SensorKind` × {active, inactive} combination with `shouldRepaint` returning true on `runtimeType` change.
-**Plans**: 5 plans
-- [ ] 01-01-PLAN.md — SensorConfig data model + JSON round-trip + polarity helper (TDD)
-- [ ] 01-02-PLAN.md — Three CustomPainter classes + 8-golden matrix + stale golden (TDD)
-- [ ] 01-03-PLAN.md — Sensor widget: GestureDetector tap, hoisted stream, stale-grey, rotation (TDD)
-- [ ] 01-04-PLAN.md — Tooltip wrapper + per-tooltip-open subscription + label golden (TDD)
-- [ ] 01-05-PLAN.md — Config dialog + AssetRegistry registration + back-compat test
+  1. Operator can place an `STBDDI3725Config` asset from the palette, configure five state keys (raw / force / on-filter / off-filter / descriptions) via `KeyField`, see all 16 channel LEDs reflect the live bitmask in a column-major 2×8 grid (matches physical module per `DDI3725_front_clean.png`), and observe force-mode channels render their forced state (raw collapsed — matching EL1008; no corner pip in v2.0).
+  2. A bit-mapping unit test asserts `0x0001 → channel 1 only lit`, `0x8000 → channel 16 only lit`, `0xAAAA → alternating channels lit` — the chosen bit-order constant lives at the top of `lib/painter/advantys_stb/io16.dart` and is referenced by both DDI3725 and DDO3705 to prevent convention drift.
+  3. Tapping the module body opens a detail dialog with 8 rows × 2-column `RowIOView` (one row per channel-pair) showing channel state + force segmented-button + ON/OFF filter ms inputs + description text field; closing/reopening the dialog 10× leaks no listeners (verified via leak test on `stateMan.subscriberCount`).
+  4. Golden tests pass for `all_off`, `all_on`, `alternating_0xAAAA`, `forced_mix`, `disconnected` × {light, dark} themes against the DXF body proportions and photo terminal-block geometry (2×18-pin per `DDI3725_front_clean.png`, NOT the inaccurate DXF). The combined StateMan stream is hoisted to `initState` (cached in `late final`) and disposed in `dispose` — `flutter analyze` reports zero issues across new files.
+  5. JSON round-trips every field via codegen with `@JsonKey(defaultValue: ...)` or nullable, and a legacy-JSON test (hand-written snippet omitting all v2.0 fields) loads cleanly into the default config — backward compatibility verified on a v1.0-era saved-page round-trip.
+**Plans**: TBD
 **UI hint**: yes
+**Research flag**: YES — Plan 01 must confirm (a) Modbus bit-ordering convention with the backend team (Beckhoff's LSB-first is NOT portable to STB), and (b) Schneider force-encoding semantics (Beckhoff's `1=forcedLow / 2=forcedHigh` single-byte may differ from STB's parallel bitmask convention) before goldens lock.
 
-### Phase 2: Elevator Foundation
-**Goal**: Operators can place an elevator on a page, point its position state key at a PLC 0–100% value, and watch the platform glide vertically inside the bbox — with the data pipeline hoisted to `initState`, smooth `ValueNotifier`-scoped repaints, stale-stream handling, and JSON / registry round-trip locked in (including the future-proof `ElevatorChildEntry` wrapper schema).
-**Depends on**: Phase 1
-**Requirements**: ELEV-01, ELEV-02, ELEV-03, ELEV-04, ELEV-05, ELEV-06, ELEV-14, ELEV-16, ELEV-17, ELEV-18, QUAL-04
+### Phase 2: STBDDO3705 (16-Ch Digital Output)
+**Goal**: Operators can place an STBDDO3705 16-channel digital-output module on a page, watch all 16 commanded channels reflect live bitmask state in the same column-major 2×8 LED grid as DDI3725, open a tap-to-open detail dialog with 8 rows × 2-column `RowIOView` (minus the filter inputs — outputs don't have filters), and manually force a channel high/low via the SegmentedButton (which writes to `forceValuesKey` and is reflected on the painter end-to-end) — with `IO16LedBlockPainter` reused verbatim from Phase 01 and the bit-ordering constant pinned to the same module-level value.
+**Depends on**: Phase 1 (reuses `IO16LedBlockPainter`, bit-order constant, combined-stream pattern, golden harness, cream-body discipline)
+**Requirements**: DDO-01, DDO-02, DDO-03, DDO-04, DDO-05, DDO-06, DDO-07, DDO-08, DDO-09
 **Success Criteria** (what must be TRUE):
-  1. Operator can place an Elevator asset from the palette and see vertical rails plus a platform deck (no shaft cage, no cabin glyph) sized to the asset's bounding box.
-  2. The platform position is driven by a single PLC 0–100% state key — 0% places the platform at the bottom, 100% at the top, with smooth `TweenAnimationBuilder`-backed motion and no resubscribe storm (the StateMan stream is hoisted to `initState`, never rebuilt in `build()`).
-  3. The platform's vertical position derives exclusively from a unit-tested `platformOffsetTop(progress, bboxHeight, platformHeight)` helper that returns the correct value at progress {0.0, 0.5, 1.0}, eliminating off-by-one bugs around platform thickness.
-  4. Elevator renders subdued grey when the position stream is stale or disconnected, and saved pages without elevator instances continue to load (back-compat).
-  5. JSON serialization round-trips for every field with defensible defaults — children list defaults to empty, `ElevatorChildEntry` wrapper shape (UUID, offsetX, child) is established from day one, and `_childrenFromJson` is in place to absorb future schema evolution.
+  1. Operator can place an `STBDDO3705Config` asset from the palette, configure `rawStateKey` + `forceValuesKey` + `descriptionsKey` via `KeyField`, and see all 16 channel LEDs reflect the commanded bitmask state — the module body painter at `lib/painter/advantys_stb/ddo3705.dart` reuses `IO16LedBlockPainter` from Phase 01 but ships its own output-style LED legend strip.
+  2. A golden visually distinguishes DDO3705 from DDI3725 (label colour / legend strip) — same body geometry, different label semantics; operator-recognizable as the output module without reading the nameOrId.
+  3. Tapping the module body opens a detail dialog mirroring DDI3725's structure but omitting filter rows; the operator drags-to-force a channel via the SegmentedButton, the `forceValuesKey` write hits StateMan, and the painter reflects the forced state in the same frame — verified by an end-to-end widget test that drives the dialog interaction and asserts the painter's IOState.
+  4. JSON round-trips every field, legacy-JSON test passes, leak test on dialog open/close cycles confirms zero subscription leaks, and `flutter analyze` reports zero issues.
+  5. Goldens cover `all_off`, `all_on`, `alternating_0x5555`, `forced_mix`, `disconnected` × {light, dark} themes; bit-ordering convention matches DDI3725 (asserted by a shared constant — drift would fail the bit-mapping test in Phase 01).
 **Plans**: TBD
 **UI hint**: yes
 
-### Phase 3: Elevator Child Embedding
-**Goal**: Operators can attach sensor and conveyor child assets to the elevator via a dropdown in the config dialog, edit and remove them through the same dialog, and watch every child physically ride the platform up and down — with stable widget identity across position changes, polymorphic `BaseAsset.build`, and the elevator's `allKeys` override surfacing nested keys to alarms and collectors.
-**Depends on**: Phase 2 (also requires Phase 1's Sensor for the integration golden test)
-**Requirements**: ELEV-07, ELEV-08, ELEV-09, ELEV-10, ELEV-11, ELEV-12, ELEV-13, ELEV-19, QUAL-03, QUAL-08
+### Phase 3: STBNIP2311 (Ethernet Head Adapter)
+**Goal**: Operators can place an STBNIP2311 Ethernet head adapter on a page, see the head body + dual RJ45 ports (reusing `EthernetPortPainter` from `lib/painter/beckhoff/ek1100.dart`) + a row of five decorative status LEDs (RUN / PWR / ERR / ST / TEST) rendered in fixed "normal" state — with NO per-LED PLC keys (firmware-driven on real hardware; locked decision), JSON round-trip clean, and the asset visually anchoring the Schneider cream + green Advantys STB livery.
+**Depends on**: Phase 2 (inherits cream-body + GestureDetector + golden conventions from Phase 01/02)
+**Requirements**: NIP-01, NIP-02, NIP-03, NIP-04
 **Success Criteria** (what must be TRUE):
-  1. Operator can open the elevator config dialog, add a child via a dropdown filtered to Sensor and Conveyor kinds, set its lateral platform offset (0..1), and see it appear on the platform; existing children can be edited or removed via the same dialog.
-  2. As the platform's Y position changes, every assigned child's `Positioned.top` follows in real time, the child renders via its own polymorphic `BaseAsset.build(context)` (the elevator never switches on child runtime type), and the child's `State.initState` fires exactly once per page load — never on position changes.
-  3. Each child entry carries a stable UUID used as a `ValueKey<String>`, ensuring widget identity (and therefore stream subscriptions, animation controllers, and dialog state) survives every position change unchanged.
-  4. The elevator's `allKeys` override flat-maps each child's `allKeys` plus its own `positionKey`, so alarms and collectors discover nested state keys without the operator having to register them separately.
-  5. Golden tests cover the elevator at progress {0.0, 0.5, 1.0} with one Sensor and one Conveyor child attached, demonstrating end-to-end correctness of identity, layout, and translation.
-**Plans**: 3 plans
-- [ ] 03-01-PLAN.md — Stack composition + Positioned children with ValueKey + hit-test-through-translation widget tests + 3 integration goldens (TDD)
-- [ ] 03-02-PLAN.md — ElevatorConfig.allKeys override flat-mapping children's keys (TDD)
-- [ ] 03-03-PLAN.md — Editor add/edit/remove/offsetX child management UI (filtered to Sensor + Conveyor)
+  1. Operator can place an `STBNIP2311Config` asset from the palette and see a module body at the NIP2311 DXF aspect ratio plus dual RJ45 ports (reusing `EthernetPortPainter` verbatim from `lib/painter/beckhoff/ek1100.dart` — no Beckhoff branding embedded in the painter) plus a row of five decorative status LEDs labelled RUN / PWR / ERR / ST / TEST.
+  2. The status LEDs render decoratively only — there are NO `runKey`, `pwrKey`, `errKey`, `stKey`, `testKey` fields on the config (locked decision per PROJECT.md). The configure dialog exposes only `nameOrId` and the standard `Coordinates` / `Size` fields. Operators inspect the physical device for true status.
+  3. Goldens cover the NIP2311 module body in `decorative_normal` state × {light, dark} themes against the NIP2311 DXF bounding-box proportions.
+  4. JSON round-trip is clean; a legacy-JSON test (saved page without an NIP2311 instance) loads without error; `flutter analyze` reports zero issues.
+**Plans**: TBD
+**UI hint**: yes
+**Research flag**: PROBABLY — Plan 03 should verify the exact RUN / PWR / ERR / ST / TEST label wording against Schneider datasheet 33001466 / EIO0000000051 before goldens lock (the wording is the only firmware-internal surface visible to operators; getting it wrong loses operator recognition).
+
+### Phase 4: STBPDT3100 (Power Distribution)
+**Goal**: Operators can place an STBPDT3100 24V DC power-distribution module on a page, configure an optional `inputOkKey` bool state key, and watch the single "INPUT OK" LED render green when the key is true / dim when null or false — the smallest module of the milestone, single state key, no detail dialog, but full JSON round-trip and back-compat.
+**Depends on**: Phase 3 (inherits all conventions from Phases 01–03)
+**Requirements**: PDT-01, PDT-02, PDT-03
+**Success Criteria** (what must be TRUE):
+  1. Operator can place an `STBPDT3100Config` asset from the palette, configure an optional `inputOkKey` via `KeyField`, and see the module body painter at `lib/painter/advantys_stb/pdt3100.dart` render at the PDT3100 DXF aspect ratio (~115×162 mm) with a single LED bound to the bool key (green = OK, dim = null/unknown/disconnected).
+  2. Goldens cover `input_ok` and `fault` (or dim) states × {light, dark} themes.
+  3. JSON round-trips cleanly with `inputOkKey` nullable, legacy-JSON test passes, `flutter analyze` reports zero issues.
+**Plans**: TBD
 **UI hint**: yes
 
-### Phase 4: Polish, Error UX & CI Hardening
-**Goal**: The elevator surfaces fault states clearly per ISA-101, no animation controllers or stream subscriptions leak across mount/unmount cycles, and multiple elevators on the same page operate with fully independent state subscriptions — closing the milestone with the production-quality guards that turn the feature from "works" to "shippable."
-**Depends on**: Phase 3
-**Requirements**: ELEV-15, QUAL-06, QUAL-07
+### Phase 5: AdvantysSTBStack (Composite Parent)
+**Goal**: Operators can place an AdvantysSTBStack onto a page, open its configure dialog, add subdevices from a filtered "Add" dropdown limited to the four STB module types (NIP2311 / PDT3100 / DDI3725 / DDO3705), reorder them in a `ReorderableListView`, watch all children render in a horizontal `Row` (height-normalized via `_SubdeviceNormalized`) — with `allKeys` flat-mapping every child's `*Key` fields (and recursive subdevices' keys) so alarms and collectors discover the full key set without separate registration, a post-`fromJson` sanitiser dropping any non-STB child types (permissive render, restrictive add — mirroring CX5010), and a full integration test confirming a stack containing one of every module type loads cleanly, all child keys are discoverable, every painter renders, and taps register on each module's body (not the stack frame).
+**Depends on**: Phase 4 (requires all four STB module types to exist in the registry)
+**Requirements**: STACK-01, STACK-02, STACK-03, STACK-04, STACK-05, QUAL-06, QUAL-07
 **Success Criteria** (what must be TRUE):
-  1. When the PLC reports a position outside 0–100%, the elevator clamps the displayed platform to the legal range and surfaces an amber outline (per ISA-101) so operators can immediately distinguish a sensor fault from a normal extreme position.
-  2. A multi-elevator smoke test verifies that placing several elevators on one page — including configurations with the same and different position keys — produces fully independent stream subscriptions with no shared-mutable-state regressions or cross-talk.
-  3. A `LeakTesting.enable()` mount/unmount test confirms every `AnimationController`, `ValueNotifier`, and StateMan stream subscription owned by the new assets is disposed cleanly when the widget unmounts.
+  1. Operator can place an `AdvantysSTBStackConfig` from the palette (registered in BOTH `_fromJsonFactories` and `defaultFactories` of `AssetRegistry`), open its configure dialog, and use a filtered "Add" dropdown bounded to `_availableSTBSubdevices` (NIP2311 / PDT3100 / DDI3725 / DDO3705 only) to add subdevices to a polymorphic `List<Asset> subdevices` annotated with `@AssetListConverter()` (mirror CX5010 verbatim).
+  2. The configure dialog supports reorder (via `ReorderableListView`) and delete (via trailing IconButton), and the `build()` renders all subdevices inside a `FittedBox(fit: BoxFit.contain, child: Row(...))` with each subdevice wrapped in `_SubdeviceNormalized` for height normalization.
+  3. `AdvantysSTBStackConfig.allKeys` is overridden to flat-map each subdevice's `allKeys` (plus recursive subdevices' keys) into a de-duplicated `Set<String>` — verified by an integration test that asserts every leaf module's `*Key` fields appear in `stack.allKeys`.
+  4. A post-`fromJson` sanitiser drops any subdevice whose `runtimeType.toString()` is not in `{STBNIP2311Config, STBPDT3100Config, STBDDI3725Config, STBDDO3705Config}` (permissive render fallback for older saved pages, restrictive add via dropdown — silent filter + log, not throw, matching `AssetRegistry.parse`'s existing convention).
+  5. An integration test mounts a single AdvantysSTBStack containing one NIP + one PDT + one DDI + one DDO, asserts the page loads cleanly, `stack.allKeys` returns the union of all child keys, every painter renders without exception, taps register on each module's body (not falling through to the stack — verified via `GestureDetector(HitTestBehavior.opaque)` on each child), `flutter analyze` reports zero issues across all new files, and the milestone-wide golden `stack_full` captures the canonical NIP+PDT+DDI+DDO layout in both themes.
 **Plans**: TBD
 **UI hint**: yes
 
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 → 2 → 3 → 4
+Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Sensor Asset | 0/TBD | Not started | - |
-| 2. Elevator Foundation | 0/TBD | Not started | - |
-| 3. Elevator Child Embedding | 0/TBD | Not started | - |
-| 4. Polish, Error UX & CI Hardening | 0/TBD | Not started | - |
+| 1. STBDDI3725 (16-Ch DI) | 0/TBD | Not started | - |
+| 2. STBDDO3705 (16-Ch DO) | 0/TBD | Not started | - |
+| 3. STBNIP2311 (Ethernet Head) | 0/TBD | Not started | - |
+| 4. STBPDT3100 (Power) | 0/TBD | Not started | - |
+| 5. AdvantysSTBStack (Composite) | 0/TBD | Not started | - |

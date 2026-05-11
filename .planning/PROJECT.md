@@ -1,26 +1,35 @@
 # tfc-hmi2 Asset Family
 
-## Current Milestone: v2.0 Modicon Momentum I/O Assets
+## Current Milestone: v2.0 Advantys STB I/O Assets
 
-**Goal:** Add HMI assets representing the Schneider Modicon Momentum stack (NIP2311 Ethernet Modbus/TCP adapter, PDT3100 power distribution, DDI3725 16-ch DI, DDO3705 16-ch DO) so operators can mirror the physical control panel on HMI pages with live PLC state — visually recognizable as Momentum modules, functionally on par with the existing Beckhoff family.
+**Goal:** Add HMI assets representing the Schneider Advantys STB distributed I/O family (STBNIP2311 Ethernet Modbus/TCP adapter, STBPDT3100 power distribution, STBDDI3725 16-ch DI, STBDDO3705 16-ch DO) so operators can mirror the physical control panel on HMI pages with live PLC state — visually recognizable as Advantys STB modules, functionally on par with the existing Beckhoff family.
+
+> **Naming note:** Centroid operators colloquially call these modules "Modicon Momentum" but Schneider's actual catalog family is **Advantys STB** (also called Modicon STB). All code, classes, and milestone artifacts use the catalog-correct `STB...` prefix. The asset-picker palette can keep colloquial labels if helpful, but the code identity is STB.
 
 **Target features:**
-- MomentumStack parent asset (mirrors BeckhoffCX5010 pattern; flattens `allKeys` across children for alarms / collectors)
-- NIP2311 head: RUN / PWR / ERR / ST / TEST indicators + dual Ethernet port visuals
-- PDT3100: 24V DC power input visual with INPUT OK state
-- DDI3725: 16-channel digital input strip — channel LEDs, force overrides (auto/low/high), per-channel filters, descriptions, detail dialog
-- DDO3705: 16-channel digital output strip — same surface as DDI3725 (DI/DO share base form factor — confirmed by user; one DXF base covers both)
+- AdvantysSTBStack parent asset (mirrors BeckhoffCX5010 pattern; flattens `allKeys` across children for alarms / collectors)
+- STBNIP2311 head: RUN / PWR / ERR / ST / TEST indicators + dual Ethernet port visuals (**status LEDs render decoratively — firmware-driven, NOT Modbus-addressable; no PLC keys configurable per LED**)
+- STBPDT3100: 24V DC power input visual with INPUT OK state
+- STBDDI3725: 16-channel digital input strip — channel LEDs, force overrides (auto/low/high), per-channel filters, descriptions, detail dialog
+- STBDDO3705: 16-channel digital output strip — same surface as DDI3725 (DI/DO share base form factor — confirmed by user; one DXF base covers both)
 - StateMan-driven via standard PLC keys (raw state, force values, filters, descriptions)
 - Asset registry registration + JSON round-trip + golden tests + leak tests
 
-**Painter fidelity (locked):** Operator-recognizable as Momentum modules (body shape, LED layout, Schneider cream colour, port placement). Not chasing dimensional accuracy. References staged at `.planning/research/dxf/` (2 DXF files — one for the I/O base shared by DI/DO, one for the adapter/head). Schneider datasheets + user-provided photo cover the rest.
+**Locked decisions (from research synthesis, 2026-05-11):**
+- **Naming**: Use catalog-correct `STB...` prefix. File: `lib/page_creator/assets/advantys_stb.dart`. Painters: `lib/painter/advantys_stb/{io16,ddi3725,ddo3705,nip2311,pdt3100}.dart`.
+- **Force-channel LED**: Collapse raw+force into single state (matches BeckhoffEL1008 behavior). Operator sees forced state only — no corner pip showing underlying raw wire state.
+- **NIP2311 status LEDs**: Decorative-only. Render in fixed "normal" state. No PLC keys per LED. Operators inspect the physical device for true status.
+
+**Painter fidelity (locked):** Operator-recognizable as Advantys STB modules (body shape, LED layout, Schneider cream colour, port placement). Not chasing dimensional accuracy. References staged at `.planning/research/dxf/` (DXFs for NIP2311 + PDT3100 + I/O base) and `.planning/research/photos/` (canonical for terminal-block geometry — DXF I/O base is INACCURATE on terminal blocks).
 
 **Out of scope (v2.0):**
-- Backend Modbus key plumbing — assumes StateMan keys already exist for the physical Momentum stack
+- Backend Modbus key plumbing — assumes StateMan keys already exist for the physical STB stack
 - Per-channel current / diagnostic readbacks beyond bit state
 - Multi-rack composition (multiple stacks on one page) — single stack first
+- Raw-vs-force corner pip on forced channels (would 3× the golden count; deferred to v2.1+)
+- Per-LED configurability on NIP2311 head
 
-**Pattern source of truth:** `lib/page_creator/assets/beckhoff.dart` (BeckhoffEK1100, BeckhoffEL1008, BeckhoffCX5010) + `lib/painter/beckhoff/` (io8.dart, ek1100.dart). New module assets land at `lib/page_creator/assets/modicon.dart` (or split file per the planner's call) with painters at `lib/painter/modicon/`.
+**Pattern source of truth:** `lib/page_creator/assets/beckhoff.dart` (BeckhoffEK1100, BeckhoffEL1008, BeckhoffCX5010) + `lib/painter/beckhoff/` (io8.dart, ek1100.dart). New module assets land at `lib/page_creator/assets/advantys_stb.dart` (single file, ~1,400 LoC est.) with painters at `lib/painter/advantys_stb/`.
 
 ---
 
