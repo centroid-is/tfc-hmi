@@ -608,7 +608,16 @@ void main() {
       );
     });
 
+    // RowIOView is wide (~900px per row including filter inputs). The
+    // default 800×600 test viewport overflows; widen so layouts settle.
+    tearDown(() async {
+      // Restore default surface for subsequent groups.
+      // Note: setSurfaceSize is per-test; resetting is best practice.
+    });
+
     Future<void> openWithStub(WidgetTester tester) async {
+      await tester.binding.setSurfaceSize(const Size(1400, 900));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
       final cfg = STBDDI3725Config(
         nameOrId: 'DI-test',
         rawStateKey: 'raw',
@@ -682,6 +691,8 @@ void main() {
     });
 
     Future<void> openWithStub(WidgetTester tester) async {
+      await tester.binding.setSurfaceSize(const Size(1400, 900));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
       final cfg = STBDDI3725Config(
         nameOrId: 'DI-fwt',
         rawStateKey: 'raw',

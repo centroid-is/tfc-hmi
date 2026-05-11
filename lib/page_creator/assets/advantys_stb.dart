@@ -37,6 +37,7 @@ import 'package:open62541/open62541.dart' show DynamicValue;
 import 'package:tfc_dart/core/state_man.dart';
 
 import 'common.dart';
+import 'beckhoff.dart' show RowIOView, FilterEdit;
 import '../../providers/state_man.dart';
 import '../../painter/advantys_stb/io16.dart';
 import '../../painter/advantys_stb/ddi3725.dart';
@@ -212,14 +213,12 @@ class _STBDDI3725State extends ConsumerState<_STBDDI3725> {
       // blocks). Without this, taps on those gaps would fall through.
       behavior: HitTestBehavior.opaque,
       onTap: () {
-        // STUB — Plan 03 replaces this with the real per-channel detail dialog
-        // (`_showDetailDialog(context, _stateMan!)`).
         if (_stateMan == null) return;
-        showDialog<void>(
-          context: context,
-          builder: (_) => const AlertDialog(
-            content: Text('Detail dialog — implemented in Plan 03.'),
-          ),
+        _showDDI3725DetailDialog(
+          context,
+          widget.config,
+          _stateMan!,
+          const AlwaysStoppedAnimation<int>(0),
         );
       },
       child: STBDDI3725Widget(
@@ -362,4 +361,136 @@ List<int>? _forceArrayFromDynamicValue(DynamicValue? dv) {
     out.add(list[i].asInt);
   }
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// Detail dialog — _showDDI3725DetailDialog
+//
+// 8 rows × 2 columns of `RowIOView` reused verbatim from `beckhoff.dart`. Each
+// row pairs channels `(r+1, r+9)` (UI-SPEC §Detail Dialog). Per-channel
+// surface: state indicator + force `SegmentedButton` + ON/OFF filter
+// `TextFormField`s + description `TextFormField`.
+//
+// The combined stream subscribes to all FIVE keys (raw, force, on_filters,
+// off_filters, descriptions) — distinct from the body stream which only
+// touches raw + force. The dialog StreamBuilder owns the subscription; when
+// the dialog pops, the StreamBuilder is disposed and the underlying StateMan
+// listeners are released. Plan 04 will land a leak test that opens/closes
+// the dialog 10× and verifies listener counts return to baseline.
+// ---------------------------------------------------------------------------
+
+void _showDDI3725DetailDialog(
+  BuildContext context,
+  STBDDI3725Config config,
+  StateMan stateMan,
+  Animation<int> animation,
+) {
+  showDialog<void>(
+    context: context,
+    builder: (dialogContext) {
+      return AlertDialog(
+        title: Text(config.nameOrId),
+        content: SingleChildScrollView(
+          child: StreamBuilder<Map<String, DynamicValue>>(
+            stream: _combinedStream(
+              LinkedHashMap<String, String?>.from(<String, String?>{
+                'raw': config.rawStateKey,
+                'force': config.forceValuesKey,
+                'on_filters': config.onFiltersKey,
+                'off_filters': config.offFiltersKey,
+                'descriptions': config.descriptionsKey,
+              }),
+              stateMan,
+            ),
+            builder: (context, snap) {
+              if (!snap.hasData || snap.hasError) {
+                return const SizedBox.shrink();
+              }
+              final map = snap.data!;
+              final rawDv = map['raw'];
+              final List<bool>? rawStates = rawDv != null
+                  ? List<bool>.generate(
+                      16, (i) => (rawDv.asInt & (1 << i)) != 0)
+                  : null;
+              return Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  for (int r = 0; r < 8; r++)
+                    Padding(
+                      padding: EdgeInsets.only(bottom: r < 7 ? 2.0 : 0.0),
+                      child: RowIOView(
+                        leftRaw: rawStates?[r] ?? false,
+                        rightRaw: rawStates?[r + 8] ?? false,
+                        leftProcessed: null,
+                        rightProcessed: null,
+                        leftSelected: map['force']?[r].asInt ?? 0,
+                        rightSelected: map['force']?[r + 8].asInt ?? 0,
+                        animationValue: animation,
+                        leftOnChanged: (value) async {
+                          map['force']![r].value = value;
+                          await stateMan.write(
+                              config.forceValuesKey!, map['force']!);
+                        },
+                        rightOnChanged: (value) async {
+                          map['force']![r + 8].value = value;
+                          await stateMan.write(
+                              config.forceValuesKey!, map['force']!);
+                        },
+                        leftDescription: map['descriptions']?[r].asString,
+                        rightDescription: map['descriptions']?[r + 8].asString,
+                        leftFilterEdit: (map.containsKey('on_filters') &&
+                                map.containsKey('off_filters'))
+                            ? FilterEdit(
+                                onFilter: map['on_filters']?[r].asInt ?? 0,
+                                offFilter: map['off_filters']?[r].asInt ?? 0,
+                                onChangedOnFilter: (v) async {
+                                  map['on_filters']![r].value = v;
+                                  await stateMan.write(
+                                      config.onFiltersKey!,
+                                      map['on_filters']!);
+                                },
+                                onChangedOffFilter: (v) async {
+                                  map['off_filters']![r].value = v;
+                                  await stateMan.write(
+                                      config.offFiltersKey!,
+                                      map['off_filters']!);
+                                },
+                              )
+                            : null,
+                        rightFilterEdit: (map.containsKey('on_filters') &&
+                                map.containsKey('off_filters'))
+                            ? FilterEdit(
+                                onFilter: map['on_filters']?[r + 8].asInt ?? 0,
+                                offFilter:
+                                    map['off_filters']?[r + 8].asInt ?? 0,
+                                onChangedOnFilter: (v) async {
+                                  map['on_filters']![r + 8].value = v;
+                                  await stateMan.write(
+                                      config.onFiltersKey!,
+                                      map['on_filters']!);
+                                },
+                                onChangedOffFilter: (v) async {
+                                  map['off_filters']![r + 8].value = v;
+                                  await stateMan.write(
+                                      config.offFiltersKey!,
+                                      map['off_filters']!);
+                                },
+                              )
+                            : null,
+                      ),
+                    ),
+                ],
+              );
+            },
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('Close'),
+          ),
+        ],
+      );
+    },
+  );
 }
