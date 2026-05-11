@@ -8,7 +8,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:open62541/open62541.dart' show DynamicValue;
 import 'package:tfc/page_creator/assets/advantys_stb.dart';
 import 'package:tfc/page_creator/assets/beckhoff.dart' show RowIOView, FilterEdit;
-import 'package:tfc/page_creator/assets/common.dart' show KeyField;
+import 'package:tfc/page_creator/assets/common.dart'
+    show Coordinates, KeyField, RelativeSize, TextPos;
 import 'package:tfc/page_creator/assets/registry.dart';
 import 'package:tfc/painter/advantys_stb/ddi3725.dart';
 import 'package:tfc/painter/advantys_stb/io16.dart';
@@ -820,6 +821,160 @@ void main() {
             'for the palette to list it.',
       );
     });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Plan 04 Task 2: JSON full round-trip + legacy-JSON back-compat.
+  //
+  // Full round-trip covers every settable field on `STBDDI3725Config` plus
+  // every BaseAsset field (coordinates / size / text / textPos / techDocId /
+  // plcAssetKey). Encoded through `jsonEncode`/`jsonDecode` to mirror the
+  // real production save path in `lib/page_creator/page.dart`.
+  //
+  // Back-compat covers the QUAL-04 lock:
+  //   - A minimal legacy snippet (only `asset_name`) — every settable
+  //     STBDDI3725 field falls back to its declared default.
+  //   - A v1.0-era save-page-shaped JSON (assets list nested under a `pages`
+  //     map) flows through `AssetRegistry.parse` and the legacy snippet is
+  //     recovered into a typed `STBDDI3725Config` instance.
+  //
+  // Default-handling note: `@JsonKey(defaultValue: '1')` on `nameOrId`
+  // already covers the "missing in JSON" case (verified by the existing
+  // 'legacy JSON without nameOrId loads as "1"' test at the data-shape
+  // group). No factory belt-and-suspenders is required.
+  // ---------------------------------------------------------------------------
+  group('STBDDI3725Config full JSON round-trip', () {
+    test(
+      'every field (incl. BaseAsset coordinates/size/text/textPos/techDocId/plcAssetKey) '
+      'survives jsonEncode + jsonDecode + fromJson',
+      () {
+        final original = STBDDI3725Config(
+          nameOrId: 'DI-42',
+          rawStateKey: 'plc/di/raw',
+          forceValuesKey: 'plc/di/force',
+          onFiltersKey: 'plc/di/on_filter',
+          offFiltersKey: 'plc/di/off_filter',
+          descriptionsKey: 'plc/di/desc',
+        )
+          ..coordinates = Coordinates(x: 0.25, y: 0.5)
+          ..size = const RelativeSize(width: 0.1, height: 0.2)
+          ..text = 'unit test'
+          ..textPos = TextPos.below
+          ..techDocId = 42
+          ..plcAssetKey = 'plc.42';
+
+        // Production round-trip: through jsonEncode/jsonDecode.
+        final encoded = jsonEncode(original.toJson());
+        final decoded = jsonDecode(encoded) as Map<String, dynamic>;
+        final parsed = STBDDI3725Config.fromJson(decoded);
+
+        // STBDDI3725 fields.
+        expect(parsed.nameOrId, 'DI-42');
+        expect(parsed.rawStateKey, 'plc/di/raw');
+        expect(parsed.forceValuesKey, 'plc/di/force');
+        expect(parsed.onFiltersKey, 'plc/di/on_filter');
+        expect(parsed.offFiltersKey, 'plc/di/off_filter');
+        expect(parsed.descriptionsKey, 'plc/di/desc');
+        // BaseAsset fields.
+        expect(parsed.coordinates.x, 0.25);
+        expect(parsed.coordinates.y, 0.5);
+        expect(parsed.size.width, 0.1);
+        expect(parsed.size.height, 0.2);
+        expect(parsed.text, 'unit test');
+        expect(parsed.textPos, TextPos.below);
+        expect(parsed.techDocId, 42);
+        expect(parsed.plcAssetKey, 'plc.42');
+        // assetName is set by BaseAsset's variant logic.
+        expect(parsed.assetName, 'STBDDI3725Config');
+      },
+    );
+  });
+
+  group('STBDDI3725Config JSON back-compat', () {
+    // "v1.0-era" here means: predates Phase 1 (this milestone). The shape
+    // therefore carries the v1.0 BaseAsset baseline (asset_name +
+    // coordinates + size, both always present since the codegen requires
+    // them — verified by inspecting `advantys_stb.g.dart` and all peer
+    // *.g.dart files like `beckhoff.g.dart`). What v1.0-era saved pages
+    // would NOT carry are the Phase 1 additions: `nameOrId` and the five
+    // `*Key` fields. Those must rehydrate to their declared defaults.
+    Map<String, dynamic> baseLegacyJson() => <String, dynamic>{
+          'asset_name': 'STBDDI3725Config',
+          'coordinates': {'x': 0.0, 'y': 0.0},
+          'size': {'width': 0.03, 'height': 0.03},
+        };
+
+    test(
+      'minimal legacy snippet (only v1.0 fields) → Phase 1 defaults rehydrate',
+      () {
+        final legacyJson = baseLegacyJson();
+        final config = STBDDI3725Config.fromJson(legacyJson);
+        // Phase 1 fields fall back to declared defaults.
+        expect(config.nameOrId, '1', reason: 'defaultValue must kick in');
+        expect(config.rawStateKey, isNull);
+        expect(config.forceValuesKey, isNull);
+        expect(config.onFiltersKey, isNull);
+        expect(config.offFiltersKey, isNull);
+        expect(config.descriptionsKey, isNull);
+        // BaseAsset fields fall back to their declared defaults.
+        expect(config.coordinates.x, 0.0);
+        expect(config.coordinates.y, 0.0);
+        expect(config.size.width, 0.03);
+        expect(config.size.height, 0.03);
+        expect(config.text, isNull);
+        expect(config.textPos, isNull);
+        expect(config.techDocId, isNull);
+        expect(config.plcAssetKey, isNull);
+        expect(config.assetName, 'STBDDI3725Config');
+      },
+    );
+
+    test(
+      'v1.0-era saved-page JSON wrapping the legacy snippet '
+      'flows through AssetRegistry.parse',
+      () {
+        // Save-page-shaped JSON: `pages` map → `assets` list → legacy snippet.
+        // Mirrors the shape produced by `PageManager` before Phase 1 existed.
+        // The crawler in `AssetRegistry.parse` must descend through both
+        // nested objects, match `asset_name == 'STBDDI3725Config'`, and call
+        // `STBDDI3725Config.fromJson` on the legacy snippet.
+        final saveJson = <String, dynamic>{
+          'pages': <String, dynamic>{
+            'home': <String, dynamic>{
+              'assets': <Map<String, dynamic>>[
+                baseLegacyJson(),
+              ],
+            },
+          },
+        };
+        final parsed = AssetRegistry.parse(saveJson);
+        expect(parsed, hasLength(1),
+            reason:
+                'AssetRegistry must recover a legacy snippet inside a v1.0-era '
+                'saved-page JSON shape (QUAL-04 end-to-end).');
+        expect(parsed[0], isA<STBDDI3725Config>());
+        final cfg = parsed[0] as STBDDI3725Config;
+        expect(cfg.nameOrId, '1');
+        expect(cfg.rawStateKey, isNull);
+        expect(cfg.coordinates.x, 0.0);
+      },
+    );
+
+    test(
+      'unknown forward-compat field in legacy snippet is ignored, not fatal',
+      () {
+        // QUAL-04 forward-compat: a v3.0-era saved page may carry fields
+        // unknown to this binary. The codegen's `_$STBDDI3725ConfigFromJson`
+        // ignores unknown keys silently — verify the contract so a future
+        // regression that flips it to strict-mode fails this test loudly.
+        final futureJson = baseLegacyJson()
+          ..['someFutureFieldKey'] = 'plc/future'
+          ..['unknownEnum'] = 'unknown_value';
+        final cfg = STBDDI3725Config.fromJson(futureJson);
+        expect(cfg.nameOrId, '1');
+        expect(cfg.rawStateKey, isNull);
+      },
+    );
   });
 }
 
