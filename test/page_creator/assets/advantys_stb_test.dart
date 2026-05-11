@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io' show Platform;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -291,6 +292,205 @@ void main() {
       await tester.pump(Duration.zero);
       expect(find.byType(STBDDI3725Widget), findsOneWidget);
       expect(tester.takeException(), isNull);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Golden matrix — 5 states × 2 themes = 10 PNGs.
+  //
+  // Per Plan 02 Task 4 checkpoint: LSB-first bit-order is auto-resolved per
+  // the CONTEXT.md locked decision. `alternating_0xAAAA` therefore renders
+  // channels 2,4,6,8,10,12,14,16 lit (odd indices in the LED array).
+  //
+  // QUAL-02 invariant: the cream body is FIXED (bodyColor from io16.dart, not
+  // theme-driven). The light/dark goldens for the same input state must show
+  // identical cream-body pixels — only the outside Theme.surface differs. The
+  // harness wraps everything in a Scaffold-coloured background that varies
+  // between light/dark to make the body-color invariance visually obvious.
+  //
+  // Harness mirrors `elevator_painter_test.dart:62-96`:
+  // - `RepaintBoundary` + unique `Key` so the matched widget = painter pixels
+  // - `tester.pump(Duration.zero)` — NEVER `pumpAndSettle()` (Pitfall 6)
+  // - `AlwaysStoppedAnimation(0)` — deterministic frame
+  // - macOS-gated via `skip: !Platform.isMacOS` (QUAL-01)
+  // ---------------------------------------------------------------------------
+  group('STBDDI3725 goldens',
+      skip: !Platform.isMacOS ? 'Golden tests only run on macOS' : null, () {
+    const goldenKey = Key('stb_ddi3725_golden');
+
+    Future<void> pumpDDI3725(
+      WidgetTester tester, {
+      required List<IOState> ledStates,
+      required bool isStale,
+      required bool isDisconnected,
+      required Brightness theme,
+    }) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: theme == Brightness.dark ? ThemeData.dark() : ThemeData.light(),
+          home: Scaffold(
+            body: Center(
+              child: RepaintBoundary(
+                key: goldenKey,
+                child: SizedBox(
+                  width: 200,
+                  height: 300,
+                  child: STBDDI3725Widget(
+                    ledStates: ledStates,
+                    isStale: isStale,
+                    isDisconnected: isDisconnected,
+                    animation: const AlwaysStoppedAnimation<int>(0),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump(Duration.zero);
+    }
+
+    // 1. all_off — 0x0000 → all 16 LEDs low. RDY green (module alive).
+    testWidgets('ddi3725_all_off_light.png', (tester) async {
+      await pumpDDI3725(tester,
+          ledStates: bitmaskToLedStates(0x0000),
+          isStale: false,
+          isDisconnected: false,
+          theme: Brightness.light);
+      await expectLater(
+        find.byKey(goldenKey),
+        matchesGoldenFile('goldens/advantys_stb/ddi3725_all_off_light.png'),
+      );
+    });
+
+    testWidgets('ddi3725_all_off_dark.png', (tester) async {
+      await pumpDDI3725(tester,
+          ledStates: bitmaskToLedStates(0x0000),
+          isStale: false,
+          isDisconnected: false,
+          theme: Brightness.dark);
+      await expectLater(
+        find.byKey(goldenKey),
+        matchesGoldenFile('goldens/advantys_stb/ddi3725_all_off_dark.png'),
+      );
+    });
+
+    // 2. all_on — 0xFFFF → all 16 LEDs high (green). RDY green.
+    testWidgets('ddi3725_all_on_light.png', (tester) async {
+      await pumpDDI3725(tester,
+          ledStates: bitmaskToLedStates(0xFFFF),
+          isStale: false,
+          isDisconnected: false,
+          theme: Brightness.light);
+      await expectLater(
+        find.byKey(goldenKey),
+        matchesGoldenFile('goldens/advantys_stb/ddi3725_all_on_light.png'),
+      );
+    });
+
+    testWidgets('ddi3725_all_on_dark.png', (tester) async {
+      await pumpDDI3725(tester,
+          ledStates: bitmaskToLedStates(0xFFFF),
+          isStale: false,
+          isDisconnected: false,
+          theme: Brightness.dark);
+      await expectLater(
+        find.byKey(goldenKey),
+        matchesGoldenFile('goldens/advantys_stb/ddi3725_all_on_dark.png'),
+      );
+    });
+
+    // 3. alternating_0xAAAA — LSB-first locked → odd indices 1,3,5,...,15 lit
+    // (channels 2,4,6,8,10,12,14,16). RDY green.
+    testWidgets('ddi3725_alternating_0xAAAA_light.png', (tester) async {
+      await pumpDDI3725(tester,
+          ledStates: bitmaskToLedStates(0xAAAA),
+          isStale: false,
+          isDisconnected: false,
+          theme: Brightness.light);
+      await expectLater(
+        find.byKey(goldenKey),
+        matchesGoldenFile(
+            'goldens/advantys_stb/ddi3725_alternating_0xAAAA_light.png'),
+      );
+    });
+
+    testWidgets('ddi3725_alternating_0xAAAA_dark.png', (tester) async {
+      await pumpDDI3725(tester,
+          ledStates: bitmaskToLedStates(0xAAAA),
+          isStale: false,
+          isDisconnected: false,
+          theme: Brightness.dark);
+      await expectLater(
+        find.byKey(goldenKey),
+        matchesGoldenFile(
+            'goldens/advantys_stb/ddi3725_alternating_0xAAAA_dark.png'),
+      );
+    });
+
+    // 4. forced_mix — raw 0xFFFF with forces[0]=1 (forcedLow on ch1) and
+    // forces[2]=2 (forcedHigh on ch3, raw bit collapsed). The remaining 14
+    // channels stay high. Shows force-collapse + forced-vs-unforced visual.
+    testWidgets('ddi3725_forced_mix_light.png', (tester) async {
+      const forces = <int>[
+        1, 0, 2, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0,
+      ];
+      await pumpDDI3725(tester,
+          ledStates: bitmaskToLedStates(0xFFFF, forceValues: forces),
+          isStale: false,
+          isDisconnected: false,
+          theme: Brightness.light);
+      await expectLater(
+        find.byKey(goldenKey),
+        matchesGoldenFile(
+            'goldens/advantys_stb/ddi3725_forced_mix_light.png'),
+      );
+    });
+
+    testWidgets('ddi3725_forced_mix_dark.png', (tester) async {
+      const forces = <int>[
+        1, 0, 2, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0,
+      ];
+      await pumpDDI3725(tester,
+          ledStates: bitmaskToLedStates(0xFFFF, forceValues: forces),
+          isStale: false,
+          isDisconnected: false,
+          theme: Brightness.dark);
+      await expectLater(
+        find.byKey(goldenKey),
+        matchesGoldenFile(
+            'goldens/advantys_stb/ddi3725_forced_mix_dark.png'),
+      );
+    });
+
+    // 5. disconnected — all LEDs low, isStale=true + isDisconnected=true.
+    // RDY dim grey; red exclamation overlay in upper-center.
+    testWidgets('ddi3725_disconnected_light.png', (tester) async {
+      await pumpDDI3725(tester,
+          ledStates: List<IOState>.filled(16, IOState.low),
+          isStale: true,
+          isDisconnected: true,
+          theme: Brightness.light);
+      await expectLater(
+        find.byKey(goldenKey),
+        matchesGoldenFile(
+            'goldens/advantys_stb/ddi3725_disconnected_light.png'),
+      );
+    });
+
+    testWidgets('ddi3725_disconnected_dark.png', (tester) async {
+      await pumpDDI3725(tester,
+          ledStates: List<IOState>.filled(16, IOState.low),
+          isStale: true,
+          isDisconnected: true,
+          theme: Brightness.dark);
+      await expectLater(
+        find.byKey(goldenKey),
+        matchesGoldenFile(
+            'goldens/advantys_stb/ddi3725_disconnected_dark.png'),
+      );
     });
   });
 }
