@@ -1,4 +1,12 @@
+import 'dart:convert';
+import 'dart:io' show Platform;
+
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:tfc/page_creator/assets/advantys_stb.dart';
+import 'package:tfc/page_creator/assets/common.dart' show KeyField;
+import 'package:tfc/painter/advantys_stb/ddi3725.dart';
 import 'package:tfc/painter/advantys_stb/io16.dart';
 import 'package:tfc/painter/beckhoff/io8.dart' show IOState;
 
@@ -85,4 +93,411 @@ void main() {
       }
     });
   });
+
+  group('STBDDI3725Config — data shape', () {
+    test('preview() succeeds with nameOrId=="1" and all five *Key fields null',
+        () {
+      final c = STBDDI3725Config.preview();
+      expect(c.nameOrId, '1');
+      expect(c.rawStateKey, isNull);
+      expect(c.forceValuesKey, isNull);
+      expect(c.onFiltersKey, isNull);
+      expect(c.offFiltersKey, isNull);
+      expect(c.descriptionsKey, isNull);
+    });
+
+    test('toJson()["asset_name"] == "STBDDI3725Config" (BaseAsset variant auto-set)',
+        () {
+      final c = STBDDI3725Config(nameOrId: 'DI-01', rawStateKey: 'di/raw');
+      final json = c.toJson();
+      expect(json['asset_name'], 'STBDDI3725Config');
+    });
+
+    test('allKeys picks up all five *Key fields via the Key\$ regex (no override needed)',
+        () {
+      final c = STBDDI3725Config(
+        nameOrId: 'DI-01',
+        rawStateKey: 'di/raw',
+        forceValuesKey: 'di/force',
+        descriptionsKey: 'di/desc',
+      );
+      expect(c.allKeys.toSet(), {'di/raw', 'di/force', 'di/desc'});
+    });
+
+    test('fromJson(toJson()) round-trips cleanly via real JSON encode/decode',
+        () {
+      // Real production round-trip goes through `jsonEncode`/`jsonDecode` (see
+      // `lib/page_creator/page.dart`), which invokes nested `Coordinates.toJson`
+      // / `RelativeSize.toJson` via their own `toJson` methods. Going through
+      // `Map<String, dynamic>` directly leaves them as Dart objects (matches
+      // Beckhoff EL1008 — same generated code shape).
+      final original = STBDDI3725Config(
+        nameOrId: 'X',
+        rawStateKey: 'a/raw',
+        forceValuesKey: 'a/force',
+        onFiltersKey: 'a/onf',
+        offFiltersKey: 'a/offf',
+        descriptionsKey: 'a/desc',
+      );
+      final encoded = jsonEncode(original.toJson());
+      final decoded = jsonDecode(encoded) as Map<String, dynamic>;
+      final parsed = STBDDI3725Config.fromJson(decoded);
+      expect(parsed.nameOrId, 'X');
+      expect(parsed.rawStateKey, 'a/raw');
+      expect(parsed.forceValuesKey, 'a/force');
+      expect(parsed.onFiltersKey, 'a/onf');
+      expect(parsed.offFiltersKey, 'a/offf');
+      expect(parsed.descriptionsKey, 'a/desc');
+    });
+
+    test('legacy JSON without nameOrId loads as "1" (QUAL-04 back-compat)', () {
+      // Construct a minimal legacy JSON blob lacking nameOrId — the
+      // @JsonKey(defaultValue: '1') annotation must rehydrate it.
+      final legacyJson = <String, dynamic>{
+        'asset_name': 'STBDDI3725Config',
+        'coordinates': {'x': 0.0, 'y': 0.0},
+        'size': {'width': 0.03, 'height': 0.03},
+      };
+      final parsed = STBDDI3725Config.fromJson(legacyJson);
+      expect(parsed.nameOrId, '1');
+      expect(parsed.rawStateKey, isNull);
+    });
+  });
+
+  group('STBDDI3725BodyPainter shouldRepaint contract', () {
+    STBDDI3725BodyPainter makePainter({
+      List<IOState>? ledStates,
+      bool isStale = false,
+      bool isDisconnected = false,
+      int animationValue = 0,
+    }) {
+      return STBDDI3725BodyPainter(
+        ledStates: ledStates ?? List<IOState>.filled(16, IOState.low),
+        isStale: isStale,
+        isDisconnected: isDisconnected,
+        animation: AlwaysStoppedAnimation<int>(animationValue),
+      );
+    }
+
+    test('same inputs → shouldRepaint=false', () {
+      final a = makePainter();
+      final b = makePainter();
+      expect(a.shouldRepaint(b), isFalse);
+    });
+
+    test('different ledStates → shouldRepaint=true', () {
+      final a = makePainter();
+      final b = makePainter(
+          ledStates: List<IOState>.filled(16, IOState.high));
+      expect(a.shouldRepaint(b), isTrue);
+    });
+
+    test('different isStale → shouldRepaint=true', () {
+      final a = makePainter(isStale: false);
+      final b = makePainter(isStale: true);
+      expect(a.shouldRepaint(b), isTrue);
+    });
+
+    test('different isDisconnected → shouldRepaint=true', () {
+      final a = makePainter(isDisconnected: false);
+      final b = makePainter(isDisconnected: true);
+      expect(a.shouldRepaint(b), isTrue);
+    });
+
+    test('different animation.value → shouldRepaint=true', () {
+      final a = makePainter(animationValue: 0);
+      final b = makePainter(animationValue: 128);
+      expect(a.shouldRepaint(b), isTrue);
+    });
+
+    test('cross-runtimeType → shouldRepaint=true (Pitfall 3 guard)', () {
+      final p = makePainter();
+      final other = _DummyDDI3725Painter();
+      expect(p.shouldRepaint(other), isTrue);
+    });
+  });
+
+  group('STBDDI3725Config.configure — editor surface', () {
+    // Mirrors elevator_widget_test's `openConfigEditor` pattern: stage the
+    // dialog behind an ElevatedButton + showDialog so the editor body resolves
+    // its Material/Theme ancestors. KeyField is a ConsumerStatefulWidget that
+    // futures-on stateManProvider — under ProviderScope without overrides the
+    // future never completes, but the widget tree is still pumped and findable
+    // (KeyField renders a placeholder while waiting). That's enough to verify
+    // the editor surface locks the 5-KeyField shape.
+    Future<void> openEditor(WidgetTester tester, STBDDI3725Config cfg) async {
+      await tester.pumpWidget(ProviderScope(
+        child: MaterialApp(
+          home: Scaffold(
+            body: Builder(
+              builder: (context) => Center(
+                child: ElevatedButton(
+                  onPressed: () => showDialog<void>(
+                    context: context,
+                    builder: (_) => Dialog(child: cfg.configure(context)),
+                  ),
+                  child: const Text('open'),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ));
+      await tester.tap(find.text('open'));
+      await tester.pump(); // open dialog frame
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+
+    testWidgets('all 5 KeyField labels + Name or ID present', (tester) async {
+      final cfg = STBDDI3725Config.preview();
+      await openEditor(tester, cfg);
+
+      expect(find.text('Name or ID'), findsOneWidget);
+      expect(find.text('Raw State Key'), findsOneWidget);
+      expect(find.text('Force Values Key'), findsOneWidget);
+      expect(find.text('On Filters Key'), findsOneWidget);
+      expect(find.text('Off Filters Key'), findsOneWidget);
+      expect(find.text('Descriptions Key'), findsOneWidget);
+    });
+
+    testWidgets('exactly 5 KeyField widgets in editor tree', (tester) async {
+      final cfg = STBDDI3725Config.preview();
+      await openEditor(tester, cfg);
+      // Locks the editor surface — Phase 3 will not silently drop a field.
+      expect(find.byType(KeyField), findsNWidgets(5));
+    });
+  });
+
+  group('STBDDI3725Widget — mount sanity', () {
+    testWidgets('pumps cleanly with 16 low LEDs (no exceptions)',
+        (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Center(
+              child: SizedBox(
+                width: 200,
+                height: 300,
+                child: STBDDI3725Widget(
+                  ledStates: List<IOState>.filled(16, IOState.low),
+                  isStale: false,
+                  isDisconnected: false,
+                  animation: const AlwaysStoppedAnimation<int>(0),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump(Duration.zero);
+      expect(find.byType(STBDDI3725Widget), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Golden matrix — 5 states × 2 themes = 10 PNGs.
+  //
+  // Per Plan 02 Task 4 checkpoint: LSB-first bit-order is auto-resolved per
+  // the CONTEXT.md locked decision. `alternating_0xAAAA` therefore renders
+  // channels 2,4,6,8,10,12,14,16 lit (odd indices in the LED array).
+  //
+  // QUAL-02 invariant: the cream body is FIXED (bodyColor from io16.dart, not
+  // theme-driven). The light/dark goldens for the same input state must show
+  // identical cream-body pixels — only the outside Theme.surface differs. The
+  // harness wraps everything in a Scaffold-coloured background that varies
+  // between light/dark to make the body-color invariance visually obvious.
+  //
+  // Harness mirrors `elevator_painter_test.dart:62-96`:
+  // - `RepaintBoundary` + unique `Key` so the matched widget = painter pixels
+  // - `tester.pump(Duration.zero)` — NEVER `pumpAndSettle()` (Pitfall 6)
+  // - `AlwaysStoppedAnimation(0)` — deterministic frame
+  // - macOS-gated via `skip: !Platform.isMacOS` (QUAL-01)
+  // ---------------------------------------------------------------------------
+  group('STBDDI3725 goldens',
+      skip: !Platform.isMacOS ? 'Golden tests only run on macOS' : null, () {
+    const goldenKey = Key('stb_ddi3725_golden');
+
+    Future<void> pumpDDI3725(
+      WidgetTester tester, {
+      required List<IOState> ledStates,
+      required bool isStale,
+      required bool isDisconnected,
+      required Brightness theme,
+    }) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: theme == Brightness.dark ? ThemeData.dark() : ThemeData.light(),
+          home: Scaffold(
+            body: Center(
+              child: RepaintBoundary(
+                key: goldenKey,
+                child: SizedBox(
+                  width: 200,
+                  height: 300,
+                  child: STBDDI3725Widget(
+                    ledStates: ledStates,
+                    isStale: isStale,
+                    isDisconnected: isDisconnected,
+                    animation: const AlwaysStoppedAnimation<int>(0),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump(Duration.zero);
+    }
+
+    // 1. all_off — 0x0000 → all 16 LEDs low. RDY green (module alive).
+    testWidgets('ddi3725_all_off_light.png', (tester) async {
+      await pumpDDI3725(tester,
+          ledStates: bitmaskToLedStates(0x0000),
+          isStale: false,
+          isDisconnected: false,
+          theme: Brightness.light);
+      await expectLater(
+        find.byKey(goldenKey),
+        matchesGoldenFile('goldens/advantys_stb/ddi3725_all_off_light.png'),
+      );
+    });
+
+    testWidgets('ddi3725_all_off_dark.png', (tester) async {
+      await pumpDDI3725(tester,
+          ledStates: bitmaskToLedStates(0x0000),
+          isStale: false,
+          isDisconnected: false,
+          theme: Brightness.dark);
+      await expectLater(
+        find.byKey(goldenKey),
+        matchesGoldenFile('goldens/advantys_stb/ddi3725_all_off_dark.png'),
+      );
+    });
+
+    // 2. all_on — 0xFFFF → all 16 LEDs high (green). RDY green.
+    testWidgets('ddi3725_all_on_light.png', (tester) async {
+      await pumpDDI3725(tester,
+          ledStates: bitmaskToLedStates(0xFFFF),
+          isStale: false,
+          isDisconnected: false,
+          theme: Brightness.light);
+      await expectLater(
+        find.byKey(goldenKey),
+        matchesGoldenFile('goldens/advantys_stb/ddi3725_all_on_light.png'),
+      );
+    });
+
+    testWidgets('ddi3725_all_on_dark.png', (tester) async {
+      await pumpDDI3725(tester,
+          ledStates: bitmaskToLedStates(0xFFFF),
+          isStale: false,
+          isDisconnected: false,
+          theme: Brightness.dark);
+      await expectLater(
+        find.byKey(goldenKey),
+        matchesGoldenFile('goldens/advantys_stb/ddi3725_all_on_dark.png'),
+      );
+    });
+
+    // 3. alternating_0xAAAA — LSB-first locked → odd indices 1,3,5,...,15 lit
+    // (channels 2,4,6,8,10,12,14,16). RDY green.
+    testWidgets('ddi3725_alternating_0xAAAA_light.png', (tester) async {
+      await pumpDDI3725(tester,
+          ledStates: bitmaskToLedStates(0xAAAA),
+          isStale: false,
+          isDisconnected: false,
+          theme: Brightness.light);
+      await expectLater(
+        find.byKey(goldenKey),
+        matchesGoldenFile(
+            'goldens/advantys_stb/ddi3725_alternating_0xAAAA_light.png'),
+      );
+    });
+
+    testWidgets('ddi3725_alternating_0xAAAA_dark.png', (tester) async {
+      await pumpDDI3725(tester,
+          ledStates: bitmaskToLedStates(0xAAAA),
+          isStale: false,
+          isDisconnected: false,
+          theme: Brightness.dark);
+      await expectLater(
+        find.byKey(goldenKey),
+        matchesGoldenFile(
+            'goldens/advantys_stb/ddi3725_alternating_0xAAAA_dark.png'),
+      );
+    });
+
+    // 4. forced_mix — raw 0xFFFF with forces[0]=1 (forcedLow on ch1) and
+    // forces[2]=2 (forcedHigh on ch3, raw bit collapsed). The remaining 14
+    // channels stay high. Shows force-collapse + forced-vs-unforced visual.
+    testWidgets('ddi3725_forced_mix_light.png', (tester) async {
+      const forces = <int>[
+        1, 0, 2, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0,
+      ];
+      await pumpDDI3725(tester,
+          ledStates: bitmaskToLedStates(0xFFFF, forceValues: forces),
+          isStale: false,
+          isDisconnected: false,
+          theme: Brightness.light);
+      await expectLater(
+        find.byKey(goldenKey),
+        matchesGoldenFile(
+            'goldens/advantys_stb/ddi3725_forced_mix_light.png'),
+      );
+    });
+
+    testWidgets('ddi3725_forced_mix_dark.png', (tester) async {
+      const forces = <int>[
+        1, 0, 2, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0,
+      ];
+      await pumpDDI3725(tester,
+          ledStates: bitmaskToLedStates(0xFFFF, forceValues: forces),
+          isStale: false,
+          isDisconnected: false,
+          theme: Brightness.dark);
+      await expectLater(
+        find.byKey(goldenKey),
+        matchesGoldenFile(
+            'goldens/advantys_stb/ddi3725_forced_mix_dark.png'),
+      );
+    });
+
+    // 5. disconnected — all LEDs low, isStale=true + isDisconnected=true.
+    // RDY dim grey; red exclamation overlay in upper-center.
+    testWidgets('ddi3725_disconnected_light.png', (tester) async {
+      await pumpDDI3725(tester,
+          ledStates: List<IOState>.filled(16, IOState.low),
+          isStale: true,
+          isDisconnected: true,
+          theme: Brightness.light);
+      await expectLater(
+        find.byKey(goldenKey),
+        matchesGoldenFile(
+            'goldens/advantys_stb/ddi3725_disconnected_light.png'),
+      );
+    });
+
+    testWidgets('ddi3725_disconnected_dark.png', (tester) async {
+      await pumpDDI3725(tester,
+          ledStates: List<IOState>.filled(16, IOState.low),
+          isStale: true,
+          isDisconnected: true,
+          theme: Brightness.dark);
+      await expectLater(
+        find.byKey(goldenKey),
+        matchesGoldenFile(
+            'goldens/advantys_stb/ddi3725_disconnected_dark.png'),
+      );
+    });
+  });
+}
+
+class _DummyDDI3725Painter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {}
+  @override
+  bool shouldRepaint(covariant CustomPainter old) => true;
 }

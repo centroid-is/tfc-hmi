@@ -81,24 +81,42 @@ class IO16LedBlockPainter extends BaseLedBlockPainter {
 
   @override
   void drawLeds(Canvas canvas, Size size) {
-    final pad = size.width * 0.05;
+    // Independent x- and y-pads. Plan 02 deviation: the original Plan 01
+    // sibling-painter pattern (IO8/IO6) uses `pad = size.width * 0.05` for
+    // both axes because those painters render into tall-narrow blocks
+    // (height >> width). The DDI3725 body painter feeds this painter a
+    // wide-flat region (width >> height — roughly 200×66 px at the standard
+    // 300px body height), and a single `width * 0.05` pad blows up cellH
+    // negative. Use independent axis pads so the painter is correct for both
+    // aspect ratios; the IO8/IO6 callers still get visually-identical output
+    // because their pad was already isotropic for square-ish blocks.
     const cols = 2;
     const rows = 8;
-    final cellW = (size.width - pad * (cols + 1)) / cols;
-    final cellH = (size.height - pad * (rows + 1)) / rows;
+    final padX = size.width * 0.05;
+    final padY = size.height * 0.05;
+    final cellW = (size.width - padX * (cols + 1)) / cols;
+    final cellH = (size.height - padY * (rows + 1)) / rows;
 
+    // Clamp the LED-border stroke so it never exceeds ~12% of the smaller
+    // cell dimension — for the DDI3725 wide-flat block the row height is
+    // ~5 px and a sibling-painter `size.width * 0.03` stroke would entirely
+    // overpaint the green/grey fill. The IO8/IO6 callers feed tall-narrow
+    // blocks where cellW/cellH are similar, so this clamp is a no-op for them.
+    final unclampedStroke = size.width * 0.03;
+    final maxStroke = (cellH < cellW ? cellH : cellW) * 0.12;
     final borderPaint = Paint()
       ..color = Colors.grey.shade700
       ..style = PaintingStyle.stroke
-      ..strokeWidth = size.width * 0.03;
+      ..strokeWidth =
+          unclampedStroke < maxStroke ? unclampedStroke : maxStroke;
 
     // Column-major: i → (col: i ~/ 8, row: i % 8).
     // Channels 1–8 fill left column top→bottom, channels 9–16 right column.
     for (int i = 0; i < 16; i++) {
       final int col = i ~/ 8;
       final int row = i % 8;
-      final double cx = pad + col * (cellW + pad);
-      final double cy = pad + row * (cellH + pad);
+      final double cx = padX + col * (cellW + padX);
+      final double cy = padY + row * (cellH + padY);
       final cellRect = Rect.fromLTWH(cx, cy, cellW, cellH);
       drawLed(canvas, cellRect, ledStates[i], borderPaint);
     }
