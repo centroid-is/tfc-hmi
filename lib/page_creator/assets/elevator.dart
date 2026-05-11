@@ -102,6 +102,13 @@ class ElevatorChildEntry {
   /// right). Default 0.5 = centre.
   double offsetX;
 
+  /// Anchor offset along Y (units of child height): -1.0..+1.0.
+  /// Default 0.0 = bottom-on-platform. Positive raises the child above
+  /// the platform; negative lowers it below. Unclamped — Stack(Clip.none)
+  /// handles overhang. (Plan 260511-ehy)
+  @JsonKey(defaultValue: 0.0)
+  double offsetY;
+
   /// Polymorphic child asset. Round-trips via [AssetRegistry.parse].
   @JsonKey(fromJson: _childFromJson, toJson: _childToJson)
   BaseAsset child;
@@ -109,6 +116,7 @@ class ElevatorChildEntry {
   ElevatorChildEntry({
     String? id,
     this.offsetX = 0.5,
+    this.offsetY = 0.0,
     required this.child,
   }) : id = id ?? DateTime.now().microsecondsSinceEpoch.toString();
 
@@ -750,13 +758,11 @@ class _ElevatorState extends ConsumerState<Elevator> {
           platformH,
           maxChildHeight,
         );
-        // Unclamped: the travel range is sized to maxChildHeight so
-        // `platformY - childH` is guaranteed >= 0 when childH <=
-        // maxChildHeight (which holds by construction — maxChildHeight is
-        // the max of all child heights). See Plan 260511-dxa for the
-        // derivation. Children taller than the bbox headroom may overhang
-        // (Stack uses Clip.none — Pitfall 7).
-        final top = platformY - childH;
+        // Anchor offset (260511-ehy): `top = platformY - childH * (1 + offsetY)`.
+        // offsetY = 0 keeps bottom-on-platform (Plan 260511-dxa invariant).
+        // Positive offsetY raises the child; negative lowers it. Unclamped —
+        // Stack(clipBehavior: Clip.none) tolerates overhang per Pitfall 7.
+        final top = platformY - childH * (1.0 + entry.offsetY);
         return Positioned(
           left: left,
           top: top,
@@ -1175,6 +1181,20 @@ class _ElevatorConfigEditorState extends State<_ElevatorConfigEditor> {
                           label: '${(entry.offsetX * 100).round()}%',
                           onChanged: (v) =>
                               setState(() => entry.offsetX = v),
+                        ),
+                        Text(
+                          'Vertical offset: ${(entry.offsetY * 100).round()}% of child height',
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                        Slider(
+                          min: -1.0,
+                          max: 1.0,
+                          divisions: 200,
+                          value: entry.offsetY,
+                          label:
+                              'Vertical offset: ${(entry.offsetY * 100).round()}%',
+                          onChanged: (v) =>
+                              setState(() => entry.offsetY = v),
                         ),
                       ],
                     ),
