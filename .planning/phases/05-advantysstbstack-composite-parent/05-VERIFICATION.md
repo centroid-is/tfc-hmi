@@ -2,9 +2,15 @@
 phase: 05
 phase_dir: 05-advantysstbstack-composite-parent
 verified: 2026-05-12T00:00:00Z
-status: human_needed
-score: 7/7 must_haves technically verified — 1 CONTEXT deviation awaiting user sign-off
+status: passed
+score: 7/7 must_haves verified — all CONTEXT deviations signed off
 date: 2026-05-12
+user_sign_offs:
+  - decision: "Delete IconButton has NO confirmation dialog (CX5010 parity overriding CONTEXT line-38 'with confirmation' phrasing)"
+    signed_off: 2026-05-12
+    signer: jon@centroid.is
+    verbatim_response: "dont need confirmation"
+    locked_by_test: "advantys_stb_test.dart:3001-3024 (Test 4: find.byType(AlertDialog), findsNothing after tap)"
 re_verification:
   previous_status: human_needed
   previous_score: 7/7
@@ -27,7 +33,7 @@ deferred: []
 **Architectural revision:** The standalone `AdvantysSTBStackConfig` was deleted mid-phase; composite behavior moved onto `STBNIP2311Config` to mirror the CX5010/EK1100 precedent. Verified against the retrofit shape per the user-approved redirect in `05-RETROFIT.md`.
 
 **Verified:** 2026-05-12 (re-run by independent verifier; goal-backward).
-**Status:** `human_needed` — 7/7 truths technically verified; one CX5010-parity deviation (no delete confirmation) still awaits user sign-off.
+**Status:** `passed` — 7/7 truths verified; CX5010-parity delete-confirmation deviation signed off by jon@centroid.is on 2026-05-12 ("dont need confirmation"). Decision is now intentional, locked by Test 4, and no follow-up plan is required.
 **Re-verification:** Yes — independent re-run of an earlier `human_needed` verification. No regressions; no new gaps; outstanding human item is unchanged.
 
 ## Goal Achievement — Requirement-Driven Truths
