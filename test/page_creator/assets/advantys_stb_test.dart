@@ -10,7 +10,13 @@ import 'package:tfc/page_creator/assets/advantys_stb.dart';
 import 'package:tfc/page_creator/assets/beckhoff.dart' show RowIOView, FilterEdit;
 import 'package:tfc/page_creator/assets/button.dart' show ButtonConfig;
 import 'package:tfc/page_creator/assets/common.dart'
-    show Asset, Coordinates, KeyField, RelativeSize, TextPos;
+    show
+        Asset,
+        Coordinates,
+        CoordinatesField,
+        KeyField,
+        RelativeSize,
+        TextPos;
 import 'package:tfc/page_creator/assets/registry.dart';
 import 'package:tfc/painter/advantys_stb/ddi3725.dart';
 import 'package:tfc/painter/advantys_stb/ddo3705.dart';
@@ -2904,6 +2910,450 @@ void main() {
       },
     );
   });
+
+  // ---------------------------------------------------------------------------
+  // Plan 05-02: configure dialog widget tests (STACK-04).
+  //
+  // The dialog mirrors `_CXxxxxConfigContent` (lib/page_creator/assets/beckhoff.dart:136-285)
+  // verbatim, substituting:
+  //   - `_availableSubdevices` → `_availableSTBSubdevices`
+  //   - `enableAngle: true` on the Coordinates field (CX5010 parity per RESEARCH Q3)
+  //
+  // The Plan-01 stub `configure()` previously returned a Column with the text
+  // "Subdevice management UI ships in Plan 05-02. Edit JSON directly for now."
+  // — these tests fail against that stub (RED gate) and pass once Plan 05-02
+  // ships the real `_AdvantysSTBStackConfigContent` dialog.
+  // ---------------------------------------------------------------------------
+  group('AdvantysSTBStack configure dialog', () {
+    Future<void> pumpConfigure(
+      WidgetTester tester,
+      AdvantysSTBStackConfig cfg,
+    ) async {
+      await tester.binding.setSurfaceSize(const Size(1200, 800));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            stateManProvider.overrideWith((ref) async => _FakeStateMan()),
+          ],
+          child: MaterialApp(
+            home: Scaffold(
+              body: Builder(
+                builder: (context) => cfg.configure(context),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+
+    testWidgets(
+      'Test 1: Add subdevice via dropdown — picks STBDDI3725Config',
+      (tester) async {
+        final cfg = AdvantysSTBStackConfig();
+        await pumpConfigure(tester, cfg);
+
+        // Open the dropdown.
+        await tester.tap(find.byType(DropdownButtonFormField<String>));
+        await tester.pumpAndSettle();
+
+        // The dropdown menu (overlay) carries exactly the 4 STB display names.
+        expect(
+          find.text('STBDDI3725 (16-Ch DI)').hitTestable(),
+          findsOneWidget,
+        );
+
+        // Tap the DDI entry.
+        await tester.tap(find.text('STBDDI3725 (16-Ch DI)').hitTestable());
+        await tester.pumpAndSettle();
+
+        expect(cfg.subdevices.length, 1);
+        expect(cfg.subdevices[0], isA<STBDDI3725Config>());
+      },
+    );
+
+    testWidgets(
+      'Test 2: Dropdown is FILTERED to the 4 STB types only '
+      '(positive assertions only per checker iteration 1 warning #5)',
+      (tester) async {
+        final cfg = AdvantysSTBStackConfig();
+        await pumpConfigure(tester, cfg);
+
+        // Open the dropdown.
+        await tester.tap(find.byType(DropdownButtonFormField<String>));
+        await tester.pumpAndSettle();
+
+        // Collect the visible item Texts inside the open menu by scanning all
+        // DropdownMenuItem<String> widgets and pulling their child Text.
+        final items = tester
+            .widgetList<DropdownMenuItem<String>>(
+                find.byType(DropdownMenuItem<String>))
+            .toList();
+        final itemTexts = items
+            .map((item) {
+              final child = item.child;
+              if (child is Text) return child.data ?? '';
+              return '';
+            })
+            .where((s) => s.isNotEmpty)
+            .toList();
+
+        // hasLength(4) + containsAll([...]) — locked positive form. Do NOT add
+        // a negative `itemTexts.any((t) => t.contains('Button')...)` assertion
+        // (checker iteration 1 warning #5 — brittle and redundant).
+        expect(itemTexts, hasLength(4));
+        expect(
+          itemTexts,
+          containsAll(<String>[
+            'STBNIP2311 (Ethernet Head)',
+            'STBPDT3100 (24 VDC PDM)',
+            'STBDDI3725 (16-Ch DI)',
+            'STBDDO3705 (16-Ch DO)',
+          ]),
+        );
+      },
+    );
+
+    testWidgets(
+      'Test 3: Reorder via ReorderableListView swaps adjacent subdevices',
+      (tester) async {
+        // Build a stack with 3 subdevices in order [DI, DO, PDT].
+        final cfg = AdvantysSTBStackConfig()
+          ..subdevices = <Asset>[
+            STBDDI3725Config(nameOrId: 'A'),
+            STBDDO3705Config(nameOrId: 'B'),
+            STBPDT3100Config(nameOrId: 'C'),
+          ];
+        await pumpConfigure(tester, cfg);
+
+        // ReorderableListView drag-and-drop is finicky in widget tests
+        // (RESEARCH §Pitfall 6); invoke the onReorder callback directly via
+        // the widget reference. Testing the ordering invariant matters more
+        // than the drag gesture mechanic.
+        final reorderable = tester
+            .widget<ReorderableListView>(find.byType(ReorderableListView));
+        // Swap items 0 and 1: oldIndex=0, newIndex=2 (Flutter API: newIndex
+        // is the insertion slot *after* removal, so moving 0 → "after 1"
+        // means newIndex=2).
+        reorderable.onReorder(0, 2);
+        await tester.pumpAndSettle();
+
+        expect(cfg.subdevices.length, 3);
+        expect(cfg.subdevices[0], isA<STBDDO3705Config>());
+        expect((cfg.subdevices[0] as STBDDO3705Config).nameOrId, 'B');
+        expect(cfg.subdevices[1], isA<STBDDI3725Config>());
+        expect((cfg.subdevices[1] as STBDDI3725Config).nameOrId, 'A');
+        expect(cfg.subdevices[2], isA<STBPDT3100Config>());
+        expect((cfg.subdevices[2] as STBPDT3100Config).nameOrId, 'C');
+      },
+    );
+
+    testWidgets(
+      'Test 4: Delete IconButton removes the subdevice with NO confirmation',
+      (tester) async {
+        // No confirmation dialog — CX5010 parity per CONTEXT.md line 38
+        // verbatim-mirror commitment, overriding the §Configure Dialog
+        // "with confirmation" phrasing. See checker iteration 1 warning #2;
+        // SUMMARY must list this as a user-decision item.
+        final cfg = AdvantysSTBStackConfig()
+          ..subdevices = <Asset>[
+            STBDDI3725Config(nameOrId: 'first'),
+            STBDDO3705Config(nameOrId: 'second'),
+          ];
+        await pumpConfigure(tester, cfg);
+
+        // Sanity: no AlertDialog up front (configure() returns inline body, not
+        // an AlertDialog wrapper).
+        expect(find.byType(AlertDialog), findsNothing);
+
+        // Tap the first delete IconButton.
+        final deleteButtons = find.widgetWithIcon(IconButton, Icons.delete);
+        expect(deleteButtons, findsNWidgets(2));
+        await tester.tap(deleteButtons.first);
+        await tester.pumpAndSettle();
+
+        // List shrank to one; the second entry survived.
+        expect(cfg.subdevices.length, 1);
+        expect(cfg.subdevices[0], isA<STBDDO3705Config>());
+        expect((cfg.subdevices[0] as STBDDO3705Config).nameOrId, 'second');
+
+        // NO confirmation AlertDialog appeared — CX5010 parity.
+        expect(find.byType(AlertDialog), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'Test 5: No nameOrId / Name field on the stack itself — CX5010 parity',
+      (tester) async {
+        // No nameOrId field on the stack — CX5010 parity. The four leaf
+        // modules carry their own. Deviates from CONTEXT §Specifics
+        // implication; verbatim-mirror commitment overrides. See checker
+        // iteration 1 warning #3; SUMMARY must list this as a user-decision
+        // item.
+        final cfg = AdvantysSTBStackConfig();
+        await pumpConfigure(tester, cfg);
+
+        // Left pane MUST only contain SizeField + CoordinatesField — no
+        // stack-level Name / nameOrId TextField/TextFormField inputs.
+        expect(find.widgetWithText(TextField, 'Name'), findsNothing);
+        expect(find.widgetWithText(TextField, 'Name or ID'), findsNothing);
+        expect(find.widgetWithText(TextFormField, 'Name'), findsNothing);
+        expect(find.widgetWithText(TextFormField, 'Name or ID'), findsNothing);
+        expect(find.widgetWithText(TextFormField, 'nameOrId'), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'Test 6: CoordinatesField has enableAngle=true (CX5010 parity per RESEARCH Q3)',
+      (tester) async {
+        final cfg = AdvantysSTBStackConfig();
+        await pumpConfigure(tester, cfg);
+
+        // LOCKED widget-access mechanic per checker iteration 1 warning #4 —
+        // do NOT use find.byWidgetPredicate or chain from tester.firstWidget.
+        expect(
+          tester
+              .widget<CoordinatesField>(find.byType(CoordinatesField))
+              .enableAngle,
+          isTrue,
+        );
+      },
+    );
+  });
+
+  // ---------------------------------------------------------------------------
+  // Plan 05-02: QUAL-07 full-stack integration test.
+  //
+  // Pumps the canonical 4-module stack (1× NIP + 1× PDT + 1× DDI + 1× DDO) and
+  // verifies: clean mount, all four leaf widgets present, taps on DDI+DDO
+  // bodies open their detail dialogs, taps on NIP+PDT areas do NOT throw and
+  // do NOT open dialogs (per RESEARCH finding 4 — NIP and PDT have no
+  // GestureDetector by design, they are decorative).
+  // ---------------------------------------------------------------------------
+  group('AdvantysSTBStack full-stack integration (QUAL-07)', () {
+    AdvantysSTBStackConfig buildCanonicalStack() {
+      return AdvantysSTBStackConfig()
+        ..subdevices = <Asset>[
+          STBNIP2311Config.preview(),
+          STBPDT3100Config.preview(),
+          STBDDI3725Config(nameOrId: 'DI', rawStateKey: 'plc.di.raw'),
+          STBDDO3705Config(nameOrId: 'DO', rawStateKey: 'plc.do.raw'),
+        ]
+        ..size = const RelativeSize(width: 0.8, height: 0.3);
+    }
+
+    Future<void> pumpStack(
+      WidgetTester tester,
+      AdvantysSTBStackConfig stack,
+    ) async {
+      await tester.binding.setSurfaceSize(const Size(1600, 600));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            stateManProvider.overrideWith((ref) async => _FakeStateMan()),
+          ],
+          child: MaterialApp(
+            home: Scaffold(
+              body: Center(
+                child: Builder(
+                  builder: (ctx) => stack.build(ctx),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+
+    testWidgets(
+      'Test 1: 1× NIP + 1× PDT + 1× DDI + 1× DDO renders cleanly',
+      (tester) async {
+        final stack = buildCanonicalStack();
+        await pumpStack(tester, stack);
+
+        expect(tester.takeException(), isNull);
+        expect(find.byType(STBNIP2311Widget), findsOneWidget);
+        expect(find.byType(STBPDT3100Widget), findsOneWidget);
+        expect(find.byType(STBDDI3725Widget), findsOneWidget);
+        expect(find.byType(STBDDO3705Widget), findsOneWidget);
+      },
+    );
+
+    test(
+      'Test 2: stack.allKeys returns the deduplicated union of subdevice keys',
+      () {
+        final stack = AdvantysSTBStackConfig()
+          ..subdevices = <Asset>[
+            STBDDI3725Config(
+              rawStateKey: 'di.raw',
+              forceValuesKey: 'di.force',
+            ),
+            STBDDO3705Config(rawStateKey: 'do.raw'),
+            STBPDT3100Config(inputOkKey: 'pdt.ok'),
+            STBNIP2311Config(),
+          ];
+
+        expect(
+          stack.allKeys,
+          containsAll(<String>[
+            'di.raw',
+            'di.force',
+            'do.raw',
+            'pdt.ok',
+          ]),
+        );
+        // NIP contributes nothing (decorative); no duplicates.
+        expect(stack.allKeys, hasLength(4));
+      },
+    );
+
+    testWidgets(
+      'Test 3: tap on DDI body opens its detail AlertDialog',
+      (tester) async {
+        final stack = buildCanonicalStack();
+        await pumpStack(tester, stack);
+
+        expect(find.byType(AlertDialog), findsNothing);
+        await tester.tap(find.byType(STBDDI3725Widget));
+        await tester.pumpAndSettle();
+
+        expect(find.byType(AlertDialog), findsOneWidget);
+
+        // Clean tester state — close the dialog.
+        await tester.tap(find.text('Close'));
+        await tester.pumpAndSettle();
+        expect(find.byType(AlertDialog), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'Test 4: tap on DDO body opens its detail AlertDialog',
+      (tester) async {
+        final stack = buildCanonicalStack();
+        await pumpStack(tester, stack);
+
+        expect(find.byType(AlertDialog), findsNothing);
+        await tester.tap(find.byType(STBDDO3705Widget));
+        await tester.pumpAndSettle();
+
+        expect(find.byType(AlertDialog), findsOneWidget);
+
+        await tester.tap(find.text('Close'));
+        await tester.pumpAndSettle();
+        expect(find.byType(AlertDialog), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'Test 5: tap on NIP body does NOT throw and does NOT open a dialog '
+      '(NIP is decorative — no GestureDetector per RESEARCH finding 4)',
+      (tester) async {
+        final stack = buildCanonicalStack();
+        await pumpStack(tester, stack);
+
+        // Tap with warnIfMissed: false because NIP has no GestureDetector;
+        // the framework would otherwise warn that no hit was registered.
+        await tester.tap(find.byType(STBNIP2311Widget), warnIfMissed: false);
+        await tester.pumpAndSettle();
+
+        expect(find.byType(AlertDialog), findsNothing);
+        expect(tester.takeException(), isNull);
+      },
+    );
+
+    testWidgets(
+      'Test 6: tap on PDT body does NOT throw and does NOT open a dialog '
+      '(PDT is decorative — no GestureDetector per RESEARCH finding 4)',
+      (tester) async {
+        final stack = buildCanonicalStack();
+        await pumpStack(tester, stack);
+
+        await tester.tap(find.byType(STBPDT3100Widget), warnIfMissed: false);
+        await tester.pumpAndSettle();
+
+        expect(find.byType(AlertDialog), findsNothing);
+        expect(tester.takeException(), isNull);
+      },
+    );
+  });
+
+  // ---------------------------------------------------------------------------
+  // Plan 05-02: full-stack goldens (QUAL-07 visual gate).
+  //
+  // Two PNGs: light + dark themes, canonical NIP+PDT+DDI+DDO layout. macOS-gated
+  // via `skip: !Platform.isMacOS` (no `tags: ['golden']` — Phase 1-4 convention).
+  // Generate locally with `--update-goldens` on macOS dev hardware.
+  // ---------------------------------------------------------------------------
+  group(
+    'AdvantysSTBStack goldens',
+    skip: !Platform.isMacOS ? 'Golden tests only run on macOS' : null,
+    () {
+      const goldenKey = Key('stb_stack_full_golden');
+
+      Future<void> pumpStack(
+        WidgetTester tester, {
+        required Brightness theme,
+      }) async {
+        final stack = AdvantysSTBStackConfig()
+          ..subdevices = <Asset>[
+            STBNIP2311Config.preview(),
+            STBPDT3100Config.preview(),
+            STBDDI3725Config.preview(),
+            STBDDO3705Config.preview(),
+          ];
+        await tester.pumpWidget(
+          ProviderScope(
+            overrides: [
+              stateManProvider.overrideWith((ref) async => _FakeStateMan()),
+            ],
+            child: MaterialApp(
+              theme: theme == Brightness.dark
+                  ? ThemeData.dark()
+                  : ThemeData.light(),
+              home: Scaffold(
+                body: Center(
+                  child: RepaintBoundary(
+                    key: goldenKey,
+                    child: SizedBox(
+                      width: 800,
+                      height: 200,
+                      child: Builder(
+                        builder: (ctx) => stack.build(ctx),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+        // NEVER pumpAndSettle() — Phase 1 goldens pitfall (non-deterministic
+        // animation frame). Use explicit duration only.
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+
+      testWidgets('stack_full_light.png', (tester) async {
+        await pumpStack(tester, theme: Brightness.light);
+        await expectLater(
+          find.byKey(goldenKey),
+          matchesGoldenFile('goldens/advantys_stb/stack_full_light.png'),
+        );
+      });
+
+      testWidgets('stack_full_dark.png', (tester) async {
+        await pumpStack(tester, theme: Brightness.dark);
+        await expectLater(
+          find.byKey(goldenKey),
+          matchesGoldenFile('goldens/advantys_stb/stack_full_dark.png'),
+        );
+      });
+    },
+  );
 }
 
 // ---------------------------------------------------------------------------
