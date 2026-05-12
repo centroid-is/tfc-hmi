@@ -67,7 +67,11 @@ Widget _wrapWithSelectionBorder({
 
 /// Computes the top-left offset for the label given the asset center, its size,
 /// the label size, and the desired position.
-Offset _labelOffset(
+///
+/// Exposed for unit testing (regression for the inside-label bug where
+/// `TextPos.inside` fell through to the right-side default).
+@visibleForTesting
+Offset labelOffset(
   Offset center,
   Size assetSize,
   Size textSize,
@@ -92,8 +96,15 @@ Offset _labelOffset(
         center.dx - halfW - spacing - textSize.width,
         center.dy - textSize.height / 2,
       );
+    case TextPos.inside:
+      // Centre the label inside the asset's bounding rect. Used by
+      // buttons / controls where the label is a face caption rather
+      // than an external annotation.
+      return Offset(
+        center.dx - textSize.width / 2,
+        center.dy - textSize.height / 2,
+      );
     case TextPos.right:
-    default:
       return Offset(
         center.dx + halfW + spacing,
         center.dy - textSize.height / 2,
@@ -403,7 +414,7 @@ class _AssetStackState extends ConsumerState<AssetStack> {
             if (cfg.yMirror && (pos == TextPos.above || pos == TextPos.below)) {
               pos = pos == TextPos.above ? TextPos.below : TextPos.above;
             }
-            final labelOff = _labelOffset(center, assetSize, textSize, pos);
+            final labelOff = labelOffset(center, assetSize, textSize, pos);
             positionedChildren.add(
               Positioned(
                 left: labelOff.dx,
