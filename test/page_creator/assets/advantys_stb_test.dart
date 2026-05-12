@@ -3558,17 +3558,18 @@ void main() {
     // -----------------------------------------------------------------------
     // Defect A — chamfer-leak at ALL FOUR corners on each module.
     //
-    // The existing DEFECT-1 tests sample (1,1). At a 200-px-wide module
-    // with radius ≈ 12 px, point (1,1) sits inside the chamfer cutout but
-    // very close to the rounded curve — anti-aliasing fringe pixels could
-    // still register. Sample (3,3) for a deeper sit-inside-the-cutout
-    // check, plus all four corners.
+    // The existing DEFECT-1 group sampled top-left only at (1, 1). With the
+    // post-Defect-B subtle radius (min(w,h)*0.03 ≈ 6 px at 200×280), the
+    // chamfer-cutout region is only the very corner — sample (1, 1) at each
+    // of the four corners (relative to that corner). Distance from rounding
+    // center (6, 6) is √(5²+5²) ≈ 7.07 > 6 ⇒ outside the rounded shape ⇒
+    // pixel MUST be background, NOT Schneider blue.
     // -----------------------------------------------------------------------
     for (final corner in <({String name, int dx, int dy})>[
-      (name: 'top-left', dx: 3, dy: 3),
-      (name: 'top-right', dx: -4, dy: 3),
-      (name: 'bottom-left', dx: 3, dy: -4),
-      (name: 'bottom-right', dx: -4, dy: -4),
+      (name: 'top-left', dx: 1, dy: 1),
+      (name: 'top-right', dx: -2, dy: 1),
+      (name: 'bottom-left', dx: 1, dy: -2),
+      (name: 'bottom-right', dx: -2, dy: -2),
     ]) {
       test(
           'BATCH2-A DDI3725: $corner chamfer corner deeply-inside has NO Schneider-blue',
