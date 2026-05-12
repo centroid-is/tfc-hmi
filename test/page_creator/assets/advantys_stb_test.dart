@@ -350,8 +350,13 @@ void main() {
             body: Center(
               child: RepaintBoundary(
                 key: goldenKey,
+                // BATCH2 Defect E: slim DIN-rail aspect (1:6) — at height
+                // 300 the canonical width is 300/6 = 50. The widget's
+                // built-in SizedBox(width: height/6, height: height)
+                // matches these constraints exactly so the painter renders
+                // at its intrinsic aspect without stretching.
                 child: SizedBox(
-                  width: 200,
+                  width: 50,
                   height: 300,
                   child: STBDDI3725Widget(
                     ledStates: ledStates,
@@ -1686,8 +1691,9 @@ void main() {
             body: Center(
               child: RepaintBoundary(
                 key: goldenKey,
+                // BATCH2 Defect E: slim DIN-rail aspect (1:6).
                 child: SizedBox(
-                  width: 200,
+                  width: 50,
                   height: 300,
                   child: STBDDO3705Widget(
                     ledStates: ledStates,
@@ -2118,8 +2124,11 @@ void main() {
             body: Center(
               child: RepaintBoundary(
                 key: goldenKey,
+                // BATCH2 Defect E: slim DIN-rail aspect (~1:3) — at height
+                // 280 the canonical width is ~93. The widget's built-in
+                // SizedBox(width: height * kNIP2311AspectRatio) matches.
                 child: SizedBox(
-                  width: 200,
+                  width: 93,
                   height: 280,
                   child: STBNIP2311Widget(nameOrId: 'NIP-01'),
                 ),
@@ -2528,8 +2537,10 @@ void main() {
             body: Center(
               child: RepaintBoundary(
                 key: goldenKey,
+                // BATCH2 Defect E: slim DIN-rail aspect (~1:3) — at height
+                // 280 the canonical width is ~93.
                 child: SizedBox(
-                  width: 200,
+                  width: 93,
                   height: 280,
                   child: STBPDT3100Widget(
                     nameOrId: 'PDT-01',
