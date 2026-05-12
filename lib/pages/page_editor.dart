@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io' show Platform;
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -14,7 +15,7 @@ import '../models/menu_item.dart';
 import '../providers/current_page_assets.dart';
 import '../tech_docs/tech_doc_picker.dart';
 
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb, visibleForTesting;
 import '../chat/ai_context_action.dart';
 import '../chat/chat_overlay.dart' show ChatContext;
 import '../chat/hamburger_context_menu.dart';
@@ -23,6 +24,38 @@ import '../chat/palette_context_menu.dart';
 import '../widgets/proposal_visual.dart';
 import '../providers/proposal_state.dart';
 import 'package:flutter/services.dart';
+
+/// Hit-tests whether a pointer position falls inside an asset's rotated
+/// visual rect. The marquee gate uses this to decide between starting a
+/// drag-selection rubber band (pointer down on empty canvas) and dragging
+/// an asset (pointer down on an asset). An unrotated AABB test would fail
+/// in both directions for any asset with a non-zero `angle`.
+///
+/// `pointer` is in the editor canvas's local coordinate system.
+/// `cx`, `cy` are the asset centre in the same system.
+/// `halfW`, `halfH` are the asset's unrotated half-extents.
+/// `angleDegrees` is the asset's rotation in degrees (matches
+/// `Coordinates.angle`).
+@visibleForTesting
+bool marqueeHitTestRotatedAsset({
+  required Offset pointer,
+  required double cx,
+  required double cy,
+  required double halfW,
+  required double halfH,
+  required double angleDegrees,
+}) {
+  final dx = pointer.dx - cx;
+  final dy = pointer.dy - cy;
+  final angleRad = angleDegrees * math.pi / 180;
+  // Apply the inverse rotation (-angle) to project the pointer into the
+  // asset's unrotated local frame, then test the half-extents.
+  final cosA = math.cos(-angleRad);
+  final sinA = math.sin(-angleRad);
+  final localDx = dx * cosA - dy * sinA;
+  final localDy = dx * sinA + dy * cosA;
+  return localDx.abs() <= halfW && localDy.abs() <= halfH;
+}
 
 class PageEditor extends ConsumerStatefulWidget {
   /// Optional proposal JSON passed via Beamer route data.
@@ -596,28 +629,30 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                         Listener(
                           behavior: HitTestBehavior.translucent,
                           onPointerDown: (pointerEvent) {
-                            // Check if we're clicking on an asset first
+                            // Check if we're clicking on an asset first.
+                            // The hit-test respects the asset's rotation
+                            // via marqueeHitTestRotatedAsset — without it
+                            // the marquee gate would (a) start a marquee
+                            // when the operator clicks inside the rotated
+                            // visual but outside its pre-rotation AABB,
+                            // and (b) refuse to start a marquee when the
+                            // operator clicks empty visual space inside
+                            // the pre-rotation rect.
                             bool hitAsset = assets.any((asset) {
-                              final cx =
-                                  asset.coordinates.x * constraints.maxWidth;
-                              final cy =
-                                  asset.coordinates.y * constraints.maxHeight;
-                              final halfW =
-                                  (asset.size.width * constraints.maxWidth) / 2;
-                              final halfH =
-                                  (asset.size.height * constraints.maxHeight) /
-                                      2;
-
-                              final assetRect = Rect.fromLTWH(
-                                cx -
-                                    halfW, // Offset by half width to match Positioned widget
-                                cy -
-                                    halfH, // Offset by half height to match Positioned widget
-                                asset.size.width * constraints.maxWidth,
-                                asset.size.height * constraints.maxHeight,
+                              return marqueeHitTestRotatedAsset(
+                                pointer: pointerEvent.localPosition,
+                                cx: asset.coordinates.x *
+                                    constraints.maxWidth,
+                                cy: asset.coordinates.y *
+                                    constraints.maxHeight,
+                                halfW: (asset.size.width *
+                                        constraints.maxWidth) /
+                                    2,
+                                halfH: (asset.size.height *
+                                        constraints.maxHeight) /
+                                    2,
+                                angleDegrees: asset.coordinates.angle ?? 0.0,
                               );
-                              final localPosition = pointerEvent.localPosition;
-                              return assetRect.contains(localPosition);
                             });
 
                             // Only start selection box if we didn't hit an asset
