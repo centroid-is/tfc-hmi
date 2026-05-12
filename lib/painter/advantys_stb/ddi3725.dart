@@ -49,6 +49,30 @@ const Color stbAccentBlue = Color(0xFF003B71);
 /// ~6 px, also subtle. Shared by all four STB body painters via `show`.
 const double kStbCornerRadiusFraction = 0.03;
 
+/// Shared body-outline stroke width for ALL four Schneider STB modules.
+/// Computed against `min(size.width, size.height) * fraction` so the
+/// stroke stays consistent across very different aspect ratios. Previously
+/// each painter computed its own stroke from `size.width`, which made the
+/// wider NIP head paint a noticeably thicker border than the slim PDT.
+/// Use via the [stbBodyStrokeWidth] helper.
+const double kStbBodyStrokeFraction = 0.025;
+
+/// Returns the absolute stroke width for an STB module body outline,
+/// keyed to `min(w, h)` and clamped to a readable range so very small
+/// or very large render sizes still produce a sensible line weight.
+/// Minimum 2.0 px so the outline never disappears against light canvas
+/// backgrounds at small render sizes.
+double stbBodyStrokeWidth(Size size) {
+  final shortest = size.width < size.height ? size.width : size.height;
+  return (shortest * kStbBodyStrokeFraction).clamp(2.0, 4.0);
+}
+
+/// Body-outline colour. Darker than `Colors.grey.shade700` to stay clearly
+/// visible against light page-editor backgrounds (the cream body fill is
+/// very close to the typical canvas colour, so a too-light outline lets
+/// the chamfer triangle blend with the canvas and reads as a fill bleed).
+const Color stbBodyBorderColor = Color(0xFF333333);
+
 /// Dark inset panel colour for the DDI3725 / DDO3705 LED windows. Real
 /// Schneider hardware uses a near-black faceplate inset that contrasts with
 /// the cream body to make the channel LEDs read clearly. BATCH2 Defect G.
@@ -128,9 +152,9 @@ class STBDDI3725BodyPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    final strokeWidth = size.width * 0.03;
+    final strokeWidth = stbBodyStrokeWidth(size);
     final outerBorderPaint = Paint()
-      ..color = Colors.grey.shade700
+      ..color = stbBodyBorderColor
       ..style = PaintingStyle.stroke
       ..strokeWidth = strokeWidth;
     final fillPaint = Paint()..color = bodyColor;
@@ -146,20 +170,27 @@ class STBDDI3725BodyPainter extends CustomPainter {
       Rect.fromLTWH(0, 0, size.width, size.height),
       Radius.circular(cornerR),
     );
+    // The outline rect is INSET by half the stroke so the stroke draws
+    // entirely INSIDE the fill (no half-stroke peeking past the cream
+    // body into a same-colored canvas — the recurring "background going
+    // outside the border" symptom the user has reported repeatedly).
+    final outlineInset = strokeWidth / 2;
     final outerRect = RRect.fromRectAndRadius(
-      Rect.fromLTWH(0, 0, size.width - strokeWidth, size.height - strokeWidth),
-      Radius.circular(cornerR),
+      Rect.fromLTWH(outlineInset, outlineInset,
+          size.width - strokeWidth, size.height - strokeWidth),
+      Radius.circular(
+          (cornerR - outlineInset).clamp(0.0, double.infinity)),
     );
     canvas.drawRRect(fillRect, fillPaint);
     canvas.drawRRect(outerRect, outerBorderPaint);
 
-    // Clip ALL interior chrome (header strip, accent strips, LED block,
-    // terminal blocks) to the body RRect so nothing overshoots the chamfer.
-    // DEFECT-1 fix: the top blue strip used to render as a plain rect and
-    // pokes out beyond the rounded corners; clipping to the body RRect
-    // keeps it inside the chamfer.
+    // Clip ALL interior chrome to the OUTLINE rect (NOT the fill rect) so
+    // header / accent strips / LED block / terminal blocks all sit
+    // strictly INSIDE the painted outline. Previously the clip was at
+    // fillRect, so blue strips extended right up to the half-painted
+    // outline edge and read as bleeding past the border.
     canvas.save();
-    canvas.clipRRect(fillRect);
+    canvas.clipRRect(outerRect);
 
     // 2. Top blue label strip with "DDI3725".
     // BATCH2 Defect G: the old blue-strip RDY indicator was removed because

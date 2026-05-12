@@ -47,7 +47,7 @@
 
 import 'package:flutter/material.dart';
 
-import 'ddi3725.dart' show stbAccentBlue, kStbCornerRadiusFraction;
+import 'ddi3725.dart' show stbAccentBlue, kStbCornerRadiusFraction, stbBodyStrokeWidth, stbBodyBorderColor;
 import 'io16.dart' show bodyColor;
 
 /// Aspect ratio width / height for the PDT3100 body.
@@ -133,9 +133,9 @@ class STBPDT3100BodyPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    final strokeWidth = size.width * 0.025;
+    final strokeWidth = stbBodyStrokeWidth(size);
     final outerBorderPaint = Paint()
-      ..color = Colors.grey.shade700
+      ..color = stbBodyBorderColor
       ..style = PaintingStyle.stroke
       ..strokeWidth = strokeWidth;
     final fillPaint = Paint()..color = bodyColor;
@@ -148,18 +148,20 @@ class STBPDT3100BodyPainter extends CustomPainter {
       Rect.fromLTWH(0, 0, size.width, size.height),
       Radius.circular(cornerR),
     );
+    // Outline INSET by half stroke — see ddi3725.dart for the full
+    // rationale.
+    final outlineInset = strokeWidth / 2;
     final outerRect = RRect.fromRectAndRadius(
-      Rect.fromLTWH(0, 0, size.width - strokeWidth, size.height - strokeWidth),
-      Radius.circular(cornerR),
+      Rect.fromLTWH(outlineInset, outlineInset,
+          size.width - strokeWidth, size.height - strokeWidth),
+      Radius.circular(
+          (cornerR - outlineInset).clamp(0.0, double.infinity)),
     );
     canvas.drawRRect(fillRect, fillPaint);
     canvas.drawRRect(outerRect, outerBorderPaint);
 
-    // Clip interior chrome to body RRect — DEFECT-1 (top header overshooting
-    // the chamfer) is eliminated when every subsequent fill is constrained
-    // to the rounded body shape.
     canvas.save();
-    canvas.clipRRect(fillRect);
+    canvas.clipRRect(outerRect);
 
     double y = 0.0;
 

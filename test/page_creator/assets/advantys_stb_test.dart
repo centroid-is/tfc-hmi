@@ -3494,8 +3494,9 @@ void main() {
       // Top block center is around y ≈ 115 + 26 ≈ 141. Scan the right-edge
       // strip (within 3 px of the right body edge) across the terminal-area
       // y-range and assert no black-ish pixel is present.
-      // "Black-ish" = R+G+B < 192 (lets dark grey terminal borders pass; only
-      // truly-black text triggers).
+      // "Black-ish" = R+G+B < 100 (only truly-black text triggers; the new
+      // stbBodyBorderColor #333333 = 153 is allowed through so the inset
+      // dark outline doesn't false-positive as label bleed).
       bool foundBlackText = false;
       for (int y = 120; y < 220; y++) {
         for (int x = w - 4; x < w - 1; x++) {
@@ -3503,7 +3504,7 @@ void main() {
           final r = pixels[i];
           final g = pixels[i + 1];
           final b = pixels[i + 2];
-          if (r + g + b < 192) {
+          if (r + g + b < 100) {
             foundBlackText = true;
             break;
           }

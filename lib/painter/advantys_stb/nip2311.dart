@@ -40,7 +40,7 @@
 
 import 'package:flutter/material.dart';
 
-import 'ddi3725.dart' show stbAccentBlue, kStbCornerRadiusFraction;
+import 'ddi3725.dart' show stbAccentBlue, kStbCornerRadiusFraction, stbBodyStrokeWidth, stbBodyBorderColor;
 import 'io16.dart' show bodyColor;
 import 'package:tfc/painter/beckhoff/ek1100.dart' show EthernetPortPainter;
 
@@ -122,9 +122,9 @@ class STBNIP2311BodyPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    final strokeWidth = size.width * 0.025;
+    final strokeWidth = stbBodyStrokeWidth(size);
     final outerBorderPaint = Paint()
-      ..color = Colors.grey.shade700
+      ..color = stbBodyBorderColor
       ..style = PaintingStyle.stroke
       ..strokeWidth = strokeWidth;
     final fillPaint = Paint()..color = bodyColor;
@@ -137,19 +137,24 @@ class STBNIP2311BodyPainter extends CustomPainter {
       Rect.fromLTWH(0, 0, size.width, size.height),
       Radius.circular(cornerR),
     );
+    // Outline INSET by half stroke — see ddi3725.dart for the full
+    // rationale. Eliminates the recurring "cream extends past the
+    // border" symptom.
+    final outlineInset = strokeWidth / 2;
     final outerRect = RRect.fromRectAndRadius(
-      Rect.fromLTWH(0, 0, size.width - strokeWidth, size.height - strokeWidth),
-      Radius.circular(cornerR),
+      Rect.fromLTWH(outlineInset, outlineInset,
+          size.width - strokeWidth, size.height - strokeWidth),
+      Radius.circular(
+          (cornerR - outlineInset).clamp(0.0, double.infinity)),
     );
     canvas.drawRRect(fillRect, fillPaint);
     canvas.drawRRect(outerRect, outerBorderPaint);
 
-    // Clip interior chrome to body RRect — DEFECT-1 (top header overshooting
-    // the chamfer) and DEFECT-2 (bottom footer band bleeding below the body
-    // outline) are both eliminated when every subsequent fill is constrained
-    // to the rounded body shape.
+    // Interior chrome clipped to OUTLINE rect (not fillRect) so the
+    // Schneider-blue strip + subtitle band + ethernet-port region all
+    // stay strictly inside the painted border.
     canvas.save();
-    canvas.clipRRect(fillRect);
+    canvas.clipRRect(outerRect);
 
     double y = 0.0;
 
@@ -264,21 +269,35 @@ class STBNIP2311BodyPainter extends CustomPainter {
   }
 
   void _drawSubtitleText(Canvas canvas, Rect band) {
-    final tp = TextPainter(
-      text: TextSpan(
-        text: 'Ethernet Modbus/TCP 10/100T',
-        style: TextStyle(
-          color: Colors.white,
-          fontSize: band.height * 0.50,
-          fontWeight: FontWeight.w500,
+    // Auto-shrink so the long "Ethernet Modbus/TCP 10/100T" caption fits
+    // on a single line inside the band — slim aspect ratios used to push
+    // the caption past the band's blue background.
+    final maxW = band.width * 0.94;
+    double fontSize = band.height * 0.50;
+    TextPainter tp;
+    while (true) {
+      tp = TextPainter(
+        text: TextSpan(
+          text: 'Ethernet Modbus/TCP 10/100T',
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: fontSize,
+            fontWeight: FontWeight.w500,
+          ),
         ),
-      ),
-      textAlign: TextAlign.center,
-      textDirection: TextDirection.ltr,
-    )..layout(minWidth: band.width, maxWidth: band.width);
+        textAlign: TextAlign.center,
+        textDirection: TextDirection.ltr,
+        maxLines: 1,
+      )..layout();
+      if (tp.width <= maxW || fontSize < 4) break;
+      fontSize *= 0.92;
+    }
     tp.paint(
       canvas,
-      Offset(band.left, band.top + (band.height - tp.height) / 2),
+      Offset(
+        band.left + (band.width - tp.width) / 2,
+        band.top + (band.height - tp.height) / 2,
+      ),
     );
   }
 

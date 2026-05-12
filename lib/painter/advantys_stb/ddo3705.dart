@@ -22,7 +22,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
-import 'ddi3725.dart' show stbAccentBlue, kStbCornerRadiusFraction;
+import 'ddi3725.dart' show stbAccentBlue, kStbCornerRadiusFraction, stbBodyStrokeWidth, stbBodyBorderColor;
 import 'io16.dart' show IO16LedBlockPainter, bodyColor;
 import 'package:tfc/painter/beckhoff/io8.dart' show IOState;
 
@@ -98,9 +98,9 @@ class STBDDO3705BodyPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    final strokeWidth = size.width * 0.03;
+    final strokeWidth = stbBodyStrokeWidth(size);
     final outerBorderPaint = Paint()
-      ..color = Colors.grey.shade700
+      ..color = stbBodyBorderColor
       ..style = PaintingStyle.stroke
       ..strokeWidth = strokeWidth;
     final fillPaint = Paint()..color = bodyColor;
@@ -114,17 +114,21 @@ class STBDDO3705BodyPainter extends CustomPainter {
       Rect.fromLTWH(0, 0, size.width, size.height),
       Radius.circular(cornerR),
     );
+    // Outline INSET by half stroke — see ddi3725.dart for full rationale.
+    final outlineInset = strokeWidth / 2;
     final outerRect = RRect.fromRectAndRadius(
-      Rect.fromLTWH(0, 0, size.width - strokeWidth, size.height - strokeWidth),
-      Radius.circular(cornerR),
+      Rect.fromLTWH(outlineInset, outlineInset,
+          size.width - strokeWidth, size.height - strokeWidth),
+      Radius.circular(
+          (cornerR - outlineInset).clamp(0.0, double.infinity)),
     );
     canvas.drawRRect(fillRect, fillPaint);
     canvas.drawRRect(outerRect, outerBorderPaint);
 
-    // Clip interior chrome to body RRect — DEFECT-1: top blue strip used to
-    // overshoot the chamfered corners. Clipping keeps it inside the curve.
+    // Interior chrome clipped to OUTLINE rect (not fillRect) so nothing
+    // appears past the painted border.
     canvas.save();
-    canvas.clipRRect(fillRect);
+    canvas.clipRRect(outerRect);
 
     // 2. Top blue label strip with "DDO3705" + output-arrow glyph.
     // BATCH2 Defect G: the old blue-strip RDY indicator was removed because
@@ -133,7 +137,8 @@ class STBDDO3705BodyPainter extends CustomPainter {
     final topStripRect = Rect.fromLTWH(0, 0, size.width, topStripH);
     canvas.drawRect(topStripRect, Paint()..color = stbAccentBlue);
     _drawTopLabelText(canvas, topStripRect);
-    _drawOutputArrowGlyph(canvas, topStripRect);
+    // Arrow glyph removed at user's request — model number alone is the
+    // differentiator vs DDI3725.
 
     // 3. LED block region — delegate to IO16LedBlockPainter (dark inset
     // panel + RDY status row + numbered 1..16 squared LEDs).
@@ -197,31 +202,6 @@ class STBDDO3705BodyPainter extends CustomPainter {
     final dy = strip.top + (strip.height - tp.height) / 2;
     final dx = strip.left + (strip.width - tp.width) / 2;
     tp.paint(canvas, Offset(dx, dy));
-  }
-
-  /// Renders the "▸" arrow glyph immediately to the LEFT of the "DDO3705"
-  /// label text — operator-recognizable as the output module without reading
-  /// the printed module name (CONTEXT.md §Visual Differentiation).
-  ///
-  /// The glyph is half the strip height and uses the same white text colour
-  /// as the label. This is the dominant visual differentiator vs DDI3725 at
-  /// the same channel state in the golden pair — the LED block beneath is
-  /// otherwise pixel-identical between DI and DO.
-  void _drawOutputArrowGlyph(Canvas canvas, Rect strip) {
-    final tp = TextPainter(
-      text: TextSpan(
-        text: '▸ ', // ▸ — Unicode BLACK RIGHT-POINTING SMALL TRIANGLE
-        style: TextStyle(
-          color: Colors.white,
-          fontSize: strip.height * 0.55,
-          fontWeight: FontWeight.bold,
-        ),
-      ),
-      textDirection: TextDirection.ltr,
-    )..layout();
-    final dy = strip.top + (strip.height - tp.height) / 2;
-    // Place glyph just to the left of the "DDO3705" label (at strip.width * 0.02).
-    tp.paint(canvas, Offset(strip.left + strip.width * 0.015, dy));
   }
 
   /// See ddi3725.dart `_drawTerminalBlocks` for the design rationale —
