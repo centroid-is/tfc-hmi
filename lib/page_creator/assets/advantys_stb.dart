@@ -1279,6 +1279,22 @@ const Set<String> _kAllowedSTBChildTypeNames = <String>{
   'STBDDO3705Config',
 };
 
+/// Map of human-readable display names → leaf preview-factories. The Add
+/// dropdown in `_AdvantysSTBStackConfigContent` iterates these keys; the
+/// FOUR-entry whitelist is the FIRST gate against unsupported child types
+/// (the post-`fromJson` sanitiser is the SECOND gate — defence-in-depth).
+///
+/// Mirrors `_availableSubdevices` from `beckhoff.dart:21-28`. Keys MUST match
+/// each leaf's `displayName` getter; widget tests in
+/// `test/page_creator/assets/advantys_stb_test.dart` assert the exact set.
+const Map<String, Asset Function()> _availableSTBSubdevices =
+    <String, Asset Function()>{
+  'STBNIP2311 (Ethernet Head)': STBNIP2311Config.preview,
+  'STBPDT3100 (24 VDC PDM)': STBPDT3100Config.preview,
+  'STBDDI3725 (16-Ch DI)': STBDDI3725Config.preview,
+  'STBDDO3705 (16-Ch DO)': STBDDO3705Config.preview,
+};
+
 /// Schneider Advantys STB stack — composite parent that groups the four STB
 /// module configs into a horizontal row mirroring the physical control panel.
 ///
@@ -1345,33 +1361,21 @@ class AdvantysSTBStackConfig extends BaseAsset {
     );
   }
 
-  /// Configure dialog stub — Plan 05-02 wires the full Add + Reorder + Delete
-  /// surface. The stub keeps the contract (returns a Widget) so the page
-  /// editor's `showDialog(builder: (_) => sub.configure(context))` call site
-  /// works today; operators can place a stack but not yet add subdevices
-  /// through the UI.
+  /// Configure dialog — VERBATIM clone of `BeckhoffCX5010Config.configure()`
+  /// shape (lib/page_creator/assets/beckhoff.dart:94-101) with the dialog
+  /// State class swapped for `_AdvantysSTBStackConfigContent`. Inside the
+  /// State class, the only substitutions vs `_CXxxxxConfigContent` are:
+  ///   - title text `'CX5010'` → `'Advantys STB Stack'`
+  ///   - subdevice map `_availableSubdevices` → `_availableSTBSubdevices`
+  ///
+  /// Carries CX5010 parity verbatim (no `nameOrId` field on the stack; no
+  /// delete-confirmation dialog) — see SUMMARY.md user-decision callouts.
   @override
   Widget configure(BuildContext context) {
     return SizedBox(
-      width: 400,
-      height: 200,
-      child: Padding(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[
-            Text(
-              'Advantys STB Stack',
-              style: Theme.of(context).textTheme.titleMedium,
-            ),
-            const SizedBox(height: 12),
-            const Text(
-              'Subdevice management UI ships in Plan 05-02. '
-              'Edit JSON directly for now.',
-            ),
-          ],
-        ),
-      ),
+      width: 800,
+      height: 500,
+      child: _AdvantysSTBStackConfigContent(config: this),
     );
   }
 
@@ -1426,6 +1430,185 @@ class _STBSubdeviceNormalized extends StatelessWidget {
         alignment: Alignment.centerLeft,
         child: child,
       ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// _AdvantysSTBStackConfigContent — configure-dialog body (Plan 05-02).
+//
+// VERBATIM clone of `_CXxxxxConfigContent` / `_CXxxxxConfigContentState` from
+// `lib/page_creator/assets/beckhoff.dart:136-285`, with TWO substitutions only:
+//   - config field type     `BeckhoffCX5010Config` → `AdvantysSTBStackConfig`
+//   - title text            `'CX5010'`             → `'Advantys STB Stack'`
+//   - subdevice map ref     `_availableSubdevices` → `_availableSTBSubdevices`
+//
+// Everything else is line-by-line identical, INCLUDING:
+//   - `enableAngle: true` on the CoordinatesField (RESEARCH Q3 — CX5010 parity)
+//   - NO `nameOrId` field on the stack (CX5010 parity — see SUMMARY user-decision callout)
+//   - NO delete-confirmation dialog (CX5010 parity — see SUMMARY user-decision callout)
+//   - `ObjectKey(sub)` on the ListTile (Pitfall 6 — not ValueKey)
+//   - Plain `StatefulWidget` / `State` (NOT ConsumerStatefulWidget — the
+//     composite parent does not subscribe to anything)
+// ---------------------------------------------------------------------------
+
+class _AdvantysSTBStackConfigContent extends StatefulWidget {
+  final AdvantysSTBStackConfig config;
+
+  const _AdvantysSTBStackConfigContent({required this.config});
+
+  @override
+  State<_AdvantysSTBStackConfigContent> createState() =>
+      _AdvantysSTBStackConfigContentState();
+}
+
+class _AdvantysSTBStackConfigContentState
+    extends State<_AdvantysSTBStackConfigContent> {
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        // LEFT: fields (independent scroll)
+        Expanded(
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Advantys STB Stack',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+                const SizedBox(height: 12),
+                SizeField(
+                  initialValue: widget.config.size,
+                  onChanged: (size) => widget.config.size = size,
+                ),
+                const SizedBox(height: 16),
+                CoordinatesField(
+                  initialValue: widget.config.coordinates,
+                  onChanged: (c) => widget.config.coordinates = c,
+                  enableAngle: true,
+                ),
+              ],
+            ),
+          ),
+        ),
+
+        const VerticalDivider(width: 1),
+
+        // RIGHT: subdevice manager
+        Expanded(
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Text('Subdevices',
+                        style: Theme.of(context).textTheme.titleMedium),
+                    const Spacer(),
+                    FilledButton.icon(
+                      onPressed: () => Navigator.of(context).maybePop(),
+                      icon: const Icon(Icons.check),
+                      label: const Text('Done'),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                DropdownButtonFormField<String>(
+                  isExpanded: true,
+                  decoration: const InputDecoration(
+                    border: OutlineInputBorder(),
+                    labelText: 'Add Subdevice',
+                  ),
+                  // Rule 1 fix: `value:` is deprecated in Flutter ≥ 3.33.0-1.0.pre;
+                  // `initialValue:` is the modern equivalent for "no initial
+                  // selection". CX5010 mirror shape preserved — only the parameter
+                  // name differs (kept this fix to satisfy QUAL-06 zero-issues gate).
+                  initialValue: null,
+                  hint: const Text('Select a subdevice to add'),
+                  items: _availableSTBSubdevices.keys
+                      .map((k) => DropdownMenuItem(value: k, child: Text(k)))
+                      .toList(),
+                  onChanged: (v) {
+                    if (v == null) return;
+                    setState(() {
+                      final mk = _availableSTBSubdevices[v]!;
+                      widget.config.subdevices.add(mk());
+                    });
+                  },
+                ),
+                const SizedBox(height: 16),
+                if (widget.config.subdevices.isEmpty)
+                  Expanded(
+                    child: Center(
+                      child: Text(
+                        'No subdevices yet',
+                        style: Theme.of(context).textTheme.bodyMedium,
+                      ),
+                    ),
+                  )
+                else ...[
+                  Row(
+                    children: [
+                      Text('Current Subdevices',
+                          style: Theme.of(context).textTheme.titleSmall),
+                      const SizedBox(width: 8),
+                      Chip(label: Text('${widget.config.subdevices.length}')),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+
+                  // Take remaining height of the dialog
+                  Expanded(
+                    child: Card(
+                      clipBehavior: Clip.antiAlias,
+                      child: ReorderableListView.builder(
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        buildDefaultDragHandles: false,
+                        itemCount: widget.config.subdevices.length,
+                        onReorder: (oldIndex, newIndex) {
+                          setState(() {
+                            if (newIndex > oldIndex) newIndex -= 1;
+                            final item =
+                                widget.config.subdevices.removeAt(oldIndex);
+                            widget.config.subdevices.insert(newIndex, item);
+                          });
+                        },
+                        itemBuilder: (context, index) {
+                          final sub = widget.config.subdevices[index];
+                          return ListTile(
+                            key: ObjectKey(sub),
+                            leading: ReorderableDragStartListener(
+                              index: index,
+                              child: const Icon(Icons.drag_indicator),
+                            ),
+                            title: Text(sub.runtimeType.toString()),
+                            onTap: () => showDialog(
+                              context: context,
+                              builder: (_) => sub.configure(context),
+                            ),
+                            trailing: IconButton(
+                              icon: const Icon(Icons.delete),
+                              onPressed: () {
+                                setState(() =>
+                                    widget.config.subdevices.removeAt(index));
+                              },
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

@@ -2929,7 +2929,9 @@ void main() {
       WidgetTester tester,
       AdvantysSTBStackConfig cfg,
     ) async {
-      await tester.binding.setSurfaceSize(const Size(1200, 800));
+      // 1400×900 surface ensures the 800×500 dialog has full room without
+      // RenderFlex overflows in the dropdown's internal InputDecorator row.
+      await tester.binding.setSurfaceSize(const Size(1400, 900));
       addTearDown(() => tester.binding.setSurfaceSize(null));
       await tester.pumpWidget(
         ProviderScope(
@@ -2938,8 +2940,19 @@ void main() {
           ],
           child: MaterialApp(
             home: Scaffold(
-              body: Builder(
-                builder: (context) => cfg.configure(context),
+              // Center keeps the 800×500 dialog at a fixed size rather than
+              // letting Scaffold expand it to fill the viewport. Wrap in
+              // Material so the DropdownButtonFormField's InputDecorator has
+              // its expected ancestor (production showDialog wraps in Dialog
+              // → Material; without it the InputDecorator's layout pass
+              // produces different intrinsic constraints).
+              body: Center(
+                child: Material(
+                  type: MaterialType.transparency,
+                  child: Builder(
+                    builder: (context) => cfg.configure(context),
+                  ),
+                ),
               ),
             ),
           ),
