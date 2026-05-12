@@ -12,6 +12,8 @@ import 'package:tfc/page_creator/assets/arrow.dart';
 import 'package:tfc/page_creator/assets/led_column.dart';
 import 'package:tfc/page_creator/assets/ratio_number.dart';
 import 'package:tfc/page_creator/assets/beckhoff.dart';
+import 'package:tfc/page_creator/assets/advantys_stb.dart';
+import 'package:tfc/page_creator/assets/common.dart' show Asset, BaseAsset;
 
 void main() {
   group('BaseAsset.allKeys', () {
@@ -236,6 +238,64 @@ void main() {
       expect(cx.allKeys, isEmpty);
     });
 
+    // -------------------------------------------------------------------
+    // Plan 05-01: AdvantysSTBStackConfig composite allKeys flat-map.
+    // Mirrors the CX5010 group above with the locked CONTEXT-line-27 shape
+    // (`expand + where(isNotEmpty) + toSet + toList`), plus an empty-string
+    // defence test using a private mock asset.
+    // -------------------------------------------------------------------
+    test('AdvantysSTBStackConfig returns keys from subdevices', () {
+      final stack = AdvantysSTBStackConfig()
+        ..subdevices = <Asset>[
+          STBDDI3725Config(
+            nameOrId: 'DI',
+            rawStateKey: 'di.raw',
+            forceValuesKey: 'di.force',
+          ),
+          STBDDO3705Config(nameOrId: 'DO', rawStateKey: 'do.raw'),
+          STBPDT3100Config(nameOrId: 'PDT', inputOkKey: 'pdt.ok'),
+        ];
+      final keys = stack.allKeys;
+      expect(
+        keys,
+        containsAll(<String>['di.raw', 'di.force', 'do.raw', 'pdt.ok']),
+      );
+      expect(keys, hasLength(4));
+    });
+
+    test('AdvantysSTBStackConfig with empty subdevices returns empty', () {
+      expect(AdvantysSTBStackConfig().allKeys, isEmpty);
+    });
+
+    test('AdvantysSTBStackConfig dedupes keys across subdevices', () {
+      // Two PDT subdevices both reference the same PLC key. The composite
+      // must collapse them to a single entry via the Set step.
+      final stack = AdvantysSTBStackConfig()
+        ..subdevices = <Asset>[
+          STBPDT3100Config(nameOrId: 'PDT1', inputOkKey: 'shared.key'),
+          STBPDT3100Config(nameOrId: 'PDT2', inputOkKey: 'shared.key'),
+        ];
+      final keys = stack.allKeys;
+      expect(keys, <String>['shared.key']);
+      expect(keys, hasLength(1));
+    });
+
+    test(
+      'AdvantysSTBStackConfig drops empty-string keys from subdevices '
+      '(defensive .where(isNotEmpty) per CONTEXT line 27)',
+      () {
+        // The leaf-level regex at common.dart:223-243 already drops empties
+        // for leaves, but a future leaf override could regress and return
+        // `['']`. The composite's defensive `.where((k) => k.isNotEmpty)`
+        // is the safety net. Mock leaf returns ['valid', ''] and we assert
+        // only 'valid' survives.
+        final stack = AdvantysSTBStackConfig()
+          ..subdevices = <Asset>[_MockEmptyKeyAsset()];
+        expect(stack.allKeys, <String>['valid']);
+        expect(stack.allKeys.contains(''), isFalse);
+      },
+    );
+
     test('Keys are deduplicated', () {
       // A button where key and feedback key are the same
       final feedback = FeedbackConfig()..key = 'same.key';
@@ -268,4 +328,32 @@ void main() {
       expect(palette.allKeys, isEmpty);
     });
   });
+}
+
+// ---------------------------------------------------------------------------
+// Private test helpers.
+//
+// _MockEmptyKeyAsset returns ['valid', ''] from its allKeys override — the
+// only way to prove the composite's defensive empty-string filter is wired
+// correctly without depending on a hypothetical broken leaf type. Per CLAUDE.md
+// naming convention, private test helpers use the `_PascalCase` prefix.
+// ---------------------------------------------------------------------------
+class _MockEmptyKeyAsset extends BaseAsset {
+  @override
+  String get displayName => 'mock';
+
+  @override
+  String get category => 'test';
+
+  @override
+  List<String> get allKeys => const <String>['valid', ''];
+
+  @override
+  Widget build(BuildContext context) => const SizedBox.shrink();
+
+  @override
+  Widget configure(BuildContext context) => const SizedBox.shrink();
+
+  @override
+  Map<String, dynamic> toJson() => const <String, dynamic>{};
 }
