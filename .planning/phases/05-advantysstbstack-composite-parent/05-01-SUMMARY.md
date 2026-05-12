@@ -60,6 +60,10 @@ duration: 8m
 completed: 2026-05-12
 ---
 
+> **Superseded by retrofit (2026-05-12)** — composite behavior moved from
+> `AdvantysSTBStackConfig` (deleted) to `STBNIP2311Config`. See `05-RETROFIT.md`
+> for the new shape. Whitelist now excludes NIP (head cannot nest a head).
+
 # Phase 5 Plan 01: AdvantysSTBStack Composite Parent Summary
 
 **Composite STB stack parent that mirrors `BeckhoffCX5010Config` verbatim with a four-type whitelist (NIP2311 / PDT3100 / DDI3725 / DDO3705) and a NET-NEW post-`fromJson` sanitiser that drops foreign child types — flat-maps every subdevice's `allKeys` so alarms and collectors discover the full key set without separate registration.**

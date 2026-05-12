@@ -56,6 +56,12 @@ duration: 17m
 completed: 2026-05-12
 ---
 
+> **Superseded by retrofit (2026-05-12)** — composite behavior moved from
+> `AdvantysSTBStackConfig` (deleted) to `STBNIP2311Config`. See `05-RETROFIT.md`
+> for the new shape. The configure dialog, integration tests, and goldens
+> were all moved onto the NIP head. Goldens were renamed
+> `stack_full_{light,dark}.png` → `nip_with_modules_{light,dark}.png`.
+
 # Phase 5 Plan 02: AdvantysSTBStack Configure Dialog + Integration + Goldens Summary
 
 **Replaces the Plan-01 stub `configure()` on `AdvantysSTBStackConfig` with `_AdvantysSTBStackConfigContent` — a verbatim CX5010 mirror with the locked STB-only Add dropdown — and lands the QUAL-07 full-stack integration test (DDI+DDO tap-routes-to-detail-dialog, NIP+PDT tap-no-throw) plus two macOS-gated goldens (`stack_full_{light,dark}.png`).**
