@@ -22,7 +22,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
-import 'ddi3725.dart' show stbAccentBlue;
+import 'ddi3725.dart' show stbAccentBlue, kStbCornerRadiusFraction;
 import 'io16.dart' show IO16LedBlockPainter, bodyColor;
 import 'package:tfc/painter/beckhoff/io8.dart' show IOState;
 
@@ -105,13 +105,17 @@ class STBDDO3705BodyPainter extends CustomPainter {
     final fillPaint = Paint()..color = bodyColor;
 
     // 1. Outer body chrome — cream fill + grey rounded border.
+    // BATCH2 Defect B: subtle chamfer (Beckhoff parity). See
+    // `kStbCornerRadiusFraction` in ddi3725.dart.
+    final cornerR = (size.width < size.height ? size.width : size.height) *
+        kStbCornerRadiusFraction;
     final fillRect = RRect.fromRectAndRadius(
       Rect.fromLTWH(0, 0, size.width, size.height),
-      Radius.circular(size.width * 0.06),
+      Radius.circular(cornerR),
     );
     final outerRect = RRect.fromRectAndRadius(
       Rect.fromLTWH(0, 0, size.width - strokeWidth, size.height - strokeWidth),
-      Radius.circular(size.width * 0.06),
+      Radius.circular(cornerR),
     );
     canvas.drawRRect(fillRect, fillPaint);
     canvas.drawRRect(outerRect, outerBorderPaint);

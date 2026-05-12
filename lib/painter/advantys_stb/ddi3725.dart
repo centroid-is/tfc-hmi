@@ -42,6 +42,18 @@ import 'package:tfc/painter/beckhoff/io8.dart' show IOState;
 /// NIP2311 can reuse it via `show stbAccentBlue`.
 const Color stbAccentBlue = Color(0xFF003B71);
 
+/// Subtle chamfer radius — fraction of the shorter body dimension. Mirrors
+/// Beckhoff's visual subtlety on slim DIN-rail modules. At a typical
+/// slim 50×300 px STB module this lands at 1.5 px — a barely-visible chamfer
+/// (Beckhoff parity); on the legacy wide form factor (200×280) the result is
+/// ~6 px, also subtle. Shared by all four STB body painters via `show`.
+const double kStbCornerRadiusFraction = 0.03;
+
+/// Dark inset panel colour for the DDI3725 / DDO3705 LED windows. Real
+/// Schneider hardware uses a near-black faceplate inset that contrasts with
+/// the cream body to make the channel LEDs read clearly. BATCH2 Defect G.
+const Color stbLedPanelColor = Color(0xFF1A1A1A);
+
 /// Widget wrapper around [STBDDI3725BodyPainter] that handles the [SizedBox]
 /// sizing + [CustomPaint] plumbing. Aspect ratio matches the
 /// `IO_BASE_DDI3725_DDO3705` DXF (107 × 152 mm).
@@ -120,13 +132,19 @@ class STBDDI3725BodyPainter extends CustomPainter {
     final fillPaint = Paint()..color = bodyColor;
 
     // 1. Outer body chrome — cream fill + grey rounded border.
+    // BATCH2 Defect B: corner radius reduced from `size.width * 0.06` to a
+    // shorter-side fraction so the chamfer stays subtle on slim DIN-rail
+    // aspect ratios (post-Defect-E). Mirrors Beckhoff's visual subtlety on
+    // the 1:6 EL1008 footprint.
+    final cornerR = (size.width < size.height ? size.width : size.height) *
+        kStbCornerRadiusFraction;
     final fillRect = RRect.fromRectAndRadius(
       Rect.fromLTWH(0, 0, size.width, size.height),
-      Radius.circular(size.width * 0.06),
+      Radius.circular(cornerR),
     );
     final outerRect = RRect.fromRectAndRadius(
       Rect.fromLTWH(0, 0, size.width - strokeWidth, size.height - strokeWidth),
-      Radius.circular(size.width * 0.06),
+      Radius.circular(cornerR),
     );
     canvas.drawRRect(fillRect, fillPaint);
     canvas.drawRRect(outerRect, outerBorderPaint);
