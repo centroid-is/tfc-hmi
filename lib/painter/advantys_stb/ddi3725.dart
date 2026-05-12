@@ -81,7 +81,13 @@ class STBDDI3725Widget extends AnimatedWidget {
   @override
   Widget build(BuildContext context) {
     final animation = listenable as Animation<int>;
-    final width = height * (107.0 / 152.0);
+    // BATCH2 Defect E: slim DIN-rail aspect ratio mirroring Beckhoff EL1008
+    // (`width: height / 6`). The previous DXF-derived 107/152 ≈ 0.704 produced
+    // a wide+squat module that read as a "stamp" rather than a real DIN-rail
+    // I/O block. Real-hardware reference photo:
+    // .planning/research/photos/momentum_stack_in_panel.png shows the
+    // DDI3725 at roughly 1:6 W:H within the panel stack.
+    final width = height / 6.0;
     return SizedBox(
       width: width,
       height: height,

@@ -41,10 +41,14 @@ import 'package:flutter/material.dart';
 import 'ddi3725.dart' show stbAccentBlue, kStbCornerRadiusFraction;
 import 'io16.dart' show bodyColor;
 
-/// Aspect ratio width / height for the PDT3100 body. Sourced from the
-/// PDT3100 DXF bounding box (114.5914794492 × 162.0650923639 mm). Public for
-/// the widget wrapper.
-const double kPDT3100AspectRatio = 114.5914794492 / 162.0650923639;
+/// Aspect ratio width / height for the PDT3100 body.
+///
+/// BATCH2 Defect E: switched from the DXF-derived 114.59/162.07 ≈ 0.707
+/// (wide+squat) to a slim ~1:3 ratio (`1.0 / 3.0`) so the power module reads
+/// as a real DIN-rail block beside the slim I/O modules. The panel reference
+/// photo (`.planning/research/photos/momentum_stack_in_panel.png`) shows the
+/// PDT3100 at roughly 2× the width of an I/O module — `2/6 = 1/3`.
+const double kPDT3100AspectRatio = 1.0 / 3.0;
 
 /// Widget wrapper around [STBPDT3100BodyPainter]. Bound to an optional
 /// `inputOk` bool — `true` lights the single front-panel LED green; any

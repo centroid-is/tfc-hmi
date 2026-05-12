@@ -3656,7 +3656,6 @@ void main() {
     // -----------------------------------------------------------------------
     testWidgets('BATCH2-E DDI3725 intrinsic aspect matches Beckhoff EL1008 (1:6 slim)',
         (tester) async {
-      late Size painted;
       await tester.pumpWidget(MaterialApp(
         home: Center(
           child: STBDDI3725Widget(
@@ -3667,7 +3666,10 @@ void main() {
           ),
         ),
       ));
-      painted = tester.getSize(find.byType(CustomPaint).first);
+      final painted = tester.getSize(
+        find.byWidgetPredicate((w) =>
+            w is CustomPaint && w.painter.runtimeType.toString().contains('STB')),
+      );
       final ratio = painted.width / painted.height;
       // EL1008 ratio = 1/6 ≈ 0.1667. Allow ±15% (Schneider DI/DO can be
       // a hair wider; check the panel photo).
@@ -3688,7 +3690,10 @@ void main() {
           ),
         ),
       ));
-      final painted = tester.getSize(find.byType(CustomPaint).first);
+      final painted = tester.getSize(
+        find.byWidgetPredicate((w) =>
+            w is CustomPaint && w.painter.runtimeType.toString().contains('STB')),
+      );
       final ratio = painted.width / painted.height;
       expect(ratio, lessThan(0.25),
           reason: 'DDO3705 intrinsic aspect $ratio must be slim like '
@@ -3702,7 +3707,10 @@ void main() {
           child: STBNIP2311Widget(nameOrId: 'NIP-01'),
         ),
       ));
-      final painted = tester.getSize(find.byType(CustomPaint).first);
+      final painted = tester.getSize(
+        find.byWidgetPredicate((w) =>
+            w is CustomPaint && w.painter.runtimeType.toString().contains('STB')),
+      );
       final ratio = painted.width / painted.height;
       // NIP head is wider than I/O but still slim. The panel photo shows
       // ~2× I/O width, so ~2/6 = 0.33 ± 15%.
@@ -3717,7 +3725,10 @@ void main() {
           child: STBPDT3100Widget(nameOrId: 'PDT-01', inputOk: true),
         ),
       ));
-      final painted = tester.getSize(find.byType(CustomPaint).first);
+      final painted = tester.getSize(
+        find.byWidgetPredicate((w) =>
+            w is CustomPaint && w.painter.runtimeType.toString().contains('STB')),
+      );
       final ratio = painted.width / painted.height;
       expect(ratio, lessThan(0.45),
           reason: 'PDT3100 intrinsic aspect $ratio must be slim (~1:3).');

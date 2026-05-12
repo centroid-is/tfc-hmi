@@ -42,9 +42,14 @@ import 'ddi3725.dart' show stbAccentBlue, kStbCornerRadiusFraction;
 import 'io16.dart' show bodyColor;
 import 'package:tfc/painter/beckhoff/ek1100.dart' show EthernetPortPainter;
 
-/// Aspect ratio width / height for the NIP2311 body. Sourced from the
-/// NIP2311 DXF bounding box (~58 × 82 mm). Public for the widget wrapper.
-const double kNIP2311AspectRatio = 58.0 / 82.0;
+/// Aspect ratio width / height for the NIP2311 body.
+///
+/// BATCH2 Defect E: switched from the DXF-derived 58/82 ≈ 0.707 (wide+squat)
+/// to a slim ~1:3 ratio (`1.0 / 3.0`) so the head module reads as a real
+/// DIN-rail block beside the slim I/O modules. The panel reference photo
+/// (`.planning/research/photos/momentum_stack_in_panel.png`) shows the
+/// NIP head at roughly 2× the width of an I/O module — `2/6 = 1/3`.
+const double kNIP2311AspectRatio = 1.0 / 3.0;
 
 /// Widget wrapper around [STBNIP2311BodyPainter]. Decorative-only: takes
 /// just a `nameOrId` (rendered as a small caption above the body so

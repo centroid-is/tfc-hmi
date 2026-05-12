@@ -50,7 +50,9 @@ class STBDDO3705Widget extends AnimatedWidget {
   @override
   Widget build(BuildContext context) {
     final animation = listenable as Animation<int>;
-    final width = height * (107.0 / 152.0);
+    // BATCH2 Defect E: slim DIN-rail aspect ratio mirroring Beckhoff EL2008
+    // (`width: height / 6`). See ddi3725.dart for the design rationale.
+    final width = height / 6.0;
     return SizedBox(
       width: width,
       height: height,
