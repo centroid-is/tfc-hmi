@@ -163,14 +163,16 @@ class STBDDI3725BodyPainter extends CustomPainter {
     canvas.save();
     canvas.clipRRect(fillRect);
 
-    // 2. Top blue label strip with "DDI3725" + RDY indicator.
+    // 2. Top blue label strip with "DDI3725".
+    // BATCH2 Defect G: the old blue-strip RDY indicator was removed because
+    // the new dark-panel LED block (below) renders its own "RDY" row.
     final topStripH = size.height * _topStripFraction;
     final topStripRect = Rect.fromLTWH(0, 0, size.width, topStripH);
     canvas.drawRect(topStripRect, Paint()..color = stbAccentBlue);
     _drawTopLabelText(canvas, topStripRect);
-    _drawRdyIndicator(canvas, topStripRect);
 
-    // 3. LED block region — delegate to IO16LedBlockPainter.
+    // 3. LED block region — delegate to IO16LedBlockPainter (dark inset
+    // panel + RDY status row + numbered 1..16 squared LEDs).
     final ledBlockY = topStripH;
     final ledBlockH = size.height * _ledBlockFraction;
     final pad = size.width * 0.05;
@@ -180,6 +182,7 @@ class STBDDI3725BodyPainter extends CustomPainter {
     IO16LedBlockPainter(
       ledStates: ledStates,
       animation: animation,
+      isStale: isStale || isDisconnected,
     ).paint(canvas, Size(ledBlockRect.width, ledBlockH));
     canvas.restore();
 
@@ -219,27 +222,6 @@ class STBDDI3725BodyPainter extends CustomPainter {
     )..layout(maxWidth: strip.width * 0.75);
     final dy = strip.top + (strip.height - tp.height) / 2;
     tp.paint(canvas, Offset(strip.left + strip.width * 0.06, dy));
-  }
-
-  void _drawRdyIndicator(Canvas canvas, Rect strip) {
-    // Small circular indicator dot — green when alive, dim grey when stale or
-    // disconnected. Per CONTEXT.md §Visual State Semantics: stale and
-    // disconnected both push RDY to grey; the body painter does not distinguish.
-    final radius = strip.height * 0.22;
-    final cx = strip.right - radius - strip.width * 0.06;
-    final cy = strip.top + strip.height / 2;
-    final color = (isStale || isDisconnected)
-        ? Colors.grey.shade400
-        : const Color(0xFF6CA545);
-    canvas.drawCircle(Offset(cx, cy), radius, Paint()..color = color);
-    canvas.drawCircle(
-      Offset(cx, cy),
-      radius,
-      Paint()
-        ..color = Colors.grey.shade700
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = radius * 0.15,
-    );
   }
 
   void _drawTerminalBlocks(

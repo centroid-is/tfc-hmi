@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:tfc/painter/beckhoff/io8.dart' show BaseLedBlockPainter, IOState;
+import 'ddi3725.dart' show stbLedPanelColor;
 
 // Re-export Schneider/Beckhoff cream `bodyColor` from this STB entry point so
 // downstream STB module body painters (DDI3725, DDO3705, NIP2311, PDT3100,
@@ -73,101 +74,195 @@ List<IOState> bitmaskToLedStates(int raw, {List<int>? forceValues}) {
 /// in the painter math, not parameterised — a future row-major or MSB variant
 /// would land as a sibling painter.
 class IO16LedBlockPainter extends BaseLedBlockPainter {
+  /// `true` when the upstream module is in stale / disconnected state — the
+  /// RDY indicator dot on the dark inset panel renders dim grey; `false`
+  /// renders bright green. BATCH2 Defect G.
+  final bool isStale;
+
   IO16LedBlockPainter({
     required super.ledStates,
     super.topLabels,
     required super.animation,
+    this.isStale = false,
   }) : assert(ledStates.length == 16);
 
   @override
   void drawLeds(Canvas canvas, Size size) {
-    // Independent x- and y-pads. Plan 02 deviation: the original Plan 01
-    // sibling-painter pattern (IO8/IO6) uses `pad = size.width * 0.05` for
-    // both axes because those painters render into tall-narrow blocks
-    // (height >> width). The DDI3725 body painter feeds this painter a
-    // wide-flat region (width >> height — roughly 200×66 px at the standard
-    // 300px body height), and a single `width * 0.05` pad blows up cellH
-    // negative. Use independent axis pads so the painter is correct for both
-    // aspect ratios; the IO8/IO6 callers still get visually-identical output
-    // because their pad was already isotropic for square-ish blocks.
+    // BATCH2 Defect G: rewrite to match real Schneider DDO3705 / DDI3725
+    // hardware (per the user's reference photo). The LED block now renders:
+    //
+    //   1. A dark inset panel covering the full LED block area
+    //      (`stbLedPanelColor`) — was the cream module body bleeding through.
+    //   2. A small "RDY" status row at the top with a green-when-alive,
+    //      grey-when-stale LED dot + the literal "RDY" caption.
+    //   3. Sixteen channel LEDs in a 2-column × 8-row grid below the RDY row.
+    //      Each LED is a small squared rounded-rectangle (RRect) — NOT a
+    //      circle (the previous round-dot fix overcorrected from the
+    //      original "venetian-blind bars"; the real shape sits between).
+    //   4. A numeric label "1".."16" to the LEFT of each LED, in light text
+    //      on the dark panel.
+    //
+    // The base-painter's `drawLed` is NOT called — we override the full LED
+    // block render. The `animation.value` is still honoured for the forced-
+    // state pulsing red border.
+
+    // 1. Dark inset panel background.
+    canvas.drawRect(
+      Rect.fromLTWH(0, 0, size.width, size.height),
+      Paint()..color = stbLedPanelColor,
+    );
+
+    // 2. "RDY" status row at the top — 18% of the LED block height.
+    final rdyH = size.height * 0.18;
+    final rdyRect = Rect.fromLTWH(0, 0, size.width, rdyH);
+    _drawRdyRow(canvas, rdyRect);
+
+    // 3. + 4. Channel-LED grid + numeric labels.
+    final gridTop = rdyH;
+    final gridRect =
+        Rect.fromLTWH(0, gridTop, size.width, size.height - gridTop);
+    _drawChannelGrid(canvas, gridRect);
+  }
+
+  /// "RDY" status row — a small green/grey LED dot followed by the literal
+  /// "RDY" caption, centred vertically in `rect`. Sits on the dark inset
+  /// panel so the caption uses light text.
+  void _drawRdyRow(Canvas canvas, Rect rect) {
+    const activeColor = Color(0xFF6CA545);
+    final dotR = rect.height * 0.30;
+    final dotCx = rect.left + rect.width * 0.18;
+    final dotCy = rect.center.dy;
+    final dotColor = isStale ? Colors.grey.shade500 : activeColor;
+    canvas.drawCircle(Offset(dotCx, dotCy), dotR, Paint()..color = dotColor);
+    canvas.drawCircle(
+      Offset(dotCx, dotCy),
+      dotR,
+      Paint()
+        ..color = Colors.grey.shade400
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = dotR * 0.18,
+    );
+
+    final captionLeft = dotCx + dotR + rect.width * 0.06;
+    final captionMaxW = rect.right - captionLeft - rect.width * 0.05;
+    final tp = TextPainter(
+      text: TextSpan(
+        text: 'RDY',
+        style: TextStyle(
+          color: Colors.grey.shade100,
+          fontSize: rect.height * 0.50,
+          fontWeight: FontWeight.w600,
+          letterSpacing: 0.6,
+        ),
+      ),
+      textAlign: TextAlign.left,
+      textDirection: TextDirection.ltr,
+    )..layout(maxWidth: captionMaxW);
+    tp.paint(canvas, Offset(captionLeft, dotCy - tp.height / 2));
+  }
+
+  /// 2×8 grid of small squared LEDs with numeric labels. The grid is column-
+  /// major: channels 1..8 fill the LEFT column top→bottom, channels 9..16
+  /// the RIGHT column. Each cell renders `[number] [LED]` left-to-right.
+  void _drawChannelGrid(Canvas canvas, Rect rect) {
     const cols = 2;
     const rows = 8;
-    final padX = size.width * 0.05;
-    final padY = size.height * 0.05;
-    final cellW = (size.width - padX * (cols + 1)) / cols;
-    final cellH = (size.height - padY * (rows + 1)) / rows;
+    if (rect.width <= 0 || rect.height <= 0) return;
 
-    // Clamp the LED-border stroke so it never exceeds ~12% of the smaller
-    // cell dimension — for the DDI3725 wide-flat block the row height is
-    // ~5 px and a sibling-painter `size.width * 0.03` stroke would entirely
-    // overpaint the green/grey fill. The IO8/IO6 callers feed tall-narrow
-    // blocks where cellW/cellH are similar, so this clamp is a no-op for them.
-    final unclampedStroke = size.width * 0.03;
-    final maxStroke = (cellH < cellW ? cellH : cellW) * 0.12;
-    final borderPaint = Paint()
-      ..color = Colors.grey.shade700
+    final padX = rect.width * 0.03;
+    final padY = rect.height * 0.03;
+    final cellW = (rect.width - padX * (cols + 1)) / cols;
+    final cellH = (rect.height - padY * (rows + 1)) / rows;
+    if (cellW <= 0 || cellH <= 0) return;
+
+    // LED slot: squared rounded-rect, ~1.5× width vs height with a small
+    // corner radius. Sits on the RIGHT half of the cell; the channel
+    // number sits on the LEFT half of the cell.
+    final ledH = cellH * 0.70;
+    final ledW = ledH * 1.50;
+    // Clamp so the LED never exceeds half the cell width.
+    final clampedLedW = ledW > cellW * 0.55 ? cellW * 0.55 : ledW;
+    final labelMaxW = cellW - clampedLedW - padX;
+
+    final borderStrokeW = (cellH * 0.08).clamp(0.5, 1.5);
+    final basePaint = Paint()
+      ..color = Colors.grey.shade400
       ..style = PaintingStyle.stroke
-      ..strokeWidth =
-          unclampedStroke < maxStroke ? unclampedStroke : maxStroke;
+      ..strokeWidth = borderStrokeW;
 
-    // Column-major: i → (col: i ~/ 8, row: i % 8).
-    // Channels 1–8 fill left column top→bottom, channels 9–16 right column.
     for (int i = 0; i < 16; i++) {
       final int col = i ~/ 8;
       final int row = i % 8;
-      final double cx = padX + col * (cellW + padX);
-      final double cy = padY + row * (cellH + padY);
-      final cellRect = Rect.fromLTWH(cx, cy, cellW, cellH);
-      _drawLedDot(canvas, cellRect, ledStates[i], borderPaint);
+      final double cellX = rect.left + padX + col * (cellW + padX);
+      final double cellY = rect.top + padY + row * (cellH + padY);
+
+      // Numeric channel label (1..16).
+      final labelTp = TextPainter(
+        text: TextSpan(
+          text: '${i + 1}',
+          style: TextStyle(
+            color: Colors.grey.shade100,
+            fontSize: cellH * 0.65,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+        textAlign: TextAlign.right,
+        textDirection: TextDirection.ltr,
+      )..layout(maxWidth: labelMaxW > 0 ? labelMaxW : cellW * 0.40);
+      labelTp.paint(
+        canvas,
+        Offset(
+          cellX + (labelMaxW > 0 ? (labelMaxW - labelTp.width) : 0),
+          cellY + (cellH - labelTp.height) / 2,
+        ),
+      );
+
+      // Squared LED slot.
+      final ledLeft = cellX + cellW - clampedLedW;
+      final ledTop = cellY + (cellH - ledH) / 2;
+      final ledRect = Rect.fromLTWH(ledLeft, ledTop, clampedLedW, ledH);
+      _drawSquaredLed(canvas, ledRect, ledStates[i], basePaint);
     }
   }
 
-  /// Draws a single LED as a round dot rather than a rectangle (the base
-  /// `drawLed` from Beckhoff `IO8Painter` paints rectangles, which look like
-  /// venetian-blind bars at the 2×8 wide-flat aspect the DDI/DDO body painter
-  /// hands to this block). The dot is inscribed in the smaller of cellW/cellH
-  /// so it stays round even when the LED slot is more rectangular than square.
-  ///
-  /// Active state uses the operator-recognizable green `Color(0xFF6CA545)`
-  /// (matches the Beckhoff and STB RDY indicator green). Inactive state uses
-  /// a soft top-light radial gradient so an "off" LED still reads as a real
-  /// indicator dot rather than empty space. Forced states inherit the red
-  /// pulsing border from the base painter.
-  void _drawLedDot(Canvas canvas, Rect rect, IOState state, Paint borderPaint) {
+  /// Draws a single squared LED — small rounded rectangle (RRect). Reads as
+  /// real DIN-rail LED hardware (per the user's reference photo): white/light
+  /// when ON, dark/grey when OFF, with a thin border. Forced states pulse
+  /// red on the border (animation.value driven).
+  void _drawSquaredLed(Canvas canvas, Rect rect, IOState state, Paint border) {
     const activeColor = Color(0xFF6CA545);
-    const inactiveTopColor = Color(0xFFF0F0F0);
-    const inactiveBottomColor = Color(0xFFCCCCCC);
+    const inactiveColor = Color(0xFF3A3A3A);
     const errorColor = Colors.red;
 
-    final cx = rect.left + rect.width / 2;
-    final cy = rect.top + rect.height / 2;
-    final r = (rect.width < rect.height ? rect.width : rect.height) / 2;
+    final rrect = RRect.fromRectAndRadius(
+      rect,
+      Radius.circular((rect.height < rect.width ? rect.height : rect.width) *
+          0.25),
+    );
 
-    // Fill.
-    if (state == IOState.error) {
-      canvas.drawCircle(Offset(cx, cy), r, Paint()..color = errorColor);
-    } else if (state == IOState.high || state == IOState.forcedHigh) {
-      canvas.drawCircle(Offset(cx, cy), r, Paint()..color = activeColor);
-    } else {
-      final shaderRect = Rect.fromCircle(center: Offset(cx, cy), radius: r);
-      canvas.drawCircle(
-        Offset(cx, cy),
-        r,
-        Paint()
-          ..shader = const LinearGradient(
-            colors: [inactiveTopColor, inactiveBottomColor],
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-          ).createShader(shaderRect),
-      );
+    Color fill;
+    switch (state) {
+      case IOState.error:
+        fill = errorColor;
+        break;
+      case IOState.high:
+      case IOState.forcedHigh:
+        fill = activeColor;
+        break;
+      case IOState.low:
+      case IOState.forcedLow:
+        fill = inactiveColor;
+        break;
     }
+    canvas.drawRRect(rrect, Paint()..color = fill);
 
-    // Border — pulses red for forced states (matches Beckhoff convention).
-    final Paint stroke = Paint.from(borderPaint)
+    // Border — pulses red for forced states (matches the Beckhoff convention).
+    final Paint stroke = Paint()
       ..style = PaintingStyle.stroke
+      ..strokeWidth = border.strokeWidth
       ..color = state == IOState.forcedHigh || state == IOState.forcedLow
           ? Colors.red.withAlpha(animation.value)
-          : borderPaint.color;
-    canvas.drawCircle(Offset(cx, cy), r, stroke);
+          : border.color;
+    canvas.drawRRect(rrect, stroke);
   }
 }

@@ -3915,31 +3915,18 @@ void main() {
     // DDO3705 (per user reference photo) has the LEDs sit on a dark inset
     // panel with numeric labels next to each LED.
     // -----------------------------------------------------------------------
-    test('BATCH2-G DDI3725 painter source contains numeric channel labels 1..16',
+    test('BATCH2-G IO16 painter source contains numeric channel labels 1..16',
         () {
-      final src = File('lib/painter/advantys_stb/ddi3725.dart')
-          .readAsStringSync();
-      // The painter must reference numeric labels in some form — either a
-      // literal list of '1'..'16' or a loop that emits 'i.toString()'.
-      // We accept either: a literal '1' label OR an i.toString() construction.
-      final hasNumericLabels = src.contains("'\${i + 1}'") ||
-          src.contains('"\${i + 1}"') ||
-          src.contains('(i + 1).toString()') ||
-          src.contains("'1'") && src.contains("'16'");
-      expect(hasNumericLabels, isTrue,
-          reason: 'ddi3725.dart must emit per-channel 1..16 labels (defect G).');
-    });
-
-    test('BATCH2-G DDO3705 painter source contains numeric channel labels 1..16',
-        () {
-      final src = File('lib/painter/advantys_stb/ddo3705.dart')
+      // The numeric channel labels live on the shared IO16LedBlockPainter
+      // (consumed by both DDI3725 and DDO3705 body painters).
+      final src = File('lib/painter/advantys_stb/io16.dart')
           .readAsStringSync();
       final hasNumericLabels = src.contains("'\${i + 1}'") ||
           src.contains('"\${i + 1}"') ||
           src.contains('(i + 1).toString()') ||
-          src.contains("'1'") && src.contains("'16'");
+          (src.contains("'1'") && src.contains("'16'"));
       expect(hasNumericLabels, isTrue,
-          reason: 'ddo3705.dart must emit per-channel 1..16 labels (defect G).');
+          reason: 'io16.dart must emit per-channel 1..16 labels (defect G).');
     });
 
     test('BATCH2-G IO16 LED block uses drawRRect (squared LEDs, not circles)',
