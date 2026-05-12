@@ -34,13 +34,45 @@ const double kDashOffPx = 4.0;
 const double kFieldFillAlpha = 0.40;
 
 /// Label text size as fraction of `size.shortestSide`.
-const double kLabelFontFraction = 0.30;
+///
+/// Reduced from 0.30 to 0.18 (SENS-17 follow-up): at 0.30 the label
+/// font dominated the glyph at typical golden canvas sizes
+/// (e.g. 38px tall on a 128px shortestSide) and forced the label band
+/// to eat enough vertical room that the geometry visibly shrank. 0.18
+/// keeps the tag legible while leaving a clean separation between the
+/// glyph and the label.
+const double kLabelFontFraction = 0.18;
+
+/// Fraction of `size.height` reserved as a bottom band for the label
+/// when the painter has a non-empty `label`. The geometry rect handed
+/// to each painter shrinks by this fraction so the painted glyph (puck +
+/// beam / cone / bubble) sits ABOVE the label band — no overlap on the
+/// inductive bubble or the optic cone base at the configured size.
+///
+/// 0.25 is the smallest value that clears the inductive-field bubble
+/// (which extends to `0.80 * h_glyph` from its centre at `0.50 * h_glyph`).
+const double kLabelBandFraction = 0.25;
 
 // ---------------------------------------------------------------------------
 // Shared paint helpers (file-private)
 // ---------------------------------------------------------------------------
 
-/// Draws an optional centred label below the glyph.
+/// Returns the height of the geometry rect for the glyph — full `size.height`
+/// when there is no label, otherwise `size.height * (1 - kLabelBandFraction)`
+/// so a bottom band is reserved for the label.
+///
+/// All three painters call this BEFORE computing geometry so the puck +
+/// field / beam fit above the label band cleanly. Mirrors the
+/// `ConveyorGate` painter pattern where the painter respects a reserved
+/// region rather than overdrawing.
+double _glyphHeight(Size size, String? label) {
+  if (label == null || label.isEmpty) return size.height;
+  return size.height * (1 - kLabelBandFraction);
+}
+
+/// Draws an optional centred label inside the bottom band reserved by
+/// [_glyphHeight]. Vertically centred within the band so the label is
+/// clearly separated from the glyph above.
 ///
 /// Skipped silently when `label` is null or empty (which is the common case —
 /// `BaseAsset.text` is also rendered separately by the page editor chrome,
@@ -59,9 +91,15 @@ void _paintLabel(Canvas canvas, Size size, String? label, Color color) {
     ),
     textDirection: TextDirection.ltr,
   )..layout();
+  final glyphH = _glyphHeight(size, label);
+  final bandTop = glyphH;
+  final bandHeight = size.height - glyphH;
   tp.paint(
     canvas,
-    Offset((size.width - tp.width) / 2, size.height - tp.height),
+    Offset(
+      (size.width - tp.width) / 2,
+      bandTop + (bandHeight - tp.height) / 2,
+    ),
   );
 }
 
@@ -133,8 +171,10 @@ class RedLightBeamPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final w = size.width;
-    final h = size.height;
-    final s = size.shortestSide;
+    // Geometry uses the glyph height — shrunk when a label is present so
+    // the painted shape sits cleanly above the reserved label band (SENS-17).
+    final h = _glyphHeight(size, label);
+    final s = h < size.shortestSide ? h : size.shortestSide;
 
     final puckRadius = s * kHousingFraction / 2;
     final emitterCentre = Offset(0.15 * w, 0.5 * h);
@@ -234,8 +274,10 @@ class OpticFieldPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final w = size.width;
-    final h = size.height;
-    final s = size.shortestSide;
+    // Geometry uses the glyph height — shrunk when a label is present so
+    // the cone base sits above the reserved label band (SENS-17).
+    final h = _glyphHeight(size, label);
+    final s = h < size.shortestSide ? h : size.shortestSide;
 
     // Housing rectangle on the left.
     final housingRect = Rect.fromLTRB(0.05 * w, 0.30 * h, 0.30 * w, 0.70 * h);
@@ -345,8 +387,12 @@ class InductiveFieldPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final w = size.width;
-    final h = size.height;
-    final s = size.shortestSide;
+    // Geometry uses the glyph height — shrunk when a label is present so
+    // the bubble ellipse sits above the reserved label band. This is the
+    // root-cause fix for the inductive-sensor label overlap reported by
+    // operators (SENS-17).
+    final h = _glyphHeight(size, label);
+    final s = h < size.shortestSide ? h : size.shortestSide;
 
     final puckRadius = s * kHousingFraction / 2;
     final puckCentre = Offset(0.30 * w, 0.50 * h);
