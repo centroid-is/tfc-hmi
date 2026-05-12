@@ -125,7 +125,6 @@ class STBDDI3725BodyPainter extends CustomPainter {
   static const double _topStripFraction = 0.07;
   static const double _ledBlockFraction = 0.22;
   static const double _bottomAccentFraction = 0.025;
-  static const int _terminalRowsPerColumn = 18;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -223,6 +222,12 @@ class STBDDI3725BodyPainter extends CustomPainter {
     tp.paint(canvas, Offset(strip.left + strip.width * 0.06, dy));
   }
 
+  /// Draws the two terminal plug blocks at the bottom of the module body:
+  /// Block A (channels 1..8) on the left, Block B (channels 9..16) on the
+  /// right. Each block is a SINGLE rectangular plug body (not a column of
+  /// discrete row-cells) containing a vertical stack of wire-entry ports
+  /// with spring-clip levers on the right edge — mirroring the
+  /// `IO_BASE_DDI3725_DDO3705_mcadid0005033.dxf` CAD reference.
   void _drawTerminalBlocks(
     Canvas canvas,
     Size size,
@@ -230,27 +235,22 @@ class STBDDI3725BodyPainter extends CustomPainter {
     double height,
   ) {
     if (height <= 0) return;
-    final innerBorderPaint = Paint()
-      ..color = Colors.grey.shade700
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = size.width * 0.015;
-
     final pad = size.width * 0.05;
-    // Each block fills half the width (minus padding gutters).
     final blockW = (size.width - pad * 3) / 2;
-    // Label slot above each block.
-    final labelH = (height * 0.05).clamp(8.0, 18.0);
-    final positionsY = top + labelH;
-    final positionsH = height - labelH;
+    final labelH = (height * 0.06).clamp(8.0, 18.0);
+    final plugTop = top + labelH;
+    final plugH = height - labelH;
+    if (plugH <= 0 || blockW <= 0) return;
 
-    // Per-row geometry (each row = small dark-grey square + wire-hole circle).
-    final rowH = positionsH / _terminalRowsPerColumn;
-    final sqSize = rowH * 0.55;
-    final crSize = rowH * 0.45;
+    final plugBorderPaint = Paint()
+      ..color = Colors.grey.shade800
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = (blockW * 0.025).clamp(0.5, 2.0);
 
     for (int col = 0; col < 2; col++) {
       final blockX = pad + col * (blockW + pad);
-      // Column label "A" / "B".
+
+      // Column label "A" / "B" — centred above the plug body.
       final labelRect = Rect.fromLTWH(blockX, top, blockW, labelH);
       final labelTp = TextPainter(
         text: TextSpan(
@@ -269,27 +269,67 @@ class STBDDI3725BodyPainter extends CustomPainter {
         Offset(labelRect.left, labelRect.top + (labelH - labelTp.height) / 2),
       );
 
-      for (int row = 0; row < _terminalRowsPerColumn; row++) {
-        final rowY = positionsY + row * rowH;
-        // Square slot (top half of the row).
-        final sqX = blockX + (blockW - sqSize) / 2;
-        final sqY = rowY + (rowH - sqSize - crSize) * 0.3;
-        final sq = Rect.fromLTWH(sqX, sqY, sqSize, sqSize);
-        canvas.drawRect(sq, Paint()..color = Colors.grey.shade400);
-        canvas.drawRect(sq, innerBorderPaint);
-        // Round wire hole (bottom half).
-        final crCenterX = blockX + blockW / 2;
-        final crCenterY = sqY + sqSize + crSize / 2 + rowH * 0.05;
-        canvas.drawCircle(
-          Offset(crCenterX, crCenterY),
-          crSize / 2,
-          Paint()..color = Colors.grey.shade300,
+      // Plug body — single rounded rectangle filling the column slot.
+      final plugRect = Rect.fromLTWH(blockX, plugTop, blockW, plugH);
+      final plugRRect = RRect.fromRectAndRadius(
+        plugRect,
+        Radius.circular(blockW * 0.10),
+      );
+      canvas.drawRRect(plugRRect, Paint()..color = Colors.grey.shade400);
+      canvas.drawRRect(plugRRect, plugBorderPaint);
+
+      // Stacked wire-entry ports inside the plug body — 8 small horizontal
+      // rounded-rect "holes" running top-to-bottom on the LEFT side of the
+      // plug interior. Mirrors the real Schneider terminal-connector shape
+      // visible in the DXF (each port is a wire-insertion mouth).
+      const portsPerBlock = 8;
+      final portsAreaTop = plugRect.top + plugH * 0.06;
+      final portsAreaH = plugH * 0.88;
+      final portSlotH = portsAreaH / portsPerBlock;
+      final portH = portSlotH * 0.62;
+      final portInsetX = blockW * 0.10;
+      final portW = blockW * 0.42;
+      final portLeft = plugRect.left + portInsetX;
+
+      // Spring-clip lever geometry — one short dark indicator per port row
+      // on the RIGHT side of the plug interior. Reads as the wire-release
+      // mechanism.
+      final leverInsetX = blockW * 0.18;
+      final leverLeft = plugRect.right - leverInsetX - blockW * 0.22;
+      final leverW = blockW * 0.22;
+      final leverH = portSlotH * 0.42;
+
+      final portHolePaint = Paint()..color = Colors.grey.shade700;
+      final portHoleBorderPaint = Paint()
+        ..color = Colors.grey.shade900
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = (blockW * 0.012).clamp(0.4, 1.5);
+      final leverPaint = Paint()..color = Colors.grey.shade600;
+      final leverBorderPaint = Paint()
+        ..color = Colors.grey.shade800
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = (blockW * 0.012).clamp(0.4, 1.5);
+
+      for (int row = 0; row < portsPerBlock; row++) {
+        final slotTop = portsAreaTop + row * portSlotH;
+        final portTop = slotTop + (portSlotH - portH) / 2;
+        final portRect = Rect.fromLTWH(portLeft, portTop, portW, portH);
+        final portRRect = RRect.fromRectAndRadius(
+          portRect,
+          Radius.circular(portH * 0.30),
         );
-        canvas.drawCircle(
-          Offset(crCenterX, crCenterY),
-          crSize / 2,
-          innerBorderPaint,
+        canvas.drawRRect(portRRect, portHolePaint);
+        canvas.drawRRect(portRRect, portHoleBorderPaint);
+
+        // Lever — small darker rounded rectangle indicating the spring clip.
+        final leverTop = slotTop + (portSlotH - leverH) / 2;
+        final leverRect = Rect.fromLTWH(leverLeft, leverTop, leverW, leverH);
+        final leverRRect = RRect.fromRectAndRadius(
+          leverRect,
+          Radius.circular(leverH * 0.25),
         );
+        canvas.drawRRect(leverRRect, leverPaint);
+        canvas.drawRRect(leverRRect, leverBorderPaint);
       }
     }
   }
