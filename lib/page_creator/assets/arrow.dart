@@ -1,16 +1,18 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter_colorpicker/flutter_colorpicker.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:open62541/open62541.dart' show DynamicValue;
+import 'package:tfc/converter/color_converter.dart';
 import 'package:tfc/page_creator/assets/common.dart';
 import 'package:tfc/providers/state_man.dart';
 import 'package:rxdart/rxdart.dart';
 
 part 'arrow.g.dart';
 
-@JsonSerializable()
+@JsonSerializable(explicitToJson: true)
 class ArrowConfig extends BaseAsset {
   @override
   String get displayName => 'Arrow';
@@ -20,17 +22,26 @@ class ArrowConfig extends BaseAsset {
   String key;
   String label;
 
+  /// Arrow body / glyph colour. Defaults to `Colors.black` — the prior
+  /// hard-coded painter colour. Per-instance configurable via the
+  /// configure dialog and JSON round-trips through `@ColorConverter()`.
+  @ColorConverter()
+  Color color;
+
   ArrowConfig({
     required this.key,
     required this.label,
-  });
+    Color? color,
+  }) : color = color ?? Colors.black;
 
   ArrowConfig.preview()
       : key = "",
-        label = "Arrow preview";
+        label = "Arrow preview",
+        color = Colors.black;
 
   factory ArrowConfig.fromJson(Map<String, dynamic> json) =>
       _$ArrowConfigFromJson(json);
+  @override
   Map<String, dynamic> toJson() => _$ArrowConfigToJson(this);
 
   @override
@@ -68,6 +79,40 @@ class _ArrowConfigEditorState extends State<_ArrowConfigEditor> {
     super.dispose();
   }
 
+  void _showColorPicker() {
+    showDialog<void>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Select Arrow Color'),
+        content: SingleChildScrollView(
+          child: ColorPicker(
+            pickerColor: widget.config.color,
+            onColorChanged: (c) => setState(() => widget.config.color = c),
+            pickerAreaHeightPercent: 0.8,
+          ),
+        ),
+        actions: [
+          ElevatedButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Done'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _colorSwatch(Color color) {
+    return Container(
+      width: 24,
+      height: 24,
+      decoration: BoxDecoration(
+        color: color,
+        shape: BoxShape.circle,
+        border: Border.all(color: Colors.grey.shade600),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return SingleChildScrollView(
@@ -83,6 +128,37 @@ class _ArrowConfigEditorState extends State<_ArrowConfigEditor> {
             controller: _labelController,
             decoration: const InputDecoration(labelText: 'Label'),
             onChanged: (value) => setState(() => widget.config.label = value),
+          ),
+          const SizedBox(height: 16),
+          // -- Arrow Color --
+          GestureDetector(
+            onTap: _showColorPicker,
+            child: Row(children: [
+              _colorSwatch(widget.config.color),
+              const SizedBox(width: 8),
+              const Text('Arrow Color'),
+            ]),
+          ),
+          const SizedBox(height: 16),
+          // -- BaseAsset.text overlay (rendered by page_view's label layer).
+          //    Without this control the operator can't enable the standard
+          //    text-position label overlay that every other asset surfaces.
+          TextFormField(
+            initialValue: widget.config.text,
+            decoration: const InputDecoration(labelText: 'Text'),
+            onChanged: (value) => setState(
+                () => widget.config.text = value.isEmpty ? null : value),
+          ),
+          const SizedBox(height: 8),
+          DropdownButton<TextPos>(
+            value: widget.config.textPos,
+            isExpanded: true,
+            hint: const Text('Text position'),
+            onChanged: (value) => setState(() => widget.config.textPos = value),
+            items: TextPos.values
+                .map((e) =>
+                    DropdownMenuItem<TextPos>(value: e, child: Text(e.name)))
+                .toList(),
           ),
           const SizedBox(height: 16),
           CoordinatesField(
@@ -131,10 +207,45 @@ class _ArrowWidgetState extends ConsumerState<ArrowWidget> {
     return Icons.arrow_upward;
   }
 
+  /// Builds the rotated icon at a size derived from its parent constraints.
+  ///
+  /// `LayoutBuilder` mirrors `IconAsset` (lib/page_creator/assets/icon.dart)
+  /// so the arrow consumes the SizedBox the page view gives it
+  /// (`asset.size.width * W` × `asset.size.height * H`). A bare
+  /// `Icon` without `size:` falls back to `IconTheme.size` (~24 px) and
+  /// would ignore the parent — that's the "doesn't scale" bug.
+  Widget _buildIcon(String operation, Color color) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final hasW =
+            constraints.hasBoundedWidth && constraints.maxWidth.isFinite;
+        final hasH =
+            constraints.hasBoundedHeight && constraints.maxHeight.isFinite;
+        final double w = hasW ? constraints.maxWidth : 48.0;
+        final double h = hasH ? constraints.maxHeight : 48.0;
+        final double size = w < h ? w : h;
+        return Center(
+          child: Transform.rotate(
+            angle: _angleForOperation(operation),
+            child: Icon(
+              _iconForOperation(operation),
+              color: color,
+              size: size,
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (widget.config.key.isEmpty) {
-      return const Icon(Icons.arrow_upward, color: Colors.grey);
+      // No live key — render the configured arrow in its configured colour.
+      // The operator's chosen colour applies in both editor and runtime
+      // fallback paths so what they see in the configure dialog matches
+      // what they see on the page.
+      return _buildIcon("up", widget.config.color);
     }
 
     return StreamBuilder<DynamicValue>(
@@ -146,7 +257,7 @@ class _ArrowWidgetState extends ConsumerState<ArrowWidget> {
       builder: (context, snapshot) {
         String operation = "lost";
         if (snapshot.hasData) {
-          final str = snapshot.data.toString().toLowerCase() ?? "";
+          final str = snapshot.data.toString().toLowerCase();
           if (str.contains("left")) {
             operation = "left";
           } else if (str.contains("right")) {
@@ -160,13 +271,7 @@ class _ArrowWidgetState extends ConsumerState<ArrowWidget> {
           }
         }
 
-        return Transform.rotate(
-          angle: _angleForOperation(operation),
-          child: Icon(
-            _iconForOperation(operation),
-            color: Colors.black,
-          ),
-        );
+        return _buildIcon(operation, widget.config.color);
       },
     );
   }

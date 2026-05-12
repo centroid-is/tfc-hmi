@@ -46,9 +46,32 @@ Matrix4 _buildTransform(AssetStackConfig cfg) {
     ..scale(cfg.xMirror ? -1.0 : 1.0, cfg.yMirror ? -1.0 : 1.0);
 }
 
+// Conditionally wraps the editor's selection chrome in a bordered Container.
+// A Container with a BoxDecoration hit-tests opaque for its full rect (even
+// when only a border is set) because BoxDecoration.hitTest returns true
+// inside any rectangular shape regardless of fillColor — that would swallow
+// runtime-mode primary taps before they reach the asset's own
+// GestureDetectors. Only paint the border when actually selected.
+Widget _wrapWithSelectionBorder({
+  required bool isSelected,
+  required Widget child,
+}) {
+  if (!isSelected) return child;
+  return Container(
+    decoration: BoxDecoration(
+      border: Border.all(color: Colors.blue, width: 2),
+    ),
+    child: child,
+  );
+}
+
 /// Computes the top-left offset for the label given the asset center, its size,
 /// the label size, and the desired position.
-Offset _labelOffset(
+///
+/// Exposed for unit testing (regression for the inside-label bug where
+/// `TextPos.inside` fell through to the right-side default).
+@visibleForTesting
+Offset labelOffset(
   Offset center,
   Size assetSize,
   Size textSize,
@@ -73,8 +96,15 @@ Offset _labelOffset(
         center.dx - halfW - spacing - textSize.width,
         center.dy - textSize.height / 2,
       );
+    case TextPos.inside:
+      // Centre the label inside the asset's bounding rect. Used by
+      // buttons / controls where the label is a face caption rather
+      // than an external annotation.
+      return Offset(
+        center.dx - textSize.width / 2,
+        center.dy - textSize.height / 2,
+      );
     case TextPos.right:
-    default:
       return Offset(
         center.dx + halfW + spacing,
         center.dy - textSize.height / 2,
@@ -185,72 +215,163 @@ class _AssetStackState extends ConsumerState<AssetStack> {
           final isProposed = widget.proposedAssets.contains(asset);
 
           // A) add the asset widget itself
+          //
+          // Layering for rotation correctness:
+          //   - The asset visual (asset.build) rotates internally via its
+          //     own `LayoutRotatedBox`/`Transform.rotate` (each asset reads
+          //     `coordinates.angle`). We do NOT wrap the visual in an outer
+          //     Transform.rotate here -- that would double-rotate.
+          //   - The selection-border container and the editor's
+          //     GestureDetector live in a SIBLING overlay that IS wrapped
+          //     in `Transform.rotate(angle, alignment: Alignment.center)`.
+          //     This makes the blue selection rectangle rotate with the
+          //     visual, and (because Transform.rotate transforms hit-tests
+          //     by default) the GestureDetector's hit area follows the
+          //     rotated visual instead of the unrotated bounding box.
+          //
+          // See test/page_creator/selection_rotation_test.dart for the
+          // regression contract.
+          final angleRadians =
+              (asset.coordinates.angle ?? 0.0) * math.pi / 180;
+          final isSelected = widget.selectedAssets.contains(asset);
+
+          // Compute the rotated AABB (axis-aligned bounding box) so the
+          // outer Positioned is large enough for taps on the rotated
+          // visual to reach our hit-test subtree. Without this, Stack
+          // clips hit-tests at each child's layout bounds and operator
+          // clicks on the visible glyph miss when the rotation pushes
+          // pixels outside the unrotated rect.
+          final cosA = math.cos(angleRadians).abs();
+          final sinA = math.sin(angleRadians).abs();
+          final aabbW = assetW * cosA + assetH * sinA;
+          final aabbH = assetW * sinA + assetH * cosA;
+          final halfAabbW = aabbW / 2;
+          final halfAabbH = aabbH / 2;
+
           positionedChildren.add(
             Positioned(
-              left: cx - halfW,
-              top: cy - halfH,
-              child: Container(
-                decoration: BoxDecoration(
-                  border: widget.selectedAssets.contains(asset)
-                      ? Border.all(color: Colors.blue, width: 2)
-                      : null,
-                ),
-                child: Transform(
-                  alignment: Alignment.center,
-                  transform: asset.coordinates.angle != null
-                      ? _buildTransform(cfg)
-                      : Matrix4.identity(),
-                  child: RepaintBoundary(
-                  child: widget.absorb
-                      ? SizedBox(
-                          width: asset.size.width * W,
-                          height: asset.size.height * H,
-                          child: GestureDetector(
-                            behavior: HitTestBehavior.translucent,
-                            onTap: widget.onTap != null
-                                ? () => widget.onTap!(asset)
-                                : null,
-                            onPanUpdate: widget.onPanUpdate != null
-                                ? (d) => widget.onPanUpdate!(asset, d)
-                                : null,
-                            onPanStart: widget.onPanStart != null
-                                ? (details) =>
-                                    widget.onPanStart!(asset, details)
-                                : null,
-                            onSecondaryTapUp: isMcpChatAvailable()
-                                ? (details) {
-                                    showEditorAssetContextMenu(
-                                      context,
-                                      ref,
-                                      details.globalPosition,
-                                      asset,
-                                    );
-                                  }
-                                : null,
-                            child: AbsorbPointer(
-                              absorbing: widget.absorb,
-                              child: asset.build(context),
-                            ),
-                          ),
-                        )
-                      : GestureDetector(
-                          onSecondaryTapUp: isMcpChatAvailable()
-                              ? (details) {
-                                  showAssetContextMenu(
-                                    context,
-                                    details.globalPosition,
-                                    () => debugAsset(ref, asset),
-                                  );
-                                }
-                              : null,
-                          child: SizedBox(
-                            width: asset.size.width * W,
-                            height: asset.size.height * H,
-                            child: asset.build(context),
-                          ),
+              left: cx - halfAabbW,
+              top: cy - halfAabbH,
+              width: aabbW,
+              height: aabbH,
+              child: Stack(
+                clipBehavior: Clip.none,
+                alignment: Alignment.center,
+                children: [
+                  // 1) The asset visual. The asset's own `build()` handles
+                  //    internal rotation; wrapping it again in
+                  //    `Transform.rotate(angle)` would double-rotate, so
+                  //    only the mirror transform lives here. The SizedBox
+                  //    keeps the unrotated visual constraints stable; the
+                  //    asset's internal rotation paints out into the
+                  //    surrounding AABB. `OverflowBox` lets the SizedBox
+                  //    escape the Stack's tight AABB constraints (Stack
+                  //    would otherwise shrink the 40x10 visual to fit the
+                  //    10x40 AABB).
+                  OverflowBox(
+                    minWidth: 0,
+                    minHeight: 0,
+                    maxWidth: double.infinity,
+                    maxHeight: double.infinity,
+                    child: SizedBox(
+                      width: assetW,
+                      height: assetH,
+                      child: Transform(
+                        alignment: Alignment.center,
+                        transform: asset.coordinates.angle != null
+                            ? _buildTransform(cfg)
+                            : Matrix4.identity(),
+                        child: RepaintBoundary(
+                          child: widget.absorb
+                              // In editor mode the asset's own
+                              // GestureDetectors must NOT fire -- the
+                              // editor's overlay GestureDetector (below) is
+                              // the single tap source. We use IgnorePointer
+                              // because the overlay sits on top in the
+                              // Stack and would otherwise compete with the
+                              // asset's internal gestures.
+                              ? IgnorePointer(child: asset.build(context))
+                              : asset.build(context),
                         ),
-                ),
-                ),
+                      ),
+                    ),
+                  ),
+                  // 2) Rotated overlay carrying the selection border and
+                  //    the editor's GestureDetector. Transform.rotate
+                  //    rotates BOTH the painted border AND the hit-test
+                  //    region (default `transformHitTests: true`) so the
+                  //    GestureDetector hit area tracks the rotated visual
+                  //    instead of the unrotated bounding rect.
+                  OverflowBox(
+                    minWidth: 0,
+                    minHeight: 0,
+                    maxWidth: double.infinity,
+                    maxHeight: double.infinity,
+                    child: Transform.rotate(
+                      angle: angleRadians,
+                      alignment: Alignment.center,
+                      child: SizedBox(
+                        width: assetW,
+                        height: assetH,
+                        // Container with a BoxDecoration hit-tests opaque for
+                        // its full bounds even when only a border is set
+                        // (BoxDecoration.hitTest returns true inside any
+                        // rectangular shape regardless of fill). In runtime
+                        // mode the overlay's inner GestureDetector is
+                        // translucent so primary taps fall through to the
+                        // asset's own GestureDetectors — but the wrapping
+                        // Container would still consume the hit. Only wrap
+                        // in a Container when there is an actual border to
+                        // paint (i.e. when selected); otherwise the chrome
+                        // is just the bare GestureDetector.
+                        child: _wrapWithSelectionBorder(
+                          isSelected: isSelected,
+                          child: widget.absorb
+                              ? GestureDetector(
+                                behavior: HitTestBehavior.opaque,
+                                onTap: widget.onTap != null
+                                    ? () => widget.onTap!(asset)
+                                    : null,
+                                onPanUpdate: widget.onPanUpdate != null
+                                    ? (d) => widget.onPanUpdate!(asset, d)
+                                    : null,
+                                onPanStart: widget.onPanStart != null
+                                    ? (details) =>
+                                        widget.onPanStart!(asset, details)
+                                    : null,
+                                onSecondaryTapUp: isMcpChatAvailable()
+                                    ? (details) {
+                                        showEditorAssetContextMenu(
+                                          context,
+                                          ref,
+                                          details.globalPosition,
+                                          asset,
+                                        );
+                                      }
+                                    : null,
+                              )
+                            : GestureDetector(
+                                // Runtime view: only secondary tap is
+                                // handled here (chat context menu). Primary
+                                // taps must pass through to the asset's
+                                // own GestureDetectors. translucent keeps
+                                // us from swallowing them.
+                                behavior: HitTestBehavior.translucent,
+                                onSecondaryTapUp: isMcpChatAvailable()
+                                    ? (details) {
+                                        showAssetContextMenu(
+                                          context,
+                                          details.globalPosition,
+                                          () => debugAsset(ref, asset),
+                                        );
+                                      }
+                                    : null,
+                              ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
           );
@@ -293,27 +414,32 @@ class _AssetStackState extends ConsumerState<AssetStack> {
             if (cfg.yMirror && (pos == TextPos.above || pos == TextPos.below)) {
               pos = pos == TextPos.above ? TextPos.below : TextPos.above;
             }
-            final labelOff = _labelOffset(center, assetSize, textSize, pos);
+            final labelOff = labelOffset(center, assetSize, textSize, pos);
+            // In editor mode, the label must NOT intercept pointer events —
+            // otherwise dragging an asset whose label overlaps the body
+            // (e.g. a button with TextPos.inside) is hijacked by the Text
+            // widget's hit-test, and the operator can't move the asset.
+            // Wrap in IgnorePointer when absorb=true so all events fall
+            // through to the editor's overlay GestureDetector below.
+            final labelWidget = widget.absorb
+                ? IgnorePointer(child: Text(asset.text!, style: labelStyle))
+                : GestureDetector(
+                    onSecondaryTapUp: isMcpChatAvailable()
+                        ? (details) {
+                            showAssetContextMenu(
+                              context,
+                              details.globalPosition,
+                              () => debugAsset(ref, asset),
+                            );
+                          }
+                        : null,
+                    child: Text(asset.text!, style: labelStyle),
+                  );
             positionedChildren.add(
               Positioned(
                 left: labelOff.dx,
                 top: labelOff.dy,
-                child: GestureDetector(
-                  onSecondaryTapUp:
-                      !widget.absorb && isMcpChatAvailable()
-                          ? (details) {
-                              showAssetContextMenu(
-                                context,
-                                details.globalPosition,
-                                () => debugAsset(ref, asset),
-                              );
-                            }
-                          : null,
-                  child: Text(
-                    asset.text!,
-                    style: labelStyle,
-                  ),
-                ),
+                child: labelWidget,
               ),
             );
           }

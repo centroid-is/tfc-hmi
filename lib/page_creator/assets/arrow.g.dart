@@ -9,6 +9,8 @@ part of 'arrow.dart';
 ArrowConfig _$ArrowConfigFromJson(Map<String, dynamic> json) => ArrowConfig(
       key: json['key'] as String,
       label: json['label'] as String,
+      color: _$JsonConverterFromJson<Map<String, dynamic>, Color>(
+          json['color'], const ColorConverter().fromJson),
     )
       ..variant = json['asset_name'] as String
       ..coordinates =
@@ -22,15 +24,22 @@ ArrowConfig _$ArrowConfigFromJson(Map<String, dynamic> json) => ArrowConfig(
 Map<String, dynamic> _$ArrowConfigToJson(ArrowConfig instance) =>
     <String, dynamic>{
       'asset_name': instance.variant,
-      'coordinates': instance.coordinates,
-      'size': instance.size,
+      'coordinates': instance.coordinates.toJson(),
+      'size': instance.size.toJson(),
       'text': instance.text,
       'textPos': _$TextPosEnumMap[instance.textPos],
       'techDocId': instance.techDocId,
       'plcAssetKey': instance.plcAssetKey,
       'key': instance.key,
       'label': instance.label,
+      'color': const ColorConverter().toJson(instance.color),
     };
+
+Value? _$JsonConverterFromJson<Json, Value>(
+  Object? json,
+  Value? Function(Json json) fromJson,
+) =>
+    json == null ? null : fromJson(json as Json);
 
 const _$TextPosEnumMap = {
   TextPos.above: 'above',
