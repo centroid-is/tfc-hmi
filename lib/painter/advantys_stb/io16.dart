@@ -118,7 +118,56 @@ class IO16LedBlockPainter extends BaseLedBlockPainter {
       final double cx = padX + col * (cellW + padX);
       final double cy = padY + row * (cellH + padY);
       final cellRect = Rect.fromLTWH(cx, cy, cellW, cellH);
-      drawLed(canvas, cellRect, ledStates[i], borderPaint);
+      _drawLedDot(canvas, cellRect, ledStates[i], borderPaint);
     }
+  }
+
+  /// Draws a single LED as a round dot rather than a rectangle (the base
+  /// `drawLed` from Beckhoff `IO8Painter` paints rectangles, which look like
+  /// venetian-blind bars at the 2×8 wide-flat aspect the DDI/DDO body painter
+  /// hands to this block). The dot is inscribed in the smaller of cellW/cellH
+  /// so it stays round even when the LED slot is more rectangular than square.
+  ///
+  /// Active state uses the operator-recognizable green `Color(0xFF6CA545)`
+  /// (matches the Beckhoff and STB RDY indicator green). Inactive state uses
+  /// a soft top-light radial gradient so an "off" LED still reads as a real
+  /// indicator dot rather than empty space. Forced states inherit the red
+  /// pulsing border from the base painter.
+  void _drawLedDot(Canvas canvas, Rect rect, IOState state, Paint borderPaint) {
+    const activeColor = Color(0xFF6CA545);
+    const inactiveTopColor = Color(0xFFF0F0F0);
+    const inactiveBottomColor = Color(0xFFCCCCCC);
+    const errorColor = Colors.red;
+
+    final cx = rect.left + rect.width / 2;
+    final cy = rect.top + rect.height / 2;
+    final r = (rect.width < rect.height ? rect.width : rect.height) / 2;
+
+    // Fill.
+    if (state == IOState.error) {
+      canvas.drawCircle(Offset(cx, cy), r, Paint()..color = errorColor);
+    } else if (state == IOState.high || state == IOState.forcedHigh) {
+      canvas.drawCircle(Offset(cx, cy), r, Paint()..color = activeColor);
+    } else {
+      final shaderRect = Rect.fromCircle(center: Offset(cx, cy), radius: r);
+      canvas.drawCircle(
+        Offset(cx, cy),
+        r,
+        Paint()
+          ..shader = const LinearGradient(
+            colors: [inactiveTopColor, inactiveBottomColor],
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+          ).createShader(shaderRect),
+      );
+    }
+
+    // Border — pulses red for forced states (matches Beckhoff convention).
+    final Paint stroke = Paint.from(borderPaint)
+      ..style = PaintingStyle.stroke
+      ..color = state == IOState.forcedHigh || state == IOState.forcedLow
+          ? Colors.red.withAlpha(animation.value)
+          : borderPaint.color;
+    canvas.drawCircle(Offset(cx, cy), r, stroke);
   }
 }
