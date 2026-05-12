@@ -35,13 +35,12 @@ const double kFieldFillAlpha = 0.40;
 
 /// Label text size as fraction of `size.shortestSide`.
 ///
-/// Reduced from 0.30 to 0.18 (SENS-17 follow-up): at 0.30 the label
-/// font dominated the glyph at typical golden canvas sizes
-/// (e.g. 38px tall on a 128px shortestSide) and forced the label band
-/// to eat enough vertical room that the geometry visibly shrank. 0.18
-/// keeps the tag legible while leaving a clean separation between the
-/// glyph and the label.
-const double kLabelFontFraction = 0.18;
+/// 0.30 is the original operator-facing label size — tags like "Lock 1"
+/// or "PE-101A" read at the size operators have built muscle memory
+/// around on the existing HMI panels. The band ([kLabelBandFraction])
+/// is widened to accommodate this font cleanly rather than shrinking
+/// the font to fit a narrower band.
+const double kLabelFontFraction = 0.30;
 
 /// Fraction of `size.height` reserved as a bottom band for the label
 /// when the painter has a non-empty `label`. The geometry rect handed
@@ -49,9 +48,13 @@ const double kLabelFontFraction = 0.18;
 /// beam / cone / bubble) sits ABOVE the label band — no overlap on the
 /// inductive bubble or the optic cone base at the configured size.
 ///
-/// 0.25 is the smallest value that clears the inductive-field bubble
-/// (which extends to `0.80 * h_glyph` from its centre at `0.50 * h_glyph`).
-const double kLabelBandFraction = 0.25;
+/// 0.38 is sized to fit the 0.30 * shortestSide font ([kLabelFontFraction])
+/// with a couple of pixels of padding above and below. Trading a slightly
+/// smaller painted glyph for the original, legible operator-facing
+/// label size. Still clears the inductive-field bubble (whose bottom edge
+/// sits at `0.80 * h_glyph` = `0.496 * h` — well above the band top
+/// at `0.62 * h`).
+const double kLabelBandFraction = 0.38;
 
 // ---------------------------------------------------------------------------
 // Shared paint helpers (file-private)
