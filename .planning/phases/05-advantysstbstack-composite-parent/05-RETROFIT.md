@@ -77,3 +77,17 @@ A unit test (`'NIP whitelist correctly excludes NIP itself'`) locks this.
 Codified in `feedback_composite_head_pattern.md`: head devices ARE their own
 composites in this codebase. Do not add standalone "stack" wrapper assets for
 future device families — put the subdevices list directly on the head class.
+
+## Visual quality gate (post-retrofit)
+
+A second lesson — codified in `05-VISUAL-QUALITY-CHECKLIST.md` (alongside this
+file) plus `feedback_golden_quality_gap.md` — is that
+`flutter test --update-goldens` is NOT a sufficient verification step on its
+own. Goldens lock in pixel stability, not pixel quality, so any agent
+regenerating goldens for this milestone MUST read every regenerated PNG and
+walk it through the six-item visual checklist before committing.
+
+Phase 5 originally shipped four visual defects (chamfer overshoot, bottom
+bleed, LED grid quality, label clipping) that were locked into the goldens
+because no human reviewed the captured PNG. The visual-quality-checklist
+gate exists to prevent that failure mode from recurring.
