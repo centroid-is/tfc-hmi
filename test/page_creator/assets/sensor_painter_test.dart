@@ -617,6 +617,77 @@ void main() {
         matchesGoldenFile('goldens/sensor/red_light_with_label.png'),
       );
     });
+
+    // 11. Inductive field — active with a multi-character label like
+    //     "Lock 1". Regression for SENS-17: before the geometry-shrink
+    //     fix, the bubble extended to `0.80 * h` and the bottom-aligned
+    //     label overlapped the bubble at common canvas sizes. The fix
+    //     reserves a bottom band for the label and shrinks the glyph
+    //     geometry into the top portion. This golden locks the corrected
+    //     layout (label visibly below the bubble).
+    testWidgets('inductive_field_active_with_label', (tester) async {
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          backgroundColor: const Color(0xFF1A1A2E),
+          body: Center(
+            child: RepaintBoundary(
+              key: goldenKey,
+              child: SizedBox(
+                width: 256,
+                height: 128,
+                child: CustomPaint(
+                  painter: InductiveFieldPainter(
+                    isActive: true,
+                    activeColor: Colors.green,
+                    inactiveColor: Colors.grey.shade400,
+                    label: 'Lock 1',
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ));
+      await expectLater(
+        find.byKey(goldenKey),
+        matchesGoldenFile(
+            'goldens/sensor/inductive_field_active_with_label.png'),
+      );
+    });
+
+    // 12. Inductive field — inactive with a multi-character label.
+    //     Same regression class as #11 but for the inactive state (the
+    //     outlined bubble) — operators reported the inactive overlap on
+    //     a real page (asset named "Lock 1").
+    testWidgets('inductive_field_inactive_with_label', (tester) async {
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          backgroundColor: const Color(0xFF1A1A2E),
+          body: Center(
+            child: RepaintBoundary(
+              key: goldenKey,
+              child: SizedBox(
+                width: 256,
+                height: 128,
+                child: CustomPaint(
+                  painter: InductiveFieldPainter(
+                    isActive: false,
+                    activeColor: Colors.green,
+                    inactiveColor: Colors.grey.shade400,
+                    label: 'Lock 1',
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ));
+      await expectLater(
+        find.byKey(goldenKey),
+        matchesGoldenFile(
+            'goldens/sensor/inductive_field_inactive_with_label.png'),
+      );
+    });
   });
 
   // ---------------------------------------------------------------------------
