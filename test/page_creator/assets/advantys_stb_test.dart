@@ -3279,7 +3279,7 @@ void main() {
   // the tests are not gated by `Platform.isMacOS`.
   // ===========================================================================
   group('STB visual defect regression — header chamfer / bottom bleed / LEDs / labels', () {
-    Future<List<int>> _renderToPixels(
+    Future<List<int>> renderToPixels(
       CustomPainter painter,
       Size size,
     ) async {
@@ -3301,7 +3301,7 @@ void main() {
       return bytes!.buffer.asUint8List().toList();
     }
 
-    int _pixelAt(List<int> rgba, int width, int x, int y) {
+    int pixelAt(List<int> rgba, int width, int x, int y) {
       final i = (y * width + x) * 4;
       return (0xFF << 24) |
           (rgba[i] << 16) |
@@ -3328,9 +3328,9 @@ void main() {
       );
       const w = 200;
       const h = 280;
-      final pixels = await _renderToPixels(painter, const Size(w * 1.0, h * 1.0));
+      final pixels = await renderToPixels(painter, const Size(w * 1.0, h * 1.0));
       // Sample the top-left corner pixel deeply inside the chamfer cutout.
-      final px = _pixelAt(pixels, w, 1, 1);
+      final px = pixelAt(pixels, w, 1, 1);
       // Schneider blue = 0xFF003B71. If the header overshot the chamfer,
       // this pixel will be (or be very close to) Schneider blue.
       expect(px, isNot(equals(0xFF003B71)),
@@ -3349,8 +3349,8 @@ void main() {
       );
       const w = 200;
       const h = 280;
-      final pixels = await _renderToPixels(painter, const Size(w * 1.0, h * 1.0));
-      final px = _pixelAt(pixels, w, 1, 1);
+      final pixels = await renderToPixels(painter, const Size(w * 1.0, h * 1.0));
+      final px = pixelAt(pixels, w, 1, 1);
       expect(px, isNot(equals(0xFF003B71)),
           reason: 'DDO3705 top-left chamfer must not contain header blue.');
     });
@@ -3361,8 +3361,8 @@ void main() {
       final painter = STBNIP2311BodyPainter(nameOrId: 'NIP-01');
       const w = 200;
       const h = 280;
-      final pixels = await _renderToPixels(painter, const Size(w * 1.0, h * 1.0));
-      final px = _pixelAt(pixels, w, 1, 1);
+      final pixels = await renderToPixels(painter, const Size(w * 1.0, h * 1.0));
+      final px = pixelAt(pixels, w, 1, 1);
       expect(px, isNot(equals(0xFF003B71)),
           reason: 'NIP2311 top-left chamfer must not contain header blue.');
     });
@@ -3373,8 +3373,8 @@ void main() {
       final painter = STBPDT3100BodyPainter(nameOrId: 'PDT-01', inputOk: true);
       const w = 200;
       const h = 280;
-      final pixels = await _renderToPixels(painter, const Size(w * 1.0, h * 1.0));
-      final px = _pixelAt(pixels, w, 1, 1);
+      final pixels = await renderToPixels(painter, const Size(w * 1.0, h * 1.0));
+      final px = pixelAt(pixels, w, 1, 1);
       expect(px, isNot(equals(0xFF003B71)),
           reason: 'PDT3100 top-left chamfer must not contain header blue.');
     });
@@ -3391,10 +3391,10 @@ void main() {
       final painter = STBNIP2311BodyPainter(nameOrId: 'NIP-01');
       const w = 200;
       const h = 280;
-      final pixels = await _renderToPixels(painter, const Size(w * 1.0, h * 1.0));
+      final pixels = await renderToPixels(painter, const Size(w * 1.0, h * 1.0));
       // Sample 2px in from the bottom-right corner (well inside the chamfer
       // cutout).
-      final px = _pixelAt(pixels, w, w - 2, h - 2);
+      final px = pixelAt(pixels, w, w - 2, h - 2);
       expect(px, isNot(equals(0xFF003B71)),
           reason:
               'NIP2311 bottom-right chamfer must not contain footer blue (no bleed).');
@@ -3404,8 +3404,8 @@ void main() {
       final painter = STBPDT3100BodyPainter(nameOrId: 'PDT-01', inputOk: true);
       const w = 200;
       const h = 280;
-      final pixels = await _renderToPixels(painter, const Size(w * 1.0, h * 1.0));
-      final px = _pixelAt(pixels, w, w - 2, h - 2);
+      final pixels = await renderToPixels(painter, const Size(w * 1.0, h * 1.0));
+      final px = pixelAt(pixels, w, w - 2, h - 2);
       expect(px, isNot(equals(0xFF003B71)),
           reason: 'PDT3100 bottom-right chamfer must not contain footer blue.');
     });
@@ -3428,14 +3428,14 @@ void main() {
       );
       const w = 200;
       const h = 280;
-      final pixels = await _renderToPixels(painter, const Size(w * 1.0, h * 1.0));
+      final pixels = await renderToPixels(painter, const Size(w * 1.0, h * 1.0));
       // LED block sits at y ≈ topStripH (0.07 * 280 = 19.6) to y ≈ 19.6 + 0.22*280 = 81.2.
       // With circle LEDs, the corner of every individual LED cell will fall
       // OUTSIDE the inscribed circle. Sample very-near the top-left corner of
       // the first LED cell (col 0, row 0). For a 200x280 widget, padX≈10,
       // padY ≈ ledBlockH * 0.05 ≈ 3 — sample at (12, 23) which is the corner
       // of the first cell *inside* the LED block.
-      final cornerPx = _pixelAt(pixels, w, 12, 23);
+      final cornerPx = pixelAt(pixels, w, 12, 23);
       expect(cornerPx, isNot(equals(0xFF6CA545)),
           reason:
               'Top-left corner of the first LED cell should NOT be the active '
@@ -3453,8 +3453,8 @@ void main() {
       );
       const w = 200;
       const h = 280;
-      final pixels = await _renderToPixels(painter, const Size(w * 1.0, h * 1.0));
-      final cornerPx = _pixelAt(pixels, w, 12, 23);
+      final pixels = await renderToPixels(painter, const Size(w * 1.0, h * 1.0));
+      final cornerPx = pixelAt(pixels, w, 12, 23);
       expect(cornerPx, isNot(equals(0xFF6CA545)),
           reason: 'DDO3705 LED-cell corner must not be filled green.');
     });
@@ -3474,7 +3474,7 @@ void main() {
       final painter = STBPDT3100BodyPainter(nameOrId: 'PDT-01', inputOk: true);
       const w = 200;
       const h = 280;
-      final pixels = await _renderToPixels(painter, const Size(w * 1.0, h * 1.0));
+      final pixels = await renderToPixels(painter, const Size(w * 1.0, h * 1.0));
       // The terminal area starts at y = (topStrip + inLabel + ledRow + subtitle)
       // ≈ (28 + 28 + 39 + 20) = 115; terminal area is 0.38 * 280 ≈ 106 px tall.
       // Top block center is around y ≈ 115 + 26 ≈ 141. Scan the right-edge
