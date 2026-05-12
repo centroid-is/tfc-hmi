@@ -86,3 +86,30 @@ Phase 5 is mechanical compose-work — Phases 1-4 produced all four leaf module 
 - Canonical-layout enforcement (NIP first, PDT next, I/O modules in any order after) — STACK-FUT-03.
 
 </deferred>
+
+## Architectural Revision (2026-05-12)
+
+The standalone `AdvantysSTBStackConfig` was retrofitted away. The
+composite-parent behavior (subdevices list + sanitiser + `allKeys` flat-map +
+Add/Reorder/Delete dialog) was moved ONTO `STBNIP2311Config` directly.
+
+**Why:** The Beckhoff precedent in `lib/page_creator/assets/beckhoff.dart`
+puts `List<Asset> subdevices` directly on the head device class
+(`BeckhoffCX5010Config`, `BeckhoffEK1100Config`). There is NO standalone
+"stack frame" asset in the Beckhoff family. Phase 5 originally shipped one
+for Advantys (rejecting that precedent), creating an extra wrapper layer the
+real Advantys STB rack does not have: in the physical rack, the NIP2311
+Ethernet head IS the parent of the slotted I/O modules.
+
+**Whitelist change:** the retrofit removed the NIP entry from
+`_kAllowedSTBChildTypeNames` (renamed to `_kAllowedSTBSubdeviceTypeNames`).
+A NIP head cannot nest another NIP head — there is one head per rack.
+The whitelist now contains only the three I/O modules (PDT/DDI/DDO).
+
+**What was preserved:** every Phase 5 success criterion 3–5 (sanitiser
+behavior, dialog UX, integration test) holds verbatim. Goldens were
+regenerated: `stack_full_{light,dark}.png` deleted, replaced by
+`nip_with_modules_{light,dark}.png`.
+
+The original CONTEXT decisions above remain for historical traceability.
+See `05-RETROFIT.md` for the full retrofit redirect.

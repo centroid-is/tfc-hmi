@@ -2671,96 +2671,118 @@ void main() {
   });
 
   // ---------------------------------------------------------------------------
-  // Plan 05-01: AdvantysSTBStackConfig — composite parent (TDD anchor).
+  // Phase 5 RETROFIT (2026-05-12): STBNIP2311 as composite head (CX5010/EK1100
+  // precedent).
   //
-  // Mirrors BeckhoffCX5010Config verbatim with the four-type whitelist
-  // substituted, plus a NET-NEW post-fromJson sanitiser that drops foreign
-  // child types. Tests in this section establish the RED contract before the
-  // class lands; once implemented (Plan 05-01 GREEN), every assertion here is
-  // load-bearing for the data layer.
+  // Replaces the standalone `AdvantysSTBStackConfig` which was deleted. The
+  // composite-parent behavior (subdevices list + sanitiser + allKeys flat-map
+  // + Add/Reorder/Delete dialog) moved ONTO `STBNIP2311Config` directly. The
+  // sanitiser whitelist drops the NIP entry: a NIP head cannot nest another
+  // NIP head.
   // ---------------------------------------------------------------------------
-  group('AdvantysSTBStackConfig — data shape', () {
+  group('STBNIP2311 head with subdevices — data shape', () {
     test('default constructor produces empty subdevices + BaseAsset defaults',
         () {
-      final stack = AdvantysSTBStackConfig();
-      expect(stack.subdevices, isEmpty);
-      expect(stack.coordinates.x, 0.0);
-      expect(stack.coordinates.y, 0.0);
-      expect(stack.size.width, 0.03);
-      expect(stack.size.height, 0.03);
-      expect(stack.text, isNull);
-      expect(stack.textPos, isNull);
-      expect(stack.techDocId, isNull);
-      expect(stack.plcAssetKey, isNull);
+      final nip = STBNIP2311Config();
+      expect(nip.subdevices, isEmpty);
+      expect(nip.coordinates.x, 0.0);
+      expect(nip.coordinates.y, 0.0);
+      expect(nip.size.width, 0.03);
+      expect(nip.size.height, 0.03);
+      expect(nip.text, isNull);
+      expect(nip.textPos, isNull);
+      expect(nip.techDocId, isNull);
+      expect(nip.plcAssetKey, isNull);
     });
 
     test('preview() factory returns an instance with empty subdevices', () {
-      final stack = AdvantysSTBStackConfig.preview();
-      expect(stack, isA<AdvantysSTBStackConfig>());
-      expect(stack.subdevices, isEmpty);
+      final nip = STBNIP2311Config.preview();
+      expect(nip, isA<STBNIP2311Config>());
+      expect(nip.subdevices, isEmpty);
     });
 
     test('displayName and category match the locked phase contract', () {
-      final stack = AdvantysSTBStackConfig();
-      expect(stack.displayName, 'Advantys STB Stack');
-      expect(stack.category, 'Advantys STB');
+      final nip = STBNIP2311Config();
+      expect(nip.displayName, 'STBNIP2311 (Ethernet Head)');
+      expect(nip.category, 'Advantys STB');
     });
 
-    test('assetName resolves to the class name via BaseAsset.variant', () {
-      final stack = AdvantysSTBStackConfig();
-      expect(stack.assetName, 'AdvantysSTBStackConfig');
+    test('assetName resolves to STBNIP2311Config via BaseAsset.variant', () {
+      final nip = STBNIP2311Config();
+      expect(nip.assetName, 'STBNIP2311Config');
     });
   });
 
-  group('AdvantysSTBStackConfig.fromJson sanitiser', () {
+  group('STBNIP2311Config.fromJson sanitiser', () {
     test('drops a foreign child type (ButtonConfig) while keeping 3 STB types',
         () {
       // Three legitimate STB children + one ButtonConfig (foreign). The
       // post-fromJson sanitiser must retainWhere over the whitelist and drop
       // the ButtonConfig silently (with a log line). Permissive render,
       // restrictive load — per CONTEXT.md §Whitelist Filter.
-      //
-      // The production load path is `jsonEncode → jsonDecode → fromJson` so
-      // the test mirrors that round-trip. Passing raw `.toJson()` output
-      // directly would leave nested codegen-typed objects (e.g.
-      // `Coordinates`, `RelativeSize`) in the map and trip the leaf
-      // `_$XxxFromJson` cast guards. The round-trip below normalises every
-      // value to JSON-native types exactly like the real load path.
       final rawJson = <String, dynamic>{
-        'asset_name': 'AdvantysSTBStackConfig',
+        'asset_name': 'STBNIP2311Config',
         'coordinates': <String, dynamic>{'x': 0.0, 'y': 0.0},
         'size': <String, dynamic>{'width': 0.5, 'height': 0.5},
+        'nameOrId': '1',
         'subdevices': <Map<String, dynamic>>[
-          STBNIP2311Config.preview().toJson(),
           STBDDI3725Config.preview().toJson(),
+          STBDDO3705Config.preview().toJson(),
           ButtonConfig.preview().toJson(), // foreign — must be dropped
           STBPDT3100Config.preview().toJson(),
         ],
       };
       final json = jsonDecode(jsonEncode(rawJson)) as Map<String, dynamic>;
-      final cfg = AdvantysSTBStackConfig.fromJson(json);
+      final cfg = STBNIP2311Config.fromJson(json);
       expect(cfg.subdevices, hasLength(3),
           reason: 'Sanitiser must drop the foreign ButtonConfig.');
-      // The 3 retained children preserve their original order.
       expect(
         cfg.subdevices.map((s) => s.runtimeType.toString()).toList(),
         <String>[
-          'STBNIP2311Config',
           'STBDDI3725Config',
+          'STBDDO3705Config',
           'STBPDT3100Config',
         ],
       );
     });
 
     test(
-      'runtimeType strings of the 4 STB leaf configs match the whitelist '
-      'literals exactly (Pitfall 2 typo guard)',
+      'NIP whitelist correctly excludes NIP itself — a NIP nested as a child '
+      'of another NIP is dropped on load',
+      () {
+        // The composite head IS the NIP. Nesting a NIP inside a NIP is a
+        // foot-gun the sanitiser must catch. Construct JSON where the outer
+        // NIP has another NIP as a subdevice and assert the inner is dropped.
+        final rawJson = <String, dynamic>{
+          'asset_name': 'STBNIP2311Config',
+          'coordinates': <String, dynamic>{'x': 0.0, 'y': 0.0},
+          'size': <String, dynamic>{'width': 0.5, 'height': 0.5},
+          'nameOrId': '1',
+          'subdevices': <Map<String, dynamic>>[
+            STBPDT3100Config.preview().toJson(),
+            STBNIP2311Config.preview().toJson(), // NIP-inside-NIP — dropped
+            STBDDI3725Config.preview().toJson(),
+          ],
+        };
+        final json = jsonDecode(jsonEncode(rawJson)) as Map<String, dynamic>;
+        final cfg = STBNIP2311Config.fromJson(json);
+        expect(cfg.subdevices, hasLength(2),
+            reason: 'Sanitiser must drop the nested NIP.');
+        expect(
+          cfg.subdevices.map((s) => s.runtimeType.toString()).toList(),
+          <String>['STBPDT3100Config', 'STBDDI3725Config'],
+        );
+      },
+    );
+
+    test(
+      'runtimeType strings of the 3 STB subdevice leaf configs match the '
+      'whitelist literals exactly (Pitfall 2 typo guard)',
       () {
         // If anyone in the whitelist literal writes 'STBDDI3725' (no Config)
-        // or 'STBNip2311Config' (wrong case), every legitimate child is
-        // silently dropped on load. This test catches that loudly.
-        expect(STBNIP2311Config.preview().runtimeType.toString(),
-            'STBNIP2311Config');
+        // or 'StbPdt3100Config' (wrong case), every legitimate child is
+        // silently dropped on load. This test catches that loudly. NIP is
+        // NOT in the whitelist by design — a NIP head cannot nest a NIP head.
         expect(STBPDT3100Config.preview().runtimeType.toString(),
             'STBPDT3100Config');
         expect(STBDDI3725Config.preview().runtimeType.toString(),
@@ -2773,164 +2795,100 @@ void main() {
     test('empty subdevices list survives fromJson unchanged (no-op sanitiser)',
         () {
       final json = <String, dynamic>{
-        'asset_name': 'AdvantysSTBStackConfig',
+        'asset_name': 'STBNIP2311Config',
         'coordinates': {'x': 0.0, 'y': 0.0},
         'size': {'width': 0.5, 'height': 0.5},
+        'nameOrId': '1',
         'subdevices': <Map<String, dynamic>>[],
       };
-      final cfg = AdvantysSTBStackConfig.fromJson(json);
+      final cfg = STBNIP2311Config.fromJson(json);
       expect(cfg.subdevices, isEmpty);
     });
   });
 
-  group('AdvantysSTBStackConfig registry resolution', () {
+  group('STBNIP2311Config composite — full JSON round-trip', () {
     test(
-      'createDefaultAssetByName returns a typed AdvantysSTBStackConfig '
-      '(defaultFactories wiring — Pitfall 3 guard)',
+      'every BaseAsset field + 3-subdevice list survives jsonEncode + jsonDecode + fromJson',
       () {
-        final asset =
-            AssetRegistry.createDefaultAssetByName('AdvantysSTBStackConfig');
-        expect(asset, isNotNull,
-            reason:
-                'defaultFactories must register AdvantysSTBStackConfig (palette wiring).');
-        expect(asset, isA<AdvantysSTBStackConfig>());
-        final cfg = asset! as AdvantysSTBStackConfig;
-        expect(cfg.subdevices, isEmpty);
-      },
-    );
-
-    test(
-      'AssetRegistry.parse round-trips a stack with a STBPDT3100 subdevice '
-      '(_fromJsonFactories wiring — Pitfall 3 other half)',
-      () {
-        final stack = AdvantysSTBStackConfig()
-          ..subdevices = <Asset>[
-            STBPDT3100Config(nameOrId: 'PDT', inputOkKey: 'plc.ok'),
-          ];
-        final saveJson = jsonDecode(jsonEncode(<String, dynamic>{
-          'assets': <Map<String, dynamic>>[stack.toJson()],
-        })) as Map<String, dynamic>;
-        final parsed = AssetRegistry.parse(saveJson);
-        expect(parsed, hasLength(1),
-            reason:
-                '_fromJsonFactories must register AdvantysSTBStackConfig.');
-        expect(parsed[0], isA<AdvantysSTBStackConfig>());
-        final restored = parsed[0] as AdvantysSTBStackConfig;
-        expect(restored.subdevices, hasLength(1));
-        expect(restored.subdevices[0], isA<STBPDT3100Config>());
-        final pdt = restored.subdevices[0] as STBPDT3100Config;
-        expect(pdt.inputOkKey, 'plc.ok');
-      },
-    );
-
-    test('defaultFactories Map contains AdvantysSTBStackConfig type key', () {
-      expect(
-        AssetRegistry.defaultFactories.keys.any(
-          (t) => t.toString() == 'AdvantysSTBStackConfig',
-        ),
-        isTrue,
-        reason:
-            'AdvantysSTBStackConfig must be enumerable through defaultFactories '
-            'for the palette to list it.',
-      );
-    });
-  });
-
-  group('AdvantysSTBStackConfig full JSON round-trip', () {
-    test(
-      'every BaseAsset field + 4-subdevice list survives jsonEncode + jsonDecode + fromJson',
-      () {
-        final original = AdvantysSTBStackConfig()
+        final original = STBNIP2311Config(nameOrId: 'NIP-rt')
           ..coordinates = Coordinates(x: 0.1, y: 0.2)
           ..size = const RelativeSize(width: 0.5, height: 0.3)
-          ..text = 'stack-rt'
+          ..text = 'nip-rt'
           ..textPos = TextPos.below
           ..techDocId = 7
-          ..plcAssetKey = 'plc.stack'
+          ..plcAssetKey = 'plc.nip'
           ..subdevices = <Asset>[
             STBDDI3725Config(nameOrId: 'DI', rawStateKey: 'a'),
             STBDDO3705Config(nameOrId: 'DO', rawStateKey: 'b'),
-            STBNIP2311Config(nameOrId: 'NIP'),
             STBPDT3100Config(nameOrId: 'PDT', inputOkKey: 'ok'),
           ];
 
-        // Production round-trip: through jsonEncode/jsonDecode.
         final encoded = jsonEncode(original.toJson());
         final decoded = jsonDecode(encoded) as Map<String, dynamic>;
-        final parsed = AdvantysSTBStackConfig.fromJson(decoded);
+        final parsed = STBNIP2311Config.fromJson(decoded);
 
-        // BaseAsset fields.
         expect(parsed.coordinates.x, 0.1);
         expect(parsed.coordinates.y, 0.2);
         expect(parsed.size.width, 0.5);
         expect(parsed.size.height, 0.3);
-        expect(parsed.text, 'stack-rt');
+        expect(parsed.text, 'nip-rt');
         expect(parsed.textPos, TextPos.below);
         expect(parsed.techDocId, 7);
-        expect(parsed.plcAssetKey, 'plc.stack');
-        expect(parsed.assetName, 'AdvantysSTBStackConfig');
+        expect(parsed.plcAssetKey, 'plc.nip');
+        expect(parsed.nameOrId, 'NIP-rt');
+        expect(parsed.assetName, 'STBNIP2311Config');
 
         // Subdevices: order, types, and key fields preserved.
-        expect(parsed.subdevices, hasLength(4));
+        expect(parsed.subdevices, hasLength(3));
         expect(parsed.subdevices[0], isA<STBDDI3725Config>());
         expect(parsed.subdevices[1], isA<STBDDO3705Config>());
-        expect(parsed.subdevices[2], isA<STBNIP2311Config>());
-        expect(parsed.subdevices[3], isA<STBPDT3100Config>());
+        expect(parsed.subdevices[2], isA<STBPDT3100Config>());
         expect((parsed.subdevices[0] as STBDDI3725Config).nameOrId, 'DI');
         expect((parsed.subdevices[0] as STBDDI3725Config).rawStateKey, 'a');
         expect((parsed.subdevices[1] as STBDDO3705Config).nameOrId, 'DO');
         expect((parsed.subdevices[1] as STBDDO3705Config).rawStateKey, 'b');
-        expect((parsed.subdevices[2] as STBNIP2311Config).nameOrId, 'NIP');
-        expect((parsed.subdevices[3] as STBPDT3100Config).nameOrId, 'PDT');
-        expect((parsed.subdevices[3] as STBPDT3100Config).inputOkKey, 'ok');
+        expect((parsed.subdevices[2] as STBPDT3100Config).nameOrId, 'PDT');
+        expect((parsed.subdevices[2] as STBPDT3100Config).inputOkKey, 'ok');
       },
     );
   });
 
-  group('AdvantysSTBStackConfig JSON back-compat', () {
+  group('STBNIP2311Config composite — JSON back-compat', () {
     test(
-      'minimal legacy snippet without subdevices field loads with empty list',
+      'legacy snippet without subdevices field loads with empty list (forward-compat)',
       () {
-        // Forward-compat: a JSON written before Phase 5 obviously did not
-        // include a `subdevices` field. The codegen must default it to []
-        // rather than throwing. (CX5010 in production never hits this because
-        // the field was always present, but the contract must hold for a
-        // forward-compat-friendly Phase 5 stack.)
+        // A NIP2311 JSON written before the Phase-5 retrofit did NOT include
+        // a `subdevices` field. The codegen must default it to [] rather
+        // than throwing — the round-trip must remain back-compat.
         final legacyJson = <String, dynamic>{
-          'asset_name': 'AdvantysSTBStackConfig',
+          'asset_name': 'STBNIP2311Config',
           'coordinates': {'x': 0.0, 'y': 0.0},
           'size': {'width': 0.5, 'height': 0.3},
-          'subdevices': <Map<String, dynamic>>[],
+          'nameOrId': '1',
         };
-        final cfg = AdvantysSTBStackConfig.fromJson(legacyJson);
+        final cfg = STBNIP2311Config.fromJson(legacyJson);
         expect(cfg.subdevices, isEmpty);
         expect(cfg.coordinates.x, 0.0);
         expect(cfg.size.width, 0.5);
-        expect(cfg.assetName, 'AdvantysSTBStackConfig');
+        expect(cfg.assetName, 'STBNIP2311Config');
       },
     );
   });
 
   // ---------------------------------------------------------------------------
-  // Plan 05-02: configure dialog widget tests (STACK-04).
+  // Retrofit configure dialog tests — STBNIP2311 head with subdevices.
   //
-  // The dialog mirrors `_CXxxxxConfigContent` (lib/page_creator/assets/beckhoff.dart:136-285)
-  // verbatim, substituting:
-  //   - `_availableSubdevices` → `_availableSTBSubdevices`
-  //   - `enableAngle: true` on the Coordinates field (CX5010 parity per RESEARCH Q3)
-  //
-  // The Plan-01 stub `configure()` previously returned a Column with the text
-  // "Subdevice management UI ships in Plan 05-02. Edit JSON directly for now."
-  // — these tests fail against that stub (RED gate) and pass once Plan 05-02
-  // ships the real `_AdvantysSTBStackConfigContent` dialog.
+  // The dialog now mirrors `_CXxxxxConfigContent` verbatim with the NIP-specific
+  // left pane (nameOrId + Size + Coordinates(enableAngle: true)) and the
+  // Add/Reorder/Delete subdevice manager on the right. The dropdown filter
+  // contains the 3 STB I/O modules ONLY (NIP excluded — a NIP head cannot
+  // nest another NIP head).
   // ---------------------------------------------------------------------------
-  group('AdvantysSTBStack configure dialog', () {
+  group('STBNIP2311 head configure dialog', () {
     Future<void> pumpConfigure(
       WidgetTester tester,
-      AdvantysSTBStackConfig cfg,
+      STBNIP2311Config cfg,
     ) async {
-      // 1400×900 surface ensures the 800×500 dialog has full room without
-      // RenderFlex overflows in the dropdown's internal InputDecorator row.
       await tester.binding.setSurfaceSize(const Size(1400, 900));
       addTearDown(() => tester.binding.setSurfaceSize(null));
       await tester.pumpWidget(
@@ -2940,12 +2898,6 @@ void main() {
           ],
           child: MaterialApp(
             home: Scaffold(
-              // Center keeps the 800×500 dialog at a fixed size rather than
-              // letting Scaffold expand it to fill the viewport. Wrap in
-              // Material so the DropdownButtonFormField's InputDecorator has
-              // its expected ancestor (production showDialog wraps in Dialog
-              // → Material; without it the InputDecorator's layout pass
-              // produces different intrinsic constraints).
               body: Center(
                 child: Material(
                   type: MaterialType.transparency,
@@ -2965,20 +2917,17 @@ void main() {
     testWidgets(
       'Test 1: Add subdevice via dropdown — picks STBDDI3725Config',
       (tester) async {
-        final cfg = AdvantysSTBStackConfig();
+        final cfg = STBNIP2311Config();
         await pumpConfigure(tester, cfg);
 
-        // Open the dropdown.
         await tester.tap(find.byType(DropdownButtonFormField<String>));
         await tester.pumpAndSettle();
 
-        // The dropdown menu (overlay) carries exactly the 4 STB display names.
         expect(
           find.text('STBDDI3725 (16-Ch DI)').hitTestable(),
           findsOneWidget,
         );
 
-        // Tap the DDI entry.
         await tester.tap(find.text('STBDDI3725 (16-Ch DI)').hitTestable());
         await tester.pumpAndSettle();
 
@@ -2988,18 +2937,15 @@ void main() {
     );
 
     testWidgets(
-      'Test 2: Dropdown is FILTERED to the 4 STB types only '
-      '(positive assertions only per checker iteration 1 warning #5)',
+      'Test 2: Dropdown is FILTERED to the 3 STB I/O subdevice types only '
+      '(NIP itself is EXCLUDED — head cannot nest another head)',
       (tester) async {
-        final cfg = AdvantysSTBStackConfig();
+        final cfg = STBNIP2311Config();
         await pumpConfigure(tester, cfg);
 
-        // Open the dropdown.
         await tester.tap(find.byType(DropdownButtonFormField<String>));
         await tester.pumpAndSettle();
 
-        // Collect the visible item Texts inside the open menu by scanning all
-        // DropdownMenuItem<String> widgets and pulling their child Text.
         final items = tester
             .widgetList<DropdownMenuItem<String>>(
                 find.byType(DropdownMenuItem<String>))
@@ -3013,14 +2959,10 @@ void main() {
             .where((s) => s.isNotEmpty)
             .toList();
 
-        // hasLength(4) + containsAll([...]) — locked positive form. Do NOT add
-        // a negative `itemTexts.any((t) => t.contains('Button')...)` assertion
-        // (checker iteration 1 warning #5 — brittle and redundant).
-        expect(itemTexts, hasLength(4));
+        expect(itemTexts, hasLength(3));
         expect(
           itemTexts,
           containsAll(<String>[
-            'STBNIP2311 (Ethernet Head)',
             'STBPDT3100 (24 VDC PDM)',
             'STBDDI3725 (16-Ch DI)',
             'STBDDO3705 (16-Ch DO)',
@@ -3032,8 +2974,7 @@ void main() {
     testWidgets(
       'Test 3: Reorder via ReorderableListView swaps adjacent subdevices',
       (tester) async {
-        // Build a stack with 3 subdevices in order [DI, DO, PDT].
-        final cfg = AdvantysSTBStackConfig()
+        final cfg = STBNIP2311Config()
           ..subdevices = <Asset>[
             STBDDI3725Config(nameOrId: 'A'),
             STBDDO3705Config(nameOrId: 'B'),
@@ -3041,15 +2982,8 @@ void main() {
           ];
         await pumpConfigure(tester, cfg);
 
-        // ReorderableListView drag-and-drop is finicky in widget tests
-        // (RESEARCH §Pitfall 6); invoke the onReorder callback directly via
-        // the widget reference. Testing the ordering invariant matters more
-        // than the drag gesture mechanic.
         final reorderable = tester
             .widget<ReorderableListView>(find.byType(ReorderableListView));
-        // Swap items 0 and 1: oldIndex=0, newIndex=2 (Flutter API: newIndex
-        // is the insertion slot *after* removal, so moving 0 → "after 1"
-        // means newIndex=2).
         reorderable.onReorder(0, 2);
         await tester.pumpAndSettle();
 
@@ -3066,67 +3000,43 @@ void main() {
     testWidgets(
       'Test 4: Delete IconButton removes the subdevice with NO confirmation',
       (tester) async {
-        // No confirmation dialog — CX5010 parity per CONTEXT.md line 38
-        // verbatim-mirror commitment, overriding the §Configure Dialog
-        // "with confirmation" phrasing. See checker iteration 1 warning #2;
-        // SUMMARY must list this as a user-decision item.
-        final cfg = AdvantysSTBStackConfig()
+        final cfg = STBNIP2311Config()
           ..subdevices = <Asset>[
             STBDDI3725Config(nameOrId: 'first'),
             STBDDO3705Config(nameOrId: 'second'),
           ];
         await pumpConfigure(tester, cfg);
 
-        // Sanity: no AlertDialog up front (configure() returns inline body, not
-        // an AlertDialog wrapper).
         expect(find.byType(AlertDialog), findsNothing);
 
-        // Tap the first delete IconButton.
         final deleteButtons = find.widgetWithIcon(IconButton, Icons.delete);
         expect(deleteButtons, findsNWidgets(2));
         await tester.tap(deleteButtons.first);
         await tester.pumpAndSettle();
 
-        // List shrank to one; the second entry survived.
         expect(cfg.subdevices.length, 1);
         expect(cfg.subdevices[0], isA<STBDDO3705Config>());
         expect((cfg.subdevices[0] as STBDDO3705Config).nameOrId, 'second');
 
-        // NO confirmation AlertDialog appeared — CX5010 parity.
         expect(find.byType(AlertDialog), findsNothing);
       },
     );
 
     testWidgets(
-      'Test 5: No nameOrId / Name field on the stack itself — CX5010 parity',
+      'Test 5: Name or ID field IS present on the head — NIP retains its own '
+      'nameOrId field even though CX5010 has none (NIP-specific deviation)',
       (tester) async {
-        // No nameOrId field on the stack — CX5010 parity. The four leaf
-        // modules carry their own. Deviates from CONTEXT §Specifics
-        // implication; verbatim-mirror commitment overrides. See checker
-        // iteration 1 warning #3; SUMMARY must list this as a user-decision
-        // item.
-        final cfg = AdvantysSTBStackConfig();
+        final cfg = STBNIP2311Config();
         await pumpConfigure(tester, cfg);
-
-        // Left pane MUST only contain SizeField + CoordinatesField — no
-        // stack-level Name / nameOrId TextField/TextFormField inputs.
-        expect(find.widgetWithText(TextField, 'Name'), findsNothing);
-        expect(find.widgetWithText(TextField, 'Name or ID'), findsNothing);
-        expect(find.widgetWithText(TextFormField, 'Name'), findsNothing);
-        expect(find.widgetWithText(TextFormField, 'Name or ID'), findsNothing);
-        expect(find.widgetWithText(TextFormField, 'nameOrId'), findsNothing);
+        expect(find.widgetWithText(TextFormField, 'Name or ID'), findsOneWidget);
       },
     );
 
     testWidgets(
-      'Test 6: CoordinatesField has enableAngle=true (CX5010 parity per RESEARCH Q3)',
+      'Test 6: CoordinatesField has enableAngle=true (CX5010 parity)',
       (tester) async {
-        final cfg = AdvantysSTBStackConfig();
+        final cfg = STBNIP2311Config();
         await pumpConfigure(tester, cfg);
-
-        // LOCKED widget-access mechanic per checker iteration 1 warning #4 —
-        // do NOT use find.byWidgetPredicate or chain from tester.firstWidget.
-        // (Single-line form preserves grep verification in plan acceptance.)
         // ignore: lines_longer_than_80_chars
         expect(tester.widget<CoordinatesField>(find.byType(CoordinatesField)).enableAngle, isTrue);
       },
@@ -3134,19 +3044,15 @@ void main() {
   });
 
   // ---------------------------------------------------------------------------
-  // Plan 05-02: QUAL-07 full-stack integration test.
-  //
-  // Pumps the canonical 4-module stack (1× NIP + 1× PDT + 1× DDI + 1× DDO) and
-  // verifies: clean mount, all four leaf widgets present, taps on DDI+DDO
-  // bodies open their detail dialogs, taps on NIP+PDT areas do NOT throw and
-  // do NOT open dialogs (per RESEARCH finding 4 — NIP and PDT have no
-  // GestureDetector by design, they are decorative).
+  // Retrofit full-stack integration — STBNIP2311 head with 1× PDT + 1× DDI +
+  // 1× DDO subdevices. Verifies: clean mount, all four leaf widgets present
+  // (NIP head + 3 subdevices), taps on DDI+DDO bodies open their detail
+  // dialogs, taps on the NIP head/PDT do NOT open dialogs.
   // ---------------------------------------------------------------------------
-  group('AdvantysSTBStack full-stack integration (QUAL-07)', () {
-    AdvantysSTBStackConfig buildCanonicalStack() {
-      return AdvantysSTBStackConfig()
+  group('STBNIP2311 head full-stack integration', () {
+    STBNIP2311Config buildCanonicalHead() {
+      return STBNIP2311Config(nameOrId: 'NIP-canon')
         ..subdevices = <Asset>[
-          STBNIP2311Config.preview(),
           STBPDT3100Config.preview(),
           STBDDI3725Config(nameOrId: 'DI', rawStateKey: 'plc.di.raw'),
           STBDDO3705Config(nameOrId: 'DO', rawStateKey: 'plc.do.raw'),
@@ -3154,27 +3060,22 @@ void main() {
         ..size = const RelativeSize(width: 0.8, height: 0.3);
     }
 
-    Future<void> pumpStack(
+    Future<void> pumpHead(
       WidgetTester tester,
-      AdvantysSTBStackConfig stack,
+      STBNIP2311Config head,
     ) async {
       await tester.binding.setSurfaceSize(const Size(1600, 600));
       addTearDown(() => tester.binding.setSurfaceSize(null));
       await tester.pumpWidget(
         ProviderScope(
           overrides: [
-            // _EmptyStubStateMan returns empty streams for every subscribe.
-            // The DDI/DDO subdevices in the canonical fixture have non-null
-            // rawStateKeys, so an empty `_FakeStateMan` would NoSuchMethod
-            // when the StreamBuilder fires. Empty stream → stale shell render
-            // (which is still tappable; that's the QUAL-07 requirement).
             stateManProvider.overrideWith((ref) async => _EmptyStubStateMan()),
           ],
           child: MaterialApp(
             home: Scaffold(
               body: Center(
                 child: Builder(
-                  builder: (ctx) => stack.build(ctx),
+                  builder: (ctx) => head.build(ctx),
                 ),
               ),
             ),
@@ -3186,10 +3087,10 @@ void main() {
     }
 
     testWidgets(
-      'Test 1: 1× NIP + 1× PDT + 1× DDI + 1× DDO renders cleanly',
+      'Test 1: NIP + PDT + DDI + DDO renders cleanly',
       (tester) async {
-        final stack = buildCanonicalStack();
-        await pumpStack(tester, stack);
+        final head = buildCanonicalHead();
+        await pumpHead(tester, head);
 
         expect(tester.takeException(), isNull);
         expect(find.byType(STBNIP2311Widget), findsOneWidget);
@@ -3200,9 +3101,9 @@ void main() {
     );
 
     test(
-      'Test 2: stack.allKeys returns the deduplicated union of subdevice keys',
+      'Test 2: head.allKeys returns the deduplicated union of subdevice keys',
       () {
-        final stack = AdvantysSTBStackConfig()
+        final head = STBNIP2311Config()
           ..subdevices = <Asset>[
             STBDDI3725Config(
               rawStateKey: 'di.raw',
@@ -3210,11 +3111,10 @@ void main() {
             ),
             STBDDO3705Config(rawStateKey: 'do.raw'),
             STBPDT3100Config(inputOkKey: 'pdt.ok'),
-            STBNIP2311Config(),
           ];
 
         expect(
-          stack.allKeys,
+          head.allKeys,
           containsAll(<String>[
             'di.raw',
             'di.force',
@@ -3222,16 +3122,16 @@ void main() {
             'pdt.ok',
           ]),
         );
-        // NIP contributes nothing (decorative); no duplicates.
-        expect(stack.allKeys, hasLength(4));
+        // NIP head contributes nothing (decorative); no duplicates.
+        expect(head.allKeys, hasLength(4));
       },
     );
 
     testWidgets(
       'Test 3: tap on DDI body opens its detail AlertDialog',
       (tester) async {
-        final stack = buildCanonicalStack();
-        await pumpStack(tester, stack);
+        final head = buildCanonicalHead();
+        await pumpHead(tester, head);
 
         expect(find.byType(AlertDialog), findsNothing);
         await tester.tap(find.byType(STBDDI3725Widget));
@@ -3239,7 +3139,6 @@ void main() {
 
         expect(find.byType(AlertDialog), findsOneWidget);
 
-        // Clean tester state — close the dialog.
         await tester.tap(find.text('Close'));
         await tester.pumpAndSettle();
         expect(find.byType(AlertDialog), findsNothing);
@@ -3249,8 +3148,8 @@ void main() {
     testWidgets(
       'Test 4: tap on DDO body opens its detail AlertDialog',
       (tester) async {
-        final stack = buildCanonicalStack();
-        await pumpStack(tester, stack);
+        final head = buildCanonicalHead();
+        await pumpHead(tester, head);
 
         expect(find.byType(AlertDialog), findsNothing);
         await tester.tap(find.byType(STBDDO3705Widget));
@@ -3265,14 +3164,12 @@ void main() {
     );
 
     testWidgets(
-      'Test 5: tap on NIP body does NOT throw and does NOT open a dialog '
-      '(NIP is decorative — no GestureDetector per RESEARCH finding 4)',
+      'Test 5: tap on NIP head body does NOT throw and does NOT open a dialog '
+      '(NIP head is decorative — no GestureDetector)',
       (tester) async {
-        final stack = buildCanonicalStack();
-        await pumpStack(tester, stack);
+        final head = buildCanonicalHead();
+        await pumpHead(tester, head);
 
-        // Tap with warnIfMissed: false because NIP has no GestureDetector;
-        // the framework would otherwise warn that no hit was registered.
         await tester.tap(find.byType(STBNIP2311Widget), warnIfMissed: false);
         await tester.pumpAndSettle();
 
@@ -3283,10 +3180,10 @@ void main() {
 
     testWidgets(
       'Test 6: tap on PDT body does NOT throw and does NOT open a dialog '
-      '(PDT is decorative — no GestureDetector per RESEARCH finding 4)',
+      '(PDT is decorative — no GestureDetector)',
       (tester) async {
-        final stack = buildCanonicalStack();
-        await pumpStack(tester, stack);
+        final head = buildCanonicalHead();
+        await pumpHead(tester, head);
 
         await tester.tap(find.byType(STBPDT3100Widget), warnIfMissed: false);
         await tester.pumpAndSettle();
@@ -3298,25 +3195,21 @@ void main() {
   });
 
   // ---------------------------------------------------------------------------
-  // Plan 05-02: full-stack goldens (QUAL-07 visual gate).
-  //
-  // Two PNGs: light + dark themes, canonical NIP+PDT+DDI+DDO layout. macOS-gated
-  // via `skip: !Platform.isMacOS` (no `tags: ['golden']` — Phase 1-4 convention).
-  // Generate locally with `--update-goldens` on macOS dev hardware.
+  // Retrofit goldens — STBNIP2311 head + 3 subdevices (PDT + DDI + DDO).
+  // Two PNGs (light + dark). macOS-gated.
   // ---------------------------------------------------------------------------
   group(
-    'AdvantysSTBStack goldens',
+    'STBNIP2311 head with modules goldens',
     skip: !Platform.isMacOS ? 'Golden tests only run on macOS' : null,
     () {
-      const goldenKey = Key('stb_stack_full_golden');
+      const goldenKey = Key('stb_nip_with_modules_golden');
 
-      Future<void> pumpStack(
+      Future<void> pumpHead(
         WidgetTester tester, {
         required Brightness theme,
       }) async {
-        final stack = AdvantysSTBStackConfig()
+        final head = STBNIP2311Config()
           ..subdevices = <Asset>[
-            STBNIP2311Config.preview(),
             STBPDT3100Config.preview(),
             STBDDI3725Config.preview(),
             STBDDO3705Config.preview(),
@@ -3338,7 +3231,7 @@ void main() {
                       width: 800,
                       height: 200,
                       child: Builder(
-                        builder: (ctx) => stack.build(ctx),
+                        builder: (ctx) => head.build(ctx),
                       ),
                     ),
                   ),
@@ -3347,24 +3240,22 @@ void main() {
             ),
           ),
         );
-        // NEVER pumpAndSettle() — Phase 1 goldens pitfall (non-deterministic
-        // animation frame). Use explicit duration only.
         await tester.pump(const Duration(milliseconds: 100));
       }
 
-      testWidgets('stack_full_light.png', (tester) async {
-        await pumpStack(tester, theme: Brightness.light);
+      testWidgets('nip_with_modules_light.png', (tester) async {
+        await pumpHead(tester, theme: Brightness.light);
         await expectLater(
           find.byKey(goldenKey),
-          matchesGoldenFile('goldens/advantys_stb/stack_full_light.png'),
+          matchesGoldenFile('goldens/advantys_stb/nip_with_modules_light.png'),
         );
       });
 
-      testWidgets('stack_full_dark.png', (tester) async {
-        await pumpStack(tester, theme: Brightness.dark);
+      testWidgets('nip_with_modules_dark.png', (tester) async {
+        await pumpHead(tester, theme: Brightness.dark);
         await expectLater(
           find.byKey(goldenKey),
-          matchesGoldenFile('goldens/advantys_stb/stack_full_dark.png'),
+          matchesGoldenFile('goldens/advantys_stb/nip_with_modules_dark.png'),
         );
       });
     },

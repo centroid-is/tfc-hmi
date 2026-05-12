@@ -4,7 +4,8 @@
 // Phase 2: `STBDDO3705Config` — 16-channel digital-output module.
 // Phase 3: `STBNIP2311Config` — Modbus network interface module.
 // Phase 4: `STBPDT3100Config` — 24V DC power distribution module.
-// Phase 5: `AdvantysSTBStackConfig` — composite stack asset.
+// Phase 5: composite parent moved ONTO `STBNIP2311Config` (retrofit
+//          2026-05-12 — head IS the composite; mirrors CX5010/EK1100).
 //
 // Conventions locked by Plan 01:
 // - Bit-to-channel mapping comes from `kSTBChannelBitOrder` in
@@ -877,30 +878,80 @@ void _showDDO3705DetailDialog(
 }
 
 // ===========================================================================
-// STBNIP2311Config — Schneider Advantys STB Ethernet network interface.
+// STBNIP2311Config — Schneider Advantys STB Ethernet head (composite parent).
 // ===========================================================================
 //
-// Phase 3 deliverable: a DECORATIVE Ethernet head adapter. The body painter
-// renders the five front-panel status LEDs (RUN / PWR / ERR / ST / TEST) in
-// a fixed "normal" state (RUN+PWR green, ERR+ST+TEST dim grey) and the
-// dual RJ45 ports via cross-vendor reuse of `EthernetPortPainter` from
-// `lib/painter/beckhoff/ek1100.dart`.
+// Phase 3 introduced the NIP2311 as a DECORATIVE Ethernet head adapter
+// (firmware-driven status LEDs + dual RJ45 ports — no PLC state keys).
 //
-// LOCKED in 03-CONTEXT.md §Status LEDs — Decorative-Only:
-//   - NO per-LED PLC keys (firmware-driven on real hardware; NOT addressable
-//     as Modbus coils). The HMI asset is the visual identity anchor, not a
-//     live status surface.
-//   - The configure dialog exposes ONLY `nameOrId` + standard
-//     `Coordinates` + `Size`. No `KeyField` widgets.
-//   - Single render state — no stale/disconnected variant either.
+// Phase 5 RETROFIT (2026-05-12): the NIP is the physical parent of the
+// slotted I/O modules in a real Advantys STB rack. To mirror the Beckhoff
+// precedent (`BeckhoffCX5010Config` / `BeckhoffEK1100Config` — both carry
+// `List<Asset> subdevices` directly on the head class), the NIP itself now
+// owns the composite-parent behavior. The standalone `AdvantysSTBStackConfig`
+// wrapper was deleted; everything moved here.
 //
-// Future deferred work (NIP-FUT-01, NIP-FUT-02) would add a synthetic
-// comm-OK key + per-port link/activity LEDs; not in v2.0.
+// What stays from Phase 3:
+//   - The decorative status LEDs + RJ45 visual (no NIP-level state keys).
+//   - `nameOrId` field. No KeyField widgets in the head editor pane.
+//   - The body widget `STBNIP2311Widget` is the visual identity anchor.
+//
+// What moved in from Phase 5 retrofit:
+//   - `List<Asset> subdevices` with `@AssetListConverter()`.
+//   - `allKeys` override flat-mapping subdevice keys.
+//   - `_kAllowedSTBSubdeviceTypeNames` whitelist (PDT/DDI/DDO — NIP itself
+//     is EXCLUDED so a NIP cannot nest another NIP).
+//   - `_availableSTBSubdevices` Map (3 entries — NIP entry removed).
+//   - `fromJson` factory wraps the generated `_$STBNIP2311ConfigFromJson`
+//     with a `retainWhere` sanitiser that drops non-STB child types
+//     (permissive render fallback, restrictive add via dropdown). Silent
+//     filter + `Logger().w` log, matching `AssetRegistry.parse`'s convention.
+//   - `_STBNIP2311ConfigContent` dialog (renamed from
+//     `_AdvantysSTBStackConfigContent`) with the Add-dropdown + reorder +
+//     delete trifecta on the right pane; the existing nameOrId field plus
+//     Size + Coordinates(enableAngle: true) on the left.
 
-/// Schneider Advantys STB NIP2311 — Ethernet Modbus/TCP network interface.
+/// Allowed STB subdevice runtimeType strings. The sanitiser drops anything
+/// whose `runtimeType.toString()` is NOT in this set. The NIP itself is
+/// intentionally EXCLUDED — a NIP head cannot nest another NIP head.
 ///
-/// Decorative-only: no state keys. The configure dialog exposes only the
-/// `nameOrId` text field plus standard `Coordinates`/`Size` widgets.
+/// **Pitfall guard:** the set entries must match the exact string returned by
+/// `runtimeType.toString()` on each leaf config (no package prefix, no
+/// `Config` truncation). A unit test in
+/// `test/page_creator/assets/advantys_stb_test.dart` asserts each leaf's
+/// runtimeType against these literals.
+const Set<String> _kAllowedSTBSubdeviceTypeNames = <String>{
+  'STBPDT3100Config',
+  'STBDDI3725Config',
+  'STBDDO3705Config',
+};
+
+/// Map of human-readable display names → leaf preview-factories. The Add
+/// dropdown in `_STBNIP2311ConfigContent` iterates these keys; the
+/// THREE-entry whitelist is the FIRST gate against unsupported child types
+/// (the post-`fromJson` sanitiser is the SECOND gate — defence-in-depth).
+///
+/// Mirrors `_availableSubdevices` from `beckhoff.dart`. Keys MUST match each
+/// leaf's `displayName` getter; widget tests in
+/// `test/page_creator/assets/advantys_stb_test.dart` assert the exact set.
+/// NIP itself is excluded so the head cannot nest another head.
+const Map<String, Asset Function()> _availableSTBSubdevices =
+    <String, Asset Function()>{
+  'STBPDT3100 (24 VDC PDM)': STBPDT3100Config.preview,
+  'STBDDI3725 (16-Ch DI)': STBDDI3725Config.preview,
+  'STBDDO3705 (16-Ch DO)': STBDDO3705Config.preview,
+};
+
+/// Schneider Advantys STB NIP2311 — Ethernet Modbus/TCP network interface
+/// AND composite head for a stack of STB I/O modules (PDT / DDI / DDO).
+///
+/// The head itself is decorative (no NIP-level state keys), but it owns a
+/// polymorphic [subdevices] list filtered to the three STB I/O module types
+/// at load time via the post-`fromJson` sanitiser. `allKeys` flat-maps each
+/// subdevice's own `allKeys` so alarms / collectors discover the full key set
+/// without separate registration. The build path is type-agnostic (permissive
+/// render): if a foreign type somehow survives in [subdevices], it renders
+/// as-is and does not crash the page.
 @JsonSerializable()
 class STBNIP2311Config extends BaseAsset {
   @override
@@ -911,54 +962,108 @@ class STBNIP2311Config extends BaseAsset {
   @JsonKey(defaultValue: '1')
   String nameOrId;
 
+  @AssetListConverter()
+  List<Asset> subdevices = <Asset>[];
+
   STBNIP2311Config({
     this.nameOrId = '1',
-  });
+    List<Asset>? subdevices,
+  }) {
+    if (subdevices != null) this.subdevices = subdevices;
+  }
 
   STBNIP2311Config.preview()
       : nameOrId = '1',
         super();
 
-  factory STBNIP2311Config.fromJson(Map<String, dynamic> json) =>
-      _$STBNIP2311ConfigFromJson(json);
+  /// Custom factory that wraps the generated `_$STBNIP2311ConfigFromJson`
+  /// with a post-deserialization sanitiser. Subdevices whose runtimeType is
+  /// NOT in [_kAllowedSTBSubdeviceTypeNames] are dropped silently and the
+  /// count of dropped entries is logged via `Logger().w(...)` (mirrors the
+  /// `AssetRegistry.parse` silent-log-and-skip convention).
+  factory STBNIP2311Config.fromJson(Map<String, dynamic> json) {
+    final cfg = _$STBNIP2311ConfigFromJson(json);
+    final before = cfg.subdevices.length;
+    cfg.subdevices.retainWhere(
+      (s) => _kAllowedSTBSubdeviceTypeNames.contains(s.runtimeType.toString()),
+    );
+    final dropped = before - cfg.subdevices.length;
+    if (dropped > 0) {
+      Logger().w(
+        'STBNIP2311: dropped $dropped non-STB subdevice(s) on fromJson '
+        '(allowed types: $_kAllowedSTBSubdeviceTypeNames)',
+      );
+    }
+    return cfg;
+  }
 
   @override
   Map<String, dynamic> toJson() => _$STBNIP2311ConfigToJson(this);
 
+  /// Flat-maps each subdevice's `allKeys` into a deduplicated list with empty
+  /// strings filtered out. Recurses naturally — if a subdevice is itself a
+  /// composite (future), its own `allKeys` walks ITS subdevices. The NIP head
+  /// itself contributes no keys (decorative).
+  @override
+  List<String> get allKeys {
+    return subdevices
+        .expand((s) => s is BaseAsset ? s.allKeys : <String>[])
+        .where((k) => k.isNotEmpty)
+        .toSet()
+        .toList();
+  }
+
+  /// Native painter height for the subdevice height-normalization wrapper.
+  /// Unitless reference — the outer `FittedBox` scales the whole row to the
+  /// asset's `targetSize`. Mirrors `BeckhoffCX5010Config._cxNativeSize.height`
+  /// (1000) for diff parity.
+  static const double _stackNativeHeight = 1000;
+
   @override
   Widget build(BuildContext context) {
-    return FittedBox(
-      fit: BoxFit.contain,
-      child: _STBNIP2311(config: this),
+    // When the NIP is standalone (no subdevices), preserve the Phase-3
+    // visual contract: a plain decorative head with no Row wrapper.
+    if (subdevices.isEmpty) {
+      return FittedBox(
+        fit: BoxFit.contain,
+        child: _STBNIP2311(config: this),
+      );
+    }
+    // Composite mode: NIP head on the left, then the subdevices in slot order.
+    final targetSize = size.toSize(MediaQuery.of(context).size);
+    return SizedBox.fromSize(
+      size: targetSize,
+      child: FittedBox(
+        fit: BoxFit.contain,
+        alignment: Alignment.center,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: <Widget>[
+            _STBSubdeviceNormalized(
+              targetHeight: _stackNativeHeight,
+              child: _STBNIP2311(config: this),
+            ),
+            for (final sub in subdevices)
+              _STBSubdeviceNormalized(
+                targetHeight: _stackNativeHeight,
+                child: sub.build(context),
+              ),
+          ],
+        ),
+      ),
     );
   }
 
+  /// Configure dialog — mirrors `BeckhoffCX5010Config.configure()` shape with
+  /// the NIP-specific left pane (nameOrId + Size + Coordinates(enableAngle:
+  /// true)) and the Add/Reorder/Delete subdevice manager on the right pane.
   @override
   Widget configure(BuildContext context) {
-    final media = MediaQuery.of(context).size;
-    final maxWidth = media.width * 0.9;
-    final maxHeight = media.height * 0.8;
-
-    return Center(
-      child: ConstrainedBox(
-        constraints: BoxConstraints(
-          maxWidth: maxWidth,
-          maxHeight: maxHeight,
-          minWidth: 320,
-          minHeight: 200,
-        ),
-        child: Material(
-          borderRadius: BorderRadius.circular(24),
-          color: DialogTheme.of(context).backgroundColor ??
-              Theme.of(context).colorScheme.surface,
-          child: Padding(
-            padding: const EdgeInsets.all(20),
-            child: SingleChildScrollView(
-              child: _STBNIP2311ConfigEditor(config: this),
-            ),
-          ),
-        ),
-      ),
+    return SizedBox(
+      width: 800,
+      height: 500,
+      child: _STBNIP2311ConfigContent(config: this),
     );
   }
 }
@@ -969,6 +1074,8 @@ class STBNIP2311Config extends BaseAsset {
 // Decorative-only: the underlying `STBNIP2311Widget` already renders the
 // fixed-state status LEDs and dual RJ45 ports. There is no StateMan
 // subscription, no stream, no tap handler — taps fall through harmlessly.
+// This is the NIP HEAD only; the composite Row wrapper lives on the
+// `STBNIP2311Config.build()` path.
 // ---------------------------------------------------------------------------
 
 class _STBNIP2311 extends StatelessWidget {
@@ -982,47 +1089,213 @@ class _STBNIP2311 extends StatelessWidget {
 }
 
 // ---------------------------------------------------------------------------
-// Configure dialog body — _STBNIP2311ConfigEditor
+// Subdevice normalizer — `_STBSubdeviceNormalized`
 //
-// Surfaces ONLY: Size + Coordinates + nameOrId. No KeyField widgets — the
-// `editor surface` test in advantys_stb_test.dart is the compile-time guard
-// against accidental state-key growth.
+// Wraps a subdevice widget and normalizes its visual height so it lines up
+// with sibling subdevices. The outer `FittedBox` (in `build()`) then scales
+// the whole row to the head's target size. Drop-in clone of
+// `_SubdeviceNormalized` from `lib/page_creator/assets/beckhoff.dart`.
 // ---------------------------------------------------------------------------
 
-class _STBNIP2311ConfigEditor extends StatefulWidget {
-  final STBNIP2311Config config;
-  const _STBNIP2311ConfigEditor({required this.config});
+class _STBSubdeviceNormalized extends StatelessWidget {
+  final double targetHeight;
+  final Widget child;
+  const _STBSubdeviceNormalized({
+    required this.targetHeight,
+    required this.child,
+  });
 
-  @override
-  State<_STBNIP2311ConfigEditor> createState() =>
-      _STBNIP2311ConfigEditorState();
-}
-
-class _STBNIP2311ConfigEditorState extends State<_STBNIP2311ConfigEditor> {
   @override
   Widget build(BuildContext context) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.start,
+    return SizedBox(
+      height: targetHeight,
+      child: FittedBox(
+        fit: BoxFit.fitHeight,
+        alignment: Alignment.centerLeft,
+        child: child,
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Configure dialog body — _STBNIP2311ConfigContent
+//
+// VERBATIM clone of `_CXxxxxConfigContent` / `_CXxxxxConfigContentState` from
+// `lib/page_creator/assets/beckhoff.dart` with these substitutions only:
+//   - config field type     `BeckhoffCX5010Config` → `STBNIP2311Config`
+//   - title text            `'CX5010'`             → `'STBNIP2311'`
+//   - subdevice map ref     `_availableSubdevices` → `_availableSTBSubdevices`
+//   - NIP head also carries a `nameOrId` field (the Beckhoff CX5010 does not)
+//
+// Everything else is line-by-line identical, INCLUDING:
+//   - `enableAngle: true` on the CoordinatesField (CX5010 parity)
+//   - NO delete-confirmation dialog (CX5010 parity)
+//   - `ObjectKey(sub)` on the ListTile (Pitfall 6 — not ValueKey)
+//   - Plain `StatefulWidget` / `State` (NOT ConsumerStatefulWidget — the
+//     composite head does not subscribe to anything; only its leaf
+//     subdevices do)
+// ---------------------------------------------------------------------------
+
+class _STBNIP2311ConfigContent extends StatefulWidget {
+  final STBNIP2311Config config;
+
+  const _STBNIP2311ConfigContent({required this.config});
+
+  @override
+  State<_STBNIP2311ConfigContent> createState() =>
+      _STBNIP2311ConfigContentState();
+}
+
+class _STBNIP2311ConfigContentState extends State<_STBNIP2311ConfigContent> {
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        SizeField(
-          initialValue: widget.config.size,
-          onChanged: (size) => widget.config.size = size,
-        ),
-        const SizedBox(height: 16),
-        CoordinatesField(
-          initialValue: widget.config.coordinates,
-          onChanged: (coordinates) => widget.config.coordinates = coordinates,
-          enableAngle: false,
-        ),
-        const SizedBox(height: 16),
-        TextFormField(
-          decoration: const InputDecoration(
-            labelText: 'Name or ID',
-            border: OutlineInputBorder(),
+        // LEFT: fields (independent scroll)
+        Expanded(
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'STBNIP2311',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+                const SizedBox(height: 12),
+                SizeField(
+                  initialValue: widget.config.size,
+                  onChanged: (size) => widget.config.size = size,
+                ),
+                const SizedBox(height: 16),
+                CoordinatesField(
+                  initialValue: widget.config.coordinates,
+                  onChanged: (c) => widget.config.coordinates = c,
+                  enableAngle: true,
+                ),
+                const SizedBox(height: 16),
+                TextFormField(
+                  decoration: const InputDecoration(
+                    labelText: 'Name or ID',
+                    border: OutlineInputBorder(),
+                  ),
+                  initialValue: widget.config.nameOrId,
+                  onChanged: (value) => widget.config.nameOrId = value,
+                ),
+              ],
+            ),
           ),
-          initialValue: widget.config.nameOrId,
-          onChanged: (value) => widget.config.nameOrId = value,
+        ),
+
+        const VerticalDivider(width: 1),
+
+        // RIGHT: subdevice manager
+        Expanded(
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Text('Subdevices',
+                        style: Theme.of(context).textTheme.titleMedium),
+                    const Spacer(),
+                    FilledButton.icon(
+                      onPressed: () => Navigator.of(context).maybePop(),
+                      icon: const Icon(Icons.check),
+                      label: const Text('Done'),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                DropdownButtonFormField<String>(
+                  isExpanded: true,
+                  decoration: const InputDecoration(
+                    border: OutlineInputBorder(),
+                    labelText: 'Add Subdevice',
+                  ),
+                  initialValue: null,
+                  hint: const Text('Select a subdevice to add'),
+                  items: _availableSTBSubdevices.keys
+                      .map((k) => DropdownMenuItem(value: k, child: Text(k)))
+                      .toList(),
+                  onChanged: (v) {
+                    if (v == null) return;
+                    setState(() {
+                      final mk = _availableSTBSubdevices[v]!;
+                      widget.config.subdevices.add(mk());
+                    });
+                  },
+                ),
+                const SizedBox(height: 16),
+                if (widget.config.subdevices.isEmpty)
+                  Expanded(
+                    child: Center(
+                      child: Text(
+                        'No subdevices yet',
+                        style: Theme.of(context).textTheme.bodyMedium,
+                      ),
+                    ),
+                  )
+                else ...[
+                  Row(
+                    children: [
+                      Text('Current Subdevices',
+                          style: Theme.of(context).textTheme.titleSmall),
+                      const SizedBox(width: 8),
+                      Chip(label: Text('${widget.config.subdevices.length}')),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+
+                  // Take remaining height of the dialog
+                  Expanded(
+                    child: Card(
+                      clipBehavior: Clip.antiAlias,
+                      child: ReorderableListView.builder(
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        buildDefaultDragHandles: false,
+                        itemCount: widget.config.subdevices.length,
+                        onReorder: (oldIndex, newIndex) {
+                          setState(() {
+                            if (newIndex > oldIndex) newIndex -= 1;
+                            final item =
+                                widget.config.subdevices.removeAt(oldIndex);
+                            widget.config.subdevices.insert(newIndex, item);
+                          });
+                        },
+                        itemBuilder: (context, index) {
+                          final sub = widget.config.subdevices[index];
+                          return ListTile(
+                            key: ObjectKey(sub),
+                            leading: ReorderableDragStartListener(
+                              index: index,
+                              child: const Icon(Icons.drag_indicator),
+                            ),
+                            title: Text(sub.runtimeType.toString()),
+                            onTap: () => showDialog(
+                              context: context,
+                              builder: (_) => sub.configure(context),
+                            ),
+                            trailing: IconButton(
+                              icon: const Icon(Icons.delete),
+                              onPressed: () {
+                                setState(() =>
+                                    widget.config.subdevices.removeAt(index));
+                              },
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
         ),
       ],
     );
@@ -1244,369 +1517,6 @@ class _STBPDT3100ConfigEditorState extends State<_STBPDT3100ConfigEditor> {
           initialValue: widget.config.inputOkKey,
           onChanged: (value) => widget.config.inputOkKey = value,
           label: 'Input OK Key',
-        ),
-      ],
-    );
-  }
-}
-
-// ---------------------------------------------------------------------------
-// AdvantysSTBStackConfig — composite parent (Phase 5).
-//
-// Mirrors `BeckhoffCX5010Config` (lib/page_creator/assets/beckhoff.dart:30-110)
-// verbatim with the four-type STB whitelist substituted, plus a NET-NEW
-// post-`fromJson` sanitiser that drops any non-STB child types. Permissive
-// render, restrictive load — see CONTEXT.md §Whitelist Filter and
-// RESEARCH.md finding 2.
-//
-// The configure dialog is intentionally stubbed in this plan; Plan 05-02 will
-// replace the stub with the filtered Add-dropdown + ReorderableListView + delete
-// trifecta.
-// ---------------------------------------------------------------------------
-
-/// Allowed STB child runtimeType strings. The sanitiser drops anything whose
-/// `runtimeType.toString()` is NOT in this set.
-///
-/// **Pitfall 2 guard:** the set entries must match the exact string returned by
-/// `runtimeType.toString()` on each leaf config (no package prefix, no `Config`
-/// truncation). A unit test in
-/// `test/page_creator/assets/advantys_stb_test.dart` asserts each leaf's
-/// runtimeType against these literals; a typo here fails that test loudly.
-const Set<String> _kAllowedSTBChildTypeNames = <String>{
-  'STBNIP2311Config',
-  'STBPDT3100Config',
-  'STBDDI3725Config',
-  'STBDDO3705Config',
-};
-
-/// Map of human-readable display names → leaf preview-factories. The Add
-/// dropdown in `_AdvantysSTBStackConfigContent` iterates these keys; the
-/// FOUR-entry whitelist is the FIRST gate against unsupported child types
-/// (the post-`fromJson` sanitiser is the SECOND gate — defence-in-depth).
-///
-/// Mirrors `_availableSubdevices` from `beckhoff.dart:21-28`. Keys MUST match
-/// each leaf's `displayName` getter; widget tests in
-/// `test/page_creator/assets/advantys_stb_test.dart` assert the exact set.
-const Map<String, Asset Function()> _availableSTBSubdevices =
-    <String, Asset Function()>{
-  'STBNIP2311 (Ethernet Head)': STBNIP2311Config.preview,
-  'STBPDT3100 (24 VDC PDM)': STBPDT3100Config.preview,
-  'STBDDI3725 (16-Ch DI)': STBDDI3725Config.preview,
-  'STBDDO3705 (16-Ch DO)': STBDDO3705Config.preview,
-};
-
-/// Schneider Advantys STB stack — composite parent that groups the four STB
-/// module configs into a horizontal row mirroring the physical control panel.
-///
-/// Holds a polymorphic [subdevices] list filtered to the four STB module types
-/// at load time via the post-`fromJson` sanitiser. `allKeys` flat-maps each
-/// subdevice's own `allKeys` so alarms / collectors discover the full key set
-/// without separate registration. The build path is type-agnostic (permissive
-/// render): if a foreign type somehow survives in [subdevices], it renders
-/// as-is and does not crash the page.
-@JsonSerializable()
-class AdvantysSTBStackConfig extends BaseAsset {
-  @override
-  String get displayName => 'Advantys STB Stack';
-  @override
-  String get category => 'Advantys STB';
-
-  @AssetListConverter()
-  List<Asset> subdevices = <Asset>[];
-
-  AdvantysSTBStackConfig();
-  AdvantysSTBStackConfig.preview() : super();
-
-  /// Flat-maps each subdevice's `allKeys` into a deduplicated list with empty
-  /// strings filtered out. Recurses naturally — if a subdevice is itself a
-  /// composite (STACK-FUT-01 future), its own `allKeys` walks ITS subdevices.
-  @override
-  List<String> get allKeys {
-    return subdevices
-        .expand((s) => s is BaseAsset ? s.allKeys : <String>[])
-        .where((k) => k.isNotEmpty)
-        .toSet()
-        .toList();
-  }
-
-  /// Native painter height for the stack's `_STBSubdeviceNormalized` wrapper.
-  /// Unitless reference — the outer `FittedBox` scales the whole row to the
-  /// asset's `targetSize`. Mirrors `BeckhoffCX5010Config._cxNativeSize.height`
-  /// (1000) for diff parity.
-  static const double _stackNativeHeight = 1000;
-
-  @override
-  Widget build(BuildContext context) {
-    final targetSize = size.toSize(MediaQuery.of(context).size);
-    // The entire stack is bounded to `targetSize`. Subdevices are each laid
-    // out at a normalized native height, packed into a Row, then the outer
-    // FittedBox uniformly scales the row to fit `targetSize` exactly.
-    return SizedBox.fromSize(
-      size: targetSize,
-      child: FittedBox(
-        fit: BoxFit.contain,
-        alignment: Alignment.center,
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: <Widget>[
-            for (final sub in subdevices)
-              _STBSubdeviceNormalized(
-                targetHeight: _stackNativeHeight,
-                child: sub.build(context),
-              ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  /// Configure dialog — VERBATIM clone of `BeckhoffCX5010Config.configure()`
-  /// shape (lib/page_creator/assets/beckhoff.dart:94-101) with the dialog
-  /// State class swapped for `_AdvantysSTBStackConfigContent`. Inside the
-  /// State class, the only substitutions vs `_CXxxxxConfigContent` are:
-  ///   - title text `'CX5010'` → `'Advantys STB Stack'`
-  ///   - subdevice map `_availableSubdevices` → `_availableSTBSubdevices`
-  ///
-  /// Carries CX5010 parity verbatim (no `nameOrId` field on the stack; no
-  /// delete-confirmation dialog) — see SUMMARY.md user-decision callouts.
-  @override
-  Widget configure(BuildContext context) {
-    return SizedBox(
-      width: 800,
-      height: 500,
-      child: _AdvantysSTBStackConfigContent(config: this),
-    );
-  }
-
-  /// Custom factory that wraps the generated `_$AdvantysSTBStackConfigFromJson`
-  /// with a post-deserialization sanitiser. Subdevices whose runtimeType is
-  /// NOT in [_kAllowedSTBChildTypeNames] are dropped silently and the count of
-  /// dropped entries is logged via `Logger().w(...)` (mirrors the
-  /// `AssetRegistry.parse` silent-log-and-skip convention at
-  /// `registry.dart:35,152-160`).
-  factory AdvantysSTBStackConfig.fromJson(Map<String, dynamic> json) {
-    final cfg = _$AdvantysSTBStackConfigFromJson(json);
-    final before = cfg.subdevices.length;
-    cfg.subdevices.retainWhere(
-      (s) => _kAllowedSTBChildTypeNames.contains(s.runtimeType.toString()),
-    );
-    final dropped = before - cfg.subdevices.length;
-    if (dropped > 0) {
-      Logger().w(
-        'AdvantysSTBStack: dropped $dropped non-STB subdevice(s) on fromJson '
-        '(allowed types: $_kAllowedSTBChildTypeNames)',
-      );
-    }
-    return cfg;
-  }
-
-  @override
-  Map<String, dynamic> toJson() => _$AdvantysSTBStackConfigToJson(this);
-}
-
-/// Wraps a subdevice widget and normalizes its visual height so it lines up
-/// with sibling subdevices. The outer `FittedBox` (in `build()`) then scales
-/// the whole row to the stack's target size.
-///
-/// Drop-in clone of `_SubdeviceNormalized` from
-/// `lib/page_creator/assets/beckhoff.dart:114-134`. Per CONTEXT.md §Compose
-/// Pattern (and the no-cross-cutting-refactor discipline), this private widget
-/// is intentionally duplicated rather than extracted to a shared location.
-class _STBSubdeviceNormalized extends StatelessWidget {
-  final double targetHeight;
-  final Widget child;
-  const _STBSubdeviceNormalized({
-    required this.targetHeight,
-    required this.child,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      height: targetHeight,
-      child: FittedBox(
-        fit: BoxFit.fitHeight,
-        alignment: Alignment.centerLeft,
-        child: child,
-      ),
-    );
-  }
-}
-
-// ---------------------------------------------------------------------------
-// _AdvantysSTBStackConfigContent — configure-dialog body (Plan 05-02).
-//
-// VERBATIM clone of `_CXxxxxConfigContent` / `_CXxxxxConfigContentState` from
-// `lib/page_creator/assets/beckhoff.dart:136-285`, with TWO substitutions only:
-//   - config field type     `BeckhoffCX5010Config` → `AdvantysSTBStackConfig`
-//   - title text            `'CX5010'`             → `'Advantys STB Stack'`
-//   - subdevice map ref     `_availableSubdevices` → `_availableSTBSubdevices`
-//
-// Everything else is line-by-line identical, INCLUDING:
-//   - `enableAngle: true` on the CoordinatesField (RESEARCH Q3 — CX5010 parity)
-//   - NO `nameOrId` field on the stack (CX5010 parity — see SUMMARY user-decision callout)
-//   - NO delete-confirmation dialog (CX5010 parity — see SUMMARY user-decision callout)
-//   - `ObjectKey(sub)` on the ListTile (Pitfall 6 — not ValueKey)
-//   - Plain `StatefulWidget` / `State` (NOT ConsumerStatefulWidget — the
-//     composite parent does not subscribe to anything)
-// ---------------------------------------------------------------------------
-
-class _AdvantysSTBStackConfigContent extends StatefulWidget {
-  final AdvantysSTBStackConfig config;
-
-  const _AdvantysSTBStackConfigContent({required this.config});
-
-  @override
-  State<_AdvantysSTBStackConfigContent> createState() =>
-      _AdvantysSTBStackConfigContentState();
-}
-
-class _AdvantysSTBStackConfigContentState
-    extends State<_AdvantysSTBStackConfigContent> {
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        // LEFT: fields (independent scroll)
-        Expanded(
-          child: Padding(
-            padding: const EdgeInsets.all(20),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Advantys STB Stack',
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
-                const SizedBox(height: 12),
-                SizeField(
-                  initialValue: widget.config.size,
-                  onChanged: (size) => widget.config.size = size,
-                ),
-                const SizedBox(height: 16),
-                CoordinatesField(
-                  initialValue: widget.config.coordinates,
-                  onChanged: (c) => widget.config.coordinates = c,
-                  enableAngle: true,
-                ),
-              ],
-            ),
-          ),
-        ),
-
-        const VerticalDivider(width: 1),
-
-        // RIGHT: subdevice manager
-        Expanded(
-          child: Padding(
-            padding: const EdgeInsets.all(20),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Text('Subdevices',
-                        style: Theme.of(context).textTheme.titleMedium),
-                    const Spacer(),
-                    FilledButton.icon(
-                      onPressed: () => Navigator.of(context).maybePop(),
-                      icon: const Icon(Icons.check),
-                      label: const Text('Done'),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                DropdownButtonFormField<String>(
-                  isExpanded: true,
-                  decoration: const InputDecoration(
-                    border: OutlineInputBorder(),
-                    labelText: 'Add Subdevice',
-                  ),
-                  // Rule 1 fix: `value:` is deprecated in Flutter ≥ 3.33.0-1.0.pre;
-                  // `initialValue:` is the modern equivalent for "no initial
-                  // selection". CX5010 mirror shape preserved — only the parameter
-                  // name differs (kept this fix to satisfy QUAL-06 zero-issues gate).
-                  initialValue: null,
-                  hint: const Text('Select a subdevice to add'),
-                  items: _availableSTBSubdevices.keys
-                      .map((k) => DropdownMenuItem(value: k, child: Text(k)))
-                      .toList(),
-                  onChanged: (v) {
-                    if (v == null) return;
-                    setState(() {
-                      final mk = _availableSTBSubdevices[v]!;
-                      widget.config.subdevices.add(mk());
-                    });
-                  },
-                ),
-                const SizedBox(height: 16),
-                if (widget.config.subdevices.isEmpty)
-                  Expanded(
-                    child: Center(
-                      child: Text(
-                        'No subdevices yet',
-                        style: Theme.of(context).textTheme.bodyMedium,
-                      ),
-                    ),
-                  )
-                else ...[
-                  Row(
-                    children: [
-                      Text('Current Subdevices',
-                          style: Theme.of(context).textTheme.titleSmall),
-                      const SizedBox(width: 8),
-                      Chip(label: Text('${widget.config.subdevices.length}')),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-
-                  // Take remaining height of the dialog
-                  Expanded(
-                    child: Card(
-                      clipBehavior: Clip.antiAlias,
-                      child: ReorderableListView.builder(
-                        padding: const EdgeInsets.symmetric(vertical: 8),
-                        buildDefaultDragHandles: false,
-                        itemCount: widget.config.subdevices.length,
-                        onReorder: (oldIndex, newIndex) {
-                          setState(() {
-                            if (newIndex > oldIndex) newIndex -= 1;
-                            final item =
-                                widget.config.subdevices.removeAt(oldIndex);
-                            widget.config.subdevices.insert(newIndex, item);
-                          });
-                        },
-                        itemBuilder: (context, index) {
-                          final sub = widget.config.subdevices[index];
-                          return ListTile(
-                            key: ObjectKey(sub),
-                            leading: ReorderableDragStartListener(
-                              index: index,
-                              child: const Icon(Icons.drag_indicator),
-                            ),
-                            title: Text(sub.runtimeType.toString()),
-                            onTap: () => showDialog(
-                              context: context,
-                              builder: (_) => sub.configure(context),
-                            ),
-                            trailing: IconButton(
-                              icon: const Icon(Icons.delete),
-                              onPressed: () {
-                                setState(() =>
-                                    widget.config.subdevices.removeAt(index));
-                              },
-                            ),
-                          );
-                        },
-                      ),
-                    ),
-                  ),
-                ],
-              ],
-            ),
-          ),
         ),
       ],
     );
