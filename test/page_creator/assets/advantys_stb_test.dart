@@ -8,8 +8,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:open62541/open62541.dart' show DynamicValue;
 import 'package:tfc/page_creator/assets/advantys_stb.dart';
 import 'package:tfc/page_creator/assets/beckhoff.dart' show RowIOView, FilterEdit;
+import 'package:tfc/page_creator/assets/button.dart' show ButtonConfig;
 import 'package:tfc/page_creator/assets/common.dart'
-    show Coordinates, KeyField, RelativeSize, TextPos;
+    show Asset, Coordinates, KeyField, RelativeSize, TextPos;
 import 'package:tfc/page_creator/assets/registry.dart';
 import 'package:tfc/painter/advantys_stb/ddi3725.dart';
 import 'package:tfc/painter/advantys_stb/ddo3705.dart';
@@ -2661,6 +2662,247 @@ void main() {
       expect(cfg.nameOrId, '1');
       expect(cfg.inputOkKey, isNull);
     });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Plan 05-01: AdvantysSTBStackConfig — composite parent (TDD anchor).
+  //
+  // Mirrors BeckhoffCX5010Config verbatim with the four-type whitelist
+  // substituted, plus a NET-NEW post-fromJson sanitiser that drops foreign
+  // child types. Tests in this section establish the RED contract before the
+  // class lands; once implemented (Plan 05-01 GREEN), every assertion here is
+  // load-bearing for the data layer.
+  // ---------------------------------------------------------------------------
+  group('AdvantysSTBStackConfig — data shape', () {
+    test('default constructor produces empty subdevices + BaseAsset defaults',
+        () {
+      final stack = AdvantysSTBStackConfig();
+      expect(stack.subdevices, isEmpty);
+      expect(stack.coordinates.x, 0.0);
+      expect(stack.coordinates.y, 0.0);
+      expect(stack.size.width, 0.03);
+      expect(stack.size.height, 0.03);
+      expect(stack.text, isNull);
+      expect(stack.textPos, isNull);
+      expect(stack.techDocId, isNull);
+      expect(stack.plcAssetKey, isNull);
+    });
+
+    test('preview() factory returns an instance with empty subdevices', () {
+      final stack = AdvantysSTBStackConfig.preview();
+      expect(stack, isA<AdvantysSTBStackConfig>());
+      expect(stack.subdevices, isEmpty);
+    });
+
+    test('displayName and category match the locked phase contract', () {
+      final stack = AdvantysSTBStackConfig();
+      expect(stack.displayName, 'Advantys STB Stack');
+      expect(stack.category, 'Advantys STB');
+    });
+
+    test('assetName resolves to the class name via BaseAsset.variant', () {
+      final stack = AdvantysSTBStackConfig();
+      expect(stack.assetName, 'AdvantysSTBStackConfig');
+    });
+  });
+
+  group('AdvantysSTBStackConfig.fromJson sanitiser', () {
+    test('drops a foreign child type (ButtonConfig) while keeping 3 STB types',
+        () {
+      // Three legitimate STB children + one ButtonConfig (foreign). The
+      // post-fromJson sanitiser must retainWhere over the whitelist and drop
+      // the ButtonConfig silently (with a log line). Permissive render,
+      // restrictive load — per CONTEXT.md §Whitelist Filter.
+      //
+      // The production load path is `jsonEncode → jsonDecode → fromJson` so
+      // the test mirrors that round-trip. Passing raw `.toJson()` output
+      // directly would leave nested codegen-typed objects (e.g.
+      // `Coordinates`, `RelativeSize`) in the map and trip the leaf
+      // `_$XxxFromJson` cast guards. The round-trip below normalises every
+      // value to JSON-native types exactly like the real load path.
+      final rawJson = <String, dynamic>{
+        'asset_name': 'AdvantysSTBStackConfig',
+        'coordinates': <String, dynamic>{'x': 0.0, 'y': 0.0},
+        'size': <String, dynamic>{'width': 0.5, 'height': 0.5},
+        'subdevices': <Map<String, dynamic>>[
+          STBNIP2311Config.preview().toJson(),
+          STBDDI3725Config.preview().toJson(),
+          ButtonConfig.preview().toJson(), // foreign — must be dropped
+          STBPDT3100Config.preview().toJson(),
+        ],
+      };
+      final json = jsonDecode(jsonEncode(rawJson)) as Map<String, dynamic>;
+      final cfg = AdvantysSTBStackConfig.fromJson(json);
+      expect(cfg.subdevices, hasLength(3),
+          reason: 'Sanitiser must drop the foreign ButtonConfig.');
+      // The 3 retained children preserve their original order.
+      expect(
+        cfg.subdevices.map((s) => s.runtimeType.toString()).toList(),
+        <String>[
+          'STBNIP2311Config',
+          'STBDDI3725Config',
+          'STBPDT3100Config',
+        ],
+      );
+    });
+
+    test(
+      'runtimeType strings of the 4 STB leaf configs match the whitelist '
+      'literals exactly (Pitfall 2 typo guard)',
+      () {
+        // If anyone in the whitelist literal writes 'STBDDI3725' (no Config)
+        // or 'STBNip2311Config' (wrong case), every legitimate child is
+        // silently dropped on load. This test catches that loudly.
+        expect(STBNIP2311Config.preview().runtimeType.toString(),
+            'STBNIP2311Config');
+        expect(STBPDT3100Config.preview().runtimeType.toString(),
+            'STBPDT3100Config');
+        expect(STBDDI3725Config.preview().runtimeType.toString(),
+            'STBDDI3725Config');
+        expect(STBDDO3705Config.preview().runtimeType.toString(),
+            'STBDDO3705Config');
+      },
+    );
+
+    test('empty subdevices list survives fromJson unchanged (no-op sanitiser)',
+        () {
+      final json = <String, dynamic>{
+        'asset_name': 'AdvantysSTBStackConfig',
+        'coordinates': {'x': 0.0, 'y': 0.0},
+        'size': {'width': 0.5, 'height': 0.5},
+        'subdevices': <Map<String, dynamic>>[],
+      };
+      final cfg = AdvantysSTBStackConfig.fromJson(json);
+      expect(cfg.subdevices, isEmpty);
+    });
+  });
+
+  group('AdvantysSTBStackConfig registry resolution', () {
+    test(
+      'createDefaultAssetByName returns a typed AdvantysSTBStackConfig '
+      '(defaultFactories wiring — Pitfall 3 guard)',
+      () {
+        final asset =
+            AssetRegistry.createDefaultAssetByName('AdvantysSTBStackConfig');
+        expect(asset, isNotNull,
+            reason:
+                'defaultFactories must register AdvantysSTBStackConfig (palette wiring).');
+        expect(asset, isA<AdvantysSTBStackConfig>());
+        final cfg = asset! as AdvantysSTBStackConfig;
+        expect(cfg.subdevices, isEmpty);
+      },
+    );
+
+    test(
+      'AssetRegistry.parse round-trips a stack with a STBPDT3100 subdevice '
+      '(_fromJsonFactories wiring — Pitfall 3 other half)',
+      () {
+        final stack = AdvantysSTBStackConfig()
+          ..subdevices = <Asset>[
+            STBPDT3100Config(nameOrId: 'PDT', inputOkKey: 'plc.ok'),
+          ];
+        final saveJson = jsonDecode(jsonEncode(<String, dynamic>{
+          'assets': <Map<String, dynamic>>[stack.toJson()],
+        })) as Map<String, dynamic>;
+        final parsed = AssetRegistry.parse(saveJson);
+        expect(parsed, hasLength(1),
+            reason:
+                '_fromJsonFactories must register AdvantysSTBStackConfig.');
+        expect(parsed[0], isA<AdvantysSTBStackConfig>());
+        final restored = parsed[0] as AdvantysSTBStackConfig;
+        expect(restored.subdevices, hasLength(1));
+        expect(restored.subdevices[0], isA<STBPDT3100Config>());
+        final pdt = restored.subdevices[0] as STBPDT3100Config;
+        expect(pdt.inputOkKey, 'plc.ok');
+      },
+    );
+
+    test('defaultFactories Map contains AdvantysSTBStackConfig type key', () {
+      expect(
+        AssetRegistry.defaultFactories.keys.any(
+          (t) => t.toString() == 'AdvantysSTBStackConfig',
+        ),
+        isTrue,
+        reason:
+            'AdvantysSTBStackConfig must be enumerable through defaultFactories '
+            'for the palette to list it.',
+      );
+    });
+  });
+
+  group('AdvantysSTBStackConfig full JSON round-trip', () {
+    test(
+      'every BaseAsset field + 4-subdevice list survives jsonEncode + jsonDecode + fromJson',
+      () {
+        final original = AdvantysSTBStackConfig()
+          ..coordinates = Coordinates(x: 0.1, y: 0.2)
+          ..size = const RelativeSize(width: 0.5, height: 0.3)
+          ..text = 'stack-rt'
+          ..textPos = TextPos.below
+          ..techDocId = 7
+          ..plcAssetKey = 'plc.stack'
+          ..subdevices = <Asset>[
+            STBDDI3725Config(nameOrId: 'DI', rawStateKey: 'a'),
+            STBDDO3705Config(nameOrId: 'DO', rawStateKey: 'b'),
+            STBNIP2311Config(nameOrId: 'NIP'),
+            STBPDT3100Config(nameOrId: 'PDT', inputOkKey: 'ok'),
+          ];
+
+        // Production round-trip: through jsonEncode/jsonDecode.
+        final encoded = jsonEncode(original.toJson());
+        final decoded = jsonDecode(encoded) as Map<String, dynamic>;
+        final parsed = AdvantysSTBStackConfig.fromJson(decoded);
+
+        // BaseAsset fields.
+        expect(parsed.coordinates.x, 0.1);
+        expect(parsed.coordinates.y, 0.2);
+        expect(parsed.size.width, 0.5);
+        expect(parsed.size.height, 0.3);
+        expect(parsed.text, 'stack-rt');
+        expect(parsed.textPos, TextPos.below);
+        expect(parsed.techDocId, 7);
+        expect(parsed.plcAssetKey, 'plc.stack');
+        expect(parsed.assetName, 'AdvantysSTBStackConfig');
+
+        // Subdevices: order, types, and key fields preserved.
+        expect(parsed.subdevices, hasLength(4));
+        expect(parsed.subdevices[0], isA<STBDDI3725Config>());
+        expect(parsed.subdevices[1], isA<STBDDO3705Config>());
+        expect(parsed.subdevices[2], isA<STBNIP2311Config>());
+        expect(parsed.subdevices[3], isA<STBPDT3100Config>());
+        expect((parsed.subdevices[0] as STBDDI3725Config).nameOrId, 'DI');
+        expect((parsed.subdevices[0] as STBDDI3725Config).rawStateKey, 'a');
+        expect((parsed.subdevices[1] as STBDDO3705Config).nameOrId, 'DO');
+        expect((parsed.subdevices[1] as STBDDO3705Config).rawStateKey, 'b');
+        expect((parsed.subdevices[2] as STBNIP2311Config).nameOrId, 'NIP');
+        expect((parsed.subdevices[3] as STBPDT3100Config).nameOrId, 'PDT');
+        expect((parsed.subdevices[3] as STBPDT3100Config).inputOkKey, 'ok');
+      },
+    );
+  });
+
+  group('AdvantysSTBStackConfig JSON back-compat', () {
+    test(
+      'minimal legacy snippet without subdevices field loads with empty list',
+      () {
+        // Forward-compat: a JSON written before Phase 5 obviously did not
+        // include a `subdevices` field. The codegen must default it to []
+        // rather than throwing. (CX5010 in production never hits this because
+        // the field was always present, but the contract must hold for a
+        // forward-compat-friendly Phase 5 stack.)
+        final legacyJson = <String, dynamic>{
+          'asset_name': 'AdvantysSTBStackConfig',
+          'coordinates': {'x': 0.0, 'y': 0.0},
+          'size': {'width': 0.5, 'height': 0.3},
+          'subdevices': <Map<String, dynamic>>[],
+        };
+        final cfg = AdvantysSTBStackConfig.fromJson(legacyJson);
+        expect(cfg.subdevices, isEmpty);
+        expect(cfg.coordinates.x, 0.0);
+        expect(cfg.size.width, 0.5);
+        expect(cfg.assetName, 'AdvantysSTBStackConfig');
+      },
+    );
   });
 }
 

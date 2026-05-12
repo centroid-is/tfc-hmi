@@ -131,3 +131,30 @@ Map<String, dynamic> _$STBPDT3100ConfigToJson(STBPDT3100Config instance) =>
       'nameOrId': instance.nameOrId,
       'inputOkKey': instance.inputOkKey,
     };
+
+AdvantysSTBStackConfig _$AdvantysSTBStackConfigFromJson(
+        Map<String, dynamic> json) =>
+    AdvantysSTBStackConfig()
+      ..variant = json['asset_name'] as String
+      ..coordinates =
+          Coordinates.fromJson(json['coordinates'] as Map<String, dynamic>)
+      ..size = RelativeSize.fromJson(json['size'] as Map<String, dynamic>)
+      ..text = json['text'] as String?
+      ..textPos = $enumDecodeNullable(_$TextPosEnumMap, json['textPos'])
+      ..techDocId = (json['techDocId'] as num?)?.toInt()
+      ..plcAssetKey = json['plcAssetKey'] as String?
+      ..subdevices =
+          const AssetListConverter().fromJson(json['subdevices'] as List);
+
+Map<String, dynamic> _$AdvantysSTBStackConfigToJson(
+        AdvantysSTBStackConfig instance) =>
+    <String, dynamic>{
+      'asset_name': instance.variant,
+      'coordinates': instance.coordinates,
+      'size': instance.size,
+      'text': instance.text,
+      'textPos': _$TextPosEnumMap[instance.textPos],
+      'techDocId': instance.techDocId,
+      'plcAssetKey': instance.plcAssetKey,
+      'subdevices': const AssetListConverter().toJson(instance.subdevices),
+    };
