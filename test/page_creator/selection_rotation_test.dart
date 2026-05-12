@@ -26,16 +26,22 @@ import 'package:tfc/pages/page_view.dart';
 /// The visual is intentionally rectangular and asymmetric so that
 /// rotating it by 90 degrees produces a clearly different on-screen
 /// footprint than the unrotated case.
+///
+/// Optionally wraps its visual in its OWN GestureDetector so we can
+/// assert that runtime-mode taps reach the asset's internal handlers
+/// (regression: an opaque overlay Container was swallowing them before).
 class _TestBoxAsset extends BaseAsset {
   @override
   String get displayName => 'TestBox';
   @override
   String get category => 'Test';
 
-  _TestBoxAsset({Coordinates? coords, RelativeSize? sz}) {
+  _TestBoxAsset({Coordinates? coords, RelativeSize? sz, this.onInternalTap}) {
     if (coords != null) coordinates = coords;
     if (sz != null) size = sz;
   }
+
+  final VoidCallback? onInternalTap;
 
   @override
   Widget build(BuildContext context) {
@@ -43,9 +49,20 @@ class _TestBoxAsset extends BaseAsset {
     // Transform.rotate so the painter follows angle. The page-view layer
     // is supposed to mirror that rotation on the selection chrome /
     // gesture detector but currently does not.
+    Widget visual = const ColoredBox(color: Color(0xFFFF0000));
+    if (onInternalTap != null) {
+      // Mirrors production sensors / conveyors that wrap their painter in
+      // their own GestureDetector(HitTestBehavior.opaque) for tap-to-
+      // open-details. Runtime mode must let these fire.
+      visual = GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onInternalTap,
+        child: visual,
+      );
+    }
     return Transform.rotate(
       angle: (coordinates.angle ?? 0.0) * math.pi / 180,
-      child: const ColoredBox(color: Color(0xFFFF0000)),
+      child: visual,
     );
   }
 
@@ -296,6 +313,71 @@ void main() {
         expect(tapped, isTrue,
             reason:
                 'A rotated asset inside a translating parent must still receive taps (gesture-through-translation memory constraint).');
+      },
+    );
+  });
+
+  group('Runtime-mode primary taps reach asset internal GestureDetectors', () {
+    // Regression: the selection-rotation fix wrapped the editor's
+    // GestureDetector in a Container(decoration: BoxDecoration(border: ...)).
+    // Even with border: null, BoxDecoration.hitTest returns true inside any
+    // rectangular shape — so the Container was hit-test-opaque and swallowed
+    // primary taps before they reached the asset's own GestureDetector. In
+    // runtime mode (absorb=false, isSelected=false) operators could no longer
+    // tap a sensor to open its details dialog. Fix: only wrap in the bordered
+    // Container when actually selected.
+    testWidgets(
+      'tap on an unrotated runtime asset reaches its internal GestureDetector',
+      (tester) async {
+        bool internalTapped = false;
+        final asset = _TestBoxAsset(
+          coords: Coordinates(x: 0.5, y: 0.5),
+          sz: const RelativeSize(width: 0.4, height: 0.1),
+          onInternalTap: () => internalTapped = true,
+        );
+
+        await tester.pumpWidget(_wrap(
+          assets: [asset],
+          absorb: false, // runtime mode
+        ));
+        await tester.pump();
+
+        // Tap at the canvas-local centre of the asset (50, 50).
+        final canvas = tester.getRect(find.byType(AssetStack));
+        await tester.tapAt(canvas.topLeft + const Offset(50, 50));
+        await tester.pump();
+
+        expect(internalTapped, isTrue,
+            reason:
+                'In runtime mode, primary taps must reach the asset\'s own GestureDetector. If false, the overlay chrome is intercepting hits (regression introduced by selection-rotation fix).');
+      },
+    );
+
+    testWidgets(
+      'tap on a rotated runtime asset reaches its internal GestureDetector',
+      (tester) async {
+        bool internalTapped = false;
+        final asset = _TestBoxAsset(
+          coords: Coordinates(x: 0.5, y: 0.5, angle: 90.0),
+          sz: const RelativeSize(width: 0.4, height: 0.1),
+          onInternalTap: () => internalTapped = true,
+        );
+
+        await tester.pumpWidget(_wrap(
+          assets: [asset],
+          absorb: false, // runtime mode
+        ));
+        await tester.pump();
+
+        // Tap inside the rotated visual (vertical post-rotation: x in
+        // [45,55], y in [30,70]). Centre (50, 50) lands cleanly inside.
+        final canvas = tester.getRect(find.byType(AssetStack));
+        await tester.tapAt(canvas.topLeft + const Offset(50, 50));
+        await tester.pump();
+
+        expect(internalTapped, isTrue,
+            reason:
+                'A rotated asset in runtime mode must still receive taps on its internal GestureDetector.');
       },
     );
   });

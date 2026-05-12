@@ -46,6 +46,25 @@ Matrix4 _buildTransform(AssetStackConfig cfg) {
     ..scale(cfg.xMirror ? -1.0 : 1.0, cfg.yMirror ? -1.0 : 1.0);
 }
 
+// Conditionally wraps the editor's selection chrome in a bordered Container.
+// A Container with a BoxDecoration hit-tests opaque for its full rect (even
+// when only a border is set) because BoxDecoration.hitTest returns true
+// inside any rectangular shape regardless of fillColor — that would swallow
+// runtime-mode primary taps before they reach the asset's own
+// GestureDetectors. Only paint the border when actually selected.
+Widget _wrapWithSelectionBorder({
+  required bool isSelected,
+  required Widget child,
+}) {
+  if (!isSelected) return child;
+  return Container(
+    decoration: BoxDecoration(
+      border: Border.all(color: Colors.blue, width: 2),
+    ),
+    child: child,
+  );
+}
+
 /// Computes the top-left offset for the label given the asset center, its size,
 /// the label size, and the desired position.
 Offset _labelOffset(
@@ -283,12 +302,19 @@ class _AssetStackState extends ConsumerState<AssetStack> {
                       child: SizedBox(
                         width: assetW,
                         height: assetH,
-                        child: Container(
-                          decoration: BoxDecoration(
-                            border: isSelected
-                                ? Border.all(color: Colors.blue, width: 2)
-                                : null,
-                          ),
+                        // Container with a BoxDecoration hit-tests opaque for
+                        // its full bounds even when only a border is set
+                        // (BoxDecoration.hitTest returns true inside any
+                        // rectangular shape regardless of fill). In runtime
+                        // mode the overlay's inner GestureDetector is
+                        // translucent so primary taps fall through to the
+                        // asset's own GestureDetectors — but the wrapping
+                        // Container would still consume the hit. Only wrap
+                        // in a Container when there is an actual border to
+                        // paint (i.e. when selected); otherwise the chrome
+                        // is just the bare GestureDetector.
+                        child: _wrapWithSelectionBorder(
+                          isSelected: isSelected,
                           child: widget.absorb
                               ? GestureDetector(
                                 behavior: HitTestBehavior.opaque,
