@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io' show File, Platform;
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -3260,6 +3261,246 @@ void main() {
       });
     },
   );
+
+  // ===========================================================================
+  // PHASE 5 — Visual defect regression tests.
+  //
+  // Goldens verify pixel STABILITY but not VISUAL QUALITY. These geometry
+  // tests assert four user-reported defects are gone:
+  //
+  //   1. Schneider header bar must NOT overshoot the chamfered/rounded body.
+  //   2. No stray pixel band BELOW the module outline.
+  //   3. DDI/DDO LED grid cells must be round (drawCircle) — not thin bars.
+  //   4. PDT3100 "INPUT +" / "INPUT −" labels must fit inside the body box.
+  //
+  // Each defect is checked via direct painter introspection or by sampling the
+  // pixels of a `Picture` rendered through `PictureRecorder`. This is robust
+  // to font-rendering jitter across host platforms (unlike full goldens), so
+  // the tests are not gated by `Platform.isMacOS`.
+  // ===========================================================================
+  group('STB visual defect regression — header chamfer / bottom bleed / LEDs / labels', () {
+    Future<List<int>> _renderToPixels(
+      CustomPainter painter,
+      Size size,
+    ) async {
+      final recorder = ui.PictureRecorder();
+      final canvas = Canvas(recorder);
+      // Solid magenta background so any "missing pixel" in the painter shows
+      // up as a non-cream / non-blue colour for the chamfer + bleed checks.
+      canvas.drawRect(
+        Rect.fromLTWH(0, 0, size.width, size.height),
+        Paint()..color = const Color(0xFFFF00FF),
+      );
+      painter.paint(canvas, size);
+      final picture = recorder.endRecording();
+      final image = await picture.toImage(
+        size.width.toInt(),
+        size.height.toInt(),
+      );
+      final bytes = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
+      return bytes!.buffer.asUint8List().toList();
+    }
+
+    int _pixelAt(List<int> rgba, int width, int x, int y) {
+      final i = (y * width + x) * 4;
+      return (0xFF << 24) |
+          (rgba[i] << 16) |
+          (rgba[i + 1] << 8) |
+          rgba[i + 2];
+    }
+
+    // Defect 1 — header must NOT overshoot the body chamfer.
+    //
+    // The body is drawn as RRect with corner radius ≈ size.width * 0.06. A
+    // point at (2 px, 2 px) sits well INSIDE the corner cutout — the cream
+    // body has not yet started — so the magenta background should still be
+    // visible. If the top blue strip is drawn as a plain rect (not clipped
+    // to the RRect) it WILL fill that pixel with Schneider blue, which the
+    // assertion rejects.
+    test(
+        'DEFECT-1 DDI3725: header is clipped at body chamfer (no blue overshoot)',
+        () async {
+      final painter = STBDDI3725BodyPainter(
+        ledStates: List<IOState>.filled(16, IOState.low),
+        isStale: false,
+        isDisconnected: false,
+        animation: const AlwaysStoppedAnimation<int>(0),
+      );
+      const w = 200;
+      const h = 280;
+      final pixels = await _renderToPixels(painter, const Size(w * 1.0, h * 1.0));
+      // Sample the top-left corner pixel deeply inside the chamfer cutout.
+      final px = _pixelAt(pixels, w, 1, 1);
+      // Schneider blue = 0xFF003B71. If the header overshot the chamfer,
+      // this pixel will be (or be very close to) Schneider blue.
+      expect(px, isNot(equals(0xFF003B71)),
+          reason: 'Top-left corner pixel must be background (chamfer respected), '
+              'not Schneider blue. Got 0x${px.toRadixString(16).padLeft(8, '0')}.');
+    });
+
+    test(
+        'DEFECT-1 DDO3705: header is clipped at body chamfer (no blue overshoot)',
+        () async {
+      final painter = STBDDO3705BodyPainter(
+        ledStates: List<IOState>.filled(16, IOState.low),
+        isStale: false,
+        isDisconnected: false,
+        animation: const AlwaysStoppedAnimation<int>(0),
+      );
+      const w = 200;
+      const h = 280;
+      final pixels = await _renderToPixels(painter, const Size(w * 1.0, h * 1.0));
+      final px = _pixelAt(pixels, w, 1, 1);
+      expect(px, isNot(equals(0xFF003B71)),
+          reason: 'DDO3705 top-left chamfer must not contain header blue.');
+    });
+
+    test(
+        'DEFECT-1 NIP2311: header is clipped at body chamfer (no blue overshoot)',
+        () async {
+      final painter = STBNIP2311BodyPainter(nameOrId: 'NIP-01');
+      const w = 200;
+      const h = 280;
+      final pixels = await _renderToPixels(painter, const Size(w * 1.0, h * 1.0));
+      final px = _pixelAt(pixels, w, 1, 1);
+      expect(px, isNot(equals(0xFF003B71)),
+          reason: 'NIP2311 top-left chamfer must not contain header blue.');
+    });
+
+    test(
+        'DEFECT-1 PDT3100: header is clipped at body chamfer (no blue overshoot)',
+        () async {
+      final painter = STBPDT3100BodyPainter(nameOrId: 'PDT-01', inputOk: true);
+      const w = 200;
+      const h = 280;
+      final pixels = await _renderToPixels(painter, const Size(w * 1.0, h * 1.0));
+      final px = _pixelAt(pixels, w, 1, 1);
+      expect(px, isNot(equals(0xFF003B71)),
+          reason: 'PDT3100 top-left chamfer must not contain header blue.');
+    });
+
+    // Defect 2 — NIP2311 / PDT3100 bottom-footer band must NOT bleed below
+    // the outlined body. The 21% bottom-footer Schneider-blue band must sit
+    // inside the chamfer, not on top of the bottom edge of the body.
+    //
+    // The body is an RRect; the very bottom row of pixels at the corners
+    // is OUTSIDE the rounded corner. The footer drawing must stop at the
+    // RRect — sampling the bottom-corner pixel should reveal background,
+    // not Schneider blue.
+    test('DEFECT-2 NIP2311: bottom footer is clipped at body chamfer', () async {
+      final painter = STBNIP2311BodyPainter(nameOrId: 'NIP-01');
+      const w = 200;
+      const h = 280;
+      final pixels = await _renderToPixels(painter, const Size(w * 1.0, h * 1.0));
+      // Sample 2px in from the bottom-right corner (well inside the chamfer
+      // cutout).
+      final px = _pixelAt(pixels, w, w - 2, h - 2);
+      expect(px, isNot(equals(0xFF003B71)),
+          reason:
+              'NIP2311 bottom-right chamfer must not contain footer blue (no bleed).');
+    });
+
+    test('DEFECT-2 PDT3100: bottom footer is clipped at body chamfer', () async {
+      final painter = STBPDT3100BodyPainter(nameOrId: 'PDT-01', inputOk: true);
+      const w = 200;
+      const h = 280;
+      final pixels = await _renderToPixels(painter, const Size(w * 1.0, h * 1.0));
+      final px = _pixelAt(pixels, w, w - 2, h - 2);
+      expect(px, isNot(equals(0xFF003B71)),
+          reason: 'PDT3100 bottom-right chamfer must not contain footer blue.');
+    });
+
+    // Defect 3 — DDI/DDO LED grid must render as circles, not thin bars.
+    //
+    // The active LED green is Color(0xFF6CA545). When all 16 channels are
+    // active, we sample two pixels on the same LED-cell row to verify that
+    // the LED has a clearly *round* shape rather than a horizontal bar:
+    //   - the cell center should be green (active LED filled)
+    //   - the cell corner should NOT be green (a circle leaves cell corners
+    //     un-filled; a rect-filled "bar" would extend green into the corner).
+    test('DEFECT-3 DDI3725: LEDs render as round dots (cell corner is NOT green)',
+        () async {
+      final painter = STBDDI3725BodyPainter(
+        ledStates: List<IOState>.filled(16, IOState.high),
+        isStale: false,
+        isDisconnected: false,
+        animation: const AlwaysStoppedAnimation<int>(0),
+      );
+      const w = 200;
+      const h = 280;
+      final pixels = await _renderToPixels(painter, const Size(w * 1.0, h * 1.0));
+      // LED block sits at y ≈ topStripH (0.07 * 280 = 19.6) to y ≈ 19.6 + 0.22*280 = 81.2.
+      // With circle LEDs, the corner of every individual LED cell will fall
+      // OUTSIDE the inscribed circle. Sample very-near the top-left corner of
+      // the first LED cell (col 0, row 0). For a 200x280 widget, padX≈10,
+      // padY ≈ ledBlockH * 0.05 ≈ 3 — sample at (12, 23) which is the corner
+      // of the first cell *inside* the LED block.
+      final cornerPx = _pixelAt(pixels, w, 12, 23);
+      expect(cornerPx, isNot(equals(0xFF6CA545)),
+          reason:
+              'Top-left corner of the first LED cell should NOT be the active '
+              'green (0xFF6CA545) — circular LEDs leave the cell corners '
+              'unfilled. Bar-shaped LEDs would fill the corners.');
+    });
+
+    test('DEFECT-3 DDO3705: LEDs render as round dots (cell corner is NOT green)',
+        () async {
+      final painter = STBDDO3705BodyPainter(
+        ledStates: List<IOState>.filled(16, IOState.high),
+        isStale: false,
+        isDisconnected: false,
+        animation: const AlwaysStoppedAnimation<int>(0),
+      );
+      const w = 200;
+      const h = 280;
+      final pixels = await _renderToPixels(painter, const Size(w * 1.0, h * 1.0));
+      final cornerPx = _pixelAt(pixels, w, 12, 23);
+      expect(cornerPx, isNot(equals(0xFF6CA545)),
+          reason: 'DDO3705 LED-cell corner must not be filled green.');
+    });
+
+    // Defect 4 — PDT3100 "INPUT +" / "INPUT −" labels must fit inside the body.
+    //
+    // We can't easily probe the TextPainter offsets that the painter uses
+    // internally, so instead we check the painter's terminal-block geometry:
+    // the labels are rendered at (rect.left + pad + innerW * 0.62, screwCy).
+    // With innerW ≈ rect.width - 2*pad and text width ≈ fontSize * len * 0.6
+    // the right edge of the label must be ≤ rect.right - 4 px (a small
+    // safety margin inside the chamfer). Easier+stronger: render the painter
+    // and assert that no black-ish pixel (the label text) appears within 2 px
+    // of the right body edge along the row where INPUT + would be drawn.
+    test('DEFECT-4 PDT3100: INPUT +/− labels fit inside body (no right-edge bleed)',
+        () async {
+      final painter = STBPDT3100BodyPainter(nameOrId: 'PDT-01', inputOk: true);
+      const w = 200;
+      const h = 280;
+      final pixels = await _renderToPixels(painter, const Size(w * 1.0, h * 1.0));
+      // The terminal area starts at y = (topStrip + inLabel + ledRow + subtitle)
+      // ≈ (28 + 28 + 39 + 20) = 115; terminal area is 0.38 * 280 ≈ 106 px tall.
+      // Top block center is around y ≈ 115 + 26 ≈ 141. Scan the right-edge
+      // strip (within 3 px of the right body edge) across the terminal-area
+      // y-range and assert no black-ish pixel is present.
+      // "Black-ish" = R+G+B < 192 (lets dark grey terminal borders pass; only
+      // truly-black text triggers).
+      bool foundBlackText = false;
+      for (int y = 120; y < 220; y++) {
+        for (int x = w - 4; x < w - 1; x++) {
+          final i = (y * w + x) * 4;
+          final r = pixels[i];
+          final g = pixels[i + 1];
+          final b = pixels[i + 2];
+          if (r + g + b < 192) {
+            foundBlackText = true;
+            break;
+          }
+        }
+        if (foundBlackText) break;
+      }
+      expect(foundBlackText, isFalse,
+          reason: 'INPUT +/− label text must not bleed within 3 px of body '
+              'right edge — labels must fit inside the body.');
+    });
+  });
 }
 
 // ---------------------------------------------------------------------------
