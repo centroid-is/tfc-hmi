@@ -311,16 +311,15 @@ class STBPDT3100BodyPainter extends CustomPainter {
     // full viewport — that way the dot+label render at the same
     // absolute scale as NIP's status strip.
     const labels = <String>['IN', 'OUT'];
-    // Stack uses ~12% of body height (2 NIP-style rows of ~0.06·H each).
-    // `rect.height` is the band size; the inset is ~80% of that. We size
-    // the LED stack relative to the BAND so it doesn't grow with the
-    // viewport inset.
+    // Stack uses ~55% of viewport band height (≈ 2 NIP-style rows of
+    // ~0.06·H of module body each). Smaller dot+label region centred in
+    // the dark inset.
     final ledStackH = rect.height * 0.55;
     final rowH = ledStackH / labels.length;
     final dotR = rowH * 0.22;
-    final dotCx = inset.left + inset.width * 0.30;
-    final labelLeft = inset.left + inset.width * 0.50;
-    final labelMaxW = inset.right - labelLeft - inset.width * 0.06;
+    final dotCx = inset.left + inset.width * 0.22;
+    final labelLeft = inset.left + inset.width * 0.38;
+    final labelMaxW = inset.right - labelLeft - inset.width * 0.04;
 
     final stackTop = inset.top + (inset.height - ledStackH) / 2;
 
@@ -331,6 +330,30 @@ class STBPDT3100BodyPainter extends CustomPainter {
 
     final Color dotColor =
         (inputOk == true) ? _ledGreen : Colors.grey.shade500;
+
+    // Auto-shrink the label font until the LONGEST label ('OUT') fits in
+    // the available column width — at slim PDT widths the 'T' in 'OUT'
+    // was being clipped by a too-tight maxWidth.
+    double fontSize = rowH * 0.45;
+    TextPainter? sizedTp;
+    while (true) {
+      sizedTp = TextPainter(
+        text: TextSpan(
+          text: 'OUT',
+          style: TextStyle(
+            color: Colors.grey.shade100,
+            fontSize: fontSize,
+            fontWeight: FontWeight.w600,
+            letterSpacing: 0.6,
+          ),
+        ),
+        textAlign: TextAlign.left,
+        textDirection: TextDirection.ltr,
+        maxLines: 1,
+      )..layout();
+      if (sizedTp.width <= labelMaxW || fontSize < 4) break;
+      fontSize *= 0.92;
+    }
 
     for (int i = 0; i < labels.length; i++) {
       final dotCy = stackTop + i * rowH + rowH / 2;
@@ -347,7 +370,7 @@ class STBPDT3100BodyPainter extends CustomPainter {
           text: labels[i],
           style: TextStyle(
             color: Colors.grey.shade100,
-            fontSize: rowH * 0.45,
+            fontSize: fontSize,
             fontWeight: FontWeight.w600,
             letterSpacing: 0.6,
           ),
@@ -355,7 +378,7 @@ class STBPDT3100BodyPainter extends CustomPainter {
         textAlign: TextAlign.left,
         textDirection: TextDirection.ltr,
         maxLines: 1,
-      )..layout(maxWidth: labelMaxW > 0 ? labelMaxW : inset.width * 0.40);
+      )..layout();
       tp.paint(
         canvas,
         Offset(labelLeft, dotCy - tp.height / 2),
