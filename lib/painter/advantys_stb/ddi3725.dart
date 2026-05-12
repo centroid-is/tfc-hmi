@@ -206,20 +206,32 @@ class STBDDI3725BodyPainter extends CustomPainter {
   }
 
   void _drawTopLabelText(Canvas canvas, Rect strip) {
-    final tp = TextPainter(
-      text: TextSpan(
-        text: 'DDI3725',
-        style: TextStyle(
-          color: Colors.white,
-          fontSize: strip.height * 0.55,
-          fontWeight: FontWeight.bold,
+    // Auto-shrink the title font until it fits in the strip's usable width.
+    // Slim-aspect modules ate the previous fixed `strip.height * 0.55` font
+    // and produced wrapped titles ("DDI372 / 5").
+    final maxW = strip.width * 0.88;
+    double fontSize = strip.height * 0.55;
+    TextPainter tp;
+    while (true) {
+      tp = TextPainter(
+        text: TextSpan(
+          text: 'DDI3725',
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: fontSize,
+            fontWeight: FontWeight.bold,
+          ),
         ),
-      ),
-      textAlign: TextAlign.left,
-      textDirection: TextDirection.ltr,
-    )..layout(maxWidth: strip.width * 0.75);
+        textAlign: TextAlign.center,
+        textDirection: TextDirection.ltr,
+        maxLines: 1,
+      )..layout();
+      if (tp.width <= maxW || fontSize < 4) break;
+      fontSize *= 0.92;
+    }
     final dy = strip.top + (strip.height - tp.height) / 2;
-    tp.paint(canvas, Offset(strip.left + strip.width * 0.06, dy));
+    final dx = strip.left + (strip.width - tp.width) / 2;
+    tp.paint(canvas, Offset(dx, dy));
   }
 
   /// Draws the two terminal plug blocks at the bottom of the module body:
@@ -278,11 +290,12 @@ class STBDDI3725BodyPainter extends CustomPainter {
       canvas.drawRRect(plugRRect, Paint()..color = Colors.grey.shade400);
       canvas.drawRRect(plugRRect, plugBorderPaint);
 
-      // Stacked wire-entry ports inside the plug body — 8 small horizontal
+      // Stacked wire-entry ports inside the plug body — 18 small horizontal
       // rounded-rect "holes" running top-to-bottom on the LEFT side of the
-      // plug interior. Mirrors the real Schneider terminal-connector shape
-      // visible in the DXF (each port is a wire-insertion mouth).
-      const portsPerBlock = 8;
+      // plug interior. Real Schneider Advantys STB I/O modules expose 18
+      // ports per terminal block (16 channel pairs + power), confirmed by
+      // the original Phase 04 painter and the user's hardware photo.
+      const portsPerBlock = 18;
       final portsAreaTop = plugRect.top + plugH * 0.06;
       final portsAreaH = plugH * 0.88;
       final portSlotH = portsAreaH / portsPerBlock;

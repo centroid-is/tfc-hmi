@@ -172,20 +172,31 @@ class STBDDO3705BodyPainter extends CustomPainter {
   }
 
   void _drawTopLabelText(Canvas canvas, Rect strip) {
-    final tp = TextPainter(
-      text: TextSpan(
-        text: 'DDO3705',
-        style: TextStyle(
-          color: Colors.white,
-          fontSize: strip.height * 0.55,
-          fontWeight: FontWeight.bold,
+    // Auto-shrink the title font until it fits in the strip's usable width.
+    // See ddi3725.dart for the design rationale.
+    final maxW = strip.width * 0.88;
+    double fontSize = strip.height * 0.55;
+    TextPainter tp;
+    while (true) {
+      tp = TextPainter(
+        text: TextSpan(
+          text: 'DDO3705',
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: fontSize,
+            fontWeight: FontWeight.bold,
+          ),
         ),
-      ),
-      textAlign: TextAlign.left,
-      textDirection: TextDirection.ltr,
-    )..layout(maxWidth: strip.width * 0.75);
+        textAlign: TextAlign.center,
+        textDirection: TextDirection.ltr,
+        maxLines: 1,
+      )..layout();
+      if (tp.width <= maxW || fontSize < 4) break;
+      fontSize *= 0.92;
+    }
     final dy = strip.top + (strip.height - tp.height) / 2;
-    tp.paint(canvas, Offset(strip.left + strip.width * 0.06, dy));
+    final dx = strip.left + (strip.width - tp.width) / 2;
+    tp.paint(canvas, Offset(dx, dy));
   }
 
   /// Renders the "▸" arrow glyph immediately to the LEFT of the "DDO3705"
@@ -264,7 +275,8 @@ class STBDDO3705BodyPainter extends CustomPainter {
       canvas.drawRRect(plugRRect, Paint()..color = Colors.grey.shade400);
       canvas.drawRRect(plugRRect, plugBorderPaint);
 
-      const portsPerBlock = 8;
+      // 18 ports per terminal block — see ddi3725.dart for rationale.
+      const portsPerBlock = 18;
       final portsAreaTop = plugRect.top + plugH * 0.06;
       final portsAreaH = plugH * 0.88;
       final portSlotH = portsAreaH / portsPerBlock;

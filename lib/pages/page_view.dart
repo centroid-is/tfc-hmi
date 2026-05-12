@@ -415,26 +415,31 @@ class _AssetStackState extends ConsumerState<AssetStack> {
               pos = pos == TextPos.above ? TextPos.below : TextPos.above;
             }
             final labelOff = labelOffset(center, assetSize, textSize, pos);
+            // In editor mode, the label must NOT intercept pointer events —
+            // otherwise dragging an asset whose label overlaps the body
+            // (e.g. a button with TextPos.inside) is hijacked by the Text
+            // widget's hit-test, and the operator can't move the asset.
+            // Wrap in IgnorePointer when absorb=true so all events fall
+            // through to the editor's overlay GestureDetector below.
+            final labelWidget = widget.absorb
+                ? IgnorePointer(child: Text(asset.text!, style: labelStyle))
+                : GestureDetector(
+                    onSecondaryTapUp: isMcpChatAvailable()
+                        ? (details) {
+                            showAssetContextMenu(
+                              context,
+                              details.globalPosition,
+                              () => debugAsset(ref, asset),
+                            );
+                          }
+                        : null,
+                    child: Text(asset.text!, style: labelStyle),
+                  );
             positionedChildren.add(
               Positioned(
                 left: labelOff.dx,
                 top: labelOff.dy,
-                child: GestureDetector(
-                  onSecondaryTapUp:
-                      !widget.absorb && isMcpChatAvailable()
-                          ? (details) {
-                              showAssetContextMenu(
-                                context,
-                                details.globalPosition,
-                                () => debugAsset(ref, asset),
-                              );
-                            }
-                          : null,
-                  child: Text(
-                    asset.text!,
-                    style: labelStyle,
-                  ),
-                ),
+                child: labelWidget,
               ),
             );
           }

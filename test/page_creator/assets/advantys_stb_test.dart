@@ -2335,14 +2335,15 @@ void main() {
   });
 
   group('STBPDT3100 aspect ratio (slim DIN-rail Beckhoff parity)', () {
-    test('kPDT3100AspectRatio matches real Schneider PDT3100 hardware (~0.108)',
+    test('kPDT3100AspectRatio reads as slimmest while staying legible (~0.18)',
         () {
-      // Real Schneider STBPDT3100 dimensions: 13.9 mm × 128.25 mm
-      // → aspect ≈ 0.108. PDT is the SLIMMEST module in the Advantys STB
-      // family (half-base-width power distribution, no I/O channels).
-      // Allow ±15% tolerance for floating-point drift.
-      expect(kPDT3100AspectRatio, greaterThan(0.09));
-      expect(kPDT3100AspectRatio, lessThan(0.13));
+      // Real Schneider STBPDT3100 hardware is 13.9 mm × 128.25 mm
+      // (aspect 0.108), but at typical HMI display sizes that's too narrow
+      // for the title and plug topology to render legibly. Bumped to
+      // ~0.18 — visibly the slimmest in the family but with breathing
+      // room for the layout. PDT must remain narrower than DDI/DDO (0.219).
+      expect(kPDT3100AspectRatio, greaterThan(0.13));
+      expect(kPDT3100AspectRatio, lessThan(0.22));
     });
   });
 

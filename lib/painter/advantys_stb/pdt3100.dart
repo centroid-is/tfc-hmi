@@ -52,12 +52,13 @@ import 'io16.dart' show bodyColor;
 
 /// Aspect ratio width / height for the PDT3100 body.
 ///
-/// Real Schneider STBPDT3100 dimensions: 13.9 mm wide × 128.25 mm tall →
-/// aspect ≈ 0.108. The PDT is the SLIMMEST module in the Advantys STB
-/// family (half-base width — just power distribution, no I/O channels).
-/// The DXF at .planning/research/dxf/PDT3100_mcadid0005043.dxf shows the
-/// long narrow profile with two terminal connector cutouts (INPUT, OUTPUT).
-const double kPDT3100AspectRatio = 0.108;
+/// Real Schneider STBPDT3100 hardware is 13.9 mm × 128.25 mm (aspect 0.108),
+/// but at typical HMI display sizes that's too slim — the "PDT3100" title
+/// text and the INPUT/OUTPUT plug terminal layouts don't have room to breathe
+/// at that ratio. Bumped to 0.18 (~64% of DDI/DDO's 0.219) so the module
+/// reads as visibly the slimmest in the family while still rendering the
+/// plug topology and label legibly.
+const double kPDT3100AspectRatio = 0.18;
 
 /// Widget wrapper around [STBPDT3100BodyPainter]. Bound to an optional
 /// `inputOk` bool — `true` lights the single front-panel LED green; any
@@ -209,20 +210,32 @@ class STBPDT3100BodyPainter extends CustomPainter {
   }
 
   void _drawTopLabelText(Canvas canvas, Rect strip) {
-    final tp = TextPainter(
-      text: TextSpan(
-        text: 'PDT3100',
-        style: TextStyle(
-          color: Colors.white,
-          fontSize: strip.height * 0.42,
-          fontWeight: FontWeight.bold,
+    // Auto-shrink the title font until it fits in the strip's usable width.
+    // See ddi3725.dart for the design rationale — slim-aspect modules wrap
+    // a fixed-size title across multiple lines, which reads as garbage.
+    final maxW = strip.width * 0.88;
+    double fontSize = strip.height * 0.42;
+    TextPainter tp;
+    while (true) {
+      tp = TextPainter(
+        text: TextSpan(
+          text: 'PDT3100',
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: fontSize,
+            fontWeight: FontWeight.bold,
+          ),
         ),
-      ),
-      textAlign: TextAlign.left,
-      textDirection: TextDirection.ltr,
-    )..layout(maxWidth: strip.width * 0.95);
+        textAlign: TextAlign.center,
+        textDirection: TextDirection.ltr,
+        maxLines: 1,
+      )..layout();
+      if (tp.width <= maxW || fontSize < 4) break;
+      fontSize *= 0.92;
+    }
     final dy = strip.top + (strip.height - tp.height) / 2;
-    tp.paint(canvas, Offset(strip.left + strip.width * 0.08, dy));
+    final dx = strip.left + (strip.width - tp.width) / 2;
+    tp.paint(canvas, Offset(dx, dy));
   }
 
   /// BATCH2 Defect C: small dark-inset IN/OUT LED viewport. Mirrors the real
