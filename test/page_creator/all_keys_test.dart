@@ -239,13 +239,14 @@ void main() {
     });
 
     // -------------------------------------------------------------------
-    // Plan 05-01: AdvantysSTBStackConfig composite allKeys flat-map.
-    // Mirrors the CX5010 group above with the locked CONTEXT-line-27 shape
-    // (`expand + where(isNotEmpty) + toSet + toList`), plus an empty-string
-    // defence test using a private mock asset.
+    // Phase 5 RETROFIT (2026-05-12): STBNIP2311Config composite allKeys
+    // flat-map. The composite-parent behavior was moved from the deleted
+    // `AdvantysSTBStackConfig` onto the NIP2311 head (mirrors CX5010/EK1100
+    // precedent). Same `expand + where(isNotEmpty) + toSet + toList` shape,
+    // same defensive empty-string filter.
     // -------------------------------------------------------------------
-    test('AdvantysSTBStackConfig returns keys from subdevices', () {
-      final stack = AdvantysSTBStackConfig()
+    test('STBNIP2311Config returns keys from subdevices', () {
+      final head = STBNIP2311Config()
         ..subdevices = <Asset>[
           STBDDI3725Config(
             nameOrId: 'DI',
@@ -255,7 +256,7 @@ void main() {
           STBDDO3705Config(nameOrId: 'DO', rawStateKey: 'do.raw'),
           STBPDT3100Config(nameOrId: 'PDT', inputOkKey: 'pdt.ok'),
         ];
-      final keys = stack.allKeys;
+      final keys = head.allKeys;
       expect(
         keys,
         containsAll(<String>['di.raw', 'di.force', 'do.raw', 'pdt.ok']),
@@ -263,36 +264,36 @@ void main() {
       expect(keys, hasLength(4));
     });
 
-    test('AdvantysSTBStackConfig with empty subdevices returns empty', () {
-      expect(AdvantysSTBStackConfig().allKeys, isEmpty);
+    test('STBNIP2311Config with empty subdevices returns empty', () {
+      expect(STBNIP2311Config().allKeys, isEmpty);
     });
 
-    test('AdvantysSTBStackConfig dedupes keys across subdevices', () {
+    test('STBNIP2311Config dedupes keys across subdevices', () {
       // Two PDT subdevices both reference the same PLC key. The composite
       // must collapse them to a single entry via the Set step.
-      final stack = AdvantysSTBStackConfig()
+      final head = STBNIP2311Config()
         ..subdevices = <Asset>[
           STBPDT3100Config(nameOrId: 'PDT1', inputOkKey: 'shared.key'),
           STBPDT3100Config(nameOrId: 'PDT2', inputOkKey: 'shared.key'),
         ];
-      final keys = stack.allKeys;
+      final keys = head.allKeys;
       expect(keys, <String>['shared.key']);
       expect(keys, hasLength(1));
     });
 
     test(
-      'AdvantysSTBStackConfig drops empty-string keys from subdevices '
-      '(defensive .where(isNotEmpty) per CONTEXT line 27)',
+      'STBNIP2311Config drops empty-string keys from subdevices '
+      '(defensive .where(isNotEmpty))',
       () {
-        // The leaf-level regex at common.dart:223-243 already drops empties
-        // for leaves, but a future leaf override could regress and return
-        // `['']`. The composite's defensive `.where((k) => k.isNotEmpty)`
-        // is the safety net. Mock leaf returns ['valid', ''] and we assert
-        // only 'valid' survives.
-        final stack = AdvantysSTBStackConfig()
+        // The leaf-level regex in common.dart already drops empties for
+        // leaves, but a future leaf override could regress and return `['']`.
+        // The composite's defensive `.where((k) => k.isNotEmpty)` is the
+        // safety net. Mock leaf returns ['valid', ''] and we assert only
+        // 'valid' survives.
+        final head = STBNIP2311Config()
           ..subdevices = <Asset>[_MockEmptyKeyAsset()];
-        expect(stack.allKeys, <String>['valid']);
-        expect(stack.allKeys.contains(''), isFalse);
+        expect(head.allKeys, <String>['valid']);
+        expect(head.allKeys.contains(''), isFalse);
       },
     );
 
