@@ -270,10 +270,12 @@ class STBPDT3100BodyPainter extends CustomPainter {
     );
   }
 
-  /// Dark rectangular LED viewport with stacked "IN" / "OUT" text on the
-  /// right and a status LED dot on the left. Both text labels render in
-  /// normal horizontal orientation (NOT rotated). `inputOk == true` →
-  /// green dot; otherwise dim grey.
+  /// Dark rectangular LED viewport with two status LEDs (one per row),
+  /// laid out like the NIP2311 RUN/PWR strip — small dot on the left,
+  /// label on the right. Top row = "IN", bottom row = "OUT". Both LEDs
+  /// follow the same `inputOk` state (green when true, dim grey otherwise)
+  /// for now; the PDT3100 config exposes a single bool so both indicators
+  /// share it. Independent OUT state can be added later if needed.
   void _drawInOutLedViewport(Canvas canvas, Rect rect) {
     if (rect.width <= 0 || rect.height <= 0) return;
 
@@ -301,39 +303,41 @@ class STBPDT3100BodyPainter extends CustomPainter {
         ..strokeWidth = (inset.height * 0.04).clamp(0.5, 2.0),
     );
 
-    // Status LED dot — bottom-left quadrant of the viewport.
-    final dotR = inset.height * 0.10;
-    final dotCx = inset.left + inset.width * 0.32;
-    final dotCy = inset.top + inset.height * 0.72;
+    // Two LED rows — IN on top, OUT below. Geometry mirrors the NIP2311
+    // `_drawLedStrip` helper: dot on the left at ~18% width, label start
+    // at ~32% width. Dot radius is ~22% of row height; label font is
+    // ~45% of row height.
+    const labels = <String>['IN', 'OUT'];
+    final rowH = inset.height / labels.length;
+    final dotR = rowH * 0.22;
+    final dotCx = inset.left + inset.width * 0.30;
+    final labelLeft = inset.left + inset.width * 0.50;
+    final labelMaxW = inset.right - labelLeft - inset.width * 0.06;
+
+    final ringPaint = Paint()
+      ..color = Colors.grey.shade400
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = (dotR * 0.18).clamp(0.4, 1.5);
+
     final Color dotColor =
         (inputOk == true) ? _ledGreen : Colors.grey.shade500;
-    canvas.drawCircle(Offset(dotCx, dotCy), dotR, Paint()..color = dotColor);
-    canvas.drawCircle(
-      Offset(dotCx, dotCy),
-      dotR,
-      Paint()
-        ..color = Colors.black54
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = (dotR * 0.18).clamp(0.4, 1.5),
-    );
 
-    // Stacked "IN" / "OUT" caption — bottom half of the viewport, normal
-    // horizontal orientation, light grey on dark. Both lines fit
-    // comfortably in the lower half of the viewport.
-    final captionTopY = inset.top + inset.height * 0.50;
-    final captionH = inset.height * 0.45;
-    final lineH = captionH / 2;
-    final captionLeft = inset.left + inset.width * 0.52;
-    final captionMaxW = inset.right - captionLeft - inset.width * 0.06;
-    final captionFontSize = (lineH * 0.78).clamp(4.0, 200.0);
+    for (int i = 0; i < labels.length; i++) {
+      final dotCy = inset.top + i * rowH + rowH / 2;
 
-    void drawCaption(String text, double topY) {
+      canvas.drawCircle(
+        Offset(dotCx, dotCy),
+        dotR,
+        Paint()..color = dotColor,
+      );
+      canvas.drawCircle(Offset(dotCx, dotCy), dotR, ringPaint);
+
       final tp = TextPainter(
         text: TextSpan(
-          text: text,
+          text: labels[i],
           style: TextStyle(
             color: Colors.grey.shade100,
-            fontSize: captionFontSize,
+            fontSize: rowH * 0.45,
             fontWeight: FontWeight.w600,
             letterSpacing: 0.6,
           ),
@@ -341,15 +345,12 @@ class STBPDT3100BodyPainter extends CustomPainter {
         textAlign: TextAlign.left,
         textDirection: TextDirection.ltr,
         maxLines: 1,
-      )..layout(maxWidth: captionMaxW > 0 ? captionMaxW : inset.width * 0.40);
+      )..layout(maxWidth: labelMaxW > 0 ? labelMaxW : inset.width * 0.40);
       tp.paint(
         canvas,
-        Offset(captionLeft, topY + (lineH - tp.height) / 2),
+        Offset(labelLeft, dotCy - tp.height / 2),
       );
     }
-
-    drawCaption('IN', captionTopY);
-    drawCaption('OUT', captionTopY + lineH);
   }
 
   /// Draws a composite plug terminal: a wider WHITE block on the left
