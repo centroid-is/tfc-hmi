@@ -22,7 +22,9 @@
 //                                       (cross-vendor reuse is intentional — the
 //                                       RJ45 jack glyph is shared between
 //                                       Schneider and Beckhoff).
-//     5. Bottom power footer   (~15%)  "24 VDC 0.55A" + "Schneider Electric".
+//     5. Bottom whitespace     (~15%)  Intentionally blank since BATCH2 fixes
+//                                       removed the decorative voltage rating
+//                                       and vendor branding (Defects D + F).
 //
 // Conventions:
 // - Body cream from `bodyColor` (re-exported through io16.dart from Beckhoff —
@@ -100,6 +102,11 @@ class STBNIP2311BodyPainter extends CustomPainter {
   static const double _ledStripFraction = 0.30;
   static const double _subtitleBandFraction = 0.07;
   static const double _ethernetFraction = 0.38;
+  // Slice retained for layout-stability — the 15% trailing band that used
+  // to carry the decorative voltage / vendor footer (removed by BATCH2
+  // Defects D + F) is preserved as blank whitespace below the RJ45 ports
+  // so the rest of the painter's layout fractions do not need to shift.
+  // ignore: unused_field
   static const double _bottomFooterFraction = 0.15;
 
   // Status-LED palette — fixed normal state.
@@ -171,11 +178,11 @@ class STBNIP2311BodyPainter extends CustomPainter {
     _drawEthernetPorts(canvas, ethernetRect);
     y += ethernetH;
 
-    // 6. Bottom decorative power footer.
-    final footerH = size.height * _bottomFooterFraction;
-    final footerRect = Rect.fromLTWH(0, y, size.width, footerH);
-    _drawBottomFooter(canvas, footerRect);
-
+    // 6. BATCH2 Defects D + F: bottom-footer region intentionally left
+    // blank — the previous decorative voltage-rating and vendor-branding
+    // text was removed at the user's request. The `_bottomFooterFraction`
+    // slice of the body height is preserved as whitespace so the rest of
+    // the layout (header, LEDs, subtitle, ports) does not need to reflow.
     canvas.restore();
   }
 
@@ -294,45 +301,6 @@ class STBNIP2311BodyPainter extends CustomPainter {
     canvas.restore();
   }
 
-  void _drawBottomFooter(Canvas canvas, Rect rect) {
-    // Two-line decorative footer: "24 VDC 0.55A" then "Schneider Electric".
-    // Both lines centered horizontally, stacked with a small inter-line gap.
-    final lineH = rect.height * 0.45;
-
-    final powerTp = TextPainter(
-      text: TextSpan(
-        text: '24 VDC 0.55A',
-        style: TextStyle(
-          color: Colors.black,
-          fontSize: lineH * 0.55,
-          fontWeight: FontWeight.w500,
-        ),
-      ),
-      textAlign: TextAlign.center,
-      textDirection: TextDirection.ltr,
-    )..layout(minWidth: rect.width, maxWidth: rect.width);
-    powerTp.paint(
-      canvas,
-      Offset(rect.left, rect.top + rect.height * 0.10),
-    );
-
-    final brandTp = TextPainter(
-      text: TextSpan(
-        text: 'Schneider Electric',
-        style: TextStyle(
-          color: stbAccentBlue,
-          fontSize: lineH * 0.50,
-          fontWeight: FontWeight.bold,
-        ),
-      ),
-      textAlign: TextAlign.center,
-      textDirection: TextDirection.ltr,
-    )..layout(minWidth: rect.width, maxWidth: rect.width);
-    brandTp.paint(
-      canvas,
-      Offset(rect.left, rect.top + rect.height * 0.55),
-    );
-  }
 
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) {

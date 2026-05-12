@@ -20,7 +20,9 @@
 //     4. Schneider blue band   (~7%)    "24 VDC POWER" subtitle.
 //     5. Input terminal area   (~38%)   Decorative two terminal blocks with
 //                                        "INPUT +" / "INPUT -" small labels.
-//     6. Bottom power footer   (~21%)   "24 VDC 0.55A" + "Schneider Electric".
+//     6. Bottom whitespace     (~21%)   Intentionally blank since BATCH2 fixes
+//                                        removed the decorative voltage rating
+//                                        and vendor branding (Defects D + F).
 //
 // Conventions:
 // - Body cream from `bodyColor` (re-exported through io16.dart from Beckhoff —
@@ -106,6 +108,10 @@ class STBPDT3100BodyPainter extends CustomPainter {
   static const double _ledRowFraction = 0.14;
   static const double _subtitleBandFraction = 0.07;
   static const double _terminalFraction = 0.38;
+  // Retained-but-unused: 21% trailing slice formerly held the decorative
+  // voltage rating + vendor branding (BATCH2 Defects D + F removed it).
+  // Preserved as whitespace so the other layout fractions are stable.
+  // ignore: unused_field
   static const double _bottomFooterFraction = 0.21;
 
   // Status-LED palette — same green as the NIP2311 RUN/PWR + DDI3725 RDY.
@@ -175,11 +181,10 @@ class STBPDT3100BodyPainter extends CustomPainter {
     _drawTerminals(canvas, terminalRect);
     y += terminalH;
 
-    // 7. Bottom decorative power footer.
-    final footerH = size.height * _bottomFooterFraction;
-    final footerRect = Rect.fromLTWH(0, y, size.width, footerH);
-    _drawBottomFooter(canvas, footerRect);
-
+    // 7. BATCH2 Defects D + F: bottom-footer region intentionally left
+    // blank — voltage-rating and vendor-branding text removed at the
+    // user's request. The `_bottomFooterFraction` slice of the body height
+    // is preserved as whitespace so the rest of the layout does not reflow.
     canvas.restore();
   }
 
@@ -373,45 +378,6 @@ class STBPDT3100BodyPainter extends CustomPainter {
     tp.paint(canvas, Offset(anchor.dx, anchor.dy - tp.height / 2));
   }
 
-  void _drawBottomFooter(Canvas canvas, Rect rect) {
-    // Two-line decorative footer: "24 VDC 0.55A" then "Schneider Electric".
-    // Both lines centered horizontally, stacked with a small inter-line gap.
-    final lineH = rect.height * 0.45;
-
-    final powerTp = TextPainter(
-      text: TextSpan(
-        text: '24 VDC 0.55A',
-        style: TextStyle(
-          color: Colors.black,
-          fontSize: lineH * 0.55,
-          fontWeight: FontWeight.w500,
-        ),
-      ),
-      textAlign: TextAlign.center,
-      textDirection: TextDirection.ltr,
-    )..layout(minWidth: rect.width, maxWidth: rect.width);
-    powerTp.paint(
-      canvas,
-      Offset(rect.left, rect.top + rect.height * 0.10),
-    );
-
-    final brandTp = TextPainter(
-      text: TextSpan(
-        text: 'Schneider Electric',
-        style: TextStyle(
-          color: stbAccentBlue,
-          fontSize: lineH * 0.50,
-          fontWeight: FontWeight.bold,
-        ),
-      ),
-      textAlign: TextAlign.center,
-      textDirection: TextDirection.ltr,
-    )..layout(minWidth: rect.width, maxWidth: rect.width);
-    brandTp.paint(
-      canvas,
-      Offset(rect.left, rect.top + rect.height * 0.55),
-    );
-  }
 
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) {
