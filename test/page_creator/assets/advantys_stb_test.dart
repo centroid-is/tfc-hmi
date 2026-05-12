@@ -3166,7 +3166,12 @@ void main() {
       await tester.pumpWidget(
         ProviderScope(
           overrides: [
-            stateManProvider.overrideWith((ref) async => _FakeStateMan()),
+            // _EmptyStubStateMan returns empty streams for every subscribe.
+            // The DDI/DDO subdevices in the canonical fixture have non-null
+            // rawStateKeys, so an empty `_FakeStateMan` would NoSuchMethod
+            // when the StreamBuilder fires. Empty stream → stale shell render
+            // (which is still tappable; that's the QUAL-07 requirement).
+            stateManProvider.overrideWith((ref) async => _EmptyStubStateMan()),
           ],
           child: MaterialApp(
             home: Scaffold(
@@ -3377,6 +3382,20 @@ void main() {
 /// `*Key` fields on the config are null, so `_combinedStream` never calls
 /// `subscribe` and the fake's no-op behaviour is sufficient.
 class _FakeStateMan extends Fake implements StateMan {}
+
+/// StateMan stub for Plan 05-02 full-stack integration tests where DDI/DDO
+/// subdevices DO have non-null `rawStateKey`s (per the canonical 4-module
+/// fixture). Returns an empty `Stream<DynamicValue>` for every `subscribe`,
+/// so the leaf widgets' `StreamBuilder`s sit at "no data" — the body renders
+/// the stale shell which is still tappable and routes to its detail dialog.
+class _EmptyStubStateMan extends Fake implements StateMan {
+  @override
+  Future<Stream<DynamicValue>> subscribe(String key) async =>
+      const Stream<DynamicValue>.empty();
+
+  @override
+  Future<void> write(String key, DynamicValue value) async {}
+}
 
 /// StateMan stub that emits canned DynamicValues for each subscribed key and
 /// records every `write` call for later assertion. Used by the
