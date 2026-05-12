@@ -54,16 +54,27 @@ void main() {
     // asset size. Render the arrow inside two SizedBoxes (small vs large);
     // the rendered Icon's effective size must scale ~linearly.
     testWidgets('Icon glyph size scales with parent SizedBox', (tester) async {
-      final smallCfg = ArrowConfig(key: '', label: '');
       await tester.pumpWidget(wrap(
-        SizedBox(width: 40, height: 40, child: smallCfg.build(tester.element(find.byType(Scaffold)))),
+        SizedBox(
+          width: 40,
+          height: 40,
+          child: Builder(
+            builder: (ctx) => ArrowConfig(key: '', label: '').build(ctx),
+          ),
+        ),
       ));
       await tester.pumpAndSettle();
       final smallIcon = tester.widget<Icon>(find.byType(Icon));
       final smallSize = smallIcon.size ?? 0;
 
       await tester.pumpWidget(wrap(
-        SizedBox(width: 200, height: 200, child: ArrowConfig(key: '', label: '').build(tester.element(find.byType(Scaffold)))),
+        SizedBox(
+          width: 200,
+          height: 200,
+          child: Builder(
+            builder: (ctx) => ArrowConfig(key: '', label: '').build(ctx),
+          ),
+        ),
       ));
       await tester.pumpAndSettle();
       final largeIcon = tester.widget<Icon>(find.byType(Icon));
