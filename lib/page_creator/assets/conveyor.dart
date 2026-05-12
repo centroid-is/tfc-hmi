@@ -744,8 +744,12 @@ class _ConveyorState extends ConsumerState<Conveyor>
         }
 
         // simulateBatches handled at top of build() — independent of streams.
-
-        if (dynValue['batches'] != null) {
+        // When simulation is on, the periodic timer owns `_batches`. Skipping
+        // _updateBatches here prevents an incoming snapshot (e.g. a configured
+        // batchesKey emitting unoccupied slots) from clobbering the simulator
+        // on every stream tick.
+        if (!(widget.config.simulateBatches ?? false) &&
+            dynValue['batches'] != null) {
           _updateBatches(dynValue['batches']!);
         }
 
