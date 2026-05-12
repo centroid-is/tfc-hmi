@@ -12,7 +12,8 @@
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:tfc/pages/page_editor.dart' show marqueeHitTestRotatedAsset;
+import 'package:tfc/pages/page_editor.dart'
+    show marqueeHitTestRotatedAsset, projectDragDeltaToCanvas;
 
 void main() {
   // Asset centred at (100, 100), 40 wide x 10 tall (half-extents 20 x 5).
@@ -141,6 +142,71 @@ void main() {
         ),
         isFalse,
       );
+    });
+  });
+
+  group('projectDragDeltaToCanvas — drag direction matches screen at all angles',
+      () {
+    // Bug: dragging a rotated sensor LEFT/RIGHT made it move UP/DOWN because
+    // `DragUpdateDetails.delta` arrived in the rotated GestureDetector's
+    // local frame. Fix: project the delta back into the canvas frame by
+    // applying +angle.
+
+    test('angle 0: identity', () {
+      final out = projectDragDeltaToCanvas(
+        delta: const Offset(5, 3),
+        angleDegrees: 0,
+      );
+      expect(out.dx, closeTo(5, 1e-9));
+      expect(out.dy, closeTo(3, 1e-9));
+    });
+
+    test('angle 90: a local-right drag is a canvas-down drag', () {
+      // At angle 90 the asset has rotated CW from the operator\'s POV. The
+      // local right axis points down on screen. So when the operator drags
+      // RIGHT on screen, in the rotated GestureDetector\'s local frame
+      // that arrives as `delta = (0, +X)` (local-DOWN, because Flutter\'s
+      // +y is screen-down and the rotation maps screen-right → local-down...
+      // actually it depends on rotation direction. We test the inverse:
+      // a local +x delta (which a 90°-rotated GestureDetector receives
+      // when the screen pointer moves DOWN) projects to canvas +y here.
+      final out = projectDragDeltaToCanvas(
+        delta: const Offset(10, 0),
+        angleDegrees: 90,
+      );
+      // cos90=0, sin90=1: (10*0 - 0*1, 10*1 + 0*0) = (0, 10)
+      expect(out.dx, closeTo(0, 1e-9));
+      expect(out.dy, closeTo(10, 1e-9));
+    });
+
+    test('angle 90: a local-down drag is a canvas-left drag', () {
+      final out = projectDragDeltaToCanvas(
+        delta: const Offset(0, 10),
+        angleDegrees: 90,
+      );
+      // cos90=0, sin90=1: (0*0 - 10*1, 0*1 + 10*0) = (-10, 0)
+      expect(out.dx, closeTo(-10, 1e-9));
+      expect(out.dy, closeTo(0, 1e-9));
+    });
+
+    test('angle 180: inverts both axes', () {
+      final out = projectDragDeltaToCanvas(
+        delta: const Offset(5, 3),
+        angleDegrees: 180,
+      );
+      expect(out.dx, closeTo(-5, 1e-9));
+      expect(out.dy, closeTo(-3, 1e-9));
+    });
+
+    test('angle 90 round trip: project then inverse-project recovers delta',
+        () {
+      const original = Offset(7, -4);
+      final canvas =
+          projectDragDeltaToCanvas(delta: original, angleDegrees: 90);
+      final back =
+          projectDragDeltaToCanvas(delta: canvas, angleDegrees: -90);
+      expect(back.dx, closeTo(original.dx, 1e-9));
+      expect(back.dy, closeTo(original.dy, 1e-9));
     });
   });
 }

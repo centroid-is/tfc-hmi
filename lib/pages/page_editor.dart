@@ -57,6 +57,30 @@ bool marqueeHitTestRotatedAsset({
   return localDx.abs() <= halfW && localDy.abs() <= halfH;
 }
 
+/// Projects a drag delta from the rotated GestureDetector's local frame
+/// back into the canvas (parent) frame. The editor's per-asset
+/// GestureDetector lives inside `Transform.rotate(angleRadians)` (so the
+/// hit area follows the rotated visual), which means `DragUpdateDetails.delta`
+/// is also expressed in that rotated frame — a screen-right drag at angle
+/// 90° arrives as local-down. This helper rotates the delta back so the
+/// editor can apply it to the asset's canvas-space coordinates directly.
+///
+/// For `angleDegrees == 0` the rotation is identity and the returned offset
+/// equals the input.
+@visibleForTesting
+Offset projectDragDeltaToCanvas({
+  required Offset delta,
+  required double angleDegrees,
+}) {
+  final angleRad = angleDegrees * math.pi / 180;
+  final cosA = math.cos(angleRad);
+  final sinA = math.sin(angleRad);
+  return Offset(
+    delta.dx * cosA - delta.dy * sinA,
+    delta.dx * sinA + delta.dy * cosA,
+  );
+}
+
 class PageEditor extends ConsumerStatefulWidget {
   /// Optional proposal JSON passed via Beamer route data.
   /// When non-null, the editor pre-populates from the proposal instead of
@@ -987,13 +1011,25 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     final assetsToMove =
         _selectedAssets.contains(asset) ? _selectedAssets.toList() : [asset];
 
+    // `details.delta` arrives in the local coord space of the GestureDetector
+    // that received the event. The selection-rotation fix wrapped that
+    // GestureDetector inside `Transform.rotate(angle)`, so for a rotated
+    // asset the local frame is rotated and a screen-right drag arrives as
+    // local-down (and vice versa). projectDragDeltaToCanvas projects the
+    // delta back into the canvas (parent) frame. For angle == 0 it's an
+    // identity transform — behaviour matches the pre-rotation editor exactly.
+    final canvasDelta = projectDragDeltaToCanvas(
+      delta: details.delta,
+      angleDegrees: asset.coordinates.angle ?? 0.0,
+    );
+
     _updateState(() {
       for (final assetToMove in assetsToMove) {
         final newX = (assetToMove.coordinates.x +
-                details.delta.dx / constraints.maxWidth)
+                canvasDelta.dx / constraints.maxWidth)
             .clamp(0.0, 1.0);
         final newY = (assetToMove.coordinates.y +
-                details.delta.dy / constraints.maxHeight)
+                canvasDelta.dy / constraints.maxHeight)
             .clamp(0.0, 1.0);
 
         assetToMove.coordinates =
