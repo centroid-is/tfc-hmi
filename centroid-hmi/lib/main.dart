@@ -58,7 +58,6 @@ import 'package:tfc/widgets/proposal_banner.dart';
 import 'package:tfc/marionette/route_logger.dart';
 
 import 'marionette_init.dart';
-import 'pages/version_manager_page.dart';
 
 /// Enable with: --dart-define=MARIONETTE=true
 const _enableMarionette = bool.fromEnvironment('MARIONETTE');
@@ -199,7 +198,6 @@ Future<void> _startApp([bool debugMode = false]) async {
         MenuItem(label: 'History View', path: '/advanced/history-view', icon: Icons.history),
         MenuItem(label: 'Server Config', path: '/advanced/server-config', icon: FontAwesomeIcons.server),
         MenuItem(label: 'Key Repository', path: '/advanced/key-repository', icon: FontAwesomeIcons.key),
-        MenuItem(label: 'Version Manager', path: '/advanced/version-manager', icon: Icons.update),
         MenuItem(label: 'Knowledge Base', path: '/advanced/knowledge-base', icon: Icons.library_books),
       ],
     ),
@@ -337,11 +335,6 @@ RoutesLocationBuilder createLocationBuilder(List<MenuItem> extraMenuItems) {
     '/advanced/key-repository': (context, state, args) => BeamPage(
         key: const ValueKey('/advanced/key-repository'), title: 'Key Repository',
         child: KeyRepositoryPage(proposalData: args is String ? args : null)),
-    '/advanced/version-manager': (context, state, args) => BeamPage(
-          key: const ValueKey('/advanced/version-manager'),
-          title: 'Version Manager',
-          child: VersionManagerPage(launcher: managerLauncher),
-        ),
     '/advanced/knowledge-base': (context, state, args) => BeamPage(
         key: const ValueKey('/advanced/knowledge-base'), title: 'Knowledge Base', child: const TechDocLibraryPage()),
     AppRoutes.alarmView: (context, state, args) =>

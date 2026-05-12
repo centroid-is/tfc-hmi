@@ -14,6 +14,7 @@ import 'analog_box.dart';
 import 'option_variable.dart';
 import 'text.dart';
 import 'beckhoff.dart';
+import 'advantys_stb.dart';
 import 'schneider.dart';
 import 'icon.dart';
 import 'table.dart';
@@ -26,6 +27,8 @@ import 'bpm.dart';
 import 'rate_value.dart';
 import 'speedbatcher.dart';
 import 'conveyor_gate.dart';
+import 'elevator.dart';
+import 'sensor.dart';
 import 'drawing_viewer.dart';
 
 class AssetRegistry {
@@ -37,6 +40,8 @@ class AssetRegistry {
     ButtonConfig: ButtonConfig.fromJson,
     ConveyorConfig: ConveyorConfig.fromJson,
     ConveyorGateConfig: ConveyorGateConfig.fromJson,
+    SensorConfig: SensorConfig.fromJson,
+    ElevatorConfig: ElevatorConfig.fromJson,
     ConveyorColorPaletteConfig: ConveyorColorPaletteConfig.fromJson,
     ArrowConfig: ArrowConfig.fromJson,
     LEDColumnConfig: LEDColumnConfig.fromJson,
@@ -58,6 +63,10 @@ class AssetRegistry {
     BeckhoffEL9187Config: BeckhoffEL9187Config.fromJson,
     BeckhoffEK1100Config: BeckhoffEK1100Config.fromJson,
     BeckhoffEL3054Config: BeckhoffEL3054Config.fromJson,
+    STBDDI3725Config: STBDDI3725Config.fromJson,
+    STBDDO3705Config: STBDDO3705Config.fromJson,
+    STBNIP2311Config: STBNIP2311Config.fromJson,
+    STBPDT3100Config: STBPDT3100Config.fromJson,
     SchneiderATV320Config: SchneiderATV320Config.fromJson,
     IconConfig: IconConfig.fromJson,
     TableAssetConfig: TableAssetConfig.fromJson,
@@ -78,6 +87,8 @@ class AssetRegistry {
     ArrowConfig: ArrowConfig.preview,
     ConveyorConfig: ConveyorConfig.preview,
     ConveyorGateConfig: ConveyorGateConfig.preview,
+    SensorConfig: SensorConfig.preview,
+    ElevatorConfig: ElevatorConfig.preview,
     ConveyorColorPaletteConfig: ConveyorColorPaletteConfig.preview,
     NumberConfig: NumberConfig.preview,
     RatioNumberConfig: RatioNumberConfig.preview,
@@ -97,6 +108,10 @@ class AssetRegistry {
     BeckhoffEL9187Config: BeckhoffEL9187Config.preview,
     BeckhoffEK1100Config: BeckhoffEK1100Config.preview,
     BeckhoffEL3054Config: BeckhoffEL3054Config.preview,
+    STBDDI3725Config: STBDDI3725Config.preview,
+    STBDDO3705Config: STBDDO3705Config.preview,
+    STBNIP2311Config: STBNIP2311Config.preview,
+    STBPDT3100Config: STBPDT3100Config.preview,
     SchneiderATV320Config: SchneiderATV320Config.preview,
     IconConfig: IconConfig.preview,
     DrawnBoxConfig: DrawnBoxConfig.preview,
