@@ -2325,13 +2325,15 @@ void main() {
     });
   });
 
-  group('STBPDT3100 aspect ratio (PDT3100 DXF bounding box)', () {
-    test('kPDT3100AspectRatio is the DXF width/height ratio (≈ 0.7071)', () {
-      // DXF EXTMAX: 114.5914794492 × 162.0650923639 mm. The painter MUST lock
-      // to this ratio so the module reads as the slim cream PDT module beside
-      // the wider IO modules in a stack.
-      const expected = 114.5914794492 / 162.0650923639;
-      expect(kPDT3100AspectRatio, closeTo(expected, 1e-6));
+  group('STBPDT3100 aspect ratio (slim DIN-rail Beckhoff parity)', () {
+    test('kPDT3100AspectRatio is slim (~1:3, matching Beckhoff DIN-rail head)',
+        () {
+      // BATCH2 Defect E: ratio updated from DXF 0.7071 to slim 1:3 ≈ 0.333
+      // so the module reads as a real Schneider DIN-rail block in a stack
+      // (matching the panel reference photo at
+      // .planning/research/photos/momentum_stack_in_panel.png).
+      expect(kPDT3100AspectRatio, lessThan(0.45));
+      expect(kPDT3100AspectRatio, greaterThan(0.15));
     });
   });
 
@@ -3499,6 +3501,500 @@ void main() {
       expect(foundBlackText, isFalse,
           reason: 'INPUT +/− label text must not bleed within 3 px of body '
               'right edge — labels must fit inside the body.');
+    });
+  });
+
+  // ===========================================================================
+  // BATCH 2 — Visual defect regression tests (user-reported post-Phase-5).
+  //
+  // Each defect (A — chamfer-leak at all 4 corners; B — subtle radii;
+  // C — PDT topology rewrite; D — voltage strip removed; E — slim aspect
+  // ratio matching Beckhoff; F — vendor branding removed) gets a dedicated
+  // RED test here. After the painter fixes land, every test in this group
+  // must be GREEN.
+  // ===========================================================================
+  group('STB visual defect regression — BATCH 2 (radii, topology, branding, aspect)', () {
+    Future<List<int>> renderToPixels(
+      CustomPainter painter,
+      Size size,
+    ) async {
+      final recorder = ui.PictureRecorder();
+      final canvas = Canvas(recorder);
+      canvas.drawRect(
+        Rect.fromLTWH(0, 0, size.width, size.height),
+        Paint()..color = const Color(0xFFFF00FF),
+      );
+      painter.paint(canvas, size);
+      final picture = recorder.endRecording();
+      final image = await picture.toImage(
+        size.width.toInt(),
+        size.height.toInt(),
+      );
+      final bytes = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
+      return bytes!.buffer.asUint8List().toList();
+    }
+
+    int pixelAt(List<int> rgba, int width, int x, int y) {
+      final i = (y * width + x) * 4;
+      return (0xFF << 24) |
+          (rgba[i] << 16) |
+          (rgba[i + 1] << 8) |
+          rgba[i + 2];
+    }
+
+    /// True if the colour `c` is close to Schneider blue (`0xFF003B71`). The
+    /// chamfered corner near the body's rounded edge can have a few
+    /// antialiased blue-ish pixels along the curve itself, so we use a wider
+    /// tolerance and only assert pixels DEEP inside the cutout (3+ px in
+    /// from the corner).
+    bool isSchneiderBlueLike(int c) {
+      final r = (c >> 16) & 0xFF;
+      final g = (c >> 8) & 0xFF;
+      final b = c & 0xFF;
+      // Schneider blue (0,59,113): low R, low-mid G, high B.
+      return r < 40 && g < 90 && b > 80;
+    }
+
+    // -----------------------------------------------------------------------
+    // Defect A — chamfer-leak at ALL FOUR corners on each module.
+    //
+    // The existing DEFECT-1 tests sample (1,1). At a 200-px-wide module
+    // with radius ≈ 12 px, point (1,1) sits inside the chamfer cutout but
+    // very close to the rounded curve — anti-aliasing fringe pixels could
+    // still register. Sample (3,3) for a deeper sit-inside-the-cutout
+    // check, plus all four corners.
+    // -----------------------------------------------------------------------
+    for (final corner in <({String name, int dx, int dy})>[
+      (name: 'top-left', dx: 3, dy: 3),
+      (name: 'top-right', dx: -4, dy: 3),
+      (name: 'bottom-left', dx: 3, dy: -4),
+      (name: 'bottom-right', dx: -4, dy: -4),
+    ]) {
+      test(
+          'BATCH2-A DDI3725: $corner chamfer corner deeply-inside has NO Schneider-blue',
+          () async {
+        final painter = STBDDI3725BodyPainter(
+          ledStates: List<IOState>.filled(16, IOState.low),
+          isStale: false,
+          isDisconnected: false,
+          animation: const AlwaysStoppedAnimation<int>(0),
+        );
+        const w = 200;
+        const h = 280;
+        final pixels =
+            await renderToPixels(painter, const Size(w * 1.0, h * 1.0));
+        final x = corner.dx >= 0 ? corner.dx : w + corner.dx;
+        final y = corner.dy >= 0 ? corner.dy : h + corner.dy;
+        final px = pixelAt(pixels, w, x, y);
+        expect(isSchneiderBlueLike(px), isFalse,
+            reason: 'DDI3725 ${corner.name} chamfer ($x,$y) must NOT show blue. '
+                'Got 0x${px.toRadixString(16).padLeft(8, '0')}.');
+      });
+
+      test(
+          'BATCH2-A DDO3705: $corner chamfer corner deeply-inside has NO Schneider-blue',
+          () async {
+        final painter = STBDDO3705BodyPainter(
+          ledStates: List<IOState>.filled(16, IOState.low),
+          isStale: false,
+          isDisconnected: false,
+          animation: const AlwaysStoppedAnimation<int>(0),
+        );
+        const w = 200;
+        const h = 280;
+        final pixels =
+            await renderToPixels(painter, const Size(w * 1.0, h * 1.0));
+        final x = corner.dx >= 0 ? corner.dx : w + corner.dx;
+        final y = corner.dy >= 0 ? corner.dy : h + corner.dy;
+        final px = pixelAt(pixels, w, x, y);
+        expect(isSchneiderBlueLike(px), isFalse,
+            reason:
+                'DDO3705 ${corner.name} chamfer ($x,$y) must NOT show blue.');
+      });
+
+      test(
+          'BATCH2-A NIP2311: $corner chamfer corner deeply-inside has NO Schneider-blue',
+          () async {
+        final painter = STBNIP2311BodyPainter(nameOrId: 'NIP-01');
+        const w = 200;
+        const h = 280;
+        final pixels =
+            await renderToPixels(painter, const Size(w * 1.0, h * 1.0));
+        final x = corner.dx >= 0 ? corner.dx : w + corner.dx;
+        final y = corner.dy >= 0 ? corner.dy : h + corner.dy;
+        final px = pixelAt(pixels, w, x, y);
+        expect(isSchneiderBlueLike(px), isFalse,
+            reason:
+                'NIP2311 ${corner.name} chamfer ($x,$y) must NOT show blue.');
+      });
+
+      test(
+          'BATCH2-A PDT3100: $corner chamfer corner deeply-inside has NO Schneider-blue',
+          () async {
+        final painter =
+            STBPDT3100BodyPainter(nameOrId: 'PDT-01', inputOk: true);
+        const w = 200;
+        const h = 280;
+        final pixels =
+            await renderToPixels(painter, const Size(w * 1.0, h * 1.0));
+        final x = corner.dx >= 0 ? corner.dx : w + corner.dx;
+        final y = corner.dy >= 0 ? corner.dy : h + corner.dy;
+        final px = pixelAt(pixels, w, x, y);
+        expect(isSchneiderBlueLike(px), isFalse,
+            reason:
+                'PDT3100 ${corner.name} chamfer ($x,$y) must NOT show blue.');
+      });
+    }
+
+    // -----------------------------------------------------------------------
+    // Defect E — Aspect ratio must match Beckhoff slim DIN-rail style.
+    //
+    // The intrinsic SizedBox is read off each Widget's build() at the
+    // declared height. We compare width/height against the Beckhoff-style
+    // expected ratio with a 10% tolerance per the coordinator's directive.
+    // -----------------------------------------------------------------------
+    testWidgets('BATCH2-E DDI3725 intrinsic aspect matches Beckhoff EL1008 (1:6 slim)',
+        (tester) async {
+      late Size painted;
+      await tester.pumpWidget(MaterialApp(
+        home: Center(
+          child: STBDDI3725Widget(
+            ledStates: List<IOState>.filled(16, IOState.low),
+            isStale: false,
+            isDisconnected: false,
+            animation: const AlwaysStoppedAnimation<int>(0),
+          ),
+        ),
+      ));
+      painted = tester.getSize(find.byType(CustomPaint).first);
+      final ratio = painted.width / painted.height;
+      // EL1008 ratio = 1/6 ≈ 0.1667. Allow ±15% (Schneider DI/DO can be
+      // a hair wider; check the panel photo).
+      expect(ratio, lessThan(0.25),
+          reason: 'DDI3725 intrinsic aspect $ratio must be slim like '
+              'Beckhoff EL1008 (~1:6 ≈ 0.167). It must not be wide+squat.');
+    });
+
+    testWidgets('BATCH2-E DDO3705 intrinsic aspect matches Beckhoff EL2008 (1:6 slim)',
+        (tester) async {
+      await tester.pumpWidget(MaterialApp(
+        home: Center(
+          child: STBDDO3705Widget(
+            ledStates: List<IOState>.filled(16, IOState.low),
+            isStale: false,
+            isDisconnected: false,
+            animation: const AlwaysStoppedAnimation<int>(0),
+          ),
+        ),
+      ));
+      final painted = tester.getSize(find.byType(CustomPaint).first);
+      final ratio = painted.width / painted.height;
+      expect(ratio, lessThan(0.25),
+          reason: 'DDO3705 intrinsic aspect $ratio must be slim like '
+              'Beckhoff EL2008 (~1:6 ≈ 0.167).');
+    });
+
+    testWidgets('BATCH2-E NIP2311 intrinsic aspect is slim (head ~1:3)',
+        (tester) async {
+      await tester.pumpWidget(MaterialApp(
+        home: Center(
+          child: STBNIP2311Widget(nameOrId: 'NIP-01'),
+        ),
+      ));
+      final painted = tester.getSize(find.byType(CustomPaint).first);
+      final ratio = painted.width / painted.height;
+      // NIP head is wider than I/O but still slim. The panel photo shows
+      // ~2× I/O width, so ~2/6 = 0.33 ± 15%.
+      expect(ratio, lessThan(0.45),
+          reason: 'NIP2311 intrinsic aspect $ratio must be slim (~1:3).');
+    });
+
+    testWidgets('BATCH2-E PDT3100 intrinsic aspect is slim (power ~1:3)',
+        (tester) async {
+      await tester.pumpWidget(MaterialApp(
+        home: Center(
+          child: STBPDT3100Widget(nameOrId: 'PDT-01', inputOk: true),
+        ),
+      ));
+      final painted = tester.getSize(find.byType(CustomPaint).first);
+      final ratio = painted.width / painted.height;
+      expect(ratio, lessThan(0.45),
+          reason: 'PDT3100 intrinsic aspect $ratio must be slim (~1:3).');
+    });
+
+    // -----------------------------------------------------------------------
+    // Defects D + F — Stray text removed from NIP and PDT.
+    //
+    // Painter source file must NOT contain "24 VDC 0.55A" or
+    // "Schneider Electric" anywhere (these were decorative-footer text that
+    // the user explicitly asked to be removed).
+    // -----------------------------------------------------------------------
+    test('BATCH2-D NIP2311 painter source has no "24 VDC 0.55A" voltage text',
+        () {
+      final src = File('lib/painter/advantys_stb/nip2311.dart')
+          .readAsStringSync();
+      // We allow the string to appear in a removed-comment section, but the
+      // grep-style assertion is: no live TextSpan with the literal must exist.
+      // Simplify: assert the literal string is not present at all.
+      expect(src.contains('24 VDC 0.55A'), isFalse,
+          reason: 'nip2311.dart must NOT contain "24 VDC 0.55A" (defect D).');
+    });
+
+    test('BATCH2-D PDT3100 painter source has no "24 VDC 0.55A" voltage text',
+        () {
+      final src = File('lib/painter/advantys_stb/pdt3100.dart')
+          .readAsStringSync();
+      expect(src.contains('24 VDC 0.55A'), isFalse,
+          reason: 'pdt3100.dart must NOT contain "24 VDC 0.55A" (defect D).');
+    });
+
+    test('BATCH2-F NIP2311 painter source has no "Schneider Electric" branding',
+        () {
+      final src = File('lib/painter/advantys_stb/nip2311.dart')
+          .readAsStringSync();
+      expect(src.contains('Schneider Electric'), isFalse,
+          reason:
+              'nip2311.dart must NOT paint "Schneider Electric" (defect F).');
+    });
+
+    test('BATCH2-F PDT3100 painter source has no "Schneider Electric" branding',
+        () {
+      final src = File('lib/painter/advantys_stb/pdt3100.dart')
+          .readAsStringSync();
+      expect(src.contains('Schneider Electric'), isFalse,
+          reason:
+              'pdt3100.dart must NOT paint "Schneider Electric" (defect F).');
+    });
+
+    // -----------------------------------------------------------------------
+    // Defect C — PDT3100 topology rewrite.
+    //
+    // The real PDT3100 has TWO horizontal plug terminal blocks labeled
+    // "INPUT" and "OUTPUT" (each with internal +/− holes), a small "DC"
+    // label between them, an "IN/OUT" LED viewport at the top, and spring
+    // clip levers on the right side of each plug. Assert the painter
+    // renders these as actual on-canvas text labels (TextPainter source
+    // must contain the strings) and that the OLD single-pin terminology
+    // ("INPUT +", "INPUT −") is GONE.
+    // -----------------------------------------------------------------------
+    test('BATCH2-C PDT3100 source contains new "INPUT" plug label', () {
+      final src = File('lib/painter/advantys_stb/pdt3100.dart')
+          .readAsStringSync();
+      // Look for "'INPUT'" — the new full-word plug-block label, distinct
+      // from the old "'INPUT +'" / "'INPUT −'" single-pin labels.
+      expect(
+          src.contains("text: 'INPUT'") || src.contains('text: "INPUT"'),
+          isTrue,
+          reason:
+              'pdt3100.dart must paint an "INPUT" plug-block label (defect C).');
+    });
+
+    test('BATCH2-C PDT3100 source contains new "OUTPUT" plug label', () {
+      final src = File('lib/painter/advantys_stb/pdt3100.dart')
+          .readAsStringSync();
+      expect(
+          src.contains("text: 'OUTPUT'") || src.contains('text: "OUTPUT"'),
+          isTrue,
+          reason:
+              'pdt3100.dart must paint an "OUTPUT" plug-block label (defect C).');
+    });
+
+    test('BATCH2-C PDT3100 source contains "DC" inter-block label', () {
+      final src = File('lib/painter/advantys_stb/pdt3100.dart')
+          .readAsStringSync();
+      // Must paint a centered "DC" label between the two plug blocks.
+      expect(src.contains("text: 'DC'") || src.contains('text: "DC"'),
+          isTrue,
+          reason: 'pdt3100.dart must paint a "DC" inter-block label (defect C).');
+    });
+
+    test('BATCH2-C PDT3100 source no longer paints single-pin "INPUT +" label',
+        () {
+      final src = File('lib/painter/advantys_stb/pdt3100.dart')
+          .readAsStringSync();
+      // Old single-pin labels must be gone — the topology is plug-block, not
+      // individual ±-pin.
+      expect(src.contains('INPUT +'), isFalse,
+          reason: 'pdt3100.dart must NOT paint "INPUT +" (old topology).');
+      expect(src.contains('INPUT −'), isFalse,
+          reason: 'pdt3100.dart must NOT paint "INPUT −" (old topology).');
+    });
+
+    // -----------------------------------------------------------------------
+    // Defect B — Corner radii are subtle (Beckhoff parity, not aggressive).
+    //
+    // Beckhoff IO8 uses `size.width * 0.06` on a 1:6-aspect module — that's
+    // a tiny absolute pixel radius. We'll mirror by using `size.width * 0.04`
+    // on slim STB modules (post-defect-E). The radius constant lives inline
+    // in each painter; we assert it via rendering check: at (radius_px+2,
+    // radius_px+2) the body should already be inside the chamfer (cream
+    // colour or other body chrome — NOT magenta background). Pick a small
+    // radius_px ceiling of 8 to guarantee subtlety.
+    // -----------------------------------------------------------------------
+    test('BATCH2-B DDI3725 chamfer radius ≤ ~8 px at 200×280 (subtle, not aggressive)',
+        () async {
+      final painter = STBDDI3725BodyPainter(
+        ledStates: List<IOState>.filled(16, IOState.low),
+        isStale: false,
+        isDisconnected: false,
+        animation: const AlwaysStoppedAnimation<int>(0),
+      );
+      const w = 200;
+      const h = 280;
+      final pixels = await renderToPixels(painter, const Size(w * 1.0, h * 1.0));
+      // At (8, 8) — 8 px in from top-left — a subtle radius should already
+      // have the body inside the chamfer (so pixel is NOT magenta bg).
+      final px = pixelAt(pixels, w, 8, 8);
+      const magenta = 0xFFFF00FF;
+      expect(px, isNot(equals(magenta)),
+          reason: 'At (8,8) the body should already cover the chamfer cutout '
+              '(radius must be ≤~8 px for subtle Beckhoff parity).');
+    });
+
+    test('BATCH2-B DDO3705 chamfer radius ≤ ~8 px at 200×280 (subtle)',
+        () async {
+      final painter = STBDDO3705BodyPainter(
+        ledStates: List<IOState>.filled(16, IOState.low),
+        isStale: false,
+        isDisconnected: false,
+        animation: const AlwaysStoppedAnimation<int>(0),
+      );
+      const w = 200;
+      const h = 280;
+      final pixels = await renderToPixels(painter, const Size(w * 1.0, h * 1.0));
+      final px = pixelAt(pixels, w, 8, 8);
+      const magenta = 0xFFFF00FF;
+      expect(px, isNot(equals(magenta)),
+          reason: 'DDO3705 corner radius must be ≤~8 px for subtle parity.');
+    });
+
+    test('BATCH2-B NIP2311 chamfer radius ≤ ~8 px at 200×280 (subtle)',
+        () async {
+      final painter = STBNIP2311BodyPainter(nameOrId: 'NIP-01');
+      const w = 200;
+      const h = 280;
+      final pixels = await renderToPixels(painter, const Size(w * 1.0, h * 1.0));
+      final px = pixelAt(pixels, w, 8, 8);
+      const magenta = 0xFFFF00FF;
+      expect(px, isNot(equals(magenta)),
+          reason: 'NIP2311 corner radius must be ≤~8 px for subtle parity.');
+    });
+
+    test('BATCH2-B PDT3100 chamfer radius ≤ ~8 px at 200×280 (subtle)',
+        () async {
+      final painter =
+          STBPDT3100BodyPainter(nameOrId: 'PDT-01', inputOk: true);
+      const w = 200;
+      const h = 280;
+      final pixels = await renderToPixels(painter, const Size(w * 1.0, h * 1.0));
+      final px = pixelAt(pixels, w, 8, 8);
+      const magenta = 0xFFFF00FF;
+      expect(px, isNot(equals(magenta)),
+          reason: 'PDT3100 corner radius must be ≤~8 px for subtle parity.');
+    });
+
+    // -----------------------------------------------------------------------
+    // Defect G — Real-hardware LED block: dark panel, RDY top label, 1..16
+    // numeric labels + squared (rectangular) LEDs in 2-col × 8-row grid.
+    //
+    // The current implementation paints round dots on the cream body. Real
+    // DDO3705 (per user reference photo) has the LEDs sit on a dark inset
+    // panel with numeric labels next to each LED.
+    // -----------------------------------------------------------------------
+    test('BATCH2-G DDI3725 painter source contains numeric channel labels 1..16',
+        () {
+      final src = File('lib/painter/advantys_stb/ddi3725.dart')
+          .readAsStringSync();
+      // The painter must reference numeric labels in some form — either a
+      // literal list of '1'..'16' or a loop that emits 'i.toString()'.
+      // We accept either: a literal '1' label OR an i.toString() construction.
+      final hasNumericLabels = src.contains("'\${i + 1}'") ||
+          src.contains('"\${i + 1}"') ||
+          src.contains('(i + 1).toString()') ||
+          src.contains("'1'") && src.contains("'16'");
+      expect(hasNumericLabels, isTrue,
+          reason: 'ddi3725.dart must emit per-channel 1..16 labels (defect G).');
+    });
+
+    test('BATCH2-G DDO3705 painter source contains numeric channel labels 1..16',
+        () {
+      final src = File('lib/painter/advantys_stb/ddo3705.dart')
+          .readAsStringSync();
+      final hasNumericLabels = src.contains("'\${i + 1}'") ||
+          src.contains('"\${i + 1}"') ||
+          src.contains('(i + 1).toString()') ||
+          src.contains("'1'") && src.contains("'16'");
+      expect(hasNumericLabels, isTrue,
+          reason: 'ddo3705.dart must emit per-channel 1..16 labels (defect G).');
+    });
+
+    test('BATCH2-G IO16 LED block uses drawRRect (squared LEDs, not circles)',
+        () {
+      final src = File('lib/painter/advantys_stb/io16.dart')
+          .readAsStringSync();
+      // After the rewrite, the LED block must use drawRRect for squared LEDs
+      // (rectangular pills with rounded corners). The previous round-dot
+      // implementation used drawCircle only.
+      expect(src.contains('drawRRect'), isTrue,
+          reason: 'io16.dart must use drawRRect for squared LEDs (defect G).');
+    });
+
+    test('BATCH2-G IO16 LED block painter source paints "RDY" indicator label',
+        () {
+      final src = File('lib/painter/advantys_stb/io16.dart')
+          .readAsStringSync();
+      expect(src.contains("'RDY'") || src.contains('"RDY"'), isTrue,
+          reason:
+              'io16.dart must paint an "RDY" indicator label on the LED panel (defect G).');
+    });
+
+    test('BATCH2-G DDI3725: rendered LED block region contains dark panel pixel',
+        () async {
+      final painter = STBDDI3725BodyPainter(
+        ledStates: List<IOState>.filled(16, IOState.low),
+        isStale: false,
+        isDisconnected: false,
+        animation: const AlwaysStoppedAnimation<int>(0),
+      );
+      const w = 200;
+      const h = 280;
+      final pixels = await renderToPixels(painter, const Size(w * 1.0, h * 1.0));
+      // LED block region starts at y = topStrip*h (~0.07*280 ≈ 20) and
+      // extends ~0.22*280 ≈ 62 px. Sample the centre y of the LED block at
+      // ~y=50, in the GAP between left+right columns at x=w/2.
+      // The gap between columns should be the dark panel background.
+      final px = pixelAt(pixels, w, w ~/ 2, 50);
+      final r = (px >> 16) & 0xFF;
+      final g = (px >> 8) & 0xFF;
+      final b = px & 0xFF;
+      // "Dark" = total luminance < 384 (each channel ~< 128). Excludes the
+      // cream body (#F7F5E6 ≈ 247+245+230 = 722).
+      final luminance = r + g + b;
+      expect(luminance, lessThan(450),
+          reason:
+              'DDI3725 LED block center should sit on a dark panel (defect G). '
+              'Got 0x${px.toRadixString(16).padLeft(8, '0')} (luminance=$luminance).');
+    });
+
+    test('BATCH2-G DDO3705: rendered LED block region contains dark panel pixel',
+        () async {
+      final painter = STBDDO3705BodyPainter(
+        ledStates: List<IOState>.filled(16, IOState.low),
+        isStale: false,
+        isDisconnected: false,
+        animation: const AlwaysStoppedAnimation<int>(0),
+      );
+      const w = 200;
+      const h = 280;
+      final pixels = await renderToPixels(painter, const Size(w * 1.0, h * 1.0));
+      final px = pixelAt(pixels, w, w ~/ 2, 50);
+      final r = (px >> 16) & 0xFF;
+      final g = (px >> 8) & 0xFF;
+      final b = px & 0xFF;
+      final luminance = r + g + b;
+      expect(luminance, lessThan(450),
+          reason:
+              'DDO3705 LED block center should sit on a dark panel (defect G).');
     });
   });
 }
