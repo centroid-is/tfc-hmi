@@ -88,23 +88,12 @@ class IO16LedBlockPainter extends BaseLedBlockPainter {
 
   @override
   void drawLeds(Canvas canvas, Size size) {
-    // BATCH2 Defect G: rewrite to match real Schneider DDO3705 / DDI3725
-    // hardware (per the user's reference photo). The LED block now renders:
-    //
-    //   1. A dark inset panel covering the full LED block area
-    //      (`stbLedPanelColor`) — was the cream module body bleeding through.
-    //   2. A small "RDY" status row at the top with a green-when-alive,
-    //      grey-when-stale LED dot + the literal "RDY" caption.
-    //   3. Sixteen channel LEDs in a 2-column × 8-row grid below the RDY row.
-    //      Each LED is a small squared rounded-rectangle (RRect) — NOT a
-    //      circle (the previous round-dot fix overcorrected from the
-    //      original "venetian-blind bars"; the real shape sits between).
-    //   4. A numeric label "1".."16" to the LEFT of each LED, in light text
-    //      on the dark panel.
-    //
-    // The base-painter's `drawLed` is NOT called — we override the full LED
-    // block render. The `animation.value` is still honoured for the forced-
-    // state pulsing red border.
+    // Unified LED grid: 2 columns × 9 rows. The TOP-LEFT cell renders RDY
+    // (label + status dot, identical to a channel cell — same size, same
+    // shape). The top-right cell is intentionally empty (real Schneider
+    // hardware exposes RDY only on the left column). Rows 1..8 in each
+    // column hold the 16 channels: 1..8 on the left, 9..16 on the right.
+    // This matches the real DDO3705 reference photo the user sent.
 
     // 1. Dark inset panel background.
     canvas.drawRect(
@@ -112,75 +101,32 @@ class IO16LedBlockPainter extends BaseLedBlockPainter {
       Paint()..color = stbLedPanelColor,
     );
 
-    // 2. "RDY" status row at the top — 18% of the LED block height.
-    final rdyH = size.height * 0.18;
-    final rdyRect = Rect.fromLTWH(0, 0, size.width, rdyH);
-    _drawRdyRow(canvas, rdyRect);
-
-    // 3. + 4. Channel-LED grid + numeric labels.
-    final gridTop = rdyH;
-    final gridRect =
-        Rect.fromLTWH(0, gridTop, size.width, size.height - gridTop);
-    _drawChannelGrid(canvas, gridRect);
-  }
-
-  /// "RDY" status row — a small green/grey LED dot followed by the literal
-  /// "RDY" caption, centred vertically in `rect`. Sits on the dark inset
-  /// panel so the caption uses light text.
-  void _drawRdyRow(Canvas canvas, Rect rect) {
-    const activeColor = Color(0xFF6CA545);
-    final dotR = rect.height * 0.30;
-    final dotCx = rect.left + rect.width * 0.18;
-    final dotCy = rect.center.dy;
-    final dotColor = isStale ? Colors.grey.shade500 : activeColor;
-    canvas.drawCircle(Offset(dotCx, dotCy), dotR, Paint()..color = dotColor);
-    canvas.drawCircle(
-      Offset(dotCx, dotCy),
-      dotR,
-      Paint()
-        ..color = Colors.grey.shade400
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = dotR * 0.18,
+    // 2. Single 2×9 grid for RDY + 16 channels.
+    _drawChannelGrid(
+      canvas,
+      Rect.fromLTWH(0, 0, size.width, size.height),
     );
-
-    final captionLeft = dotCx + dotR + rect.width * 0.06;
-    final captionMaxW = rect.right - captionLeft - rect.width * 0.05;
-    final tp = TextPainter(
-      text: TextSpan(
-        text: 'RDY',
-        style: TextStyle(
-          color: Colors.grey.shade100,
-          fontSize: rect.height * 0.50,
-          fontWeight: FontWeight.w600,
-          letterSpacing: 0.6,
-        ),
-      ),
-      textAlign: TextAlign.left,
-      textDirection: TextDirection.ltr,
-    )..layout(maxWidth: captionMaxW);
-    tp.paint(canvas, Offset(captionLeft, dotCy - tp.height / 2));
   }
 
-  /// 2×8 grid of small squared LEDs with numeric labels. The grid is column-
-  /// major: channels 1..8 fill the LEFT column top→bottom, channels 9..16
-  /// the RIGHT column. Each cell renders `[number] [LED]` left-to-right.
+  /// Unified 2-column × 9-row grid. Row 0 of the LEFT column is RDY (label
+  /// + green/grey status dot, same shape as a channel cell). Row 0 of the
+  /// RIGHT column is blank. Rows 1..8 carry channels 1..8 (left) and 9..16
+  /// (right). All cells share the same dimensions so RDY and channel LEDs
+  /// read as the same kind of indicator at the same size — matches the
+  /// real Schneider DDO3705 hardware photo.
   void _drawChannelGrid(Canvas canvas, Rect rect) {
     const cols = 2;
-    const rows = 8;
+    const rows = 9; // row 0 = RDY (+ blank), rows 1..8 = channels
     if (rect.width <= 0 || rect.height <= 0) return;
 
-    final padX = rect.width * 0.03;
-    final padY = rect.height * 0.03;
+    final padX = rect.width * 0.025;
+    final padY = rect.height * 0.018;
     final cellW = (rect.width - padX * (cols + 1)) / cols;
     final cellH = (rect.height - padY * (rows + 1)) / rows;
     if (cellW <= 0 || cellH <= 0) return;
 
-    // LED slot: squared rounded-rect, ~1.5× width vs height with a small
-    // corner radius. Sits on the RIGHT half of the cell; the channel
-    // number sits on the LEFT half of the cell.
-    final ledH = cellH * 0.70;
+    final ledH = cellH * 0.80;
     final ledW = ledH * 1.50;
-    // Clamp so the LED never exceeds half the cell width.
     final clampedLedW = ledW > cellW * 0.55 ? cellW * 0.55 : ledW;
     final labelMaxW = cellW - clampedLedW - padX;
 
@@ -190,16 +136,39 @@ class IO16LedBlockPainter extends BaseLedBlockPainter {
       ..style = PaintingStyle.stroke
       ..strokeWidth = borderStrokeW;
 
-    for (int i = 0; i < 16; i++) {
-      final int col = i ~/ 8;
-      final int row = i % 8;
+    // Loop covers 18 cells (2×9). RDY is i=0; channels 1..8 are i=1..8
+    // (left column); blank is i=9; channels 9..16 are i=10..17 (right).
+    for (int i = 0; i < cols * rows; i++) {
+      final int col = i ~/ rows;
+      final int row = i % rows;
       final double cellX = rect.left + padX + col * (cellW + padX);
       final double cellY = rect.top + padY + row * (cellH + padY);
+
+      // Top-right cell is intentionally blank.
+      if (col == 1 && row == 0) continue;
+
+      // RDY: top-left cell. Label "RDY", green dot when alive, grey when stale.
+      if (col == 0 && row == 0) {
+        _drawRdyCell(
+          canvas,
+          Rect.fromLTWH(cellX, cellY, cellW, cellH),
+          labelMaxW: labelMaxW,
+          clampedLedW: clampedLedW,
+          ledH: ledH,
+          padX: padX,
+          basePaint: basePaint,
+        );
+        continue;
+      }
+
+      // Channel cells. Channel number = row in left column, row + 8 in right.
+      final int channelNumber = col == 0 ? row : row + 8;
+      final int ledIndex = channelNumber - 1; // ledStates is 0-indexed.
 
       // Numeric channel label (1..16).
       final labelTp = TextPainter(
         text: TextSpan(
-          text: '${i + 1}',
+          text: '$channelNumber',
           style: TextStyle(
             color: Colors.grey.shade100,
             fontSize: cellH * 0.65,
@@ -221,8 +190,51 @@ class IO16LedBlockPainter extends BaseLedBlockPainter {
       final ledLeft = cellX + cellW - clampedLedW;
       final ledTop = cellY + (cellH - ledH) / 2;
       final ledRect = Rect.fromLTWH(ledLeft, ledTop, clampedLedW, ledH);
-      _drawSquaredLed(canvas, ledRect, ledStates[i], basePaint);
+      _drawSquaredLed(canvas, ledRect, ledStates[ledIndex], basePaint);
     }
+  }
+
+  /// RDY cell — same layout as a channel cell (label + LED, equal size)
+  /// so RDY reads as a same-sized indicator at the top-left of the grid.
+  void _drawRdyCell(
+    Canvas canvas,
+    Rect cell, {
+    required double labelMaxW,
+    required double clampedLedW,
+    required double ledH,
+    required double padX,
+    required Paint basePaint,
+  }) {
+    final labelTp = TextPainter(
+      text: TextSpan(
+        text: 'RDY',
+        style: TextStyle(
+          color: Colors.grey.shade100,
+          fontSize: cell.height * 0.55,
+          fontWeight: FontWeight.w600,
+          letterSpacing: 0.4,
+        ),
+      ),
+      textAlign: TextAlign.right,
+      textDirection: TextDirection.ltr,
+      maxLines: 1,
+    )..layout(maxWidth: labelMaxW > 0 ? labelMaxW : cell.width * 0.50);
+    labelTp.paint(
+      canvas,
+      Offset(
+        cell.left + (labelMaxW > 0 ? (labelMaxW - labelTp.width) : 0),
+        cell.top + (cell.height - labelTp.height) / 2,
+      ),
+    );
+
+    final ledLeft = cell.left + cell.width - clampedLedW;
+    final ledTop = cell.top + (cell.height - ledH) / 2;
+    final ledRect = Rect.fromLTWH(ledLeft, ledTop, clampedLedW, ledH);
+    // RDY is "alive" green when not stale, dim grey otherwise — never
+    // forced/error, so route a synthetic IOState through the same
+    // rendering path as the channels.
+    final rdyState = isStale ? IOState.low : IOState.high;
+    _drawSquaredLed(canvas, ledRect, rdyState, basePaint);
   }
 
   /// Draws a single squared LED — small rounded rectangle (RRect). Reads as

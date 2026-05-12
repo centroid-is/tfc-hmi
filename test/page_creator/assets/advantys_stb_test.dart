@@ -3937,6 +3937,8 @@ void main() {
       final hasNumericLabels = src.contains("'\${i + 1}'") ||
           src.contains('"\${i + 1}"') ||
           src.contains('(i + 1).toString()') ||
+          src.contains("'\$channelNumber'") ||
+          src.contains("channelNumber.toString()") ||
           (src.contains("'1'") && src.contains("'16'"));
       expect(hasNumericLabels, isTrue,
           reason: 'io16.dart must emit per-channel 1..16 labels (defect G).');
