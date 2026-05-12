@@ -132,18 +132,18 @@ void main() {
           return border.top.color == Colors.blue;
         });
         expect(borderedFinder, findsOneWidget,
-            reason: 'Selection-border Container must exist when asset is selected');
+            reason:
+                'Selection-border Container must exist when asset is selected');
 
         // Walk up the element tree looking for a Transform whose matrix
-        // encodes the 90 degree rotation. (Today: the only Transform up
-        // there is the mirror identity, so this assertion FAILS.)
+        // encodes the 90 degree rotation. Pre-fix this fails -- the only
+        // Transform in the ancestor chain is the mirror identity matrix.
         final borderElement = tester.element(borderedFinder);
         var found90Rotation = false;
         borderElement.visitAncestorElements((element) {
           final widget = element.widget;
           if (widget is Transform) {
-            // cos(pi/2)=0, sin(pi/2)=1 -- entries 0 and 5 should both be ~0,
-            // and entries 1 and 4 should be ~1 and ~-1 respectively.
+            // cos(pi/2)=0, sin(pi/2)=1
             final m = widget.transform;
             final c = m.entry(0, 0).abs();
             final s = m.entry(1, 0).abs();
@@ -184,8 +184,7 @@ void main() {
         await tester.pump();
 
         // Tap at the canvas-local point (50, 32).
-        final canvasFinder = find.byType(AssetStack);
-        final canvas = tester.getRect(canvasFinder);
+        final canvas = tester.getRect(find.byType(AssetStack));
         await tester.tapAt(canvas.topLeft + const Offset(50, 32));
         await tester.pump();
 
@@ -220,6 +219,83 @@ void main() {
         expect(tapped, isFalse,
             reason:
                 'Tap outside the rotated visual must NOT fire onTap; currently the unrotated GestureDetector swallows clicks the operator never sees a target for');
+      },
+    );
+  });
+
+  group('Gestures propagate through translation + asset angle', () {
+    testWidgets(
+      'tap on rotated asset still fires when wrapped in a translating parent',
+      (tester) async {
+        // Regression for the project memory note
+        // `feedback_gesture_through_translation`: children of an elevator
+        // (modelled here as a Transform.translate) must keep their
+        // GestureDetectors working during platform motion. We compound
+        // that constraint with the asset's own rotation to ensure the
+        // combined Transform.translate + Transform.rotate stack does not
+        // break hit-testing.
+        final asset = _TestBoxAsset(
+          coords: Coordinates(x: 0.5, y: 0.5, angle: 90.0),
+          sz: const RelativeSize(width: 0.4, height: 0.1),
+        );
+
+        bool tapped = false;
+
+        await tester.pumpWidget(
+          ProviderScope(
+            child: MaterialApp(
+              home: Scaffold(
+                body: Center(
+                  child: SizedBox(
+                    width: 100,
+                    height: 100,
+                    // Simulate the elevator platform translating its
+                    // children downward by 20 px. With transformHitTests
+                    // = true (Transform.translate default), the rotated
+                    // asset underneath must still receive taps at its
+                    // new screen position.
+                    child: Transform.translate(
+                      offset: const Offset(0, 20),
+                      child: LayoutBuilder(
+                        builder: (context, constraints) => AssetStack(
+                          assets: [asset],
+                          constraints: constraints,
+                          absorb: true,
+                          onTap: (_) => tapped = true,
+                          selectedAssets: const {},
+                          mirroringDisabled: true,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.pump();
+
+        // The asset visual lives at canvas centre (50, 50) rotated 90°,
+        // so post-translation it occupies x in [45,55], y in [50, 90]
+        // in screen space (a 20 px shift). Tap at (50, 70) which is
+        // inside the translated rotated visual.
+        final asResolved = tester
+            .getRect(find.byType(AssetStack))
+            .topLeft;
+        // AssetStack's top-left is at the Center'd 100x100 SizedBox's
+        // top-left, which has already absorbed the translation: tap
+        // relative to the AssetStack at (50, 70 - 20) = (50, 50) would
+        // be the un-translated centre. Since Transform.translate is
+        // BETWEEN the SizedBox and AssetStack, AssetStack reports its
+        // post-translation rect. So we tap at AssetStack-local (50, 32)
+        // -- the same offset that lands inside the rotated visual in
+        // the basic regression test above.
+        await tester.tapAt(asResolved + const Offset(50, 32));
+        await tester.pump();
+
+        expect(tapped, isTrue,
+            reason:
+                'A rotated asset inside a translating parent must still receive taps (gesture-through-translation memory constraint).');
       },
     );
   });
