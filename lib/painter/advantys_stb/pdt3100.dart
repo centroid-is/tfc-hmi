@@ -286,6 +286,14 @@ class STBPDT3100BodyPainter extends CustomPainter {
       ..style = PaintingStyle.stroke
       ..strokeWidth = rect.width * 0.008;
 
+    // Right-edge of the terminal block — labels must NEVER cross this so they
+    // sit fully INSIDE the rounded rectangle (DEFECT-4 fix).
+    final blockRight = rect.left + pad + innerW;
+    // Anchor labels just to the right of the screw, but reserve a small
+    // safety margin (4% of innerW) inside the right edge.
+    final labelLeft = rect.left + pad + innerW * 0.50;
+    final labelMaxW = blockRight - labelLeft - innerW * 0.04;
+
     // Top block (+).
     final topBlockRect = RRect.fromRectAndRadius(
       Rect.fromLTWH(rect.left + pad, rect.top, innerW, blockH),
@@ -293,14 +301,15 @@ class STBPDT3100BodyPainter extends CustomPainter {
     );
     canvas.drawRRect(topBlockRect, terminalPaint);
     canvas.drawRRect(topBlockRect, terminalStroke);
-    final topScrewCx = rect.left + pad + innerW * 0.30;
+    final topScrewCx = rect.left + pad + innerW * 0.25;
     final topScrewCy = rect.top + blockH / 2;
     canvas.drawCircle(Offset(topScrewCx, topScrewCy), screwR, screwPaint);
     canvas.drawCircle(Offset(topScrewCx, topScrewCy), screwR, screwStroke);
     _drawTerminalLabel(
       canvas,
-      Offset(rect.left + pad + innerW * 0.62, topScrewCy),
+      Offset(labelLeft, topScrewCy),
       blockH,
+      labelMaxW,
       'INPUT +',
     );
 
@@ -312,7 +321,7 @@ class STBPDT3100BodyPainter extends CustomPainter {
     );
     canvas.drawRRect(bottomBlockRect, terminalPaint);
     canvas.drawRRect(bottomBlockRect, terminalStroke);
-    final bottomScrewCx = rect.left + pad + innerW * 0.30;
+    final bottomScrewCx = rect.left + pad + innerW * 0.25;
     final bottomScrewCy = bottomTop + blockH / 2;
     canvas.drawCircle(
         Offset(bottomScrewCx, bottomScrewCy), screwR, screwPaint);
@@ -320,26 +329,40 @@ class STBPDT3100BodyPainter extends CustomPainter {
         Offset(bottomScrewCx, bottomScrewCy), screwR, screwStroke);
     _drawTerminalLabel(
       canvas,
-      Offset(rect.left + pad + innerW * 0.62, bottomScrewCy),
+      Offset(labelLeft, bottomScrewCy),
       blockH,
+      labelMaxW,
       'INPUT −',
     );
   }
 
-  void _drawTerminalLabel(
-      Canvas canvas, Offset anchor, double blockH, String text) {
-    final tp = TextPainter(
-      text: TextSpan(
-        text: text,
-        style: TextStyle(
-          color: Colors.black,
-          fontSize: blockH * 0.32,
-          fontWeight: FontWeight.w500,
+  /// Draws the terminal label inside the block, with the font auto-shrunk
+  /// to fit `maxWidth`. DEFECT-4 fix — the old layout used a fixed font size
+  /// of `blockH * 0.32` and let the painted text overflow the right edge of
+  /// the terminal block and even the body box itself. The new layout caps
+  /// the font size at `blockH * 0.28` and then iteratively scales it down
+  /// (in 5% increments) until the laid-out text width fits inside `maxWidth`,
+  /// guaranteeing the painted text stays inside the rounded terminal block.
+  void _drawTerminalLabel(Canvas canvas, Offset anchor, double blockH,
+      double maxWidth, String text) {
+    double fontSize = blockH * 0.28;
+    TextPainter tp;
+    while (true) {
+      tp = TextPainter(
+        text: TextSpan(
+          text: text,
+          style: TextStyle(
+            color: Colors.black,
+            fontSize: fontSize,
+            fontWeight: FontWeight.w500,
+          ),
         ),
-      ),
-      textAlign: TextAlign.left,
-      textDirection: TextDirection.ltr,
-    )..layout();
+        textAlign: TextAlign.left,
+        textDirection: TextDirection.ltr,
+      )..layout();
+      if (tp.width <= maxWidth || fontSize < 4) break;
+      fontSize *= 0.95;
+    }
     tp.paint(canvas, Offset(anchor.dx, anchor.dy - tp.height / 2));
   }
 
