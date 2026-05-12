@@ -303,16 +303,26 @@ class STBPDT3100BodyPainter extends CustomPainter {
         ..strokeWidth = (inset.height * 0.04).clamp(0.5, 2.0),
     );
 
-    // Two LED rows — IN on top, OUT below. Geometry mirrors the NIP2311
-    // `_drawLedStrip` helper: dot on the left at ~18% width, label start
-    // at ~32% width. Dot radius is ~22% of row height; label font is
-    // ~45% of row height.
+    // Two LED rows — IN on top, OUT below. Geometry sized to match the
+    // body-relative scale of the NIP2311 RUN/PWR rows (NIP renders 5
+    // rows in 30% of body height; each NIP row ≈ 0.06·H of body, font
+    // ≈ 0.027·H). The PDT viewport band is 24% of body, so we let the
+    // LEDs occupy a compact centred sub-region rather than filling the
+    // full viewport — that way the dot+label render at the same
+    // absolute scale as NIP's status strip.
     const labels = <String>['IN', 'OUT'];
-    final rowH = inset.height / labels.length;
+    // Stack uses ~12% of body height (2 NIP-style rows of ~0.06·H each).
+    // `rect.height` is the band size; the inset is ~80% of that. We size
+    // the LED stack relative to the BAND so it doesn't grow with the
+    // viewport inset.
+    final ledStackH = rect.height * 0.55;
+    final rowH = ledStackH / labels.length;
     final dotR = rowH * 0.22;
     final dotCx = inset.left + inset.width * 0.30;
     final labelLeft = inset.left + inset.width * 0.50;
     final labelMaxW = inset.right - labelLeft - inset.width * 0.06;
+
+    final stackTop = inset.top + (inset.height - ledStackH) / 2;
 
     final ringPaint = Paint()
       ..color = Colors.grey.shade400
@@ -323,7 +333,7 @@ class STBPDT3100BodyPainter extends CustomPainter {
         (inputOk == true) ? _ledGreen : Colors.grey.shade500;
 
     for (int i = 0; i < labels.length; i++) {
-      final dotCy = inset.top + i * rowH + rowH / 2;
+      final dotCy = stackTop + i * rowH + rowH / 2;
 
       canvas.drawCircle(
         Offset(dotCx, dotCy),
