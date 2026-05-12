@@ -613,6 +613,15 @@ class _ConveyorState extends ConsumerState<Conveyor>
       return _buildConveyorVisual(context, Colors.grey);
     }
 
+    // The "Simulate batches" toggle is independent of any PLC stream — it
+    // must drive the timer even when no keys are configured and even before
+    // the first stream tick arrives. Evaluate it here, outside StreamBuilder.
+    if (widget.config.simulateBatches ?? false) {
+      _startSimulateBatchesTimer();
+    } else {
+      _stopSimulateBatchesTimer();
+    }
+
     // Determine which streams to subscribe to
     final streams = <Stream<DynamicValue>>[];
     final streamLabels = <String>[];
@@ -734,11 +743,7 @@ class _ConveyorState extends ConsumerState<Conveyor>
           _updateAugerAnimation(0);
         }
 
-        if (widget.config.simulateBatches ?? false) {
-          _startSimulateBatchesTimer();
-        } else {
-          _stopSimulateBatchesTimer();
-        }
+        // simulateBatches handled at top of build() — independent of streams.
 
         if (dynValue['batches'] != null) {
           _updateBatches(dynValue['batches']!);
