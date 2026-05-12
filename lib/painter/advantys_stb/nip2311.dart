@@ -47,11 +47,12 @@ import 'package:tfc/painter/beckhoff/ek1100.dart' show EthernetPortPainter;
 /// Aspect ratio width / height for the NIP2311 body.
 ///
 /// BATCH2 Defect E: switched from the DXF-derived 58/82 ≈ 0.707 (wide+squat)
-/// to a slim ~1:3 ratio (`1.0 / 3.0`) so the head module reads as a real
-/// DIN-rail block beside the slim I/O modules. The panel reference photo
-/// (`.planning/research/photos/momentum_stack_in_panel.png`) shows the
-/// NIP head at roughly 2× the width of an I/O module — `2/6 = 1/3`.
-const double kNIP2311AspectRatio = 1.0 / 3.0;
+/// Real Schneider STBNIP2311 dimensions: 38.85 mm wide × 128.25 mm tall →
+/// aspect ≈ 0.303. The NIP head is the widest in the Advantys STB family
+/// (head adapter with dual RJ45 ports needs more horizontal real estate
+/// than a 16-channel I/O module). The DXF for NIP2311 is corrupted/wrong
+/// in `.planning/research/dxf/` so we use the datasheet dimensions.
+const double kNIP2311AspectRatio = 0.303;
 
 /// Widget wrapper around [STBNIP2311BodyPainter]. Decorative-only: takes
 /// just a `nameOrId` (rendered as a small caption above the body so

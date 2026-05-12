@@ -2335,14 +2335,14 @@ void main() {
   });
 
   group('STBPDT3100 aspect ratio (slim DIN-rail Beckhoff parity)', () {
-    test('kPDT3100AspectRatio is slim (~1:3, matching Beckhoff DIN-rail head)',
+    test('kPDT3100AspectRatio matches real Schneider PDT3100 hardware (~0.108)',
         () {
-      // BATCH2 Defect E: ratio updated from DXF 0.7071 to slim 1:3 ≈ 0.333
-      // so the module reads as a real Schneider DIN-rail block in a stack
-      // (matching the panel reference photo at
-      // .planning/research/photos/momentum_stack_in_panel.png).
-      expect(kPDT3100AspectRatio, lessThan(0.45));
-      expect(kPDT3100AspectRatio, greaterThan(0.15));
+      // Real Schneider STBPDT3100 dimensions: 13.9 mm × 128.25 mm
+      // → aspect ≈ 0.108. PDT is the SLIMMEST module in the Advantys STB
+      // family (half-base-width power distribution, no I/O channels).
+      // Allow ±15% tolerance for floating-point drift.
+      expect(kPDT3100AspectRatio, greaterThan(0.09));
+      expect(kPDT3100AspectRatio, lessThan(0.13));
     });
   });
 

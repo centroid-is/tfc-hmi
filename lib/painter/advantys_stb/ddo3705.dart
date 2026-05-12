@@ -50,9 +50,9 @@ class STBDDO3705Widget extends AnimatedWidget {
   @override
   Widget build(BuildContext context) {
     final animation = listenable as Animation<int>;
-    // BATCH2 Defect E: slim DIN-rail aspect ratio mirroring Beckhoff EL2008
-    // (`width: height / 6`). See ddi3725.dart for the design rationale.
-    final width = height / 6.0;
+    // Real Schneider STBDDO3705 dimensions: 28.1 mm wide × 128.25 mm tall →
+    // aspect ≈ 0.219. See ddi3725.dart for the design rationale.
+    final width = height * 0.219;
     return SizedBox(
       width: width,
       height: height,

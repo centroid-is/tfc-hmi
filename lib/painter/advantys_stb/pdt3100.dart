@@ -52,12 +52,12 @@ import 'io16.dart' show bodyColor;
 
 /// Aspect ratio width / height for the PDT3100 body.
 ///
-/// BATCH2 Defect E: switched from the DXF-derived 114.59/162.07 ≈ 0.707
-/// (wide+squat) to a slim ~1:3 ratio (`1.0 / 3.0`) so the power module reads
-/// as a real DIN-rail block beside the slim I/O modules. The panel reference
-/// photo (`.planning/research/photos/momentum_stack_in_panel.png`) shows the
-/// PDT3100 at roughly 2× the width of an I/O module — `2/6 = 1/3`.
-const double kPDT3100AspectRatio = 1.0 / 3.0;
+/// Real Schneider STBPDT3100 dimensions: 13.9 mm wide × 128.25 mm tall →
+/// aspect ≈ 0.108. The PDT is the SLIMMEST module in the Advantys STB
+/// family (half-base width — just power distribution, no I/O channels).
+/// The DXF at .planning/research/dxf/PDT3100_mcadid0005043.dxf shows the
+/// long narrow profile with two terminal connector cutouts (INPUT, OUTPUT).
+const double kPDT3100AspectRatio = 0.108;
 
 /// Widget wrapper around [STBPDT3100BodyPainter]. Bound to an optional
 /// `inputOk` bool — `true` lights the single front-panel LED green; any
@@ -118,12 +118,14 @@ class STBPDT3100BodyPainter extends CustomPainter {
   // clip lever) + a centred "DC" label between them.
   static const double _topStripFraction = 0.10;
   static const double _viewportFraction = 0.18;
-  static const double _subtitleBandFraction = 0.07;
-  static const double _inputPlugFraction = 0.24;
+  // _subtitleBandFraction reabsorbed — "24 VDC POWER" subtitle removed at
+  // user's request. Its 7% was redistributed across the plug bands so the
+  // layout remains balanced without leaving a stripe of dead space.
+  static const double _inputPlugFraction = 0.27;
   static const double _dcLabelFraction = 0.05;
-  static const double _outputPlugFraction = 0.24;
+  static const double _outputPlugFraction = 0.27;
   // ignore: unused_field
-  static const double _bottomWhitespaceFraction = 0.12;
+  static const double _bottomWhitespaceFraction = 0.13;
 
   // Status-LED palette — same green as the NIP2311 RUN/PWR + DDI3725 RDY.
   static const Color _ledGreen = Color(0xFF6CA545);
@@ -176,12 +178,10 @@ class STBPDT3100BodyPainter extends CustomPainter {
     _drawInOutLedViewport(canvas, viewportRect);
     y += viewportH;
 
-    // 4. Schneider blue subtitle band ("24 VDC POWER").
-    final subtitleH = size.height * _subtitleBandFraction;
-    final subtitleRect = Rect.fromLTWH(0, y, size.width, subtitleH);
-    canvas.drawRect(subtitleRect, Paint()..color = stbAccentBlue);
-    _drawSubtitleText(canvas, subtitleRect);
-    y += subtitleH;
+    // 4. (Removed) Schneider blue "24 VDC POWER" subtitle band — voltage-
+    // rating chrome stripped at the user's request. The band's vertical
+    // space was redistributed across the two plug terminals so the
+    // remaining layout fills the body cleanly.
 
     // 5. BATCH2 Defect C: INPUT plug terminal block.
     final inputPlugH = size.height * _inputPlugFraction;
@@ -290,25 +290,6 @@ class STBPDT3100BodyPainter extends CustomPainter {
       textDirection: TextDirection.ltr,
     )..layout(maxWidth: captionMaxW);
     tp.paint(canvas, Offset(captionLeft, dotCy - tp.height / 2));
-  }
-
-  void _drawSubtitleText(Canvas canvas, Rect band) {
-    final tp = TextPainter(
-      text: TextSpan(
-        text: '24 VDC POWER',
-        style: TextStyle(
-          color: Colors.white,
-          fontSize: band.height * 0.50,
-          fontWeight: FontWeight.w500,
-        ),
-      ),
-      textAlign: TextAlign.center,
-      textDirection: TextDirection.ltr,
-    )..layout(minWidth: band.width, maxWidth: band.width);
-    tp.paint(
-      canvas,
-      Offset(band.left, band.top + (band.height - tp.height) / 2),
-    );
   }
 
   /// BATCH2 Defect C: draws ONE horizontal plug-style terminal connector
