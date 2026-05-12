@@ -32,11 +32,13 @@ import 'dart:collection' show LinkedHashMap;
 import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:logger/logger.dart';
 import 'package:rxdart/rxdart.dart';
 import 'package:open62541/open62541.dart' show DynamicValue;
 import 'package:tfc_dart/core/state_man.dart';
 
 import 'common.dart';
+import '../page.dart' show AssetListConverter;
 import 'beckhoff.dart' show RowIOView, FilterEdit;
 import '../../providers/state_man.dart';
 import '../../painter/advantys_stb/io16.dart';
@@ -1244,6 +1246,186 @@ class _STBPDT3100ConfigEditorState extends State<_STBPDT3100ConfigEditor> {
           label: 'Input OK Key',
         ),
       ],
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// AdvantysSTBStackConfig — composite parent (Phase 5).
+//
+// Mirrors `BeckhoffCX5010Config` (lib/page_creator/assets/beckhoff.dart:30-110)
+// verbatim with the four-type STB whitelist substituted, plus a NET-NEW
+// post-`fromJson` sanitiser that drops any non-STB child types. Permissive
+// render, restrictive load — see CONTEXT.md §Whitelist Filter and
+// RESEARCH.md finding 2.
+//
+// The configure dialog is intentionally stubbed in this plan; Plan 05-02 will
+// replace the stub with the filtered Add-dropdown + ReorderableListView + delete
+// trifecta.
+// ---------------------------------------------------------------------------
+
+/// Allowed STB child runtimeType strings. The sanitiser drops anything whose
+/// `runtimeType.toString()` is NOT in this set.
+///
+/// **Pitfall 2 guard:** the set entries must match the exact string returned by
+/// `runtimeType.toString()` on each leaf config (no package prefix, no `Config`
+/// truncation). A unit test in
+/// `test/page_creator/assets/advantys_stb_test.dart` asserts each leaf's
+/// runtimeType against these literals; a typo here fails that test loudly.
+const Set<String> _kAllowedSTBChildTypeNames = <String>{
+  'STBNIP2311Config',
+  'STBPDT3100Config',
+  'STBDDI3725Config',
+  'STBDDO3705Config',
+};
+
+/// Schneider Advantys STB stack — composite parent that groups the four STB
+/// module configs into a horizontal row mirroring the physical control panel.
+///
+/// Holds a polymorphic [subdevices] list filtered to the four STB module types
+/// at load time via the post-`fromJson` sanitiser. `allKeys` flat-maps each
+/// subdevice's own `allKeys` so alarms / collectors discover the full key set
+/// without separate registration. The build path is type-agnostic (permissive
+/// render): if a foreign type somehow survives in [subdevices], it renders
+/// as-is and does not crash the page.
+@JsonSerializable()
+class AdvantysSTBStackConfig extends BaseAsset {
+  @override
+  String get displayName => 'Advantys STB Stack';
+  @override
+  String get category => 'Advantys STB';
+
+  @AssetListConverter()
+  List<Asset> subdevices = <Asset>[];
+
+  AdvantysSTBStackConfig();
+  AdvantysSTBStackConfig.preview() : super();
+
+  /// Flat-maps each subdevice's `allKeys` into a deduplicated list with empty
+  /// strings filtered out. Recurses naturally — if a subdevice is itself a
+  /// composite (STACK-FUT-01 future), its own `allKeys` walks ITS subdevices.
+  @override
+  List<String> get allKeys {
+    return subdevices
+        .expand((s) => s is BaseAsset ? s.allKeys : <String>[])
+        .where((k) => k.isNotEmpty)
+        .toSet()
+        .toList();
+  }
+
+  /// Native painter height for the stack's `_STBSubdeviceNormalized` wrapper.
+  /// Unitless reference — the outer `FittedBox` scales the whole row to the
+  /// asset's `targetSize`. Mirrors `BeckhoffCX5010Config._cxNativeSize.height`
+  /// (1000) for diff parity.
+  static const double _stackNativeHeight = 1000;
+
+  @override
+  Widget build(BuildContext context) {
+    final targetSize = size.toSize(MediaQuery.of(context).size);
+    // The entire stack is bounded to `targetSize`. Subdevices are each laid
+    // out at a normalized native height, packed into a Row, then the outer
+    // FittedBox uniformly scales the row to fit `targetSize` exactly.
+    return SizedBox.fromSize(
+      size: targetSize,
+      child: FittedBox(
+        fit: BoxFit.contain,
+        alignment: Alignment.center,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: <Widget>[
+            for (final sub in subdevices)
+              _STBSubdeviceNormalized(
+                targetHeight: _stackNativeHeight,
+                child: sub.build(context),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Configure dialog stub — Plan 05-02 wires the full Add + Reorder + Delete
+  /// surface. The stub keeps the contract (returns a Widget) so the page
+  /// editor's `showDialog(builder: (_) => sub.configure(context))` call site
+  /// works today; operators can place a stack but not yet add subdevices
+  /// through the UI.
+  @override
+  Widget configure(BuildContext context) {
+    return SizedBox(
+      width: 400,
+      height: 200,
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Text(
+              'Advantys STB Stack',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 12),
+            const Text(
+              'Subdevice management UI ships in Plan 05-02. '
+              'Edit JSON directly for now.',
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Custom factory that wraps the generated `_$AdvantysSTBStackConfigFromJson`
+  /// with a post-deserialization sanitiser. Subdevices whose runtimeType is
+  /// NOT in [_kAllowedSTBChildTypeNames] are dropped silently and the count of
+  /// dropped entries is logged via `Logger().w(...)` (mirrors the
+  /// `AssetRegistry.parse` silent-log-and-skip convention at
+  /// `registry.dart:35,152-160`).
+  factory AdvantysSTBStackConfig.fromJson(Map<String, dynamic> json) {
+    final cfg = _$AdvantysSTBStackConfigFromJson(json);
+    final before = cfg.subdevices.length;
+    cfg.subdevices.retainWhere(
+      (s) => _kAllowedSTBChildTypeNames.contains(s.runtimeType.toString()),
+    );
+    final dropped = before - cfg.subdevices.length;
+    if (dropped > 0) {
+      Logger().w(
+        'AdvantysSTBStack: dropped $dropped non-STB subdevice(s) on fromJson '
+        '(allowed types: $_kAllowedSTBChildTypeNames)',
+      );
+    }
+    return cfg;
+  }
+
+  @override
+  Map<String, dynamic> toJson() => _$AdvantysSTBStackConfigToJson(this);
+}
+
+/// Wraps a subdevice widget and normalizes its visual height so it lines up
+/// with sibling subdevices. The outer `FittedBox` (in `build()`) then scales
+/// the whole row to the stack's target size.
+///
+/// Drop-in clone of `_SubdeviceNormalized` from
+/// `lib/page_creator/assets/beckhoff.dart:114-134`. Per CONTEXT.md §Compose
+/// Pattern (and the no-cross-cutting-refactor discipline), this private widget
+/// is intentionally duplicated rather than extracted to a shared location.
+class _STBSubdeviceNormalized extends StatelessWidget {
+  final double targetHeight;
+  final Widget child;
+  const _STBSubdeviceNormalized({
+    required this.targetHeight,
+    required this.child,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: targetHeight,
+      child: FittedBox(
+        fit: BoxFit.fitHeight,
+        alignment: Alignment.centerLeft,
+        child: child,
+      ),
     );
   }
 }

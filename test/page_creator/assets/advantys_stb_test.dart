@@ -2713,10 +2713,17 @@ void main() {
       // post-fromJson sanitiser must retainWhere over the whitelist and drop
       // the ButtonConfig silently (with a log line). Permissive render,
       // restrictive load — per CONTEXT.md §Whitelist Filter.
-      final json = <String, dynamic>{
+      //
+      // The production load path is `jsonEncode → jsonDecode → fromJson` so
+      // the test mirrors that round-trip. Passing raw `.toJson()` output
+      // directly would leave nested codegen-typed objects (e.g.
+      // `Coordinates`, `RelativeSize`) in the map and trip the leaf
+      // `_$XxxFromJson` cast guards. The round-trip below normalises every
+      // value to JSON-native types exactly like the real load path.
+      final rawJson = <String, dynamic>{
         'asset_name': 'AdvantysSTBStackConfig',
-        'coordinates': {'x': 0.0, 'y': 0.0},
-        'size': {'width': 0.5, 'height': 0.5},
+        'coordinates': <String, dynamic>{'x': 0.0, 'y': 0.0},
+        'size': <String, dynamic>{'width': 0.5, 'height': 0.5},
         'subdevices': <Map<String, dynamic>>[
           STBNIP2311Config.preview().toJson(),
           STBDDI3725Config.preview().toJson(),
@@ -2724,6 +2731,7 @@ void main() {
           STBPDT3100Config.preview().toJson(),
         ],
       };
+      final json = jsonDecode(jsonEncode(rawJson)) as Map<String, dynamic>;
       final cfg = AdvantysSTBStackConfig.fromJson(json);
       expect(cfg.subdevices, hasLength(3),
           reason: 'Sanitiser must drop the foreign ButtonConfig.');
