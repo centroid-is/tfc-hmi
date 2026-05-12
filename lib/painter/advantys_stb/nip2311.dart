@@ -128,6 +128,13 @@ class STBNIP2311BodyPainter extends CustomPainter {
     canvas.drawRRect(fillRect, fillPaint);
     canvas.drawRRect(outerRect, outerBorderPaint);
 
+    // Clip interior chrome to body RRect — DEFECT-1 (top header overshooting
+    // the chamfer) and DEFECT-2 (bottom footer band bleeding below the body
+    // outline) are both eliminated when every subsequent fill is constrained
+    // to the rounded body shape.
+    canvas.save();
+    canvas.clipRRect(fillRect);
+
     double y = 0.0;
 
     // 2. Top blue label strip with "NIP2311" + MAC ID placeholder.
@@ -160,6 +167,8 @@ class STBNIP2311BodyPainter extends CustomPainter {
     final footerH = size.height * _bottomFooterFraction;
     final footerRect = Rect.fromLTWH(0, y, size.width, footerH);
     _drawBottomFooter(canvas, footerRect);
+
+    canvas.restore();
   }
 
   void _drawTopLabelText(Canvas canvas, Rect strip) {

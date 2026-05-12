@@ -131,6 +131,14 @@ class STBDDI3725BodyPainter extends CustomPainter {
     canvas.drawRRect(fillRect, fillPaint);
     canvas.drawRRect(outerRect, outerBorderPaint);
 
+    // Clip ALL interior chrome (header strip, accent strips, LED block,
+    // terminal blocks) to the body RRect so nothing overshoots the chamfer.
+    // DEFECT-1 fix: the top blue strip used to render as a plain rect and
+    // pokes out beyond the rounded corners; clipping to the body RRect
+    // keeps it inside the chamfer.
+    canvas.save();
+    canvas.clipRRect(fillRect);
+
     // 2. Top blue label strip with "DDI3725" + RDY indicator.
     final topStripH = size.height * _topStripFraction;
     final topStripRect = Rect.fromLTWH(0, 0, size.width, topStripH);
@@ -162,6 +170,9 @@ class STBDDI3725BodyPainter extends CustomPainter {
     final terminalsY = bottomAccentY + bottomAccentH;
     final terminalsH = size.height - terminalsY - (pad * 0.5);
     _drawTerminalBlocks(canvas, size, terminalsY, terminalsH);
+
+    // End of body-RRect-clipped interior chrome.
+    canvas.restore();
 
     // 6. Disconnected indicator — red exclamation overlay in upper-center.
     if (isDisconnected) {

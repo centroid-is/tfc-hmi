@@ -128,6 +128,12 @@ class STBPDT3100BodyPainter extends CustomPainter {
     canvas.drawRRect(fillRect, fillPaint);
     canvas.drawRRect(outerRect, outerBorderPaint);
 
+    // Clip interior chrome to body RRect — DEFECT-1 (top header overshooting
+    // the chamfer) is eliminated when every subsequent fill is constrained
+    // to the rounded body shape.
+    canvas.save();
+    canvas.clipRRect(fillRect);
+
     double y = 0.0;
 
     // 2. Top blue label strip with "PDT3100".
@@ -166,6 +172,8 @@ class STBPDT3100BodyPainter extends CustomPainter {
     final footerH = size.height * _bottomFooterFraction;
     final footerRect = Rect.fromLTWH(0, y, size.width, footerH);
     _drawBottomFooter(canvas, footerRect);
+
+    canvas.restore();
   }
 
   void _drawTopLabelText(Canvas canvas, Rect strip) {

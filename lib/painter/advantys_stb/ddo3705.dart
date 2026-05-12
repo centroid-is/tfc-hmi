@@ -116,6 +116,11 @@ class STBDDO3705BodyPainter extends CustomPainter {
     canvas.drawRRect(fillRect, fillPaint);
     canvas.drawRRect(outerRect, outerBorderPaint);
 
+    // Clip interior chrome to body RRect — DEFECT-1: top blue strip used to
+    // overshoot the chamfered corners. Clipping keeps it inside the curve.
+    canvas.save();
+    canvas.clipRRect(fillRect);
+
     // 2. Top blue label strip with "DDO3705" + RDY indicator.
     final topStripH = size.height * _topStripFraction;
     final topStripRect = Rect.fromLTWH(0, 0, size.width, topStripH);
@@ -149,6 +154,8 @@ class STBDDO3705BodyPainter extends CustomPainter {
     final terminalsY = bottomAccentY + bottomAccentH;
     final terminalsH = size.height - terminalsY - (pad * 0.5);
     _drawTerminalBlocks(canvas, size, terminalsY, terminalsH);
+
+    canvas.restore();
 
     // 6. Disconnected indicator — red exclamation overlay in upper-center.
     if (isDisconnected) {
