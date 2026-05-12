@@ -13,16 +13,23 @@
 //   than NIP2311 (which is 58 × 82 mm). Width-to-height ratio ≈ 1/√2.
 //
 // - Body layout (top → bottom, fractions of `size.height`):
-//     1. Top blue label strip  (~10%)   "PDT3100" white text, left-justified.
-//     2. "IN" decorative band  (~10%)   Small black "IN" label centered.
-//     3. INPUT LED row         (~14%)   Single LED (left) + "INPUT" caption
-//                                        (right). Bound to `inputOk` bool.
-//     4. Schneider blue band   (~7%)    "24 VDC POWER" subtitle.
-//     5. Input terminal area   (~38%)   Decorative two terminal blocks with
-//                                        "INPUT +" / "INPUT -" small labels.
-//     6. Bottom whitespace     (~21%)   Intentionally blank since BATCH2 fixes
-//                                        removed the decorative voltage rating
-//                                        and vendor branding (Defects D + F).
+//     1. Top blue label strip      (~10%)  "PDT3100" white text, left-justified.
+//     2. IN/OUT LED viewport       (~18%)  Small dark rectangular window showing
+//                                           a single status LED dot (green when
+//                                           `inputOk` true). Replaces the old
+//                                           "IN" caption + cream LED row.
+//     3. Schneider blue band       (~7%)   "24 VDC POWER" subtitle.
+//     4. INPUT plug terminal block (~24%)  Horizontal plug-style connector
+//                                           labeled "INPUT" with two internal
+//                                           terminal holes (small "+" / "−"
+//                                           markings inside the plug) + spring
+//                                           clip lever on the right edge.
+//     5. "DC" centred label        (~5%)   Black "DC" between plug blocks.
+//     6. OUTPUT plug terminal      (~24%)  Mirror of #4 labeled "OUTPUT".
+//     7. Bottom whitespace         (~12%)  Intentionally blank since BATCH2
+//                                           fixes removed the decorative
+//                                           voltage rating and vendor branding
+//                                           (Defects D + F).
 //
 // Conventions:
 // - Body cream from `bodyColor` (re-exported through io16.dart from Beckhoff —
@@ -92,9 +99,12 @@ class STBPDT3100Widget extends StatelessWidget {
 }
 
 /// Body painter for the PDT3100 module faceplate. Owns the cream body
-/// chrome, the top Schneider-blue label strip, the "IN" decorative band, the
-/// single LED (bound to `inputOk`), the Schneider-blue subtitle band, the
-/// decorative input terminal pair, and the bottom power footer.
+/// chrome, the top Schneider-blue label strip, the IN/OUT LED viewport
+/// (bound to `inputOk`), the Schneider-blue subtitle band, the INPUT and
+/// OUTPUT plug terminal blocks, a centred "DC" inter-block label, and a
+/// blank trailing whitespace region (the decorative voltage rating and
+/// vendor branding were removed at the user's request — BATCH2 Defects
+/// D + F).
 class STBPDT3100BodyPainter extends CustomPainter {
   final String nameOrId;
   final bool? inputOk;
@@ -102,17 +112,18 @@ class STBPDT3100BodyPainter extends CustomPainter {
   STBPDT3100BodyPainter({required this.nameOrId, required this.inputOk});
 
   // Layout fractions, top → bottom. Sum is normalized to 1.0; minor padding
-  // is absorbed inside each region.
+  // is absorbed inside each region. BATCH2 Defect C: re-cut to make room
+  // for the new IN/OUT LED viewport + two horizontal plug terminal blocks
+  // labeled INPUT/OUTPUT (each with internal "+"/"−" holes and a spring
+  // clip lever) + a centred "DC" label between them.
   static const double _topStripFraction = 0.10;
-  static const double _inLabelFraction = 0.10;
-  static const double _ledRowFraction = 0.14;
+  static const double _viewportFraction = 0.18;
   static const double _subtitleBandFraction = 0.07;
-  static const double _terminalFraction = 0.38;
-  // Retained-but-unused: 21% trailing slice formerly held the decorative
-  // voltage rating + vendor branding (BATCH2 Defects D + F removed it).
-  // Preserved as whitespace so the other layout fractions are stable.
+  static const double _inputPlugFraction = 0.24;
+  static const double _dcLabelFraction = 0.05;
+  static const double _outputPlugFraction = 0.24;
   // ignore: unused_field
-  static const double _bottomFooterFraction = 0.21;
+  static const double _bottomWhitespaceFraction = 0.12;
 
   // Status-LED palette — same green as the NIP2311 RUN/PWR + DDI3725 RDY.
   static const Color _ledGreen = Color(0xFF6CA545);
@@ -156,35 +167,44 @@ class STBPDT3100BodyPainter extends CustomPainter {
     _drawTopLabelText(canvas, topStripRect);
     y += topStripH;
 
-    // 3. "IN" decorative band (cream — no fill change; just text).
-    final inBandH = size.height * _inLabelFraction;
-    final inBandRect = Rect.fromLTWH(0, y, size.width, inBandH);
-    _drawInLabel(canvas, inBandRect);
-    y += inBandH;
+    // 3. BATCH2 Defect C: IN/OUT LED viewport — small dark rectangle with
+    // a single status LED dot. Green when `inputOk == true`; dim grey
+    // otherwise. The viewport sits on the cream body with horizontal
+    // padding so it reads as a recessed window on the faceplate.
+    final viewportH = size.height * _viewportFraction;
+    final viewportRect = Rect.fromLTWH(0, y, size.width, viewportH);
+    _drawInOutLedViewport(canvas, viewportRect);
+    y += viewportH;
 
-    // 4. Single LED row — green when inputOk == true; dim grey otherwise.
-    final ledRowH = size.height * _ledRowFraction;
-    final ledRowRect = Rect.fromLTWH(0, y, size.width, ledRowH);
-    _drawLedRow(canvas, ledRowRect);
-    y += ledRowH;
-
-    // 5. Schneider blue subtitle band.
+    // 4. Schneider blue subtitle band ("24 VDC POWER").
     final subtitleH = size.height * _subtitleBandFraction;
     final subtitleRect = Rect.fromLTWH(0, y, size.width, subtitleH);
     canvas.drawRect(subtitleRect, Paint()..color = stbAccentBlue);
     _drawSubtitleText(canvas, subtitleRect);
     y += subtitleH;
 
-    // 6. Input terminal area — decorative two terminal blocks.
-    final terminalH = size.height * _terminalFraction;
-    final terminalRect = Rect.fromLTWH(0, y, size.width, terminalH);
-    _drawTerminals(canvas, terminalRect);
-    y += terminalH;
+    // 5. BATCH2 Defect C: INPUT plug terminal block.
+    final inputPlugH = size.height * _inputPlugFraction;
+    final inputPlugRect = Rect.fromLTWH(0, y, size.width, inputPlugH);
+    _drawPlugTerminal(canvas, inputPlugRect, 'INPUT');
+    y += inputPlugH;
 
-    // 7. BATCH2 Defects D + F: bottom-footer region intentionally left
-    // blank — voltage-rating and vendor-branding text removed at the
-    // user's request. The `_bottomFooterFraction` slice of the body height
-    // is preserved as whitespace so the rest of the layout does not reflow.
+    // 6. BATCH2 Defect C: centred "DC" label between the two plug blocks.
+    final dcLabelH = size.height * _dcLabelFraction;
+    final dcLabelRect = Rect.fromLTWH(0, y, size.width, dcLabelH);
+    _drawDcLabel(canvas, dcLabelRect);
+    y += dcLabelH;
+
+    // 7. BATCH2 Defect C: OUTPUT plug terminal block (mirror of INPUT).
+    final outputPlugH = size.height * _outputPlugFraction;
+    final outputPlugRect = Rect.fromLTWH(0, y, size.width, outputPlugH);
+    _drawPlugTerminal(canvas, outputPlugRect, 'OUTPUT');
+    y += outputPlugH;
+
+    // 8. BATCH2 Defects D + F: bottom-whitespace region intentionally
+    // left blank — voltage-rating and vendor-branding text removed at the
+    // user's request. The `_bottomWhitespaceFraction` slice is preserved
+    // so the rest of the layout does not need to reflow.
     canvas.restore();
   }
 
@@ -205,57 +225,71 @@ class STBPDT3100BodyPainter extends CustomPainter {
     tp.paint(canvas, Offset(strip.left + strip.width * 0.08, dy));
   }
 
-  void _drawInLabel(Canvas canvas, Rect band) {
-    final tp = TextPainter(
-      text: TextSpan(
-        text: 'IN',
-        style: TextStyle(
-          color: Colors.black87,
-          fontSize: band.height * 0.55,
-          fontWeight: FontWeight.bold,
-          letterSpacing: 1.5,
-        ),
-      ),
-      textAlign: TextAlign.center,
-      textDirection: TextDirection.ltr,
-    )..layout(minWidth: band.width, maxWidth: band.width);
-    tp.paint(
-      canvas,
-      Offset(band.left, band.top + (band.height - tp.height) / 2),
+  /// BATCH2 Defect C: small dark-inset IN/OUT LED viewport. Mirrors the real
+  /// PDT3100 hardware which has a single rectangular window showing the
+  /// status indicator. Green when `inputOk == true`; dim grey otherwise.
+  ///
+  /// The viewport is centred horizontally with ~12% horizontal padding so it
+  /// reads as a recessed window on the cream body.
+  void _drawInOutLedViewport(Canvas canvas, Rect rect) {
+    final padX = rect.width * 0.20;
+    final padY = rect.height * 0.18;
+    final inset = Rect.fromLTRB(
+      rect.left + padX,
+      rect.top + padY,
+      rect.right - padX,
+      rect.bottom - padY,
     );
-  }
+    // Dark background.
+    final bgPaint = Paint()..color = const Color(0xFF1A1A1A);
+    final bgRRect = RRect.fromRectAndRadius(
+      inset,
+      Radius.circular(inset.height * 0.18),
+    );
+    canvas.drawRRect(bgRRect, bgPaint);
+    // Subtle inner bezel stroke.
+    canvas.drawRRect(
+      bgRRect,
+      Paint()
+        ..color = Colors.grey.shade700
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = inset.height * 0.07,
+    );
 
-  void _drawLedRow(Canvas canvas, Rect rect) {
-    // Single LED: left-aligned circle + "INPUT" caption to the right.
-    final dotR = rect.height * 0.28;
-    final dotCx = rect.left + rect.width * 0.26;
-    final dotCy = rect.top + rect.height / 2;
-
-    final ringPaint = Paint()
-      ..color = Colors.grey.shade700
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = dotR * 0.18;
-
-    final Color dotColor = (inputOk == true) ? _ledGreen : Colors.grey.shade400;
-
+    // Single LED dot centred horizontally inside the viewport.
+    final dotR = inset.height * 0.30;
+    final dotCx = inset.left + inset.width * 0.30;
+    final dotCy = inset.center.dy;
+    final Color dotColor =
+        (inputOk == true) ? _ledGreen : Colors.grey.shade500;
     canvas.drawCircle(Offset(dotCx, dotCy), dotR, Paint()..color = dotColor);
-    canvas.drawCircle(Offset(dotCx, dotCy), dotR, ringPaint);
+    canvas.drawCircle(
+      Offset(dotCx, dotCy),
+      dotR,
+      Paint()
+        ..color = Colors.black54
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = dotR * 0.15,
+    );
 
-    final labelLeft = dotCx + dotR + rect.width * 0.08;
-    final labelMaxW = rect.right - labelLeft - rect.width * 0.05;
+    // "IN/OUT" caption to the right of the dot, in light text on the dark
+    // viewport background.
+    final captionLeft = dotCx + dotR + inset.width * 0.06;
+    final captionMaxW = inset.right - captionLeft - inset.width * 0.05;
     final tp = TextPainter(
       text: TextSpan(
-        text: 'INPUT',
+        text: 'IN/OUT',
         style: TextStyle(
-          color: Colors.black,
-          fontSize: rect.height * 0.40,
+          color: Colors.grey.shade100,
+          fontSize: inset.height * 0.42,
           fontWeight: FontWeight.w600,
+          letterSpacing: 0.8,
         ),
       ),
       textAlign: TextAlign.left,
       textDirection: TextDirection.ltr,
-    )..layout(maxWidth: labelMaxW);
-    tp.paint(canvas, Offset(labelLeft, dotCy - tp.height / 2));
+    )..layout(maxWidth: captionMaxW);
+    tp.paint(canvas, Offset(captionLeft, dotCy - tp.height / 2));
   }
 
   void _drawSubtitleText(Canvas canvas, Rect band) {
@@ -277,105 +311,170 @@ class STBPDT3100BodyPainter extends CustomPainter {
     );
   }
 
-  void _drawTerminals(Canvas canvas, Rect rect) {
-    // Two stacked decorative terminal blocks with "+" and "-" labels. Each
-    // block is a rounded rectangle with a small inner screw circle to read
-    // as a Schneider clamp terminal — consistent with the visual cue
-    // operators use to identify input wiring.
-    final pad = rect.width * 0.12;
-    final innerW = rect.width - pad * 2;
-    final gap = rect.height * 0.08;
-    final blockH = (rect.height - gap) / 2;
-    final screwR = blockH * 0.20;
-    final terminalPaint = Paint()..color = Colors.grey.shade300;
-    final terminalStroke = Paint()
-      ..color = Colors.grey.shade700
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = rect.width * 0.012;
-    final screwPaint = Paint()..color = Colors.grey.shade500;
-    final screwStroke = Paint()
-      ..color = Colors.grey.shade700
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = rect.width * 0.008;
+  /// BATCH2 Defect C: draws ONE horizontal plug-style terminal connector
+  /// (the real PDT3100 has two — one labeled "INPUT" stacked above one
+  /// labeled "OUTPUT"). Each plug renders as:
+  ///   * a darker rounded rectangle (the plug-block body),
+  ///   * a small full-word label centred on the LEFT half ("INPUT"/"OUTPUT"),
+  ///   * two internal terminal holes (small dark circles) on the RIGHT half
+  ///     with inline "+" and "−" markings next to them, and
+  ///   * a small spring-clip lever (a trapezoidal nub) sticking up past the
+  ///     plug's right edge to signal "snap-in / cable-release" hardware.
+  void _drawPlugTerminal(Canvas canvas, Rect rect, String label) {
+    if (rect.height <= 0 || rect.width <= 0) return;
 
-    // Right-edge of the terminal block — labels must NEVER cross this so they
-    // sit fully INSIDE the rounded rectangle (DEFECT-4 fix).
-    final blockRight = rect.left + pad + innerW;
-    // Anchor labels just to the right of the screw, but reserve a small
-    // safety margin (4% of innerW) inside the right edge.
-    final labelLeft = rect.left + pad + innerW * 0.50;
-    final labelMaxW = blockRight - labelLeft - innerW * 0.04;
-
-    // Top block (+).
-    final topBlockRect = RRect.fromRectAndRadius(
-      Rect.fromLTWH(rect.left + pad, rect.top, innerW, blockH),
-      Radius.circular(blockH * 0.18),
+    final padX = rect.width * 0.10;
+    final padY = rect.height * 0.10;
+    final plugRect = Rect.fromLTRB(
+      rect.left + padX,
+      rect.top + padY,
+      rect.right - padX,
+      rect.bottom - padY,
     );
-    canvas.drawRRect(topBlockRect, terminalPaint);
-    canvas.drawRRect(topBlockRect, terminalStroke);
-    final topScrewCx = rect.left + pad + innerW * 0.25;
-    final topScrewCy = rect.top + blockH / 2;
-    canvas.drawCircle(Offset(topScrewCx, topScrewCy), screwR, screwPaint);
-    canvas.drawCircle(Offset(topScrewCx, topScrewCy), screwR, screwStroke);
-    _drawTerminalLabel(
-      canvas,
-      Offset(labelLeft, topScrewCy),
-      blockH,
-      labelMaxW,
-      'INPUT +',
+    if (plugRect.width <= 0 || plugRect.height <= 0) return;
+
+    // Plug-block body (darker grey rounded rect with a stroke).
+    final blockRRect = RRect.fromRectAndRadius(
+      plugRect,
+      Radius.circular(plugRect.height * 0.18),
+    );
+    canvas.drawRRect(blockRRect, Paint()..color = Colors.grey.shade400);
+    canvas.drawRRect(
+      blockRRect,
+      Paint()
+        ..color = Colors.grey.shade800
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = plugRect.height * 0.04,
     );
 
-    // Bottom block (−).
-    final bottomTop = rect.top + blockH + gap;
-    final bottomBlockRect = RRect.fromRectAndRadius(
-      Rect.fromLTWH(rect.left + pad, bottomTop, innerW, blockH),
-      Radius.circular(blockH * 0.18),
+    // Spring-clip lever — a small trapezoid sticking up past the plug's
+    // top-right corner. Reads as a snap-in cable-release lever.
+    final leverW = plugRect.width * 0.10;
+    final leverH = plugRect.height * 0.30;
+    final leverRight = plugRect.right - plugRect.width * 0.02;
+    final leverLeft = leverRight - leverW;
+    final leverTopY = plugRect.top - leverH * 0.65;
+    final leverPath = Path()
+      ..moveTo(leverLeft, plugRect.top)
+      ..lineTo(leverLeft + leverW * 0.20, leverTopY)
+      ..lineTo(leverRight - leverW * 0.20, leverTopY)
+      ..lineTo(leverRight, plugRect.top)
+      ..close();
+    canvas.drawPath(leverPath, Paint()..color = Colors.grey.shade600);
+    canvas.drawPath(
+      leverPath,
+      Paint()
+        ..color = Colors.grey.shade800
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = plugRect.height * 0.03,
     );
-    canvas.drawRRect(bottomBlockRect, terminalPaint);
-    canvas.drawRRect(bottomBlockRect, terminalStroke);
-    final bottomScrewCx = rect.left + pad + innerW * 0.25;
-    final bottomScrewCy = bottomTop + blockH / 2;
-    canvas.drawCircle(
-        Offset(bottomScrewCx, bottomScrewCy), screwR, screwPaint);
-    canvas.drawCircle(
-        Offset(bottomScrewCx, bottomScrewCy), screwR, screwStroke);
-    _drawTerminalLabel(
-      canvas,
-      Offset(labelLeft, bottomScrewCy),
-      blockH,
-      labelMaxW,
-      'INPUT −',
-    );
-  }
 
-  /// Draws the terminal label inside the block, with the font auto-shrunk
-  /// to fit `maxWidth`. DEFECT-4 fix — the old layout used a fixed font size
-  /// of `blockH * 0.32` and let the painted text overflow the right edge of
-  /// the terminal block and even the body box itself. The new layout caps
-  /// the font size at `blockH * 0.28` and then iteratively scales it down
-  /// (in 5% increments) until the laid-out text width fits inside `maxWidth`,
-  /// guaranteeing the painted text stays inside the rounded terminal block.
-  void _drawTerminalLabel(Canvas canvas, Offset anchor, double blockH,
-      double maxWidth, String text) {
-    double fontSize = blockH * 0.28;
-    TextPainter tp;
+    // Layout: left half = label ("INPUT" / "OUTPUT"); right half = two
+    // terminal holes with internal "+" and "−" markings.
+    final leftHalfRight = plugRect.left + plugRect.width * 0.50;
+
+    // Label centred in the left half, sized to fit. Iteratively shrink the
+    // font if it overflows the available width.
+    final labelMaxW = leftHalfRight - plugRect.left - plugRect.width * 0.08;
+    double labelFontSize = plugRect.height * 0.55;
+    TextPainter labelTp;
     while (true) {
-      tp = TextPainter(
+      labelTp = TextPainter(
         text: TextSpan(
-          text: text,
+          text: label,
           style: TextStyle(
             color: Colors.black,
-            fontSize: fontSize,
-            fontWeight: FontWeight.w500,
+            fontSize: labelFontSize,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 0.6,
           ),
         ),
         textAlign: TextAlign.left,
         textDirection: TextDirection.ltr,
       )..layout();
-      if (tp.width <= maxWidth || fontSize < 4) break;
-      fontSize *= 0.95;
+      if (labelTp.width <= labelMaxW || labelFontSize < 4) break;
+      labelFontSize *= 0.95;
     }
-    tp.paint(canvas, Offset(anchor.dx, anchor.dy - tp.height / 2));
+    labelTp.paint(
+      canvas,
+      Offset(
+        plugRect.left + plugRect.width * 0.06,
+        plugRect.center.dy - labelTp.height / 2,
+      ),
+    );
+
+    // Right half — two terminal holes, each with a "+" or "−" marking.
+    final holeR = plugRect.height * 0.18;
+    final holeCy = plugRect.center.dy;
+    final holeCxLeft = leftHalfRight + plugRect.width * 0.12;
+    final holeCxRight = plugRect.right - plugRect.width * 0.10;
+    final holePaint = Paint()..color = const Color(0xFF1A1A1A);
+    final holeStroke = Paint()
+      ..color = Colors.grey.shade800
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = holeR * 0.18;
+    canvas.drawCircle(Offset(holeCxLeft, holeCy), holeR, holePaint);
+    canvas.drawCircle(Offset(holeCxLeft, holeCy), holeR, holeStroke);
+    canvas.drawCircle(Offset(holeCxRight, holeCy), holeR, holePaint);
+    canvas.drawCircle(Offset(holeCxRight, holeCy), holeR, holeStroke);
+
+    // "+" / "−" markings BELOW each hole so they read as polarity hints
+    // without overlapping the dark hole pixels.
+    final markFontSize = plugRect.height * 0.30;
+    final plusTp = TextPainter(
+      text: TextSpan(
+        text: '+',
+        style: TextStyle(
+          color: Colors.black,
+          fontSize: markFontSize,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+      textAlign: TextAlign.center,
+      textDirection: TextDirection.ltr,
+    )..layout();
+    final minusTp = TextPainter(
+      text: TextSpan(
+        text: '−',
+        style: TextStyle(
+          color: Colors.black,
+          fontSize: markFontSize,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+      textAlign: TextAlign.center,
+      textDirection: TextDirection.ltr,
+    )..layout();
+    final markY = holeCy + holeR + plugRect.height * 0.02;
+    plusTp.paint(
+      canvas,
+      Offset(holeCxLeft - plusTp.width / 2, markY),
+    );
+    minusTp.paint(
+      canvas,
+      Offset(holeCxRight - minusTp.width / 2, markY),
+    );
+  }
+
+  /// BATCH2 Defect C: small centred "DC" label between the two plug blocks.
+  void _drawDcLabel(Canvas canvas, Rect rect) {
+    final tp = TextPainter(
+      text: TextSpan(
+        text: 'DC',
+        style: TextStyle(
+          color: Colors.black87,
+          fontSize: rect.height * 0.80,
+          fontWeight: FontWeight.w700,
+          letterSpacing: 1.5,
+        ),
+      ),
+      textAlign: TextAlign.center,
+      textDirection: TextDirection.ltr,
+    )..layout(minWidth: rect.width, maxWidth: rect.width);
+    tp.paint(
+      canvas,
+      Offset(rect.left, rect.top + (rect.height - tp.height) / 2),
+    );
   }
 
 

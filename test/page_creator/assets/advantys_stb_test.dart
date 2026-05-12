@@ -3794,8 +3794,10 @@ void main() {
           .readAsStringSync();
       // Look for "'INPUT'" — the new full-word plug-block label, distinct
       // from the old "'INPUT +'" / "'INPUT −'" single-pin labels.
+      // The literal may appear either inside a `TextPainter(text: 'INPUT')`
+      // OR be passed as the `label` parameter of `_drawPlugTerminal(...)`.
       expect(
-          src.contains("text: 'INPUT'") || src.contains('text: "INPUT"'),
+          src.contains("'INPUT'") || src.contains('"INPUT"'),
           isTrue,
           reason:
               'pdt3100.dart must paint an "INPUT" plug-block label (defect C).');
@@ -3805,7 +3807,7 @@ void main() {
       final src = File('lib/painter/advantys_stb/pdt3100.dart')
           .readAsStringSync();
       expect(
-          src.contains("text: 'OUTPUT'") || src.contains('text: "OUTPUT"'),
+          src.contains("'OUTPUT'") || src.contains('"OUTPUT"'),
           isTrue,
           reason:
               'pdt3100.dart must paint an "OUTPUT" plug-block label (defect C).');
