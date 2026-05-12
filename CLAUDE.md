@@ -21,18 +21,15 @@ Two new HMI assets for the tfc-hmi2 page creator: an **elevator** that translate
 
 ## Languages
 - Dart 3.5–3.6 - All Flutter UI and business logic (`lib/`, `packages/tfc_dart/`, `packages/tfc_mcp_server/`, `packages/jbtm/`)
-- Go 1.26 - `centroidx-manager` update manager tool (`tools/centroidx-manager/`)
 - Kotlin - Android platform host (`centroid-hmi/android/app/src/main/kotlin/`)
 - Swift/Objective-C - iOS/macOS platform host (`centroid-hmi/ios/`, `centroid-hmi/macos/`)
 - C/C++ (via build hooks) - `open62541` OPC UA native library compiled by `dart build` hooks
 ## Runtime
 - Flutter (stable channel) — targets Linux (elinux/Wayland), macOS (arm64), Windows (x64), Android, iOS
 - Dart SDK ^3.5.1 (root package) / ^3.6.0 (centroid-hmi app)
-- Go 1.26.1 (centroidx-manager only)
 - Nix flake (`flake.nix`) provides dev shell with Flutter, libsecret, gtk3, pkg-config on NixOS 25.05
 - Dart: `pub` (flutter pub / dart pub)
 - Lockfiles: `pubspec.lock` present in each package (not listed in repo root — workspace managed per-package)
-- Go: `go.mod` / `go.sum` at `tools/centroidx-manager/`
 ## Frameworks
 - Flutter (Material) — full app framework for all platforms
 - Beamer ^1.6–1.7 — declarative routing / deep linking
@@ -44,7 +41,7 @@ Two new HMI assets for the tfc-hmi2 page creator: an **elevator** that translate
 - TimescaleDB (PostgreSQL 17 extension) — time-series hypertables for telemetry data storage (see `database_drift.dart` lines 855–887)
 - `anthropic_sdk_dart ^1.2.0` — Claude API SDK
 - `openai_dart ^1.1.0` — OpenAI/GPT API SDK
-- Gemini: HTTP-based provider (no dedicated SDK package; uses `http`)
+- Gemini: HTTP-based provider (uses `dart:io` HttpClient; no dedicated SDK package)
 - `mcp_dart ^2.0.0` — Model Context Protocol (MCP) SDK for exposing HMI state as AI-readable tools
 - `flutter_test` (SDK) — Flutter widget tests
 - `dart test ^1.25.0` — Pure-Dart unit/integration tests (`packages/tfc_dart/`, `packages/tfc_mcp_server/`)
@@ -55,9 +52,6 @@ Two new HMI assets for the tfc-hmi2 page creator: an **elevator** that translate
 - `flutter_lints ^5.0.0` / `lints ^5.0.0` — Analysis/lint rules
 - `msix ^3.16.12` — Windows MSIX package builder (centroid-hmi)
 - `flutter_launcher_icons ^0.14.3` / `flutter_native_splash ^2.4.6` — App icon/splash code gen
-- `gioui.org v0.9.0` — Immediate-mode GUI for the native update manager
-- `github.com/Masterminds/semver/v3 v3.4.0` — Semantic version comparison
-- `github.com/google/go-github/v84 v84.0.0` — GitHub Releases API client
 ## Key Dependencies
 - `open62541` (git: `github.com/centroid-is/open62541_dart`, branch `main`) — OPC UA C library with Dart FFI bindings; compiled at build time via Dart native hooks; used for all PLC data subscriptions
 - `tfc_dart` (path: `packages/tfc_dart`) — Core data-acquisition engine: OPC UA state machine, Modbus/UMAS client, Drift DB layer, alarm system, preferences
@@ -86,9 +80,6 @@ Two new HMI assets for the tfc-hmi2 page creator: an **elevator** that translate
 - `desktop_drop ^0.7.0` — Drag-and-drop file upload (drawings)
 - `package_info_plus ^8.0.0` — App version info
 - `intl ^0.20.2` — Internationalization / date formatting
-- `centroidx_upgrader` (path: `packages/centroidx_upgrader`) — GitHub Releases update check + manager launcher
-- `upgrader ^11.5.1` — Update dialog UI (wraps centroidx_upgrader)
-- `http ^1.6.0` — HTTP client (upgrader, Gemini provider)
 ## Configuration
 - `CENTROID_PGHOST` — PostgreSQL host (required for backend `main.dart`)
 - `CENTROID_PGPORT` — PostgreSQL port (default 5432)
@@ -112,7 +103,6 @@ Two new HMI assets for the tfc-hmi2 page creator: an **elevator** that translate
 ## Platform Requirements
 - Flutter stable channel
 - Nix devShell (`flake.nix`) or manual install of: libsecret, gtk3, pkg-config, cmake, python3, build-essential (for `open62541` native build hook)
-- Go 1.26+ for `tools/centroidx-manager/`
 - TimescaleDB (PostgreSQL 17 + timescaledb extension) for integration tests
 - **Linux elinux/Wayland**: Docker image `ghcr.io/centroid-is/centroid-hmi` (Debian trixie-slim + Wayland stack), deployed via `docker-compose.yml` with Weston compositor
 - **macOS arm64**: Signed `.dmg` (Developer ID Application, notarized via Apple Notary Service)
@@ -210,7 +200,6 @@ Two new HMI assets for the tfc-hmi2 page creator: an **elevator** that translate
 - `tfc_mcp_server`: MCP server with strict linting (no `print`, strict casts/raw types)
 - `jbtm`: M2400 device protocol
 - `modbus_client`, `modbus_client_tcp`: Modbus protocol (local forks)
-- `centroidx_upgrader`: version management
 <!-- GSD:conventions-end -->
 
 <!-- GSD:architecture-start source:ARCHITECTURE.md -->
@@ -222,7 +211,7 @@ Two new HMI assets for the tfc-hmi2 page creator: an **elevator** that translate
 ## Component Responsibilities
 | Component | Responsibility | Key Files |
 |-----------|----------------|-----------|
-| `centroid-hmi` app | Production HMI binary; wires routes, menu, upgrade flow | `centroid-hmi/lib/main.dart` |
+| `centroid-hmi` app | Production HMI binary; wires routes, menu, app shell | `centroid-hmi/lib/main.dart` |
 | `tfc` library | All UI, providers, painters, page creator — consumed by app | `lib/` root |
 | `StateMan` | Protocol multiplexer: OPC UA + Modbus + M2400 subscribe/read/write | `packages/tfc_dart/lib/core/state_man.dart` |
 | `AssetRegistry` | Deserialises JSON pages into typed `Asset` widgets | `lib/page_creator/assets/registry.dart` |
@@ -234,16 +223,15 @@ Two new HMI assets for the tfc-hmi2 page creator: an **elevator** that translate
 | `Collector` | Subscribes to StateMan keys, writes time-series to PostgreSQL | `packages/tfc_dart/lib/core/collector.dart` |
 | `AlarmMan` | Evaluates boolean expressions against live values, fires alarms | `packages/tfc_dart/lib/core/alarm.dart` |
 | `Preferences` | Dual-layer storage: SharedPreferences (local) + PostgreSQL (sync) | `packages/tfc_dart/lib/core/preferences.dart` |
-| `centroidx_upgrader` | GitHub release store + ManagerLauncher for auto-update flow | `packages/centroidx_upgrader/lib/src/` |
 ## Pattern Overview
 - Assets are pure data configs (`BaseAsset`) that carry both their serialized state (JSON) and a `build()` method returning a `Widget`. No separate ViewModel.
 - All live process data flows through `StateMan.subscribe(key)` → `Stream<DynamicValue>`. Widgets read `stateManProvider` and call `stateMan.subscribe(key)`.
 - Riverpod `keepAlive: true` providers (`preferencesProvider`, `stateManProvider`, `databaseProvider`, etc.) are singletons for the app lifetime — they are never auto-disposed.
 - The MCP AI layer is a separate subprocess (`tfc_mcp_server`) that communicates with the Flutter app over SSE; it is not in-process.
 ## Layers
-- Purpose: Dart/Flutter binary entry point; platform-specific setup, route wiring, upgrade orchestration
+- Purpose: Dart/Flutter binary entry point; platform-specific setup, route wiring
 - Location: `centroid-hmi/lib/`
-- Contains: `main.dart`, `marionette_init.dart`, `pages/version_manager_page.dart`
+- Contains: `main.dart`, `marionette_init.dart`
 - Depends on: `tfc` library package at `../`
 - Used by: End users, CI/CD pipelines
 - Purpose: All reusable UI — pages, widgets, painters, asset components, providers

@@ -4,15 +4,13 @@ Industrial HMI (Human-Machine Interface) for monitoring and controlling automati
 
 ## Install
 
-Download the **CentroidX Version Manager** for your platform — it handles installation, updates, and rollback:
+Download the latest release for your platform from the
+[GitHub Releases page](https://github.com/centroid-is/tfc-hmi/releases/latest):
 
-| Platform | Download |
+| Platform | Artifact |
 |----------|----------|
-| :apple: **macOS** (Apple Silicon) | [`centroidx-manager_darwin_arm64.dmg`](https://github.com/centroid-is/tfc-hmi/releases/latest/download/centroidx-manager_darwin_arm64.dmg) |
-| :window: **Windows** (x64) | [`centroidx-manager_windows_amd64.exe`](https://github.com/centroid-is/tfc-hmi/releases/latest/download/centroidx-manager_windows_amd64.exe) |
-| :penguin: **Linux** (x64) | [`centroidx-manager_linux_amd64`](https://github.com/centroid-is/tfc-hmi/releases/latest/download/centroidx-manager_linux_amd64) |
-
-Run the manager and it will download and install the latest CentroidX release.
+| :apple: **macOS** (Apple Silicon) | `centroidx_darwin_arm64.dmg` |
+| :window: **Windows** (x64) | `*.msix` (sideload-signed) |
 
 > macOS and Windows binaries are signed and notarized — no Gatekeeper warnings.
 
