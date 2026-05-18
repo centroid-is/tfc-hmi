@@ -1233,7 +1233,19 @@ class UmasClient {
   /// Acquire exclusive PLC write reservation (sub-function 0x10).
   ///
   /// Sets [hasReservation] to true on success.
-  /// Throws [UmasReservationException] if another client holds the reservation.
+  ///
+  /// **Exception taxonomy (TD-014, v1.1.x):**
+  /// - Transport-level errors (e.g. Modbus exception code, no PDU) →
+  ///   plain [UmasException]. These are not reservation conflicts;
+  ///   they're network / framing failures and callers should not
+  ///   special-case them as "another client holds the lock."
+  /// - PLC-side reservation conflict (UMAS status error byte with the
+  ///   well-known 0x06 conflict error code, or any other non-success
+  ///   status accompanied by a UMAS-error payload) → [UmasReservationException]
+  ///   so the UI/operator workflow can present a graceful "wait for
+  ///   the other client to release" affordance instead of a generic
+  ///   "something failed" red banner.
+  ///
   /// Uses [_withSession] to auto-initialize if not yet paired.
   Future<void> takePlcReservation() async {
     return _withSession(() async {
@@ -1245,9 +1257,13 @@ class UmasClient {
       final code = await sendFn(request);
 
       if (code != ModbusResponseCode.requestSucceed) {
-        throw UmasReservationException(
+        // TD-014: transport-level failure is NOT a reservation conflict.
+        // Surface as plain UmasException so callers don't false-positive
+        // on "another client holds the lock" UX when the network is just
+        // down.
+        throw UmasException(
           errorCode: code.code,
-          message: 'Another client holds the PLC reservation',
+          message: 'UMAS takePlcReservation transport error: ${code.name}',
         );
       }
 
@@ -1259,12 +1275,25 @@ class UmasClient {
         );
       }
 
-      // Check for UMAS-level error (0xFD status = conflict)
+      // Check for UMAS-level error. The conflict-byte 0x06 ("another
+      // client holds the reservation") is the only condition that
+      // should be surfaced as UmasReservationException; other status
+      // errors (e.g. 0x83 Data Dictionary disabled, 0xC0 access
+      // denied) are real protocol errors that callers MUST NOT treat
+      // as a transient reservation conflict.
       if (pdu[2] == _statusError || pdu[2] != _statusSuccess) {
         final errorCode = pdu.length > 3 ? pdu[3] : 0;
-        throw UmasReservationException(
+        if (errorCode == 0x06) {
+          throw UmasReservationException(
+            errorCode: errorCode,
+            message: 'Another client holds the PLC reservation',
+          );
+        }
+        throw UmasException(
           errorCode: errorCode,
-          message: 'Another client holds the PLC reservation',
+          message: 'UMAS takePlcReservation failed: status=0x'
+              '${pdu[2].toRadixString(16).padLeft(2, '0')} '
+              'errorCode=0x${errorCode.toRadixString(16).padLeft(2, '0')}',
         );
       }
 
