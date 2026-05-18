@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:modbus_client/modbus_client.dart';
@@ -415,6 +416,62 @@ void main() {
       expect(subFuncs, contains(0x02));
       expect(subFuncs, contains(0x01));
       expect(subFuncs, contains(0x06));
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // TD-016 (v1.1.x): UTF-8-aware project name extraction
+  // ---------------------------------------------------------------------------
+  group('TD-016: debugExtractProjectName (UTF-8 / ASCII)', () {
+    test('plain ASCII project name is extracted (regression: legacy behavior)',
+        () {
+      final payload = Uint8List.fromList([
+        0x00, 0x00, 0x00, 0x00, // leading binary
+        ...'MyProject_v3'.codeUnits,
+        0x00, 0x00, // trailing binary
+      ]);
+      final name = UmasClient.debugExtractProjectName(payload);
+      expect(name, 'MyProject_v3');
+    });
+
+    test('UTF-8 Cyrillic project name decodes correctly (was null before)',
+        () {
+      // "ПроектУправления" in UTF-8.
+      final bytes = utf8.encode('ПроектУправления');
+      final payload = Uint8List.fromList([
+        0x00, 0x00,
+        ...bytes,
+        0x00, 0x00,
+      ]);
+      final name = UmasClient.debugExtractProjectName(payload);
+      expect(name, isNotNull);
+      expect(name, contains('Проект'));
+    });
+
+    test('UTF-8 accented Latin (Western European) project name decodes',
+        () {
+      final bytes = utf8.encode('Projet_éàü_v2');
+      final payload = Uint8List.fromList([0x00, ...bytes, 0x00]);
+      final name = UmasClient.debugExtractProjectName(payload);
+      expect(name, isNotNull);
+      expect(name, contains('Projet'));
+      expect(name, contains('é'));
+    });
+
+    test('binary garbage returns null', () {
+      final payload = Uint8List.fromList([
+        0x00, 0xFF, 0x00, 0x01, 0x02, 0x03, 0xFE, 0x00,
+      ]);
+      expect(UmasClient.debugExtractProjectName(payload), isNull);
+    });
+
+    test('empty payload returns null', () {
+      expect(UmasClient.debugExtractProjectName(Uint8List(0)), isNull);
+    });
+
+    test('single printable char is too short (returns null)', () {
+      final payload = Uint8List.fromList([0x00, 0x41, 0x00]); // single "A"
+      expect(UmasClient.debugExtractProjectName(payload), isNull);
     });
   });
 }

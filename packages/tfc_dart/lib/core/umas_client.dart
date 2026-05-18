@@ -674,31 +674,117 @@ class UmasClient {
     });
   }
 
-  /// Extract the longest contiguous run of printable ASCII characters
-  /// from [data]. Returns null if no run of 2+ printable chars is found.
+  /// Extract a best-effort human-readable project name from a raw
+  /// [readProjectInfo] payload.
+  ///
+  /// **TD-016 (v1.1.x):** Schneider PLCs in non-Western locales (Kanji,
+  /// Cyrillic, accented Latin) embed project names as UTF-8 in the
+  /// 0x03 response. The previous implementation hard-coded
+  /// `0x20..0x7E` and returned null or garbage for such projects.
+  ///
+  /// Strategy:
+  ///   1. Find every contiguous run of non-control / non-zero bytes
+  ///      (skip 0x00 NUL, 0x01..0x1F C0-controls except tab/lf, and
+  ///      the C1-range 0x7F..0x9F).
+  ///   2. For each candidate run, attempt `utf8.decode(allowMalformed: true)`.
+  ///      Score the decoded string by the ratio of alpha-numeric +
+  ///      symbol characters to total characters; reject if too many
+  ///      replacement characters (U+FFFD) leak through.
+  ///   3. Return the highest-scoring run of >=2 characters.
+  ///
+  /// Falls back to a pure-ASCII run when no UTF-8 run scores well —
+  /// matches the previous behavior for the common case of plain-ASCII
+  /// names.
+  /// Test hook for TD-016: exposes the (now UTF-8-aware) project-name
+  /// extraction so the unit test can pin behavior without mocking a
+  /// full readProjectInfo round-trip.
+  @visibleForTesting
+  static String? debugExtractProjectName(Uint8List data) =>
+      _extractLongestAsciiRun(data);
+
   static String? _extractLongestAsciiRun(Uint8List data) {
-    String? longest;
-    int longestLen = 0;
+    // Collect candidate runs (start, end-exclusive).
+    final runs = <(int, int)>[];
     int runStart = -1;
+    bool isPrintableByte(int b) {
+      // Allow any byte that could plausibly be UTF-8: skip C0 controls
+      // (0x00..0x1F) and DEL (0x7F). High-bit bytes (>=0x80) stay in
+      // because they're UTF-8 continuation or lead bytes.
+      return b >= 0x20 && b != 0x7F;
+    }
 
     for (int i = 0; i <= data.length; i++) {
-      final isPrintable = i < data.length && data[i] >= 0x20 && data[i] <= 0x7E;
-      if (isPrintable) {
+      final inRun = i < data.length && isPrintableByte(data[i]);
+      if (inRun) {
         if (runStart < 0) runStart = i;
       } else {
         if (runStart >= 0) {
-          final runLen = i - runStart;
-          if (runLen > longestLen) {
-            longestLen = runLen;
-            longest = String.fromCharCodes(data, runStart, i);
-          }
+          runs.add((runStart, i));
           runStart = -1;
         }
       }
     }
 
-    // Require at least 2 printable chars to avoid false positives
-    return longestLen >= 2 ? longest : null;
+    String? bestUtf8;
+    int bestUtf8Score = 0;
+    String? bestAscii;
+    int bestAsciiLen = 0;
+
+    for (final (start, end) in runs) {
+      final len = end - start;
+      if (len < 2) continue;
+      final slice = data.sublist(start, end);
+
+      // Try UTF-8 decode (allowMalformed leaves U+FFFD on bad
+      // sequences instead of throwing). Score by the count of
+      // characters that aren't the replacement marker so a
+      // mostly-binary run with a few accidental valid lead bytes
+      // doesn't beat a clean ASCII run.
+      try {
+        final decoded = utf8.decode(slice, allowMalformed: true);
+        var score = 0;
+        for (final cp in decoded.runes) {
+          if (cp == 0xFFFD) continue; // replacement char
+          if (cp < 0x20) continue; // control
+          score++;
+        }
+        // Require at least 50% of the run to decode to valid
+        // characters — otherwise we're looking at binary that
+        // happened to have a few printable ASCII bytes.
+        if (score >= 2 && score * 2 >= decoded.runes.length) {
+          if (score > bestUtf8Score) {
+            bestUtf8Score = score;
+            bestUtf8 = decoded.replaceAll('�', '');
+          }
+        }
+      } catch (_) {
+        // utf8.decode shouldn't throw with allowMalformed=true, but
+        // belt-and-suspenders.
+      }
+
+      // Also track the longest pure-ASCII (0x20..0x7E) sub-run as a
+      // conservative fallback. This preserves the previous behavior
+      // for the common Western-PLC case where the UTF-8 decode and
+      // ASCII match degenerate to the same thing.
+      var asciiStart = -1;
+      for (int j = start; j <= end; j++) {
+        final isAscii =
+            j < end && data[j] >= 0x20 && data[j] <= 0x7E;
+        if (isAscii) {
+          if (asciiStart < 0) asciiStart = j;
+        } else if (asciiStart >= 0) {
+          final asciiLen = j - asciiStart;
+          if (asciiLen > bestAsciiLen) {
+            bestAsciiLen = asciiLen;
+            bestAscii = String.fromCharCodes(data, asciiStart, j);
+          }
+          asciiStart = -1;
+        }
+      }
+    }
+
+    if (bestUtf8 != null && bestUtf8Score >= 2) return bestUtf8;
+    return bestAsciiLen >= 2 ? bestAscii : null;
   }
 
   /// Build the full 13-byte payload for 0x26 (ReadDataDictionary) requests.
