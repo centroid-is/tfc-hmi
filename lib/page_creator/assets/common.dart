@@ -1031,6 +1031,15 @@ class _KeyMappingEntryDialogState extends ConsumerState<KeyMappingEntryDialog> {
                       _entry = _entry.copyWith(modbusNode: nodeConfig);
                     });
                   },
+                  // B-5: propagate UMAS symbol path into KeyMappingEntry.
+                  variableName: _entry.variableName,
+                  onPickedVariableName: (variableName) {
+                    setState(() {
+                      _entry = (variableName == null || variableName.isEmpty)
+                          ? _entry.copyWith(clearVariableName: true)
+                          : _entry.copyWith(variableName: variableName);
+                    });
+                  },
                 )
               else
                 M2400ConfigSection(

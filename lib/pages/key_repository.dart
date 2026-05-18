@@ -922,6 +922,17 @@ class _KeyMappingCardState extends State<_KeyMappingCard> {
     widget.onUpdate(widget.entry.copyWith(modbusNode: config));
   }
 
+  /// B-5 (v1.1.x): the UMAS browse picker calls this with the picked
+  /// dotted symbol path. Persists into `KeyMappingEntry.variableName`
+  /// so the runtime read/write path routes by name.
+  void _updatePickedVariableName(String? variableName) {
+    if (variableName == null || variableName.isEmpty) {
+      widget.onUpdate(widget.entry.copyWith(clearVariableName: true));
+    } else {
+      widget.onUpdate(widget.entry.copyWith(variableName: variableName));
+    }
+  }
+
   void _updateBitMask(int? mask, int? shift) {
     if (mask == null) {
       widget.onUpdate(widget.entry.copyWith(clearBitMask: true));
@@ -1114,6 +1125,8 @@ class _KeyMappingCardState extends State<_KeyMappingCard> {
                     modbusServerAliases: widget.modbusServerAliases,
                     modbusConfigs: widget.modbusConfigs,
                     onChanged: _updateModbusConfig,
+                    variableName: widget.entry.variableName,
+                    onPickedVariableName: _updatePickedVariableName,
                   )
                 else if (_isM2400)
                   M2400ConfigSection(

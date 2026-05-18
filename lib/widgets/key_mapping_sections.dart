@@ -423,12 +423,27 @@ class ModbusConfigSection extends ConsumerStatefulWidget {
   final List<ModbusConfig> modbusConfigs;
   final Function(ModbusNodeConfig) onChanged;
 
+  /// Optional: fired when the user picks a UMAS symbol from the browse
+  /// dialog. The argument is the full dotted path (e.g.
+  /// `B_F1_RC_01_Front` or `M_Elevator.speed`); pass null to clear a
+  /// previously-picked name. Address/register/dataType continue to be
+  /// updated via [onChanged] (kept for display + classic-Modbus
+  /// fallback). When the picker is wired through, the runtime read
+  /// path uses [variableName] instead of the address.
+  final void Function(String? variableName)? onPickedVariableName;
+
+  /// Optional: currently-selected UMAS symbol path, surfaced as a chip
+  /// in the section header for transparency.
+  final String? variableName;
+
   const ModbusConfigSection({
     super.key,
     required this.config,
     required this.modbusServerAliases,
     required this.modbusConfigs,
     required this.onChanged,
+    this.onPickedVariableName,
+    this.variableName,
   });
 
   @override
@@ -469,6 +484,11 @@ class _ModbusConfigSectionState extends ConsumerState<ModbusConfigSection> {
       final address = blockNo + offset;
       final dataTypeName = result.metadata['dataTypeName'] ?? '';
       final byteSize = int.tryParse(result.metadata['byteSize'] ?? '') ?? 2;
+      // Picked symbol path (e.g. `B_F1_RC_01_Front`,
+      // `M_Elevator.speed`). The runtime read path uses this when
+      // umasEnabled=true; the address/register/dataType below are
+      // kept as a %MW display + non-UMAS fallback.
+      final pickedPath = result.metadata['path'] ?? result.id;
 
       setState(() {
         _addressController.text = address.toString();
@@ -476,6 +496,13 @@ class _ModbusConfigSectionState extends ConsumerState<ModbusConfigSection> {
         _selectedDataType = mapUmasDataTypeToModbus(dataTypeName, byteSize);
       });
       _notifyChanged();
+      // B-5 (v1.1.x): propagate the picked variableName to the parent
+      // so KeyMappingEntry.variableName is set. With this in place the
+      // runtime read path routes by name (B-1) — no more "verify the
+      // PLC's Modbus mapping" caveat.
+      if (pickedPath.isNotEmpty) {
+        widget.onPickedVariableName?.call(pickedPath);
+      }
     }
   }
 
@@ -542,6 +569,50 @@ class _ModbusConfigSectionState extends ConsumerState<ModbusConfigSection> {
                   ),
               ],
             ),
+            // B-5 (v1.1.x): show the picked UMAS symbol path + a clear
+            // routing hint. With variableName set the runtime read path
+            // ignores address/register/bit — keep them visible for
+            // operator transparency / %MW fallback only.
+            if (widget.variableName != null && widget.variableName!.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 8.0),
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.label_important_outline,
+                      size: 14,
+                      color: Theme.of(context).colorScheme.primary,
+                    ),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Tooltip(
+                        message:
+                            'Picked UMAS symbol: ${widget.variableName} — will be read by name at runtime',
+                        child: Text(
+                          'UMAS: ${widget.variableName}',
+                          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                color: Theme.of(context).colorScheme.primary,
+                                fontWeight: FontWeight.w600,
+                              ),
+                          overflow: TextOverflow.ellipsis,
+                          maxLines: 1,
+                        ),
+                      ),
+                    ),
+                    if (widget.onPickedVariableName != null)
+                      IconButton(
+                        icon: const Icon(Icons.close, size: 14),
+                        tooltip: 'Clear UMAS symbol (use address mapping)',
+                        visualDensity: VisualDensity.compact,
+                        padding: EdgeInsets.zero,
+                        constraints:
+                            const BoxConstraints(minWidth: 24, minHeight: 24),
+                        onPressed: () =>
+                            widget.onPickedVariableName!(null),
+                      ),
+                  ],
+                ),
+              ),
             const SizedBox(height: 12),
             // Server alias dropdown
             DropdownButtonFormField<String>(
