@@ -355,13 +355,15 @@ import sys, json
 try:
     d = json.loads(sys.stdin.read())
 except Exception as e:
-    print(f"parse_error={e}")
+    print("parse_error=" + str(e))
     sys.exit(0)
-print(f"scalars_ok={d.get(\"scalars\",{}).get(\"ok\",0)}")
-print(f"scalars_fail={d.get(\"scalars\",{}).get(\"fail\",0)}")
-print(f"arrays_ok={d.get(\"arrays\",{}).get(\"ok\",0)}")
-print(f"arrays_fail={d.get(\"arrays\",{}).get(\"fail\",0)}")
-print(f"arrays_fb_in_out={d.get(\"arrays\",{}).get(\"fb_in_out\",0)}")
+scalars = d.get("scalars", {})
+arrays = d.get("arrays", {})
+print("scalars_ok=" + str(scalars.get("ok", 0)))
+print("scalars_fail=" + str(scalars.get("fail", 0)))
+print("arrays_ok=" + str(arrays.get("ok", 0)))
+print("arrays_fail=" + str(arrays.get("fail", 0)))
+print("arrays_fb_in_out=" + str(arrays.get("fb_in_out", 0)))
 ')
 
     if echo "$parsed" | grep -q '^parse_error='; then
