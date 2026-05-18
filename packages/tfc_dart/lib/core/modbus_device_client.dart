@@ -1,13 +1,23 @@
+import 'dart:async';
+
+import 'package:logger/logger.dart';
 import 'package:open62541/open62541.dart' show DynamicValue, NodeId;
 import 'package:modbus_client/modbus_client.dart' show ModbusEndianness;
 import 'package:modbus_client_tcp/modbus_client_tcp.dart' show ModbusClientTcp;
 import 'package:rxdart/rxdart.dart' show BehaviorSubject;
 import 'package:tfc_dart/core/modbus_client_wrapper.dart';
 import 'package:tfc_dart/core/state_man.dart'
-    show ConnectionStatus, DeviceClient, KeyMappings, ModbusConfig, ModbusNodeConfig, StateMan;
+    show
+        ConnectionStatus,
+        DeviceClient,
+        KeyMappings,
+        ModbusConfig,
+        ModbusNodeConfig,
+        ModbusPollGroupConfig,
+        StateMan;
 import 'package:tfc_dart/core/umas_client.dart';
 import 'package:tfc_dart/core/umas_types.dart'
-    show TypedVariableValue, UmasException;
+    show TypedVariableValue, UmasException, UmasVariable, UmasDataTypeRef;
 
 /// Adapter that wraps [ModbusClientWrapper] as a [DeviceClient] for use in
 /// [StateMan].
@@ -57,14 +67,273 @@ class ModbusDeviceClientAdapter implements DeviceClient {
   UmasClient? _umasClient;
   ModbusClientTcp? _umasClientFor;
 
+  /// B-4 (v1.1.x): per-poll-group state for batched MonitorPlc polling.
+  /// All UMAS-by-name keys for this adapter share ONE MonitorPlc table
+  /// on the PLC (the protocol only supports one table per session),
+  /// but each poll group keeps its own [Timer.periodic] so the cadence
+  /// matches the configured group interval. Each tick issues a single
+  /// `monitorReadAll` and demuxes the response back into per-key
+  /// [_umasSubjects] / [_umasLastValues].
+  ///
+  /// `_umasPollGroups`: poll-group name -> configured interval.
+  /// `_umasKeysByGroup`: poll-group name -> list of UMAS-by-name keys
+  ///   that opted into the group (via `KeyMappingEntry.modbusNode.pollGroup`).
+  /// `_umasKeyOrder`: list of UMAS-by-name keys in MonitorPlc registration
+  ///   order — populated when the table is built on a fresh UmasClient.
+  ///   `monitorReadAll` returns values in sorted-index order, so the i-th
+  ///   value belongs to `_umasKeyOrder[i]`.
+  /// `_umasTimers`: per-group timers. Stopped on disconnect, restarted
+  ///   on (re)connect after the table is rebuilt.
+  /// `_umasTableBuiltFor`: the ModbusClientTcp identity the current
+  ///   table was registered against — when it changes the table must
+  ///   be rebuilt against the fresh UmasClient.
+  final Map<String, Duration> _umasPollGroups = {};
+  final Map<String, List<String>> _umasKeysByGroup = {};
+  final List<String> _umasKeyOrder = [];
+  final Map<String, Timer> _umasTimers = {};
+  ModbusClientTcp? _umasTableBuiltFor;
+
+  /// Guard so we don't kick off two concurrent table-build attempts when
+  /// a poll tick races with the connection-state listener.
+  bool _umasTableBuildInFlight = false;
+
+  /// Subscription to [ModbusClientWrapper.connectionStream]. Drives
+  /// table (re)build + timer lifecycle. Cancelled in [dispose].
+  StreamSubscription<ConnectionStatus>? _umasConnectionSub;
+
+  static final _log = Logger(printer: SimplePrinter(), level: Level.info);
+
+  /// Default MonitorPlc-poll interval when the operator's key mapping
+  /// references a poll group not present in [ModbusConfig.pollGroups].
+  /// Conservative 1s default mirrors `ModbusClientWrapper._defaultPollInterval`.
+  static const _defaultPollInterval = Duration(seconds: 1);
+
   ModbusDeviceClientAdapter(
     this.wrapper, {
     required Map<String, ModbusRegisterSpec> specs,
     this.serverAlias,
     Map<String, String?> variableNames = const {},
     this.umasEnabled = false,
+    Map<String, String>? umasPollGroupByKey,
+    List<ModbusPollGroupConfig>? pollGroups,
   })  : _specs = Map.unmodifiable(specs),
-        _variableNames = Map.unmodifiable(variableNames);
+        _variableNames = Map.unmodifiable(variableNames) {
+    _initUmasPollGroups(
+      umasPollGroupByKey: umasPollGroupByKey ?? const {},
+      pollGroups: pollGroups ?? const [],
+    );
+    _initUmasLifecycle();
+  }
+
+  /// Build the per-group key lists from the supplied per-key mapping
+  /// `(key -> pollGroupName)` and the per-server pollGroup intervals.
+  /// Called once at construction; the adapter is otherwise immutable.
+  void _initUmasPollGroups({
+    required Map<String, String> umasPollGroupByKey,
+    required List<ModbusPollGroupConfig> pollGroups,
+  }) {
+    final groupIntervals = <String, Duration>{};
+    for (final pg in pollGroups) {
+      groupIntervals[pg.name] = pg.interval;
+    }
+    for (final entry in umasPollGroupByKey.entries) {
+      final key = entry.key;
+      if (_variableNames[key] == null) continue; // only UMAS-by-name
+      final group = entry.value;
+      _umasKeysByGroup.putIfAbsent(group, () => <String>[]).add(key);
+      _umasPollGroups.putIfAbsent(
+        group,
+        () => groupIntervals[group] ?? _defaultPollInterval,
+      );
+    }
+    // Keys without an explicit pollGroup mapping default to 'default'.
+    for (final key in _variableNames.keys) {
+      if (_variableNames[key] == null) continue;
+      if (umasPollGroupByKey[key] != null) continue;
+      _umasKeysByGroup.putIfAbsent('default', () => <String>[]).add(key);
+      _umasPollGroups.putIfAbsent(
+        'default',
+        () => groupIntervals['default'] ?? _defaultPollInterval,
+      );
+    }
+  }
+
+  /// Wire the (re)connect → rebuild-table → start-timers chain. Cheap
+  /// no-op when [umasEnabled] is false or there are no UMAS-by-name
+  /// keys — keeps classic-Modbus adapters untouched.
+  void _initUmasLifecycle() {
+    if (!umasEnabled) return;
+    if (_umasKeysByGroup.isEmpty) return;
+    _umasConnectionSub = wrapper.connectionStream.listen((status) {
+      if (status == ConnectionStatus.connected) {
+        // Defer to a microtask so listeners don't fight `_getClientWrapper`
+        // ordering on the very first connected emission.
+        Future.microtask(_buildUmasTableAndStartTimers);
+      } else {
+        _stopUmasTimers();
+        _umasTableBuiltFor = null;
+      }
+    });
+  }
+
+  /// Build the MonitorPlc table from `_umasKeysByGroup` and start each
+  /// group's [Timer.periodic]. Safe to call repeatedly — bails when the
+  /// table is already built against the current UmasClient.
+  Future<void> _buildUmasTableAndStartTimers() async {
+    if (_umasTableBuildInFlight) return;
+    _umasTableBuildInFlight = true;
+    try {
+      final umas = _getUmasClient();
+      if (umas == null) return;
+      if (identical(_umasTableBuiltFor, _umasClientFor)) {
+        // Same client identity, table is already wired. Restart timers
+        // if they're not running (e.g. after a transient stream blip
+        // that didn't actually drop the socket).
+        _startUmasTimers();
+        return;
+      }
+      // Fresh client — drop any stale ordering and reset the server-side
+      // table so we own the index space cleanly.
+      _umasKeyOrder.clear();
+      try {
+        await umas.monitorReset();
+      } catch (e) {
+        _log.w('UMAS monitorReset before rebuild failed: $e');
+        // Continue anyway — registering still allocates fresh indices on
+        // the client side, and the PLC will overwrite stale entries.
+      }
+      // Prime project block / blockCrcs so monitorRegister succeeds.
+      try {
+        await umas.readPlcStatus();
+      } catch (e) {
+        _log.w('UMAS readPlcStatus during table build failed: $e');
+        return;
+      }
+
+      // Resolve every UMAS-by-name key and build the registration list
+      // in a deterministic order (groups in insertion order; keys within
+      // a group in insertion order). The same ordering is mirrored in
+      // [_umasKeyOrder] so `monitorReadAll` results demux correctly.
+      final refs = <(UmasVariable, UmasDataTypeRef)>[];
+      for (final group in _umasKeysByGroup.keys) {
+        for (final key in _umasKeysByGroup[group]!) {
+          final symbolPath = _variableNames[key];
+          if (symbolPath == null) continue;
+          try {
+            final sym = await umas.lookupSymbol(symbolPath);
+            if (!sym.readable) {
+              _log.w('UMAS key "$key" symbol "$symbolPath" is not readable — '
+                  'skipping MonitorPlc registration');
+              continue;
+            }
+            refs.add((sym.variable, sym.dataType));
+            _umasKeyOrder.add(key);
+          } catch (e) {
+            _log.w('UMAS lookupSymbol for "$symbolPath" (key "$key") '
+                'failed: $e — skipping');
+          }
+        }
+      }
+
+      if (refs.isEmpty) {
+        _log.i('UMAS MonitorPlc table build: no resolvable symbols');
+        _umasTableBuiltFor = _umasClientFor;
+        return;
+      }
+
+      // Chunk to fit the 1-byte index limit (255). Each chunk is one
+      // monitorRegister TCP roundtrip; the table accumulates server-side.
+      const chunkSize = 100;
+      for (var i = 0; i < refs.length; i += chunkSize) {
+        final chunk = refs.sublist(i, (i + chunkSize).clamp(0, refs.length));
+        try {
+          await umas.monitorRegister(chunk);
+        } catch (e) {
+          _log.w('UMAS monitorRegister chunk (size=${chunk.length}) failed: $e');
+          // Drop the corresponding key-order entries so demux stays aligned.
+          // We registered nothing past this chunk.
+          _umasKeyOrder.removeRange(i, _umasKeyOrder.length);
+          break;
+        }
+      }
+      _umasTableBuiltFor = _umasClientFor;
+      _log.i('UMAS MonitorPlc table built: ${_umasKeyOrder.length} '
+          'variable(s) across ${_umasKeysByGroup.length} group(s)');
+      _startUmasTimers();
+    } finally {
+      _umasTableBuildInFlight = false;
+    }
+  }
+
+  /// Start per-group poll timers. Called after [_buildUmasTableAndStartTimers]
+  /// and on transient stream events. Idempotent — replaces any prior timer
+  /// for a group so interval edits picked up via adapter re-creation take
+  /// effect immediately.
+  void _startUmasTimers() {
+    for (final group in _umasPollGroups.keys) {
+      _umasTimers[group]?.cancel();
+      final interval = _umasPollGroups[group]!;
+      _umasTimers[group] = Timer.periodic(interval, (_) {
+        // Fire-and-forget; errors caught inside _pollUmasGroup.
+        unawaited(_pollUmasGroup(group));
+      });
+    }
+  }
+
+  /// Cancel and clear all per-group poll timers.
+  void _stopUmasTimers() {
+    for (final t in _umasTimers.values) {
+      t.cancel();
+    }
+    _umasTimers.clear();
+  }
+
+  /// Single poll tick for a UMAS poll group. Issues one
+  /// `monitorReadAll` and demuxes the per-key values into
+  /// [_umasLastValues] and [_umasSubjects].
+  ///
+  /// `monitorReadAll` returns values for ALL registered variables in
+  /// sorted-index order — not just the calling group's keys. We could
+  /// filter here, but pushing every fresh value into every subscriber's
+  /// subject is exactly the semantics callers want: a fresh read on a
+  /// faster group's tick benefits slower-group subscribers too. The
+  /// poll-group interval only controls how often THIS group fires; it
+  /// does not gate which keys receive updates.
+  Future<void> _pollUmasGroup(String group) async {
+    if (wrapper.connectionStatus != ConnectionStatus.connected) return;
+    final umas = _getUmasClient();
+    if (umas == null) return;
+    if (!identical(_umasTableBuiltFor, _umasClientFor)) {
+      // Client changed under us — kick off a rebuild and skip this tick.
+      unawaited(_buildUmasTableAndStartTimers());
+      return;
+    }
+    if (_umasKeyOrder.isEmpty) return;
+    try {
+      final values = await umas.monitorReadAll();
+      _demuxUmasReadAll(values);
+    } catch (e) {
+      _log.w('UMAS monitorReadAll for group "$group" failed: $e');
+      // Subjects retain their last value (SCADA semantics).
+    }
+  }
+
+  /// Demux a [monitorReadAll] response into the per-key subjects + cache.
+  /// Assumes `values` is in the same order as [_umasKeyOrder].
+  void _demuxUmasReadAll(List<TypedVariableValue> values) {
+    final n = values.length < _umasKeyOrder.length
+        ? values.length
+        : _umasKeyOrder.length;
+    for (var i = 0; i < n; i++) {
+      final key = _umasKeyOrder[i];
+      final dv = _typedVariableToDynamicValue(values[i]);
+      _umasLastValues[key] = dv;
+      final subject = _umasSubjects[key];
+      if (subject != null && !subject.isClosed) {
+        subject.add(dv);
+      }
+    }
+  }
 
   /// All keys claimed by this adapter — the union of classic-Modbus
   /// specs and UMAS-by-name keys.
@@ -296,9 +565,14 @@ class ModbusDeviceClientAdapter implements DeviceClient {
 
   @override
   void dispose() {
+    _stopUmasTimers();
+    _umasConnectionSub?.cancel();
+    _umasConnectionSub = null;
     _umasClient?.dispose();
     _umasClient = null;
     _umasClientFor = null;
+    _umasTableBuiltFor = null;
+    _umasKeyOrder.clear();
     // F-1: close every long-lived UMAS-by-name subject so subscribers
     // see `onDone` exactly once at adapter teardown rather than after
     // a single read.
@@ -410,6 +684,26 @@ Map<String, String> buildVariableNamesFromKeyMappings(
   return out;
 }
 
+/// Extract `KeyMappingEntry.modbusNode.pollGroup` for every UMAS-by-name
+/// key whose server alias matches [serverAlias]. Used by
+/// [ModbusDeviceClientAdapter]'s B-4 batched MonitorPlc poll loop to
+/// place each key into its configured group cadence.
+Map<String, String> buildUmasPollGroupsFromKeyMappings(
+  KeyMappings keyMappings,
+  String? serverAlias,
+) {
+  final out = <String, String>{};
+  for (final entry in keyMappings.nodes.entries) {
+    final modbusNode = entry.value.modbusNode;
+    if (modbusNode == null) continue;
+    if (modbusNode.serverAlias != serverAlias) continue;
+    final vn = entry.value.variableName;
+    if (vn == null || vn.isEmpty) continue;
+    out[entry.key] = modbusNode.pollGroup;
+  }
+  return out;
+}
+
 /// Builds Modbus [DeviceClient] instances from config and key mappings.
 ///
 /// For each [ModbusConfig], translates key mappings into [ModbusRegisterSpec]s
@@ -430,6 +724,8 @@ List<DeviceClient> buildModbusDeviceClients(
     );
     final variableNames =
         buildVariableNamesFromKeyMappings(keyMappings, config.serverAlias);
+    final umasPollGroups =
+        buildUmasPollGroupsFromKeyMappings(keyMappings, config.serverAlias);
     final wrapper = ModbusClientWrapper(
       config.host,
       config.port,
@@ -445,40 +741,40 @@ List<DeviceClient> buildModbusDeviceClients(
       serverAlias: config.serverAlias,
       variableNames: variableNames,
       umasEnabled: config.umasEnabled,
+      umasPollGroupByKey: umasPollGroups,
+      pollGroups: config.pollGroups,
     );
   }).toList();
 }
 
-// TODO(B-4 / v1.2): MonitorPlc-driven streaming polling for UMAS-by-name
-// keys.
+// B-4 (v1.1.x): batched MonitorPlc polling for UMAS-by-name keys SHIPPED.
 //
-// Today, [ModbusDeviceClientAdapter.subscribe] hands out a long-lived
-// [BehaviorSubject] per key (F-1) but nothing inside the adapter pushes
-// fresh values into the subjects on a periodic cadence — they only get
-// updated when something else explicitly calls [readUmasVariable].
+// `ModbusDeviceClientAdapter` now wires a `connectionStream` listener that,
+// on every successful (re)connect, calls `monitorReset()` to clear any
+// stale server-side state and then `monitorRegister(refs)` for the union
+// of all UMAS-by-name keys configured for the adapter's server. A per-
+// poll-group `Timer.periodic` then issues ONE `monitorReadAll()` per
+// tick and demuxes the response back into the matching per-key
+// `BehaviorSubject` / `_umasLastValues` entry. The MonitorPlc table is
+// SHARED across all poll groups for the adapter's server (the UMAS
+// protocol exposes a single registration table per session), so a faster
+// group's tick incidentally refreshes all keys; the group cadence still
+// controls how often each timer fires.
 //
-// Intended design:
-//   1. On first connect (and on every successful reconnect), register
-//      the union of all UMAS-by-name keys for the adapter's server with
-//      the PLC's MonitorPlc registration table (sub-function 0x50/0x52).
-//   2. Poll the registered batch at the configured poll-group cadence
-//      (per the [ModbusConfig.pollGroups] table — UMAS-by-name keys
-//      will need to opt into a poll group, same shape as classic Modbus
-//      specs).
-//   3. Demux each poll response into the corresponding per-key
-//      [BehaviorSubject] in [_umasSubjects], converting the
-//      [TypedVariableValue] via [_typedVariableToDynamicValue] (same
-//      path as [readUmasVariable]).
-//   4. On key add/remove (e.g. an operator picks a new symbol via the
-//      browse dialog), re-register the MonitorPlc table.
-//   5. On project-CRC change (see F-8 / [UmasClient.
-//      invalidateSymbolCacheIfProjectChanged]), invalidate the
-//      registration table and rebuild it — block numbers may have
-//      shifted under a fresh download.
+// Lifecycle:
+//   - Built on the first ConnectionStatus.connected emission after the
+//     UmasClient identity changes (covers cold start + every reconnect).
+//   - Reset + rebuilt on UmasClient re-creation (TCP reconnect → fresh
+//     ModbusClientTcp → `_getUmasClient` allocates a new UmasClient
+//     against the new socket, so the server-side table is gone too).
+//   - Disposed in `dispose()`.
 //
-// Until B-4 ships, UMAS-by-name subscribers receive updates only when
-// some other code path (a manual refresh, a write-then-read, etc.)
-// calls [readUmasVariable]. The subject does NOT close in between; the
-// stream simply doesn't emit. UI surfaces that need live values today
-// should poll [StateMan.read] on their own interval instead of binding
-// via [StateMan.subscribe].
+// Still v1.2:
+//   - F-10 (cache survival across reconnect): the symbol cache is dropped
+//     on every UmasClient teardown. Would save one browse round-trip per
+//     reconnect.
+//   - In-place table mutation on Key Repository save: today the adapter
+//     is re-created when `key_mappings` changes (the stateManProvider
+//     listener invalidates and rebuilds), which transparently rebuilds
+//     the table. Mutating the live table without a full adapter rebuild
+//     is a possible optimisation but not required for correctness.
