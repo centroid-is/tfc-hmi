@@ -918,20 +918,9 @@ class _KeyMappingCardState extends State<_KeyMappingCard> {
     ));
   }
 
-  void _updateModbusConfig(ModbusNodeConfig config) {
-    widget.onUpdate(widget.entry.copyWith(modbusNode: config));
-  }
-
-  /// B-5 (v1.1.x): the UMAS browse picker calls this with the picked
-  /// dotted symbol path. Persists into `KeyMappingEntry.variableName`
-  /// so the runtime read/write path routes by name.
-  void _updatePickedVariableName(String? variableName) {
-    if (variableName == null || variableName.isEmpty) {
-      widget.onUpdate(widget.entry.copyWith(clearVariableName: true));
-    } else {
-      widget.onUpdate(widget.entry.copyWith(variableName: variableName));
-    }
-  }
+  // TD-010 (v1.1.x): _updateModbusConfig + _updatePickedVariableName
+  // moved into [KeyMappingModbusSection] so the page editor and this
+  // row share one implementation.
 
   void _updateBitMask(int? mask, int? shift) {
     if (mask == null) {
@@ -1120,13 +1109,17 @@ class _KeyMappingCardState extends State<_KeyMappingCard> {
                 const SizedBox(height: 4),
                 // Protocol-specific config section
                 if (_isModbus)
-                  ModbusConfigSection(
-                    config: widget.entry.modbusNode!,
+                  // TD-010 (v1.1.x): both the page editor and this key
+                  // repository row used to inline the same picker-wiring
+                  // boilerplate. Both now route through
+                  // [KeyMappingModbusSection] so the wiring lives in one
+                  // place and can't drift.
+                  KeyMappingModbusSection(
+                    entry: widget.entry,
                     modbusServerAliases: widget.modbusServerAliases,
                     modbusConfigs: widget.modbusConfigs,
-                    onChanged: _updateModbusConfig,
-                    variableName: widget.entry.variableName,
-                    onPickedVariableName: _updatePickedVariableName,
+                    onEntryChanged: widget.onUpdate,
+                    defaultNodeConfigBuilder: () => widget.entry.modbusNode!,
                   )
                 else if (_isM2400)
                   M2400ConfigSection(

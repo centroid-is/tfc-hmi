@@ -1015,29 +1015,23 @@ class _KeyMappingEntryDialogState extends ConsumerState<KeyMappingEntryDialog> {
                   },
                 )
               else if (_protocol == _DialogProtocol.modbus)
-                ModbusConfigSection(
-                  key: ValueKey('modbus-$_selectedServerAlias'),
-                  config: _entry.modbusNode ??
-                      ModbusNodeConfig(
-                        registerType: ModbusRegisterType.holdingRegister,
-                        address: 0,
-                      ),
+                // TD-010 (v1.1.x): shared widget owns both the node-config
+                // edits and the UMAS picker callback. Previously this site
+                // and the Key Repository row hand-rolled the same wiring.
+                KeyMappingModbusSection(
+                  sectionKey: ValueKey('modbus-$_selectedServerAlias'),
+                  entry: _entry,
                   modbusServerAliases: config.modbus
                       .map((c) => c.serverAlias ?? c.host)
                       .toList(),
                   modbusConfigs: config.modbus,
-                  onChanged: (nodeConfig) {
+                  defaultNodeConfigBuilder: () => ModbusNodeConfig(
+                    registerType: ModbusRegisterType.holdingRegister,
+                    address: 0,
+                  ),
+                  onEntryChanged: (newEntry) {
                     setState(() {
-                      _entry = _entry.copyWith(modbusNode: nodeConfig);
-                    });
-                  },
-                  // B-5: propagate UMAS symbol path into KeyMappingEntry.
-                  variableName: _entry.variableName,
-                  onPickedVariableName: (variableName) {
-                    setState(() {
-                      _entry = (variableName == null || variableName.isEmpty)
-                          ? _entry.copyWith(clearVariableName: true)
-                          : _entry.copyWith(variableName: variableName);
+                      _entry = newEntry;
                     });
                   },
                 )

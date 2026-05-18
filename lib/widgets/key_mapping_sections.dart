@@ -415,6 +415,83 @@ class _M2400ConfigSectionState extends State<M2400ConfigSection> {
   }
 }
 
+// ===================== Key Mapping Modbus Section (TD-010) =====================
+
+/// Thin wrapper around [ModbusConfigSection] that owns the
+/// `(modbusNode, variableName)` half of a [KeyMappingEntry] and reports
+/// changes back through a single [onEntryChanged] callback.
+///
+/// Both the Key Repository row (`lib/pages/key_repository.dart`) and the
+/// Page Editor key-mapping dialog (`lib/page_creator/assets/common.dart`)
+/// embed the same Modbus section with the same boilerplate:
+///
+///   - `onChanged: (cfg) => entry.copyWith(modbusNode: cfg)`
+///   - `onPickedVariableName: (n) => n == null ? entry.copyWith(clearVariableName: true) : entry.copyWith(variableName: n)`
+///
+/// TD-010 (v1.1.x): hoist that wiring into one shared widget so the two
+/// call sites can't drift (e.g. one site forgets to clear the variable
+/// name on null, or stops propagating modbusNode edits). Both sites now
+/// pass the [KeyMappingEntry] directly and absorb either kind of edit
+/// via [onEntryChanged].
+class KeyMappingModbusSection extends StatelessWidget {
+  /// Current entry. Only its `modbusNode` and `variableName` fields are
+  /// inspected/mutated by this widget — other fields pass through
+  /// unchanged on every copyWith.
+  final KeyMappingEntry entry;
+
+  /// Modbus server aliases available for selection (drives the alias
+  /// dropdown inside [ModbusConfigSection]).
+  final List<String> modbusServerAliases;
+
+  /// Full Modbus server configs (needed by [ModbusConfigSection] to
+  /// resolve `umasEnabled` per alias and gate the picker affordance).
+  final List<ModbusConfig> modbusConfigs;
+
+  /// Fired with a fresh [KeyMappingEntry] whenever the user edits the
+  /// Modbus node config OR picks/clears a UMAS variable name.
+  final ValueChanged<KeyMappingEntry> onEntryChanged;
+
+  /// Default [ModbusNodeConfig] used when the entry has no
+  /// `modbusNode` yet (the Page Editor seeds entries lazily, so the
+  /// wrapper must produce a sensible starting config when the user
+  /// switches the protocol to Modbus).
+  final ModbusNodeConfig Function() defaultNodeConfigBuilder;
+
+  /// Optional explicit key (passed straight to [ModbusConfigSection]).
+  final Key? sectionKey;
+
+  const KeyMappingModbusSection({
+    super.key,
+    required this.entry,
+    required this.modbusServerAliases,
+    required this.modbusConfigs,
+    required this.onEntryChanged,
+    required this.defaultNodeConfigBuilder,
+    this.sectionKey,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return ModbusConfigSection(
+      key: sectionKey,
+      config: entry.modbusNode ?? defaultNodeConfigBuilder(),
+      modbusServerAliases: modbusServerAliases,
+      modbusConfigs: modbusConfigs,
+      onChanged: (nodeConfig) {
+        onEntryChanged(entry.copyWith(modbusNode: nodeConfig));
+      },
+      variableName: entry.variableName,
+      onPickedVariableName: (variableName) {
+        if (variableName == null || variableName.isEmpty) {
+          onEntryChanged(entry.copyWith(clearVariableName: true));
+        } else {
+          onEntryChanged(entry.copyWith(variableName: variableName));
+        }
+      },
+    );
+  }
+}
+
 // ===================== Modbus Config Section =====================
 
 class ModbusConfigSection extends ConsumerStatefulWidget {
