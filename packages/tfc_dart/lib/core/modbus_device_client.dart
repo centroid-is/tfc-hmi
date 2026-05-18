@@ -101,6 +101,14 @@ class ModbusDeviceClientAdapter implements DeviceClient {
   /// table (re)build + timer lifecycle. Cancelled in [dispose].
   StreamSubscription<ConnectionStatus>? _umasConnectionSub;
 
+  /// F-8 / TD-011: subscription to [UmasClient.projectCrcChanges] for
+  /// the currently-active UmasClient instance. Re-subscribed each time
+  /// [_getUmasClient] allocates a fresh client (after reconnect). On
+  /// emission the adapter forces a MonitorPlc table rebuild so the
+  /// cached `(blockNo, offset)` registrations are refreshed against
+  /// the new project.
+  StreamSubscription<int>? _umasProjectCrcSub;
+
   static final _log = Logger(printer: SimplePrinter(), level: Level.info);
 
   /// Default MonitorPlc-poll interval when the operator's key mapping
@@ -358,6 +366,8 @@ class ModbusDeviceClientAdapter implements DeviceClient {
     if (tcp == null) {
       // Connection torn down — drop the stale client so the next
       // successful reconnect rebuilds it against the fresh socket.
+      _umasProjectCrcSub?.cancel();
+      _umasProjectCrcSub = null;
       _umasClient?.dispose();
       _umasClient = null;
       _umasClientFor = null;
@@ -366,9 +376,22 @@ class ModbusDeviceClientAdapter implements DeviceClient {
     if (_umasClient != null && identical(_umasClientFor, tcp)) {
       return _umasClient;
     }
+    _umasProjectCrcSub?.cancel();
+    _umasProjectCrcSub = null;
     _umasClient?.dispose();
     _umasClient = UmasClient(sendFn: tcp.send, unitId: wrapper.unitId);
     _umasClientFor = tcp;
+    // F-8 / TD-011: when the UMAS-side CRC watch detects a project
+    // change, the symbol cache is already cleared by the time this
+    // emit lands. Force a MonitorPlc table rebuild on the next tick so
+    // the registered `(blockNo, offset)` pairs are re-resolved against
+    // the new project — block numbers may have moved.
+    _umasProjectCrcSub = _umasClient!.projectCrcChanges.listen((_) {
+      _log.i('UMAS project CRC changed — rebuilding MonitorPlc table');
+      _umasTableBuiltFor = null;
+      _umasKeyOrder.clear();
+      unawaited(_buildUmasTableAndStartTimers());
+    });
     return _umasClient;
   }
 
@@ -568,6 +591,8 @@ class ModbusDeviceClientAdapter implements DeviceClient {
     _stopUmasTimers();
     _umasConnectionSub?.cancel();
     _umasConnectionSub = null;
+    _umasProjectCrcSub?.cancel();
+    _umasProjectCrcSub = null;
     _umasClient?.dispose();
     _umasClient = null;
     _umasClientFor = null;

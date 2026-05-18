@@ -324,6 +324,15 @@ class UmasHandler(socketserver.BaseRequestHandler):
         # MonitorPlc (0x50) registration table: variableIndex -> (block, offset)
         self._monitor_registrations = {}
 
+        # TD-008 (v1.1.x): project-CRC seed for F-8 testing. _readMemoryBlock(0x30)
+        # places this value in `hash1` of the response (`hash2` stays 0), so the
+        # Dart side observes `projectCrc = seed`. Tests bump the seed via a
+        # coil-write to the sentinel address 0xFFFF (value=1 = bump). On bump
+        # the seed advances by 1 and the next readMemoryBlock(0x30) response
+        # carries the new value, which drives `refreshProjectMetadata` to fire
+        # `projectCrcChanges`.
+        self._project_crc_seed = 1
+
         while True:
             try:
                 data = self.request.recv(4096)
@@ -634,6 +643,21 @@ class UmasHandler(socketserver.BaseRequestHandler):
             return build_error_response(0x02, self.pairing_key)
 
         data = payload[data_start:data_end]
+
+        # TD-008: sentinel coil write to area=0x00 (coils), address=0xFFFF
+        # with any non-zero byte bumps `_project_crc_seed`. This is the
+        # test hook for F-8 — after the bump, the next readMemoryBlock(0x30)
+        # response carries the new seed in `hash1`, which drives the
+        # client-side projectCrc to change → `projectCrcChanges` fires →
+        # MonitorPlc table rebuilds.
+        if area == 0x00 and start_addr == 0xFFFF and quantity >= 1:
+            if len(data) >= 1 and data[0] != 0:
+                self._project_crc_seed = (self._project_crc_seed + 1) & 0xFFFFFFFF
+                print(f"[STUB] CRC seed bumped to {self._project_crc_seed:#010x}")
+                # Do NOT persist the sentinel write to REGISTER_STORE —
+                # it's a control channel, not a real coil.
+                return build_success_response(b"", self.pairing_key)
+
         key = (area, start_addr)
         REGISTER_STORE[key] = bytes(data)
 
@@ -802,7 +826,7 @@ class UmasHandler(socketserver.BaseRequestHandler):
             if len(payload) < 9:
                 return build_error_response(0x02, self.pairing_key)
             range_byte = payload[0]
-            # block_number = struct.unpack("<H", payload[1:3])[0]
+            block_number = struct.unpack("<H", payload[1:3])[0]
             # mem_offset = struct.unpack("<H", payload[3:5])[0]
             # unknown_obj = struct.unpack("<H", payload[5:7])[0]
             num_bytes = struct.unpack("<H", payload[7:9])[0]
@@ -810,7 +834,25 @@ class UmasHandler(socketserver.BaseRequestHandler):
             resp = bytearray()
             resp += struct.pack("B", range_byte)
             resp += struct.pack("<H", num_bytes)
-            resp += b"\x00" * num_bytes  # zero-filled data
+            # TD-008: when blockNumber == 0x30 (project block) and the
+            # response window covers the hash1/hash2 fields at offsets
+            # 9 and 13 inside the data section, populate hash1 with the
+            # current `_project_crc_seed` so the Dart side sees a
+            # non-zero `projectCrc = seed + 0 = seed`. This lets F-8
+            # tests bump the seed (via the sentinel coil write) and
+            # observe `projectCrcChanges` fire.
+            data = bytearray(num_bytes)
+            if block_number == 0x30 and num_bytes >= 17:
+                # Layout matches `_readProjectBlock` in umas_client.dart:
+                #   data[0..1]   range (LE)
+                #   data[2..3]   notSure
+                #   data[4]      projectIndex
+                #   data[5..8]   projectHardwareId (LE)
+                #   data[9..12]  hash1 (LE)
+                #   data[13..16] hash2 (LE)
+                struct.pack_into("<I", data, 9, self._project_crc_seed & 0xFFFFFFFF)
+                struct.pack_into("<I", data, 13, 0)
+            resp += bytes(data)
             return build_success_response(bytes(resp), self.pairing_key)
 
         elif sub_func == 0x39:

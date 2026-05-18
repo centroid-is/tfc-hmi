@@ -129,8 +129,35 @@ class UmasClient {
   /// Interval between keep-alive (0x12) messages when in PAIRED state.
   final Duration keepAliveInterval;
 
+  /// F-8 (v1.1.x): interval between project-CRC re-reads. Each tick
+  /// calls [refreshProjectMetadata], which re-reads memory block 0x30
+  /// and emits on [projectCrcChanges] if [_projectCrc] moved. Default
+  /// 30 seconds — operator-grade reprogram-while-running events are
+  /// rare and a single extra TCP roundtrip every 30s is well below the
+  /// noise floor of normal MonitorPlc polling.
+  final Duration projectCrcCheckInterval;
+
   /// Periodic timer for sending keep-alive messages.
   Timer? _keepAliveTimer;
+
+  /// F-8: periodic timer for re-checking the project CRC. Started in
+  /// [startKeepAlive] (alongside the keep-alive timer), stopped in
+  /// [stopKeepAlive] and [dispose].
+  Timer? _projectCrcTimer;
+
+  /// F-8: emits the new project CRC whenever [refreshProjectMetadata]
+  /// observes a change. Subscribers (e.g.
+  /// [ModbusDeviceClientAdapter]'s MonitorPlc batch) listen here to
+  /// know they must rebuild downstream state (registered table,
+  /// resolved symbol IDs) — the symbol cache itself is invalidated
+  /// before the emit so a re-resolution sees the fresh data dictionary.
+  ///
+  /// Behaves like a broadcast stream — late subscribers do NOT receive
+  /// past CRC values; they only get notified about future changes.
+  final _projectCrcSubject = PublishSubject<int>();
+
+  /// Public stream of project-CRC changes (F-8). See [_projectCrcSubject].
+  Stream<int> get projectCrcChanges => _projectCrcSubject.stream;
 
   /// Maximum number of re-init retry attempts before propagating the error.
   static const _maxRetries = 3;
@@ -212,6 +239,7 @@ class UmasClient {
     required this.sendFn,
     this.unitId,
     this.keepAliveInterval = const Duration(seconds: 10),
+    this.projectCrcCheckInterval = const Duration(seconds: 30),
     Future<void> Function(Duration)? backoffDelay,
   }) : _delayFn = backoffDelay ?? ((d) => Future.delayed(d));
 
@@ -220,6 +248,10 @@ class UmasClient {
   /// The timer calls [sendKeepAlive] every [keepAliveInterval]. If the
   /// session is not in PAIRED state, the tick is skipped. If sendKeepAlive
   /// throws, the session is reset to uninitialized via [_handleSessionError].
+  ///
+  /// F-8 (v1.1.x): also starts the separate [_projectCrcTimer] that
+  /// periodically re-reads memory block 0x30 to detect PLC reprograms
+  /// without a session-level error.
   void startKeepAlive() {
     stopKeepAlive();
     _keepAliveTimer = Timer.periodic(keepAliveInterval, (_) async {
@@ -233,18 +265,34 @@ class UmasClient {
         _handleSessionError();
       }
     });
+    _projectCrcTimer = Timer.periodic(projectCrcCheckInterval, (_) async {
+      if (_stateValue != UmasSessionState.paired) return;
+      try {
+        await refreshProjectMetadata();
+      } catch (e) {
+        // Best-effort: a single failed CRC read should NOT bring down
+        // the session. The next tick will retry; if the underlying
+        // session is genuinely broken, keep-alive will catch it.
+        _log.w('UmasClient projectCrc tick failed: $e');
+      }
+    });
   }
 
-  /// Stop the keep-alive timer.
+  /// Stop the keep-alive timer (and the F-8 project-CRC timer).
   void stopKeepAlive() {
     _keepAliveTimer?.cancel();
     _keepAliveTimer = null;
+    _projectCrcTimer?.cancel();
+    _projectCrcTimer = null;
   }
 
   /// Release resources (cancels keep-alive timer and closes the session state stream).
   void dispose() {
     stopKeepAlive();
     _stateSubject.close();
+    if (!_projectCrcSubject.isClosed) {
+      _projectCrcSubject.close();
+    }
   }
 
   /// Current session state.
@@ -1299,32 +1347,13 @@ class UmasClient {
   /// Drops the symbol cache if the project CRC changed since the cache
   /// was built. Safe to call repeatedly — no-op when CRCs match.
   ///
-  // TODO(F-8 / v1.2): wire this from a periodic caller so PLC reprograms
-  // are detected without a session-level error.
-  //
-  // Today this hook is callable but has no production invoker: the
-  // existing keep-alive timer ([startKeepAlive]) calls UMAS sub-function
-  // 0x12 (KeepAlive), NOT [readPlcStatus] (0x04), so [_projectCrc] is
-  // never refreshed once init has set it. A PLC reprogram-without-
-  // disconnect therefore serves stale symbol resolutions until the next
-  // session-level error (which calls [_handleSessionError] →
-  // [_clearSymbolCache] anyway).
-  //
-  // Two viable wirings for v1.2:
-  //   (a) Extend the keep-alive timer to alternate KeepAlive with
-  //       [readPlcStatus] every Nth tick, then call this method. Costs
-  //       one extra round-trip per N keep-alives. Requires also re-
-  //       reading the project block (sub-function 0x03 / project info)
-  //       to refresh [_projectCrc] — currently only [_readProjectBlock]
-  //       inside the init sequence sets it.
-  //   (b) Hook into [ModbusClientWrapper]'s reconnect path so on every
-  //       successful resume the adapter checks the project CRC before
-  //       resuming reads.
-  //
-  // The B-4 MonitorPlc batching work (see modbus_device_client.dart EOF
-  // TODO) needs the same invalidation chain — when the registration
-  // table is built, it caches (blockNo, offset) pairs that move under
-  // a fresh project download. Both should land together.
+  /// F-8 (v1.1.x): now invoked from the periodic [_projectCrcTimer]
+  /// via [refreshProjectMetadata] so PLC reprograms are detected
+  /// without waiting for a session-level error. On a CRC change this
+  /// method clears the symbol cache AND emits on [projectCrcChanges];
+  /// downstream consumers (the MonitorPlc batched poller in
+  /// `ModbusDeviceClientAdapter`) listen on that stream so their own
+  /// caches invalidate atomically with the symbol cache.
   void invalidateSymbolCacheIfProjectChanged() {
     if (!_symbolCacheBuilt) return;
     if (_projectCrc != _symbolCacheProjectCrc) {
@@ -1332,6 +1361,44 @@ class UmasClient {
           '(${_symbolCacheProjectCrc} -> $_projectCrc) — clearing');
       _clearSymbolCache();
     }
+  }
+
+  /// F-8: re-read memory block 0x30 to refresh [_projectCrc], then fire
+  /// the invalidation chain. The CRC-watch timer drives this every
+  /// [projectCrcCheckInterval]; tests can call it directly to assert
+  /// deterministic invalidation behaviour.
+  ///
+  /// On a CRC change this method:
+  ///   1. Drops the symbol cache (via [invalidateSymbolCacheIfProjectChanged]
+  ///      — no-op if the cache wasn't built yet).
+  ///   2. Emits the new CRC on [projectCrcChanges] so external caches
+  ///      (e.g. the MonitorPlc batched table in `ModbusDeviceClientAdapter`)
+  ///      can drop their state and rebuild against the fresh project.
+  ///
+  /// Returns true if the project CRC differed from the previous value
+  /// (so the caller — typically a test — can assert the watched
+  /// transition fired).
+  Future<bool> refreshProjectMetadata() async {
+    if (_stateValue != UmasSessionState.paired) return false;
+    final before = _projectCrc;
+    try {
+      await _readProjectBlock();
+    } catch (e) {
+      _log.w('refreshProjectMetadata: _readProjectBlock failed: $e');
+      return false;
+    }
+    final after = _projectCrc;
+    if (before == after) return false;
+    // Drop symbol cache (no-op if not yet built).
+    invalidateSymbolCacheIfProjectChanged();
+    // Always notify external listeners — the MonitorPlc table caches
+    // `(blockNo, offset)` pairs that move under a fresh project even
+    // if no symbol was ever looked up. Don't gate the stream on
+    // `_symbolCacheBuilt`.
+    if (after != null && !_projectCrcSubject.isClosed) {
+      _projectCrcSubject.add(after);
+    }
+    return true;
   }
 
   /// Build the symbol cache from a full [browse]. Concurrent first-time
