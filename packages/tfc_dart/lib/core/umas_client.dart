@@ -1897,6 +1897,18 @@ class UmasClient {
   }
 
   /// Recursively expand a variable into its struct/FB members or array elements.
+  ///
+  /// plc4j(UmasProtocolLogic.java:1079-1097, 1130-1146): for any custom-type
+  /// reference whose `classIdentifier != 0`, plc4j issues a DD02 request keyed
+  /// on the type's index (NOT 0xFFFF) and discriminates on the first response
+  /// byte. `classId == 0x04` ⇒ UmasArrayTypeDefinition; anything else ⇒
+  /// UmasPDUReadUmasUDTDefinitionResponse (member records). We extend this
+  /// gate to ALSO fire for variables whose `dataTypeId` did not appear in
+  /// DD03 at all — the live M580 at 192.168.112.159 omits FB types from DD03
+  /// even though their UDT bodies are accessible via DD02-on-typeIndex. plc4j
+  /// strictly gates on the non-zero classIdentifier of a *resolved* DD03
+  /// record and would silently drop these FB instances; we resolve
+  /// speculatively to surface them. See `.planning/phases/02-fb-visibility-bug-b-core/02-RESEARCH.md`.
   Future<UmasVariableTreeNode> _expandVariable({
     required UmasVariable variable,
     required String path,
@@ -1906,10 +1918,97 @@ class UmasClient {
     required int depth,
     required int maxDepth,
   }) async {
-    final type = UmasDataTypes.resolve(variable.dataTypeId, dataTypes);
-    final isStructOrFb =
-        type != null && (type.classIdentifier == 2 || type.classIdentifier == 7);
-    final isArray = type != null && type.classIdentifier == 4;
+    UmasDataTypeRef? type =
+        UmasDataTypes.resolve(variable.dataTypeId, dataTypes);
+    bool isStructOrFb = type != null &&
+        (type.classIdentifier == 2 || type.classIdentifier == 7);
+    bool isArray = type != null && type.classIdentifier == 4;
+
+    // Speculative FB / UDT resolution for variables whose type was not
+    // enumerated in DD03 and is not a built-in scalar. Mirrors plc4j
+    // `parseCustomTypeBlock`'s classId discriminator (UmasProtocolLogic.java:1130-1146):
+    // the first byte of the DD02-on-typeIndex response selects between
+    // UmasArrayTypeDefinition (0x04) and UmasPDUReadUmasUDTDefinitionResponse
+    // (anything else, including FB instances).
+    final isCandidateForSpeculativeResolve = type == null &&
+        depth < maxDepth &&
+        variable.dataTypeId != 0 &&
+        !UmasDataTypes.builtIn.containsKey(variable.dataTypeId);
+    if (isCandidateForSpeculativeResolve) {
+      // Honour caches before reissuing network I/O. A non-null entry in
+      // arrayCache means a previous resolve discovered an array def;
+      // a non-empty entry in memberCache means an FB/UDT body.
+      final cachedArray = arrayCache[variable.dataTypeId];
+      final cachedMembers = memberCache[variable.dataTypeId];
+      if (cachedArray != null) {
+        isArray = true;
+        type = UmasDataTypeRef(
+          id: variable.dataTypeId,
+          name: '?',
+          byteSize: 0,
+          classIdentifier: 4,
+          dataType: cachedArray.elementTypeId,
+        );
+      } else if (cachedMembers != null && cachedMembers.isNotEmpty) {
+        isStructOrFb = true;
+        type = UmasDataTypeRef(
+          id: variable.dataTypeId,
+          name: 'FB',
+          byteSize: 0,
+          classIdentifier: 7,
+          dataType: variable.dataTypeId,
+        );
+      } else if (cachedMembers == null && !arrayCache.containsKey(variable.dataTypeId)) {
+        // No cache entry either way — fire the speculative DD02 once.
+        try {
+          final raw = await readDD02Raw(variable.dataTypeId);
+          final asArray = UmasArrayTypeDefinition.tryParse(raw);
+          if (asArray != null) {
+            arrayCache[variable.dataTypeId] = asArray;
+            isArray = true;
+            // Synthesize a minimal array-class type so the existing
+            // array branch can pick it up. byteSize 0 disables the
+            // total-bytes / element-count derivation; the array branch
+            // will degrade gracefully to a children-less node when
+            // byteSize <= 0 (already handled at L1917).
+            type = UmasDataTypeRef(
+              id: variable.dataTypeId,
+              name: '?',
+              byteSize: 0,
+              classIdentifier: 4,
+              dataType: asArray.elementTypeId,
+            );
+          } else {
+            // Reissue via _readDD02Block(isMemberLayout: true) so the
+            // response is parsed through the shared
+            // _parseVariableRecords code path — same wire layout as
+            // plc4j's UmasPDUReadUmasUDTDefinitionResponse / UmasUDTDefinition.
+            final members = await _readDD02Block(
+                blockNo: variable.dataTypeId, isMemberLayout: true);
+            memberCache[variable.dataTypeId] = members;
+            if (members.isNotEmpty) {
+              isStructOrFb = true;
+              type = UmasDataTypeRef(
+                id: variable.dataTypeId,
+                name: 'FB',
+                byteSize: 0,
+                classIdentifier: 7,
+                dataType: variable.dataTypeId,
+              );
+            }
+            // Empty member list ⇒ leaf (observed on M580 for
+            // M_Elevator typeId 0xb6, where the PLC returns a single
+            // byte 0x00 — firmware-dependent). The cached empty list
+            // prevents per-instance retry.
+          }
+        } on UmasException catch (e) {
+          _log.w('Speculative DD02 resolution failed for type '
+              '0x${variable.dataTypeId.toRadixString(16)}: ${e.message}');
+          // Cache empty so other instances of this type don't retry.
+          memberCache[variable.dataTypeId] = const [];
+        }
+      }
+    }
 
     if (depth >= maxDepth || (!isStructOrFb && !isArray)) {
       return UmasVariableTreeNode(
@@ -1920,6 +2019,12 @@ class UmasClient {
         dataType: type,
       );
     }
+
+    // Past the gate, `isStructOrFb || isArray` holds, which is only set
+    // when `type` is non-null (either via DD03 resolve or via the
+    // speculative DD02 branch above). Pin a local non-null view so the
+    // downstream branches keep working without a sea of `!` operators.
+    final resolvedType = type!;
 
     if (isArray) {
       // Fetch the array type definition (PLC4X UmasArrayTypeDefinition) by
@@ -1935,7 +2040,7 @@ class UmasClient {
           final raw = await readDD02Raw(variable.dataTypeId);
           arrayDef = UmasArrayTypeDefinition.tryParse(raw);
         } on UmasException catch (e) {
-          _log.w('Array DD02 fetch failed for type ${type.name}: ${e.message}');
+          _log.w('Array DD02 fetch failed for type ${resolvedType.name}: ${e.message}');
           arrayDef = null;
         }
         arrayCache[variable.dataTypeId] = arrayDef;
@@ -1945,7 +2050,7 @@ class UmasClient {
       if (arrayDef == null ||
           totalElements <= 0 ||
           totalElements > _maxArrayElements ||
-          type.byteSize <= 0) {
+          resolvedType.byteSize <= 0) {
         return UmasVariableTreeNode(
           name: variable.name,
           path: path,
@@ -1957,7 +2062,7 @@ class UmasClient {
 
       // Element size derived from total array byte size (works for arrays of
       // builtin scalars, UDTs, and atypically-sized strings alike).
-      final elementSize = type.byteSize ~/ totalElements;
+      final elementSize = resolvedType.byteSize ~/ totalElements;
       if (elementSize <= 0) {
         return UmasVariableTreeNode(
           name: variable.name,
@@ -2056,7 +2161,7 @@ class UmasClient {
             blockNo: variable.dataTypeId, isMemberLayout: true);
       }
     } on UmasException catch (e) {
-      _log.w('Struct expansion failed for type ${type.name}: ${e.message}');
+      _log.w('Struct expansion failed for type ${resolvedType.name}: ${e.message}');
       return UmasVariableTreeNode(
         name: variable.name,
         path: path,

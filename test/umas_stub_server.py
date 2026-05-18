@@ -46,6 +46,12 @@ VARIABLES = [
     # Array variable referencing the custom array type below (id=120).
     # Type 120 is "ARRAY[1..4] OF UINT" (4 elements * 2 bytes = 8 bytes).
     ("Application.GVL.colors", 1, 16, 120),
+    # Function-block instance: typeId 200 is intentionally absent from
+    # DATA_TYPES (DD03) — mirrors the M580 firmware behaviour where FB
+    # types are omitted from DD03 but accessible via DD02-on-typeIndex.
+    # Forces the speculative-DD02 path through _expandVariable
+    # (plc4j parseCustomTypeBlock:1130-1146).
+    ("Application.Motors.M_Elevator", 5, 0, 200),
 ]
 
 DATA_TYPES = [
@@ -72,6 +78,24 @@ DATA_TYPES = [
 #   typeId -> (elementTypeId, [(startIndex, upperBound), ...])
 ARRAY_TYPES = {
     120: (5, [(1, 4)]),  # ARRAY[1..4] OF UINT
+}
+
+# UDT / FB member layouts returned by DD02 queries keyed on a typeId
+# whose entry is intentionally absent from DD03. Mirrors plc4j's
+# resolveCustomType / parseCustomTypeBlock path: when DD02 returns a
+# non-array body (first byte != 0x04), the response is a
+# UmasPDUReadUmasUDTDefinitionResponse listing member records.
+#
+#   typeId -> [(member_name, member_data_type_id, member_offset_within_parent), ...]
+FB_TYPES = {
+    # M_Elevator FB: typeId 200 is NOT in DATA_TYPES (DD03), so the
+    # Dart driver's existing classIdentifier gate would drop it. The
+    # speculative DD02-on-typeIndex path must surface these 3 members.
+    200: [
+        ("speed",   8, 0),   # REAL  @ +0
+        ("torque",  8, 4),   # REAL  @ +4
+        ("enabled", 1, 8),   # BOOL  @ +8
+    ],
 }
 
 # PLC identification values
@@ -128,6 +152,12 @@ def _init_variable_store():
         (2, 8): struct.pack("B", 1),              # enabled BOOL
         (3, 0): struct.pack("<I", 12345),         # production UDINT
         (3, 4): struct.pack("<I", 3600000),       # runtime_ms TIME
+        # M_Elevator FB (block=5, typeId=200) member values. Member offsets
+        # are relative to the FB's start (offset 0), so absolute addresses
+        # equal the member offsets.
+        (5, 0): struct.pack("<f", 1450.0),        # M_Elevator.speed REAL
+        (5, 4): struct.pack("<f", 92.5),          # M_Elevator.torque REAL
+        (5, 8): struct.pack("B", 1),              # M_Elevator.enabled BOOL
     }
     store.update(initial_values)
     return store
@@ -710,6 +740,27 @@ class UmasHandler(socketserver.BaseRequestHandler):
                 print(f"[STUB]   index={index} hwId={hw_id:#010x} blockNo={block_no:#06x} offset={offset:#06x}{blank_str}")
 
             if record_type == 0xDD02:
+                # FB / UDT member layout: when the typeId-keyed request hits
+                # an entry in FB_TYPES, return a UmasPDUReadUmasUDTDefinitionResponse
+                # body (plc4j parseCustomTypeBlock:1130-1146 fork: classId != 0x04).
+                # Wire format (LE):
+                #   range(1) + unknown1(4) + noOfRecords(2)              -- 7-byte header
+                #   per record (UmasUDTDefinition):
+                #     dataType(2) + offset(2) + unknown5(2) + unknown4(2)
+                #     + null-terminated UTF-8 name
+                if block_no in FB_TYPES:
+                    members = FB_TYPES[block_no]
+                    body = bytearray()
+                    body += struct.pack("B", 0x00)            # range
+                    body += struct.pack("<I", 0x00000000)     # unknown1 (4 bytes per UmasPDUReadUmasUDTDefinitionResponse)
+                    body += struct.pack("<H", len(members))   # noOfRecords
+                    for mname, mdt, moff in members:
+                        body += struct.pack("<H", mdt)        # member dataType
+                        body += struct.pack("<H", moff)       # member offset within parent
+                        body += struct.pack("<H", 0x0000)     # unknown5
+                        body += struct.pack("<H", 0x0000)     # unknown4
+                        body += mname.encode("utf-8") + b"\x00"
+                    return build_success_response(bytes(body), self.pairing_key)
                 # If the request keys on a custom array type, return that
                 # type's UmasArrayTypeDefinition payload (per PLC4X mspec).
                 # Otherwise fall through to the variable-name table.
