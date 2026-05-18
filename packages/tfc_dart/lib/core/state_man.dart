@@ -428,10 +428,36 @@ class KeyMappingEntry {
   @JsonKey(name: 'bit_shift')
   int? bitShift;
 
+  /// Optional UMAS symbol path (e.g. `B_F1_RC_01_Front` or
+  /// `M_Elevator.i_isAuto`). When set on a key whose server has UMAS
+  /// enabled, the polled value is read by UMAS variable name rather than
+  /// translated to a Modbus address — Schneider PLCs only expose
+  /// `%MW`-located variables on the FC03 register map, so symbolic
+  /// variables fail to read via plain Modbus addressing.
+  ///
+  /// `null` means classic Modbus addressing (the address + bit fields are
+  /// the read source). When `variableName != null` but the server has
+  /// `umasEnabled == false`, the key is invalid and the UI surfaces an
+  /// Error badge — the address-space fallback is intentionally not silent.
+  ///
+  /// JSON key is `variable_name` for snake_case parity with the other
+  /// fields. Existing entries deserialize cleanly because `defaultValue`
+  /// is `null` (see `_$KeyMappingEntryFromJson` in `state_man.g.dart`).
+  @JsonKey(name: 'variable_name', defaultValue: null)
+  String? variableName;
+
   String? get server =>
       opcuaNode?.serverAlias ?? m2400Node?.serverAlias ?? modbusNode?.serverAlias;
 
-  KeyMappingEntry({this.opcuaNode, this.m2400Node, this.modbusNode, this.collect, this.bitMask, this.bitShift});
+  KeyMappingEntry({
+    this.opcuaNode,
+    this.m2400Node,
+    this.modbusNode,
+    this.collect,
+    this.bitMask,
+    this.bitShift,
+    this.variableName,
+  });
 
   KeyMappingEntry copyWith({
     OpcUANodeConfig? opcuaNode,
@@ -441,6 +467,8 @@ class KeyMappingEntry {
     int? bitMask,
     int? bitShift,
     bool clearBitMask = false,
+    String? variableName,
+    bool clearVariableName = false,
   }) {
     return KeyMappingEntry(
       opcuaNode: opcuaNode ?? this.opcuaNode,
@@ -449,6 +477,8 @@ class KeyMappingEntry {
       collect: collect ?? this.collect,
       bitMask: clearBitMask ? null : (bitMask ?? this.bitMask),
       bitShift: clearBitMask ? null : (bitShift ?? this.bitShift),
+      variableName:
+          clearVariableName ? null : (variableName ?? this.variableName),
     )..io = io;
   }
 
@@ -458,7 +488,8 @@ class KeyMappingEntry {
 
   @override
   String toString() {
-    return 'KeyMappingEntry(opcuaNode: ${opcuaNode?.toString()}, m2400Node: ${m2400Node?.toString()}, modbusNode: ${modbusNode?.toString()}, collect: $collect, io: $io)';
+    return 'KeyMappingEntry(opcuaNode: ${opcuaNode?.toString()}, m2400Node: ${m2400Node?.toString()}, modbusNode: ${modbusNode?.toString()}, collect: $collect, io: $io'
+        '${variableName != null ? ', variableName: $variableName' : ''})';
   }
 }
 
@@ -1001,6 +1032,8 @@ class StateMan {
             for (final key in keysToResub) {
               _monitor(key, resub: true).catchError((e, s) {
                 logger.e('[$alias] Failed to resubscribe key "$key": $e\n$s');
+                return Stream<DynamicValue>.error(
+                    e is Object ? e : StateManException('resubscribe failed'));
               });
             }
           }
