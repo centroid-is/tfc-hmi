@@ -922,19 +922,50 @@ Uint8List encodeVariableValue(dynamic value, UmasDataTypeRef dataType) {
       return Uint8List.fromList([value & 0xFF]);
 
     case 'STRING':
+    case 'WSTRING':
+    case 'BYTE_STRING':
       if (value is! String) {
         throw UmasException(
           errorCode: 0,
           message: 'Expected String for ${dataType.name}, got ${value.runtimeType}',
         );
       }
+      // TD-001 (v1.1.x): the encoder produces exactly `dataType.byteSize`
+      // bytes on the wire — that's the declared wire-size resolved from
+      // DD02 (so a `STRING(20)` carries `byteSize=22`, NOT the built-in
+      // 256). The read path is null-terminated (see [parseVariableValue]
+      // STRING branch), so the encoded payload reserves the LAST byte for
+      // the null terminator: max writable length = `byteSize - 1`.
+      //
+      // Refuse oversized values with an explicit error instead of silently
+      // truncating — clobbering the trailing PLC memory under a real
+      // M580 would corrupt whatever variable lives at the next address.
       final encoded = utf8.encode(value);
-      final bytes = Uint8List(dataType.byteSize);
-      final copyLen = encoded.length < dataType.byteSize
-          ? encoded.length
-          : dataType.byteSize;
-      bytes.setRange(0, copyLen, encoded);
-      // Remaining bytes are already 0 (null padding)
+      final wireSize = dataType.byteSize;
+      if (wireSize <= 0) {
+        throw UmasException(
+          errorCode: 0,
+          message: '${dataType.name} encode: invalid wire size ${wireSize} '
+              '(symbol byteSize must be resolved before writing)',
+        );
+      }
+      // STRING is C-style null-terminated on the M580 wire — reserve a
+      // byte for the terminator. BYTE_STRING / WSTRING follow the same
+      // convention in plc4j's encoder.
+      final maxLen = wireSize - 1;
+      if (encoded.length > maxLen) {
+        throw UmasException(
+          errorCode: 0,
+          message: '${dataType.name} value too long: '
+              '${encoded.length} bytes exceeds declared maximum '
+              '$maxLen (wire size $wireSize, reserves 1 byte for '
+              'null terminator). Truncating would corrupt adjacent PLC '
+              'memory — refusing.',
+        );
+      }
+      final bytes = Uint8List(wireSize);
+      bytes.setRange(0, encoded.length, encoded);
+      // Remaining bytes are already 0 (null padding + terminator).
       return bytes;
 
     default:

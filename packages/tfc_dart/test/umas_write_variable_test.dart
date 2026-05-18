@@ -100,6 +100,120 @@ void main() {
         throwsA(isA<UmasException>()),
       );
     });
+
+    // -----------------------------------------------------------------
+    // TD-001 (v1.1.x): STRING encoder length safety.
+    //
+    // Previously, the encoder produced exactly `dataType.byteSize` bytes
+    // regardless of the supplied value length. For built-in STRING that
+    // size is 256 — a write to a `STRING(20)` (declared 22 bytes via DD02)
+    // sent 256 bytes on the wire, overwriting 234 bytes of adjacent PLC
+    // memory. These tests pin the new contract:
+    //   - The wire payload is exactly `byteSize` bytes (no implicit
+    //     ballooning to 256).
+    //   - Values longer than `byteSize - 1` (the null-terminator
+    //     reservation) refuse to encode rather than truncate silently.
+    //   - STRING / WSTRING / BYTE_STRING all share the same path.
+    // -----------------------------------------------------------------
+    group('STRING encoding (TD-001)', () {
+      test('STRING(20): "hello" encodes to exactly 22 bytes with null pad',
+          () {
+        // A user-declared STRING(20) resolves to byteSize=22 (20 chars +
+        // 1 length + 1 status, per Schneider docs).
+        final dataType = UmasDataTypeRef(id: 9, name: 'STRING', byteSize: 22);
+        final bytes = encodeVariableValue('hello', dataType);
+        expect(bytes.length, 22,
+            reason: 'encoder must produce exactly the declared wire size');
+        // First 5 bytes match utf8("hello").
+        expect(bytes.sublist(0, 5), [0x68, 0x65, 0x6c, 0x6c, 0x6f]);
+        // Last 17 bytes are zero (null pad + terminator).
+        expect(bytes.sublist(5), List.filled(17, 0));
+      });
+
+      test('STRING built-in (256): short value still pads to 256 bytes',
+          () {
+        final dataType = UmasDataTypeRef(id: 9, name: 'STRING', byteSize: 256);
+        final bytes = encodeVariableValue('hi', dataType);
+        expect(bytes.length, 256);
+        expect(bytes.sublist(0, 2), [0x68, 0x69]);
+        expect(bytes.sublist(2), List.filled(254, 0));
+      });
+
+      test(
+          'STRING(20) wireSize=22: value of length 22 (== byteSize, would '
+          'leave NO null terminator) refuses to encode',
+          () {
+        final dataType = UmasDataTypeRef(id: 9, name: 'STRING', byteSize: 22);
+        expect(
+          () => encodeVariableValue('a' * 22, dataType),
+          throwsA(isA<UmasException>().having(
+              (e) => e.message,
+              'message',
+              allOf(
+                contains('too long'),
+                contains('22'),
+                contains('null terminator'),
+              ))),
+          reason: 'a value filling the entire wire would clobber the null '
+              'terminator, leaving the next variable in PLC memory exposed',
+        );
+      });
+
+      test(
+          'STRING(20) wireSize=22: value of length 21 (== byteSize-1, '
+          'leaves exactly the trailing null) encodes successfully',
+          () {
+        final dataType = UmasDataTypeRef(id: 9, name: 'STRING', byteSize: 22);
+        final bytes = encodeVariableValue('a' * 21, dataType);
+        expect(bytes.length, 22,
+            reason: 'value at exactly maxLen=byteSize-1 must encode');
+        expect(bytes.sublist(0, 21), List.filled(21, 0x61));
+        expect(bytes[21], 0x00,
+            reason: 'last byte reserved for null terminator');
+      });
+
+      test('STRING wireSize=22: value of length 200 refuses with message '
+          'naming both supplied length and declared max', () {
+        final dataType = UmasDataTypeRef(id: 9, name: 'STRING', byteSize: 22);
+        expect(
+          () => encodeVariableValue('a' * 200, dataType),
+          throwsA(isA<UmasException>().having(
+              (e) => e.message,
+              'message',
+              allOf(
+                contains('too long'),
+                contains('200'),
+                contains('21'),
+                contains('null terminator'),
+              ))),
+        );
+      });
+
+      test('STRING with byteSize=0 refuses to encode (unresolved symbol)',
+          () {
+        final dataType = UmasDataTypeRef(id: 9, name: 'STRING', byteSize: 0);
+        expect(
+          () => encodeVariableValue('x', dataType),
+          throwsA(isA<UmasException>().having(
+              (e) => e.message, 'message', contains('invalid wire size'))),
+        );
+      });
+
+      test('WSTRING and BYTE_STRING share the same length contract', () {
+        final wstring =
+            UmasDataTypeRef(id: 60, name: 'WSTRING', byteSize: 10);
+        final byteStr =
+            UmasDataTypeRef(id: 61, name: 'BYTE_STRING', byteSize: 4);
+        // Within bounds — encode succeeds.
+        expect(encodeVariableValue('abc', wstring).length, 10);
+        expect(encodeVariableValue('xy', byteStr).length, 4);
+        // Out of bounds — refuses.
+        expect(() => encodeVariableValue('a' * 10, wstring),
+            throwsA(isA<UmasException>()));
+        expect(() => encodeVariableValue('abcd', byteStr),
+            throwsA(isA<UmasException>()));
+      });
+    });
   });
 
   group('VariableWriteRef', () {
