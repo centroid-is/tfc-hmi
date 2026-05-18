@@ -1298,6 +1298,33 @@ class UmasClient {
   /// loop that calls [readPlcStatus] and observes `crcChanged=true`).
   /// Drops the symbol cache if the project CRC changed since the cache
   /// was built. Safe to call repeatedly — no-op when CRCs match.
+  ///
+  // TODO(F-8 / v1.2): wire this from a periodic caller so PLC reprograms
+  // are detected without a session-level error.
+  //
+  // Today this hook is callable but has no production invoker: the
+  // existing keep-alive timer ([startKeepAlive]) calls UMAS sub-function
+  // 0x12 (KeepAlive), NOT [readPlcStatus] (0x04), so [_projectCrc] is
+  // never refreshed once init has set it. A PLC reprogram-without-
+  // disconnect therefore serves stale symbol resolutions until the next
+  // session-level error (which calls [_handleSessionError] →
+  // [_clearSymbolCache] anyway).
+  //
+  // Two viable wirings for v1.2:
+  //   (a) Extend the keep-alive timer to alternate KeepAlive with
+  //       [readPlcStatus] every Nth tick, then call this method. Costs
+  //       one extra round-trip per N keep-alives. Requires also re-
+  //       reading the project block (sub-function 0x03 / project info)
+  //       to refresh [_projectCrc] — currently only [_readProjectBlock]
+  //       inside the init sequence sets it.
+  //   (b) Hook into [ModbusClientWrapper]'s reconnect path so on every
+  //       successful resume the adapter checks the project CRC before
+  //       resuming reads.
+  //
+  // The B-4 MonitorPlc batching work (see modbus_device_client.dart EOF
+  // TODO) needs the same invalidation chain — when the registration
+  // table is built, it caches (blockNo, offset) pairs that move under
+  // a fresh project download. Both should land together.
   void invalidateSymbolCacheIfProjectChanged() {
     if (!_symbolCacheBuilt) return;
     if (_projectCrc != _symbolCacheProjectCrc) {
