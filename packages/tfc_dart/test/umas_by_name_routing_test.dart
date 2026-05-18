@@ -428,6 +428,95 @@ void main() {
       }
       expect(sendCalls, 0);
     });
+
+    // -----------------------------------------------------------------
+    // TD-013 (v1.1.x): case-insensitive fallback suggestion
+    // -----------------------------------------------------------------
+    test(
+        'TD-013: case-mismatch on lookupSymbol returns "did you mean" hint',
+        () async {
+      final umas = UmasClient(
+        sendFn: (req) async => ModbusResponseCode.requestSucceed,
+      );
+      umas.debugInjectSymbol(ResolvedSymbol(
+        path: 'M_Elevator.q_rVelocity',
+        variable: const UmasVariable(
+          name: 'q_rVelocity',
+          blockNo: 0x43,
+          offset: 0x8,
+          dataTypeId: 6,
+        ),
+        dataType: const UmasDataTypeRef(
+          id: 6,
+          name: 'REAL',
+          byteSize: 4,
+        ),
+      ));
+
+      // Lookup the same symbol with the wrong casing — should throw
+      // a UmasException whose message names the correct casing.
+      try {
+        await umas.lookupSymbol('m_elevator.q_rvelocity');
+        fail('expected UmasException on case-mismatched lookup');
+      } on UmasException catch (e) {
+        expect(e.message, contains('m_elevator.q_rvelocity'));
+        expect(e.message, contains('Did you mean'));
+        expect(e.message, contains('M_Elevator.q_rVelocity'));
+        expect(e.message, contains('case-sensitive'));
+      }
+    });
+
+    test('TD-013: exact-case hits still return resolved symbol (no fallback)',
+        () async {
+      final umas = UmasClient(
+        sendFn: (req) async => ModbusResponseCode.requestSucceed,
+      );
+      umas.debugInjectSymbol(ResolvedSymbol(
+        path: 'M_Elevator.q_rVelocity',
+        variable: const UmasVariable(
+          name: 'q_rVelocity',
+          blockNo: 0x43,
+          offset: 0x8,
+          dataTypeId: 6,
+        ),
+        dataType: const UmasDataTypeRef(
+          id: 6,
+          name: 'REAL',
+          byteSize: 4,
+        ),
+      ));
+      final sym = await umas.lookupSymbol('M_Elevator.q_rVelocity');
+      expect(sym.path, 'M_Elevator.q_rVelocity');
+    });
+
+    test('TD-013: no case-insensitive match → plain "not found" (no hint)',
+        () async {
+      final umas = UmasClient(
+        sendFn: (req) async => ModbusResponseCode.requestSucceed,
+      );
+      umas.debugInjectSymbol(ResolvedSymbol(
+        path: 'M_Elevator.q_rVelocity',
+        variable: const UmasVariable(
+          name: 'q_rVelocity',
+          blockNo: 0x43,
+          offset: 0x8,
+          dataTypeId: 6,
+        ),
+        dataType: const UmasDataTypeRef(
+          id: 6,
+          name: 'REAL',
+          byteSize: 4,
+        ),
+      ));
+      try {
+        await umas.lookupSymbol('CompletelyUnrelated.symbol');
+        fail('expected UmasException');
+      } on UmasException catch (e) {
+        expect(e.message, contains('CompletelyUnrelated.symbol'));
+        // No suggestion when nothing matches even case-insensitively.
+        expect(e.message, isNot(contains('Did you mean')));
+      }
+    });
   });
 
   // ---------------------------------------------------------------------------

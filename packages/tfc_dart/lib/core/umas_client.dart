@@ -1476,15 +1476,51 @@ class UmasClient {
   /// [browse] if the cache is empty; concurrent first-time callers share
   /// the same browse via [_ensureSymbolCache].
   ///
+  /// **Case sensitivity (TD-013, v1.1.x):** Schneider M580 / M340 UMAS
+  /// symbols are *case-sensitive on the wire*. Verified against live
+  /// PLC at 192.168.112.159: the same byte-for-byte symbol path with
+  /// different casing (`B_Elevator_F1_A` vs `b_elevator_f1_a`) returns
+  /// "not found" for the lowercase variant. This is the inverse of IEC
+  /// 61131-3 source-level case-insensitivity, which is enforced by the
+  /// engineering tool (EcoStruxure) rather than the firmware.
+  ///
+  /// Operators (and LLMs generating symbol paths) frequently get the
+  /// case wrong. We do a case-insensitive fallback scan on miss so the
+  /// error names the correct casing instead of just "not found":
+  ///
+  ///   `UMAS symbol not found in data dictionary: "elevator.speed".
+  ///    Did you mean "Elevator.speed"? (Schneider symbol paths are
+  ///    case-sensitive on the wire.)`
+  ///
+  /// The fallback is O(N) in the cache size — acceptable because it
+  /// only runs on the miss path. On the hit path, the existing O(1)
+  /// hash lookup is unchanged.
+  ///
   /// Throws [UmasException] when the symbol does not exist in the PLC's
-  /// Data Dictionary.
+  /// Data Dictionary (with the "did you mean" suggestion when a
+  /// case-insensitive match exists).
   Future<ResolvedSymbol> lookupSymbol(String path) async {
     await _ensureSymbolCache();
     final hit = _symbolCache[path];
     if (hit != null) return hit;
+    // TD-013: case-insensitive fallback — surface the correct casing
+    // in the error message so the operator can fix the typo without
+    // re-browsing the data dictionary manually.
+    final lower = path.toLowerCase();
+    String? caseSuggestion;
+    for (final cachedPath in _symbolCache.keys) {
+      if (cachedPath.toLowerCase() == lower) {
+        caseSuggestion = cachedPath;
+        break;
+      }
+    }
+    final suffix = caseSuggestion == null
+        ? ''
+        : '. Did you mean "$caseSuggestion"? '
+            '(Schneider symbol paths are case-sensitive on the wire.)';
     throw UmasException(
       errorCode: 0,
-      message: 'UMAS symbol not found in data dictionary: "$path"',
+      message: 'UMAS symbol not found in data dictionary: "$path"$suffix',
     );
   }
 
