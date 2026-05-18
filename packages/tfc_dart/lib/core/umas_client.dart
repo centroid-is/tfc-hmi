@@ -314,6 +314,12 @@ class UmasClient {
   ///   pdu[1] = PairingKey
   ///   pdu[2] = Status (0xFE=success, 0xFD=error, other=error code)
   ///   pdu[3+] = Payload (on success) or error code (on 0xFD error)
+  ///
+  /// SWEEP-03 (v1.1): always prefixes the [operation] token (e.g.
+  /// `"writeVariable"`, `"readDD02(blockNo=0x...)"`) so operator log
+  /// greps can isolate failures by sub-function. Every caller passes
+  /// a stable operation name — the previous implementation did so
+  /// inconsistently; this is now the contract.
   void _checkStatus(Uint8List pdu, String operation) {
     if (pdu.length < 3) {
       throw UmasException(
@@ -1162,6 +1168,14 @@ class UmasClient {
   /// Reset all session state when UMAS session is invalidated.
   /// Called when error responses indicate the pairing key is no longer valid
   /// (PLC reboot, engineering tool connection, TCP reconnection).
+  ///
+  /// SWEEP-04 (v1.1): also clears [_projectCrc] so a PLC reboot
+  /// mid-session does not carry a stale project CRC into the
+  /// post-reboot session. Without this, after a PLC reprogramming
+  /// reboot, the next 0x22 / 0x23 request would send the old
+  /// project CRC and either silently match the wrong project or be
+  /// rejected with a CRC-mismatch error attributed to the wrong
+  /// cause.
   void _handleSessionError() {
     _log.i('UMAS session invalidated, resetting to uninitialized');
     _pairingKey = 0x00;
@@ -1169,6 +1183,7 @@ class UmasClient {
     _index = null;
     maxFrameSize = null;
     _previousCrcs = null;
+    _projectCrc = null; // SWEEP-04
     _hasReservation = false;
     _useMonitorPlc = false;
     _monitorTable.reset();
@@ -1208,10 +1223,18 @@ class UmasClient {
         );
       }
 
-      // Cap refs to max 255 (variableCount is 1 byte) -- T-05-02 DoS mitigation
+      // Cap refs to max 255 (variableCount is 1 byte) -- T-05-02 DoS mitigation.
+      // SWEEP-05 (v1.1): warn when truncation drops refs so callers see the
+      // truncation in operator logs instead of only via a returned-shorter
+      // ReadVariableResult.
       final cappedRefs = refs.length > _maxReadVariableRefs
           ? refs.sublist(0, _maxReadVariableRefs)
           : refs;
+      if (refs.length > _maxReadVariableRefs) {
+        _log.w('UMAS readVariable: truncated request from ${refs.length} to '
+            '$_maxReadVariableRefs refs (cap is 1 byte). '
+            '${refs.length - _maxReadVariableRefs} refs were NOT read.');
+      }
 
       // Build payload: crc(4 LE) + count(1) + [ref.toBytes()]*
       // Per PLC4X reference driver, the CRC is the project-level CRC from
@@ -1317,10 +1340,18 @@ class UmasClient {
         );
       }
 
-      // Cap refs to max 255 (variableCount is 1 byte) -- T-06-05 DoS mitigation
+      // Cap refs to max 255 (variableCount is 1 byte) -- T-06-05 DoS mitigation.
+      // SWEEP-05 (v1.1): warn when truncation drops refs so callers see the
+      // silent data loss in operator logs instead of treating the Future
+      // resolution as success-for-all.
       final cappedRefs = refs.length > _maxWriteVariableRefs
           ? refs.sublist(0, _maxWriteVariableRefs)
           : refs;
+      if (refs.length > _maxWriteVariableRefs) {
+        _log.w('UMAS writeVariable: truncated request from ${refs.length} to '
+            '$_maxWriteVariableRefs refs (cap is 1 byte). '
+            '${refs.length - _maxWriteVariableRefs} refs were NOT written.');
+      }
 
       // Build payload: crc(4 LE) + count(1) + [ref.toBytes()]*
       // See readVariable for projectCrc rationale.

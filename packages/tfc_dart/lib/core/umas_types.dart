@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:tfc_dart/core/modbus_client_wrapper.dart' show ModbusDataType;
+import 'package:tfc_dart/core/umas_fb_direction.dart' show UmasFbMemberDirection;
 
 /// Maps a UMAS data type name to the corresponding Modbus data type.
 ///
@@ -230,6 +231,17 @@ class UmasPlcIdent {
 }
 
 /// A node in the hierarchical variable tree built from data dictionary.
+///
+/// Phase 5 / FB-05 additions: [direction], [readable], and
+/// [unreadableReason] expose IEC 61131-3 FB member metadata so the
+/// UI (Phase 4) can render VAR_INPUT / VAR_OUTPUT distinctions and
+/// surface unreadable VAR_IN_OUT members with a clear affordance
+/// instead of silently dropping them.
+///
+/// Direction classification belongs to Phase 3 (see
+/// `umas_fb_direction.dart`). plc4j (PLC4X) does not surface
+/// direction metadata at all; see `umas_var_in_out.dart` for the
+/// parity-deviation rationale.
 class UmasVariableTreeNode {
   final String name;
   final String path;
@@ -237,12 +249,30 @@ class UmasVariableTreeNode {
   final UmasVariable? variable;
   final UmasDataTypeRef? dataType;
 
+  /// Direction of this node when it is an FB member, or `null` for
+  /// non-member nodes (top-level variables, struct members, array
+  /// elements, folders). Phase 2's FB expander populates this.
+  final UmasFbMemberDirection? direction;
+
+  /// Whether this node is readable through the normal 0x22 / 0x50
+  /// read path. Defaults to `true`. Phase 5 sets `false` for
+  /// VAR_IN_OUT members per FB-05 path (b).
+  final bool readable;
+
+  /// Human-readable reason a node is unreadable (e.g. `"VAR_IN_OUT
+  /// (PLC returns 0x94)"`). `null` when [readable] is `true`.
+  /// Surfaced by the UI as a tooltip / suffix on unreadable leaves.
+  final String? unreadableReason;
+
   UmasVariableTreeNode({
     required this.name,
     required this.path,
     List<UmasVariableTreeNode>? children,
     this.variable,
     this.dataType,
+    this.direction,
+    this.readable = true,
+    this.unreadableReason,
   }) : children = children ?? [];
 
   bool get isFolder => children.isNotEmpty && variable == null;
@@ -250,7 +280,9 @@ class UmasVariableTreeNode {
   @override
   String toString() => 'UmasVariableTreeNode($path, '
       '${isFolder ? "folder" : "leaf"}, '
-      '${children.length} children)';
+      '${children.length} children'
+      '${direction != null ? ", direction=${direction!.name}" : ""}'
+      '${!readable ? ", readable=false" : ""})';
 }
 
 /// Exception thrown by UMAS operations.
