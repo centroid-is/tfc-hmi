@@ -59,7 +59,17 @@ const _defaultTimeoutSeconds = 5;
 // pass/fail gate.
 final _fbInOutRegex = RegExp(r'\.(iq_|io_)');
 
-Future<int> main(List<String> args) async {
+Future<void> main(List<String> args) async {
+  // Wrap the real entry in an explicit exit() because the underlying
+  // Modbus client keeps a heartbeat / listener alive after disconnect,
+  // and the Dart VM otherwise waits for that timer to settle (which
+  // never happens). This caused `v1.1-verify.sh` to hang after the
+  // command had already printed its full result.
+  final code = await _main(args);
+  exit(code);
+}
+
+Future<int> _main(List<String> args) async {
   final parser = ArgParser(allowTrailingOptions: true)
     ..addOption('port', defaultsTo: '$_defaultPort')
     ..addOption('unit', defaultsTo: '$_defaultUnit')
