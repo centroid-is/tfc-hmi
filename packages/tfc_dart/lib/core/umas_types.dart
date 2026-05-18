@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:tfc_dart/core/modbus_client_wrapper.dart' show ModbusDataType;
+import 'package:tfc_dart/core/umas_fb_direction.dart';
 
 /// Maps a UMAS data type name to the corresponding Modbus data type.
 ///
@@ -83,17 +84,25 @@ class UmasVariable {
   final int dataTypeId;
   final String? parentPath;
 
+  /// Declaration direction when this variable is a function-block member
+  /// (see [UmasFbMemberDirection]). Null for top-level variables and for
+  /// non-FB struct members. Populated by [UmasClient] when parsing DD02
+  /// member-layout records (Phase 3 of v1.1).
+  final UmasFbMemberDirection? direction;
+
   const UmasVariable({
     required this.name,
     required this.blockNo,
     required this.offset,
     required this.dataTypeId,
     this.parentPath,
+    this.direction,
   });
 
   @override
   String toString() => 'UmasVariable($name, block=$blockNo, offset=$offset, '
-      'typeId=$dataTypeId)';
+      'typeId=$dataTypeId'
+      '${direction != null ? ', dir=${direction!.name}' : ''})';
 }
 
 /// A data type reference from the UMAS data dictionary (0xDD03 records).
@@ -237,12 +246,19 @@ class UmasVariableTreeNode {
   final UmasVariable? variable;
   final UmasDataTypeRef? dataType;
 
+  /// Declaration direction for function-block members (see
+  /// [UmasFbMemberDirection]). Null for non-FB-member nodes (folders,
+  /// top-level variables, array elements). Consumed by the browser-tree
+  /// UI (Phase 4) and the `--show-direction` CLI flag.
+  final UmasFbMemberDirection? direction;
+
   UmasVariableTreeNode({
     required this.name,
     required this.path,
     List<UmasVariableTreeNode>? children,
     this.variable,
     this.dataType,
+    this.direction,
   }) : children = children ?? [];
 
   bool get isFolder => children.isNotEmpty && variable == null;
@@ -250,7 +266,8 @@ class UmasVariableTreeNode {
   @override
   String toString() => 'UmasVariableTreeNode($path, '
       '${isFolder ? "folder" : "leaf"}, '
-      '${children.length} children)';
+      '${children.length} children'
+      '${direction != null ? ', dir=${direction!.name}' : ''})';
 }
 
 /// Exception thrown by UMAS operations.
