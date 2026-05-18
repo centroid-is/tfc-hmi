@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
+import 'package:tfc_dart/core/umas_fb_browse_types.dart';
 
 import '../theme.dart' show SolarizedColors;
 
@@ -645,6 +646,34 @@ class BrowseNodeTile extends StatelessWidget {
   });
 
   Widget _buildIcon(ColorScheme cs) {
+    // Phase 4 (UI-01, UI-02): FB-member affordances. Variable-type nodes with
+    // FB metadata get a direction-specific icon (input / output / inOut) or a
+    // "not readable" block icon. Non-FB variables fall through to the
+    // existing FA tag icon. See umas_fb_browse_types.dart for the metadata
+    // key contract.
+    if (node.type == BrowseNodeType.variable) {
+      final meta = node.node.metadata;
+      // Inaccessible members always take priority over direction icons.
+      if (!UmasFbMember.readableFromMetadata(meta)) {
+        return const Icon(Icons.block,
+            size: 14, color: SolarizedColors.red);
+      }
+      switch (UmasFbMember.directionFromMetadata(meta)) {
+        case UmasFbMemberDirection.input:
+          return const Icon(Icons.login,
+              size: 14, color: SolarizedColors.blue);
+        case UmasFbMemberDirection.output:
+          return const Icon(Icons.logout,
+              size: 14, color: SolarizedColors.orange);
+        case UmasFbMemberDirection.inOut:
+          return const Icon(Icons.swap_horiz,
+              size: 14, color: SolarizedColors.violet);
+        case UmasFbMemberDirection.publicVar:
+        case UmasFbMemberDirection.unknown:
+          // Fall through to existing variable rendering below.
+          break;
+      }
+    }
     switch (node.type) {
       case BrowseNodeType.folder:
         return const Icon(Icons.folder_outlined,
@@ -692,9 +721,25 @@ class BrowseNodeTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final isMethod = node.type == BrowseNodeType.method;
-    final textColor = isMethod ? cs.secondary : cs.onSurface;
+    // Phase 4: FB-member affordance state (UI-01, UI-02).
+    final meta = node.node.metadata;
+    final fbDirection = node.type == BrowseNodeType.variable
+        ? UmasFbMember.directionFromMetadata(meta)
+        : UmasFbMemberDirection.unknown;
+    final isUnreadable = node.type == BrowseNodeType.variable &&
+        !UmasFbMember.readableFromMetadata(meta);
+    final unreadableReason = isUnreadable
+        ? (UmasFbMember.unreadableReasonFromMetadata(meta) ?? 'Not readable')
+        : null;
 
-    return GestureDetector(
+    final baseTextColor = isMethod ? cs.secondary : cs.onSurface;
+    final textColor =
+        isUnreadable ? baseTextColor.withAlpha(120) : baseTextColor;
+
+    final directionSuffix = _directionSuffix(fbDirection);
+    final directionTint = _directionTint(fbDirection);
+
+    final row = GestureDetector(
       onTap: onTap,
       onDoubleTap: onDoubleTap,
       child: Container(
@@ -721,6 +766,28 @@ class BrowseNodeTile extends StatelessWidget {
                 overflow: TextOverflow.ellipsis,
               ),
             ),
+            if (directionSuffix != null) ...[
+              const SizedBox(width: 6),
+              Text(
+                directionSuffix,
+                style: TextStyle(
+                  color: directionTint ?? cs.secondary,
+                  fontSize: 10,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+            if (isUnreadable) ...[
+              const SizedBox(width: 6),
+              const Text(
+                '[not readable]',
+                style: TextStyle(
+                  color: SolarizedColors.red,
+                  fontSize: 10,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
             const SizedBox(width: 8),
             Text(
               node.id,
@@ -733,6 +800,39 @@ class BrowseNodeTile extends StatelessWidget {
         ),
       ),
     );
+
+    if (unreadableReason != null) {
+      return Tooltip(message: unreadableReason, child: row);
+    }
+    return row;
+  }
+
+  static String? _directionSuffix(UmasFbMemberDirection d) {
+    switch (d) {
+      case UmasFbMemberDirection.input:
+        return '(IN)';
+      case UmasFbMemberDirection.output:
+        return '(OUT)';
+      case UmasFbMemberDirection.inOut:
+        return '(IN/OUT)';
+      case UmasFbMemberDirection.publicVar:
+      case UmasFbMemberDirection.unknown:
+        return null;
+    }
+  }
+
+  static Color? _directionTint(UmasFbMemberDirection d) {
+    switch (d) {
+      case UmasFbMemberDirection.input:
+        return SolarizedColors.blue;
+      case UmasFbMemberDirection.output:
+        return SolarizedColors.orange;
+      case UmasFbMemberDirection.inOut:
+        return SolarizedColors.violet;
+      case UmasFbMemberDirection.publicVar:
+      case UmasFbMemberDirection.unknown:
+        return null;
+    }
   }
 }
 
