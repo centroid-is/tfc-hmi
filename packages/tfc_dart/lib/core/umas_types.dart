@@ -1447,6 +1447,13 @@ class MonitorPlcRegistrationTable {
   /// Auto-incrementing counter for assigning variable indices.
   int _nextIndex = 0;
 
+  /// TD-020 (v1.1.x): cached sort of [_types.keys]. Recomputed lazily
+  /// from a dirty flag on next read after any register/deregister/
+  /// reset. parseReadAllResponse runs every poll cycle once B-4 ships
+  /// (sub-second cadence with up to 255 entries); doing the O(N log N)
+  /// sort each call was wasted CPU.
+  List<int>? _sortedIndicesCache;
+
   /// Register a variable index with its data type.
   void register(int variableIndex, UmasDataTypeRef type) {
     if (_types.length >= maxRegistrations && !_types.containsKey(variableIndex)) {
@@ -1459,24 +1466,34 @@ class MonitorPlcRegistrationTable {
     if (variableIndex >= _nextIndex) {
       _nextIndex = variableIndex + 1;
     }
+    _sortedIndicesCache = null; // invalidate
   }
 
   /// Remove a variable index registration.
   void deregister(int variableIndex) {
-    _types.remove(variableIndex);
+    final removed = _types.remove(variableIndex);
+    if (removed != null) {
+      _sortedIndicesCache = null; // invalidate
+    }
   }
 
   /// Clear all registrations.
   void reset() {
     _types.clear();
     _nextIndex = 0;
+    _sortedIndicesCache = null; // invalidate
   }
 
   /// Get the data type for a registered variable index.
   UmasDataTypeRef? getType(int variableIndex) => _types[variableIndex];
 
   /// All registered variable indices, sorted ascending.
-  List<int> get registeredIndices => _types.keys.toList()..sort();
+  ///
+  /// TD-020 (v1.1.x): result is memoized between mutation calls.
+  /// Mutators (register / deregister / reset) clear the cache.
+  List<int> get registeredIndices {
+    return _sortedIndicesCache ??= (_types.keys.toList()..sort());
+  }
 
   /// Whether the table has no registrations.
   bool get isEmpty => _types.isEmpty;

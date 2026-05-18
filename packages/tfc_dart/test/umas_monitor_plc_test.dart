@@ -155,6 +155,49 @@ void main() {
       final result = table.parseReadAllResponse(Uint8List(0));
       expect(result, isEmpty);
     });
+
+    test(
+        'TD-020: registeredIndices caches the sorted list across reads '
+        '(stable identity until next mutation)', () {
+      const dt = UmasDataTypeRef(id: 8, name: 'REAL', byteSize: 4);
+      table.register(3, dt);
+      table.register(1, dt);
+      table.register(5, dt);
+
+      final first = table.registeredIndices;
+      final second = table.registeredIndices;
+      // Same list instance — cache hit.
+      expect(identical(first, second), isTrue,
+          reason: 'cached sort should not be recomputed between reads');
+
+      // Mutating invalidates the cache → new list instance.
+      table.register(2, dt);
+      final third = table.registeredIndices;
+      expect(identical(first, third), isFalse,
+          reason: 'register() must invalidate the cached sort');
+      expect(third, [1, 2, 3, 5]);
+
+      // Deregistering a present index also invalidates.
+      table.deregister(3);
+      final fourth = table.registeredIndices;
+      expect(identical(third, fourth), isFalse,
+          reason: 'deregister() must invalidate the cached sort');
+      expect(fourth, [1, 2, 5]);
+
+      // Deregistering a non-present index is a no-op AND must not
+      // invalidate (small win — avoids needless re-sort).
+      table.deregister(42);
+      final fifth = table.registeredIndices;
+      expect(identical(fourth, fifth), isTrue,
+          reason: 'no-op deregister must not invalidate cache');
+
+      // reset() invalidates.
+      table.reset();
+      final sixth = table.registeredIndices;
+      expect(identical(fifth, sixth), isFalse,
+          reason: 'reset() must invalidate the cached sort');
+      expect(sixth, isEmpty);
+    });
   });
 
   // ---------------------------------------------------------------

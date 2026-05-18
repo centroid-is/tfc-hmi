@@ -474,8 +474,13 @@ UmasVariableTreeNode? _findByName(
     }
   }
 
+  // TD-019 (v1.1.x): break out as soon as a root walk finds the
+  // target. Previously the outer loop kept iterating roots even after
+  // `hit` was set — on PLCs with many roots this wasted up to N
+  // traversals worth of work per lookup.
   for (final r in roots) {
     walk(r);
+    if (hit != null) break;
   }
   return hit;
 }
