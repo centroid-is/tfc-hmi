@@ -352,8 +352,15 @@ check_verify_03() {
     local parsed
     parsed=$(printf '%s\n' "$CAPTURED_OUTPUT" | python3 -c '
 import sys, json
+raw = sys.stdin.read()
+# `dart run` emits "Running build hooks..." to stderr (captured here via
+# `2>&1` in run_capture) before the actual JSON. Strip everything before
+# the first "{" so json.loads sees clean JSON.
+brace = raw.find("{")
+if brace > 0:
+    raw = raw[brace:]
 try:
-    d = json.loads(sys.stdin.read())
+    d = json.loads(raw)
 except Exception as e:
     print("parse_error=" + str(e))
     sys.exit(0)
