@@ -70,4 +70,85 @@ void main() {
       expect(result[0].value, equals('OK'));
     });
   });
+
+  // JOB-A (v1.1): defensive belt-and-braces — even when a hypothetical
+  // PLC-side bug or upstream parser advance hands us an out-of-range
+  // offset, STRING/BYTE_STRING/WSTRING must NEVER throw "Buffer
+  // underflow". The HMI UMAS browse dialog catches that exception via
+  // `'read error: $e'`, surfacing the literal text "underflow" to the
+  // operator. The fix here is at the parser; the dialog also renders a
+  // neutral placeholder on exception.
+  group('parseVariableValue — STRING never throws (JOB-A)', () {
+    test('STRING with empty buffer at offset 0 returns empty string', () {
+      const stringType = UmasDataTypeRef(id: 9, name: 'STRING', byteSize: 256);
+      final result = parseVariableValue(Uint8List(0), 0, stringType);
+      expect(result.value, equals(''));
+      expect(result.typeName, 'STRING');
+    });
+
+    test('STRING with offset > bytes.length returns empty string', () {
+      // This is the defensive case: a prior iteration in
+      // parseReadAllResponse over-advanced past the buffer. Pre-fix the
+      // `available < 0` branch threw "Buffer underflow". Post-fix, STRING
+      // gracefully returns an empty string.
+      const stringType = UmasDataTypeRef(id: 9, name: 'STRING', byteSize: 256);
+      final bytes = Uint8List.fromList([0x4f]); // 1 byte
+      final result = parseVariableValue(bytes, 4, stringType);
+      expect(result.value, equals(''));
+      expect(result.typeName, 'STRING');
+    });
+
+    test('STRING with malformed UTF-8 mid-codepoint does not throw', () {
+      // Schneider's 4-byte clamp can split a multi-byte UTF-8 codepoint —
+      // a hard utf8.decode would throw FormatException and re-surface as
+      // an error string in the UI. JOB-A: decode with allowMalformed.
+      const stringType = UmasDataTypeRef(id: 9, name: 'STRING', byteSize: 256);
+      // 0xC3 0x84 = 'Ä' (2 bytes); 0xC3 alone is half of a codepoint.
+      final bytes = Uint8List.fromList([0xC3, 0x4f, 0x00, 0x00]);
+      final result = parseVariableValue(bytes, 0, stringType);
+      // Malformed first byte is replaced; rest decodes cleanly.
+      expect(result.typeName, 'STRING');
+      expect(result.value, isA<String>());
+      // No throw — that's the assertion that matters.
+    });
+
+    test('BYTE_STRING with under-read does not throw', () {
+      const bsType = UmasDataTypeRef(id: 30, name: 'BYTE_STRING', byteSize: 64);
+      final result = parseVariableValue(Uint8List(0), 0, bsType);
+      expect(result.value, equals(''));
+    });
+  });
+
+  // parseReadAllResponse defensive advance clamp (JOB-A): the M580 0x50
+  // path normally pads STRING to a 4-byte slot, but if the PLC ever
+  // returns fewer bytes than expected, advancing by the static clamp
+  // can push `offset` past `rawBytes.length`. The clamp prevents
+  // subsequent reads from receiving a negative `available` and falling
+  // into a throw path. This is purely defensive — current observation
+  // of the M580 at 192.168.112.159 shows reliable 4-byte STRING slots.
+  group('parseReadAllResponse advance clamp for STRING (JOB-A)', () {
+    test('STRING-only over-clamp still decodes the available bytes', () {
+      final table = MonitorPlcRegistrationTable();
+      const stringType = UmasDataTypeRef(id: 9, name: 'STRING', byteSize: 256);
+      table.register(0, stringType);
+
+      // PLC returned only 1 byte for STRING instead of the standard 4.
+      // The parser must consume what arrived and not throw.
+      final result =
+          table.parseReadAllResponse(Uint8List.fromList([0x4e]));
+      expect(result.length, 1);
+      expect(result[0].typeName, 'STRING');
+      expect(result[0].value, equals('N'));
+    });
+
+    test('STRING with zero-byte response decodes to empty string', () {
+      final table = MonitorPlcRegistrationTable();
+      const stringType = UmasDataTypeRef(id: 9, name: 'STRING', byteSize: 256);
+      table.register(0, stringType);
+
+      final result = table.parseReadAllResponse(Uint8List(0));
+      expect(result.length, 1);
+      expect(result[0].value, equals(''));
+    });
+  });
 }

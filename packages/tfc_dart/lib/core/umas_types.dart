@@ -592,7 +592,15 @@ const _maxStringByteSize = 1024;
 /// Parse a single variable value from [bytes] at [offset] using [dataType] info.
 ///
 /// Returns a [TypedVariableValue] with the correctly typed Dart value.
-/// Throws [UmasException] if the buffer is too short (T-05-04 mitigation).
+/// Throws [UmasException] if the buffer is too short for a *fixed-size scalar*
+/// (BOOL/INT/REAL/etc.) — T-05-04 mitigation.
+///
+/// STRING / BYTE_STRING / WSTRING are *never* a throw source: Schneider PLCs
+/// return STRING reads clamped to 4 bytes via the M580's 0x50 path and may
+/// return 0 bytes for empty strings via 0x22. The parser slices whatever
+/// arrived (possibly empty) and decodes it without raising, so the HMI
+/// renders a (possibly truncated/empty) string rather than the literal text
+/// "Buffer underflow" through `'read error: $e'` (v1.1 JOB-A fix).
 TypedVariableValue parseVariableValue(
     Uint8List bytes, int offset, UmasDataTypeRef dataType) {
   final declared = dataType.byteSize;
@@ -601,18 +609,27 @@ TypedVariableValue parseVariableValue(
   // For wide types (TON, struct instances) the PLC clamps the read to 4
   // bytes — accept what arrived and parse the slice as raw bytes. For
   // known scalar types we still require the declared size to be present.
-  // STRING is intentionally NOT in this set: Schneider stores STRING(N) at
-  // arbitrary sizes (N=16 inside ARRAY OF STRING(16)) and the PLC may
-  // truncate reads of >4-byte elements via the dsi clamp; the parser must
-  // gracefully decode whatever bytes arrive.
+  // STRING / BYTE_STRING / WSTRING are intentionally NOT in this set: the
+  // PLC truncates wide STRING reads, and the parser must gracefully decode
+  // whatever bytes arrive even when zero bytes are available.
+  final upper = dataType.name.toUpperCase();
   final knownScalar = const {
         'BOOL', 'EBOOL', 'INT', 'UINT', 'WORD', 'DINT', 'TIME', 'UDINT',
         'DWORD', 'REAL', 'LREAL', 'LINT', 'ULINT', 'BYTE',
         'DATE', 'TIME_OF_DAY', 'DATE_AND_TIME',
-      }.contains(dataType.name.toUpperCase());
+      }.contains(upper);
+  final isStringy = upper == 'STRING' ||
+      upper == 'BYTE_STRING' ||
+      upper == 'WSTRING';
 
   if (offset + declared > bytes.length) {
-    if (knownScalar || available < 0) {
+    if (isStringy) {
+      // Never throw for STRING-family: clamp `needed` to the available
+      // bytes (possibly zero) and let the STRING branch decode an empty
+      // or short slice gracefully. JOB-A: a defensive belt-and-braces
+      // path for the case where a prior iteration in parseReadAllResponse
+      // already advanced `offset` past `bytes.length`.
+    } else if (knownScalar || available < 0) {
       throw UmasException(
         errorCode: 0,
         message: 'Buffer underflow: need $declared bytes at offset $offset, '
@@ -621,12 +638,22 @@ TypedVariableValue parseVariableValue(
     }
   }
 
-  final needed = (offset + declared > bytes.length) ? available : declared;
-  final slice = bytes.sublist(offset, offset + needed);
+  // Clamp `needed` so it never goes negative and never overruns the buffer,
+  // regardless of how `offset` and `declared` line up.
+  int needed;
+  if (isStringy) {
+    needed = available < 0 ? 0 : (declared < available ? declared : available);
+  } else {
+    needed = (offset + declared > bytes.length) ? available : declared;
+  }
+  final sliceStart = offset < 0 ? 0 : (offset > bytes.length ? bytes.length : offset);
+  final sliceEnd = sliceStart + (needed < 0 ? 0 : needed);
+  final clampedEnd = sliceEnd > bytes.length ? bytes.length : sliceEnd;
+  final slice = bytes.sublist(sliceStart, clampedEnd);
   final bd = ByteData.sublistView(bytes);
   dynamic value;
 
-  switch (dataType.name.toUpperCase()) {
+  switch (upper) {
     case 'BOOL':
     case 'EBOOL':
       value = bytes[offset] != 0;
@@ -652,14 +679,21 @@ TypedVariableValue parseVariableValue(
     case 'BYTE':
       value = bytes[offset];
     case 'STRING':
-      // T-05-06: Cap string read length
+    case 'BYTE_STRING':
+    case 'WSTRING':
+      // T-05-06: Cap string read length. JOB-A: also defensively guard
+      // against malformed UTF-8 — the PLC's clamped slice can land
+      // mid-codepoint, and a hard utf8.decode throw would re-surface
+      // as "Buffer underflow"-adjacent garbage in the UI.
+      final available0 = slice.length;
       final maxRead =
-          needed > _maxStringByteSize ? _maxStringByteSize : needed;
-      final stringBytes = bytes.sublist(offset, offset + maxRead);
+          available0 > _maxStringByteSize ? _maxStringByteSize : available0;
+      final stringBytes = slice.sublist(0, maxRead);
       // Find null terminator
       int nullPos = stringBytes.indexOf(0x00);
       if (nullPos < 0) nullPos = maxRead;
-      value = utf8.decode(stringBytes.sublist(0, nullPos));
+      value = utf8.decode(stringBytes.sublist(0, nullPos),
+          allowMalformed: true);
     default:
       // Unknown type: return raw bytes
       value = slice;
@@ -1279,7 +1313,9 @@ class MonitorPlcRegistrationTable {
   /// Parse a ReadAll (0x07) response by walking bytes in registration order.
   ///
   /// Iterates sorted registered indices, parsing each variable's bytes
-  /// using [parseVariableValue]. Throws [UmasException] on buffer underflow.
+  /// using [parseVariableValue]. Throws [UmasException] on buffer underflow
+  /// for fixed-size scalars; STRING-family values decode gracefully even
+  /// from a zero-byte slice (JOB-A v1.1: see parseVariableValue comments).
   List<TypedVariableValue> parseReadAllResponse(Uint8List rawBytes) {
     final indices = registeredIndices;
     if (indices.isEmpty) return [];
@@ -1287,14 +1323,28 @@ class MonitorPlcRegistrationTable {
     final results = <TypedVariableValue>[];
     int offset = 0;
 
+    bool isStringy(String n) {
+      final u = n.toUpperCase();
+      return u == 'STRING' || u == 'BYTE_STRING' || u == 'WSTRING';
+    }
+
     for (final idx in indices) {
       final type = _types[idx]!;
-      // parseVariableValue throws UmasException on buffer underflow.
       // M580 clamps wide types (STRING, struct instances) to 4 bytes per
       // dataSizeIndex range — advance by actual on-wire size, not declared
-      // byteSize. See /tmp/umas-string-bug-report.md + parseVariableValues:672.
+      // byteSize. See /tmp/umas-string-bug-report.md + parseVariableValues.
       results.add(parseVariableValue(rawBytes, offset, type));
-      offset += type.byteSize > 4 ? 4 : type.byteSize;
+      final remaining = rawBytes.length - offset;
+      final declaredAdvance = type.byteSize > 4 ? 4 : type.byteSize;
+      // For STRING-family, clamp the advance at the remaining bytes so a
+      // PLC that returned fewer-than-clamped bytes (e.g. 1 byte for an
+      // empty STRING via 0x22, or no bytes at all) does not push `offset`
+      // past `rawBytes.length` and break the next variable's parse.
+      if (isStringy(type.name) && declaredAdvance > remaining) {
+        offset += remaining < 0 ? 0 : remaining;
+      } else {
+        offset += declaredAdvance;
+      }
     }
 
     return results;
