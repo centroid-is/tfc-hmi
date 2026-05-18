@@ -120,6 +120,90 @@ void main() {
   });
 
   // ---------------------------------------------------------------------------
+  // F-7: writeVariableByName refuses non-readable symbols (no PLC needed)
+  // ---------------------------------------------------------------------------
+  group('UmasClient.writeVariableByName — F-7 readable gate', () {
+    test(
+        'refuses write for ResolvedSymbol with readable=false; '
+        'no bytes sent downstream',
+        () async {
+      var sendCalls = 0;
+      final umas = UmasClient(
+        sendFn: (req) async {
+          sendCalls++;
+          return ModbusResponseCode.requestSucceed;
+        },
+      );
+      umas.debugInjectSymbol(ResolvedSymbol(
+        path: 'M_Elevator.iq_handshake',
+        variable: const UmasVariable(
+          name: 'iq_handshake',
+          blockNo: 5,
+          offset: 0,
+          dataTypeId: 0,
+        ),
+        dataType: const UmasDataTypeRef(
+          id: 0,
+          name: 'REAL',
+          byteSize: 4,
+        ),
+        readable: false,
+        unreadableReason: 'VAR_IN_OUT (PLC returns 0x94)',
+      ));
+
+      try {
+        await umas.writeVariableByName('M_Elevator.iq_handshake', 1.0);
+        fail('expected UmasException — readable=false symbols must refuse');
+      } on UmasException catch (e) {
+        expect(e.message, contains('M_Elevator.iq_handshake'));
+        expect(e.message, contains('VAR_IN_OUT'));
+      }
+      // The client-side refusal must short-circuit before any PDU is
+      // sent to the underlying transport.
+      expect(sendCalls, 0,
+          reason: 'writeVariableByName must not send bytes when symbol is '
+              'marked unreadable');
+    });
+
+    test(
+        'omitting unreadableReason still produces a clear error message',
+        () async {
+      var sendCalls = 0;
+      final umas = UmasClient(
+        sendFn: (req) async {
+          sendCalls++;
+          return ModbusResponseCode.requestSucceed;
+        },
+      );
+      umas.debugInjectSymbol(ResolvedSymbol(
+        path: 'Foo.bar',
+        variable: const UmasVariable(
+          name: 'bar',
+          blockNo: 5,
+          offset: 0,
+          dataTypeId: 0,
+        ),
+        dataType: const UmasDataTypeRef(
+          id: 0,
+          name: 'REAL',
+          byteSize: 4,
+        ),
+        readable: false,
+        // unreadableReason intentionally null — gate must still fire
+        // with a sensible fallback message.
+      ));
+      try {
+        await umas.writeVariableByName('Foo.bar', 1.0);
+        fail('expected UmasException');
+      } on UmasException catch (e) {
+        expect(e.message, contains('Foo.bar'));
+        expect(e.message, contains('not readable'));
+      }
+      expect(sendCalls, 0);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
   // buildVariableNamesFromKeyMappings (no PLC)
   // ---------------------------------------------------------------------------
   group('buildVariableNamesFromKeyMappings', () {

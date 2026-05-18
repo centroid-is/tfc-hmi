@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:logger/logger.dart';
+import 'package:meta/meta.dart';
 import 'package:modbus_client/modbus_client.dart';
 import 'package:rxdart/rxdart.dart';
 import 'package:tfc_dart/core/umas_fb_direction.dart';
@@ -195,6 +196,17 @@ class UmasClient {
 
   /// True if a symbol cache build has completed for the current session.
   bool get symbolCacheBuilt => _symbolCacheBuilt;
+
+  /// Inject a [ResolvedSymbol] directly into the cache for tests that
+  /// need to assert behavior of [readVariableByName] / [writeVariableByName]
+  /// without standing up a full browse against the Python stub. Used
+  /// e.g. to verify the F-7 VAR_IN_OUT write refusal path with a
+  /// readable=false sentinel.
+  @visibleForTesting
+  void debugInjectSymbol(ResolvedSymbol sym) {
+    _symbolCache[sym.path] = sym;
+    _symbolCacheBuilt = true;
+  }
 
   UmasClient({
     required this.sendFn,
@@ -1376,8 +1388,21 @@ class UmasClient {
   /// then issues [writeVariable] with the value encoded per the
   /// resolved data type. The [value] is encoded by [encodeVariableValue]
   /// (see umas_types.dart).
+  ///
+  /// F-7: refuses VAR_IN_OUT (and any other [ResolvedSymbol] with
+  /// `readable == false`) client-side. The PLC would reject these with
+  /// 0x94 anyway; surfacing the precise [ResolvedSymbol.unreadableReason]
+  /// gives operators a clearer error than the raw protocol code, and
+  /// avoids burning a round-trip on a guaranteed failure.
   Future<void> writeVariableByName(String path, dynamic value) async {
     final sym = await lookupSymbol(path);
+    if (!sym.readable) {
+      throw UmasException(
+        errorCode: 0,
+        message: 'Cannot write ${sym.path}: '
+            '${sym.unreadableReason ?? "marked as not readable"}',
+      );
+    }
     final ref = VariableWriteRef.fromVariable(sym.variable, sym.dataType, value);
     await writeVariable([ref]);
   }
