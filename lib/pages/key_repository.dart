@@ -1142,8 +1142,19 @@ class _KeyMappingCardState extends State<_KeyMappingCard> {
                     serverAliases: widget.serverAliases,
                     onChanged: _updateOpcUaConfig,
                   ),
-                // Bit selection -- required for bit types, optional mask for others
-                if (!_isM2400 && _isBitType) ...[
+                // Bit selection — required for bit types, optional mask
+                // for others.
+                //
+                // F-5 (v1.1.x): when the operator has bound a UMAS symbol
+                // path via Browse, the runtime read path ignores
+                // bitMask/bitShift just like the address fields. Hide the
+                // section entirely so there's no "edits the mask, nothing
+                // happens" trap — the UMAS chip's clear-X re-exposes the
+                // section.
+                if (!_isM2400 &&
+                    _isBitType &&
+                    (widget.entry.variableName == null ||
+                        widget.entry.variableName!.isEmpty)) ...[
                   const Divider(),
                   Padding(
                     padding: const EdgeInsets.all(16),
@@ -1164,7 +1175,9 @@ class _KeyMappingCardState extends State<_KeyMappingCard> {
                       ],
                     ),
                   ),
-                ] else if (!_isM2400) ...[
+                ] else if (!_isM2400 &&
+                    (widget.entry.variableName == null ||
+                        widget.entry.variableName!.isEmpty)) ...[
                   const Divider(),
                   ExpansionTile(
                     title: const Text('Bit Mask (optional)'),

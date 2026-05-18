@@ -467,6 +467,22 @@ class _ModbusConfigSectionState extends ConsumerState<ModbusConfigSection> {
     return config?.umasEnabled ?? false;
   }
 
+  /// F-5 (v1.1.x): true when the operator has bound this key to a UMAS
+  /// symbol path via the Browse picker. While set, the runtime read path
+  /// routes by name and ignores `address` / `registerType` / `dataType`
+  /// / bitMask — so the form disables those fields with a tooltip that
+  /// points the operator at the clear-X on the symbol chip. Picking
+  /// `variableName == null` (chip cleared) re-enables them.
+  bool get _isLockedByVariableName =>
+      widget.variableName != null && widget.variableName!.isNotEmpty;
+
+  /// Tooltip body for every disabled field — points the operator at the
+  /// chip's clear-X so the field is reversibly editable.
+  static const _lockedTooltip =
+      'Variable name is set — runtime reads route by name and ignore '
+      'this field. Clear the UMAS symbol chip (×) above to edit '
+      'address-based mapping directly.';
+
   Future<void> _openUmasBrowseDialog(BuildContext context) async {
     final stateManAsync = ref.read(stateManProvider);
     final stateMan = stateManAsync.valueOrNull;
@@ -636,74 +652,98 @@ class _ModbusConfigSectionState extends ConsumerState<ModbusConfigSection> {
               },
             ),
             const SizedBox(height: 12),
-            // Register type dropdown
-            DropdownButtonFormField<ModbusRegisterType>(
-              key: ValueKey(_selectedRegisterType),
-              initialValue: _selectedRegisterType,
-              decoration: const InputDecoration(
-                labelText: 'Register Type',
-                prefixIcon: FaIcon(FontAwesomeIcons.layerGroup, size: 16),
+            // Register type dropdown — F-5: disabled while a UMAS symbol
+            // is bound (variableName != null). The runtime read path
+            // ignores this field; greying it out prevents silently
+            // stranded operator edits.
+            Tooltip(
+              message: _isLockedByVariableName ? _lockedTooltip : '',
+              child: DropdownButtonFormField<ModbusRegisterType>(
+                key: ValueKey(_selectedRegisterType),
+                initialValue: _selectedRegisterType,
+                decoration: InputDecoration(
+                  labelText: _isLockedByVariableName
+                      ? 'Register Type (UMAS bound)'
+                      : 'Register Type',
+                  prefixIcon: const FaIcon(FontAwesomeIcons.layerGroup, size: 16),
+                ),
+                items: ModbusRegisterType.values
+                    .map((rt) => DropdownMenuItem(
+                          value: rt,
+                          child: Text(rt.name),
+                        ))
+                    .toList(),
+                onChanged: _isLockedByVariableName
+                    ? null
+                    : (ModbusRegisterType? value) {
+                        if (value == null) return;
+                        setState(() {
+                          _selectedRegisterType = value;
+                          // Auto-lock data type for boolean register types
+                          if (value == ModbusRegisterType.coil ||
+                              value == ModbusRegisterType.discreteInput) {
+                            _selectedDataType = ModbusDataType.bit;
+                          } else if (_selectedDataType == ModbusDataType.bit) {
+                            // Switching away from boolean type -- reset to default
+                            _selectedDataType = ModbusDataType.uint16;
+                          }
+                        });
+                        _notifyChanged();
+                      },
               ),
-              items: ModbusRegisterType.values
-                  .map((rt) => DropdownMenuItem(
-                        value: rt,
-                        child: Text(rt.name),
-                      ))
-                  .toList(),
-              onChanged: (ModbusRegisterType? value) {
-                if (value == null) return;
-                setState(() {
-                  _selectedRegisterType = value;
-                  // Auto-lock data type for boolean register types
-                  if (value == ModbusRegisterType.coil ||
-                      value == ModbusRegisterType.discreteInput) {
-                    _selectedDataType = ModbusDataType.bit;
-                  } else if (_selectedDataType == ModbusDataType.bit) {
-                    // Switching away from boolean type -- reset to default
-                    _selectedDataType = ModbusDataType.uint16;
-                  }
-                });
-                _notifyChanged();
-              },
             ),
             const SizedBox(height: 12),
-            // Address field
-            TextField(
-              controller: _addressController,
-              decoration: const InputDecoration(
-                labelText: 'Address',
-                prefixIcon: FaIcon(FontAwesomeIcons.locationDot, size: 16),
+            // Address field — F-5: disabled while a UMAS symbol is bound.
+            Tooltip(
+              message: _isLockedByVariableName ? _lockedTooltip : '',
+              child: TextField(
+                controller: _addressController,
+                enabled: !_isLockedByVariableName,
+                decoration: InputDecoration(
+                  labelText: _isLockedByVariableName
+                      ? 'Address (UMAS bound)'
+                      : 'Address',
+                  prefixIcon:
+                      const FaIcon(FontAwesomeIcons.locationDot, size: 16),
+                ),
+                keyboardType: TextInputType.number,
+                onChanged: (_) => _notifyChanged(),
               ),
-              keyboardType: TextInputType.number,
-              onChanged: (_) => _notifyChanged(),
             ),
             const SizedBox(height: 12),
-            // Data type dropdown (disabled for coil/discrete input)
-            DropdownButtonFormField<ModbusDataType>(
-              key: ValueKey(_selectedDataType),
-              initialValue: _selectedDataType,
-              decoration: InputDecoration(
-                labelText:
-                    _isBooleanRegisterType ? 'Data Type (auto)' : 'Data Type',
-                prefixIcon:
-                    const FaIcon(FontAwesomeIcons.hashtag, size: 16),
+            // Data type dropdown — F-5: disabled while a UMAS symbol is
+            // bound; also disabled for coil/discrete input (auto-bit).
+            Tooltip(
+              message: _isLockedByVariableName ? _lockedTooltip : '',
+              child: DropdownButtonFormField<ModbusDataType>(
+                key: ValueKey(_selectedDataType),
+                initialValue: _selectedDataType,
+                decoration: InputDecoration(
+                  labelText: _isLockedByVariableName
+                      ? 'Data Type (UMAS bound)'
+                      : (_isBooleanRegisterType
+                          ? 'Data Type (auto)'
+                          : 'Data Type'),
+                  prefixIcon:
+                      const FaIcon(FontAwesomeIcons.hashtag, size: 16),
+                ),
+                items: _isBooleanRegisterType
+                    ? [
+                        const DropdownMenuItem(
+                            value: ModbusDataType.bit, child: Text('bit'))
+                      ]
+                    : ModbusDataType.values
+                        .map((dt) =>
+                            DropdownMenuItem(value: dt, child: Text(dt.name)))
+                        .toList(),
+                onChanged: (_isBooleanRegisterType || _isLockedByVariableName)
+                    ? null // null disables the dropdown
+                    : (value) {
+                        if (value == null) return;
+                        setState(() => _selectedDataType = value);
+                        _notifyChanged();
+                      },
               ),
-              items: _isBooleanRegisterType
-                  ? [
-                      const DropdownMenuItem(
-                          value: ModbusDataType.bit, child: Text('bit'))
-                    ]
-                  : ModbusDataType.values
-                      .map((dt) =>
-                          DropdownMenuItem(value: dt, child: Text(dt.name)))
-                      .toList(),
-              onChanged: _isBooleanRegisterType
-                  ? null // null disables the dropdown
-                  : (value) {
-                      if (value == null) return;
-                      setState(() => _selectedDataType = value);
-                      _notifyChanged();
-                    },
             ),
             const SizedBox(height: 12),
             // Poll group dropdown
