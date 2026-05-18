@@ -123,6 +123,191 @@ void main() {
   });
 
   // ---------------------------------------------------------------------------
+  // TD-003 (v1.1.x): per-key UMAS state must release on key removal /
+  // rename. Without this hook, `_umasSubjects` and `_umasLastValues`
+  // leaked for every deleted UMAS-by-name key for the adapter lifetime.
+  // ---------------------------------------------------------------------------
+  group('ModbusDeviceClientAdapter — TD-003 per-key cleanup', () {
+    ModbusDeviceClientAdapter buildAdapter(Map<String, String?> names) {
+      final wrapper = ModbusClientWrapper('127.0.0.1', 0, 1,
+          clientFactory: (h, p, u) =>
+              ModbusClientTcp(h, serverPort: p, unitId: u));
+      return ModbusDeviceClientAdapter(
+        wrapper,
+        specs: const {},
+        variableNames: names,
+        umasEnabled: true,
+        serverAlias: 'plc1',
+      );
+    }
+
+    test('unsubscribeUmas closes the subject and clears the cache', () async {
+      final adapter = buildAdapter({'k1': 'A.b'});
+      try {
+        // Materialize a subject by subscribing once.
+        final stream = adapter.subscribe('k1');
+        final received = <DynamicValue>[];
+        var done = false;
+        final sub = stream.listen(received.add, onDone: () => done = true);
+        await Future.delayed(Duration.zero);
+
+        // unsubscribe → subject must close.
+        adapter.unsubscribeUmas('k1');
+        await Future.delayed(Duration.zero);
+        expect(done, isTrue,
+            reason: 'unsubscribeUmas must close the BehaviorSubject so '
+                'subscribers see onDone instead of holding a dangling '
+                'reference for the adapter lifetime');
+        await sub.cancel();
+
+        // Cache must be empty.
+        expect(adapter.read('k1'), isNull,
+            reason: 'unsubscribeUmas must drop the cached last value');
+      } finally {
+        adapter.dispose();
+      }
+    });
+
+    test('unsubscribeUmas is a no-op for unknown keys', () {
+      final adapter = buildAdapter({'k1': 'A.b'});
+      try {
+        adapter.unsubscribeUmas('does-not-exist');
+        // Existing key still present.
+        expect(adapter.variableNameFor('k1'), 'A.b');
+      } finally {
+        adapter.dispose();
+      }
+    });
+
+    test(
+        'updateVariableNames closes subjects for REMOVED keys; '
+        'kept keys retain their subjects',
+        () async {
+      final adapter = buildAdapter({'k1': 'A.b', 'k2': 'C.d'});
+      try {
+        // Materialize both subjects.
+        var k1Done = false;
+        var k2Done = false;
+        final s1 = adapter.subscribe('k1').listen((_) {}, onDone: () {
+          k1Done = true;
+        });
+        final s2 = adapter.subscribe('k2').listen((_) {}, onDone: () {
+          k2Done = true;
+        });
+        await Future.delayed(Duration.zero);
+
+        // Operator deletes k1 from key mappings — adapter should
+        // release k1's subject but leave k2 alive.
+        adapter.updateVariableNames({'k2': 'C.d'});
+        await Future.delayed(Duration.zero);
+
+        expect(k1Done, isTrue,
+            reason: 'removed key must release its subject');
+        expect(k2Done, isFalse,
+            reason: 'kept key must keep its subject open');
+        expect(adapter.variableNameFor('k1'), isNull);
+        expect(adapter.variableNameFor('k2'), 'C.d');
+
+        await s1.cancel();
+        await s2.cancel();
+      } finally {
+        adapter.dispose();
+      }
+    });
+
+    test(
+        'updateVariableNames closes the subject when the variableName '
+        'is RENAMED (path changed for the same key)',
+        () async {
+      final adapter = buildAdapter({'k1': 'A.b'});
+      try {
+        var done = false;
+        final s = adapter
+            .subscribe('k1')
+            .listen((_) {}, onDone: () => done = true);
+        await Future.delayed(Duration.zero);
+
+        adapter.updateVariableNames({'k1': 'X.y'}); // same key, new path
+        await Future.delayed(Duration.zero);
+
+        expect(done, isTrue,
+            reason: 'rename should release the old subject so a fresh '
+                'subscription against the new symbol starts clean');
+        expect(adapter.variableNameFor('k1'), 'X.y');
+        await s.cancel();
+      } finally {
+        adapter.dispose();
+      }
+    });
+
+    test('updateVariableNames absorbs NEW keys without crashing', () {
+      final adapter = buildAdapter({'k1': 'A.b'});
+      try {
+        adapter.updateVariableNames({'k1': 'A.b', 'k2': 'C.d'});
+        expect(adapter.variableNameFor('k2'), 'C.d');
+        expect(adapter.canSubscribe('k2'), isTrue);
+      } finally {
+        adapter.dispose();
+      }
+    });
+
+    test(
+        'StateMan.updateKeyMappings propagates removal to the adapter '
+        '— end-to-end leak guard',
+        () async {
+      final wrapper = ModbusClientWrapper('127.0.0.1', 0, 1,
+          clientFactory: (h, p, u) =>
+              ModbusClientTcp(h, serverPort: p, unitId: u));
+      final adapter = ModbusDeviceClientAdapter(
+        wrapper,
+        specs: const {},
+        variableNames: const {'pump.speed': 'M_Pump.speed'},
+        umasEnabled: false,
+        serverAlias: 'plc1',
+      );
+      final stateMan = await StateMan.create(
+        config: StateManConfig(opcua: []),
+        keyMappings: KeyMappings(nodes: {
+          'pump.speed': KeyMappingEntry(
+            modbusNode: ModbusNodeConfig(
+              serverAlias: 'plc1',
+              registerType: ModbusRegisterType.holdingRegister,
+              address: 0,
+            ),
+            variableName: 'M_Pump.speed',
+          ),
+        }),
+        deviceClients: [adapter],
+      );
+      try {
+        // Materialize the subject.
+        var done = false;
+        final s = adapter
+            .subscribe('pump.speed')
+            .listen((_) {}, onDone: () => done = true);
+        await Future.delayed(Duration.zero);
+        expect(adapter.variableNameFor('pump.speed'), 'M_Pump.speed');
+
+        // Operator deletes the key from the mappings.
+        stateMan.updateKeyMappings(KeyMappings(nodes: {}));
+        await Future.delayed(Duration.zero);
+
+        expect(adapter.variableNameFor('pump.speed'), isNull,
+            reason: 'StateMan.updateKeyMappings must forward the new '
+                'variableName mapping to the adapter');
+        expect(done, isTrue,
+            reason: 'the adapter must release the subject for the '
+                'deleted UMAS-by-name key');
+
+        await s.cancel();
+      } finally {
+        adapter.dispose();
+        await stateMan.close();
+      }
+    });
+  });
+
+  // ---------------------------------------------------------------------------
   // F-7: writeVariableByName refuses non-readable symbols (no PLC needed)
   // ---------------------------------------------------------------------------
   group('UmasClient.writeVariableByName — F-7 readable gate', () {

@@ -20,7 +20,8 @@ import 'package:modbus_client/modbus_client.dart' show ModbusElementType, Modbus
 
 import 'collector.dart';
 import 'modbus_client_wrapper.dart' show ModbusDataType;
-import 'modbus_device_client.dart' show ModbusDeviceClientAdapter;
+import 'modbus_device_client.dart'
+    show ModbusDeviceClientAdapter, buildVariableNamesFromKeyMappings;
 import 'preferences.dart';
 
 part 'state_man.g.dart';
@@ -1477,6 +1478,23 @@ class StateMan {
 
   void updateKeyMappings(KeyMappings newKeyMappings) {
     keyMappings = newKeyMappings;
+    // TD-003 (v1.1.x): propagate the new variableName mapping to every
+    // Modbus adapter so per-key UMAS state (BehaviorSubject + cached
+    // last value + MonitorPlc table) is released for keys that were
+    // removed or renamed. Without this hook, deleting a UMAS-by-name
+    // key from the operator's mappings would leak the subject + cached
+    // DynamicValue for the lifetime of the StateMan.
+    for (final dc in deviceClients) {
+      if (dc is ModbusDeviceClientAdapter) {
+        final newNames = buildVariableNamesFromKeyMappings(
+            newKeyMappings, dc.serverAlias);
+        // Preserve the null entries for non-UMAS keys the adapter knows
+        // about so the merged map's "renamed" detection works (it
+        // compares old non-null name vs new entry — missing entry =
+        // removed, so we don't need to inject null placeholders).
+        dc.updateVariableNames(Map<String, String?>.from(newNames));
+      }
+    }
   }
 
   List<String> get keys => keyMappings.keys.toList();

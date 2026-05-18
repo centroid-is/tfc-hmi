@@ -42,8 +42,9 @@ class ModbusDeviceClientAdapter implements DeviceClient {
 
   /// UMAS variable names per key (null for keys that use classic Modbus
   /// addressing). Populated from `KeyMappingEntry.variableName` at
-  /// adapter construction.
-  final Map<String, String?> _variableNames;
+  /// adapter construction. Mutated by [updateVariableNames] when the
+  /// operator edits the key mappings (TD-003 v1.1.x cleanup path).
+  Map<String, String?> _variableNames;
 
   /// True when this adapter's server has `umasEnabled == true` in its
   /// [ModbusConfig]. Determines whether variableName-bearing keys can
@@ -125,7 +126,7 @@ class ModbusDeviceClientAdapter implements DeviceClient {
     Map<String, String>? umasPollGroupByKey,
     List<ModbusPollGroupConfig>? pollGroups,
   })  : _specs = Map.unmodifiable(specs),
-        _variableNames = Map.unmodifiable(variableNames) {
+        _variableNames = Map.of(variableNames) {
     _initUmasPollGroups(
       umasPollGroupByKey: umasPollGroupByKey ?? const {},
       pollGroups: pollGroups ?? const [],
@@ -362,6 +363,71 @@ class ModbusDeviceClientAdapter implements DeviceClient {
   /// null before the first connect+read primes it. Used to assert
   /// internal cache state (e.g. TD-005: blockCrcs reuse).
   UmasClient? get debugUmasClient => _umasClient;
+
+  /// TD-003 (v1.1.x): release every per-key resource the adapter
+  /// allocates for a UMAS-by-name [key]. Called from
+  /// [updateVariableNames] when the operator removes or renames a
+  /// key; also exposed for direct callers that need to drop a key
+  /// (e.g. UI tear-down paths).
+  ///
+  /// Closes and removes the long-lived BehaviorSubject, drops the
+  /// cached typed value, evicts the key from poll-group ordering,
+  /// and dirties the MonitorPlc table so it re-registers without
+  /// the stale entry on the next (re)connect.
+  ///
+  /// No-op when [key] is unknown.
+  void unsubscribeUmas(String key) {
+    final subject = _umasSubjects.remove(key);
+    if (subject != null && !subject.isClosed) {
+      subject.close();
+    }
+    _umasLastValues.remove(key);
+    // Drop from group ordering. The order list is rebuilt on the next
+    // table build, but defensive removal here keeps the cached state
+    // consistent even when no rebuild happens (e.g. UMAS disabled).
+    for (final keys in _umasKeysByGroup.values) {
+      keys.remove(key);
+    }
+    // Force a MonitorPlc table rebuild on the next connection state
+    // change; until then, the order list is unchanged and demux still
+    // ignores indices it can't map (n = min(values, _umasKeyOrder)).
+    _umasKeyOrder.remove(key);
+    _umasTableBuiltFor = null;
+  }
+
+  /// TD-003 (v1.1.x): refresh `_variableNames` after a KeyMappings edit
+  /// and tear down per-key state for any key that was removed or had
+  /// its [variableName] changed.
+  ///
+  /// Without this hook, `StateMan.updateKeyMappings` would only swap
+  /// the top-level KeyMappings reference and the adapter would
+  /// permanently leak the BehaviorSubject + last-value entry for every
+  /// deleted UMAS-by-name key. On a long-running HMI where operators
+  /// iterate key configs, the leak is unbounded.
+  ///
+  /// New mappings are merged in place — adds and updates are absorbed;
+  /// removals trigger [unsubscribeUmas].
+  void updateVariableNames(Map<String, String?> newVariableNames) {
+    // Find removed keys (in old, missing from new or now null).
+    final removed = <String>[];
+    for (final key in _variableNames.keys) {
+      final oldName = _variableNames[key];
+      if (oldName == null) continue; // wasn't UMAS-by-name to begin with
+      final newName = newVariableNames[key];
+      if (newName == null || newName != oldName) {
+        // Renamed or removed — drop the cached subject so a fresh
+        // subscription against the new symbol path starts clean.
+        removed.add(key);
+      }
+    }
+    for (final key in removed) {
+      unsubscribeUmas(key);
+    }
+    // Swap the variableNames map. Adds are absorbed automatically —
+    // a fresh [subscribe] call will materialize a new subject on first
+    // use via [_umasSubjectFor].
+    _variableNames = Map.of(newVariableNames);
+  }
 
   /// Get or lazily construct a UmasClient bound to the wrapper's current
   /// TCP client. Returns null if the wrapper is disconnected (no
