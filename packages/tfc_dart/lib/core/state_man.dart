@@ -1254,6 +1254,23 @@ class StateMan {
     // Check Modbus key
     final modbusDc = _resolveModbusDeviceClient(key);
     if (modbusDc != null) {
+      // B-1 (v1.1.x): UMAS-by-name routing. When the entry has a
+      // variableName set, read live via the UmasClient symbol cache
+      // rather than the Modbus address space. The adapter throws a
+      // UmasException with the operator-facing "umas not enabled"
+      // message when the server has umasEnabled=false; let it
+      // propagate as StateManException so the key card surfaces an
+      // Error badge.
+      final entry = keyMappings.nodes[key];
+      final variableName = entry?.variableName;
+      if (variableName != null && modbusDc is ModbusDeviceClientAdapter) {
+        try {
+          return await modbusDc.readUmasVariable(key);
+        } catch (e) {
+          throw StateManException('Failed to read UMAS variable "$variableName" '
+              'for key "$key": $e');
+        }
+      }
       final value = modbusDc.read(key);
       if (value == null) {
         throw StateManException('No cached value for key: "$key" -- not polled yet');
@@ -1293,6 +1310,19 @@ class StateMan {
       // Check Modbus
       final modbusDc = _resolveModbusDeviceClient(key);
       if (modbusDc != null) {
+        // B-1 (v1.1.x): UMAS-by-name keys read live via the symbol
+        // cache. Errors here only skip the failing key (analogous to
+        // the existing "no cached value -> skip" semantics of
+        // [DeviceClient.read]); the caller surfaces missing keys.
+        final entry = keyMappings.nodes[key];
+        if (entry?.variableName != null && modbusDc is ModbusDeviceClientAdapter) {
+          try {
+            results[key] = await modbusDc.readUmasVariable(key);
+          } catch (_) {
+            // Skip; UI surfaces error badge via single-key read().
+          }
+          continue;
+        }
         final value = modbusDc.read(key);
         if (value != null) results[key] = value;
         continue;
