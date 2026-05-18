@@ -1400,6 +1400,22 @@ class StateMan {
     // Check Modbus (and other DeviceClient protocols)
     final modbusDc = _resolveModbusDeviceClient(key);
     if (modbusDc != null) {
+      // F-3: wrap UMAS-by-name write errors symmetrically with the
+      // read path (state_man.dart:1267-1273) so operator-facing
+      // surfaces (key-card Error chip) get a StateManException whose
+      // message names both the key and the symbol path.
+      final entry = keyMappings.nodes[key];
+      final variableName = entry?.variableName;
+      if (variableName != null && modbusDc is ModbusDeviceClientAdapter) {
+        try {
+          await modbusDc.write(key, value);
+        } catch (e) {
+          throw StateManException(
+              'Failed to write UMAS variable "$variableName" '
+              'for key "$key": $e');
+        }
+        return;
+      }
       await modbusDc.write(key, value);
       return;
     }

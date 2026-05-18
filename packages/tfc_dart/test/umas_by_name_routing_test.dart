@@ -33,7 +33,10 @@ import 'package:tfc_dart/core/state_man.dart'
         KeyMappings,
         KeyMappingEntry,
         ModbusNodeConfig,
-        ModbusRegisterType;
+        ModbusRegisterType,
+        StateMan,
+        StateManConfig,
+        StateManException;
 import 'package:tfc_dart/core/umas_client.dart';
 import 'package:tfc_dart/core/umas_types.dart';
 
@@ -568,6 +571,172 @@ void main() {
         await sub.cancel();
       } finally {
         adapter.dispose();
+      }
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // F-3: StateMan-level error path for umasEnabled=false (no PLC needed)
+  // ---------------------------------------------------------------------------
+  group('StateMan UMAS-by-name error path (F-3)', () {
+    /// Build a StateMan whose only DeviceClient is a (disconnected)
+    /// ModbusDeviceClientAdapter with umasEnabled=false. The wrapper
+    /// uses port 0 so no real socket is opened — we only exercise the
+    /// adapter's UMAS-enabled gate at the StateMan boundary.
+    Future<({StateMan stateMan, ModbusDeviceClientAdapter adapter})>
+        buildStateMan({required bool umasEnabled}) async {
+      final wrapper = ModbusClientWrapper('127.0.0.1', 0, 1,
+          clientFactory: (h, p, u) =>
+              ModbusClientTcp(h, serverPort: p, unitId: u));
+      final adapter = ModbusDeviceClientAdapter(
+        wrapper,
+        specs: const {},
+        variableNames: const {'pump.speed': 'M_Pump.speed'},
+        umasEnabled: umasEnabled,
+        serverAlias: 'plc1',
+      );
+      final stateMan = await StateMan.create(
+        config: StateManConfig(opcua: []),
+        keyMappings: KeyMappings(nodes: {
+          'pump.speed': KeyMappingEntry(
+            modbusNode: ModbusNodeConfig(
+              serverAlias: 'plc1',
+              registerType: ModbusRegisterType.holdingRegister,
+              address: 0,
+            ),
+            variableName: 'M_Pump.speed',
+          ),
+        }),
+        deviceClients: [adapter],
+      );
+      return (stateMan: stateMan, adapter: adapter);
+    }
+
+    test(
+        'read() wraps adapter UmasException as StateManException naming '
+        'key, variableName, and "UMAS"',
+        () async {
+      final h = await buildStateMan(umasEnabled: false);
+      try {
+        await h.stateMan.read('pump.speed');
+        fail('expected StateManException');
+      } on StateManException catch (e) {
+        expect(e.message, contains('pump.speed'),
+            reason: 'wrapped error must name the operator-facing key');
+        expect(e.message, contains('M_Pump.speed'),
+            reason: 'wrapped error must name the symbol path');
+        expect(e.message, contains('UMAS'),
+            reason: 'wrapped error must mention UMAS so the key-card '
+                'Error chip surfaces the contract violation');
+      } finally {
+        h.adapter.dispose();
+        await h.stateMan.close();
+      }
+    });
+
+    test(
+        'write() wraps adapter UmasException as StateManException naming '
+        'key, variableName, and "UMAS"',
+        () async {
+      final h = await buildStateMan(umasEnabled: false);
+      try {
+        await h.stateMan
+            .write('pump.speed', DynamicValue(value: 1.0, typeId: NodeId.float));
+        fail('expected StateManException');
+      } on StateManException catch (e) {
+        expect(e.message, contains('pump.speed'));
+        expect(e.message, contains('M_Pump.speed'));
+        expect(e.message, contains('UMAS'));
+      } finally {
+        h.adapter.dispose();
+        await h.stateMan.close();
+      }
+    });
+
+    test(
+        'read() wraps unknown-symbol error from lookupSymbol when '
+        'umasEnabled=true but the PLC has no such symbol',
+        () async {
+      // Use the stub server so the UMAS session establishes but the
+      // requested symbol path is missing → lookupSymbol throws.
+      final stubScript = '${_findProjectRoot()}/test/umas_stub_server.py';
+      String python;
+      try {
+        final r = await Process.run('python3', ['--version']);
+        python = r.exitCode == 0 ? 'python3' : 'python';
+      } catch (_) {
+        python = 'python';
+      }
+      final proc = await Process.start(python, ['-u', stubScript, '--port', '0']);
+      proc.stderr.transform(const SystemEncoding().decoder).drain();
+      final portCompleter = Completer<int>();
+      final portPattern = RegExp(r'PORT=(\d+)');
+      proc.stdout.transform(const SystemEncoding().decoder).listen((line) {
+        if (!portCompleter.isCompleted) {
+          final m = portPattern.firstMatch(line);
+          if (m != null) portCompleter.complete(int.parse(m.group(1)!));
+        }
+      });
+      final port =
+          await portCompleter.future.timeout(const Duration(seconds: 5));
+
+      final wrapper = ModbusClientWrapper(
+        '127.0.0.1',
+        port,
+        255,
+        clientFactory: (h, p, u) => ModbusClientTcp(
+          h,
+          serverPort: p,
+          unitId: u,
+          connectionMode: ModbusConnectionMode.doNotConnect,
+          connectionTimeout: const Duration(seconds: 3),
+        ),
+      );
+      wrapper.connect();
+      final ready = Completer<void>();
+      late StreamSubscription<ConnectionStatus> sub;
+      sub = wrapper.connectionStream.listen((s) {
+        if (s == ConnectionStatus.connected && !ready.isCompleted) {
+          ready.complete();
+          sub.cancel();
+        }
+      });
+      await ready.future.timeout(const Duration(seconds: 5));
+
+      final adapter = ModbusDeviceClientAdapter(
+        wrapper,
+        specs: const {},
+        variableNames: const {'bogus.key': 'Bogus.NoSuchSymbol'},
+        umasEnabled: true,
+        serverAlias: 'plc1',
+      );
+      final stateMan = await StateMan.create(
+        config: StateManConfig(opcua: []),
+        keyMappings: KeyMappings(nodes: {
+          'bogus.key': KeyMappingEntry(
+            modbusNode: ModbusNodeConfig(
+              serverAlias: 'plc1',
+              registerType: ModbusRegisterType.holdingRegister,
+              address: 0,
+            ),
+            variableName: 'Bogus.NoSuchSymbol',
+          ),
+        }),
+        deviceClients: [adapter],
+      );
+      try {
+        await stateMan.read('bogus.key');
+        fail('expected StateManException for unknown symbol');
+      } on StateManException catch (e) {
+        expect(e.message, contains('bogus.key'),
+            reason: 'must name the operator key');
+        expect(e.message, contains('Bogus.NoSuchSymbol'),
+            reason: 'must name the symbol path so the operator knows what to '
+                'fix');
+      } finally {
+        adapter.dispose();
+        await stateMan.close();
+        proc.kill();
       }
     });
   });
