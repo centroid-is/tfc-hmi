@@ -346,6 +346,95 @@ void main() {
       expect(client.monitorRegistrations.isEmpty, true);
       client.dispose();
     });
+
+    // -----------------------------------------------------------------
+    // TD-015 (v1.1.x): monitorRegister failure → monitorReset to
+    // re-sync PLC-side state.
+    // -----------------------------------------------------------------
+    test(
+        'TD-015: monitorRegister failure issues monitorReset (0x0B) and '
+        'leaves local table empty', () async {
+      final subCommandSequence = <int>[];
+      // First 0x50 call (subCmd=0x05 Register) errors. Reset call
+      // (subCmd=0x0B) succeeds. Verifies the fix routes through reset
+      // on partial-failure to flush PLC state.
+      final client = createMockClient(
+        onRequest: (ModbusRequest req) async {
+          final umasReq = req as UmasRequest;
+          if (umasReq.umasSubFunction == 0x02 ||
+              umasReq.umasSubFunction == 0x01) {
+            // delegate to standard mock init handling — inline the
+            // session-setup logic from mockSendFn since we need custom
+            // 0x50 dispatch.
+            int pairingKey = 0x42;
+            if (umasReq.umasSubFunction == 0x02) {
+              final resp = BytesBuilder();
+              resp.add([0x5A, 0x00, 0xFE]);
+              final pd = ByteData(16);
+              pd.setUint16(0, 1, Endian.little);
+              pd.setUint32(2, 0x12345678, Endian.little);
+              pd.setUint8(6, 1);
+              pd.setUint16(7, 0, Endian.little);
+              pd.setUint8(9, 1);
+              pd.setUint16(10, 0, Endian.little);
+              pd.setUint32(12, 0x10000, Endian.little);
+              resp.add(pd.buffer.asUint8List());
+              umasReq.internalSetFromPduResponse(
+                  Uint8List.fromList(resp.toBytes()));
+              return ModbusResponseCode.requestSucceed;
+            }
+            final resp = BytesBuilder();
+            resp.add([0x5A, pairingKey, 0xFE]);
+            final pd = ByteData(2);
+            pd.setUint16(0, 1021, Endian.little);
+            resp.add(pd.buffer.asUint8List());
+            umasReq.internalSetFromPduResponse(
+                Uint8List.fromList(resp.toBytes()));
+            return ModbusResponseCode.requestSucceed;
+          }
+          if (umasReq.umasSubFunction == 0x50) {
+            final subCmd = umasReq.umasPayload[0];
+            subCommandSequence.add(subCmd);
+            if (subCmd == 0x05) {
+              // Register: return UMAS-level error to simulate the
+              // PLC having registered SOME refs before the failure.
+              final resp = Uint8List.fromList([0x5A, 0x42, 0xFD, 0xC0]);
+              umasReq.internalSetFromPduResponse(resp);
+              return ModbusResponseCode.requestSucceed;
+            }
+            // Reset (0x0B) and other sub-commands succeed.
+            final resp = Uint8List.fromList([0x5A, 0x42, 0xFE]);
+            umasReq.internalSetFromPduResponse(resp);
+            return ModbusResponseCode.requestSucceed;
+          }
+          return ModbusResponseCode.requestSucceed;
+        },
+      );
+
+      final variables = [
+        (
+          const UmasVariable(name: 'a', blockNo: 1, offset: 0, dataTypeId: 5),
+          const UmasDataTypeRef(id: 8, name: 'REAL', byteSize: 4),
+        ),
+        (
+          const UmasVariable(name: 'b', blockNo: 1, offset: 4, dataTypeId: 5),
+          const UmasDataTypeRef(id: 8, name: 'REAL', byteSize: 4),
+        ),
+      ];
+
+      await expectLater(
+        () => client.monitorRegister(variables),
+        throwsA(isA<UmasException>()),
+      );
+
+      // Wire sequence must show Register → Reset (the fix's contract).
+      expect(subCommandSequence, [0x05, 0x0B],
+          reason: 'monitorRegister failure must follow up with monitorReset');
+      // Local table must be empty — caller can re-issue from scratch.
+      expect(client.monitorRegistrations.isEmpty, true,
+          reason: 'partial-failure must clear local registration table');
+      client.dispose();
+    });
   });
 
   // ---------------------------------------------------------------

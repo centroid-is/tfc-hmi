@@ -1985,6 +1985,20 @@ class UmasClient {
   /// Assigns variable indices sequentially and registers each variable's
   /// data type in the local registration table for response parsing.
   /// Returns the assigned variable indices.
+  ///
+  /// **Failure semantics (TD-015, v1.1.x):** if `_sendMonitorPlc` throws
+  /// mid-batch (e.g. PLC errored on the 50th of 100 refs), the PLC may
+  /// have registered SOME subset of the requested variables while the
+  /// local `_monitorTable` still has none. A subsequent `monitorReadAll`
+  /// (0x07) would then receive bytes for indices the local table can't
+  /// parse, silently producing wrong values for every key in the batch.
+  ///
+  /// On exception we issue `monitorReset` (0x0B) to flush the PLC side
+  /// so client and PLC re-converge on the empty state. The caller can
+  /// re-issue `monitorRegister` after fixing the root cause. The reset
+  /// itself is best-effort — if it also fails, we log and re-raise the
+  /// original exception (a stuck-PLC condition is already worse than a
+  /// missed reset).
   Future<List<int>> monitorRegister(
       List<(UmasVariable, UmasDataTypeRef)> variables) async {
     return _withSessionAndRecovery(() async {
@@ -2001,7 +2015,33 @@ class UmasClient {
         buffer.add(ref.toRegisterBytes());
       }
 
-      await _sendMonitorPlc(Uint8List.fromList(buffer.toBytes()));
+      try {
+        await _sendMonitorPlc(Uint8List.fromList(buffer.toBytes()));
+      } catch (e) {
+        // TD-015 (v1.1.x): the PLC may have registered SOME subset of
+        // the batch before erroring. The local _monitorTable has no
+        // entries yet (we only register on success below). Without a
+        // reset, a subsequent monitorReadAll would receive bytes for
+        // PLC-registered indices the local table can't parse —
+        // silently producing wrong values for every key.
+        //
+        // Reset semantics: flush PLC-side state via 0x0B and clear
+        // the local index allocator so client and PLC re-converge on
+        // the empty state. The reset itself is best-effort; if it
+        // also fails, the original exception is what the caller cares
+        // about — re-raise it. The caller can retry monitorRegister
+        // from scratch after fixing the root cause.
+        _log.w('monitorRegister failed mid-batch: $e — issuing '
+            'monitorReset to re-sync PLC state');
+        try {
+          await _sendMonitorPlc(Uint8List.fromList([0x0B]));
+        } catch (resetErr) {
+          _log.w('monitorReset after partial-failure also failed: '
+              '$resetErr (state may be out of sync until next session reset)');
+        }
+        _monitorTable.reset();
+        rethrow;
+      }
 
       // On success, register types in local table
       for (int i = 0; i < variables.length; i++) {
