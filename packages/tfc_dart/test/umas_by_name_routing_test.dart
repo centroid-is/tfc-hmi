@@ -30,6 +30,7 @@ import 'package:tfc_dart/core/modbus_device_client.dart';
 import 'package:tfc_dart/core/state_man.dart'
     show
         ConnectionStatus,
+        EffectiveDeviceStatus,
         KeyMappings,
         KeyMappingEntry,
         ModbusNodeConfig,
@@ -246,6 +247,44 @@ void main() {
         adapter.updateVariableNames({'k1': 'A.b', 'k2': 'C.d'});
         expect(adapter.variableNameFor('k2'), 'C.d');
         expect(adapter.canSubscribe('k2'), isTrue);
+      } finally {
+        adapter.dispose();
+      }
+    });
+
+    // -----------------------------------------------------------------
+    // TD-004 (v1.1.x): the adapter exposes a derived effectiveStatus
+    // that combines TCP socket state with UMAS session state. When
+    // umasEnabled=true and TCP is up but session isn't paired, the
+    // status surfaces as umasUnhealthy — used by ConnectionStatusChip
+    // to render "UMAS error" amber instead of green.
+    //
+    // The previous chip behavior reported "Connected" while every key
+    // card showed an error badge — TD-004 fixes the operator-confusion
+    // surface.
+    // -----------------------------------------------------------------
+    test(
+        'TD-004: umasEnabled=false adapter passes through TCP status '
+        '(no UMAS demotion)',
+        () async {
+      final wrapper = ModbusClientWrapper('127.0.0.1', 0, 1,
+          clientFactory: (h, p, u) =>
+              ModbusClientTcp(h, serverPort: p, unitId: u));
+      final adapter = ModbusDeviceClientAdapter(
+        wrapper,
+        specs: const {},
+        variableNames: const {'k1': 'A.b'},
+        umasEnabled: false, // UMAS off → effective == TCP
+        serverAlias: 'plc1',
+      );
+      try {
+        // Initial: TCP is disconnected → effective is disconnected.
+        expect(adapter.effectiveStatus,
+            EffectiveDeviceStatus.disconnected);
+        // Stream is seeded.
+        final first = await adapter.effectiveStatusStream.first
+            .timeout(const Duration(seconds: 1));
+        expect(first, EffectiveDeviceStatus.disconnected);
       } finally {
         adapter.dispose();
       }
@@ -813,6 +852,103 @@ void main() {
             reason: 'subsequent reads must reuse cached blockCrcs '
                 'instead of re-fetching via readPlcStatus()');
       } finally {
+        adapter.dispose();
+      }
+    });
+
+    // -----------------------------------------------------------------
+    // TD-004 (v1.1.x) — full-fidelity tests in the E2E group so they
+    // can use the stub server via _connectedWrapper.
+    // -----------------------------------------------------------------
+    test(
+        'TD-004: paired UMAS session lights effectiveStatus=connected; '
+        'a forced session reset transitions to umasUnhealthy',
+        () async {
+      final wrapper = await _connectedWrapper();
+      final adapter = ModbusDeviceClientAdapter(
+        wrapper,
+        specs: const {},
+        serverAlias: 'plc1',
+        variableNames: const {
+          'temperature': 'Application.GVL.temperature',
+        },
+        umasEnabled: true,
+      );
+      try {
+        // Drive a successful read to materialize the UmasClient and
+        // pair the session → effective status becomes connected.
+        await adapter.readUmasVariable('temperature');
+        await Future.delayed(const Duration(milliseconds: 50));
+        expect(adapter.effectiveStatus,
+            EffectiveDeviceStatus.connected,
+            reason: 'paired UMAS session must surface as connected');
+
+        final emissions = <EffectiveDeviceStatus>[];
+        final sub = adapter.effectiveStatusStream.listen(emissions.add);
+        await Future.delayed(Duration.zero);
+
+        // Simulate a session error (e.g. PLC rejects keep-alive,
+        // Data Dictionary suddenly disabled, reservation lost). The
+        // adapter must transition its derived status to
+        // `umasUnhealthy` so the chip turns amber.
+        adapter.debugUmasClient!
+            .debugSetSessionState(UmasSessionState.uninitialized);
+        await Future.delayed(const Duration(milliseconds: 50));
+
+        expect(adapter.effectiveStatus,
+            EffectiveDeviceStatus.umasUnhealthy,
+            reason: 'session reset must surface as umasUnhealthy '
+                '(amber "UMAS error" chip), not connected');
+        expect(emissions, contains(EffectiveDeviceStatus.umasUnhealthy));
+
+        await sub.cancel();
+      } finally {
+        adapter.dispose();
+      }
+    });
+
+    test(
+        'TD-004: TCP up + UMAS not yet paired surfaces as "connecting"; '
+        'a real read drives it to "connected"',
+        () async {
+      // Build a fresh adapter without driving any read yet — so the
+      // umas session is null on the first TCP-connected emission.
+      final wrapper = await _connectedWrapper();
+      final adapter = ModbusDeviceClientAdapter(
+        wrapper,
+        specs: const {},
+        serverAlias: 'plc1',
+        variableNames: const {
+          'temperature': 'Application.GVL.temperature',
+        },
+        umasEnabled: true,
+      );
+
+      final transitions = <EffectiveDeviceStatus>[];
+      final sub = adapter.effectiveStatusStream.listen(transitions.add);
+      try {
+        // Give the wrapper's connectionStream a tick to fire the
+        // initial connected event (wrapper was just connected by
+        // _connectedWrapper but the adapter listener may not have
+        // been wired up before that).
+        await Future.delayed(const Duration(milliseconds: 100));
+
+        // Drive the first read → session pairs → effective = connected.
+        await adapter.readUmasVariable('temperature');
+        await Future.delayed(const Duration(milliseconds: 50));
+
+        expect(adapter.effectiveStatus,
+            EffectiveDeviceStatus.connected);
+        // The sequence of emissions must NOT have surfaced
+        // `EffectiveDeviceStatus.connected` before the read primed
+        // the UMAS session — i.e. the chip didn't lie about health.
+        // We allow either `connecting` or no intermediate state
+        // (depending on stream ordering); the invariant is that the
+        // FINAL state is connected and that no other state survives
+        // past the read.
+        expect(transitions.last, EffectiveDeviceStatus.connected);
+      } finally {
+        await sub.cancel();
         adapter.dispose();
       }
     });

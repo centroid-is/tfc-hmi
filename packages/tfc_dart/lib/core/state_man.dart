@@ -584,6 +584,27 @@ class SingleWorker {
 
 enum ConnectionStatus { connected, connecting, disconnected }
 
+/// TD-004 (v1.1.x): a derived health status that combines TCP socket
+/// state with protocol-layer state (UMAS session). Surfaces the case
+/// where TCP is up but every UMAS read/write fails because the PLC's
+/// Data Dictionary is disabled or the session refuses to pair —
+/// previously rendered as a green "Connected" chip while every key
+/// card on the page showed an error badge.
+///
+/// Mapping:
+///   - [disconnected] / [connecting] / [connected]: same as the pure
+///     TCP states for adapters where UMAS is OFF or no operation has
+///     attempted to pair yet.
+///   - [umasUnhealthy]: TCP is connected, `umasEnabled == true`, but
+///     the UMAS session is not `paired` (init failed, identification
+///     failed, or the session was reset by a recent protocol error).
+enum EffectiveDeviceStatus {
+  disconnected,
+  connecting,
+  connected,
+  umasUnhealthy,
+}
+
 class ClientWrapper {
   final ClientApi client;
   final OpcUAConfig config;

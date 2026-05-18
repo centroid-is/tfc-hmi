@@ -235,6 +235,16 @@ class UmasClient {
     _symbolCacheBuilt = true;
   }
 
+  /// TD-004 (v1.1.x) test hook: force a session-state transition so
+  /// the adapter's [EffectiveDeviceStatus] stream emits without
+  /// having to drive a real handshake. Used by tests that need to
+  /// verify the unhealthy / paired transitions without relying on
+  /// the stub server's pairing flow.
+  @visibleForTesting
+  void debugSetSessionState(UmasSessionState newState) {
+    _setState(newState);
+  }
+
   UmasClient({
     required this.sendFn,
     this.unitId,

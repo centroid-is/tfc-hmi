@@ -10,6 +10,7 @@ import 'package:tfc_dart/core/state_man.dart'
     show
         ConnectionStatus,
         DeviceClient,
+        EffectiveDeviceStatus,
         KeyMappings,
         ModbusConfig,
         ModbusNodeConfig,
@@ -17,7 +18,12 @@ import 'package:tfc_dart/core/state_man.dart'
         StateMan;
 import 'package:tfc_dart/core/umas_client.dart';
 import 'package:tfc_dart/core/umas_types.dart'
-    show TypedVariableValue, UmasException, UmasVariable, UmasDataTypeRef;
+    show
+        TypedVariableValue,
+        UmasException,
+        UmasSessionState,
+        UmasVariable,
+        UmasDataTypeRef;
 
 /// Adapter that wraps [ModbusClientWrapper] as a [DeviceClient] for use in
 /// [StateMan].
@@ -110,6 +116,29 @@ class ModbusDeviceClientAdapter implements DeviceClient {
   /// the new project.
   StreamSubscription<int>? _umasProjectCrcSub;
 
+  /// TD-004 (v1.1.x): subscription to [UmasClient.sessionStream] for
+  /// the currently-active UmasClient. Re-subscribed every time
+  /// [_getUmasClient] allocates a fresh client. Drives
+  /// [_effectiveStatus$] so the UI chip surfaces broken UMAS sessions
+  /// (TCP up + Data Dictionary disabled, refused reservation, pairing-
+  /// key drift) as `umasUnhealthy` instead of falsely showing green.
+  StreamSubscription<UmasSessionState>? _umasSessionSub;
+
+  /// TD-004: latest cached UMAS session state. `null` when no umas
+  /// session has been attempted yet (no UMAS-by-name keys subscribed
+  /// and no operator-triggered read/write). Used in
+  /// [_recomputeEffectiveStatus] to decide whether `connected` should
+  /// be demoted to `umasUnhealthy`.
+  UmasSessionState? _lastUmasSessionState;
+
+  /// TD-004: derived health stream. Emits the combined TCP+UMAS
+  /// status. Seeded with the current TCP status mapped to its
+  /// [EffectiveDeviceStatus] equivalent so first subscribers see a
+  /// value immediately. Closed in [dispose].
+  late final BehaviorSubject<EffectiveDeviceStatus> _effectiveStatus$ =
+      BehaviorSubject<EffectiveDeviceStatus>.seeded(
+          _mapTcpStatus(wrapper.connectionStatus));
+
   static final _log = Logger(printer: SimplePrinter(), level: Level.info);
 
   /// Default MonitorPlc-poll interval when the operator's key mapping
@@ -132,6 +161,7 @@ class ModbusDeviceClientAdapter implements DeviceClient {
       pollGroups: pollGroups ?? const [],
     );
     _initUmasLifecycle();
+    _initEffectiveStatus();
   }
 
   /// Build the per-group key lists from the supplied per-key mapping
@@ -183,6 +213,77 @@ class ModbusDeviceClientAdapter implements DeviceClient {
         _umasTableBuiltFor = null;
       }
     });
+  }
+
+  /// TD-004 (v1.1.x): map a pure TCP [ConnectionStatus] to its
+  /// [EffectiveDeviceStatus] equivalent for the case where UMAS is
+  /// either disabled or not yet attempted. The mapping is a 1:1
+  /// upgrade — the umasUnhealthy state is only reachable when the
+  /// adapter has observed a non-paired UmasSessionState.
+  EffectiveDeviceStatus _mapTcpStatus(ConnectionStatus s) => switch (s) {
+        ConnectionStatus.connected => EffectiveDeviceStatus.connected,
+        ConnectionStatus.connecting => EffectiveDeviceStatus.connecting,
+        ConnectionStatus.disconnected => EffectiveDeviceStatus.disconnected,
+      };
+
+  /// TD-004 (v1.1.x): always-on TCP-status listener that drives the
+  /// derived [_effectiveStatus$] stream. Runs independently of the
+  /// UMAS-by-name lifecycle (which short-circuits for adapters with
+  /// no UMAS-by-name keys). On TCP disconnect the cached session
+  /// state is cleared so a stale `paired` doesn't leak across
+  /// reconnects.
+  StreamSubscription<ConnectionStatus>? _effectiveStatusSub;
+
+  void _initEffectiveStatus() {
+    _effectiveStatusSub = wrapper.connectionStream.listen((status) {
+      if (status != ConnectionStatus.connected) {
+        // TCP down → drop the UMAS session view so a stale paired
+        // doesn't survive a reconnect. _getUmasClient will rewire
+        // _umasSessionSub against the fresh client on the next read.
+        _lastUmasSessionState = null;
+      }
+      _recomputeEffectiveStatus();
+    });
+  }
+
+  /// TD-004 (v1.1.x): recompute and emit [EffectiveDeviceStatus]
+  /// from the current TCP status + UMAS session state. Idempotent —
+  /// only emits when the derived value actually changes.
+  ///
+  /// Rules:
+  ///   - Anything but `connected` on TCP → pass through.
+  ///   - `connected` + umasEnabled=false → connected (UMAS not in
+  ///     scope for this adapter).
+  ///   - `connected` + umasEnabled=true + sessionState in {null,
+  ///     uninitialized, identified} → umasUnhealthy. The non-paired
+  ///     states indicate the UMAS handshake is not complete; every
+  ///     read/write would either probe init (slow) or fail. The chip
+  ///     should NOT render green just because TCP is up.
+  ///   - `connected` + umasEnabled=true + sessionState == paired →
+  ///     connected.
+  void _recomputeEffectiveStatus() {
+    final tcp = wrapper.connectionStatus;
+    EffectiveDeviceStatus next;
+    if (tcp != ConnectionStatus.connected) {
+      next = _mapTcpStatus(tcp);
+    } else if (!umasEnabled) {
+      next = EffectiveDeviceStatus.connected;
+    } else if (_lastUmasSessionState == UmasSessionState.paired) {
+      next = EffectiveDeviceStatus.connected;
+    } else if (_lastUmasSessionState == null) {
+      // TCP just came up; UMAS hasn't attempted to pair yet. Stay
+      // optimistic — render `connecting` so the chip doesn't go red
+      // on every cold start before the first MonitorPlc table build.
+      // _getUmasClient + the upcoming sessionStream emission will
+      // resolve this to either paired (connected) or non-paired
+      // (umasUnhealthy) within a round-trip.
+      next = EffectiveDeviceStatus.connecting;
+    } else {
+      next = EffectiveDeviceStatus.umasUnhealthy;
+    }
+    if (_effectiveStatus$.isClosed) return;
+    if (_effectiveStatus$.valueOrNull == next) return;
+    _effectiveStatus$.add(next);
   }
 
   /// Build the MonitorPlc table from `_umasKeysByGroup` and start each
@@ -439,6 +540,9 @@ class ModbusDeviceClientAdapter implements DeviceClient {
       // successful reconnect rebuilds it against the fresh socket.
       _umasProjectCrcSub?.cancel();
       _umasProjectCrcSub = null;
+      _umasSessionSub?.cancel();
+      _umasSessionSub = null;
+      _lastUmasSessionState = null;
       _umasClient?.dispose();
       _umasClient = null;
       _umasClientFor = null;
@@ -449,6 +553,9 @@ class ModbusDeviceClientAdapter implements DeviceClient {
     }
     _umasProjectCrcSub?.cancel();
     _umasProjectCrcSub = null;
+    _umasSessionSub?.cancel();
+    _umasSessionSub = null;
+    _lastUmasSessionState = null;
     _umasClient?.dispose();
     _umasClient = UmasClient(sendFn: tcp.send, unitId: wrapper.unitId);
     _umasClientFor = tcp;
@@ -462,6 +569,16 @@ class ModbusDeviceClientAdapter implements DeviceClient {
       _umasTableBuiltFor = null;
       _umasKeyOrder.clear();
       unawaited(_buildUmasTableAndStartTimers());
+    });
+    // TD-004 (v1.1.x): forward UMAS session-state transitions into
+    // the derived effective-status stream. `sessionStream` is seeded
+    // with the current state so first listen lands an event
+    // immediately — paired here means handshake completed; any other
+    // value means TCP is up but UMAS is NOT healthy and the chip
+    // should reflect that with `umasUnhealthy`.
+    _umasSessionSub = _umasClient!.sessionStream.listen((state) {
+      _lastUmasSessionState = state;
+      _recomputeEffectiveStatus();
     });
     return _umasClient;
   }
@@ -666,6 +783,20 @@ class ModbusDeviceClientAdapter implements DeviceClient {
   @override
   Stream<ConnectionStatus> get connectionStream => wrapper.connectionStream;
 
+  /// TD-004 (v1.1.x): the combined TCP + UMAS health status. UI chip
+  /// should prefer this over the raw [connectionStatus] when the
+  /// server has `umasEnabled == true`, otherwise a PLC with Data
+  /// Dictionary disabled renders as green "Connected" while every
+  /// UMAS key card shows a red error badge.
+  EffectiveDeviceStatus get effectiveStatus =>
+      _effectiveStatus$.valueOrNull ??
+      _mapTcpStatus(wrapper.connectionStatus);
+
+  /// TD-004 (v1.1.x): broadcast stream of [EffectiveDeviceStatus]
+  /// changes. Seeded with the current value via [BehaviorSubject].
+  Stream<EffectiveDeviceStatus> get effectiveStatusStream =>
+      _effectiveStatus$.stream;
+
   @override
   void connect() => wrapper.connect();
 
@@ -676,6 +807,13 @@ class ModbusDeviceClientAdapter implements DeviceClient {
     _umasConnectionSub = null;
     _umasProjectCrcSub?.cancel();
     _umasProjectCrcSub = null;
+    _umasSessionSub?.cancel();
+    _umasSessionSub = null;
+    _effectiveStatusSub?.cancel();
+    _effectiveStatusSub = null;
+    if (!_effectiveStatus$.isClosed) {
+      _effectiveStatus$.close();
+    }
     _umasClient?.dispose();
     _umasClient = null;
     _umasClientFor = null;

@@ -1435,6 +1435,10 @@ class _ModbusServersSectionState extends ConsumerState<_ModbusServersSection> {
           onRemove: () => _removeServer(index),
           connectionStatus: adapter?.connectionStatus,
           connectionStream: adapter?.connectionStream,
+          // TD-004 (v1.1.x): combined TCP + UMAS health stream so the
+          // chip surfaces a broken UMAS session as `umasUnhealthy`.
+          effectiveStatus: adapter?.effectiveStatus,
+          effectiveStatusStream: adapter?.effectiveStatusStream,
           stateManLoading: stateManAsync.isLoading,
         );
       },
@@ -1522,6 +1526,13 @@ class _ModbusServerConfigCard extends StatefulWidget {
   final VoidCallback onRemove;
   final ConnectionStatus? connectionStatus;
   final Stream<ConnectionStatus>? connectionStream;
+  // TD-004 (v1.1.x): combined TCP + UMAS health. Optional — when null
+  // the chip falls back to pure TCP. Modbus cards backed by a
+  // ModbusDeviceClientAdapter with `umasEnabled == true` should
+  // always supply both so the chip can surface a broken UMAS session
+  // as `umasUnhealthy` instead of falsely showing green.
+  final EffectiveDeviceStatus? effectiveStatus;
+  final Stream<EffectiveDeviceStatus>? effectiveStatusStream;
   final bool stateManLoading;
 
   const _ModbusServerConfigCard({
@@ -1530,6 +1541,8 @@ class _ModbusServerConfigCard extends StatefulWidget {
     required this.onRemove,
     this.connectionStatus,
     this.connectionStream,
+    this.effectiveStatus,
+    this.effectiveStatusStream,
     this.stateManLoading = false,
   });
 
@@ -1547,6 +1560,10 @@ class _ModbusServerConfigCardState extends State<_ModbusServerConfigCard> {
   List<TextEditingController> _pollGroupIntervalControllers = [];
   ConnectionStatus? _connectionStatus;
   StreamSubscription<ConnectionStatus>? _statusSub;
+  // TD-004 (v1.1.x): mirror the TCP-status subscription pattern for
+  // the derived UMAS-aware effective status.
+  EffectiveDeviceStatus? _effectiveStatus;
+  StreamSubscription<EffectiveDeviceStatus>? _effectiveStatusSub;
   late bool _umasEnabled;
   late ModbusEndianness _endianness;
   late int _addressBase;
@@ -1565,7 +1582,9 @@ class _ModbusServerConfigCardState extends State<_ModbusServerConfigCard> {
     _endianness = widget.server.endianness;
     _addressBase = widget.server.addressBase;
     _connectionStatus = widget.connectionStatus;
+    _effectiveStatus = widget.effectiveStatus;
     _subscribeToStatus();
+    _subscribeToEffectiveStatus();
     _initPollGroupControllers();
   }
 
@@ -1593,6 +1612,10 @@ class _ModbusServerConfigCardState extends State<_ModbusServerConfigCard> {
       _connectionStatus = widget.connectionStatus;
       _subscribeToStatus();
     }
+    if (widget.effectiveStatusStream != oldWidget.effectiveStatusStream) {
+      _effectiveStatus = widget.effectiveStatus;
+      _subscribeToEffectiveStatus();
+    }
     if (widget.server.pollGroups.length != _pollGroupNameControllers.length) {
       _initPollGroupControllers();
     }
@@ -1605,9 +1628,17 @@ class _ModbusServerConfigCardState extends State<_ModbusServerConfigCard> {
     });
   }
 
+  void _subscribeToEffectiveStatus() {
+    _effectiveStatusSub?.cancel();
+    _effectiveStatusSub = widget.effectiveStatusStream?.listen((status) {
+      if (mounted) setState(() => _effectiveStatus = status);
+    });
+  }
+
   @override
   void dispose() {
     _statusSub?.cancel();
+    _effectiveStatusSub?.cancel();
     _hostController.dispose();
     _portController.dispose();
     _unitIdController.dispose();
@@ -1710,8 +1741,11 @@ class _ModbusServerConfigCardState extends State<_ModbusServerConfigCard> {
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
+            // TD-004 (v1.1.x): surface UMAS session health when
+            // umasEnabled is on. Falls back to pure TCP otherwise.
             ConnectionStatusChip(
               status: _connectionStatus,
+              effectiveStatus: _umasEnabled ? _effectiveStatus : null,
               stateManLoading: widget.stateManLoading,
             ),
             const SizedBox(width: 8),
