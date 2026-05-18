@@ -96,6 +96,11 @@ UmasFbMemberDirection classifyFbMemberDirection(int unknown5, int unknown4) {
       return UmasFbMemberDirection.output;
     case 0x04:
       return UmasFbMemberDirection.publicVar;
+    // SPECULATIVE — no live calibration sample for 0x05 on the M580.
+    // Based on lower-byte progression (0x01=in, 0x03=out, 0x05=in_out)
+    // and plc4j's UmasReadVariableInOutMember convention. If a future
+    // PLC exposes 0x05 as something else, members will be silently
+    // mis-labeled as VAR_IN_OUT.
     case 0x05:
       // Speculative: VAR_IN_OUT (PLC4J's UmasReadVariableInOutMember).
       // No live sample on this M580. Kept here so the lower-byte

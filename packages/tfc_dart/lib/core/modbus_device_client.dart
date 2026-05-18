@@ -448,3 +448,37 @@ List<DeviceClient> buildModbusDeviceClients(
     );
   }).toList();
 }
+
+// TODO(B-4 / v1.2): MonitorPlc-driven streaming polling for UMAS-by-name
+// keys.
+//
+// Today, [ModbusDeviceClientAdapter.subscribe] hands out a long-lived
+// [BehaviorSubject] per key (F-1) but nothing inside the adapter pushes
+// fresh values into the subjects on a periodic cadence — they only get
+// updated when something else explicitly calls [readUmasVariable].
+//
+// Intended design:
+//   1. On first connect (and on every successful reconnect), register
+//      the union of all UMAS-by-name keys for the adapter's server with
+//      the PLC's MonitorPlc registration table (sub-function 0x50/0x52).
+//   2. Poll the registered batch at the configured poll-group cadence
+//      (per the [ModbusConfig.pollGroups] table — UMAS-by-name keys
+//      will need to opt into a poll group, same shape as classic Modbus
+//      specs).
+//   3. Demux each poll response into the corresponding per-key
+//      [BehaviorSubject] in [_umasSubjects], converting the
+//      [TypedVariableValue] via [_typedVariableToDynamicValue] (same
+//      path as [readUmasVariable]).
+//   4. On key add/remove (e.g. an operator picks a new symbol via the
+//      browse dialog), re-register the MonitorPlc table.
+//   5. On project-CRC change (see F-8 / [UmasClient.
+//      invalidateSymbolCacheIfProjectChanged]), invalidate the
+//      registration table and rebuild it — block numbers may have
+//      shifted under a fresh download.
+//
+// Until B-4 ships, UMAS-by-name subscribers receive updates only when
+// some other code path (a manual refresh, a write-then-read, etc.)
+// calls [readUmasVariable]. The subject does NOT close in between; the
+// stream simply doesn't emit. UI surfaces that need live values today
+// should poll [StateMan.read] on their own interval instead of binding
+// via [StateMan.subscribe].
