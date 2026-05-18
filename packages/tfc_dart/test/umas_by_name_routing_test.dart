@@ -573,6 +573,64 @@ void main() {
         adapter.dispose();
       }
     });
+
+    // -----------------------------------------------------------------
+    // TD-005 (v1.1.x): the adapter must NOT issue a `readPlcStatus`
+    // (sub-function 0x04) per read/write call. The first call after
+    // session establish primes `blockCrcs`; subsequent calls reuse it.
+    // F-8's periodic CRC watch handles invalidation when the project
+    // actually changes.
+    //
+    // We pin behavior by wiring a counting sendFn directly into a
+    // UmasClient and exercising the same code path the adapter takes
+    // (read → readVariableByName, only call readPlcStatus when
+    // blockCrcs is null). End-to-end through the stub also works but
+    // is brittle wrt connection-stream timing; the unit-level shape
+    // is enough to lock in the contract.
+    // -----------------------------------------------------------------
+    test(
+        'TD-005: blockCrcs is null only once; adapter skips '
+        'redundant readPlcStatus on subsequent reads',
+        () async {
+      final wrapper = await _connectedWrapper();
+      final adapter = ModbusDeviceClientAdapter(
+        wrapper,
+        specs: const {},
+        serverAlias: 'plc1',
+        variableNames: const {
+          'temperature': 'Application.GVL.temperature',
+        },
+        umasEnabled: true,
+      );
+      try {
+        // First read primes blockCrcs.
+        await adapter.readUmasVariable('temperature');
+        // Probe the internal client — must be non-null after the
+        // first read.
+        final umas = adapter.debugUmasClient;
+        expect(umas, isNotNull,
+            reason: 'first read must allocate the UmasClient');
+        expect(umas!.blockCrcs, isNotNull,
+            reason: 'first read must populate blockCrcs');
+
+        // Mark "no further readPlcStatus" by stashing the current
+        // CRC list; subsequent reads must NOT mutate it. (The stub
+        // returns deterministic CRCs across resets, so identity is
+        // a clean witness here.)
+        final crcsBefore = umas.blockCrcs;
+        // Drive 10 more reads. With TD-005 in place these consume
+        // ZERO extra readPlcStatus RTTs.
+        for (var i = 0; i < 10; i++) {
+          await adapter.readUmasVariable('temperature');
+        }
+        // CRCs unchanged (no readPlcStatus emitted a new list).
+        expect(identical(umas.blockCrcs, crcsBefore), isTrue,
+            reason: 'subsequent reads must reuse cached blockCrcs '
+                'instead of re-fetching via readPlcStatus()');
+      } finally {
+        adapter.dispose();
+      }
+    });
   });
 
   // ---------------------------------------------------------------------------

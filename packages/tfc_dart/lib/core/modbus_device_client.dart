@@ -358,6 +358,11 @@ class ModbusDeviceClientAdapter implements DeviceClient {
   /// routed by name.
   String? variableNameFor(String key) => _variableNames[key];
 
+  /// Test-only access to the lazily-constructed UmasClient. Returns
+  /// null before the first connect+read primes it. Used to assert
+  /// internal cache state (e.g. TD-005: blockCrcs reuse).
+  UmasClient? get debugUmasClient => _umasClient;
+
   /// Get or lazily construct a UmasClient bound to the wrapper's current
   /// TCP client. Returns null if the wrapper is disconnected (no
   /// underlying ModbusClientTcp yet).
@@ -467,8 +472,15 @@ class ModbusDeviceClientAdapter implements DeviceClient {
       throw StateError(
           'readUmasVariable: server "${serverAlias ?? '<unknown>'}" not connected');
     }
-    // Prime the session so blockCrcs is populated before readVariable.
-    await umas.readPlcStatus();
+    // TD-005 (v1.1.x): only prime blockCrcs on the FIRST call after a
+    // session (re)establish. The periodic project-CRC watch (F-8) already
+    // invalidates the symbol cache + MonitorPlc table when the CRC moves,
+    // so the eager pre-call `readPlcStatus()` was adding one extra TCP
+    // round-trip per read with no incremental safety. With 30 UMAS keys
+    // polled at 1Hz that's 30 wasted RTTs/sec.
+    if (umas.blockCrcs == null) {
+      await umas.readPlcStatus();
+    }
     final typed = await umas.readVariableByName(variableName);
     final dv = _typedVariableToDynamicValue(typed);
     _umasLastValues[key] = dv;
@@ -504,7 +516,12 @@ class ModbusDeviceClientAdapter implements DeviceClient {
       throw StateError(
           'writeUmasVariable: server "${serverAlias ?? '<unknown>'}" not connected');
     }
-    await umas.readPlcStatus();
+    // TD-005 (v1.1.x): mirror the read path — only prime blockCrcs on
+    // the first call. F-8's periodic project-CRC watch handles cache
+    // invalidation between writes.
+    if (umas.blockCrcs == null) {
+      await umas.readPlcStatus();
+    }
     // Encode via the resolved symbol so the byte layout matches the
     // PLC's declared type. `writeVariableByName` runs the encode via
     // `VariableWriteRef.fromVariable` -> `encodeVariableValue`.
