@@ -123,16 +123,17 @@ void main() {
     // browse() now does: readPlcId -> init -> readDataTypes -> readVariableNames -> tree
     final tree = await umas.browse();
 
-    // Stub serves 10 variables under "Application" root
+    // Stub serves 12 variables under "Application" root
+    // (Phase 2 added Application.Motors.M_Elevator FB instance).
     expect(tree, hasLength(1), reason: 'single root: Application');
     final app = tree.first;
     expect(app.name, 'Application');
     expect(app.isFolder, isTrue);
 
-    // Application has 3 child folders: GVL, Motor, Counters
-    expect(app.children, hasLength(3));
+    // Application has 4 child folders: GVL, Motor, Counters, Motors (FB).
+    expect(app.children, hasLength(4));
     final childNames = app.children.map((c) => c.name).toSet();
-    expect(childNames, containsAll(['GVL', 'Motor', 'Counters']));
+    expect(childNames, containsAll(['GVL', 'Motor', 'Counters', 'Motors']));
 
     // GVL has 6 variables (5 scalars + 1 array)
     final gvl = app.children.firstWhere((c) => c.name == 'GVL');
@@ -245,7 +246,7 @@ void main() {
     expect(result.maxFrameSize, 1021);
   });
 
-  test('readVariableNames returns all 11 variables (requires readPlcId + init)',
+  test('readVariableNames returns all 12 variables (requires readPlcId + init)',
       () async {
     await tcp.connect();
     final umas = UmasClient(sendFn: tcp.send);
@@ -254,7 +255,8 @@ void main() {
     await umas.init();
 
     final vars = await umas.readVariableNames();
-    expect(vars, hasLength(11));
+    // 12 vars: 11 original + Application.Motors.M_Elevator (Phase 2 FB fixture).
+    expect(vars, hasLength(12));
 
     // Check first variable
     expect(vars[0].name, 'Application.GVL.temperature');

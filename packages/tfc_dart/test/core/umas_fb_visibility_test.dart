@@ -189,8 +189,8 @@ void main() {
       () async {
     await tcp.connect();
     final umas = UmasClient(sendFn: tcp.send);
-    // readVariables (0x22 path) requires PLC status / CRC priming
-    // — `umas.readVariables` does this internally via _withSession.
+    // readVariables (0x22 path) needs block CRCs from readPlcStatus.
+    await umas.readPlcStatus();
 
     final tree = await umas.browse();
     final mElevator = _findByName(tree, 'M_Elevator')!;
