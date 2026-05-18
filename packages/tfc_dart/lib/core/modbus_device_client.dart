@@ -1,6 +1,7 @@
 import 'package:open62541/open62541.dart' show DynamicValue, NodeId;
 import 'package:modbus_client/modbus_client.dart' show ModbusEndianness;
 import 'package:modbus_client_tcp/modbus_client_tcp.dart' show ModbusClientTcp;
+import 'package:rxdart/rxdart.dart' show BehaviorSubject;
 import 'package:tfc_dart/core/modbus_client_wrapper.dart';
 import 'package:tfc_dart/core/state_man.dart'
     show ConnectionStatus, DeviceClient, KeyMappings, ModbusConfig, ModbusNodeConfig, StateMan;
@@ -43,6 +44,13 @@ class ModbusDeviceClientAdapter implements DeviceClient {
   /// last-cached-value semantics for keys whose data has not yet been
   /// polled. Updated by [read]/[subscribe] when they fire successfully.
   final Map<String, DynamicValue> _umasLastValues = {};
+
+  /// Long-lived per-key broadcast subjects for UMAS-by-name keys (F-1).
+  /// [subscribe] hands out the subject's stream and the subject stays
+  /// open for the lifetime of the adapter. Every successful
+  /// [readUmasVariable] adds the fresh [DynamicValue] so subscribers
+  /// see updates without the stream completing. Disposed in [dispose].
+  final Map<String, BehaviorSubject<DynamicValue>> _umasSubjects = {};
 
   /// Lazy UMAS client. Re-created when the underlying
   /// [ModbusClientWrapper.client] changes (reconnect).
@@ -97,21 +105,35 @@ class ModbusDeviceClientAdapter implements DeviceClient {
 
   @override
   Stream<DynamicValue> subscribe(String key) {
-    // UMAS-by-name routing: no background poller yet — emit the cached
-    // last value (if any) and surface fresh values when `read(key)` is
-    // explicitly invoked. MonitorPlc-driven streaming polling is a
-    // v1.2 follow-up; see B-4 TODO at the bottom of this file.
+    // UMAS-by-name routing (F-1): return a long-lived BehaviorSubject
+    // per key so subscribers don't see `onDone` after a single emit.
+    // The subject is seeded with the most-recent cached value (if any)
+    // and stays open for the adapter's lifetime. Every successful
+    // [readUmasVariable] pushes the fresh DynamicValue. MonitorPlc-
+    // driven streaming polling is a v1.2 follow-up; see B-4 TODO at
+    // the bottom of this file.
     final variableName = _variableNames[key];
     if (variableName != null) {
-      // Bridge cached UMAS reads through a no-op stream so consumers
-      // don't bind to a missing wrapper.subscribe(spec).
-      final cached = _umasLastValues[key];
-      return Stream<DynamicValue>.fromIterable(
-          cached != null ? [cached] : const []);
+      return _umasSubjectFor(key).stream;
     }
     final spec = _specs[key];
     if (spec == null) throw ArgumentError('Unknown Modbus key: $key');
     return wrapper.subscribe(spec).map((v) => _toDynamicValue(v, spec));
+  }
+
+  /// Get-or-create the long-lived [BehaviorSubject] for a UMAS-by-name
+  /// [key]. Seeded with the cached last value when present (so a fresh
+  /// subscriber sees the most-recent typed read), otherwise unseeded.
+  /// Reused across subscribe/unsubscribe cycles for the same key.
+  BehaviorSubject<DynamicValue> _umasSubjectFor(String key) {
+    final existing = _umasSubjects[key];
+    if (existing != null && !existing.isClosed) return existing;
+    final cached = _umasLastValues[key];
+    final subject = cached != null
+        ? BehaviorSubject<DynamicValue>.seeded(cached)
+        : BehaviorSubject<DynamicValue>();
+    _umasSubjects[key] = subject;
+    return subject;
   }
 
   @override
@@ -158,6 +180,14 @@ class ModbusDeviceClientAdapter implements DeviceClient {
     final typed = await umas.readVariableByName(variableName);
     final dv = _typedVariableToDynamicValue(typed);
     _umasLastValues[key] = dv;
+    // F-1: push the fresh value to any active subscribers so
+    // StreamBuilder / StreamProvider keep updating across reads. Only
+    // forward when a subject already exists — don't materialize one on
+    // every read.
+    final subject = _umasSubjects[key];
+    if (subject != null && !subject.isClosed) {
+      subject.add(dv);
+    }
     return dv;
   }
 
@@ -269,6 +299,13 @@ class ModbusDeviceClientAdapter implements DeviceClient {
     _umasClient?.dispose();
     _umasClient = null;
     _umasClientFor = null;
+    // F-1: close every long-lived UMAS-by-name subject so subscribers
+    // see `onDone` exactly once at adapter teardown rather than after
+    // a single read.
+    for (final subject in _umasSubjects.values) {
+      if (!subject.isClosed) subject.close();
+    }
+    _umasSubjects.clear();
     wrapper.dispose();
   }
 

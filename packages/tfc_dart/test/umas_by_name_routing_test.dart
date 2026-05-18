@@ -427,5 +427,64 @@ void main() {
         adapter.dispose();
       }
     });
+
+    test(
+        'F-1: subscribe() for a UMAS-by-name key stays open across multiple reads',
+        () async {
+      final wrapper = await _connectedWrapper();
+      final adapter = ModbusDeviceClientAdapter(
+        wrapper,
+        specs: const {},
+        serverAlias: 'plc1',
+        variableNames: const {
+          'temperature': 'Application.GVL.temperature',
+        },
+        umasEnabled: true,
+      );
+      try {
+        // Seed a known starting value so the BehaviorSubject's first
+        // emission after the listen() below is deterministic.
+        await adapter.writeUmasVariable(
+            'temperature', DynamicValue(value: 11.5, typeId: NodeId.float));
+        await adapter.readUmasVariable('temperature');
+
+        final received = <DynamicValue>[];
+        var doneFired = false;
+        final sub = adapter.subscribe('temperature').listen(
+              received.add,
+              onDone: () => doneFired = true,
+            );
+
+        // Allow the seeded value (from BehaviorSubject) to be delivered.
+        await Future.delayed(Duration.zero);
+
+        // First fresh read after subscribing — subscriber should see it.
+        await adapter.writeUmasVariable(
+            'temperature', DynamicValue(value: 33.25, typeId: NodeId.float));
+        await adapter.readUmasVariable('temperature');
+        await Future.delayed(Duration.zero);
+
+        // Second fresh read — subscriber should still be live.
+        await adapter.writeUmasVariable(
+            'temperature', DynamicValue(value: 44.75, typeId: NodeId.float));
+        await adapter.readUmasVariable('temperature');
+        await Future.delayed(Duration.zero);
+
+        // F-1 acceptance: the stream did NOT complete after the first
+        // emit; the subscriber observed both subsequent updates.
+        expect(doneFired, isFalse,
+            reason: 'subscribe() stream must not fire onDone between reads');
+        expect(received.length, greaterThanOrEqualTo(3),
+            reason: 'expected seeded + 2 fresh reads');
+        // Last two emissions must reflect the two writes (third-from-last
+        // is the seeded value from before .listen()).
+        expect(received[received.length - 2].value, closeTo(33.25, 0.01));
+        expect(received.last.value, closeTo(44.75, 0.01));
+
+        await sub.cancel();
+      } finally {
+        adapter.dispose();
+      }
+    });
   });
 }
