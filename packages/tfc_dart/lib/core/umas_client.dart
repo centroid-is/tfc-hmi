@@ -161,6 +161,41 @@ class UmasClient {
   /// Expose the registration table for inspection/testing.
   MonitorPlcRegistrationTable get monitorRegistrations => _monitorTable;
 
+  // ---------------------------------------------------------------------------
+  // Symbol cache (B-3 v1.1.x) — read/write by UMAS variable name.
+  // ---------------------------------------------------------------------------
+
+  /// Resolved-symbol cache keyed by full dotted path (e.g.
+  /// `B_F1_RC_01_Front` or `M_Elevator.speed`). Populated lazily on first
+  /// [lookupSymbol] miss by issuing [browse], or eagerly by callers that
+  /// invoke [browse] up front. Invalidated by [_handleSessionError] (PLC
+  /// reboot) and by [invalidateSymbolCacheIfProjectChanged].
+  final Map<String, ResolvedSymbol> _symbolCache = {};
+
+  /// Cross-call caches re-used by [browse]'s struct/FB and array
+  /// resolution. Hoisted to per-client lifetime so consecutive browses
+  /// don't re-issue DD02 for the same custom type id (F-3 from v1.1
+  /// Phase 2 SUMMARY).
+  final Map<int, List<UmasVariable>> _persistentMemberCache = {};
+  final Map<int, UmasArrayTypeDefinition?> _persistentArrayCache = {};
+
+  /// Project CRC observed when the symbol cache was last populated. Used
+  /// by [invalidateSymbolCacheIfProjectChanged] to flush the cache when
+  /// the PLC project is reprogrammed.
+  int? _symbolCacheProjectCrc;
+
+  /// True once [browse] has populated the symbol cache for this session.
+  bool _symbolCacheBuilt = false;
+
+  /// Synchronous lock so concurrent first-time lookups share one browse.
+  Completer<void>? _symbolCacheLock;
+
+  /// Number of cached symbols (for testing / instrumentation).
+  int get symbolCacheSize => _symbolCache.length;
+
+  /// True if a symbol cache build has completed for the current session.
+  bool get symbolCacheBuilt => _symbolCacheBuilt;
+
   UmasClient({
     required this.sendFn,
     this.unitId,
@@ -1228,7 +1263,123 @@ class UmasClient {
     _hasReservation = false;
     _useMonitorPlc = false;
     _monitorTable.reset();
+    // B-3: drop the symbol cache too — a session reset usually means the
+    // PLC rebooted or the engineering tool reset the connection, and any
+    // cached symbol→(blockNo, offset) mapping may now point at a moved
+    // variable in a freshly-downloaded project. Force re-browse next time.
+    _clearSymbolCache();
     _setState(UmasSessionState.uninitialized);
+  }
+
+  /// Clear the symbol cache + cross-call browse caches. Forces the next
+  /// [lookupSymbol] (or [readVariableByName] / [writeVariableByName]) to
+  /// re-browse the PLC.
+  void _clearSymbolCache() {
+    _symbolCache.clear();
+    _persistentMemberCache.clear();
+    _persistentArrayCache.clear();
+    _symbolCacheBuilt = false;
+    _symbolCacheProjectCrc = null;
+  }
+
+  /// Public hook for callers that detect a project change (e.g. a poll
+  /// loop that calls [readPlcStatus] and observes `crcChanged=true`).
+  /// Drops the symbol cache if the project CRC changed since the cache
+  /// was built. Safe to call repeatedly — no-op when CRCs match.
+  void invalidateSymbolCacheIfProjectChanged() {
+    if (!_symbolCacheBuilt) return;
+    if (_projectCrc != _symbolCacheProjectCrc) {
+      _log.i('UMAS symbolCache: project CRC changed '
+          '(${_symbolCacheProjectCrc} -> $_projectCrc) — clearing');
+      _clearSymbolCache();
+    }
+  }
+
+  /// Build the symbol cache from a full [browse]. Concurrent first-time
+  /// callers wait on the same browse via [_symbolCacheLock] so multiple
+  /// keys reading at startup don't fan out into N parallel browses.
+  Future<void> _ensureSymbolCache() async {
+    if (_symbolCacheBuilt) return;
+    if (_symbolCacheLock != null) {
+      await _symbolCacheLock!.future;
+      return;
+    }
+    _symbolCacheLock = Completer<void>();
+    // Avoid unhandled-async-error if no one awaits the lock.
+    _symbolCacheLock!.future.ignore();
+    try {
+      final tree = await browse();
+      _symbolCache.clear();
+      void walk(UmasVariableTreeNode node) {
+        if (node.variable != null && node.dataType != null) {
+          _symbolCache[node.path] = ResolvedSymbol(
+            path: node.path,
+            variable: node.variable!,
+            dataType: node.dataType!,
+            readable: node.readable,
+            unreadableReason: node.unreadableReason,
+          );
+        }
+        for (final c in node.children) {
+          walk(c);
+        }
+      }
+
+      for (final root in tree) {
+        walk(root);
+      }
+      _symbolCacheBuilt = true;
+      _symbolCacheProjectCrc = _projectCrc;
+      _log.i('UMAS symbolCache: built ${_symbolCache.length} entries '
+          '(projectCrc=${_symbolCacheProjectCrc == null ? 'n/a' : '0x${_symbolCacheProjectCrc!.toRadixString(16)}'})');
+      _symbolCacheLock!.complete();
+    } catch (e) {
+      _symbolCacheLock!.completeError(e);
+      rethrow;
+    } finally {
+      _symbolCacheLock = null;
+    }
+  }
+
+  /// Resolve a UMAS symbol path (e.g. `B_F1_RC_01_Front` or
+  /// `M_Elevator.speed`) to its [ResolvedSymbol]. Triggers a one-time
+  /// [browse] if the cache is empty; concurrent first-time callers share
+  /// the same browse via [_ensureSymbolCache].
+  ///
+  /// Throws [UmasException] when the symbol does not exist in the PLC's
+  /// Data Dictionary.
+  Future<ResolvedSymbol> lookupSymbol(String path) async {
+    await _ensureSymbolCache();
+    final hit = _symbolCache[path];
+    if (hit != null) return hit;
+    throw UmasException(
+      errorCode: 0,
+      message: 'UMAS symbol not found in data dictionary: "$path"',
+    );
+  }
+
+  /// Read a single UMAS variable by name. Resolves via [lookupSymbol]
+  /// then issues [readVariables] for one symbol. Returns the parsed
+  /// typed value.
+  Future<TypedVariableValue> readVariableByName(String path) async {
+    final sym = await lookupSymbol(path);
+    final values = await readVariables([(sym.variable, sym.dataType)]);
+    if (values.isEmpty) {
+      throw UmasException(
+          errorCode: 0,
+          message: 'UMAS readVariableByName($path) returned empty result');
+    }
+    return values.first;
+  }
+
+  /// Write a single UMAS variable by name. Resolves via [lookupSymbol]
+  /// then issues [writeVariable] with the value encoded per the
+  /// resolved data type. The [value] is encoded by [encodeVariableValue]
+  /// (see umas_types.dart).
+  Future<void> writeVariableByName(String path, dynamic value) async {
+    final sym = await lookupSymbol(path);
+    final ref = VariableWriteRef.fromVariable(sym.variable, sym.dataType, value);
+    await writeVariable([ref]);
   }
 
   /// Wraps [_withSession] with session recovery: on any [UmasException],
@@ -1863,8 +2014,13 @@ class UmasClient {
       // First, dot-split top-level variable names (CodeSys style: e.g.
       // "Application.GVL.temperature") into folder nodes. Then expand any
       // leaf that resolves to a struct/FB type into its members.
-      final memberCache = <int, List<UmasVariable>>{};
-      final arrayCache = <int, UmasArrayTypeDefinition?>{};
+      //
+      // B-3 (v1.1.x): the member / array caches are hoisted to per-client
+      // lifetime (`_persistentMemberCache`, `_persistentArrayCache`) so
+      // back-to-back browses don't reissue DD02 for the same custom
+      // type id. Per-browse aliases below preserve the inner-API names.
+      final memberCache = _persistentMemberCache;
+      final arrayCache = _persistentArrayCache;
       final builder = _TreeBuilder();
       for (final v in variables) {
         builder.insert(v, dataTypes);

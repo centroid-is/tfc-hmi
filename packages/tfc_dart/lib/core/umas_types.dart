@@ -295,6 +295,45 @@ class UmasVariableTreeNode {
       '${!readable ? ", readable=false" : ""})';
 }
 
+/// A flattened, resolved view of a UMAS symbol — the minimum tuple
+/// needed to issue a [VariableReadRef] / [VariableWriteRef] for a leaf
+/// addressed by name.
+///
+/// Produced by [UmasClient.lookupSymbol]. The fields mirror what the
+/// browse tree carries on a leaf node, but with non-nullable types so
+/// callers don't need to re-validate.
+class ResolvedSymbol {
+  /// Full dotted path used to look the symbol up, e.g.
+  /// `B_F1_RC_01_Front` or `M_Elevator.speed`.
+  final String path;
+
+  /// PLC address (blockNo + offset) and metadata.
+  final UmasVariable variable;
+
+  /// Resolved data type (built-in or custom UDT).
+  final UmasDataTypeRef dataType;
+
+  /// Whether the underlying tree node was marked readable. VAR_IN_OUT
+  /// members are unreadable (PLC returns 0x94).
+  final bool readable;
+
+  /// Human-readable explanation when [readable] is `false`.
+  final String? unreadableReason;
+
+  const ResolvedSymbol({
+    required this.path,
+    required this.variable,
+    required this.dataType,
+    this.readable = true,
+    this.unreadableReason,
+  });
+
+  @override
+  String toString() => 'ResolvedSymbol($path, ${dataType.name}, '
+      'block=${variable.blockNo}, offset=${variable.offset}'
+      '${!readable ? ", readable=false" : ""})';
+}
+
 /// Exception thrown by UMAS operations.
 class UmasException implements Exception {
   final int errorCode;
