@@ -807,12 +807,39 @@ List<TypedVariableValue> parseVariableValues(
 
 /// Encode a Dart value to raw bytes matching the given UMAS [dataType].
 ///
-/// Supports: BOOL, INT, UINT, WORD, DINT, UDINT, DWORD, TIME, REAL, LREAL,
-/// LINT, ULINT, BYTE, STRING. Throws [UmasException] for unknown types
-/// or type mismatches (T-06-07 mitigation).
+/// Supports: BOOL, EBOOL, INT, UINT, WORD, DINT, UDINT, DWORD, TIME, REAL,
+/// LREAL, LINT, ULINT, BYTE, DATE, TIME_OF_DAY, DATE_AND_TIME, STRING,
+/// WSTRING, BYTE_STRING.
+///
+/// Throws [UmasException] for:
+///   - Unknown types (T-06-07 mitigation).
+///   - Type mismatches (e.g. passing a String to an INT field).
+///   - Out-of-range integer values (TD-006 v1.1.x): writing 100000 to an
+///     INT silently wrapped to -31072 via setInt16 truncation before.
+///     We now refuse with a precise message that names the supplied
+///     value, the target type, and its [min..max] range.
+///   - Oversize STRING / WSTRING / BYTE_STRING (TD-001).
 Uint8List encodeVariableValue(dynamic value, UmasDataTypeRef dataType) {
+  // TD-006 (v1.1.x): pre-flight range guard for integer types. Industrial
+  // control silent-truncation hazard — Dart's `setIntN` wraps via bit
+  // masking without raising, so a setpoint of 100000 to an INT silently
+  // becomes -31072. Refuse instead and surface a precise operator-
+  // facing message.
+  void checkRange(String typeName, int v, int min, int max) {
+    if (v < min || v > max) {
+      throw UmasException(
+        errorCode: 0,
+        message: 'Value $v exceeds range of $typeName [$min..$max]',
+      );
+    }
+  }
+
   switch (dataType.name.toUpperCase()) {
     case 'BOOL':
+    case 'EBOOL':
+      // TD-002: EBOOL (id=25) parses as 1-byte bool on the read side
+      // (parseVariableValue maps both BOOL and EBOOL to `bytes[offset]
+      // != 0`). Mirror that on the write side — same 1-byte 0x00/0x01.
       if (value is! bool) {
         throw UmasException(
           errorCode: 0,
@@ -828,6 +855,7 @@ Uint8List encodeVariableValue(dynamic value, UmasDataTypeRef dataType) {
           message: 'Expected int for ${dataType.name}, got ${value.runtimeType}',
         );
       }
+      checkRange('INT', value, -0x8000, 0x7FFF);
       final bytes = Uint8List(2);
       ByteData.sublistView(bytes).setInt16(0, value, Endian.little);
       return bytes;
@@ -840,6 +868,7 @@ Uint8List encodeVariableValue(dynamic value, UmasDataTypeRef dataType) {
           message: 'Expected int for ${dataType.name}, got ${value.runtimeType}',
         );
       }
+      checkRange(dataType.name.toUpperCase(), value, 0, 0xFFFF);
       final bytes = Uint8List(2);
       ByteData.sublistView(bytes).setUint16(0, value, Endian.little);
       return bytes;
@@ -851,6 +880,7 @@ Uint8List encodeVariableValue(dynamic value, UmasDataTypeRef dataType) {
           message: 'Expected int for ${dataType.name}, got ${value.runtimeType}',
         );
       }
+      checkRange('DINT', value, -0x80000000, 0x7FFFFFFF);
       final bytes = Uint8List(4);
       ByteData.sublistView(bytes).setInt32(0, value, Endian.little);
       return bytes;
@@ -858,12 +888,33 @@ Uint8List encodeVariableValue(dynamic value, UmasDataTypeRef dataType) {
     case 'UDINT':
     case 'DWORD':
     case 'TIME':
+      // TIME is the IEC 61131 elapsed-time-in-ms type, 4-byte unsigned.
       if (value is! int) {
         throw UmasException(
           errorCode: 0,
           message: 'Expected int for ${dataType.name}, got ${value.runtimeType}',
         );
       }
+      checkRange(dataType.name.toUpperCase(), value, 0, 0xFFFFFFFF);
+      final bytes = Uint8List(4);
+      ByteData.sublistView(bytes).setUint32(0, value, Endian.little);
+      return bytes;
+
+    case 'DATE':
+    case 'TIME_OF_DAY':
+      // TD-002: DATE / TIME_OF_DAY are 4-byte unsigned IEC types.
+      // DATE encodes days-since-epoch (PLC-defined epoch); TIME_OF_DAY
+      // encodes ms-since-midnight. Operators write an integer matching
+      // the wire format — the same encoding as UDINT. parseVariableValue
+      // currently returns these as raw bytes (no high-level decoder), so
+      // mirror the write side at the UDINT level.
+      if (value is! int) {
+        throw UmasException(
+          errorCode: 0,
+          message: 'Expected int for ${dataType.name}, got ${value.runtimeType}',
+        );
+      }
+      checkRange(dataType.name.toUpperCase(), value, 0, 0xFFFFFFFF);
       final bytes = Uint8List(4);
       ByteData.sublistView(bytes).setUint32(0, value, Endian.little);
       return bytes;
@@ -897,6 +948,9 @@ Uint8List encodeVariableValue(dynamic value, UmasDataTypeRef dataType) {
           message: 'Expected int for ${dataType.name}, got ${value.runtimeType}',
         );
       }
+      // Dart's int is 64-bit signed on the VM; full LINT range fits
+      // natively. checkRange still useful to make the contract explicit.
+      checkRange('LINT', value, -0x8000000000000000, 0x7FFFFFFFFFFFFFFF);
       final bytes = Uint8List(8);
       ByteData.sublistView(bytes).setInt64(0, value, Endian.little);
       return bytes;
@@ -908,9 +962,43 @@ Uint8List encodeVariableValue(dynamic value, UmasDataTypeRef dataType) {
           message: 'Expected int for ${dataType.name}, got ${value.runtimeType}',
         );
       }
+      // Dart 64-bit int max is 2^63-1 — values above that cannot be
+      // expressed in a Dart int literal. The wire ULINT can hold up to
+      // 2^64-1, so accept any non-negative Dart int. setUint64 reads the
+      // bottom 64 bits, so negatives would wrap silently — refuse them
+      // explicitly.
+      if (value < 0) {
+        throw UmasException(
+          errorCode: 0,
+          message: 'Value $value exceeds range of ULINT '
+              '[0..2^64-1] (negative)',
+        );
+      }
       final bytes = Uint8List(8);
       ByteData.sublistView(bytes).setUint64(0, value, Endian.little);
       return bytes;
+
+    case 'DATE_AND_TIME':
+      // TD-002: DATE_AND_TIME (id=16) is 8 bytes. Schneider stores it as
+      // a packed timestamp; without a high-level decoder on the read
+      // side, mirror as raw 64-bit unsigned. Operator-supplied int is
+      // emitted as setUint64 LE.
+      if (value is! int) {
+        throw UmasException(
+          errorCode: 0,
+          message: 'Expected int for ${dataType.name}, got ${value.runtimeType}',
+        );
+      }
+      if (value < 0) {
+        throw UmasException(
+          errorCode: 0,
+          message: 'Value $value exceeds range of DATE_AND_TIME '
+              '[0..2^64-1] (negative)',
+        );
+      }
+      final dtBytes = Uint8List(8);
+      ByteData.sublistView(dtBytes).setUint64(0, value, Endian.little);
+      return dtBytes;
 
     case 'BYTE':
       if (value is! int) {
@@ -919,7 +1007,8 @@ Uint8List encodeVariableValue(dynamic value, UmasDataTypeRef dataType) {
           message: 'Expected int for ${dataType.name}, got ${value.runtimeType}',
         );
       }
-      return Uint8List.fromList([value & 0xFF]);
+      checkRange('BYTE', value, 0, 0xFF);
+      return Uint8List.fromList([value]);
 
     case 'STRING':
     case 'WSTRING':

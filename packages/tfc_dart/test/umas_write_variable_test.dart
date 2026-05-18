@@ -214,6 +214,237 @@ void main() {
             throwsA(isA<UmasException>()));
       });
     });
+
+    // -----------------------------------------------------------------
+    // TD-002 (v1.1.x): mirror the read switch on the write side.
+    //
+    // Previously, EBOOL / DATE / TIME_OF_DAY / DATE_AND_TIME threw
+    // `UmasException("Unknown data type for encoding")` even though
+    // the corresponding read path returns a value (BOOL/EBOOL share
+    // a switch case; DATE-family decode as raw bytes, but the read
+    // does not throw). Asymmetry confused operators: read worked,
+    // write failed with a generic error.
+    //
+    // These tests pin the new encoder coverage:
+    //   - EBOOL routes through BOOL (1 byte, 0x00/0x01).
+    //   - DATE / TIME_OF_DAY are 4-byte UDINT-shaped.
+    //   - DATE_AND_TIME is 8-byte ULINT-shaped.
+    // -----------------------------------------------------------------
+    group('TD-002: encoder mirrors read-side type coverage', () {
+      test('EBOOL true encodes to 1 byte 0x01', () {
+        final dataType = UmasDataTypeRef(id: 25, name: 'EBOOL', byteSize: 1);
+        final bytes = encodeVariableValue(true, dataType);
+        expect(bytes, [0x01]);
+      });
+
+      test('EBOOL false encodes to 1 byte 0x00', () {
+        final dataType = UmasDataTypeRef(id: 25, name: 'EBOOL', byteSize: 1);
+        final bytes = encodeVariableValue(false, dataType);
+        expect(bytes, [0x00]);
+      });
+
+      test('EBOOL refuses non-bool input', () {
+        final dataType = UmasDataTypeRef(id: 25, name: 'EBOOL', byteSize: 1);
+        expect(
+          () => encodeVariableValue(1, dataType),
+          throwsA(isA<UmasException>().having(
+              (e) => e.message, 'message', contains('Expected bool'))),
+        );
+      });
+
+      test('DATE encodes as 4-byte UDINT (days since PLC epoch)', () {
+        final dataType = UmasDataTypeRef(id: 14, name: 'DATE', byteSize: 4);
+        final bytes = encodeVariableValue(20240, dataType); // ~2025-05
+        expect(bytes.length, 4);
+        expect(ByteData.sublistView(bytes).getUint32(0, Endian.little), 20240);
+      });
+
+      test('TIME_OF_DAY encodes as 4-byte UDINT (ms since midnight)', () {
+        final dataType =
+            UmasDataTypeRef(id: 15, name: 'TIME_OF_DAY', byteSize: 4);
+        // 12:00:00 = 43_200_000 ms
+        final bytes = encodeVariableValue(43200000, dataType);
+        expect(bytes.length, 4);
+        expect(ByteData.sublistView(bytes).getUint32(0, Endian.little),
+            43200000);
+      });
+
+      test('DATE_AND_TIME encodes as 8-byte ULINT', () {
+        final dataType =
+            UmasDataTypeRef(id: 16, name: 'DATE_AND_TIME', byteSize: 8);
+        final bytes = encodeVariableValue(0x0123456789ABCDEF, dataType);
+        expect(bytes.length, 8);
+        expect(ByteData.sublistView(bytes).getUint64(0, Endian.little),
+            0x0123456789ABCDEF);
+      });
+
+      test('DATE refuses non-int input', () {
+        final dataType = UmasDataTypeRef(id: 14, name: 'DATE', byteSize: 4);
+        expect(
+          () => encodeVariableValue('today', dataType),
+          throwsA(isA<UmasException>().having(
+              (e) => e.message, 'message', contains('Expected int'))),
+        );
+      });
+
+      test('DATE_AND_TIME refuses negative values', () {
+        final dataType =
+            UmasDataTypeRef(id: 16, name: 'DATE_AND_TIME', byteSize: 8);
+        expect(
+          () => encodeVariableValue(-1, dataType),
+          throwsA(isA<UmasException>().having(
+              (e) => e.message, 'message', contains('DATE_AND_TIME'))),
+        );
+      });
+    });
+
+    // -----------------------------------------------------------------
+    // TD-006 (v1.1.x): client-side integer range guard.
+    //
+    // Before: writing 100000 to an INT silently wrapped to -31072
+    // (Dart's setInt16 truncates without raising). Industrial-control
+    // silent-truncation hazard — a setpoint write is silently
+    // misinterpreted, equipment operates on the wrong value, no error.
+    //
+    // After: each integer type checks the supplied value against its
+    // declared [min..max] BEFORE the setIntN call. Out-of-range
+    // values throw a precise UmasException naming the supplied value,
+    // type, and range. STRING was already pinned by TD-001.
+    //
+    // For each integer type we test:
+    //   (a) valid in-range value encodes correctly,
+    //   (b) max+1 refuses,
+    //   (c) min-1 refuses (for signed types; >0 over for unsigned).
+    // -----------------------------------------------------------------
+    group('TD-006: integer range guards', () {
+      test('INT: 32767 (max) encodes; 32768 refuses', () {
+        final t = UmasDataTypeRef(id: 4, name: 'INT', byteSize: 2);
+        // (a) Valid: max.
+        expect(encodeVariableValue(32767, t).length, 2);
+        expect(encodeVariableValue(-32768, t).length, 2);
+        // (b) max+1.
+        expect(
+          () => encodeVariableValue(32768, t),
+          throwsA(isA<UmasException>().having(
+              (e) => e.message,
+              'message',
+              allOf(contains('32768'), contains('INT'),
+                  contains('-32768..32767')))),
+        );
+        // (c) min-1.
+        expect(
+          () => encodeVariableValue(-32769, t),
+          throwsA(isA<UmasException>().having(
+              (e) => e.message, 'message', contains('INT'))),
+        );
+      });
+
+      test('UINT: 65535 (max) encodes; 65536 refuses; -1 refuses', () {
+        final t = UmasDataTypeRef(id: 5, name: 'UINT', byteSize: 2);
+        expect(encodeVariableValue(65535, t).length, 2);
+        expect(encodeVariableValue(0, t), [0x00, 0x00]);
+        expect(
+          () => encodeVariableValue(65536, t),
+          throwsA(isA<UmasException>().having(
+              (e) => e.message,
+              'message',
+              allOf(contains('65536'), contains('UINT'),
+                  contains('0..65535')))),
+        );
+        expect(
+          () => encodeVariableValue(-1, t),
+          throwsA(isA<UmasException>()),
+        );
+      });
+
+      test('WORD: same range as UINT', () {
+        final t = UmasDataTypeRef(id: 22, name: 'WORD', byteSize: 2);
+        expect(encodeVariableValue(0xFFFF, t).length, 2);
+        expect(() => encodeVariableValue(0x10000, t),
+            throwsA(isA<UmasException>()));
+        expect(
+            () => encodeVariableValue(-1, t), throwsA(isA<UmasException>()));
+      });
+
+      test('DINT: 2^31-1 encodes; 2^31 refuses; -(2^31)-1 refuses', () {
+        final t = UmasDataTypeRef(id: 6, name: 'DINT', byteSize: 4);
+        expect(encodeVariableValue(0x7FFFFFFF, t).length, 4);
+        expect(encodeVariableValue(-0x80000000, t).length, 4);
+        expect(() => encodeVariableValue(0x80000000, t),
+            throwsA(isA<UmasException>()));
+        expect(() => encodeVariableValue(-0x80000001, t),
+            throwsA(isA<UmasException>()));
+      });
+
+      test('UDINT: 2^32-1 encodes; 2^32 refuses; -1 refuses', () {
+        final t = UmasDataTypeRef(id: 7, name: 'UDINT', byteSize: 4);
+        expect(encodeVariableValue(0xFFFFFFFF, t).length, 4);
+        expect(() => encodeVariableValue(0x100000000, t),
+            throwsA(isA<UmasException>()));
+        expect(() => encodeVariableValue(-1, t),
+            throwsA(isA<UmasException>()));
+      });
+
+      test('DWORD / TIME share UDINT range', () {
+        final dw = UmasDataTypeRef(id: 23, name: 'DWORD', byteSize: 4);
+        final tm = UmasDataTypeRef(id: 10, name: 'TIME', byteSize: 4);
+        expect(encodeVariableValue(0xFFFFFFFF, dw).length, 4);
+        expect(encodeVariableValue(0, tm).length, 4);
+        expect(() => encodeVariableValue(0x100000000, dw),
+            throwsA(isA<UmasException>()));
+        expect(() => encodeVariableValue(-1, tm),
+            throwsA(isA<UmasException>()));
+      });
+
+      test('BYTE: 0xFF encodes; 0x100 refuses; -1 refuses', () {
+        final t = UmasDataTypeRef(id: 21, name: 'BYTE', byteSize: 1);
+        expect(encodeVariableValue(0xFF, t), [0xFF]);
+        expect(encodeVariableValue(0, t), [0x00]);
+        expect(
+          () => encodeVariableValue(0x100, t),
+          throwsA(isA<UmasException>().having(
+              (e) => e.message,
+              'message',
+              allOf(contains('256'), contains('BYTE'),
+                  contains('0..255')))),
+        );
+        expect(() => encodeVariableValue(-1, t),
+            throwsA(isA<UmasException>()));
+      });
+
+      test('LINT: full 64-bit signed range encodes', () {
+        final t = UmasDataTypeRef(id: 13, name: 'LINT', byteSize: 8);
+        // Dart can express the full LINT range natively.
+        expect(encodeVariableValue(0x7FFFFFFFFFFFFFFF, t).length, 8);
+        expect(encodeVariableValue(-0x8000000000000000, t).length, 8);
+      });
+
+      test('ULINT: 0 and large positives encode; negative refuses', () {
+        final t = UmasDataTypeRef(id: 24, name: 'ULINT', byteSize: 8);
+        expect(encodeVariableValue(0, t).length, 8);
+        // 2^62 is well within Dart int and within ULINT.
+        expect(encodeVariableValue(0x4000000000000000, t).length, 8);
+        expect(
+          () => encodeVariableValue(-1, t),
+          throwsA(isA<UmasException>().having(
+              (e) => e.message, 'message', contains('ULINT'))),
+        );
+      });
+
+      test('error message names supplied value AND target range', () {
+        final t = UmasDataTypeRef(id: 4, name: 'INT', byteSize: 2);
+        try {
+          encodeVariableValue(100000, t);
+          fail('expected UmasException');
+        } on UmasException catch (e) {
+          // Operator-facing — must include the offending value AND
+          // a human-readable range bound.
+          expect(e.message, contains('100000'));
+          expect(e.message, contains('-32768'));
+          expect(e.message, contains('32767'));
+        }
+      });
+    });
   });
 
   group('VariableWriteRef', () {
