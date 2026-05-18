@@ -443,8 +443,13 @@ class UmasClient {
     final status = pdu[2];
     if (status == _statusError) {
       final errorCode = pdu.length > 3 ? pdu[3] : 0;
+      // TD-017 (v1.1.x): forward the second error byte when present so
+      // [readVariables] can require 0xA1A1 (not bare 0xA1) for M580
+      // auto-detection.
+      final secondaryErrorCode = pdu.length > 4 ? pdu[4] : null;
       throw UmasException(
           errorCode: errorCode,
+          secondaryErrorCode: secondaryErrorCode,
           message: 'UMAS $operation error: '
               '0x${errorCode.toRadixString(16)}');
     }
@@ -1797,7 +1802,13 @@ class UmasClient {
       final result = await readVariable(refs);
       return parseVariableValues(result.rawBytes, types);
     } on UmasException catch (e) {
-      if (e.errorCode == 0xA1) {
+      // TD-017 (v1.1.x): the Schneider M580 marker for "use MonitorPlc
+      // instead of ReadVariable" is the 2-byte sequence 0xA1 0xA1 in
+      // pdu[3..4]. The single-byte 0xA1 alone could plausibly come from
+      // an unrelated firmware path; flipping to MonitorPlc on the
+      // weaker signal would silently mask non-M580 protocol errors.
+      // Require BOTH bytes to match before switching modes.
+      if (e.errorCode == 0xA1 && e.secondaryErrorCode == 0xA1) {
         // M580 detected: 0x22 returns 0xA1A1 error
         _useMonitorPlc = true;
         return monitorRegisterAndRead(variables);

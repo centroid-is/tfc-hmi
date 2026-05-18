@@ -289,12 +289,21 @@ def build_success_response(payload, pairing_key=0x00):
     return bytes(pdu)
 
 
-def build_error_response(error_code, pairing_key=0x00):
-    """Build FC90 error PDU: [0x5A, pairingKey, 0xFD, errorCode].
+def build_error_response(error_code, pairing_key=0x00, secondary_byte=None):
+    """Build FC90 error PDU: [0x5A, pairingKey, 0xFD, errorCode[, secondary]].
 
     Real Schneider PLC 3-byte header: FC + pairingKey + status (no sub-function echo).
+
+    TD-017 (v1.1.x): when [secondary_byte] is provided, emit a 5-byte error
+    PDU. The M580 firmware uses the 2-byte 0xA1 0xA1 marker for
+    "ReadVariable not supported, use MonitorPlc instead"; the Dart client
+    requires BOTH bytes before flipping into MonitorPlc mode so a stray
+    single 0xA1 from an unrelated firmware path doesn't trigger the
+    fallback.
     """
-    return bytes([0x5A, pairing_key, 0xFD, error_code])
+    if secondary_byte is None:
+        return bytes([0x5A, pairing_key, 0xFD, error_code])
+    return bytes([0x5A, pairing_key, 0xFD, error_code, secondary_byte])
 
 
 def wrap_mbap(transaction_id, unit_id, pdu):
@@ -379,8 +388,11 @@ class UmasHandler(socketserver.BaseRequestHandler):
         behavior where ReadVariable is not supported.
         """
         if self._m580_mode:
-            print("[STUB] M580 mode: rejecting ReadVariable (0x22) with 0xA1 error")
-            return build_error_response(0xA1, self.pairing_key)
+            print("[STUB] M580 mode: rejecting ReadVariable (0x22) with 0xA1A1 marker")
+            # TD-017 (v1.1.x): emit the 2-byte 0xA1A1 marker so the Dart
+            # client's hardened heuristic actually trips. Bare 0xA1 alone
+            # is intentionally ignored as ambiguous.
+            return build_error_response(0xA1, self.pairing_key, secondary_byte=0xA1)
 
         global VARIABLE_STORE
         if len(payload) < 5:

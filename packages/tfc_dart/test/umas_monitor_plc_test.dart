@@ -492,10 +492,12 @@ void main() {
           return ModbusResponseCode.requestSucceed;
         }
         if (umasReq.umasSubFunction == 0x22) {
-          // ReadVariable: return 0xA1 error if M580 mode
+          // ReadVariable: M580 mode emits the 2-byte 0xA1A1 marker.
+          // TD-017 (v1.1.x): bare 0xA1 alone does NOT trigger auto-
+          // fallback any more — both pdu[3] and pdu[4] must be 0xA1.
           if (rejectReadVariable) {
             umasReq.internalSetFromPduResponse(
-                Uint8List.fromList([0x5A, pairingKey, 0xFD, 0xA1]));
+                Uint8List.fromList([0x5A, pairingKey, 0xFD, 0xA1, 0xA1]));
             return ModbusResponseCode.requestSucceed;
           }
           // M340 mode: return REAL 22.5 + BOOL true
@@ -602,6 +604,86 @@ void main() {
       expect(values.length, 2);
       expect(values[0], isA<TypedVariableValue>());
       expect(values[1], isA<TypedVariableValue>());
+      client.dispose();
+    });
+
+    test(
+        'TD-017: bare 0xA1 (single byte, not 0xA1A1) does NOT trigger '
+        'auto-fallback', () async {
+      final log = <int>[];
+      // Custom mock: returns [0xFD, 0xA1] WITHOUT the second 0xA1.
+      // Per TD-017 the fallback must require 0xA1A1; bare 0xA1 alone
+      // should be passed through as a regular UmasException.
+      Future<ModbusResponseCode> bareA1MockSendFn(ModbusRequest req) async {
+        final umasReq = req as UmasRequest;
+        log.add(umasReq.umasSubFunction);
+        int pairingKey = 0x42;
+        if (umasReq.umasSubFunction == 0x02) {
+          final resp = BytesBuilder();
+          resp.add([0x5A, 0x00, 0xFE]);
+          final pd = ByteData(16);
+          pd.setUint16(0, 1, Endian.little);
+          pd.setUint32(2, 0x12345678, Endian.little);
+          pd.setUint8(6, 1);
+          pd.setUint16(7, 0, Endian.little);
+          pd.setUint8(9, 1);
+          pd.setUint16(10, 0, Endian.little);
+          pd.setUint32(12, 0x10000, Endian.little);
+          resp.add(pd.buffer.asUint8List());
+          umasReq.internalSetFromPduResponse(
+              Uint8List.fromList(resp.toBytes()));
+          return ModbusResponseCode.requestSucceed;
+        }
+        if (umasReq.umasSubFunction == 0x01) {
+          final resp = BytesBuilder();
+          resp.add([0x5A, pairingKey, 0xFE]);
+          final pd = ByteData(2);
+          pd.setUint16(0, 1021, Endian.little);
+          resp.add(pd.buffer.asUint8List());
+          umasReq.internalSetFromPduResponse(
+              Uint8List.fromList(resp.toBytes()));
+          return ModbusResponseCode.requestSucceed;
+        }
+        if (umasReq.umasSubFunction == 0x04) {
+          // PlcStatus: minimal success with one block CRC.
+          // PDU layout: [0x5A, pairingKey, 0xFE, statusByte,
+          //              notUsed(2), numBlocks=1, crc(4 LE)]
+          final resp = BytesBuilder();
+          resp.add([0x5A, pairingKey, 0xFE]);
+          resp.add([0x01, 0x00, 0x00, 0x01]); // statusByte, notUsed, numBlocks
+          final crc = ByteData(4);
+          crc.setUint32(0, 0xDEADBEEF, Endian.little);
+          resp.add(crc.buffer.asUint8List());
+          umasReq.internalSetFromPduResponse(
+              Uint8List.fromList(resp.toBytes()));
+          return ModbusResponseCode.requestSucceed;
+        }
+        if (umasReq.umasSubFunction == 0x22) {
+          // Single 0xA1 in pdu[3], NO second 0xA1.
+          umasReq.internalSetFromPduResponse(
+              Uint8List.fromList([0x5A, pairingKey, 0xFD, 0xA1]));
+          return ModbusResponseCode.requestSucceed;
+        }
+        return ModbusResponseCode.requestSucceed;
+      }
+
+      final client = UmasClient(
+        sendFn: bareA1MockSendFn,
+        backoffDelay: (_) async {},
+      );
+      await client.readPlcStatus();
+
+      // Bare 0xA1 should NOT silently retry via 0x50 — it must
+      // propagate as a UmasException(0xA1).
+      await expectLater(
+        () => client.readVariables(testVariables),
+        throwsA(isA<UmasException>().having(
+            (e) => e.errorCode, 'errorCode', 0xA1)),
+      );
+      // No 0x50 attempt — the heuristic correctly stayed in M340 mode.
+      expect(log, isNot(contains(0x50)),
+          reason: 'bare 0xA1 must not trigger MonitorPlc fallback');
+      expect(client.useMonitorPlc, false);
       client.dispose();
     });
 

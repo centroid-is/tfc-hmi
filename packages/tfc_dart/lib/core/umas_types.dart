@@ -339,10 +339,31 @@ class UmasException implements Exception {
   final int errorCode;
   final String message;
 
-  const UmasException({required this.errorCode, required this.message});
+  /// TD-017 (v1.1.x): second byte of the PLC's UMAS error payload,
+  /// when present. Schneider M580 firmware emits a 2-byte error marker
+  /// `0xA1 0xA1` from sub-function 0x22 (ReadVariable) to signal "use
+  /// MonitorPlc (0x50) instead"; the single-byte 0xA1 alone could
+  /// plausibly originate from an unrelated firmware path on a different
+  /// PLC family, so the auto-fallback heuristic in [UmasClient.readVariables]
+  /// requires both bytes to match (pdu[3] == 0xA1 && pdu[4] == 0xA1) to
+  /// flip into MonitorPlc mode.
+  ///
+  /// Null when the PDU did not carry a 5th byte.
+  final int? secondaryErrorCode;
+
+  const UmasException({
+    required this.errorCode,
+    required this.message,
+    this.secondaryErrorCode,
+  });
 
   @override
-  String toString() => 'UmasException($errorCode): $message';
+  String toString() {
+    if (secondaryErrorCode == null) {
+      return 'UmasException($errorCode): $message';
+    }
+    return 'UmasException($errorCode, sec=$secondaryErrorCode): $message';
+  }
 }
 
 /// Exception thrown when PLC reservation cannot be acquired (conflict).
@@ -353,6 +374,7 @@ class UmasReservationException extends UmasException {
   const UmasReservationException({
     required super.errorCode,
     required super.message,
+    super.secondaryErrorCode,
   });
 
   @override
