@@ -47,6 +47,7 @@ import 'package:args/args.dart';
 import 'package:modbus_client/modbus_client.dart';
 import 'package:modbus_client_tcp/modbus_client_tcp.dart';
 import 'package:tfc_dart/core/umas_client.dart';
+import 'package:tfc_dart/core/umas_error_messages.dart';
 import 'package:tfc_dart/core/umas_types.dart';
 
 const _defaultPort = 502;
@@ -177,9 +178,23 @@ Future<int> _withClient(
   );
   await tcp.connect();
   final umas = UmasClient(sendFn: tcp.send, unitId: unit);
-  await umas.readPlcStatus();
   try {
+    await umas.readPlcStatus();
     return await body(umas);
+  } on UmasException catch (e) {
+    // TD-018 (v1.1.x): translate raw UMAS hex into operator-grade
+    // guidance instead of letting the unhandled exception trace
+    // surface in the verify-script gating loop. Same mapping the
+    // Flutter Browse dialog uses.
+    final info = mapUmasError(e);
+    if (info != null) {
+      stderr.writeln(info.summary);
+      stderr.writeln('');
+      stderr.writeln(info.detail);
+    } else {
+      stderr.writeln('UMAS error: $e');
+    }
+    return 1;
   } finally {
     try {
       await tcp.disconnect();
@@ -419,7 +434,14 @@ Future<int> _readCommand(UmasClient umas, String name) async {
       // signal is in `e.message`. Print it to stderr so operators
       // and `v1.1-verify.sh` greps surface the real cause rather
       // than a misleading `0x0`.
+      //
+      // TD-018 (v1.1.x): for protocol error codes (0x83, 0xC0, 0x86,
+      // etc.) print the shared operator-friendly summary so the verify
+      // loop produces actionable output without the operator having
+      // to look up hex codes.
+      final info = mapUmasError(e);
       final codeHex = '0x${e.errorCode.toRadixString(16)}';
+      final summary = info?.summary ?? codeHex;
       if (e.errorCode == 0) {
         stderr.writeln('  ${leaf.path}  ${dt.name} '
             '[block=0x${v.blockNo.toRadixString(16)} '
@@ -429,7 +451,7 @@ Future<int> _readCommand(UmasClient umas, String name) async {
       print('  ${leaf.path}  ${dt.name} '
           '[block=0x${v.blockNo.toRadixString(16)} '
           'off=0x${v.offset.toRadixString(16)}]  -> '
-          '$codeHex'
+          '$summary'
           '${e.errorCode == 0 ? '  ${e.message}' : ''}');
     }
   }
