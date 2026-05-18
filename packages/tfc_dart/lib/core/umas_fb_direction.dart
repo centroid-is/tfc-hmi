@@ -7,10 +7,9 @@
 /// (UI affordances) can depend on the data model without waiting on
 /// Phase 3's implementation to merge.
 ///
-/// plc4j does not decode direction bytes (PLC4X
-/// UmasUnlocatedVariableReference has `unknown5` / `unknown4`
-/// opaque fields). The mapping below is inferred from observation
-/// of M580 FB layouts and pinned by
+/// plc4j does not decode direction bytes (PLC4X UmasUnlocatedVariableReference
+/// has `unknown5` / `unknown4` opaque fields). The mapping below is
+/// inferred from observation of M580 FB layouts and pinned by
 /// `test/core/umas_fb_direction_test.dart`. See
 /// `.planning/phases/03-var_input-var_output-distinction/03-RESEARCH.md`
 /// for full provenance (Phase 3 deliverable; not present in this
@@ -34,8 +33,8 @@ enum UmasFbMemberDirection {
   /// readable.
   publicVar,
 
-  /// Direction bytes did not match any known table entry. Surface
-  /// as an undecorated leaf rather than a silent miscategorisation.
+  /// Direction bytes did not match any known table entry. Surface as
+  /// an undecorated leaf rather than a silent miscategorisation.
   unknown,
 }
 
@@ -45,17 +44,18 @@ enum UmasFbMemberDirection {
 ///
 /// Mapping (empirical, pinned by tests):
 ///
-///   unknown5  unknown4   direction
-///   0x0001    *          input
-///   0x0002    *          output
-///   0x0003    *          inOut
-///   0x0000    0x0000     publicVar
-///   else      else       unknown
+/// | `unknown5` | `unknown4` | direction   |
+/// |-----------:|-----------:|-------------|
+/// |     0x0001 |          * | `input`     |
+/// |     0x0002 |          * | `output`    |
+/// |     0x0003 |          * | `inOut`     |
+/// |     0x0000 |     0x0000 | `publicVar` |
+/// |       else |       else | `unknown`   |
 ///
 /// `unknown` is a deliberate catch-all: when the wire bytes do not
 /// match a known direction, we surface the member as undecorated
-/// rather than silently miscategorising. The UI can render
-/// `unknown` distinctly from `publicVar` if desired (Phase 4).
+/// rather than silently miscategorising. The UI can render `unknown`
+/// distinctly from `publicVar` if desired (Phase 4).
 UmasFbMemberDirection classifyFbMemberDirection(int unknown5, int unknown4) {
   switch (unknown5 & 0xFFFF) {
     case 0x0001:

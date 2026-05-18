@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:logger/logger.dart';
 import 'package:modbus_client/modbus_client.dart';
 import 'package:rxdart/rxdart.dart';
+import 'package:tfc_dart/core/umas_fb_direction.dart';
 import 'package:tfc_dart/core/umas_types.dart';
 
 /// A Modbus request carrying a UMAS (FC90) payload.
@@ -758,6 +759,21 @@ class UmasClient {
       final dataTypeId = view.getUint16(0, Endian.little);
       final blockNo = view.getUint16(2, Endian.little);
       final offset = view.getUint32(4, Endian.little);
+
+      // Phase 3 (v1.1): for member-layout records, the two uint16 LE values
+      // at bytes 4-5 and 6-7 are plc4j's `unknown5` and `unknown4` fields
+      // (see UmasUDTDefinition mspec, protocols/umas/.../umas.mspec:214-220).
+      // Bytes 4-7 are also re-read above as a uint32 `offset` — the two
+      // views coexist because Dart's getUint32(LE) is identical to
+      // (getUint16(4,LE) | getUint16(6,LE) << 16). The classifier views
+      // them as two separate halves for direction inference, while the
+      // existing offset path is unchanged.
+      UmasFbMemberDirection? direction;
+      if (isMemberLayout) {
+        final unknown5 = view.getUint16(4, Endian.little);
+        final unknown4 = view.getUint16(6, Endian.little);
+        direction = classifyFbMemberDirection(unknown5, unknown4);
+      }
       pos += headerSize;
 
       int end = pos;
@@ -777,6 +793,7 @@ class UmasClient {
         blockNo: blockNo,
         offset: offset,
         dataTypeId: dataTypeId,
+        direction: direction,
       ));
     }
 
@@ -2176,13 +2193,18 @@ class UmasClient {
       // For struct members, the parser puts the byte-offset-within-parent
       // into `blockNo`. Compute the member's absolute address by combining
       // it with the parent's address.
+      // Phase 3 (v1.1): forward the member's `direction` so the tree node
+      // can render input/output/public/in_out distinctly. `m.direction` is
+      // populated by `_parseVariableRecords` when `isMemberLayout == true`
+      // (null for non-FB struct members).
       final memberAddr = UmasVariable(
         name: m.name,
         blockNo: variable.blockNo,
         offset: variable.offset + m.blockNo,
         dataTypeId: m.dataTypeId,
+        direction: m.direction,
       );
-      children.add(await _expandVariable(
+      final childNode = await _expandVariable(
         variable: memberAddr,
         path: '$path.${m.name}',
         dataTypes: dataTypes,
@@ -2190,6 +2212,18 @@ class UmasClient {
         arrayCache: arrayCache,
         depth: depth + 1,
         maxDepth: maxDepth,
+      );
+      // Surface direction on the tree node so downstream consumers
+      // (browser tree, CLI --show-direction) can read it without
+      // peeking into UmasVariable. `_expandVariable` doesn't carry the
+      // direction parameter; rebuild the node with the direction attached.
+      children.add(UmasVariableTreeNode(
+        name: childNode.name,
+        path: childNode.path,
+        children: childNode.children,
+        variable: childNode.variable,
+        dataType: childNode.dataType,
+        direction: m.direction,
       ));
     }
 

@@ -84,17 +84,25 @@ class UmasVariable {
   final int dataTypeId;
   final String? parentPath;
 
+  /// Declaration direction when this variable is a function-block member
+  /// (see [UmasFbMemberDirection]). Null for top-level variables and for
+  /// non-FB struct members. Populated by [UmasClient] when parsing DD02
+  /// member-layout records (Phase 3 of v1.1).
+  final UmasFbMemberDirection? direction;
+
   const UmasVariable({
     required this.name,
     required this.blockNo,
     required this.offset,
     required this.dataTypeId,
     this.parentPath,
+    this.direction,
   });
 
   @override
   String toString() => 'UmasVariable($name, block=$blockNo, offset=$offset, '
-      'typeId=$dataTypeId)';
+      'typeId=$dataTypeId'
+      '${direction != null ? ', dir=${direction!.name}' : ''})';
 }
 
 /// A data type reference from the UMAS data dictionary (0xDD03 records).
@@ -251,7 +259,9 @@ class UmasVariableTreeNode {
 
   /// Direction of this node when it is an FB member, or `null` for
   /// non-member nodes (top-level variables, struct members, array
-  /// elements, folders). Phase 2's FB expander populates this.
+  /// elements, folders). Phase 2's FB expander and Phase 3's
+  /// [UmasFbMemberDirection] classifier populate this. Consumed by the
+  /// browser-tree UI (Phase 4) and the `--show-direction` CLI flag.
   final UmasFbMemberDirection? direction;
 
   /// Whether this node is readable through the normal 0x22 / 0x50
