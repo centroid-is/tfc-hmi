@@ -1,19 +1,47 @@
 /// Function-block (FB) member direction classification for UMAS.
 ///
-/// Phase 3 (VAR_INPUT / VAR_OUTPUT distinction) owns the classifier
-/// itself. This file provides the [UmasFbMemberDirection] enum and a
-/// minimal [classifyFbMemberDirection] entry point so Phase 5
-/// (VAR_IN_OUT stretch — see `umas_var_in_out.dart`) and Phase 4
-/// (UI affordances) can depend on the data model without waiting on
-/// Phase 3's implementation to merge.
+/// Bytes-only classifier. Maps the two opaque uint16 LE fields that
+/// follow `(dataType, offset)` in a DD02 per-member record header to an
+/// [UmasFbMemberDirection]. plc4j calls these fields `unknown5` (bytes
+/// 4-5) and `unknown4` (bytes 6-7) — see protocols/umas/.../umas.mspec.
 ///
-/// plc4j does not decode direction bytes (PLC4X UmasUnlocatedVariableReference
-/// has `unknown5` / `unknown4` opaque fields). The mapping below is
-/// inferred from observation of M580 FB layouts and pinned by
-/// `test/core/umas_fb_direction_test.dart`. See
-/// `.planning/phases/03-var_input-var_output-distinction/03-RESEARCH.md`
-/// for full provenance (Phase 3 deliverable; not present in this
-/// worktree).
+/// The mapping was calibrated against the live M580 at 192.168.112.159
+/// using `tools/umas_direction_calibration.dart`: the harness walks
+/// every FB-member record and pairs each member's bytes with the
+/// Schneider naming-convention prefix (`i_` / `q_` / `p_` / `iq_` /
+/// `io_`) used in that project's PLC code, then prints an agreement
+/// matrix. The shipping classifier follows the byte signal only — names
+/// were a reverse-engineering oracle and are **not** consulted at
+/// runtime.
+///
+/// Observed mapping on the M580 (counts from the live calibration):
+///
+/// | `unknown5` | `unknown4` lower byte | direction   | samples |
+/// |-----------:|----------------------:|-------------|--------:|
+/// |     0x0000 |                  0x01 | `input`     |      16 |
+/// |     0x0000 |                  0x03 | `output`    |       5 |
+/// |     0x0000 |                  0x04 | `publicVar` |      10 |
+/// |     0x0000 |                  0x00 | `publicVar` |       2 |
+/// |       else |             *anything | `unknown`   |       — |
+///
+/// `unknown5` is always zero on the M580; the direction signal lives in
+/// the **lower byte** of `unknown4`. The upper byte of `unknown4` is
+/// observed non-zero only once (`0x02` paired with input — `i_stDTM`)
+/// and is ignored — likely an orthogonal flag (e.g. "is-DDT") that has
+/// no bearing on direction.
+///
+/// `inOut` (VAR_IN_OUT, i.e. members named `iq_*` / `io_*`) does NOT
+/// appear in the calibration sample on this PLC. The shipping
+/// classifier maps `0x05` → `inOut` speculatively based on the lower
+/// byte progression (`0x01`=in, `0x03`=out, `0x05`=in_out) plus plc4j's
+/// VAR_IN_OUT marker convention; any unfamiliar pattern collapses to
+/// `unknown` so an incorrect guess shows as undecorated UI rather than
+/// silent miscategorisation.
+///
+/// F-1 v1.1: callers must gate this classifier on parent class
+/// (classIdentifier==7 → FB members get a direction; ==2 → UDT struct
+/// fields stay undecorated). The gate is in `_parseVariableRecords` /
+/// `_readDD02Block` in `umas_client.dart`.
 library;
 
 /// Direction of an FB member declared in the IEC 61131-3 sense.
@@ -42,38 +70,38 @@ enum UmasFbMemberDirection {
 /// 16-bit fields (`unknown5`, `unknown4`) that follow `(dataType,
 /// offset)` in a DD02 per-member record header.
 ///
-/// Mapping (empirical, pinned by tests):
+/// See the file header for the full live-calibrated byte→direction
+/// table. The classifier is independent of any naming convention.
 ///
-/// | `unknown5` | `unknown4` | direction   |
-/// |-----------:|-----------:|-------------|
-/// |     0x0001 |          * | `input`     |
-/// |     0x0002 |          * | `output`    |
-/// |     0x0003 |          * | `inOut`     |
-/// |     0x0000 |     0x0000 | `publicVar` |
-/// |       else |       else | `unknown`   |
+/// [unknown5] — uint16 LE at bytes 4-5 of the DD02 member record.
+///   Always observed as 0x0000 on the M580 calibration target. Any
+///   non-zero value collapses to `unknown` (safety: we don't have a
+///   sample for what a non-zero upper word means).
 ///
-/// `unknown` is a deliberate catch-all: when the wire bytes do not
-/// match a known direction, we surface the member as undecorated
-/// rather than silently miscategorising. The UI can render `unknown`
-/// distinctly from `publicVar` if desired (Phase 4).
+/// [unknown4] — uint16 LE at bytes 6-7 of the DD02 member record. The
+///   **lower byte** carries the direction code; the upper byte is
+///   treated as an orthogonal flag and ignored.
 UmasFbMemberDirection classifyFbMemberDirection(int unknown5, int unknown4) {
-  switch (unknown5 & 0xFFFF) {
-    case 0x0001:
+  // unknown5 must be zero — anything else is outside the calibrated
+  // sample and stays unknown to avoid silent miscategorisation.
+  if ((unknown5 & 0xFFFF) != 0x0000) {
+    return UmasFbMemberDirection.unknown;
+  }
+  switch (unknown4 & 0xFF) {
+    case 0x00:
+      return UmasFbMemberDirection.publicVar;
+    case 0x01:
       return UmasFbMemberDirection.input;
-    case 0x0002:
+    case 0x03:
       return UmasFbMemberDirection.output;
-    case 0x0003:
+    case 0x04:
+      return UmasFbMemberDirection.publicVar;
+    case 0x05:
+      // Speculative: VAR_IN_OUT (PLC4J's UmasReadVariableInOutMember).
+      // No live sample on this M580. Kept here so the lower-byte
+      // progression is complete; collapses to `unknown` only if the
+      // sample base expands and shows this maps elsewhere.
       return UmasFbMemberDirection.inOut;
-    case 0x0000:
-      // publicVar requires BOTH bytes to be zero — a non-zero
-      // unknown4 with unknown5==0 has not been observed and is
-      // intentionally classified as `unknown` so a wrong mapping
-      // surfaces as undecorated UI rather than as silent
-      // miscategorisation.
-      if ((unknown4 & 0xFFFF) == 0x0000) {
-        return UmasFbMemberDirection.publicVar;
-      }
-      return UmasFbMemberDirection.unknown;
     default:
       return UmasFbMemberDirection.unknown;
   }

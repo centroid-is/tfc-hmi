@@ -631,9 +631,17 @@ class UmasClient {
   /// header per entry). blockNo=<typeId> returns the member layout of
   /// that struct/FB type (8-byte record header per entry, since the
   /// flags+unknown4 bytes are absent for member records).
+  ///
+  /// [parentClassId] — when this block represents a member layout, the
+  /// classIdentifier of the parent type (2=STRUCT/UDT, 7=FB). Direction
+  /// classification only runs when parentClassId==7 (FB members). For
+  /// non-FB UDTs the direction stays null so the UI renders members
+  /// undecorated (F-1 v1.1: fixes the case where the byte-classifier
+  /// fired on arbitrary UDT struct fields).
   Future<List<UmasVariable>> _readDD02Block({
     required int blockNo,
     required bool isMemberLayout,
+    int? parentClassId,
   }) async {
     final all = <UmasVariable>[];
     int offset = 0x0000;
@@ -664,8 +672,11 @@ class UmasClient {
             errorCode: 0, message: 'Empty data dictionary response');
       }
       _checkStatus(pdu, 'readDD02(blockNo=0x${blockNo.toRadixString(16)})');
-      final (nextAddress, variables) =
-          _parseVariableRecords(pdu.sublist(3), isMemberLayout: isMemberLayout);
+      final (nextAddress, variables) = _parseVariableRecords(
+        pdu.sublist(3),
+        isMemberLayout: isMemberLayout,
+        parentClassId: parentClassId,
+      );
       all.addAll(variables);
       offset = nextAddress;
     }
@@ -677,9 +688,17 @@ class UmasClient {
   /// Returns the members; each [UmasVariable]'s `blockNo` is the byte offset
   /// of that member within the parent struct, and `dataTypeId` is the member's
   /// own type id (resolved against [readDataTypes]).
-  Future<List<UmasVariable>> readStructMembers(int typeId) async {
-    return _withSessionAndRecovery(
-        () => _readDD02Block(blockNo: typeId, isMemberLayout: true));
+  ///
+  /// [parentClassId] — the classIdentifier of the parent type (2 for
+  /// STRUCT/UDT, 7 for FB). When omitted, direction classification is
+  /// suppressed (safe default) — callers that know the parent is an FB
+  /// should pass 7 to get per-member direction in the returned values.
+  Future<List<UmasVariable>> readStructMembers(int typeId,
+      {int? parentClassId}) async {
+    return _withSessionAndRecovery(() => _readDD02Block(
+        blockNo: typeId,
+        isMemberLayout: true,
+        parentClassId: parentClassId));
   }
 
   /// Read raw DD02 response bytes for [blockNo].
@@ -737,6 +756,7 @@ class UmasClient {
   (int nextAddress, List<UmasVariable>) _parseVariableRecords(
     Uint8List data, {
     required bool isMemberLayout,
+    int? parentClassId,
   }) {
     if (data.length < 7) return (0, []);
 
@@ -761,16 +781,19 @@ class UmasClient {
       final blockNo = view.getUint16(2, Endian.little);
       final offset = view.getUint32(4, Endian.little);
 
-      // Phase 3 (v1.1): for member-layout records, the two uint16 LE values
-      // at bytes 4-5 and 6-7 are plc4j's `unknown5` and `unknown4` fields
-      // (see UmasUDTDefinition mspec, protocols/umas/.../umas.mspec:214-220).
-      // Bytes 4-7 are also re-read above as a uint32 `offset` — the two
-      // views coexist because Dart's getUint32(LE) is identical to
-      // (getUint16(4,LE) | getUint16(6,LE) << 16). The classifier views
-      // them as two separate halves for direction inference, while the
-      // existing offset path is unchanged.
+      // Phase 3 / v1.1 calibration: for member-layout records, the two
+      // uint16 LE values at bytes 4-5 and 6-7 are plc4j's `unknown5` and
+      // `unknown4` fields (see UmasUDTDefinition mspec). Bytes 4-7 are
+      // also re-read above as a uint32 `offset` — the two views coexist
+      // because Dart's getUint32(LE) is identical to (getUint16(4,LE) |
+      // getUint16(6,LE) << 16). Live-PLC calibration on the M580 at
+      // 192.168.112.159 (see tools/umas_direction_calibration.dart)
+      // showed that only `unknown4` carries direction; `unknown5` is
+      // always zero. F-1: only classify when the parent is an FB
+      // (classIdentifier==7); non-FB UDT struct members keep
+      // direction=null so the UI renders them undecorated.
       UmasFbMemberDirection? direction;
-      if (isMemberLayout) {
+      if (isMemberLayout && parentClassId == 7) {
         final unknown5 = view.getUint16(4, Endian.little);
         final unknown4 = view.getUint16(6, Endian.little);
         direction = classifyFbMemberDirection(unknown5, unknown4);
@@ -1612,7 +1635,7 @@ class UmasClient {
       buffer.addByte(0x00); // unknown
       buffer.addByte(variables.length & 0xFF); // numberOfSubOps
 
-      for (final (variable, dataType) in variables) {
+      for (final (variable, _) in variables) {
         final idx = _monitorTable.allocateIndex();
         indices.add(idx);
         final ref = MonitorPlcRef.fromVariable(idx, variable);
@@ -2001,8 +2024,13 @@ class UmasClient {
             // response is parsed through the shared
             // _parseVariableRecords code path — same wire layout as
             // plc4j's UmasPDUReadUmasUDTDefinitionResponse / UmasUDTDefinition.
+            // Speculative-resolved types that aren't arrays are treated
+            // as FBs (classId=7) — see the synthesized type below — so
+            // direction classification fires for their members.
             final members = await _readDD02Block(
-                blockNo: variable.dataTypeId, isMemberLayout: true);
+                blockNo: variable.dataTypeId,
+                isMemberLayout: true,
+                parentClassId: 7);
             memberCache[variable.dataTypeId] = members;
             if (members.isNotEmpty) {
               isStructOrFb = true;
@@ -2169,14 +2197,19 @@ class UmasClient {
       );
     }
 
-    // Fetch struct member layout (cached per typeId).
+    // Fetch struct member layout (cached per typeId). Forward
+    // resolvedType.classIdentifier so the per-member direction
+    // classifier only fires for FB members (classId=7) and NOT for
+    // arbitrary UDT struct fields (classId=2). F-1 v1.1.
     List<UmasVariable> members;
     try {
       members = memberCache.putIfAbsent(
           variable.dataTypeId, () => <UmasVariable>[]);
       if (members.isEmpty) {
         memberCache[variable.dataTypeId] = members = await _readDD02Block(
-            blockNo: variable.dataTypeId, isMemberLayout: true);
+            blockNo: variable.dataTypeId,
+            isMemberLayout: true,
+            parentClassId: resolvedType.classIdentifier);
       }
     } on UmasException catch (e) {
       _log.w('Struct expansion failed for type ${resolvedType.name}: ${e.message}');
