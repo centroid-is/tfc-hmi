@@ -1231,9 +1231,12 @@ class MonitorPlcRegistrationTable {
 
     for (final idx in indices) {
       final type = _types[idx]!;
-      // parseVariableValue throws UmasException on buffer underflow
+      // parseVariableValue throws UmasException on buffer underflow.
+      // M580 clamps wide types (STRING, struct instances) to 4 bytes per
+      // dataSizeIndex range — advance by actual on-wire size, not declared
+      // byteSize. See /tmp/umas-string-bug-report.md + parseVariableValues:672.
       results.add(parseVariableValue(rawBytes, offset, type));
-      offset += type.byteSize;
+      offset += type.byteSize > 4 ? 4 : type.byteSize;
     }
 
     return results;
