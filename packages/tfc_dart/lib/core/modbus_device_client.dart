@@ -74,6 +74,16 @@ class ModbusDeviceClientAdapter implements DeviceClient {
   UmasClient? _umasClient;
   ModbusClientTcp? _umasClientFor;
 
+  /// TD-009 (v1.1.x): sticky M580-detected bit, hoisted out of
+  /// [UmasClient] so it survives client re-creates on every reconnect.
+  /// `false` initially; flips to `true` the first time any UmasClient
+  /// owned by this adapter detects M580 via 0xA1 from ReadVariable
+  /// (0x22). Seeded into each freshly-constructed UmasClient so the
+  /// next reconnect skips the wasted 0x22 → 0xA1 probe round-trip.
+  /// Tied to [serverAlias] lifetime; the adapter is rebuilt when key
+  /// mappings (and therefore the alias) change.
+  bool _useMonitorPlc = false;
+
   /// B-4 (v1.1.x): per-poll-group state for batched MonitorPlc polling.
   /// All UMAS-by-name keys for this adapter share ONE MonitorPlc table
   /// on the PLC (the protocol only supports one table per session),
@@ -538,6 +548,10 @@ class ModbusDeviceClientAdapter implements DeviceClient {
     if (tcp == null) {
       // Connection torn down — drop the stale client so the next
       // successful reconnect rebuilds it against the fresh socket.
+      // TD-009: capture the M580-detected bit before disposing.
+      if (_umasClient != null && _umasClient!.useMonitorPlc) {
+        _useMonitorPlc = true;
+      }
       _umasProjectCrcSub?.cancel();
       _umasProjectCrcSub = null;
       _umasSessionSub?.cancel();
@@ -551,13 +565,23 @@ class ModbusDeviceClientAdapter implements DeviceClient {
     if (_umasClient != null && identical(_umasClientFor, tcp)) {
       return _umasClient;
     }
+    // TD-009 (v1.1.x): capture the sticky M580-detected bit from the
+    // outgoing client before disposing so the next reconnect doesn't
+    // re-probe via 0x22.
+    if (_umasClient != null && _umasClient!.useMonitorPlc) {
+      _useMonitorPlc = true;
+    }
     _umasProjectCrcSub?.cancel();
     _umasProjectCrcSub = null;
     _umasSessionSub?.cancel();
     _umasSessionSub = null;
     _lastUmasSessionState = null;
     _umasClient?.dispose();
-    _umasClient = UmasClient(sendFn: tcp.send, unitId: wrapper.unitId);
+    _umasClient = UmasClient(
+      sendFn: tcp.send,
+      unitId: wrapper.unitId,
+      useMonitorPlc: _useMonitorPlc,
+    );
     _umasClientFor = tcp;
     // F-8 / TD-011: when the UMAS-side CRC watch detects a project
     // change, the symbol cache is already cleared by the time this

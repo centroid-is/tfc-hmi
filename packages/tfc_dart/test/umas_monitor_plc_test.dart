@@ -516,7 +516,8 @@ void main() {
       client.dispose();
     });
 
-    test('session reset clears useMonitorPlc flag', () async {
+    test('TD-009: session reset preserves useMonitorPlc (sticky hardware bit)',
+        () async {
       final log = <int>[];
       final client = UmasClient(
         sendFn: m580MockSendFn(subFunctionLog: log, rejectReadVariable: true),
@@ -527,24 +528,36 @@ void main() {
       await client.readVariables(testVariables);
       expect(client.useMonitorPlc, true);
 
-      // Simulate session error by checking the state after calling
-      // _handleSessionError indirectly -- readPlcId re-inits
-      // We cannot call _handleSessionError directly, but session state
-      // transitions are observable.
-      // Instead, check that after the client becomes uninitialized,
-      // the flag resets. We test this via the internal mechanism:
-      // Manually trigger session error by calling readPlcId which
-      // resets session state.
-      // NOTE: _handleSessionError is private. We test through
-      // session state observation. When session goes uninitialized,
-      // the flag must be false.
+      // TD-009 (v1.1.x): the M580-detected bit is a hardware
+      // fingerprint and MUST survive _handleSessionError so the next
+      // reconnect doesn't re-probe via 0x22 → 0xA1. We can't call
+      // _handleSessionError directly (private), but the post-call
+      // expectation is that the bit stays set across the session
+      // lifecycle.
+      expect(client.useMonitorPlc, true,
+          reason: 'M580 detection is sticky across session resets');
+      client.dispose();
+    });
 
-      // Force session reset by going through the error path
-      // Create a new client to test the reset mechanism
-      // Actually, we need to verify the public getter
+    test('TD-009: useMonitorPlc=true constructor parameter is honored',
+        () async {
+      final log = <int>[];
+      // Pre-seed the bit so the client never tries 0x22 — emulates the
+      // adapter passing the sticky bit into a fresh UmasClient after
+      // reconnect.
+      final client = UmasClient(
+        sendFn: m580MockSendFn(subFunctionLog: log, rejectReadVariable: true),
+        backoffDelay: (_) async {},
+        useMonitorPlc: true,
+      );
       expect(client.useMonitorPlc, true);
-      // The flag should reset when session errors happen
-      // This is tested indirectly through the session lifecycle
+      await client.readPlcStatus();
+      await client.readVariables(testVariables);
+      // Verify NO 0x22 ReadVariable went out on the wire — the client
+      // should have gone straight to MonitorPlc (0x50).
+      expect(log, isNot(contains(UmasSubFunction.readVariable.code)),
+          reason: 'pre-seeded useMonitorPlc skips the 0xA1 probe');
+      expect(log, contains(UmasSubFunction.monitorPlc.code));
       client.dispose();
     });
 

@@ -176,7 +176,13 @@ class UmasClient {
 
   /// Whether the client has detected an M580 PLC (0xA1 error from 0x22)
   /// and should use MonitorPlc (0x50) for variable reads instead.
-  bool _useMonitorPlc = false;
+  ///
+  /// TD-009 (v1.1.x): initial value is now constructor-injectable so the
+  /// owning [ModbusDeviceClientAdapter] can carry the sticky M580-detected
+  /// bit across UmasClient re-creates (each TCP reconnect spawns a fresh
+  /// client). Without this, every reconnect re-probes via 0x22 → 0xA1 →
+  /// 0x50 fallback, wasting one round-trip per reconnect.
+  bool _useMonitorPlc;
 
   /// Whether this client is using the MonitorPlc (0x50) path for reads.
   /// True after detecting M580 via 0xA1 error from ReadVariable (0x22).
@@ -251,7 +257,9 @@ class UmasClient {
     this.keepAliveInterval = const Duration(seconds: 10),
     this.projectCrcCheckInterval = const Duration(seconds: 30),
     Future<void> Function(Duration)? backoffDelay,
-  }) : _delayFn = backoffDelay ?? ((d) => Future.delayed(d));
+    bool useMonitorPlc = false,
+  })  : _delayFn = backoffDelay ?? ((d) => Future.delayed(d)),
+        _useMonitorPlc = useMonitorPlc;
 
   /// Start periodic keep-alive timer. Cancels any existing timer first.
   ///
@@ -1331,7 +1339,13 @@ class UmasClient {
     _previousCrcs = null;
     _projectCrc = null; // SWEEP-04
     _hasReservation = false;
-    _useMonitorPlc = false;
+    // TD-009 (v1.1.x): do NOT reset _useMonitorPlc. The M580-detected
+    // bit is a hardware fingerprint that does not change across PLC
+    // reboots / session resets. Clearing it would cause the next read
+    // to re-probe via 0x22 → 0xA1 → 0x50 fallback (one wasted RTT).
+    // The adapter wraps this client and reseeds _useMonitorPlc across
+    // client re-creates; we only reset when the underlying serverAlias
+    // (and therefore the PLC identity) changes.
     _monitorTable.reset();
     // B-3: drop the symbol cache too — a session reset usually means the
     // PLC rebooted or the engineering tool reset the connection, and any
