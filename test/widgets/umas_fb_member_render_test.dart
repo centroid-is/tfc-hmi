@@ -30,13 +30,37 @@ Widget _wrap(Widget child) {
   );
 }
 
-BrowseNode _fbNodeFromMember(UmasFbMember m) {
+/// Test-only fixture carrying the five fields the original Phase 4 stub
+/// exposed. Post-merge with Phase 3, the canonical `UmasFbMember` is a
+/// metadata bridge (statics only), so the constructor + instance method
+/// is reproduced here for the widget tests' fixture shape.
+class _FbMemberFixture {
+  final String name;
+  final String typeName;
+  final UmasFbMemberDirection direction;
+  final bool readable;
+  final String? unreadableReason;
+
+  const _FbMemberFixture({
+    required this.name,
+    required this.typeName,
+    required this.direction,
+    this.readable = true,
+    this.unreadableReason,
+  });
+}
+
+BrowseNode _fbNodeFromMember(_FbMemberFixture m) {
   return BrowseNode(
     id: m.name,
     displayName: m.name,
     type: BrowseNodeType.variable,
     dataType: m.typeName,
-    metadata: m.toBrowseNodeMetadata(),
+    metadata: UmasFbMember.toMetadata(
+      direction: m.direction,
+      readable: m.readable,
+      unreadableReason: m.unreadableReason,
+    ),
   );
 }
 
@@ -69,7 +93,7 @@ void main() {
   group('BrowseNodeTile FB-member affordances', () {
     testWidgets('input direction renders Icons.login + (IN) suffix',
         (tester) async {
-      final member = const UmasFbMember(
+      final member = const _FbMemberFixture(
         name: 'cmdSpeed',
         typeName: 'REAL',
         direction: UmasFbMemberDirection.input,
@@ -89,7 +113,7 @@ void main() {
 
     testWidgets('output direction renders Icons.logout + (OUT) suffix',
         (tester) async {
-      final member = const UmasFbMember(
+      final member = const _FbMemberFixture(
         name: 'actualSpeed',
         typeName: 'REAL',
         direction: UmasFbMemberDirection.output,
@@ -108,7 +132,7 @@ void main() {
         'publicVar direction renders the existing variable affordance — '
         'no direction suffix, no direction icon, FA tag icon retained',
         (tester) async {
-      final member = const UmasFbMember(
+      final member = const _FbMemberFixture(
         name: 'config',
         typeName: 'BOOL',
         direction: UmasFbMemberDirection.publicVar,
@@ -131,7 +155,7 @@ void main() {
 
     testWidgets('inOut direction renders Icons.swap_horiz + (IN/OUT) suffix',
         (tester) async {
-      final member = const UmasFbMember(
+      final member = const _FbMemberFixture(
         name: 'sharedRef',
         typeName: 'INT',
         direction: UmasFbMemberDirection.inOut,
@@ -150,7 +174,7 @@ void main() {
         'unknown direction falls back to existing variable affordance '
         '— no direction suffix, no exception text',
         (tester) async {
-      final member = const UmasFbMember(
+      final member = const _FbMemberFixture(
         name: 'mystery',
         typeName: 'DINT',
         direction: UmasFbMemberDirection.unknown,
@@ -175,7 +199,7 @@ void main() {
         '[not readable] suffix + tooltip carrying the reason',
         (tester) async {
       const reason = 'VAR_IN_OUT (PLC returns 0x94)';
-      final member = const UmasFbMember(
+      final member = const _FbMemberFixture(
         name: 'sharedRef',
         typeName: 'INT',
         direction: UmasFbMemberDirection.inOut,

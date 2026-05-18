@@ -1,61 +1,30 @@
-// @phase4-stub — Phase 2/3 will replace this with the real model.
+// Browser-tree FB-member metadata bridge.
 //
-// This file is the Phase 4 (browser-tree UI affordances) stand-in for the
-// `UmasFbMember` model that Phase 2 (FB visibility) and Phase 3 (VAR_INPUT /
-// VAR_OUTPUT distinction) will eventually produce in `umas_types.dart` or a
-// sibling file. It lets Phase 4 ship the rendering against a stable shape
-// before Phases 2/3 have merged.
+// Phase 3 (VAR_INPUT / VAR_OUTPUT distinction) owns the canonical
+// [UmasFbMemberDirection] enum in `umas_fb_direction.dart`. This file
+// provides only the metadata-key constants + decoder statics that
+// [BrowseNode.metadata] uses to round-trip FB-member affordance state
+// for the browser-tree UI (Phase 4).
 //
-// **Merge unification recipe** (for the orchestrator when Phase 2/3 land):
-//   1. Phase 2 (or 3) defines the canonical `UmasFbMember` /
-//      `UmasFbMemberDirection` carrying the protocol fields (offset,
-//      blockNo, dataTypeId, etc.) on top of the minimum fields below.
-//   2. Delete this file.
-//   3. Update the single import in
-//      `lib/widgets/browse_panel.dart` to the real type's location.
-//   4. The four direction enum values MUST be named exactly
-//      `input | output | publicVar | inOut | unknown`. If Phase 3 picks
-//      different names (e.g. `inout`, `pub`), rename in
-//      `BrowseNodeTile._buildIcon` and the widget test.
-//   5. The widget reads only `name`, `typeName`, `direction`, `readable`,
-//      `unreadableReason`, and the three `kMeta*` metadata-key constants.
-//      The real model must keep these fields/keys (or define equivalents).
-//
-// See `.planning/phases/04-browser-tree-ui-affordances/04-CONTEXT.md` for
-// the full coexistence contract.
+// Post-merge (v1.1) state: the duplicate enum that lived here in Phase 4's
+// worktree has been removed in favour of Phase 3's canonical enum. The
+// widget call sites in `lib/widgets/browse_panel.dart` remain valid because
+// they only depend on `UmasFbMember.{kMetaDirection|kMetaReadable|
+// kMetaUnreadableReason}` constants and the three `*FromMetadata` static
+// helpers.
 
-/// Direction classification for a function-block instance member.
+import 'package:tfc_dart/core/umas_fb_direction.dart';
+
+export 'package:tfc_dart/core/umas_fb_direction.dart' show UmasFbMemberDirection;
+
+/// Metadata bridge between [UmasVariableTreeNode] (model layer) and
+/// [BrowseNode.metadata] (UI layer) for function-block instance members.
 ///
-/// Phase 4 paints icon + colour + suffix based on this value. Phase 3 (in a
-/// parallel worktree) is responsible for assigning the value when the FB
-/// member tree is assembled.
-enum UmasFbMemberDirection {
-  /// `VAR_INPUT` — readable inbound parameter of the FB.
-  input,
-
-  /// `VAR_OUTPUT` — readable outbound parameter of the FB.
-  output,
-
-  /// Public `VAR` — non-IN_OUT FB local; rendered with the existing
-  /// variable affordance (no direction suffix).
-  publicVar,
-
-  /// `VAR_IN_OUT` — bidirectional pointer. Plc4j drops these with
-  /// reason; pointer resolution is a Phase 5 stretch goal.
-  inOut,
-
-  /// Direction could not be determined. Falls back to the existing
-  /// variable affordance with no direction suffix.
-  unknown,
-}
-
-/// A single member of an FB instance as seen by the browser tree.
-///
-/// Phase 4 uses this only as a fixture carrier for tests and as the
-/// data carrier for the `BrowseNode.metadata` round-trip via
-/// [toBrowseNodeMetadata]. Phase 2/3 will own the real type and may add
-/// additional protocol fields (offset, blockNo, dataTypeId, etc.) — they
-/// must keep the five Phase 4 fields available.
+/// The widget layer (`browse_panel.dart`) reads three keys
+/// (`fbDirection`, `fbReadable`, `fbUnreadableReason`) off
+/// [BrowseNode.metadata]. The protocol layer (`umas_browse.dart`
+/// `_toBrowseNode`) writes them. Both sides go through this class so
+/// the key strings and direction-wire encoding stay in one place.
 class UmasFbMember {
   /// Metadata key under [BrowseNode.metadata] carrying the direction
   /// enum name (one of `input | output | publicVar | inOut | unknown`).
@@ -69,46 +38,7 @@ class UmasFbMember {
   /// is inaccessible (e.g. `'VAR_IN_OUT (PLC returns 0x94)'`).
   static const String kMetaUnreadableReason = 'fbUnreadableReason';
 
-  /// Member identifier, e.g. `'speed'`.
-  final String name;
-
-  /// Data-type name, e.g. `'REAL'`. Surfaced in the tile suffix /
-  /// detail strip; never null because Phase 2 always populates it.
-  final String typeName;
-
-  /// `VAR_INPUT` / `VAR_OUTPUT` / public / `VAR_IN_OUT` classification.
-  final UmasFbMemberDirection direction;
-
-  /// `false` for inaccessible members (e.g. unresolved `VAR_IN_OUT`
-  /// pointers or types missing from DD03). When `false`, the UI renders
-  /// the "not readable" indicator with [unreadableReason] as tooltip.
-  final bool readable;
-
-  /// Human-readable reason for why this member is inaccessible.
-  /// Required when [readable] is `false`; ignored otherwise.
-  final String? unreadableReason;
-
-  const UmasFbMember({
-    required this.name,
-    required this.typeName,
-    required this.direction,
-    this.readable = true,
-    this.unreadableReason,
-  });
-
-  /// Encodes this member's affordance state into the
-  /// [BrowseNode.metadata] string map used by the browser-tree UI.
-  ///
-  /// Phase 2/3 should call this from `UmasBrowseDataSource._toBrowseNode`
-  /// when constructing the `BrowseNode` for an FB member, merging the
-  /// returned map into the existing metadata.
-  Map<String, String> toBrowseNodeMetadata() {
-    return <String, String>{
-      kMetaDirection: directionToWire(direction),
-      kMetaReadable: readable ? 'true' : 'false',
-      if (unreadableReason != null) kMetaUnreadableReason: unreadableReason!,
-    };
-  }
+  const UmasFbMember._();
 
   /// Decodes the direction key from a [BrowseNode.metadata] map.
   /// Returns [UmasFbMemberDirection.unknown] for missing or
@@ -165,5 +95,21 @@ class UmasFbMember {
       default:
         return UmasFbMemberDirection.unknown;
     }
+  }
+
+  /// Encodes member affordance state into a [BrowseNode.metadata] map.
+  /// Used by `UmasBrowseDataSource._toBrowseNode` when constructing the
+  /// `BrowseNode` for an FB-member node.
+  static Map<String, String> toMetadata({
+    required UmasFbMemberDirection direction,
+    bool readable = true,
+    String? unreadableReason,
+  }) {
+    return <String, String>{
+      kMetaDirection: directionToWire(direction),
+      kMetaReadable: readable ? 'true' : 'false',
+      if (unreadableReason != null && unreadableReason.isNotEmpty)
+        kMetaUnreadableReason: unreadableReason,
+    };
   }
 }

@@ -7,6 +7,7 @@ import 'package:modbus_client/modbus_client.dart';
 import 'package:rxdart/rxdart.dart';
 import 'package:tfc_dart/core/umas_fb_direction.dart';
 import 'package:tfc_dart/core/umas_types.dart';
+import 'package:tfc_dart/core/umas_var_in_out.dart';
 
 /// A Modbus request carrying a UMAS (FC90) payload.
 ///
@@ -2217,13 +2218,23 @@ class UmasClient {
       // (browser tree, CLI --show-direction) can read it without
       // peeking into UmasVariable. `_expandVariable` doesn't carry the
       // direction parameter; rebuild the node with the direction attached.
+      // F-5 wiring: VAR_IN_OUT members are pointer-backed (PLC returns
+      // 0x94 on read); mark them unreadable with a human-readable reason
+      // so the UI renders the "not readable" affordance instead of
+      // silently dropping them.
+      final dir = m.direction;
+      final readable = dir == null ? true : isReadableForDirection(dir);
+      final unreadableReason =
+          dir == null ? null : unreadableReasonForDirection(dir);
       children.add(UmasVariableTreeNode(
         name: childNode.name,
         path: childNode.path,
         children: childNode.children,
         variable: childNode.variable,
         dataType: childNode.dataType,
-        direction: m.direction,
+        direction: dir,
+        readable: readable,
+        unreadableReason: unreadableReason,
       ));
     }
 

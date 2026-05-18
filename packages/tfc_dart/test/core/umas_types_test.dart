@@ -43,4 +43,31 @@ void main() {
       expect(result[0].value, equals(''));
     });
   });
+
+  group('parseVariableValues — STRING bound check (CRIT-1)', () {
+    test('STRING(byteSize=256) with 1-byte 0x22 response does not throw', () {
+      // Live M580 (0x22 ReadVariable) returns 1 byte for an empty STRING(256).
+      // The pre-loop bound check used to require 4 bytes per STRING (clamped
+      // ceiling), which threw "Buffer underflow" before any value was parsed.
+      // Phase 1 fixed the 0x50 MonitorPlc path; CRIT-1 covers the 0x22 path.
+      const stringType = UmasDataTypeRef(id: 9, name: 'STRING', byteSize: 256);
+      final bytes = Uint8List.fromList([0x00]);
+
+      final result = parseVariableValues(bytes, [stringType]);
+
+      expect(result.length, 1);
+      expect(result[0].typeName, 'STRING');
+      expect(result[0].value, equals(''));
+    });
+
+    test('STRING(byteSize=256) with "OK"+null+pad 4-byte response decodes', () {
+      const stringType = UmasDataTypeRef(id: 9, name: 'STRING', byteSize: 256);
+      final bytes = Uint8List.fromList([0x4f, 0x4b, 0x00, 0x00]);
+
+      final result = parseVariableValues(bytes, [stringType]);
+
+      expect(result.length, 1);
+      expect(result[0].value, equals('OK'));
+    });
+  });
 }

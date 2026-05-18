@@ -404,10 +404,23 @@ Future<int> _readCommand(UmasClient umas, String name) async {
       ok++;
     } on UmasException catch (e) {
       fail++;
+      // CRIT-1: when errorCode == 0 the failure is a parse / decode
+      // condition (e.g. "Buffer underflow") and the actionable
+      // signal is in `e.message`. Print it to stderr so operators
+      // and `v1.1-verify.sh` greps surface the real cause rather
+      // than a misleading `0x0`.
+      final codeHex = '0x${e.errorCode.toRadixString(16)}';
+      if (e.errorCode == 0) {
+        stderr.writeln('  ${leaf.path}  ${dt.name} '
+            '[block=0x${v.blockNo.toRadixString(16)} '
+            'off=0x${v.offset.toRadixString(16)}]  -> '
+            '$codeHex  ${e.message}');
+      }
       print('  ${leaf.path}  ${dt.name} '
           '[block=0x${v.blockNo.toRadixString(16)} '
           'off=0x${v.offset.toRadixString(16)}]  -> '
-          '0x${e.errorCode.toRadixString(16)}');
+          '$codeHex'
+          '${e.errorCode == 0 ? '  ${e.message}' : ''}');
     }
   }
 

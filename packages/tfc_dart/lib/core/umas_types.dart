@@ -693,9 +693,19 @@ List<TypedVariableValue> parseVariableValues(
   // T-05-05: Validate total expected bytes fit in buffer.
   // Wide types (TON, struct instances) are clamped to 4 bytes per the PLC's
   // dataSizeIndex range, so use the on-wire size (max 4) for the bound
-  // check rather than the declared byteSize.
+  // check rather than the declared byteSize. STRING / BYTE_STRING / WSTRING
+  // are intentionally excluded from the bound check (CRIT-1): the M580 may
+  // return as little as 1 byte for empty / narrow STRING reads through the
+  // 0x22 path, well below the 4-byte ceiling above. parseVariableValue's
+  // graceful slice path handles the under-read.
+  bool isStringy(String n) {
+    final u = n.toUpperCase();
+    return u == 'STRING' || u == 'BYTE_STRING' || u == 'WSTRING';
+  }
+
   int totalExpected = 0;
   for (final type in types) {
+    if (isStringy(type.name)) continue;
     totalExpected += type.byteSize > 4 ? 4 : type.byteSize;
   }
   if (totalExpected > rawBytes.length) {
@@ -711,7 +721,13 @@ List<TypedVariableValue> parseVariableValues(
   for (final type in types) {
     results.add(parseVariableValue(rawBytes, offset, type));
     // Advance by the actual on-wire size (clamped to 4 for wide types).
-    offset += type.byteSize > 4 ? 4 : type.byteSize;
+    // For STRING-family the on-wire size is whatever remains up to 4 bytes,
+    // matching parseVariableValue's graceful-slice semantics.
+    final remaining = rawBytes.length - offset;
+    final declaredAdvance = type.byteSize > 4 ? 4 : type.byteSize;
+    offset += isStringy(type.name) && declaredAdvance > remaining
+        ? remaining
+        : declaredAdvance;
   }
   return results;
 }

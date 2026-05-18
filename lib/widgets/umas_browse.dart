@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:tfc_dart/core/umas_client.dart';
+import 'package:tfc_dart/core/umas_fb_browse_types.dart';
 import 'package:tfc_dart/core/umas_types.dart';
 import 'package:tfc_dart/core/state_man.dart';
 import 'package:tfc_dart/core/modbus_device_client.dart';
@@ -90,6 +91,27 @@ class UmasBrowseDataSource implements BrowseDataSource {
   }
 
   BrowseNode _toBrowseNode(UmasVariableTreeNode treeNode) {
+    final metadata = <String, String>{
+      'path': treeNode.path,
+      if (treeNode.variable != null) ...{
+        'blockNo': treeNode.variable!.blockNo.toString(),
+        'offset': treeNode.variable!.offset.toString(),
+        'dataTypeId': treeNode.variable!.dataTypeId.toString(),
+      },
+      if (treeNode.dataType != null) ...{
+        'dataTypeName': treeNode.dataType!.name,
+        'byteSize': treeNode.dataType!.byteSize.toString(),
+      },
+    };
+    // CRIT-2 wiring: surface FB-member affordance state to the UI layer
+    // (browse_panel BrowseNodeTile reads these via UmasFbMember.*FromMetadata).
+    if (treeNode.direction != null) {
+      metadata.addAll(UmasFbMember.toMetadata(
+        direction: treeNode.direction!,
+        readable: treeNode.readable,
+        unreadableReason: treeNode.unreadableReason,
+      ));
+    }
     return BrowseNode(
       id: treeNode.path,
       displayName: treeNode.name,
@@ -97,18 +119,7 @@ class UmasBrowseDataSource implements BrowseDataSource {
           ? BrowseNodeType.folder
           : BrowseNodeType.variable,
       dataType: treeNode.dataType?.name,
-      metadata: {
-        'path': treeNode.path,
-        if (treeNode.variable != null) ...{
-          'blockNo': treeNode.variable!.blockNo.toString(),
-          'offset': treeNode.variable!.offset.toString(),
-          'dataTypeId': treeNode.variable!.dataTypeId.toString(),
-        },
-        if (treeNode.dataType != null) ...{
-          'dataTypeName': treeNode.dataType!.name,
-          'byteSize': treeNode.dataType!.byteSize.toString(),
-        },
-      },
+      metadata: metadata,
     );
   }
 
