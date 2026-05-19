@@ -48,7 +48,6 @@ import 'package:tfc/providers/navigator_key.dart';
 import 'package:tfc/providers/proposal_watcher.dart';
 import 'package:tfc/providers/proposal_state.dart';
 import 'package:tfc/providers/scaffold_messenger_key.dart';
-import 'package:tfc/providers/state_man.dart' show stateManProvider;
 
 import 'package:tfc_dart/core/secure_storage/secure_storage.dart';
 import 'package:tfc_dart/core/log_config.dart';
@@ -424,15 +423,6 @@ class MyApp extends ConsumerWidget {
 
     // Initialize chat lifecycle management (MCP bridge connect/disconnect)
     ref.watch(chatLifecycleProvider);
-
-    // v1.1.x Bug A: eagerly materialize StateMan so device-client
-    // connect() loops fire from app launch instead of waiting for the
-    // operator to navigate to Server Config / Key Repository. The
-    // provider is keepAlive — first read pins it for the app's lifetime
-    // and `ref.watch` re-tries on transient construction errors. The
-    // returned AsyncValue is ignored here; downstream consumers
-    // (connection chips, asset cards) observe the same provider.
-    ref.watch(stateManProvider);
 
     // Expose the BeamerDelegate's navigator key so overlay widgets
     // (chat, drawings, FAB) can show dialogs / access Navigator.
