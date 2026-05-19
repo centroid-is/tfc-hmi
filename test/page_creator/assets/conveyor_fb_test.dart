@@ -154,9 +154,14 @@ void main() {
       // All three indicators render a "?" placeholder via the
       // ConveyorFbIndicator widget. Locate by Semantics label so
       // we test the contract, not the painter.
-      expect(find.bySemanticsLabel('red: unknown'), findsOneWidget);
-      expect(find.bySemanticsLabel('grey: unknown'), findsOneWidget);
-      expect(find.bySemanticsLabel('green: unknown'), findsOneWidget);
+      expect(find.byKey(const ValueKey('conveyor-fb-indicator:red:unknown')),
+          findsOneWidget);
+      expect(find.byKey(const ValueKey('conveyor-fb-indicator:grey:unknown')),
+          findsOneWidget);
+      expect(find.byKey(const ValueKey('conveyor-fb-indicator:green:unknown')),
+          findsOneWidget);
+      // The "?" glyph appears for every unknown indicator.
+      expect(find.text('?'), findsNWidgets(3));
     });
 
     testWidgets('decoder returning true/false renders correct state',
@@ -179,9 +184,12 @@ void main() {
         ),
       ));
 
-      expect(find.bySemanticsLabel('red: on'), findsOneWidget);
-      expect(find.bySemanticsLabel('grey: off'), findsOneWidget);
-      expect(find.bySemanticsLabel('green: off'), findsOneWidget);
+      expect(find.byKey(const ValueKey('conveyor-fb-indicator:red:on')),
+          findsOneWidget);
+      expect(find.byKey(const ValueKey('conveyor-fb-indicator:grey:off')),
+          findsOneWidget);
+      expect(find.byKey(const ValueKey('conveyor-fb-indicator:green:off')),
+          findsOneWidget);
     });
 
     testWidgets('decoder result flips when parent word changes',
@@ -203,8 +211,10 @@ void main() {
           ),
         ),
       ));
-      expect(find.bySemanticsLabel('red: off'), findsOneWidget);
-      expect(find.bySemanticsLabel('green: on'), findsOneWidget);
+      expect(find.byKey(const ValueKey('conveyor-fb-indicator:red:off')),
+          findsOneWidget);
+      expect(find.byKey(const ValueKey('conveyor-fb-indicator:green:on')),
+          findsOneWidget);
 
       // Then: all three lit.
       await tester.pumpWidget(wrap(
@@ -219,9 +229,12 @@ void main() {
           ),
         ),
       ));
-      expect(find.bySemanticsLabel('red: on'), findsOneWidget);
-      expect(find.bySemanticsLabel('grey: on'), findsOneWidget);
-      expect(find.bySemanticsLabel('green: on'), findsOneWidget);
+      expect(find.byKey(const ValueKey('conveyor-fb-indicator:red:on')),
+          findsOneWidget);
+      expect(find.byKey(const ValueKey('conveyor-fb-indicator:grey:on')),
+          findsOneWidget);
+      expect(find.byKey(const ValueKey('conveyor-fb-indicator:green:on')),
+          findsOneWidget);
     });
 
     testWidgets('partial decoder result — some bits known, others unknown',
@@ -242,9 +255,12 @@ void main() {
         ),
       ));
 
-      expect(find.bySemanticsLabel('red: on'), findsOneWidget);
-      expect(find.bySemanticsLabel('grey: unknown'), findsOneWidget);
-      expect(find.bySemanticsLabel('green: unknown'), findsOneWidget);
+      expect(find.byKey(const ValueKey('conveyor-fb-indicator:red:on')),
+          findsOneWidget);
+      expect(find.byKey(const ValueKey('conveyor-fb-indicator:grey:unknown')),
+          findsOneWidget);
+      expect(find.byKey(const ValueKey('conveyor-fb-indicator:green:unknown')),
+          findsOneWidget);
     });
 
     testWidgets('null parentWordValue -> all indicators unknown',
@@ -266,9 +282,14 @@ void main() {
         ),
       ));
 
-      expect(find.bySemanticsLabel('red: unknown'), findsOneWidget);
-      expect(find.bySemanticsLabel('grey: unknown'), findsOneWidget);
-      expect(find.bySemanticsLabel('green: unknown'), findsOneWidget);
+      expect(find.byKey(const ValueKey('conveyor-fb-indicator:red:unknown')),
+          findsOneWidget);
+      expect(find.byKey(const ValueKey('conveyor-fb-indicator:grey:unknown')),
+          findsOneWidget);
+      expect(find.byKey(const ValueKey('conveyor-fb-indicator:green:unknown')),
+          findsOneWidget);
+      // The "?" glyph appears for every unknown indicator.
+      expect(find.text('?'), findsNWidgets(3));
     });
   });
 
