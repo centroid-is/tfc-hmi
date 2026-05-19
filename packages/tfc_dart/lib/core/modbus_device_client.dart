@@ -207,22 +207,68 @@ class ModbusDeviceClientAdapter implements DeviceClient {
     }
   }
 
-  /// Wire the (re)connect → rebuild-table → start-timers chain. Cheap
-  /// no-op when [umasEnabled] is false or there are no UMAS-by-name
-  /// keys — keeps classic-Modbus adapters untouched.
+  /// Wire the (re)connect → pair-session → rebuild-table → start-timers
+  /// chain. Cheap no-op when [umasEnabled] is false — keeps classic-Modbus
+  /// adapters untouched.
+  ///
+  /// v1.1.x Bug A real fix: this fires for ALL `umasEnabled` adapters,
+  /// not just those with at least one UMAS-by-name key. Without it, an
+  /// `umasEnabled=true` server whose KeyMappings contain only classic-
+  /// Modbus addresses (no `variableName` entries) would never pair the
+  /// UMAS session at boot — the only path to session init was a read of
+  /// a UMAS-by-name key, which never happened. The
+  /// [EffectiveDeviceStatus] chip stayed amber forever, lying to the
+  /// operator about a server that's actually fine. We now eagerly pair
+  /// the session via [_eagerPairUmasSession] on every `connected`
+  /// transition. When UMAS-by-name keys ARE configured, the same
+  /// listener also triggers the MonitorPlc table build.
   void _initUmasLifecycle() {
     if (!umasEnabled) return;
-    if (_umasKeysByGroup.isEmpty) return;
     _umasConnectionSub = wrapper.connectionStream.listen((status) {
       if (status == ConnectionStatus.connected) {
         // Defer to a microtask so listeners don't fight `_getClientWrapper`
         // ordering on the very first connected emission.
-        Future.microtask(_buildUmasTableAndStartTimers);
+        if (_umasKeysByGroup.isEmpty) {
+          // No MonitorPlc registrations needed — just pair the session
+          // so the chip surfaces real UMAS health.
+          Future.microtask(_eagerPairUmasSession);
+        } else {
+          // The table-build path already calls `readPlcStatus` internally,
+          // which pairs the session as a side effect. No need to fire
+          // both.
+          Future.microtask(_buildUmasTableAndStartTimers);
+        }
       } else {
         _stopUmasTimers();
         _umasTableBuiltFor = null;
       }
     });
+  }
+
+  /// v1.1.x Bug A real fix: fire `readPlcStatus()` on a freshly-
+  /// (re)connected UMAS-enabled adapter so the session pairs without
+  /// waiting for an operator-triggered read.
+  ///
+  /// `readPlcStatus()` runs through [`UmasClient._withSession`] which
+  /// drives `readPlcId` + `init` + `_readProjectBlock` on its first
+  /// call after a (re)connect, transitioning the session into
+  /// [`UmasSessionState.paired`]. The session-state stream emission
+  /// flows back into [_recomputeEffectiveStatus] and flips the
+  /// [EffectiveDeviceStatus] chip from `connecting` → `connected`
+  /// (paired) or `umasUnhealthy` (init failure surfaced in tooltip).
+  ///
+  /// Errors are logged at info level — a non-Schneider Modbus server on
+  /// an UMAS-flagged port should fail loudly via the chip but not crash
+  /// the adapter. Re-fires on every reconnect via [_initUmasLifecycle].
+  Future<void> _eagerPairUmasSession() async {
+    final umas = _getUmasClient();
+    if (umas == null) return;
+    try {
+      await umas.readPlcStatus();
+    } catch (e) {
+      _log.i('UMAS eager session pairing failed: $e — chip will '
+          'reflect umasUnhealthy via session-state stream');
+    }
   }
 
   /// TD-004 (v1.1.x): map a pure TCP [ConnectionStatus] to its
