@@ -91,6 +91,19 @@ class UmasClient {
   /// Memory block index from 0x02 response, used in 0x26 payloads.
   int? _index;
 
+  /// Project-level hardware ID (the 4-byte LE id at offset 5 of the
+  /// `0x26+[0x04]` directory header and at offset 5 of memory block
+  /// 0x30). Exposed for diagnostic / probe tooling (`bitalias-probe`)
+  /// that builds raw `0x26` payloads carrying the hwId. Null until
+  /// the session has initialised through `_readProjectBlock` (the
+  /// last step of `_initWithRetry`).
+  int? get hardwareId => _hardwareId;
+
+  /// Memory block index used by 0x26 payload byte 2 (`_build0x26Payload`).
+  /// Exposed for diagnostic / probe tooling. Null until the session
+  /// has initialised through `_readProjectBlock`.
+  int? get memoryIndex => _index;
+
   /// Block CRC checksums from the last PlcStatus (0x04) response.
   /// Required by ReadVariable (0x22) and WriteVariable (0x23).
   List<int>? _blockCrcs;
