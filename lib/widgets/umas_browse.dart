@@ -46,17 +46,17 @@ class UmasBrowseDataSource implements BrowseDataSource {
 
   @override
   Future<BrowseNodeDetail> fetchDetail(BrowseNode node) async {
-    String? value;
     final dataTypeIdStr = node.metadata['dataTypeId'];
     final blockNoStr = node.metadata['blockNo'];
-    // Only attempt to read if this is a leaf scalar variable. Folders
-    // (struct/FB nodes whose children expose the actual scalars) and
-    // arrays cannot be read directly via ReadVariable; trying to do so
-    // returns 0x94 from the PLC. Reading is only meaningful for leaves.
-    final isReadable = node.type == BrowseNodeType.variable &&
+    // Branch 1: scalar leaf — single-ref read, no structChildren. This
+    // path is unchanged from v1.0 semantics: folders/arrays return 0x94
+    // when hit directly, so reading is only meaningful for scalar
+    // leaves carrying blockNo + dataTypeId.
+    final isScalar = node.type == BrowseNodeType.variable &&
         blockNoStr != null &&
         dataTypeIdStr != null;
-    if (isReadable) {
+    if (isScalar) {
+      String? value;
       try {
         if (_client.blockCrcs == null || _client.blockCrcs!.isEmpty) {
           await _client.readPlcStatus();
@@ -83,12 +83,172 @@ class UmasBrowseDataSource implements BrowseDataSource {
       } catch (e) {
         value = 'read error: $e';
       }
+      return BrowseNodeDetail(
+        dataType: node.dataType,
+        description: node.metadata['path'],
+        value: value,
+      );
     }
+
+    // Branch 2: FB / struct folder with at least one readable
+    // descendant leaf — fan out a single batched read across all
+    // readable members and synthesise child BrowseNodes (260519-hgc
+    // inspection layer). VAR_IN_OUT members surface as `[not readable:
+    // ...]` placeholders without issuing a read for them.
+    final tree = _pathIndex?[node.id];
+    if (tree != null) {
+      final readable = <UmasVariableTreeNode>[];
+      final unreadable = <UmasVariableTreeNode>[];
+      _collectFbLeaves(tree, readable, unreadable);
+      if (readable.isNotEmpty || unreadable.isNotEmpty) {
+        return _synthesizeFbChildren(tree, readable, unreadable);
+      }
+    }
+
+    // Branch 3: default — pure folder / unknown node. No read attempt;
+    // no structChildren. Returns just the path as description.
     return BrowseNodeDetail(
       dataType: node.dataType,
       description: node.metadata['path'],
-      value: value,
     );
+  }
+
+  // Depth-first walk that splits leaves into readable vs unreadable.
+  // A leaf is `variable != null && dataType != null`. Sub-folders are
+  // recursed into (nested structs inside an FB instance are flattened
+  // into the same children list). Encounter order is preserved so the
+  // synthesised display order matches the source tree.
+  void _collectFbLeaves(
+    UmasVariableTreeNode root,
+    List<UmasVariableTreeNode> readable,
+    List<UmasVariableTreeNode> unreadable,
+  ) {
+    for (final child in root.children) {
+      if (child.variable != null && child.dataType != null) {
+        if (child.readable) {
+          readable.add(child);
+        } else {
+          unreadable.add(child);
+        }
+      } else if (child.children.isNotEmpty) {
+        _collectFbLeaves(child, readable, unreadable);
+      }
+    }
+  }
+
+  // Issues the single batched readVariables call and assembles the
+  // BrowseNodeDetail. Catches transport errors and surfaces them via
+  // `detail.value = 'read error: $e'` with `structChildren = null`,
+  // matching the scalar branch's error-style.
+  Future<BrowseNodeDetail> _synthesizeFbChildren(
+    UmasVariableTreeNode tree,
+    List<UmasVariableTreeNode> readable,
+    List<UmasVariableTreeNode> unreadable,
+  ) async {
+    List<TypedVariableValue> values;
+    try {
+      if (_client.blockCrcs == null || _client.blockCrcs!.isEmpty) {
+        await _client.readPlcStatus();
+      }
+      final pairs = <(UmasVariable, UmasDataTypeRef)>[
+        for (final leaf in readable) (leaf.variable!, leaf.dataType!),
+      ];
+      values = pairs.isEmpty
+          ? const <TypedVariableValue>[]
+          : await _client.readVariables(pairs);
+    } catch (e) {
+      return BrowseNodeDetail(
+        value: 'read error: $e',
+        dataType: tree.dataType?.name,
+        description: tree.path,
+      );
+    }
+
+    final children = <BrowseNode>[];
+    for (var i = 0; i < readable.length; i++) {
+      final leaf = readable[i];
+      final typed = values[i];
+      children.add(_fbMemberNode(leaf, value: '${typed.value}'));
+    }
+    for (final leaf in unreadable) {
+      final reason = leaf.unreadableReason ?? 'unknown reason';
+      children.add(_fbMemberNode(
+        leaf,
+        value: '[not readable: $reason]',
+        readable: false,
+        unreadableReason: leaf.unreadableReason,
+      ));
+    }
+
+    final summary = _formatFbSummary(readable, unreadable, values);
+    return BrowseNodeDetail(
+      value: summary,
+      dataType: tree.dataType?.name,
+      description: tree.path,
+      structChildren: children,
+    );
+  }
+
+  // Builds a BrowseNode for one FB member entry. The synthesised node
+  // carries the same blockNo / offset / dataType metadata that
+  // `_toBrowseNode` writes for tree leaves (so downstream consumers
+  // like BrowseNodeTile keep rendering FB direction badges), plus the
+  // rendered `value` under metadata['value'].
+  BrowseNode _fbMemberNode(
+    UmasVariableTreeNode leaf, {
+    required String value,
+    bool readable = true,
+    String? unreadableReason,
+  }) {
+    final metadata = <String, String>{
+      'path': leaf.path,
+      'value': value,
+      if (leaf.variable != null) ...{
+        'blockNo': leaf.variable!.blockNo.toString(),
+        'offset': leaf.variable!.offset.toString(),
+        'dataTypeId': leaf.variable!.dataTypeId.toString(),
+      },
+      if (leaf.dataType != null) ...{
+        'dataTypeName': leaf.dataType!.name,
+        'byteSize': leaf.dataType!.byteSize.toString(),
+      },
+    };
+    if (leaf.direction != null) {
+      metadata.addAll(UmasFbMember.toMetadata(
+        direction: leaf.direction!,
+        readable: readable,
+        unreadableReason: unreadableReason ?? leaf.unreadableReason,
+      ));
+    }
+    return BrowseNode(
+      id: leaf.path,
+      displayName: leaf.name,
+      type: BrowseNodeType.variable,
+      dataType: leaf.dataType?.name,
+      metadata: metadata,
+    );
+  }
+
+  // Brace-wrapped value preview for the FB-instance detail strip.
+  // Mirrors the OPC-UA `formatDynamicValue` shape: up to 6 entries
+  // inline, then `, ... (N fields)` once the total exceeds 6. Unreadable
+  // members surface as `name: [n/r]` so the preview's element count
+  // honestly matches the total field count.
+  String _formatFbSummary(
+    List<UmasVariableTreeNode> readable,
+    List<UmasVariableTreeNode> unreadable,
+    List<TypedVariableValue> values,
+  ) {
+    final entries = <String>[];
+    for (var i = 0; i < readable.length; i++) {
+      entries.add('${readable[i].name}: ${values[i].value}');
+    }
+    for (final u in unreadable) {
+      entries.add('${u.name}: [n/r]');
+    }
+    final total = entries.length;
+    if (total <= 6) return '{${entries.join(', ')}}';
+    return '{${entries.take(6).join(', ')}, ... ($total fields)}';
   }
 
   BrowseNode _toBrowseNode(UmasVariableTreeNode treeNode) {
