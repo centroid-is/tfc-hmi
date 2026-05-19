@@ -59,6 +59,7 @@ import 'dart:typed_data';
 import 'package:args/args.dart';
 import 'package:modbus_client/modbus_client.dart';
 import 'package:modbus_client_tcp/modbus_client_tcp.dart';
+import 'package:tfc_dart/core/umas_bit_alias_map.dart';
 import 'package:tfc_dart/core/umas_client.dart';
 import 'package:tfc_dart/core/umas_error_messages.dart';
 import 'package:tfc_dart/core/umas_types.dart';
@@ -145,6 +146,10 @@ Future<int> _main(List<String> args) async {
       final typeId = _parseInt(rest[1]);
       return _withClient(rest[0], port, unit, timeout,
           (umas) => _dumpArrayCommand(umas, typeId));
+    case 'bit-aliases':
+      _need(rest, 1, 'bit-aliases <host>');
+      return _withClient(rest[0], port, unit, timeout,
+          (umas) => _bitAliasesCommand(umas, emitJson: emitJson));
     default:
       stderr.writeln('Unknown command: $command\n');
       _printUsage(parser);
@@ -166,7 +171,9 @@ void _printUsage(ArgParser parser) {
       '  write  <host> <name> <value>  Write a single value to a named variable');
   stderr.writeln('  dump-types <host>          Dump every DD03 data type');
   stderr.writeln(
-      '  dump-array <host> <typeId> Dump raw DD02 bytes for an array type id\n');
+      '  dump-array <host> <typeId> Dump raw DD02 bytes for an array type id');
+  stderr.writeln(
+      '  bit-aliases <host>         Enumerate every located-bit / bit alias\n');
   stderr.writeln('Options:\n${parser.usage}');
 }
 
@@ -696,6 +703,81 @@ Future<int> _dumpArrayCommand(UmasClient umas, int typeId) async {
         '(${d.count} elements)');
   }
   print('  total elements: ${arr.totalElementCount}');
+  return 0;
+}
+
+// ---------------------------------------------------------------------------
+// bit-aliases — enumerate every located-bit / bit alias on the PLC
+// ---------------------------------------------------------------------------
+
+Future<int> _bitAliasesCommand(UmasClient umas,
+    {bool emitJson = false}) async {
+  final UmasBitAliasMap map;
+  try {
+    map = await umas.ensureBitAliasMap();
+  } on UmasException catch (e) {
+    final info = mapUmasError(e);
+    if (info != null) {
+      stderr.writeln(info.summary);
+      stderr.writeln(info.detail);
+    } else {
+      stderr.writeln('UMAS bit-alias enumeration error: ${e.message}');
+    }
+    return 1;
+  }
+
+  if (emitJson) {
+    final out = {
+      'count': map.length,
+      'entries': [
+        for (final e in map.entries)
+          {
+            'alias': e.aliasName,
+            'parent': e.parentVariableName,
+            'parentBlock': e.parentBlock,
+            'parentByteOffset': e.parentByteOffset,
+            'bitOffset': e.bitOffset,
+          },
+      ],
+    };
+    print(const JsonEncoder.withIndent('  ').convert(out));
+    return 0;
+  }
+
+  print('${map.length} bit-alias(es)\n');
+  // Header
+  print('  alias                                                 '
+      'parent                                            '
+      '   block  byteOff  bit');
+  print('  ${'-' * 116}');
+  for (final e in map.entries) {
+    final alias = e.aliasName.padRight(52).substring(
+        0, e.aliasName.length > 52 ? 52 : e.aliasName.length).padRight(52);
+    final parent = (e.parentVariableName ?? '').padRight(48).substring(
+        0,
+        (e.parentVariableName ?? '').length > 48
+            ? 48
+            : (e.parentVariableName ?? '').length).padRight(48);
+    final block = '0x${e.parentBlock.toRadixString(16).padLeft(4, '0')}';
+    final byteOff =
+        '0x${e.parentByteOffset.toRadixString(16).padLeft(4, '0')}';
+    final bit = e.bitOffset.toString().padLeft(3);
+    print('  $alias  $parent  $block   $byteOff   $bit');
+  }
+  print('');
+  // Per-parent summary so the operator can see the array-bound layout.
+  final byParent = <String, int>{};
+  for (final e in map.entries) {
+    final k = e.parentVariableName ?? '?';
+    byParent[k] = (byParent[k] ?? 0) + 1;
+  }
+  if (byParent.isNotEmpty) {
+    print('Summary (per parent variable):');
+    final keys = byParent.keys.toList()..sort();
+    for (final k in keys) {
+      print('  $k: ${byParent[k]} bit(s)');
+    }
+  }
   return 0;
 }
 

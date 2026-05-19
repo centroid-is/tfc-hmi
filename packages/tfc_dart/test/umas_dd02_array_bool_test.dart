@@ -123,7 +123,7 @@ void main() {
   // BOOL-array type, then expand the array into N BitAliasEntry rows
   // using parent.blockNo / parent.offset.
   // --------------------------------------------------------------------
-  group('UmasBitAliasMap.buildFromArrayDefinition', () {
+  group('UmasBitAliasMap.buildFromArrayDefinition — packed-bits layout', () {
     test('ARRAY[1..16] OF BOOL → 16 entries, bit 0..15 of parent word', () {
       const def = UmasArrayTypeDefinition(
         classId: 0x04,
@@ -138,6 +138,7 @@ void main() {
         parentBlock: 1,
         parentByteOffset: 0,
         aliasPrefix: '%M',
+        layout: UmasBitAliasMap.bitArrayLayoutPackedBits16,
       );
       expect(entries, hasLength(16));
       expect(entries.first.aliasName, '%M1');
@@ -167,6 +168,7 @@ void main() {
         parentBlock: 2,
         parentByteOffset: 0x40,
         aliasPrefix: '%M',
+        layout: UmasBitAliasMap.bitArrayLayoutPackedBits16,
       );
       expect(entries, hasLength(128));
       expect(entries.first.aliasName, '%M257');
@@ -181,7 +183,68 @@ void main() {
       expect(entries.last.bitOffset, 15);
       expect(entries.last.parentByteOffset, 0x40 + 14);
     });
+  });
 
+  group('UmasBitAliasMap.buildFromArrayDefinition — byte-per-bool layout', () {
+    // Schneider's default on M580 for `ARRAY[..] OF BOOL` fields: every
+    // BOOL takes one byte, `bitOffset` stays at 0, byte offset advances
+    // by 1 per element. Verified against the live PLC via `dart run
+    // tool/umas_cli.dart browse 192.168.112.159` (Elevator FB's
+    // DROP_HEALTH at block=0x33 off=0x90 → [1]@0x90, [2]@0x91, …,
+    // [31]@0xAE) and the DD03 record `id=0x1f byteSize=31`
+    // (31 elements × 1 byte = 31 bytes).
+    test('ARRAY[1..31] OF BOOL → 31 byte-spaced entries (default layout)',
+        () {
+      const def = UmasArrayTypeDefinition(
+        classId: 0x04,
+        elementTypeId: 0x0001,
+        dimensions: [
+          UmasArrayDimension(startIndex: 1, upperBound: 31),
+        ],
+      );
+      final entries = UmasBitAliasMap.buildFromArrayDefinition(
+        definition: def,
+        parentVariableName: 'DROP_HEALTH',
+        parentBlock: 0x33,
+        parentByteOffset: 0x90,
+        aliasPrefix: 'DROP_HEALTH[',
+      );
+      expect(entries, hasLength(31));
+      expect(entries.first.aliasName, 'DROP_HEALTH[1');
+      expect(entries.first.parentByteOffset, 0x90);
+      expect(entries.first.bitOffset, 0);
+      expect(entries[5].aliasName, 'DROP_HEALTH[6');
+      expect(entries[5].parentByteOffset, 0x90 + 5);
+      expect(entries[5].bitOffset, 0);
+      expect(entries.last.aliasName, 'DROP_HEALTH[31');
+      expect(entries.last.parentByteOffset, 0x90 + 30);
+      expect(entries.last.bitOffset, 0);
+    });
+
+    test('default layout (no explicit param) is byte-per-bool', () {
+      const def = UmasArrayTypeDefinition(
+        classId: 0x04,
+        elementTypeId: 0x0001,
+        dimensions: [
+          UmasArrayDimension(startIndex: 1, upperBound: 8),
+        ],
+      );
+      final entries = UmasBitAliasMap.buildFromArrayDefinition(
+        definition: def,
+        parentVariableName: 'flags',
+        parentBlock: 1,
+        parentByteOffset: 0,
+        aliasPrefix: 'flags[',
+      );
+      // Each element at a distinct byte offset, bitOffset always 0.
+      for (int i = 0; i < 8; i++) {
+        expect(entries[i].parentByteOffset, i);
+        expect(entries[i].bitOffset, 0);
+      }
+    });
+  });
+
+  group('UmasBitAliasMap.buildFromArrayDefinition — non-BOOL filter', () {
     test('non-BOOL array → empty (filtered out)', () {
       const def = UmasArrayTypeDefinition(
         classId: 0x04,

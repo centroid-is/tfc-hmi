@@ -23,6 +23,20 @@ import 'dart:typed_data';
 
 import 'package:tfc_dart/core/umas_types.dart';
 
+/// Wire-format layout enum. Public (re-exported via static fields on
+/// [UmasBitAliasMap]) but only meaningfully constructed through the
+/// `bitArrayLayout*` constants — the type itself is private.
+enum _BitArrayLayout {
+  /// 16 BOOLs packed per 2-byte WORD; `bitOffset = i % 16`,
+  /// `parentByteOffset += (i ~/ 16) * 2`.
+  packedBits16,
+
+  /// 1 BOOL per byte (Schneider's default on M580 / B_Elevator for
+  /// `ARRAY[..] OF BOOL` fields); `bitOffset = 0`,
+  /// `parentByteOffset += i`.
+  bytePerBool,
+}
+
 /// One located-bit allocation: an alias name pinned to a single bit of
 /// a known parent WORD in PLC memory.
 class BitAliasEntry {
@@ -115,6 +129,22 @@ class UmasBitAliasMap {
   /// Number of entries in the map.
   int get length => _ordered.length;
 
+  /// Storage layout of an `ARRAY[..] OF BOOL` on the wire.
+  ///
+  /// Schneider PLCs declare both layouts depending on context:
+  ///   * [packedBits16]: 16 BOOLs per 2-byte WORD; each successive
+  ///     element advances the bit position within the same word,
+  ///     wrapping to the next word every 16 entries. This is the
+  ///     classical "located bit" / `%M`-style packing.
+  ///   * [bytePerBool]: 1 BOOL per byte (a non-zero byte is `TRUE`);
+  ///     each successive element advances the byte offset by 1 and
+  ///     `bitOffset` stays at 0. Observed on M580 / B_Elevator for
+  ///     `ARRAY[..] OF BOOL` fields inside DFB instances — see
+  ///     `Elevator.BMEP58_ECPU_EXT.DROP_HEALTH` whose array `byteSize`
+  ///     equals the element count (31 → 31 bytes).
+  static const bitArrayLayoutPackedBits16 = _BitArrayLayout.packedBits16;
+  static const bitArrayLayoutBytePerBool = _BitArrayLayout.bytePerBool;
+
   /// Expand a single `ARRAY[..] OF BOOL` definition (decoded from a DD02
   /// short record via [UmasArrayTypeDefinition.tryParse]) into
   /// per-bit [BitAliasEntry] rows pinned to a concrete parent variable.
@@ -124,15 +154,15 @@ class UmasBitAliasMap {
   /// * [parentVariableName] — display name carried into every entry.
   /// * [parentBlock] — UMAS block number of the parent variable.
   /// * [parentByteOffset] — byte offset of the parent variable's first
-  ///   WORD within [parentBlock].
+  ///   element within [parentBlock].
   /// * [aliasPrefix] — printed before each array index, e.g. `%M` →
   ///   `%M5`, `%M6`, …. For DFB / UDT BOOL members callers should pass
   ///   `'$parentVariableName.bit'` (or similar) to produce
   ///   `'FB_X.bit5'`-style names.
-  ///
-  /// Array index → bit position mapping: each successive index occupies
-  /// bit `(idx - startIndex) % 16` of the WORD at
-  /// `parentByteOffset + ((idx - startIndex) ~/ 16) * 2`.
+  /// * [layout] — wire-format layout, defaults to [bitArrayLayoutBytePerBool]
+  ///   (one BOOL per byte, `bitOffset==0` always). Pass
+  ///   [bitArrayLayoutPackedBits16] for packed `%M`-style addressing
+  ///   (16 BOOLs per 2-byte WORD).
   ///
   /// Non-BOOL arrays (element type != 0x0001) return an empty list so
   /// callers can apply this builder unconditionally over every short
@@ -143,6 +173,7 @@ class UmasBitAliasMap {
     required int parentBlock,
     required int parentByteOffset,
     required String aliasPrefix,
+    _BitArrayLayout layout = _BitArrayLayout.bytePerBool,
   }) {
     if (definition.elementTypeId != 0x0001) return const [];
     if (definition.dimensions.length != 1) return const [];
@@ -152,12 +183,22 @@ class UmasBitAliasMap {
     final out = <BitAliasEntry>[];
     for (int i = 0; i < count; i++) {
       final arrayIndex = dim.startIndex + i;
-      final wordIndex = i ~/ 16;
-      final bit = i % 16;
+      final int byteOff;
+      final int bit;
+      switch (layout) {
+        case _BitArrayLayout.packedBits16:
+          byteOff = parentByteOffset + (i ~/ 16) * 2;
+          bit = i % 16;
+          break;
+        case _BitArrayLayout.bytePerBool:
+          byteOff = parentByteOffset + i;
+          bit = 0;
+          break;
+      }
       out.add(BitAliasEntry(
         aliasName: '$aliasPrefix$arrayIndex',
         parentBlock: parentBlock,
-        parentByteOffset: parentByteOffset + wordIndex * 2,
+        parentByteOffset: byteOff,
         bitOffset: bit,
         parentVariableName: parentVariableName,
       ));

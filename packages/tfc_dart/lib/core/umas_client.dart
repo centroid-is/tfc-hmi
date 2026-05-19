@@ -1789,59 +1789,65 @@ class UmasClient {
 
   /// Inner builder — runs inside the session-recovery wrapper. See
   /// [ensureBitAliasMap] for the high-level contract.
+  ///
+  /// Walks the full [browse] tree (not just top-level variables) so
+  /// `ARRAY[..] OF BOOL` fields buried inside DFB / UDT instances are
+  /// also picked up. The live M580 / B_Elevator project, for example,
+  /// puts a 31-element BOOL array `DROP_HEALTH` inside the
+  /// `Elevator.BMEP58_ECPU_EXT` DFB at `block=0x33 off=0x90` — it is
+  /// not reachable from the top-level variable list alone.
+  ///
+  /// Performance: reuses the cached browse tree's `(blockNo, offset)`
+  /// pairs and the `_persistentArrayCache` populated during the same
+  /// browse; no additional UMAS round-trips beyond what `browse()` had
+  /// to do anyway.
   Future<UmasBitAliasMap> _buildBitAliasMapInner() async {
-    final variables = await _readVariableNamesInner();
+    final tree = await browse();
     final entries = <BitAliasEntry>[];
-    for (final v in variables) {
-      // Built-in scalar types (BOOL, INT, WORD, …) can never be the parent
-      // of a bit-alias array — they're leaves themselves. Skip the
-      // speculative DD02 fetch for those.
-      if (UmasDataTypes.builtIn.containsKey(v.dataTypeId)) continue;
-      // Already resolved as non-array (an FB / UDT body) in a previous
-      // browse — the cache holds null for those. Honour that.
-      if (_persistentArrayCache.containsKey(v.dataTypeId) &&
-          _persistentArrayCache[v.dataTypeId] == null) {
-        continue;
-      }
 
-      UmasArrayTypeDefinition? def =
-          _persistentArrayCache[v.dataTypeId];
-      if (def == null) {
-        try {
-          final raw = await readDD02Raw(v.dataTypeId);
-          def = UmasArrayTypeDefinition.tryParse(raw);
-          // Always cache: null means "tried, not an array" so the browse
-          // path doesn't refetch.
-          _persistentArrayCache[v.dataTypeId] = def;
-        } on UmasException catch (e) {
-          // Defensive: a single record-not-found shouldn't kill the whole
-          // sweep. Log and move on; the map will just be smaller.
-          _log.w('UMAS bitAliasMap: DD02 fetch failed for typeId '
-              '0x${v.dataTypeId.toRadixString(16)} '
-              '(variable "${v.name}"): ${e.message}');
-          continue;
+    void visit(UmasVariableTreeNode node, String path) {
+      final type = node.dataType;
+      final variable = node.variable;
+      if (type != null &&
+          variable != null &&
+          type.classIdentifier == 4 /* array */) {
+        // Resolve the array body from the cache (browse populates it
+        // when it expands the variable). For BOOL arrays specifically
+        // the byteSize == element count (1 byte per BOOL on M580).
+        final def = _persistentArrayCache[variable.dataTypeId];
+        if (def != null && def.elementTypeId == 0x0001) {
+          entries.addAll(UmasBitAliasMap.buildFromArrayDefinition(
+            definition: def,
+            parentVariableName: node.name,
+            parentBlock: variable.blockNo,
+            parentByteOffset: variable.offset,
+            aliasPrefix: '$path[',
+          ).map((e) => BitAliasEntry(
+                // Append the closing bracket so the alias matches the
+                // existing browse-tree leaf naming convention
+                // ("path[N]"), giving operators a single canonical name
+                // for every located bit.
+                aliasName: '${e.aliasName}]',
+                parentBlock: e.parentBlock,
+                parentByteOffset: e.parentByteOffset,
+                bitOffset: e.bitOffset,
+                parentVariableName: e.parentVariableName,
+              )));
         }
       }
-      if (def == null) continue;
-      if (def.elementTypeId != 0x0001) continue;
-      entries.addAll(UmasBitAliasMap.buildFromArrayDefinition(
-        definition: def,
-        parentVariableName: v.name,
-        parentBlock: v.blockNo,
-        parentByteOffset: v.offset,
-        aliasPrefix: '${v.name}[',
-      ).map((e) => BitAliasEntry(
-            // buildFromArrayDefinition emits names of the form
-            // "<aliasPrefix><arrayIndex>", so with aliasPrefix='name[' we
-            // get 'name[5'. Tack on the closing bracket here to produce
-            // the canonical 'name[5]' form that matches the existing
-            // browse-tree leaf naming convention (line ~2812).
-            aliasName: '${e.aliasName}]',
-            parentBlock: e.parentBlock,
-            parentByteOffset: e.parentByteOffset,
-            bitOffset: e.bitOffset,
-            parentVariableName: e.parentVariableName,
-          )));
+      for (final child in node.children) {
+        // Children carry their own path component via node.name; the
+        // existing browse code uses '.' as the separator and '[N]' for
+        // array elements, so we mirror it here.
+        final isArrayElem = child.name.startsWith('[') &&
+            child.name.endsWith(']');
+        final childPath = isArrayElem ? '$path${child.name}' : '$path.${child.name}';
+        visit(child, childPath);
+      }
+    }
+
+    for (final root in tree) {
+      visit(root, root.name);
     }
     return UmasBitAliasMap(entries);
   }
@@ -1849,17 +1855,44 @@ class UmasClient {
   /// Convenience: read a single bit-alias by canonical name.
   ///
   /// Looks the alias up in the [bitAliases] map (auto-building it on
-  /// first call), issues a 2-byte ReadVariable against the parent WORD,
-  /// then extracts the requested bit. Returns null when the alias is
-  /// unknown.
+  /// first call). The read path branches by layout:
+  ///
+  ///   * `bitOffset == 0` — byte-per-bool layout (Schneider M580 default):
+  ///     issues a 1-byte BOOL read against `(parentBlock,
+  ///     parentByteOffset)` via [readVariables], returns the resulting
+  ///     bool directly.
+  ///   * `bitOffset > 0` — packed-bits-16 layout: reads the parent WORD
+  ///     and bit-shifts the requested bit out of it.
+  ///
+  /// Returns null when the alias is unknown. Reuses the existing
+  /// [readVariables] path so M580 MonitorPlc / M340 ReadVariable
+  /// selection is honoured transparently.
   Future<bool?> readBitAlias(String aliasName) async {
     final map = await ensureBitAliasMap();
     final entry = map.lookup(aliasName);
     if (entry == null) return null;
-    // Synthesize a minimal UmasVariable / UmasDataTypeRef pair for a
-    // 2-byte raw read at (parentBlock, parentByteOffset). Reuses the
-    // existing readVariables path so M580 MonitorPlc / M340 ReadVariable
-    // selection is honoured transparently.
+    if (entry.bitOffset == 0) {
+      // Byte-per-bool — one-byte BOOL read directly at the byte offset.
+      // BOOL byteSize=1 in UmasDataTypes.builtIn; dataTypeId=1 is BOOL.
+      final parentVar = UmasVariable(
+        name: aliasName,
+        blockNo: entry.parentBlock,
+        offset: entry.parentByteOffset,
+        dataTypeId: 1, // BOOL
+      );
+      const boolType = UmasDataTypeRef(
+        id: 1,
+        name: 'BOOL',
+        byteSize: 1,
+      );
+      final values = await readVariables([(parentVar, boolType)]);
+      if (values.isEmpty) return null;
+      final v = values.first.value;
+      if (v is bool) return v;
+      if (v is int) return v != 0;
+      return null;
+    }
+    // Packed-bits — read the parent WORD and shift the requested bit.
     final parentVar = UmasVariable(
       name: aliasName,
       blockNo: entry.parentBlock,
