@@ -438,7 +438,8 @@ class ModbusDeviceClientAdapter implements DeviceClient {
         try {
           await umas.monitorRegister(chunk);
         } catch (e) {
-          _log.w('UMAS monitorRegister chunk (size=${chunk.length}) failed: $e');
+          _log.w(
+              'UMAS monitorRegister chunk (size=${chunk.length}) failed: $e');
           // Drop the corresponding key-order entries so demux stays aligned.
           // We registered nothing past this chunk.
           _umasKeyOrder.removeRange(i, _umasKeyOrder.length);
@@ -497,7 +498,35 @@ class ModbusDeviceClientAdapter implements DeviceClient {
       unawaited(_buildUmasTableAndStartTimers());
       return;
     }
-    if (_umasKeyOrder.isEmpty) return;
+    // TD-021 (v1.1.x): when MonitorPlc registration failed for this
+    // adapter's keys (e.g. PLC returned 0x82 — wire-format mismatch on
+    // real M580 firmware that the stub doesn't reproduce) the global
+    // `_umasKeyOrder` ends up empty but `_umasKeysByGroup[group]` still
+    // holds the configured keys. Without a fallback, every subscriber to
+    // a UMAS-by-name key on a 0x82-rejecting PLC sees a permanently stale
+    // BehaviorSubject — the home screen renders grey forever and only
+    // wakes up after a Key Repository round-trip (which one-shot reads
+    // each key via readUmasVariable). Mirror that recovery path here:
+    // when MonitorPlc is unusable, poll the group's keys one-by-one with
+    // ReadVariable (0x22). Each readUmasVariable pushes to the per-key
+    // BehaviorSubject, so subscribers get live values via the same code
+    // path the Key Repository probe already validates against this PLC.
+    // Slower than batched MonitorPlc (N TCP RTTs vs 1 per tick) but
+    // correctness > throughput; the operator's home screen updates.
+    if (_umasKeyOrder.isEmpty) {
+      final keys = _umasKeysByGroup[group];
+      if (keys == null || keys.isEmpty) return;
+      for (final key in keys) {
+        try {
+          await readUmasVariable(key);
+        } catch (e) {
+          _log.w('UMAS fallback poll for key "$key" in group "$group" '
+              'failed: $e');
+          // Subjects retain their last value (SCADA semantics).
+        }
+      }
+      return;
+    }
     try {
       final values = await umas.monitorReadAll();
       _demuxUmasReadAll(values);
@@ -527,13 +556,14 @@ class ModbusDeviceClientAdapter implements DeviceClient {
   /// All keys claimed by this adapter — the union of classic-Modbus
   /// specs and UMAS-by-name keys.
   @override
-  Set<String> get subscribableKeys =>
-      {..._specs.keys, ..._variableNames.keys.where((k) => _variableNames[k] != null)};
+  Set<String> get subscribableKeys => {
+        ..._specs.keys,
+        ..._variableNames.keys.where((k) => _variableNames[k] != null)
+      };
 
   @override
   bool canSubscribe(String key) =>
-      _specs.containsKey(key) ||
-      (_variableNames[key] != null);
+      _specs.containsKey(key) || (_variableNames[key] != null);
 
   /// Returns the UMAS variable name for [key], or null if [key] is not
   /// routed by name.
@@ -687,7 +717,30 @@ class ModbusDeviceClientAdapter implements DeviceClient {
     // the bottom of this file.
     final variableName = _variableNames[key];
     if (variableName != null) {
-      return _umasSubjectFor(key).stream;
+      final subject = _umasSubjectFor(key);
+      // TD-021 (v1.1.x): subscribers should see a live value within ~1
+      // poll-cycle of mounting, not "stale until somebody else triggers
+      // a read". When MonitorPlc registration succeeded the next tick of
+      // the group timer fills the subject; when MonitorPlc failed (0x82
+      // on real M580) the fallback in [_pollUmasGroup] does the same.
+      // Either way, the FIRST emission can lag a full poll interval —
+      // and operators perceive the home-screen sensor as broken during
+      // that window. Kick off a one-shot read here so the subject has a
+      // value ASAP without waiting for the timer.
+      //
+      // Fire-and-forget: readUmasVariable handles its own errors (logs
+      // + leaves subject seeded with cached or empty); we just need the
+      // round-trip to start. Skip if there's already a cached value
+      // (subject is already seeded) to avoid hammering the PLC on every
+      // route change.
+      if (umasEnabled && _umasLastValues[key] == null) {
+        unawaited(readUmasVariable(key).then<void>((_) {}).catchError(
+          (Object e) {
+            _log.w('UMAS eager subscribe-read for "$key" failed: $e');
+          },
+        ));
+      }
+      return subject.stream;
     }
     final spec = _specs[key];
     if (spec == null) throw ArgumentError('Unknown Modbus key: $key');
@@ -861,8 +914,8 @@ class ModbusDeviceClientAdapter implements DeviceClient {
       } else {
         final writeInt =
             (value.value is num) ? (value.value as num).toInt() : 0;
-        newValue =
-            (currentInt & ~spec.bitMask!) | ((writeInt << shift) & spec.bitMask!);
+        newValue = (currentInt & ~spec.bitMask!) |
+            ((writeInt << shift) & spec.bitMask!);
       }
       await wrapper.write(spec, newValue);
     } else {
@@ -882,8 +935,7 @@ class ModbusDeviceClientAdapter implements DeviceClient {
   /// Dictionary disabled renders as green "Connected" while every
   /// UMAS key card shows a red error badge.
   EffectiveDeviceStatus get effectiveStatus =>
-      _effectiveStatus$.valueOrNull ??
-      _mapTcpStatus(wrapper.connectionStatus);
+      _effectiveStatus$.valueOrNull ?? _mapTcpStatus(wrapper.connectionStatus);
 
   /// TD-004 (v1.1.x): broadcast stream of [EffectiveDeviceStatus]
   /// changes. Seeded with the current value via [BehaviorSubject].
@@ -930,7 +982,8 @@ class ModbusDeviceClientAdapter implements DeviceClient {
   /// derived from the register spec's declared data type, then applies
   /// optional bit masking.
   static DynamicValue _toDynamicValue(Object? value, ModbusRegisterSpec spec) {
-    final dv = DynamicValue(value: value, typeId: _typeIdFromDataType(spec.dataType));
+    final dv =
+        DynamicValue(value: value, typeId: _typeIdFromDataType(spec.dataType));
     return StateMan.applyBitMask(dv, spec.bitMask, spec.bitShift);
   }
 
@@ -1057,7 +1110,8 @@ List<DeviceClient> buildModbusDeviceClients(
 ) {
   return modbusConfigs.map((config) {
     final specs = buildSpecsFromKeyMappings(
-      keyMappings, config.serverAlias,
+      keyMappings,
+      config.serverAlias,
       endianness: config.endianness,
       addressBase: config.addressBase,
     );
