@@ -125,20 +125,18 @@ void main() {
       // when any UMAS error bubbles up through
       // _withSessionAndRecovery.
       //
-      // Trigger a deliberate session error by injecting a sendFn
-      // that returns an error code.
+      // Fix A: trigger a TRANSPORT-level session error (a byte-level
+      // UMAS 0xFD/0x83 error is now non-fatal and would NOT invalidate).
       final errorClient = UmasClient(
         sendFn: (req) async {
           final umasReq = req as UmasRequest;
-          // Init success, then any later call errors.
+          // Init success, then any later call returns a transport timeout.
           if (umasReq.umasSubFunction == 0x02 ||
-              umasReq.umasSubFunction == 0x01) {
+              umasReq.umasSubFunction == 0x01 ||
+              umasReq.umasSubFunction == 0x20) {
             return _benignSession(subFunctionLog: [])(req);
           }
-          // Any other call returns a Modbus error.
-          umasReq.internalSetFromPduResponse(
-              Uint8List.fromList([0x5A, 0x42, 0xFD, 0x83]));
-          return ModbusResponseCode.requestSucceed;
+          return ModbusResponseCode.requestTimeout;
         },
         backoffDelay: (_) async {},
       );

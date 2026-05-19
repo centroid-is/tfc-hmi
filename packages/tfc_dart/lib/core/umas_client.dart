@@ -307,10 +307,19 @@ class UmasClient {
       if (_stateValue != UmasSessionState.paired) return;
       try {
         await sendKeepAlive();
-      } on UmasException {
-        _handleSessionError();
-      } catch (_) {
-        // Prevent unhandled exceptions in timer callback
+      } on UmasException catch (e) {
+        // Fix A: only invalidate for genuine transport-level failures.
+        // A malformed-echo / parse error should not flush the session
+        // and trigger a 1082-entry symbol-cache rebuild on the next tick.
+        if (_isFatalSessionError(e)) {
+          _handleSessionError();
+        } else {
+          _log.w('UmasClient keep-alive failed (non-fatal): $e');
+        }
+      } catch (e) {
+        // Unknown / non-UmasException — assume the worst (transport
+        // imploded). Prevent unhandled exceptions in timer callback.
+        _log.w('UmasClient keep-alive threw non-UmasException: $e');
         _handleSessionError();
       }
     });
@@ -415,14 +424,25 @@ class UmasClient {
         return;
       } catch (e) {
         lastError = e;
-        _handleSessionError(); // Reset state for clean retry
+        // Fix A: do NOT call _handleSessionError on every failed attempt.
+        // A single root failure would otherwise produce up to
+        // (_maxRetries + 1) "session invalidated" log entries in quick
+        // succession. Reset only the state-machine bits so the next
+        // attempt re-runs readPlcId / init cleanly; the full invalidate
+        // (which nukes the symbol cache) waits until the WHOLE retry
+        // loop has been exhausted, below.
+        _setState(UmasSessionState.uninitialized);
+        _pairingKey = 0x00;
         if (attempt < _maxRetries) {
           final delay = _computeBackoff(attempt);
           await _delayFn(delay);
         }
       }
     }
-    // All retries exhausted
+    // All retries exhausted — only NOW do we nuke the full session +
+    // symbol cache. Anything that resumes after this will re-pair from
+    // scratch.
+    _handleSessionError();
     if (lastError is Exception) {
       throw lastError;
     }
@@ -1486,6 +1506,51 @@ class UmasClient {
     }
   }
 
+  /// Fix A: Predicate distinguishing fatal session errors (which justify
+  /// nuking the pairing key + rebuilding the symbol cache) from
+  /// per-operation errors (which do not).
+  ///
+  /// Without this gate, every benign `UmasException` thrown from
+  /// `_withSessionAndRecovery`, the keep-alive timer, or a single init
+  /// retry attempt would call [_handleSessionError] and force a full
+  /// re-pair + 1082-entry symbol-cache rebuild. In the field this
+  /// produced a tight "paired -> uninitialized -> identified -> paired"
+  /// log loop on the live HMI; the symbol-cache rebuild also burned
+  /// real wall-clock time and disrupted reads.
+  ///
+  /// **Fatal (session must be invalidated):**
+  /// - Transport-level Modbus codes 0xF0..0xF6 + 0xFF
+  ///   (timeout, connectionFailed, tx/rx failed, wrong unit id /
+  ///   function code / checksum, undefined). These mean the wire was
+  ///   unusable; the next operation must re-handshake.
+  ///
+  /// **NOT fatal (do not invalidate):**
+  /// - `errorCode == 0`: client-side parse / empty response / range
+  ///   guard / lookup miss. The session is fine; the caller can retry.
+  /// - PLC-side UMAS error bytes such as 0x06 (reservation conflict),
+  ///   0x83 (Data Dictionary disabled), 0x86 (memory block not found),
+  ///   0x94 (not writable), 0xC0 (DD not accessible). These are
+  ///   operation-specific and surface via the response status byte —
+  ///   they do NOT indicate the pairing key is invalid.
+  /// - Standard Modbus exception codes 0x01..0x0B. The PLC accepted
+  ///   the modbus frame but rejected the operation; the session is
+  ///   intact.
+  ///
+  /// TODO(session-error-tuning): once we have field data showing the
+  /// specific code/message the M580 returns when the engineering tool
+  /// steals the session, add it explicitly to the fatal set. Until
+  /// then, the conservative policy here is "transport-level only" —
+  /// see the test expectations in
+  /// `umas_client_session_error_test.dart`.
+  bool _isFatalSessionError(UmasException e) {
+    final code = e.errorCode;
+    // Transport-level failures from ModbusResponseCode. The non-success
+    // sentinels live in 0xF0..0xF6 and 0xFF (see ModbusResponseCode).
+    if (code == 0xFF) return true;
+    if (code >= 0xF0 && code <= 0xF6) return true;
+    return false;
+  }
+
   /// Reset all session state when UMAS session is invalidated.
   /// Called when error responses indicate the pairing key is no longer valid
   /// (PLC reboot, engineering tool connection, TCP reconnection).
@@ -1735,14 +1800,27 @@ class UmasClient {
     await writeVariable([ref]);
   }
 
-  /// Wraps [_withSession] with session recovery: on any [UmasException],
-  /// resets session state so the next call re-initializes. Does NOT retry
-  /// automatically — the caller must explicitly retry to avoid infinite loops.
+  /// Wraps [_withSession] with session recovery: on a FATAL [UmasException]
+  /// (see [_isFatalSessionError]), resets session state so the next call
+  /// re-initializes. Per-operation errors (parse failures, range guards,
+  /// per-symbol 0x83/0x86/0x94/0xC0 codes, etc.) propagate WITHOUT
+  /// tearing down the session.
+  ///
+  /// Fix A: previously this method invalidated on every UmasException.
+  /// That made benign errors (e.g. a single parse failure on a malformed
+  /// reply, a CRC mismatch from a stale block) trigger a full re-pair
+  /// + 1082-entry symbol-cache rebuild, which was the visible "session
+  /// re-pair storm" in live HMI logs.
+  ///
+  /// Does NOT retry automatically — the caller must explicitly retry
+  /// to avoid infinite loops.
   Future<T> _withSessionAndRecovery<T>(Future<T> Function() operation) async {
     try {
       return await _withSession(operation);
-    } on UmasException {
-      _handleSessionError();
+    } on UmasException catch (e) {
+      if (_isFatalSessionError(e)) {
+        _handleSessionError();
+      }
       rethrow;
     }
   }
