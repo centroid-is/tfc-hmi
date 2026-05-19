@@ -48,13 +48,25 @@ class UmasBrowseDataSource implements BrowseDataSource {
   Future<BrowseNodeDetail> fetchDetail(BrowseNode node) async {
     final dataTypeIdStr = node.metadata['dataTypeId'];
     final blockNoStr = node.metadata['blockNo'];
+    // Shared lookup for both branches: live FB instances carry the
+    // production tree node, including any struct/FB members under
+    // `children`. The scalar branch uses this to opt OUT when the node
+    // has descendants (FB instance shape), so it doesn't capture
+    // browse-tree FB nodes that happen to also carry blockNo +
+    // dataTypeId on themselves.
+    final tree = _pathIndex?[node.id];
+    final hasChildren = tree != null && tree.children.isNotEmpty;
     // Branch 1: scalar leaf — single-ref read, no structChildren. This
     // path is unchanged from v1.0 semantics: folders/arrays return 0x94
     // when hit directly, so reading is only meaningful for scalar
-    // leaves carrying blockNo + dataTypeId.
+    // leaves carrying blockNo + dataTypeId. FB instances are excluded
+    // here via `!hasChildren` — they also carry blockNo + dataTypeId
+    // on themselves (the FB lives at a memory address) but have
+    // children, so they belong in Branch 2.
     final isScalar = node.type == BrowseNodeType.variable &&
         blockNoStr != null &&
-        dataTypeIdStr != null;
+        dataTypeIdStr != null &&
+        !hasChildren;
     if (isScalar) {
       String? value;
       try {
@@ -95,7 +107,6 @@ class UmasBrowseDataSource implements BrowseDataSource {
     // readable members and synthesise child BrowseNodes (260519-hgc
     // inspection layer). VAR_IN_OUT members surface as `[not readable:
     // ...]` placeholders without issuing a read for them.
-    final tree = _pathIndex?[node.id];
     if (tree != null) {
       final readable = <UmasVariableTreeNode>[];
       final unreadable = <UmasVariableTreeNode>[];

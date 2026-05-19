@@ -153,6 +153,65 @@ List<UmasVariableTreeNode> sampleTreeWithFb() {
   ];
 }
 
+/// Production-shape FB instance tree: the FB instance node itself
+/// carries BOTH `variable` (with blockNo + dataTypeId — the FB lives at
+/// a memory address) AND non-empty `children` (its members). This is
+/// what the live M580 browse() actually returns for a node like
+/// `M_F2_RC_01`. The earlier [sampleTreeWithFb] omits the
+/// instance-level variable so the FB instance is dispatched through
+/// `BrowseNodeType.folder`, hiding the branch-order regression this
+/// fixture pins down. See `lib/widgets/umas_browse.dart::fetchDetail`.
+List<UmasVariableTreeNode> sampleTreeWithProductionShapeFb() {
+  return [
+    UmasVariableTreeNode(
+      name: 'App',
+      path: 'App',
+      children: [
+        UmasVariableTreeNode(
+          name: 'M_F2_RC_01',
+          path: 'App.M_F2_RC_01',
+          // Instance-level variable: the FB lives at block=178, offset=0.
+          // dataTypeId points at the FB type, NOT a primitive.
+          variable: const UmasVariable(
+            name: 'App.M_F2_RC_01',
+            blockNo: 178,
+            offset: 0,
+            dataTypeId: 0xb2,
+          ),
+          dataType: const UmasDataTypeRef(
+              id: 0xb2, name: 'F2_RC_TYPE', byteSize: 16),
+          children: [
+            UmasVariableTreeNode(
+              name: 'i_setpoint',
+              path: 'App.M_F2_RC_01.i_setpoint',
+              variable: const UmasVariable(
+                name: 'App.M_F2_RC_01.i_setpoint',
+                blockNo: 178,
+                offset: 0,
+                dataTypeId: 8,
+              ),
+              dataType: const UmasDataTypeRef(id: 8, name: 'REAL', byteSize: 4),
+              direction: UmasFbMemberDirection.input,
+            ),
+            UmasVariableTreeNode(
+              name: 'q_actual',
+              path: 'App.M_F2_RC_01.q_actual',
+              variable: const UmasVariable(
+                name: 'App.M_F2_RC_01.q_actual',
+                blockNo: 178,
+                offset: 4,
+                dataTypeId: 8,
+              ),
+              dataType: const UmasDataTypeRef(id: 8, name: 'REAL', byteSize: 4),
+              direction: UmasFbMemberDirection.output,
+            ),
+          ],
+        ),
+      ],
+    ),
+  ];
+}
+
 /// Builds a pure-folder tree with no readable variable leaves anywhere —
 /// guards the safety net in fetchDetail (do not call readVariables on an
 /// empty leaf set).
@@ -621,6 +680,76 @@ void main() {
       expect(smallDetail.value, contains('p_count: 99'));
       expect(smallDetail.value, contains('iq_pointer: [n/r]'),
           reason: 'unreadable member surfaces as [n/r] in the preview');
+    });
+
+    test('fetchDetail on FB instance with production tree shape '
+        '(variable + dataType + non-empty children) routes through the FB '
+        'branch, not the scalar branch', () async {
+      // Regression for the val [] bug: the live M580 returns FB instances
+      // with the instance-level `variable` populated (the FB lives at a
+      // memory address) AND non-empty children. `_toBrowseNode` therefore
+      // emits BrowseNodeType.variable with blockNo + dataTypeId metadata.
+      // The pre-fix scalar branch matched first and read the FB as a
+      // primitive, producing `val []` in the UI. The earlier FB tests
+      // didn't catch it because their FB instance node had `variable ==
+      // null`, so the BrowseNode came back as BrowseNodeType.folder.
+      fakeClient = FakeUmasClient(
+        sampleTreeWithProductionShapeFb(),
+        cannedByOffset: {
+          0: TypedVariableValue(
+            value: 42.5,
+            typeName: 'REAL',
+            rawBytes: Uint8List(0),
+          ),
+          4: TypedVariableValue(
+            value: 17.0,
+            typeName: 'REAL',
+            rawBytes: Uint8List(0),
+          ),
+        },
+      );
+      dataSource = UmasBrowseDataSource(fakeClient);
+      await dataSource.fetchRoots();
+
+      // BrowseNode shaped exactly as `_toBrowseNode` would emit for the
+      // production-shape FB instance: variable type, with FB-level
+      // blockNo + dataTypeId metadata.
+      final fb = BrowseNode(
+        id: 'App.M_F2_RC_01',
+        displayName: 'M_F2_RC_01',
+        type: BrowseNodeType.variable,
+        dataType: 'F2_RC_TYPE',
+        metadata: const {
+          'path': 'App.M_F2_RC_01',
+          'blockNo': '178',
+          'offset': '0',
+          'dataTypeId': '178',
+          'dataTypeName': 'F2_RC_TYPE',
+          'byteSize': '16',
+        },
+      );
+      final detail = await dataSource.fetchDetail(fb);
+
+      expect(detail.structChildren, isNotNull,
+          reason:
+              'FB instance with production shape must reach the FB branch '
+              'and synthesise structChildren, not be read as a primitive');
+      expect(detail.structChildren!.length, 2,
+          reason: 'two readable members on this FB');
+      expect(detail.value, isNotNull);
+      expect(detail.value, startsWith('{'),
+          reason: 'FB summary must be brace-wrapped, not a single scalar '
+              'or "val []"');
+      expect(detail.value, contains('i_setpoint: 42.5'));
+      expect(detail.value, contains('q_actual: 17.0'));
+
+      // The single batched FB read must cover exactly the members, not
+      // the FB instance itself.
+      expect(fakeClient.readCalls.length, 1);
+      final offsets =
+          fakeClient.readCalls.single.map((p) => p.$1.offset).toSet();
+      expect(offsets, {0, 4},
+          reason: 'reads must target the members, not the FB instance');
     });
 
     test('fetchDetail on pure-folder tree (no readable leaves anywhere) '
