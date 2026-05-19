@@ -18,6 +18,16 @@
 ///                              (e.g. `astColorScanner_Colors_B`) and
 ///                              print value, type and address. Exits
 ///                              non-zero on any read failure.
+///   write  <host> <name> <value>
+///                              Write a single value to a named UMAS
+///                              variable. The value is parsed according
+///                              to the resolved symbol's data type:
+///                              BOOL accepts true/false/1/0, integer
+///                              types parse as int (with the same
+///                              client-side range guard as the live
+///                              writer), REAL/LREAL parse as double,
+///                              STRING / WSTRING pass through verbatim.
+///                              Exits non-zero on any failure.
 ///   dump-types <host>          Dump every DD03 data-type entry.
 ///   dump-array <host> <typeId> Print the raw DD02 bytes returned for
 ///                              an array type id (the
@@ -39,6 +49,9 @@
 ///                   alongside each leaf that has one. Nodes without a
 ///                   direction (top-level vars, array elements) are
 ///                   printed as before.
+///   --quiet         `write` only — suppress the resolved-symbol summary
+///                   so the command emits a single line on success.
+///                   Useful for tight write→read shell loops.
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -78,6 +91,7 @@ Future<int> _main(List<String> args) async {
     ..addOption('elements', defaultsTo: '5')
     ..addFlag('json', defaultsTo: false, negatable: false)
     ..addFlag('show-direction', defaultsTo: false, negatable: false)
+    ..addFlag('quiet', defaultsTo: false, negatable: false)
     ..addFlag('help', abbr: 'h', defaultsTo: false, negatable: false);
 
   final ArgResults parsed;
@@ -103,6 +117,7 @@ Future<int> _main(List<String> args) async {
   final elementsPerArray = int.parse(parsed['elements'] as String);
   final emitJson = parsed['json'] as bool;
   final showDirection = parsed['show-direction'] as bool;
+  final quiet = parsed['quiet'] as bool;
 
   switch (command) {
     case 'browse':
@@ -117,6 +132,10 @@ Future<int> _main(List<String> args) async {
       _need(rest, 2, 'read <host> <name>');
       return _withClient(
           rest[0], port, unit, timeout, (umas) => _readCommand(umas, rest[1]));
+    case 'write':
+      _need(rest, 3, 'write <host> <name> <value>');
+      return _withClient(rest[0], port, unit, timeout,
+          (umas) => _writeCommand(umas, rest[1], rest[2], quiet: quiet));
     case 'dump-types':
       _need(rest, 1, 'dump-types <host>');
       return _withClient(
@@ -143,6 +162,8 @@ void _printUsage(ArgParser parser) {
       '  check  <host>              Read scalars + sampled array elements');
   stderr.writeln(
       '  read   <host> <name>       Read every leaf under a named variable');
+  stderr.writeln(
+      '  write  <host> <name> <value>  Write a single value to a named variable');
   stderr.writeln('  dump-types <host>          Dump every DD03 data type');
   stderr.writeln(
       '  dump-array <host> <typeId> Dump raw DD02 bytes for an array type id\n');
@@ -483,6 +504,157 @@ UmasVariableTreeNode? _findByName(
     if (hit != null) break;
   }
   return hit;
+}
+
+// ---------------------------------------------------------------------------
+// write — write a single value to a named variable
+// ---------------------------------------------------------------------------
+
+/// Write a single value to a named UMAS variable.
+///
+/// Resolves the symbol via [UmasClient.lookupSymbol], parses [rawValue]
+/// per the resolved data type, then issues
+/// [UmasClient.writeVariableByName]. Operator-friendly errors are
+/// surfaced via [mapUmasError] when the protocol returns a known code.
+///
+/// `--quiet` suppresses the resolved-symbol summary so the command emits
+/// a single OK line on success, suitable for write→read shell loops.
+Future<int> _writeCommand(
+  UmasClient umas,
+  String name,
+  String rawValue, {
+  bool quiet = false,
+}) async {
+  // Resolve the symbol first so we can show the operator exactly what
+  // we're about to hit and which type we're encoding against. This
+  // matters more for write than for read — a typo'd name or wrong type
+  // could otherwise drop a value in the wrong PLC address.
+  final ResolvedSymbol sym;
+  try {
+    sym = await umas.lookupSymbol(name);
+  } on UmasException catch (e) {
+    final info = mapUmasError(e);
+    if (info != null) {
+      stderr.writeln(info.summary);
+      stderr.writeln(info.detail);
+    } else {
+      stderr.writeln('UMAS lookupSymbol error: ${e.message}');
+    }
+    return 1;
+  }
+
+  final dynamic parsed;
+  try {
+    parsed = _parseWriteValue(rawValue, sym.dataType);
+  } on FormatException catch (e) {
+    stderr.writeln('Cannot parse value "$rawValue" for '
+        '${sym.path} (${sym.dataType.name}): ${e.message}');
+    return 64;
+  }
+
+  if (!quiet) {
+    print('write ${sym.path}  (${sym.dataType.name}) '
+        '[block=0x${sym.variable.blockNo.toRadixString(16)} '
+        'off=0x${sym.variable.offset.toRadixString(16)}]  =  $parsed');
+  }
+
+  try {
+    await umas.writeVariableByName(sym.path, parsed);
+  } on UmasException catch (e) {
+    // Same operator-friendly mapping path the read command uses.
+    final info = mapUmasError(e);
+    final codeHex = '0x${e.errorCode.toRadixString(16)}';
+    if (info != null) {
+      stderr.writeln(info.summary);
+      stderr.writeln(info.detail);
+    } else if (e.errorCode == 0) {
+      // Pure client-side errors (range guard, type mismatch, VAR_IN_OUT
+      // refusal) carry the actionable signal in `e.message` rather than
+      // a protocol code — surface it verbatim.
+      stderr.writeln('write ${sym.path}: ${e.message}');
+    } else {
+      stderr.writeln('write ${sym.path}: $codeHex  ${e.message}');
+    }
+    return 1;
+  }
+
+  if (quiet) {
+    print('ok ${sym.path} = $parsed');
+  } else {
+    print('ok');
+  }
+  return 0;
+}
+
+/// Parse a CLI-supplied string into the Dart value expected by
+/// [encodeVariableValue] for the resolved [dataType].
+///
+/// Throws [FormatException] for unparseable inputs. The actual range
+/// check (e.g. INT [-32768..32767]) is left to [encodeVariableValue] so
+/// the CLI surface and the live HMI writer share exactly one guard.
+dynamic _parseWriteValue(String raw, UmasDataTypeRef dataType) {
+  final upper = dataType.name.toUpperCase();
+  switch (upper) {
+    case 'BOOL':
+    case 'EBOOL':
+      switch (raw.toLowerCase()) {
+        case 'true':
+        case '1':
+          return true;
+        case 'false':
+        case '0':
+          return false;
+        default:
+          throw FormatException(
+              'expected true/false/1/0 for $upper, got "$raw"');
+      }
+
+    case 'INT':
+    case 'UINT':
+    case 'WORD':
+    case 'DINT':
+    case 'UDINT':
+    case 'DWORD':
+    case 'TIME':
+    case 'DATE':
+    case 'TIME_OF_DAY':
+    case 'DATE_AND_TIME':
+    case 'LINT':
+    case 'ULINT':
+    case 'BYTE':
+      final lower = raw.toLowerCase();
+      final radix = lower.startsWith('0x') ? 16 : 10;
+      final value = int.tryParse(radix == 16 ? lower.substring(2) : raw,
+          radix: radix);
+      if (value == null) {
+        throw FormatException(
+            'expected integer (decimal or 0x-prefixed hex) for $upper');
+      }
+      return value;
+
+    case 'REAL':
+    case 'LREAL':
+      final value = double.tryParse(raw);
+      if (value == null) {
+        throw FormatException('expected floating-point value for $upper');
+      }
+      return value;
+
+    case 'STRING':
+    case 'WSTRING':
+    case 'BYTE_STRING':
+      return raw;
+
+    default:
+      // Fall back to integer parsing for unknown types — encodeVariableValue
+      // will surface a precise "unknown type" UmasException downstream if
+      // the type really isn't supported.
+      final asInt = int.tryParse(raw);
+      if (asInt != null) return asInt;
+      final asDouble = double.tryParse(raw);
+      if (asDouble != null) return asDouble;
+      return raw;
+  }
 }
 
 // ---------------------------------------------------------------------------
