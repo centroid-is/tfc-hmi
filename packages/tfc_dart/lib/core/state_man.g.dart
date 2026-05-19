@@ -265,6 +265,7 @@ KeyMappingEntry _$KeyMappingEntryFromJson(Map<String, dynamic> json) =>
           : CollectEntry.fromJson(json['collect'] as Map<String, dynamic>),
       bitMask: (json['bit_mask'] as num?)?.toInt(),
       bitShift: (json['bit_shift'] as num?)?.toInt(),
+      variableName: json['variable_name'] as String?,
     )..io = json['io'] as bool?;
 
 Map<String, dynamic> _$KeyMappingEntryToJson(KeyMappingEntry instance) =>
@@ -276,6 +277,7 @@ Map<String, dynamic> _$KeyMappingEntryToJson(KeyMappingEntry instance) =>
       'collect': instance.collect?.toJson(),
       'bit_mask': instance.bitMask,
       'bit_shift': instance.bitShift,
+      'variable_name': instance.variableName,
     };
 
 KeyMappings _$KeyMappingsFromJson(Map<String, dynamic> json) => KeyMappings(

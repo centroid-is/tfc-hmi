@@ -918,9 +918,9 @@ class _KeyMappingCardState extends State<_KeyMappingCard> {
     ));
   }
 
-  void _updateModbusConfig(ModbusNodeConfig config) {
-    widget.onUpdate(widget.entry.copyWith(modbusNode: config));
-  }
+  // TD-010 (v1.1.x): _updateModbusConfig + _updatePickedVariableName
+  // moved into [KeyMappingModbusSection] so the page editor and this
+  // row share one implementation.
 
   void _updateBitMask(int? mask, int? shift) {
     if (mask == null) {
@@ -1109,11 +1109,17 @@ class _KeyMappingCardState extends State<_KeyMappingCard> {
                 const SizedBox(height: 4),
                 // Protocol-specific config section
                 if (_isModbus)
-                  ModbusConfigSection(
-                    config: widget.entry.modbusNode!,
+                  // TD-010 (v1.1.x): both the page editor and this key
+                  // repository row used to inline the same picker-wiring
+                  // boilerplate. Both now route through
+                  // [KeyMappingModbusSection] so the wiring lives in one
+                  // place and can't drift.
+                  KeyMappingModbusSection(
+                    entry: widget.entry,
                     modbusServerAliases: widget.modbusServerAliases,
                     modbusConfigs: widget.modbusConfigs,
-                    onChanged: _updateModbusConfig,
+                    onEntryChanged: widget.onUpdate,
+                    defaultNodeConfigBuilder: () => widget.entry.modbusNode!,
                   )
                 else if (_isM2400)
                   M2400ConfigSection(
@@ -1129,8 +1135,19 @@ class _KeyMappingCardState extends State<_KeyMappingCard> {
                     serverAliases: widget.serverAliases,
                     onChanged: _updateOpcUaConfig,
                   ),
-                // Bit selection -- required for bit types, optional mask for others
-                if (!_isM2400 && _isBitType) ...[
+                // Bit selection — required for bit types, optional mask
+                // for others.
+                //
+                // F-5 (v1.1.x): when the operator has bound a UMAS symbol
+                // path via Browse, the runtime read path ignores
+                // bitMask/bitShift just like the address fields. Hide the
+                // section entirely so there's no "edits the mask, nothing
+                // happens" trap — the UMAS chip's clear-X re-exposes the
+                // section.
+                if (!_isM2400 &&
+                    _isBitType &&
+                    (widget.entry.variableName == null ||
+                        widget.entry.variableName!.isEmpty)) ...[
                   const Divider(),
                   Padding(
                     padding: const EdgeInsets.all(16),
@@ -1151,7 +1168,9 @@ class _KeyMappingCardState extends State<_KeyMappingCard> {
                       ],
                     ),
                   ),
-                ] else if (!_isM2400) ...[
+                ] else if (!_isM2400 &&
+                    (widget.entry.variableName == null ||
+                        widget.entry.variableName!.isEmpty)) ...[
                   const Divider(),
                   ExpansionTile(
                     title: const Text('Bit Mask (optional)'),

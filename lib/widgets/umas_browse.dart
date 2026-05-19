@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:tfc_dart/core/umas_client.dart';
+import 'package:tfc_dart/core/umas_error_messages.dart';
+import 'package:tfc_dart/core/umas_fb_browse_types.dart';
 import 'package:tfc_dart/core/umas_types.dart';
 import 'package:tfc_dart/core/state_man.dart';
 import 'package:tfc_dart/core/modbus_device_client.dart';
@@ -90,6 +92,27 @@ class UmasBrowseDataSource implements BrowseDataSource {
   }
 
   BrowseNode _toBrowseNode(UmasVariableTreeNode treeNode) {
+    final metadata = <String, String>{
+      'path': treeNode.path,
+      if (treeNode.variable != null) ...{
+        'blockNo': treeNode.variable!.blockNo.toString(),
+        'offset': treeNode.variable!.offset.toString(),
+        'dataTypeId': treeNode.variable!.dataTypeId.toString(),
+      },
+      if (treeNode.dataType != null) ...{
+        'dataTypeName': treeNode.dataType!.name,
+        'byteSize': treeNode.dataType!.byteSize.toString(),
+      },
+    };
+    // CRIT-2 wiring: surface FB-member affordance state to the UI layer
+    // (browse_panel BrowseNodeTile reads these via UmasFbMember.*FromMetadata).
+    if (treeNode.direction != null) {
+      metadata.addAll(UmasFbMember.toMetadata(
+        direction: treeNode.direction!,
+        readable: treeNode.readable,
+        unreadableReason: treeNode.unreadableReason,
+      ));
+    }
     return BrowseNode(
       id: treeNode.path,
       displayName: treeNode.name,
@@ -97,18 +120,7 @@ class UmasBrowseDataSource implements BrowseDataSource {
           ? BrowseNodeType.folder
           : BrowseNodeType.variable,
       dataType: treeNode.dataType?.name,
-      metadata: {
-        'path': treeNode.path,
-        if (treeNode.variable != null) ...{
-          'blockNo': treeNode.variable!.blockNo.toString(),
-          'offset': treeNode.variable!.offset.toString(),
-          'dataTypeId': treeNode.variable!.dataTypeId.toString(),
-        },
-        if (treeNode.dataType != null) ...{
-          'dataTypeName': treeNode.dataType!.name,
-          'byteSize': treeNode.dataType!.byteSize.toString(),
-        },
-      },
+      metadata: metadata,
     );
   }
 
@@ -118,52 +130,14 @@ class UmasBrowseDataSource implements BrowseDataSource {
 }
 
 /// Maps UMAS exceptions to user-friendly error info.
+///
+/// TD-018 (v1.1.x): delegates to the shared `mapUmasError` in
+/// `tfc_dart/core/umas_error_messages.dart` so the CLI and the Flutter
+/// dialog produce identical error guidance.
 BrowseErrorInfo? _umasErrorMapper(Object error) {
-  if (error is UmasException) {
-    final hex = '0x${error.errorCode.toRadixString(16).toUpperCase()}';
-    if (error.errorCode == 0x83) {
-      return (
-        summary: 'UMAS not available on this PLC (status $hex)',
-        detail: 'The PLC responded to FC90 but rejected the request '
-            'with status $hex. This typically means the Data Dictionary '
-            'is not enabled.\n\n'
-            'To fix this in Unity Pro / EcoStruxure Control Expert:\n\n'
-            '1. Open your PLC project\n'
-            '2. Go to Tools \u2192 Project Settings \u2192 PLC embedded data\n'
-            '3. Enable "Data Dictionary"\n'
-            '4. Download the updated project to the PLC\n'
-            '5. Retry browsing\n\n'
-            'Also check that your PLC firmware is v2.60 or newer '
-            '(older firmware has known UMAS issues).',
-      );
-    }
-    if (error.errorCode == 0xC0) {
-      return (
-        summary: 'Data Dictionary not available on this PLC ($hex)',
-        detail: 'The PLC connection works (session established) but the '
-            'Data Dictionary is not accessible. Error $hex means the PLC '
-            'project does not have variable browsing enabled.\n\n'
-            'To fix this in EcoStruxure Control Expert:\n\n'
-            '1. Open your PLC project\n'
-            '2. Go to Tools \u2192 Project Settings \u2192 PLC embedded data\n'
-            '3. Check "Allow Data Dictionary Read"\n'
-            '4. Rebuild and download the project to the PLC\n'
-            '5. Retry browsing\n\n'
-            'Note: Without the Data Dictionary, you can still use '
-            'direct register addressing (holding registers, coils) '
-            'by entering addresses manually.',
-      );
-    }
-    return (
-      summary: 'UMAS error ($hex): ${error.message}',
-      detail: 'The PLC returned UMAS error code $hex.\n\n'
-          'If this is unexpected, verify that:\n'
-          '- The PLC supports UMAS (M340/M580 with Unity firmware)\n'
-          '- Data Dictionary is enabled in the PLC project\n'
-          '- The PLC firmware is up to date',
-    );
-  }
-  return null;
+  final info = mapUmasError(error);
+  if (info == null) return null;
+  return (summary: info.summary, detail: info.detail);
 }
 
 /// Convenience function to open UMAS browse dialog for a Modbus server.

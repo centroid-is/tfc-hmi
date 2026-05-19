@@ -415,6 +415,83 @@ class _M2400ConfigSectionState extends State<M2400ConfigSection> {
   }
 }
 
+// ===================== Key Mapping Modbus Section (TD-010) =====================
+
+/// Thin wrapper around [ModbusConfigSection] that owns the
+/// `(modbusNode, variableName)` half of a [KeyMappingEntry] and reports
+/// changes back through a single [onEntryChanged] callback.
+///
+/// Both the Key Repository row (`lib/pages/key_repository.dart`) and the
+/// Page Editor key-mapping dialog (`lib/page_creator/assets/common.dart`)
+/// embed the same Modbus section with the same boilerplate:
+///
+///   - `onChanged: (cfg) => entry.copyWith(modbusNode: cfg)`
+///   - `onPickedVariableName: (n) => n == null ? entry.copyWith(clearVariableName: true) : entry.copyWith(variableName: n)`
+///
+/// TD-010 (v1.1.x): hoist that wiring into one shared widget so the two
+/// call sites can't drift (e.g. one site forgets to clear the variable
+/// name on null, or stops propagating modbusNode edits). Both sites now
+/// pass the [KeyMappingEntry] directly and absorb either kind of edit
+/// via [onEntryChanged].
+class KeyMappingModbusSection extends StatelessWidget {
+  /// Current entry. Only its `modbusNode` and `variableName` fields are
+  /// inspected/mutated by this widget — other fields pass through
+  /// unchanged on every copyWith.
+  final KeyMappingEntry entry;
+
+  /// Modbus server aliases available for selection (drives the alias
+  /// dropdown inside [ModbusConfigSection]).
+  final List<String> modbusServerAliases;
+
+  /// Full Modbus server configs (needed by [ModbusConfigSection] to
+  /// resolve `umasEnabled` per alias and gate the picker affordance).
+  final List<ModbusConfig> modbusConfigs;
+
+  /// Fired with a fresh [KeyMappingEntry] whenever the user edits the
+  /// Modbus node config OR picks/clears a UMAS variable name.
+  final ValueChanged<KeyMappingEntry> onEntryChanged;
+
+  /// Default [ModbusNodeConfig] used when the entry has no
+  /// `modbusNode` yet (the Page Editor seeds entries lazily, so the
+  /// wrapper must produce a sensible starting config when the user
+  /// switches the protocol to Modbus).
+  final ModbusNodeConfig Function() defaultNodeConfigBuilder;
+
+  /// Optional explicit key (passed straight to [ModbusConfigSection]).
+  final Key? sectionKey;
+
+  const KeyMappingModbusSection({
+    super.key,
+    required this.entry,
+    required this.modbusServerAliases,
+    required this.modbusConfigs,
+    required this.onEntryChanged,
+    required this.defaultNodeConfigBuilder,
+    this.sectionKey,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return ModbusConfigSection(
+      key: sectionKey,
+      config: entry.modbusNode ?? defaultNodeConfigBuilder(),
+      modbusServerAliases: modbusServerAliases,
+      modbusConfigs: modbusConfigs,
+      onChanged: (nodeConfig) {
+        onEntryChanged(entry.copyWith(modbusNode: nodeConfig));
+      },
+      variableName: entry.variableName,
+      onPickedVariableName: (variableName) {
+        if (variableName == null || variableName.isEmpty) {
+          onEntryChanged(entry.copyWith(clearVariableName: true));
+        } else {
+          onEntryChanged(entry.copyWith(variableName: variableName));
+        }
+      },
+    );
+  }
+}
+
 // ===================== Modbus Config Section =====================
 
 class ModbusConfigSection extends ConsumerStatefulWidget {
@@ -423,12 +500,27 @@ class ModbusConfigSection extends ConsumerStatefulWidget {
   final List<ModbusConfig> modbusConfigs;
   final Function(ModbusNodeConfig) onChanged;
 
+  /// Optional: fired when the user picks a UMAS symbol from the browse
+  /// dialog. The argument is the full dotted path (e.g.
+  /// `B_F1_RC_01_Front` or `M_Elevator.speed`); pass null to clear a
+  /// previously-picked name. Address/register/dataType continue to be
+  /// updated via [onChanged] (kept for display + classic-Modbus
+  /// fallback). When the picker is wired through, the runtime read
+  /// path uses [variableName] instead of the address.
+  final void Function(String? variableName)? onPickedVariableName;
+
+  /// Optional: currently-selected UMAS symbol path, surfaced as a chip
+  /// in the section header for transparency.
+  final String? variableName;
+
   const ModbusConfigSection({
     super.key,
     required this.config,
     required this.modbusServerAliases,
     required this.modbusConfigs,
     required this.onChanged,
+    this.onPickedVariableName,
+    this.variableName,
   });
 
   @override
@@ -452,6 +544,22 @@ class _ModbusConfigSectionState extends ConsumerState<ModbusConfigSection> {
     return config?.umasEnabled ?? false;
   }
 
+  /// F-5 (v1.1.x): true when the operator has bound this key to a UMAS
+  /// symbol path via the Browse picker. While set, the runtime read path
+  /// routes by name and ignores `address` / `registerType` / `dataType`
+  /// / bitMask — so the form disables those fields with a tooltip that
+  /// points the operator at the clear-X on the symbol chip. Picking
+  /// `variableName == null` (chip cleared) re-enables them.
+  bool get _isLockedByVariableName =>
+      widget.variableName != null && widget.variableName!.isNotEmpty;
+
+  /// Tooltip body for every disabled field — points the operator at the
+  /// chip's clear-X so the field is reversibly editable.
+  static const _lockedTooltip =
+      'Variable name is set — runtime reads route by name and ignore '
+      'this field. Clear the UMAS symbol chip (×) above to edit '
+      'address-based mapping directly.';
+
   Future<void> _openUmasBrowseDialog(BuildContext context) async {
     final stateManAsync = ref.read(stateManProvider);
     final stateMan = stateManAsync.valueOrNull;
@@ -469,6 +577,11 @@ class _ModbusConfigSectionState extends ConsumerState<ModbusConfigSection> {
       final address = blockNo + offset;
       final dataTypeName = result.metadata['dataTypeName'] ?? '';
       final byteSize = int.tryParse(result.metadata['byteSize'] ?? '') ?? 2;
+      // Picked symbol path (e.g. `B_F1_RC_01_Front`,
+      // `M_Elevator.speed`). The runtime read path uses this when
+      // umasEnabled=true; the address/register/dataType below are
+      // kept as a %MW display + non-UMAS fallback.
+      final pickedPath = result.metadata['path'] ?? result.id;
 
       setState(() {
         _addressController.text = address.toString();
@@ -476,6 +589,13 @@ class _ModbusConfigSectionState extends ConsumerState<ModbusConfigSection> {
         _selectedDataType = mapUmasDataTypeToModbus(dataTypeName, byteSize);
       });
       _notifyChanged();
+      // B-5 (v1.1.x): propagate the picked variableName to the parent
+      // so KeyMappingEntry.variableName is set. With this in place the
+      // runtime read path routes by name (B-1) — no more "verify the
+      // PLC's Modbus mapping" caveat.
+      if (pickedPath.isNotEmpty) {
+        widget.onPickedVariableName?.call(pickedPath);
+      }
     }
   }
 
@@ -542,6 +662,50 @@ class _ModbusConfigSectionState extends ConsumerState<ModbusConfigSection> {
                   ),
               ],
             ),
+            // B-5 (v1.1.x): show the picked UMAS symbol path + a clear
+            // routing hint. With variableName set the runtime read path
+            // ignores address/register/bit — keep them visible for
+            // operator transparency / %MW fallback only.
+            if (widget.variableName != null && widget.variableName!.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 8.0),
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.label_important_outline,
+                      size: 14,
+                      color: Theme.of(context).colorScheme.primary,
+                    ),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Tooltip(
+                        message:
+                            'Picked UMAS symbol: ${widget.variableName} — will be read by name at runtime',
+                        child: Text(
+                          'UMAS: ${widget.variableName}',
+                          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                color: Theme.of(context).colorScheme.primary,
+                                fontWeight: FontWeight.w600,
+                              ),
+                          overflow: TextOverflow.ellipsis,
+                          maxLines: 1,
+                        ),
+                      ),
+                    ),
+                    if (widget.onPickedVariableName != null)
+                      IconButton(
+                        icon: const Icon(Icons.close, size: 14),
+                        tooltip: 'Clear UMAS symbol (use address mapping)',
+                        visualDensity: VisualDensity.compact,
+                        padding: EdgeInsets.zero,
+                        constraints:
+                            const BoxConstraints(minWidth: 24, minHeight: 24),
+                        onPressed: () =>
+                            widget.onPickedVariableName!(null),
+                      ),
+                  ],
+                ),
+              ),
             const SizedBox(height: 12),
             // Server alias dropdown
             DropdownButtonFormField<String>(
@@ -565,74 +729,98 @@ class _ModbusConfigSectionState extends ConsumerState<ModbusConfigSection> {
               },
             ),
             const SizedBox(height: 12),
-            // Register type dropdown
-            DropdownButtonFormField<ModbusRegisterType>(
-              key: ValueKey(_selectedRegisterType),
-              initialValue: _selectedRegisterType,
-              decoration: const InputDecoration(
-                labelText: 'Register Type',
-                prefixIcon: FaIcon(FontAwesomeIcons.layerGroup, size: 16),
+            // Register type dropdown — F-5: disabled while a UMAS symbol
+            // is bound (variableName != null). The runtime read path
+            // ignores this field; greying it out prevents silently
+            // stranded operator edits.
+            Tooltip(
+              message: _isLockedByVariableName ? _lockedTooltip : '',
+              child: DropdownButtonFormField<ModbusRegisterType>(
+                key: ValueKey(_selectedRegisterType),
+                initialValue: _selectedRegisterType,
+                decoration: InputDecoration(
+                  labelText: _isLockedByVariableName
+                      ? 'Register Type (UMAS bound)'
+                      : 'Register Type',
+                  prefixIcon: const FaIcon(FontAwesomeIcons.layerGroup, size: 16),
+                ),
+                items: ModbusRegisterType.values
+                    .map((rt) => DropdownMenuItem(
+                          value: rt,
+                          child: Text(rt.name),
+                        ))
+                    .toList(),
+                onChanged: _isLockedByVariableName
+                    ? null
+                    : (ModbusRegisterType? value) {
+                        if (value == null) return;
+                        setState(() {
+                          _selectedRegisterType = value;
+                          // Auto-lock data type for boolean register types
+                          if (value == ModbusRegisterType.coil ||
+                              value == ModbusRegisterType.discreteInput) {
+                            _selectedDataType = ModbusDataType.bit;
+                          } else if (_selectedDataType == ModbusDataType.bit) {
+                            // Switching away from boolean type -- reset to default
+                            _selectedDataType = ModbusDataType.uint16;
+                          }
+                        });
+                        _notifyChanged();
+                      },
               ),
-              items: ModbusRegisterType.values
-                  .map((rt) => DropdownMenuItem(
-                        value: rt,
-                        child: Text(rt.name),
-                      ))
-                  .toList(),
-              onChanged: (ModbusRegisterType? value) {
-                if (value == null) return;
-                setState(() {
-                  _selectedRegisterType = value;
-                  // Auto-lock data type for boolean register types
-                  if (value == ModbusRegisterType.coil ||
-                      value == ModbusRegisterType.discreteInput) {
-                    _selectedDataType = ModbusDataType.bit;
-                  } else if (_selectedDataType == ModbusDataType.bit) {
-                    // Switching away from boolean type -- reset to default
-                    _selectedDataType = ModbusDataType.uint16;
-                  }
-                });
-                _notifyChanged();
-              },
             ),
             const SizedBox(height: 12),
-            // Address field
-            TextField(
-              controller: _addressController,
-              decoration: const InputDecoration(
-                labelText: 'Address',
-                prefixIcon: FaIcon(FontAwesomeIcons.locationDot, size: 16),
+            // Address field — F-5: disabled while a UMAS symbol is bound.
+            Tooltip(
+              message: _isLockedByVariableName ? _lockedTooltip : '',
+              child: TextField(
+                controller: _addressController,
+                enabled: !_isLockedByVariableName,
+                decoration: InputDecoration(
+                  labelText: _isLockedByVariableName
+                      ? 'Address (UMAS bound)'
+                      : 'Address',
+                  prefixIcon:
+                      const FaIcon(FontAwesomeIcons.locationDot, size: 16),
+                ),
+                keyboardType: TextInputType.number,
+                onChanged: (_) => _notifyChanged(),
               ),
-              keyboardType: TextInputType.number,
-              onChanged: (_) => _notifyChanged(),
             ),
             const SizedBox(height: 12),
-            // Data type dropdown (disabled for coil/discrete input)
-            DropdownButtonFormField<ModbusDataType>(
-              key: ValueKey(_selectedDataType),
-              initialValue: _selectedDataType,
-              decoration: InputDecoration(
-                labelText:
-                    _isBooleanRegisterType ? 'Data Type (auto)' : 'Data Type',
-                prefixIcon:
-                    const FaIcon(FontAwesomeIcons.hashtag, size: 16),
+            // Data type dropdown — F-5: disabled while a UMAS symbol is
+            // bound; also disabled for coil/discrete input (auto-bit).
+            Tooltip(
+              message: _isLockedByVariableName ? _lockedTooltip : '',
+              child: DropdownButtonFormField<ModbusDataType>(
+                key: ValueKey(_selectedDataType),
+                initialValue: _selectedDataType,
+                decoration: InputDecoration(
+                  labelText: _isLockedByVariableName
+                      ? 'Data Type (UMAS bound)'
+                      : (_isBooleanRegisterType
+                          ? 'Data Type (auto)'
+                          : 'Data Type'),
+                  prefixIcon:
+                      const FaIcon(FontAwesomeIcons.hashtag, size: 16),
+                ),
+                items: _isBooleanRegisterType
+                    ? [
+                        const DropdownMenuItem(
+                            value: ModbusDataType.bit, child: Text('bit'))
+                      ]
+                    : ModbusDataType.values
+                        .map((dt) =>
+                            DropdownMenuItem(value: dt, child: Text(dt.name)))
+                        .toList(),
+                onChanged: (_isBooleanRegisterType || _isLockedByVariableName)
+                    ? null // null disables the dropdown
+                    : (value) {
+                        if (value == null) return;
+                        setState(() => _selectedDataType = value);
+                        _notifyChanged();
+                      },
               ),
-              items: _isBooleanRegisterType
-                  ? [
-                      const DropdownMenuItem(
-                          value: ModbusDataType.bit, child: Text('bit'))
-                    ]
-                  : ModbusDataType.values
-                      .map((dt) =>
-                          DropdownMenuItem(value: dt, child: Text(dt.name)))
-                      .toList(),
-              onChanged: _isBooleanRegisterType
-                  ? null // null disables the dropdown
-                  : (value) {
-                      if (value == null) return;
-                      setState(() => _selectedDataType = value);
-                      _notifyChanged();
-                    },
             ),
             const SizedBox(height: 12),
             // Poll group dropdown

@@ -127,10 +127,14 @@ void main() {
       expect(umas.hasReservation, isTrue);
     });
 
-    test('throws UmasReservationException on conflict', () async {
+    test('throws UmasReservationException on conflict (errorCode=0x06)',
+        () async {
       await tcp.connect();
 
-      // Use a mock sendFn that returns error for 0x10
+      // TD-014 (v1.1.x): UmasReservationException is reserved for the
+      // 0x06 "another client holds the reservation" error code. Use a
+      // mock sendFn that returns 0x06 to verify the specialized
+      // exception type is raised.
       final umas = UmasClient(sendFn: (request) async {
         // For readPlcId and init, delegate to tcp
         if (request is UmasRequest &&
@@ -138,8 +142,9 @@ void main() {
           return tcp.send(request);
         }
         // For takePlcReservation, simulate conflict error response
+        // with the well-known 0x06 conflict code.
         if (request is UmasRequest) {
-          final pdu = Uint8List.fromList([0x5A, 0x00, 0xFD, 0x01]);
+          final pdu = Uint8List.fromList([0x5A, 0x00, 0xFD, 0x06]);
           request.internalSetFromPduResponse(pdu);
           return ModbusResponseCode.requestSucceed;
         }
@@ -150,6 +155,38 @@ void main() {
         () => umas.takePlcReservation(),
         throwsA(isA<UmasReservationException>()),
       );
+    });
+
+    test(
+        'TD-014: non-conflict status errors throw plain UmasException, not '
+        'UmasReservationException', () async {
+      await tcp.connect();
+
+      // Status error with errorCode 0x83 (Data Dictionary disabled) is
+      // NOT a reservation conflict — it must surface as plain
+      // UmasException so callers don't false-positive on "another
+      // client holds the lock" UX.
+      final umas = UmasClient(sendFn: (request) async {
+        if (request is UmasRequest &&
+            request.umasSubFunction != UmasSubFunction.takePlcReservation.code) {
+          return tcp.send(request);
+        }
+        if (request is UmasRequest) {
+          final pdu = Uint8List.fromList([0x5A, 0x00, 0xFD, 0x83]);
+          request.internalSetFromPduResponse(pdu);
+          return ModbusResponseCode.requestSucceed;
+        }
+        return ModbusResponseCode.requestSucceed;
+      });
+
+      try {
+        await umas.takePlcReservation();
+        fail('expected UmasException for 0x83 status error');
+      } on UmasReservationException {
+        fail('non-conflict status error must NOT throw UmasReservationException');
+      } on UmasException catch (e) {
+        expect(e.errorCode, 0x83);
+      }
     });
   });
 

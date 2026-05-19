@@ -34,6 +34,11 @@
 ///                   slow but exhaustive).
 ///   --json          `check` only — emit machine-readable JSON summary
 ///                   instead of the human report.
+///   --show-direction `browse` only — print the function-block member
+///                   direction (input / output / publicVar / inOut / unknown)
+///                   alongside each leaf that has one. Nodes without a
+///                   direction (top-level vars, array elements) are
+///                   printed as before.
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -42,6 +47,7 @@ import 'package:args/args.dart';
 import 'package:modbus_client/modbus_client.dart';
 import 'package:modbus_client_tcp/modbus_client_tcp.dart';
 import 'package:tfc_dart/core/umas_client.dart';
+import 'package:tfc_dart/core/umas_error_messages.dart';
 import 'package:tfc_dart/core/umas_types.dart';
 
 const _defaultPort = 502;
@@ -54,13 +60,24 @@ const _defaultTimeoutSeconds = 5;
 // pass/fail gate.
 final _fbInOutRegex = RegExp(r'\.(iq_|io_)');
 
-Future<int> main(List<String> args) async {
+Future<void> main(List<String> args) async {
+  // Wrap the real entry in an explicit exit() because the underlying
+  // Modbus client keeps a heartbeat / listener alive after disconnect,
+  // and the Dart VM otherwise waits for that timer to settle (which
+  // never happens). This caused `v1.1-verify.sh` to hang after the
+  // command had already printed its full result.
+  final code = await _main(args);
+  exit(code);
+}
+
+Future<int> _main(List<String> args) async {
   final parser = ArgParser(allowTrailingOptions: true)
     ..addOption('port', defaultsTo: '$_defaultPort')
     ..addOption('unit', defaultsTo: '$_defaultUnit')
     ..addOption('timeout', defaultsTo: '$_defaultTimeoutSeconds')
     ..addOption('elements', defaultsTo: '5')
     ..addFlag('json', defaultsTo: false, negatable: false)
+    ..addFlag('show-direction', defaultsTo: false, negatable: false)
     ..addFlag('help', abbr: 'h', defaultsTo: false, negatable: false);
 
   final ArgResults parsed;
@@ -85,11 +102,13 @@ Future<int> main(List<String> args) async {
       Duration(seconds: int.parse(parsed['timeout'] as String));
   final elementsPerArray = int.parse(parsed['elements'] as String);
   final emitJson = parsed['json'] as bool;
+  final showDirection = parsed['show-direction'] as bool;
 
   switch (command) {
     case 'browse':
       _need(rest, 1, 'browse <host>');
-      return _withClient(rest[0], port, unit, timeout, _browseCommand);
+      return _withClient(rest[0], port, unit, timeout,
+          (umas) => _browseCommand(umas, showDirection: showDirection));
     case 'check':
       _need(rest, 1, 'check <host>');
       return _withClient(rest[0], port, unit, timeout,
@@ -159,9 +178,23 @@ Future<int> _withClient(
   );
   await tcp.connect();
   final umas = UmasClient(sendFn: tcp.send, unitId: unit);
-  await umas.readPlcStatus();
   try {
+    await umas.readPlcStatus();
     return await body(umas);
+  } on UmasException catch (e) {
+    // TD-018 (v1.1.x): translate raw UMAS hex into operator-grade
+    // guidance instead of letting the unhandled exception trace
+    // surface in the verify-script gating loop. Same mapping the
+    // Flutter Browse dialog uses.
+    final info = mapUmasError(e);
+    if (info != null) {
+      stderr.writeln(info.summary);
+      stderr.writeln('');
+      stderr.writeln(info.detail);
+    } else {
+      stderr.writeln('UMAS error: $e');
+    }
+    return 1;
   } finally {
     try {
       await tcp.disconnect();
@@ -173,25 +206,33 @@ Future<int> _withClient(
 // browse — print the full tree
 // ---------------------------------------------------------------------------
 
-Future<int> _browseCommand(UmasClient umas) async {
+Future<int> _browseCommand(UmasClient umas,
+    {bool showDirection = false}) async {
   final tree = await umas.browse();
   final leafCount = _countLeaves(tree);
   print('${tree.length} root(s), $leafCount leaves\n');
   for (final root in tree) {
-    _printTree(root, '');
+    _printTree(root, '', showDirection: showDirection);
   }
   return 0;
 }
 
-void _printTree(UmasVariableTreeNode n, String indent) {
+void _printTree(UmasVariableTreeNode n, String indent,
+    {bool showDirection = false}) {
   final type = n.dataType?.name ?? '?';
   final addr = n.variable == null
       ? ''
       : ' [block=0x${n.variable!.blockNo.toRadixString(16)} '
           'off=0x${n.variable!.offset.toRadixString(16)}]';
-  print('$indent${n.name}  ($type)$addr');
+  // Phase 3 (v1.1): --show-direction surfaces the FB-member direction
+  // when the node carries one. Suppress entirely when no direction is
+  // attached so legacy top-level / array-element output is unchanged.
+  final dirSuffix = (showDirection && n.direction != null)
+      ? ' dir=${n.direction!.name}'
+      : '';
+  print('$indent${n.name}  ($type)$addr$dirSuffix');
   for (final c in n.children) {
-    _printTree(c, '$indent  ');
+    _printTree(c, '$indent  ', showDirection: showDirection);
   }
 }
 
@@ -388,10 +429,30 @@ Future<int> _readCommand(UmasClient umas, String name) async {
       ok++;
     } on UmasException catch (e) {
       fail++;
+      // CRIT-1: when errorCode == 0 the failure is a parse / decode
+      // condition (e.g. "Buffer underflow") and the actionable
+      // signal is in `e.message`. Print it to stderr so operators
+      // and `v1.1-verify.sh` greps surface the real cause rather
+      // than a misleading `0x0`.
+      //
+      // TD-018 (v1.1.x): for protocol error codes (0x83, 0xC0, 0x86,
+      // etc.) print the shared operator-friendly summary so the verify
+      // loop produces actionable output without the operator having
+      // to look up hex codes.
+      final info = mapUmasError(e);
+      final codeHex = '0x${e.errorCode.toRadixString(16)}';
+      final summary = info?.summary ?? codeHex;
+      if (e.errorCode == 0) {
+        stderr.writeln('  ${leaf.path}  ${dt.name} '
+            '[block=0x${v.blockNo.toRadixString(16)} '
+            'off=0x${v.offset.toRadixString(16)}]  -> '
+            '$codeHex  ${e.message}');
+      }
       print('  ${leaf.path}  ${dt.name} '
           '[block=0x${v.blockNo.toRadixString(16)} '
           'off=0x${v.offset.toRadixString(16)}]  -> '
-          '0x${e.errorCode.toRadixString(16)}');
+          '$summary'
+          '${e.errorCode == 0 ? '  ${e.message}' : ''}');
     }
   }
 
@@ -413,8 +474,13 @@ UmasVariableTreeNode? _findByName(
     }
   }
 
+  // TD-019 (v1.1.x): break out as soon as a root walk finds the
+  // target. Previously the outer loop kept iterating roots even after
+  // `hit` was set — on PLCs with many roots this wasted up to N
+  // traversals worth of work per lookup.
   for (final r in roots) {
     walk(r);
+    if (hit != null) break;
   }
   return hit;
 }

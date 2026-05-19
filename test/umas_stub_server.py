@@ -46,6 +46,12 @@ VARIABLES = [
     # Array variable referencing the custom array type below (id=120).
     # Type 120 is "ARRAY[1..4] OF UINT" (4 elements * 2 bytes = 8 bytes).
     ("Application.GVL.colors", 1, 16, 120),
+    # Function-block instance: typeId 200 is intentionally absent from
+    # DATA_TYPES (DD03) — mirrors the M580 firmware behaviour where FB
+    # types are omitted from DD03 but accessible via DD02-on-typeIndex.
+    # Forces the speculative-DD02 path through _expandVariable
+    # (plc4j parseCustomTypeBlock:1130-1146).
+    ("Application.Motors.M_Elevator", 5, 0, 200),
 ]
 
 DATA_TYPES = [
@@ -72,6 +78,24 @@ DATA_TYPES = [
 #   typeId -> (elementTypeId, [(startIndex, upperBound), ...])
 ARRAY_TYPES = {
     120: (5, [(1, 4)]),  # ARRAY[1..4] OF UINT
+}
+
+# UDT / FB member layouts returned by DD02 queries keyed on a typeId
+# whose entry is intentionally absent from DD03. Mirrors plc4j's
+# resolveCustomType / parseCustomTypeBlock path: when DD02 returns a
+# non-array body (first byte != 0x04), the response is a
+# UmasPDUReadUmasUDTDefinitionResponse listing member records.
+#
+#   typeId -> [(member_name, member_data_type_id, member_offset_within_parent), ...]
+FB_TYPES = {
+    # M_Elevator FB: typeId 200 is NOT in DATA_TYPES (DD03), so the
+    # Dart driver's existing classIdentifier gate would drop it. The
+    # speculative DD02-on-typeIndex path must surface these 3 members.
+    200: [
+        ("speed",   8, 0),   # REAL  @ +0
+        ("torque",  8, 4),   # REAL  @ +4
+        ("enabled", 1, 8),   # BOOL  @ +8
+    ],
 }
 
 # PLC identification values
@@ -128,6 +152,12 @@ def _init_variable_store():
         (2, 8): struct.pack("B", 1),              # enabled BOOL
         (3, 0): struct.pack("<I", 12345),         # production UDINT
         (3, 4): struct.pack("<I", 3600000),       # runtime_ms TIME
+        # M_Elevator FB (block=5, typeId=200) member values. Member offsets
+        # are relative to the FB's start (offset 0), so absolute addresses
+        # equal the member offsets.
+        (5, 0): struct.pack("<f", 1450.0),        # M_Elevator.speed REAL
+        (5, 4): struct.pack("<f", 92.5),          # M_Elevator.torque REAL
+        (5, 8): struct.pack("B", 1),              # M_Elevator.enabled BOOL
     }
     store.update(initial_values)
     return store
@@ -259,12 +289,21 @@ def build_success_response(payload, pairing_key=0x00):
     return bytes(pdu)
 
 
-def build_error_response(error_code, pairing_key=0x00):
-    """Build FC90 error PDU: [0x5A, pairingKey, 0xFD, errorCode].
+def build_error_response(error_code, pairing_key=0x00, secondary_byte=None):
+    """Build FC90 error PDU: [0x5A, pairingKey, 0xFD, errorCode[, secondary]].
 
     Real Schneider PLC 3-byte header: FC + pairingKey + status (no sub-function echo).
+
+    TD-017 (v1.1.x): when [secondary_byte] is provided, emit a 5-byte error
+    PDU. The M580 firmware uses the 2-byte 0xA1 0xA1 marker for
+    "ReadVariable not supported, use MonitorPlc instead"; the Dart client
+    requires BOTH bytes before flipping into MonitorPlc mode so a stray
+    single 0xA1 from an unrelated firmware path doesn't trigger the
+    fallback.
     """
-    return bytes([0x5A, pairing_key, 0xFD, error_code])
+    if secondary_byte is None:
+        return bytes([0x5A, pairing_key, 0xFD, error_code])
+    return bytes([0x5A, pairing_key, 0xFD, error_code, secondary_byte])
 
 
 def wrap_mbap(transaction_id, unit_id, pdu):
@@ -293,6 +332,15 @@ class UmasHandler(socketserver.BaseRequestHandler):
 
         # MonitorPlc (0x50) registration table: variableIndex -> (block, offset)
         self._monitor_registrations = {}
+
+        # TD-008 (v1.1.x): project-CRC seed for F-8 testing. _readMemoryBlock(0x30)
+        # places this value in `hash1` of the response (`hash2` stays 0), so the
+        # Dart side observes `projectCrc = seed`. Tests bump the seed via a
+        # coil-write to the sentinel address 0xFFFF (value=1 = bump). On bump
+        # the seed advances by 1 and the next readMemoryBlock(0x30) response
+        # carries the new value, which drives `refreshProjectMetadata` to fire
+        # `projectCrcChanges`.
+        self._project_crc_seed = 1
 
         while True:
             try:
@@ -340,8 +388,11 @@ class UmasHandler(socketserver.BaseRequestHandler):
         behavior where ReadVariable is not supported.
         """
         if self._m580_mode:
-            print("[STUB] M580 mode: rejecting ReadVariable (0x22) with 0xA1 error")
-            return build_error_response(0xA1, self.pairing_key)
+            print("[STUB] M580 mode: rejecting ReadVariable (0x22) with 0xA1A1 marker")
+            # TD-017 (v1.1.x): emit the 2-byte 0xA1A1 marker so the Dart
+            # client's hardened heuristic actually trips. Bare 0xA1 alone
+            # is intentionally ignored as ambiguous.
+            return build_error_response(0xA1, self.pairing_key, secondary_byte=0xA1)
 
         global VARIABLE_STORE
         if len(payload) < 5:
@@ -604,6 +655,21 @@ class UmasHandler(socketserver.BaseRequestHandler):
             return build_error_response(0x02, self.pairing_key)
 
         data = payload[data_start:data_end]
+
+        # TD-008: sentinel coil write to area=0x00 (coils), address=0xFFFF
+        # with any non-zero byte bumps `_project_crc_seed`. This is the
+        # test hook for F-8 — after the bump, the next readMemoryBlock(0x30)
+        # response carries the new seed in `hash1`, which drives the
+        # client-side projectCrc to change → `projectCrcChanges` fires →
+        # MonitorPlc table rebuilds.
+        if area == 0x00 and start_addr == 0xFFFF and quantity >= 1:
+            if len(data) >= 1 and data[0] != 0:
+                self._project_crc_seed = (self._project_crc_seed + 1) & 0xFFFFFFFF
+                print(f"[STUB] CRC seed bumped to {self._project_crc_seed:#010x}")
+                # Do NOT persist the sentinel write to REGISTER_STORE —
+                # it's a control channel, not a real coil.
+                return build_success_response(b"", self.pairing_key)
+
         key = (area, start_addr)
         REGISTER_STORE[key] = bytes(data)
 
@@ -710,6 +776,27 @@ class UmasHandler(socketserver.BaseRequestHandler):
                 print(f"[STUB]   index={index} hwId={hw_id:#010x} blockNo={block_no:#06x} offset={offset:#06x}{blank_str}")
 
             if record_type == 0xDD02:
+                # FB / UDT member layout: when the typeId-keyed request hits
+                # an entry in FB_TYPES, return a UmasPDUReadUmasUDTDefinitionResponse
+                # body (plc4j parseCustomTypeBlock:1130-1146 fork: classId != 0x04).
+                # Wire format (LE):
+                #   range(1) + unknown1(4) + noOfRecords(2)              -- 7-byte header
+                #   per record (UmasUDTDefinition):
+                #     dataType(2) + offset(2) + unknown5(2) + unknown4(2)
+                #     + null-terminated UTF-8 name
+                if block_no in FB_TYPES:
+                    members = FB_TYPES[block_no]
+                    body = bytearray()
+                    body += struct.pack("B", 0x00)            # range
+                    body += struct.pack("<I", 0x00000000)     # unknown1 (4 bytes per UmasPDUReadUmasUDTDefinitionResponse)
+                    body += struct.pack("<H", len(members))   # noOfRecords
+                    for mname, mdt, moff in members:
+                        body += struct.pack("<H", mdt)        # member dataType
+                        body += struct.pack("<H", moff)       # member offset within parent
+                        body += struct.pack("<H", 0x0000)     # unknown5
+                        body += struct.pack("<H", 0x0000)     # unknown4
+                        body += mname.encode("utf-8") + b"\x00"
+                    return build_success_response(bytes(body), self.pairing_key)
                 # If the request keys on a custom array type, return that
                 # type's UmasArrayTypeDefinition payload (per PLC4X mspec).
                 # Otherwise fall through to the variable-name table.
@@ -751,7 +838,7 @@ class UmasHandler(socketserver.BaseRequestHandler):
             if len(payload) < 9:
                 return build_error_response(0x02, self.pairing_key)
             range_byte = payload[0]
-            # block_number = struct.unpack("<H", payload[1:3])[0]
+            block_number = struct.unpack("<H", payload[1:3])[0]
             # mem_offset = struct.unpack("<H", payload[3:5])[0]
             # unknown_obj = struct.unpack("<H", payload[5:7])[0]
             num_bytes = struct.unpack("<H", payload[7:9])[0]
@@ -759,7 +846,25 @@ class UmasHandler(socketserver.BaseRequestHandler):
             resp = bytearray()
             resp += struct.pack("B", range_byte)
             resp += struct.pack("<H", num_bytes)
-            resp += b"\x00" * num_bytes  # zero-filled data
+            # TD-008: when blockNumber == 0x30 (project block) and the
+            # response window covers the hash1/hash2 fields at offsets
+            # 9 and 13 inside the data section, populate hash1 with the
+            # current `_project_crc_seed` so the Dart side sees a
+            # non-zero `projectCrc = seed + 0 = seed`. This lets F-8
+            # tests bump the seed (via the sentinel coil write) and
+            # observe `projectCrcChanges` fire.
+            data = bytearray(num_bytes)
+            if block_number == 0x30 and num_bytes >= 17:
+                # Layout matches `_readProjectBlock` in umas_client.dart:
+                #   data[0..1]   range (LE)
+                #   data[2..3]   notSure
+                #   data[4]      projectIndex
+                #   data[5..8]   projectHardwareId (LE)
+                #   data[9..12]  hash1 (LE)
+                #   data[13..16] hash2 (LE)
+                struct.pack_into("<I", data, 9, self._project_crc_seed & 0xFFFFFFFF)
+                struct.pack_into("<I", data, 13, 0)
+            resp += bytes(data)
             return build_success_response(bytes(resp), self.pairing_key)
 
         elif sub_func == 0x39:

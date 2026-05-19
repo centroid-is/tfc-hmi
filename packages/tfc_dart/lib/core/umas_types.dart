@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:tfc_dart/core/modbus_client_wrapper.dart' show ModbusDataType;
+import 'package:tfc_dart/core/umas_fb_direction.dart' show UmasFbMemberDirection;
 
 /// Maps a UMAS data type name to the corresponding Modbus data type.
 ///
@@ -83,17 +84,25 @@ class UmasVariable {
   final int dataTypeId;
   final String? parentPath;
 
+  /// Declaration direction when this variable is a function-block member
+  /// (see [UmasFbMemberDirection]). Null for top-level variables and for
+  /// non-FB struct members. Populated by [UmasClient] when parsing DD02
+  /// member-layout records (Phase 3 of v1.1).
+  final UmasFbMemberDirection? direction;
+
   const UmasVariable({
     required this.name,
     required this.blockNo,
     required this.offset,
     required this.dataTypeId,
     this.parentPath,
+    this.direction,
   });
 
   @override
   String toString() => 'UmasVariable($name, block=$blockNo, offset=$offset, '
-      'typeId=$dataTypeId)';
+      'typeId=$dataTypeId'
+      '${direction != null ? ', dir=${direction!.name}' : ''})';
 }
 
 /// A data type reference from the UMAS data dictionary (0xDD03 records).
@@ -230,6 +239,17 @@ class UmasPlcIdent {
 }
 
 /// A node in the hierarchical variable tree built from data dictionary.
+///
+/// Phase 5 / FB-05 additions: [direction], [readable], and
+/// [unreadableReason] expose IEC 61131-3 FB member metadata so the
+/// UI (Phase 4) can render VAR_INPUT / VAR_OUTPUT distinctions and
+/// surface unreadable VAR_IN_OUT members with a clear affordance
+/// instead of silently dropping them.
+///
+/// Direction classification belongs to Phase 3 (see
+/// `umas_fb_direction.dart`). plc4j (PLC4X) does not surface
+/// direction metadata at all; see `umas_var_in_out.dart` for the
+/// parity-deviation rationale.
 class UmasVariableTreeNode {
   final String name;
   final String path;
@@ -237,12 +257,32 @@ class UmasVariableTreeNode {
   final UmasVariable? variable;
   final UmasDataTypeRef? dataType;
 
+  /// Direction of this node when it is an FB member, or `null` for
+  /// non-member nodes (top-level variables, struct members, array
+  /// elements, folders). Phase 2's FB expander and Phase 3's
+  /// [UmasFbMemberDirection] classifier populate this. Consumed by the
+  /// browser-tree UI (Phase 4) and the `--show-direction` CLI flag.
+  final UmasFbMemberDirection? direction;
+
+  /// Whether this node is readable through the normal 0x22 / 0x50
+  /// read path. Defaults to `true`. Phase 5 sets `false` for
+  /// VAR_IN_OUT members per FB-05 path (b).
+  final bool readable;
+
+  /// Human-readable reason a node is unreadable (e.g. `"VAR_IN_OUT
+  /// (PLC returns 0x94)"`). `null` when [readable] is `true`.
+  /// Surfaced by the UI as a tooltip / suffix on unreadable leaves.
+  final String? unreadableReason;
+
   UmasVariableTreeNode({
     required this.name,
     required this.path,
     List<UmasVariableTreeNode>? children,
     this.variable,
     this.dataType,
+    this.direction,
+    this.readable = true,
+    this.unreadableReason,
   }) : children = children ?? [];
 
   bool get isFolder => children.isNotEmpty && variable == null;
@@ -250,7 +290,48 @@ class UmasVariableTreeNode {
   @override
   String toString() => 'UmasVariableTreeNode($path, '
       '${isFolder ? "folder" : "leaf"}, '
-      '${children.length} children)';
+      '${children.length} children'
+      '${direction != null ? ", direction=${direction!.name}" : ""}'
+      '${!readable ? ", readable=false" : ""})';
+}
+
+/// A flattened, resolved view of a UMAS symbol — the minimum tuple
+/// needed to issue a [VariableReadRef] / [VariableWriteRef] for a leaf
+/// addressed by name.
+///
+/// Produced by [UmasClient.lookupSymbol]. The fields mirror what the
+/// browse tree carries on a leaf node, but with non-nullable types so
+/// callers don't need to re-validate.
+class ResolvedSymbol {
+  /// Full dotted path used to look the symbol up, e.g.
+  /// `B_F1_RC_01_Front` or `M_Elevator.speed`.
+  final String path;
+
+  /// PLC address (blockNo + offset) and metadata.
+  final UmasVariable variable;
+
+  /// Resolved data type (built-in or custom UDT).
+  final UmasDataTypeRef dataType;
+
+  /// Whether the underlying tree node was marked readable. VAR_IN_OUT
+  /// members are unreadable (PLC returns 0x94).
+  final bool readable;
+
+  /// Human-readable explanation when [readable] is `false`.
+  final String? unreadableReason;
+
+  const ResolvedSymbol({
+    required this.path,
+    required this.variable,
+    required this.dataType,
+    this.readable = true,
+    this.unreadableReason,
+  });
+
+  @override
+  String toString() => 'ResolvedSymbol($path, ${dataType.name}, '
+      'block=${variable.blockNo}, offset=${variable.offset}'
+      '${!readable ? ", readable=false" : ""})';
 }
 
 /// Exception thrown by UMAS operations.
@@ -258,10 +339,31 @@ class UmasException implements Exception {
   final int errorCode;
   final String message;
 
-  const UmasException({required this.errorCode, required this.message});
+  /// TD-017 (v1.1.x): second byte of the PLC's UMAS error payload,
+  /// when present. Schneider M580 firmware emits a 2-byte error marker
+  /// `0xA1 0xA1` from sub-function 0x22 (ReadVariable) to signal "use
+  /// MonitorPlc (0x50) instead"; the single-byte 0xA1 alone could
+  /// plausibly originate from an unrelated firmware path on a different
+  /// PLC family, so the auto-fallback heuristic in [UmasClient.readVariables]
+  /// requires both bytes to match (pdu[3] == 0xA1 && pdu[4] == 0xA1) to
+  /// flip into MonitorPlc mode.
+  ///
+  /// Null when the PDU did not carry a 5th byte.
+  final int? secondaryErrorCode;
+
+  const UmasException({
+    required this.errorCode,
+    required this.message,
+    this.secondaryErrorCode,
+  });
 
   @override
-  String toString() => 'UmasException($errorCode): $message';
+  String toString() {
+    if (secondaryErrorCode == null) {
+      return 'UmasException($errorCode): $message';
+    }
+    return 'UmasException($errorCode, sec=$secondaryErrorCode): $message';
+  }
 }
 
 /// Exception thrown when PLC reservation cannot be acquired (conflict).
@@ -272,6 +374,7 @@ class UmasReservationException extends UmasException {
   const UmasReservationException({
     required super.errorCode,
     required super.message,
+    super.secondaryErrorCode,
   });
 
   @override
@@ -550,7 +653,15 @@ const _maxStringByteSize = 1024;
 /// Parse a single variable value from [bytes] at [offset] using [dataType] info.
 ///
 /// Returns a [TypedVariableValue] with the correctly typed Dart value.
-/// Throws [UmasException] if the buffer is too short (T-05-04 mitigation).
+/// Throws [UmasException] if the buffer is too short for a *fixed-size scalar*
+/// (BOOL/INT/REAL/etc.) — T-05-04 mitigation.
+///
+/// STRING / BYTE_STRING / WSTRING are *never* a throw source: Schneider PLCs
+/// return STRING reads clamped to 4 bytes via the M580's 0x50 path and may
+/// return 0 bytes for empty strings via 0x22. The parser slices whatever
+/// arrived (possibly empty) and decodes it without raising, so the HMI
+/// renders a (possibly truncated/empty) string rather than the literal text
+/// "Buffer underflow" through `'read error: $e'` (v1.1 JOB-A fix).
 TypedVariableValue parseVariableValue(
     Uint8List bytes, int offset, UmasDataTypeRef dataType) {
   final declared = dataType.byteSize;
@@ -559,18 +670,27 @@ TypedVariableValue parseVariableValue(
   // For wide types (TON, struct instances) the PLC clamps the read to 4
   // bytes — accept what arrived and parse the slice as raw bytes. For
   // known scalar types we still require the declared size to be present.
-  // STRING is intentionally NOT in this set: Schneider stores STRING(N) at
-  // arbitrary sizes (N=16 inside ARRAY OF STRING(16)) and the PLC may
-  // truncate reads of >4-byte elements via the dsi clamp; the parser must
-  // gracefully decode whatever bytes arrive.
+  // STRING / BYTE_STRING / WSTRING are intentionally NOT in this set: the
+  // PLC truncates wide STRING reads, and the parser must gracefully decode
+  // whatever bytes arrive even when zero bytes are available.
+  final upper = dataType.name.toUpperCase();
   final knownScalar = const {
         'BOOL', 'EBOOL', 'INT', 'UINT', 'WORD', 'DINT', 'TIME', 'UDINT',
         'DWORD', 'REAL', 'LREAL', 'LINT', 'ULINT', 'BYTE',
         'DATE', 'TIME_OF_DAY', 'DATE_AND_TIME',
-      }.contains(dataType.name.toUpperCase());
+      }.contains(upper);
+  final isStringy = upper == 'STRING' ||
+      upper == 'BYTE_STRING' ||
+      upper == 'WSTRING';
 
   if (offset + declared > bytes.length) {
-    if (knownScalar || available < 0) {
+    if (isStringy) {
+      // Never throw for STRING-family: clamp `needed` to the available
+      // bytes (possibly zero) and let the STRING branch decode an empty
+      // or short slice gracefully. JOB-A: a defensive belt-and-braces
+      // path for the case where a prior iteration in parseReadAllResponse
+      // already advanced `offset` past `bytes.length`.
+    } else if (knownScalar || available < 0) {
       throw UmasException(
         errorCode: 0,
         message: 'Buffer underflow: need $declared bytes at offset $offset, '
@@ -579,12 +699,22 @@ TypedVariableValue parseVariableValue(
     }
   }
 
-  final needed = (offset + declared > bytes.length) ? available : declared;
-  final slice = bytes.sublist(offset, offset + needed);
+  // Clamp `needed` so it never goes negative and never overruns the buffer,
+  // regardless of how `offset` and `declared` line up.
+  int needed;
+  if (isStringy) {
+    needed = available < 0 ? 0 : (declared < available ? declared : available);
+  } else {
+    needed = (offset + declared > bytes.length) ? available : declared;
+  }
+  final sliceStart = offset < 0 ? 0 : (offset > bytes.length ? bytes.length : offset);
+  final sliceEnd = sliceStart + (needed < 0 ? 0 : needed);
+  final clampedEnd = sliceEnd > bytes.length ? bytes.length : sliceEnd;
+  final slice = bytes.sublist(sliceStart, clampedEnd);
   final bd = ByteData.sublistView(bytes);
   dynamic value;
 
-  switch (dataType.name.toUpperCase()) {
+  switch (upper) {
     case 'BOOL':
     case 'EBOOL':
       value = bytes[offset] != 0;
@@ -610,14 +740,21 @@ TypedVariableValue parseVariableValue(
     case 'BYTE':
       value = bytes[offset];
     case 'STRING':
-      // T-05-06: Cap string read length
+    case 'BYTE_STRING':
+    case 'WSTRING':
+      // T-05-06: Cap string read length. JOB-A: also defensively guard
+      // against malformed UTF-8 — the PLC's clamped slice can land
+      // mid-codepoint, and a hard utf8.decode throw would re-surface
+      // as "Buffer underflow"-adjacent garbage in the UI.
+      final available0 = slice.length;
       final maxRead =
-          needed > _maxStringByteSize ? _maxStringByteSize : needed;
-      final stringBytes = bytes.sublist(offset, offset + maxRead);
+          available0 > _maxStringByteSize ? _maxStringByteSize : available0;
+      final stringBytes = slice.sublist(0, maxRead);
       // Find null terminator
       int nullPos = stringBytes.indexOf(0x00);
       if (nullPos < 0) nullPos = maxRead;
-      value = utf8.decode(stringBytes.sublist(0, nullPos));
+      value = utf8.decode(stringBytes.sublist(0, nullPos),
+          allowMalformed: true);
     default:
       // Unknown type: return raw bytes
       value = slice;
@@ -651,9 +788,19 @@ List<TypedVariableValue> parseVariableValues(
   // T-05-05: Validate total expected bytes fit in buffer.
   // Wide types (TON, struct instances) are clamped to 4 bytes per the PLC's
   // dataSizeIndex range, so use the on-wire size (max 4) for the bound
-  // check rather than the declared byteSize.
+  // check rather than the declared byteSize. STRING / BYTE_STRING / WSTRING
+  // are intentionally excluded from the bound check (CRIT-1): the M580 may
+  // return as little as 1 byte for empty / narrow STRING reads through the
+  // 0x22 path, well below the 4-byte ceiling above. parseVariableValue's
+  // graceful slice path handles the under-read.
+  bool isStringy(String n) {
+    final u = n.toUpperCase();
+    return u == 'STRING' || u == 'BYTE_STRING' || u == 'WSTRING';
+  }
+
   int totalExpected = 0;
   for (final type in types) {
+    if (isStringy(type.name)) continue;
     totalExpected += type.byteSize > 4 ? 4 : type.byteSize;
   }
   if (totalExpected > rawBytes.length) {
@@ -669,19 +816,52 @@ List<TypedVariableValue> parseVariableValues(
   for (final type in types) {
     results.add(parseVariableValue(rawBytes, offset, type));
     // Advance by the actual on-wire size (clamped to 4 for wide types).
-    offset += type.byteSize > 4 ? 4 : type.byteSize;
+    // For STRING-family the on-wire size is whatever remains up to 4 bytes,
+    // matching parseVariableValue's graceful-slice semantics.
+    final remaining = rawBytes.length - offset;
+    final declaredAdvance = type.byteSize > 4 ? 4 : type.byteSize;
+    offset += isStringy(type.name) && declaredAdvance > remaining
+        ? remaining
+        : declaredAdvance;
   }
   return results;
 }
 
 /// Encode a Dart value to raw bytes matching the given UMAS [dataType].
 ///
-/// Supports: BOOL, INT, UINT, WORD, DINT, UDINT, DWORD, TIME, REAL, LREAL,
-/// LINT, ULINT, BYTE, STRING. Throws [UmasException] for unknown types
-/// or type mismatches (T-06-07 mitigation).
+/// Supports: BOOL, EBOOL, INT, UINT, WORD, DINT, UDINT, DWORD, TIME, REAL,
+/// LREAL, LINT, ULINT, BYTE, DATE, TIME_OF_DAY, DATE_AND_TIME, STRING,
+/// WSTRING, BYTE_STRING.
+///
+/// Throws [UmasException] for:
+///   - Unknown types (T-06-07 mitigation).
+///   - Type mismatches (e.g. passing a String to an INT field).
+///   - Out-of-range integer values (TD-006 v1.1.x): writing 100000 to an
+///     INT silently wrapped to -31072 via setInt16 truncation before.
+///     We now refuse with a precise message that names the supplied
+///     value, the target type, and its [min..max] range.
+///   - Oversize STRING / WSTRING / BYTE_STRING (TD-001).
 Uint8List encodeVariableValue(dynamic value, UmasDataTypeRef dataType) {
+  // TD-006 (v1.1.x): pre-flight range guard for integer types. Industrial
+  // control silent-truncation hazard — Dart's `setIntN` wraps via bit
+  // masking without raising, so a setpoint of 100000 to an INT silently
+  // becomes -31072. Refuse instead and surface a precise operator-
+  // facing message.
+  void checkRange(String typeName, int v, int min, int max) {
+    if (v < min || v > max) {
+      throw UmasException(
+        errorCode: 0,
+        message: 'Value $v exceeds range of $typeName [$min..$max]',
+      );
+    }
+  }
+
   switch (dataType.name.toUpperCase()) {
     case 'BOOL':
+    case 'EBOOL':
+      // TD-002: EBOOL (id=25) parses as 1-byte bool on the read side
+      // (parseVariableValue maps both BOOL and EBOOL to `bytes[offset]
+      // != 0`). Mirror that on the write side — same 1-byte 0x00/0x01.
       if (value is! bool) {
         throw UmasException(
           errorCode: 0,
@@ -697,6 +877,7 @@ Uint8List encodeVariableValue(dynamic value, UmasDataTypeRef dataType) {
           message: 'Expected int for ${dataType.name}, got ${value.runtimeType}',
         );
       }
+      checkRange('INT', value, -0x8000, 0x7FFF);
       final bytes = Uint8List(2);
       ByteData.sublistView(bytes).setInt16(0, value, Endian.little);
       return bytes;
@@ -709,6 +890,7 @@ Uint8List encodeVariableValue(dynamic value, UmasDataTypeRef dataType) {
           message: 'Expected int for ${dataType.name}, got ${value.runtimeType}',
         );
       }
+      checkRange(dataType.name.toUpperCase(), value, 0, 0xFFFF);
       final bytes = Uint8List(2);
       ByteData.sublistView(bytes).setUint16(0, value, Endian.little);
       return bytes;
@@ -720,6 +902,7 @@ Uint8List encodeVariableValue(dynamic value, UmasDataTypeRef dataType) {
           message: 'Expected int for ${dataType.name}, got ${value.runtimeType}',
         );
       }
+      checkRange('DINT', value, -0x80000000, 0x7FFFFFFF);
       final bytes = Uint8List(4);
       ByteData.sublistView(bytes).setInt32(0, value, Endian.little);
       return bytes;
@@ -727,12 +910,33 @@ Uint8List encodeVariableValue(dynamic value, UmasDataTypeRef dataType) {
     case 'UDINT':
     case 'DWORD':
     case 'TIME':
+      // TIME is the IEC 61131 elapsed-time-in-ms type, 4-byte unsigned.
       if (value is! int) {
         throw UmasException(
           errorCode: 0,
           message: 'Expected int for ${dataType.name}, got ${value.runtimeType}',
         );
       }
+      checkRange(dataType.name.toUpperCase(), value, 0, 0xFFFFFFFF);
+      final bytes = Uint8List(4);
+      ByteData.sublistView(bytes).setUint32(0, value, Endian.little);
+      return bytes;
+
+    case 'DATE':
+    case 'TIME_OF_DAY':
+      // TD-002: DATE / TIME_OF_DAY are 4-byte unsigned IEC types.
+      // DATE encodes days-since-epoch (PLC-defined epoch); TIME_OF_DAY
+      // encodes ms-since-midnight. Operators write an integer matching
+      // the wire format — the same encoding as UDINT. parseVariableValue
+      // currently returns these as raw bytes (no high-level decoder), so
+      // mirror the write side at the UDINT level.
+      if (value is! int) {
+        throw UmasException(
+          errorCode: 0,
+          message: 'Expected int for ${dataType.name}, got ${value.runtimeType}',
+        );
+      }
+      checkRange(dataType.name.toUpperCase(), value, 0, 0xFFFFFFFF);
       final bytes = Uint8List(4);
       ByteData.sublistView(bytes).setUint32(0, value, Endian.little);
       return bytes;
@@ -766,6 +970,9 @@ Uint8List encodeVariableValue(dynamic value, UmasDataTypeRef dataType) {
           message: 'Expected int for ${dataType.name}, got ${value.runtimeType}',
         );
       }
+      // Dart's int is 64-bit signed on the VM; full LINT range fits
+      // natively. checkRange still useful to make the contract explicit.
+      checkRange('LINT', value, -0x8000000000000000, 0x7FFFFFFFFFFFFFFF);
       final bytes = Uint8List(8);
       ByteData.sublistView(bytes).setInt64(0, value, Endian.little);
       return bytes;
@@ -777,9 +984,43 @@ Uint8List encodeVariableValue(dynamic value, UmasDataTypeRef dataType) {
           message: 'Expected int for ${dataType.name}, got ${value.runtimeType}',
         );
       }
+      // Dart 64-bit int max is 2^63-1 — values above that cannot be
+      // expressed in a Dart int literal. The wire ULINT can hold up to
+      // 2^64-1, so accept any non-negative Dart int. setUint64 reads the
+      // bottom 64 bits, so negatives would wrap silently — refuse them
+      // explicitly.
+      if (value < 0) {
+        throw UmasException(
+          errorCode: 0,
+          message: 'Value $value exceeds range of ULINT '
+              '[0..2^64-1] (negative)',
+        );
+      }
       final bytes = Uint8List(8);
       ByteData.sublistView(bytes).setUint64(0, value, Endian.little);
       return bytes;
+
+    case 'DATE_AND_TIME':
+      // TD-002: DATE_AND_TIME (id=16) is 8 bytes. Schneider stores it as
+      // a packed timestamp; without a high-level decoder on the read
+      // side, mirror as raw 64-bit unsigned. Operator-supplied int is
+      // emitted as setUint64 LE.
+      if (value is! int) {
+        throw UmasException(
+          errorCode: 0,
+          message: 'Expected int for ${dataType.name}, got ${value.runtimeType}',
+        );
+      }
+      if (value < 0) {
+        throw UmasException(
+          errorCode: 0,
+          message: 'Value $value exceeds range of DATE_AND_TIME '
+              '[0..2^64-1] (negative)',
+        );
+      }
+      final dtBytes = Uint8List(8);
+      ByteData.sublistView(dtBytes).setUint64(0, value, Endian.little);
+      return dtBytes;
 
     case 'BYTE':
       if (value is! int) {
@@ -788,22 +1029,54 @@ Uint8List encodeVariableValue(dynamic value, UmasDataTypeRef dataType) {
           message: 'Expected int for ${dataType.name}, got ${value.runtimeType}',
         );
       }
-      return Uint8List.fromList([value & 0xFF]);
+      checkRange('BYTE', value, 0, 0xFF);
+      return Uint8List.fromList([value]);
 
     case 'STRING':
+    case 'WSTRING':
+    case 'BYTE_STRING':
       if (value is! String) {
         throw UmasException(
           errorCode: 0,
           message: 'Expected String for ${dataType.name}, got ${value.runtimeType}',
         );
       }
+      // TD-001 (v1.1.x): the encoder produces exactly `dataType.byteSize`
+      // bytes on the wire — that's the declared wire-size resolved from
+      // DD02 (so a `STRING(20)` carries `byteSize=22`, NOT the built-in
+      // 256). The read path is null-terminated (see [parseVariableValue]
+      // STRING branch), so the encoded payload reserves the LAST byte for
+      // the null terminator: max writable length = `byteSize - 1`.
+      //
+      // Refuse oversized values with an explicit error instead of silently
+      // truncating — clobbering the trailing PLC memory under a real
+      // M580 would corrupt whatever variable lives at the next address.
       final encoded = utf8.encode(value);
-      final bytes = Uint8List(dataType.byteSize);
-      final copyLen = encoded.length < dataType.byteSize
-          ? encoded.length
-          : dataType.byteSize;
-      bytes.setRange(0, copyLen, encoded);
-      // Remaining bytes are already 0 (null padding)
+      final wireSize = dataType.byteSize;
+      if (wireSize <= 0) {
+        throw UmasException(
+          errorCode: 0,
+          message: '${dataType.name} encode: invalid wire size ${wireSize} '
+              '(symbol byteSize must be resolved before writing)',
+        );
+      }
+      // STRING is C-style null-terminated on the M580 wire — reserve a
+      // byte for the terminator. BYTE_STRING / WSTRING follow the same
+      // convention in plc4j's encoder.
+      final maxLen = wireSize - 1;
+      if (encoded.length > maxLen) {
+        throw UmasException(
+          errorCode: 0,
+          message: '${dataType.name} value too long: '
+              '${encoded.length} bytes exceeds declared maximum '
+              '$maxLen (wire size $wireSize, reserves 1 byte for '
+              'null terminator). Truncating would corrupt adjacent PLC '
+              'memory — refusing.',
+        );
+      }
+      final bytes = Uint8List(wireSize);
+      bytes.setRange(0, encoded.length, encoded);
+      // Remaining bytes are already 0 (null padding + terminator).
       return bytes;
 
     default:
@@ -1174,6 +1447,13 @@ class MonitorPlcRegistrationTable {
   /// Auto-incrementing counter for assigning variable indices.
   int _nextIndex = 0;
 
+  /// TD-020 (v1.1.x): cached sort of [_types.keys]. Recomputed lazily
+  /// from a dirty flag on next read after any register/deregister/
+  /// reset. parseReadAllResponse runs every poll cycle once B-4 ships
+  /// (sub-second cadence with up to 255 entries); doing the O(N log N)
+  /// sort each call was wasted CPU.
+  List<int>? _sortedIndicesCache;
+
   /// Register a variable index with its data type.
   void register(int variableIndex, UmasDataTypeRef type) {
     if (_types.length >= maxRegistrations && !_types.containsKey(variableIndex)) {
@@ -1186,24 +1466,34 @@ class MonitorPlcRegistrationTable {
     if (variableIndex >= _nextIndex) {
       _nextIndex = variableIndex + 1;
     }
+    _sortedIndicesCache = null; // invalidate
   }
 
   /// Remove a variable index registration.
   void deregister(int variableIndex) {
-    _types.remove(variableIndex);
+    final removed = _types.remove(variableIndex);
+    if (removed != null) {
+      _sortedIndicesCache = null; // invalidate
+    }
   }
 
   /// Clear all registrations.
   void reset() {
     _types.clear();
     _nextIndex = 0;
+    _sortedIndicesCache = null; // invalidate
   }
 
   /// Get the data type for a registered variable index.
   UmasDataTypeRef? getType(int variableIndex) => _types[variableIndex];
 
   /// All registered variable indices, sorted ascending.
-  List<int> get registeredIndices => _types.keys.toList()..sort();
+  ///
+  /// TD-020 (v1.1.x): result is memoized between mutation calls.
+  /// Mutators (register / deregister / reset) clear the cache.
+  List<int> get registeredIndices {
+    return _sortedIndicesCache ??= (_types.keys.toList()..sort());
+  }
 
   /// Whether the table has no registrations.
   bool get isEmpty => _types.isEmpty;
@@ -1221,7 +1511,9 @@ class MonitorPlcRegistrationTable {
   /// Parse a ReadAll (0x07) response by walking bytes in registration order.
   ///
   /// Iterates sorted registered indices, parsing each variable's bytes
-  /// using [parseVariableValue]. Throws [UmasException] on buffer underflow.
+  /// using [parseVariableValue]. Throws [UmasException] on buffer underflow
+  /// for fixed-size scalars; STRING-family values decode gracefully even
+  /// from a zero-byte slice (JOB-A v1.1: see parseVariableValue comments).
   List<TypedVariableValue> parseReadAllResponse(Uint8List rawBytes) {
     final indices = registeredIndices;
     if (indices.isEmpty) return [];
@@ -1229,11 +1521,28 @@ class MonitorPlcRegistrationTable {
     final results = <TypedVariableValue>[];
     int offset = 0;
 
+    bool isStringy(String n) {
+      final u = n.toUpperCase();
+      return u == 'STRING' || u == 'BYTE_STRING' || u == 'WSTRING';
+    }
+
     for (final idx in indices) {
       final type = _types[idx]!;
-      // parseVariableValue throws UmasException on buffer underflow
+      // M580 clamps wide types (STRING, struct instances) to 4 bytes per
+      // dataSizeIndex range — advance by actual on-wire size, not declared
+      // byteSize. See /tmp/umas-string-bug-report.md + parseVariableValues.
       results.add(parseVariableValue(rawBytes, offset, type));
-      offset += type.byteSize;
+      final remaining = rawBytes.length - offset;
+      final declaredAdvance = type.byteSize > 4 ? 4 : type.byteSize;
+      // For STRING-family, clamp the advance at the remaining bytes so a
+      // PLC that returned fewer-than-clamped bytes (e.g. 1 byte for an
+      // empty STRING via 0x22, or no bytes at all) does not push `offset`
+      // past `rawBytes.length` and break the next variable's parse.
+      if (isStringy(type.name) && declaredAdvance > remaining) {
+        offset += remaining < 0 ? 0 : remaining;
+      } else {
+        offset += declaredAdvance;
+      }
     }
 
     return results;

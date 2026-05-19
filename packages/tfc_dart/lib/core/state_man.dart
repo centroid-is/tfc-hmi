@@ -20,7 +20,8 @@ import 'package:modbus_client/modbus_client.dart' show ModbusElementType, Modbus
 
 import 'collector.dart';
 import 'modbus_client_wrapper.dart' show ModbusDataType;
-import 'modbus_device_client.dart' show ModbusDeviceClientAdapter;
+import 'modbus_device_client.dart'
+    show ModbusDeviceClientAdapter, buildVariableNamesFromKeyMappings;
 import 'preferences.dart';
 
 part 'state_man.g.dart';
@@ -428,10 +429,36 @@ class KeyMappingEntry {
   @JsonKey(name: 'bit_shift')
   int? bitShift;
 
+  /// Optional UMAS symbol path (e.g. `B_F1_RC_01_Front` or
+  /// `M_Elevator.i_isAuto`). When set on a key whose server has UMAS
+  /// enabled, the polled value is read by UMAS variable name rather than
+  /// translated to a Modbus address — Schneider PLCs only expose
+  /// `%MW`-located variables on the FC03 register map, so symbolic
+  /// variables fail to read via plain Modbus addressing.
+  ///
+  /// `null` means classic Modbus addressing (the address + bit fields are
+  /// the read source). When `variableName != null` but the server has
+  /// `umasEnabled == false`, the key is invalid and the UI surfaces an
+  /// Error badge — the address-space fallback is intentionally not silent.
+  ///
+  /// JSON key is `variable_name` for snake_case parity with the other
+  /// fields. Existing entries deserialize cleanly because `defaultValue`
+  /// is `null` (see `_$KeyMappingEntryFromJson` in `state_man.g.dart`).
+  @JsonKey(name: 'variable_name', defaultValue: null)
+  String? variableName;
+
   String? get server =>
       opcuaNode?.serverAlias ?? m2400Node?.serverAlias ?? modbusNode?.serverAlias;
 
-  KeyMappingEntry({this.opcuaNode, this.m2400Node, this.modbusNode, this.collect, this.bitMask, this.bitShift});
+  KeyMappingEntry({
+    this.opcuaNode,
+    this.m2400Node,
+    this.modbusNode,
+    this.collect,
+    this.bitMask,
+    this.bitShift,
+    this.variableName,
+  });
 
   KeyMappingEntry copyWith({
     OpcUANodeConfig? opcuaNode,
@@ -441,6 +468,8 @@ class KeyMappingEntry {
     int? bitMask,
     int? bitShift,
     bool clearBitMask = false,
+    String? variableName,
+    bool clearVariableName = false,
   }) {
     return KeyMappingEntry(
       opcuaNode: opcuaNode ?? this.opcuaNode,
@@ -449,6 +478,8 @@ class KeyMappingEntry {
       collect: collect ?? this.collect,
       bitMask: clearBitMask ? null : (bitMask ?? this.bitMask),
       bitShift: clearBitMask ? null : (bitShift ?? this.bitShift),
+      variableName:
+          clearVariableName ? null : (variableName ?? this.variableName),
     )..io = io;
   }
 
@@ -458,7 +489,8 @@ class KeyMappingEntry {
 
   @override
   String toString() {
-    return 'KeyMappingEntry(opcuaNode: ${opcuaNode?.toString()}, m2400Node: ${m2400Node?.toString()}, modbusNode: ${modbusNode?.toString()}, collect: $collect, io: $io)';
+    return 'KeyMappingEntry(opcuaNode: ${opcuaNode?.toString()}, m2400Node: ${m2400Node?.toString()}, modbusNode: ${modbusNode?.toString()}, collect: $collect, io: $io'
+        '${variableName != null ? ', variableName: $variableName' : ''})';
   }
 }
 
@@ -551,6 +583,27 @@ class SingleWorker {
 }
 
 enum ConnectionStatus { connected, connecting, disconnected }
+
+/// TD-004 (v1.1.x): a derived health status that combines TCP socket
+/// state with protocol-layer state (UMAS session). Surfaces the case
+/// where TCP is up but every UMAS read/write fails because the PLC's
+/// Data Dictionary is disabled or the session refuses to pair —
+/// previously rendered as a green "Connected" chip while every key
+/// card on the page showed an error badge.
+///
+/// Mapping:
+///   - [disconnected] / [connecting] / [connected]: same as the pure
+///     TCP states for adapters where UMAS is OFF or no operation has
+///     attempted to pair yet.
+///   - [umasUnhealthy]: TCP is connected, `umasEnabled == true`, but
+///     the UMAS session is not `paired` (init failed, identification
+///     failed, or the session was reset by a recent protocol error).
+enum EffectiveDeviceStatus {
+  disconnected,
+  connecting,
+  connected,
+  umasUnhealthy,
+}
 
 class ClientWrapper {
   final ClientApi client;
@@ -1001,6 +1054,8 @@ class StateMan {
             for (final key in keysToResub) {
               _monitor(key, resub: true).catchError((e, s) {
                 logger.e('[$alias] Failed to resubscribe key "$key": $e\n$s');
+                return Stream<DynamicValue>.error(
+                    e is Object ? e : StateManException('resubscribe failed'));
               });
             }
           }
@@ -1221,6 +1276,23 @@ class StateMan {
     // Check Modbus key
     final modbusDc = _resolveModbusDeviceClient(key);
     if (modbusDc != null) {
+      // B-1 (v1.1.x): UMAS-by-name routing. When the entry has a
+      // variableName set, read live via the UmasClient symbol cache
+      // rather than the Modbus address space. The adapter throws a
+      // UmasException with the operator-facing "umas not enabled"
+      // message when the server has umasEnabled=false; let it
+      // propagate as StateManException so the key card surfaces an
+      // Error badge.
+      final entry = keyMappings.nodes[key];
+      final variableName = entry?.variableName;
+      if (variableName != null && modbusDc is ModbusDeviceClientAdapter) {
+        try {
+          return await modbusDc.readUmasVariable(key);
+        } catch (e) {
+          throw StateManException('Failed to read UMAS variable "$variableName" '
+              'for key "$key": $e');
+        }
+      }
       final value = modbusDc.read(key);
       if (value == null) {
         throw StateManException('No cached value for key: "$key" -- not polled yet');
@@ -1260,6 +1332,19 @@ class StateMan {
       // Check Modbus
       final modbusDc = _resolveModbusDeviceClient(key);
       if (modbusDc != null) {
+        // B-1 (v1.1.x): UMAS-by-name keys read live via the symbol
+        // cache. Errors here only skip the failing key (analogous to
+        // the existing "no cached value -> skip" semantics of
+        // [DeviceClient.read]); the caller surfaces missing keys.
+        final entry = keyMappings.nodes[key];
+        if (entry?.variableName != null && modbusDc is ModbusDeviceClientAdapter) {
+          try {
+            results[key] = await modbusDc.readUmasVariable(key);
+          } catch (_) {
+            // Skip; UI surfaces error badge via single-key read().
+          }
+          continue;
+        }
         final value = modbusDc.read(key);
         if (value != null) results[key] = value;
         continue;
@@ -1337,6 +1422,22 @@ class StateMan {
     // Check Modbus (and other DeviceClient protocols)
     final modbusDc = _resolveModbusDeviceClient(key);
     if (modbusDc != null) {
+      // F-3: wrap UMAS-by-name write errors symmetrically with the
+      // read path (state_man.dart:1267-1273) so operator-facing
+      // surfaces (key-card Error chip) get a StateManException whose
+      // message names both the key and the symbol path.
+      final entry = keyMappings.nodes[key];
+      final variableName = entry?.variableName;
+      if (variableName != null && modbusDc is ModbusDeviceClientAdapter) {
+        try {
+          await modbusDc.write(key, value);
+        } catch (e) {
+          throw StateManException(
+              'Failed to write UMAS variable "$variableName" '
+              'for key "$key": $e');
+        }
+        return;
+      }
       await modbusDc.write(key, value);
       return;
     }
@@ -1398,6 +1499,23 @@ class StateMan {
 
   void updateKeyMappings(KeyMappings newKeyMappings) {
     keyMappings = newKeyMappings;
+    // TD-003 (v1.1.x): propagate the new variableName mapping to every
+    // Modbus adapter so per-key UMAS state (BehaviorSubject + cached
+    // last value + MonitorPlc table) is released for keys that were
+    // removed or renamed. Without this hook, deleting a UMAS-by-name
+    // key from the operator's mappings would leak the subject + cached
+    // DynamicValue for the lifetime of the StateMan.
+    for (final dc in deviceClients) {
+      if (dc is ModbusDeviceClientAdapter) {
+        final newNames = buildVariableNamesFromKeyMappings(
+            newKeyMappings, dc.serverAlias);
+        // Preserve the null entries for non-UMAS keys the adapter knows
+        // about so the merged map's "renamed" detection works (it
+        // compares old non-null name vs new entry — missing entry =
+        // removed, so we don't need to inject null placeholders).
+        dc.updateVariableNames(Map<String, String?>.from(newNames));
+      }
+    }
   }
 
   List<String> get keys => keyMappings.keys.toList();

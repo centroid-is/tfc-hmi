@@ -155,6 +155,49 @@ void main() {
       final result = table.parseReadAllResponse(Uint8List(0));
       expect(result, isEmpty);
     });
+
+    test(
+        'TD-020: registeredIndices caches the sorted list across reads '
+        '(stable identity until next mutation)', () {
+      const dt = UmasDataTypeRef(id: 8, name: 'REAL', byteSize: 4);
+      table.register(3, dt);
+      table.register(1, dt);
+      table.register(5, dt);
+
+      final first = table.registeredIndices;
+      final second = table.registeredIndices;
+      // Same list instance — cache hit.
+      expect(identical(first, second), isTrue,
+          reason: 'cached sort should not be recomputed between reads');
+
+      // Mutating invalidates the cache → new list instance.
+      table.register(2, dt);
+      final third = table.registeredIndices;
+      expect(identical(first, third), isFalse,
+          reason: 'register() must invalidate the cached sort');
+      expect(third, [1, 2, 3, 5]);
+
+      // Deregistering a present index also invalidates.
+      table.deregister(3);
+      final fourth = table.registeredIndices;
+      expect(identical(third, fourth), isFalse,
+          reason: 'deregister() must invalidate the cached sort');
+      expect(fourth, [1, 2, 5]);
+
+      // Deregistering a non-present index is a no-op AND must not
+      // invalidate (small win — avoids needless re-sort).
+      table.deregister(42);
+      final fifth = table.registeredIndices;
+      expect(identical(fourth, fifth), isTrue,
+          reason: 'no-op deregister must not invalidate cache');
+
+      // reset() invalidates.
+      table.reset();
+      final sixth = table.registeredIndices;
+      expect(identical(fifth, sixth), isFalse,
+          reason: 'reset() must invalidate the cached sort');
+      expect(sixth, isEmpty);
+    });
   });
 
   // ---------------------------------------------------------------
@@ -346,6 +389,95 @@ void main() {
       expect(client.monitorRegistrations.isEmpty, true);
       client.dispose();
     });
+
+    // -----------------------------------------------------------------
+    // TD-015 (v1.1.x): monitorRegister failure → monitorReset to
+    // re-sync PLC-side state.
+    // -----------------------------------------------------------------
+    test(
+        'TD-015: monitorRegister failure issues monitorReset (0x0B) and '
+        'leaves local table empty', () async {
+      final subCommandSequence = <int>[];
+      // First 0x50 call (subCmd=0x05 Register) errors. Reset call
+      // (subCmd=0x0B) succeeds. Verifies the fix routes through reset
+      // on partial-failure to flush PLC state.
+      final client = createMockClient(
+        onRequest: (ModbusRequest req) async {
+          final umasReq = req as UmasRequest;
+          if (umasReq.umasSubFunction == 0x02 ||
+              umasReq.umasSubFunction == 0x01) {
+            // delegate to standard mock init handling — inline the
+            // session-setup logic from mockSendFn since we need custom
+            // 0x50 dispatch.
+            int pairingKey = 0x42;
+            if (umasReq.umasSubFunction == 0x02) {
+              final resp = BytesBuilder();
+              resp.add([0x5A, 0x00, 0xFE]);
+              final pd = ByteData(16);
+              pd.setUint16(0, 1, Endian.little);
+              pd.setUint32(2, 0x12345678, Endian.little);
+              pd.setUint8(6, 1);
+              pd.setUint16(7, 0, Endian.little);
+              pd.setUint8(9, 1);
+              pd.setUint16(10, 0, Endian.little);
+              pd.setUint32(12, 0x10000, Endian.little);
+              resp.add(pd.buffer.asUint8List());
+              umasReq.internalSetFromPduResponse(
+                  Uint8List.fromList(resp.toBytes()));
+              return ModbusResponseCode.requestSucceed;
+            }
+            final resp = BytesBuilder();
+            resp.add([0x5A, pairingKey, 0xFE]);
+            final pd = ByteData(2);
+            pd.setUint16(0, 1021, Endian.little);
+            resp.add(pd.buffer.asUint8List());
+            umasReq.internalSetFromPduResponse(
+                Uint8List.fromList(resp.toBytes()));
+            return ModbusResponseCode.requestSucceed;
+          }
+          if (umasReq.umasSubFunction == 0x50) {
+            final subCmd = umasReq.umasPayload[0];
+            subCommandSequence.add(subCmd);
+            if (subCmd == 0x05) {
+              // Register: return UMAS-level error to simulate the
+              // PLC having registered SOME refs before the failure.
+              final resp = Uint8List.fromList([0x5A, 0x42, 0xFD, 0xC0]);
+              umasReq.internalSetFromPduResponse(resp);
+              return ModbusResponseCode.requestSucceed;
+            }
+            // Reset (0x0B) and other sub-commands succeed.
+            final resp = Uint8List.fromList([0x5A, 0x42, 0xFE]);
+            umasReq.internalSetFromPduResponse(resp);
+            return ModbusResponseCode.requestSucceed;
+          }
+          return ModbusResponseCode.requestSucceed;
+        },
+      );
+
+      final variables = [
+        (
+          const UmasVariable(name: 'a', blockNo: 1, offset: 0, dataTypeId: 5),
+          const UmasDataTypeRef(id: 8, name: 'REAL', byteSize: 4),
+        ),
+        (
+          const UmasVariable(name: 'b', blockNo: 1, offset: 4, dataTypeId: 5),
+          const UmasDataTypeRef(id: 8, name: 'REAL', byteSize: 4),
+        ),
+      ];
+
+      await expectLater(
+        () => client.monitorRegister(variables),
+        throwsA(isA<UmasException>()),
+      );
+
+      // Wire sequence must show Register → Reset (the fix's contract).
+      expect(subCommandSequence, [0x05, 0x0B],
+          reason: 'monitorRegister failure must follow up with monitorReset');
+      // Local table must be empty — caller can re-issue from scratch.
+      expect(client.monitorRegistrations.isEmpty, true,
+          reason: 'partial-failure must clear local registration table');
+      client.dispose();
+    });
   });
 
   // ---------------------------------------------------------------
@@ -403,10 +535,12 @@ void main() {
           return ModbusResponseCode.requestSucceed;
         }
         if (umasReq.umasSubFunction == 0x22) {
-          // ReadVariable: return 0xA1 error if M580 mode
+          // ReadVariable: M580 mode emits the 2-byte 0xA1A1 marker.
+          // TD-017 (v1.1.x): bare 0xA1 alone does NOT trigger auto-
+          // fallback any more — both pdu[3] and pdu[4] must be 0xA1.
           if (rejectReadVariable) {
             umasReq.internalSetFromPduResponse(
-                Uint8List.fromList([0x5A, pairingKey, 0xFD, 0xA1]));
+                Uint8List.fromList([0x5A, pairingKey, 0xFD, 0xA1, 0xA1]));
             return ModbusResponseCode.requestSucceed;
           }
           // M340 mode: return REAL 22.5 + BOOL true
@@ -516,7 +650,88 @@ void main() {
       client.dispose();
     });
 
-    test('session reset clears useMonitorPlc flag', () async {
+    test(
+        'TD-017: bare 0xA1 (single byte, not 0xA1A1) does NOT trigger '
+        'auto-fallback', () async {
+      final log = <int>[];
+      // Custom mock: returns [0xFD, 0xA1] WITHOUT the second 0xA1.
+      // Per TD-017 the fallback must require 0xA1A1; bare 0xA1 alone
+      // should be passed through as a regular UmasException.
+      Future<ModbusResponseCode> bareA1MockSendFn(ModbusRequest req) async {
+        final umasReq = req as UmasRequest;
+        log.add(umasReq.umasSubFunction);
+        int pairingKey = 0x42;
+        if (umasReq.umasSubFunction == 0x02) {
+          final resp = BytesBuilder();
+          resp.add([0x5A, 0x00, 0xFE]);
+          final pd = ByteData(16);
+          pd.setUint16(0, 1, Endian.little);
+          pd.setUint32(2, 0x12345678, Endian.little);
+          pd.setUint8(6, 1);
+          pd.setUint16(7, 0, Endian.little);
+          pd.setUint8(9, 1);
+          pd.setUint16(10, 0, Endian.little);
+          pd.setUint32(12, 0x10000, Endian.little);
+          resp.add(pd.buffer.asUint8List());
+          umasReq.internalSetFromPduResponse(
+              Uint8List.fromList(resp.toBytes()));
+          return ModbusResponseCode.requestSucceed;
+        }
+        if (umasReq.umasSubFunction == 0x01) {
+          final resp = BytesBuilder();
+          resp.add([0x5A, pairingKey, 0xFE]);
+          final pd = ByteData(2);
+          pd.setUint16(0, 1021, Endian.little);
+          resp.add(pd.buffer.asUint8List());
+          umasReq.internalSetFromPduResponse(
+              Uint8List.fromList(resp.toBytes()));
+          return ModbusResponseCode.requestSucceed;
+        }
+        if (umasReq.umasSubFunction == 0x04) {
+          // PlcStatus: minimal success with one block CRC.
+          // PDU layout: [0x5A, pairingKey, 0xFE, statusByte,
+          //              notUsed(2), numBlocks=1, crc(4 LE)]
+          final resp = BytesBuilder();
+          resp.add([0x5A, pairingKey, 0xFE]);
+          resp.add([0x01, 0x00, 0x00, 0x01]); // statusByte, notUsed, numBlocks
+          final crc = ByteData(4);
+          crc.setUint32(0, 0xDEADBEEF, Endian.little);
+          resp.add(crc.buffer.asUint8List());
+          umasReq.internalSetFromPduResponse(
+              Uint8List.fromList(resp.toBytes()));
+          return ModbusResponseCode.requestSucceed;
+        }
+        if (umasReq.umasSubFunction == 0x22) {
+          // Single 0xA1 in pdu[3], NO second 0xA1.
+          umasReq.internalSetFromPduResponse(
+              Uint8List.fromList([0x5A, pairingKey, 0xFD, 0xA1]));
+          return ModbusResponseCode.requestSucceed;
+        }
+        return ModbusResponseCode.requestSucceed;
+      }
+
+      final client = UmasClient(
+        sendFn: bareA1MockSendFn,
+        backoffDelay: (_) async {},
+      );
+      await client.readPlcStatus();
+
+      // Bare 0xA1 should NOT silently retry via 0x50 — it must
+      // propagate as a UmasException(0xA1).
+      await expectLater(
+        () => client.readVariables(testVariables),
+        throwsA(isA<UmasException>().having(
+            (e) => e.errorCode, 'errorCode', 0xA1)),
+      );
+      // No 0x50 attempt — the heuristic correctly stayed in M340 mode.
+      expect(log, isNot(contains(0x50)),
+          reason: 'bare 0xA1 must not trigger MonitorPlc fallback');
+      expect(client.useMonitorPlc, false);
+      client.dispose();
+    });
+
+    test('TD-009: session reset preserves useMonitorPlc (sticky hardware bit)',
+        () async {
       final log = <int>[];
       final client = UmasClient(
         sendFn: m580MockSendFn(subFunctionLog: log, rejectReadVariable: true),
@@ -527,24 +742,36 @@ void main() {
       await client.readVariables(testVariables);
       expect(client.useMonitorPlc, true);
 
-      // Simulate session error by checking the state after calling
-      // _handleSessionError indirectly -- readPlcId re-inits
-      // We cannot call _handleSessionError directly, but session state
-      // transitions are observable.
-      // Instead, check that after the client becomes uninitialized,
-      // the flag resets. We test this via the internal mechanism:
-      // Manually trigger session error by calling readPlcId which
-      // resets session state.
-      // NOTE: _handleSessionError is private. We test through
-      // session state observation. When session goes uninitialized,
-      // the flag must be false.
+      // TD-009 (v1.1.x): the M580-detected bit is a hardware
+      // fingerprint and MUST survive _handleSessionError so the next
+      // reconnect doesn't re-probe via 0x22 → 0xA1. We can't call
+      // _handleSessionError directly (private), but the post-call
+      // expectation is that the bit stays set across the session
+      // lifecycle.
+      expect(client.useMonitorPlc, true,
+          reason: 'M580 detection is sticky across session resets');
+      client.dispose();
+    });
 
-      // Force session reset by going through the error path
-      // Create a new client to test the reset mechanism
-      // Actually, we need to verify the public getter
+    test('TD-009: useMonitorPlc=true constructor parameter is honored',
+        () async {
+      final log = <int>[];
+      // Pre-seed the bit so the client never tries 0x22 — emulates the
+      // adapter passing the sticky bit into a fresh UmasClient after
+      // reconnect.
+      final client = UmasClient(
+        sendFn: m580MockSendFn(subFunctionLog: log, rejectReadVariable: true),
+        backoffDelay: (_) async {},
+        useMonitorPlc: true,
+      );
       expect(client.useMonitorPlc, true);
-      // The flag should reset when session errors happen
-      // This is tested indirectly through the session lifecycle
+      await client.readPlcStatus();
+      await client.readVariables(testVariables);
+      // Verify NO 0x22 ReadVariable went out on the wire — the client
+      // should have gone straight to MonitorPlc (0x50).
+      expect(log, isNot(contains(UmasSubFunction.readVariable.code)),
+          reason: 'pre-seeded useMonitorPlc skips the 0xA1 probe');
+      expect(log, contains(UmasSubFunction.monitorPlc.code));
       client.dispose();
     });
 

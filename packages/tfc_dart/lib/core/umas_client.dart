@@ -3,9 +3,12 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:logger/logger.dart';
+import 'package:meta/meta.dart';
 import 'package:modbus_client/modbus_client.dart';
 import 'package:rxdart/rxdart.dart';
+import 'package:tfc_dart/core/umas_fb_direction.dart';
 import 'package:tfc_dart/core/umas_types.dart';
+import 'package:tfc_dart/core/umas_var_in_out.dart';
 
 /// A Modbus request carrying a UMAS (FC90) payload.
 ///
@@ -126,8 +129,35 @@ class UmasClient {
   /// Interval between keep-alive (0x12) messages when in PAIRED state.
   final Duration keepAliveInterval;
 
+  /// F-8 (v1.1.x): interval between project-CRC re-reads. Each tick
+  /// calls [refreshProjectMetadata], which re-reads memory block 0x30
+  /// and emits on [projectCrcChanges] if [_projectCrc] moved. Default
+  /// 30 seconds — operator-grade reprogram-while-running events are
+  /// rare and a single extra TCP roundtrip every 30s is well below the
+  /// noise floor of normal MonitorPlc polling.
+  final Duration projectCrcCheckInterval;
+
   /// Periodic timer for sending keep-alive messages.
   Timer? _keepAliveTimer;
+
+  /// F-8: periodic timer for re-checking the project CRC. Started in
+  /// [startKeepAlive] (alongside the keep-alive timer), stopped in
+  /// [stopKeepAlive] and [dispose].
+  Timer? _projectCrcTimer;
+
+  /// F-8: emits the new project CRC whenever [refreshProjectMetadata]
+  /// observes a change. Subscribers (e.g.
+  /// [ModbusDeviceClientAdapter]'s MonitorPlc batch) listen here to
+  /// know they must rebuild downstream state (registered table,
+  /// resolved symbol IDs) — the symbol cache itself is invalidated
+  /// before the emit so a re-resolution sees the fresh data dictionary.
+  ///
+  /// Behaves like a broadcast stream — late subscribers do NOT receive
+  /// past CRC values; they only get notified about future changes.
+  final _projectCrcSubject = PublishSubject<int>();
+
+  /// Public stream of project-CRC changes (F-8). See [_projectCrcSubject].
+  Stream<int> get projectCrcChanges => _projectCrcSubject.stream;
 
   /// Maximum number of re-init retry attempts before propagating the error.
   static const _maxRetries = 3;
@@ -146,7 +176,13 @@ class UmasClient {
 
   /// Whether the client has detected an M580 PLC (0xA1 error from 0x22)
   /// and should use MonitorPlc (0x50) for variable reads instead.
-  bool _useMonitorPlc = false;
+  ///
+  /// TD-009 (v1.1.x): initial value is now constructor-injectable so the
+  /// owning [ModbusDeviceClientAdapter] can carry the sticky M580-detected
+  /// bit across UmasClient re-creates (each TCP reconnect spawns a fresh
+  /// client). Without this, every reconnect re-probes via 0x22 → 0xA1 →
+  /// 0x50 fallback, wasting one round-trip per reconnect.
+  bool _useMonitorPlc;
 
   /// Whether this client is using the MonitorPlc (0x50) path for reads.
   /// True after detecting M580 via 0xA1 error from ReadVariable (0x22).
@@ -159,18 +195,81 @@ class UmasClient {
   /// Expose the registration table for inspection/testing.
   MonitorPlcRegistrationTable get monitorRegistrations => _monitorTable;
 
+  // ---------------------------------------------------------------------------
+  // Symbol cache (B-3 v1.1.x) — read/write by UMAS variable name.
+  // ---------------------------------------------------------------------------
+
+  /// Resolved-symbol cache keyed by full dotted path (e.g.
+  /// `B_F1_RC_01_Front` or `M_Elevator.speed`). Populated lazily on first
+  /// [lookupSymbol] miss by issuing [browse], or eagerly by callers that
+  /// invoke [browse] up front. Invalidated by [_handleSessionError] (PLC
+  /// reboot) and by [invalidateSymbolCacheIfProjectChanged].
+  final Map<String, ResolvedSymbol> _symbolCache = {};
+
+  /// Cross-call caches re-used by [browse]'s struct/FB and array
+  /// resolution. Hoisted to per-client lifetime so consecutive browses
+  /// don't re-issue DD02 for the same custom type id (F-3 from v1.1
+  /// Phase 2 SUMMARY).
+  final Map<int, List<UmasVariable>> _persistentMemberCache = {};
+  final Map<int, UmasArrayTypeDefinition?> _persistentArrayCache = {};
+
+  /// Project CRC observed when the symbol cache was last populated. Used
+  /// by [invalidateSymbolCacheIfProjectChanged] to flush the cache when
+  /// the PLC project is reprogrammed.
+  int? _symbolCacheProjectCrc;
+
+  /// True once [browse] has populated the symbol cache for this session.
+  bool _symbolCacheBuilt = false;
+
+  /// Synchronous lock so concurrent first-time lookups share one browse.
+  Completer<void>? _symbolCacheLock;
+
+  /// Number of cached symbols (for testing / instrumentation).
+  int get symbolCacheSize => _symbolCache.length;
+
+  /// True if a symbol cache build has completed for the current session.
+  bool get symbolCacheBuilt => _symbolCacheBuilt;
+
+  /// Inject a [ResolvedSymbol] directly into the cache for tests that
+  /// need to assert behavior of [readVariableByName] / [writeVariableByName]
+  /// without standing up a full browse against the Python stub. Used
+  /// e.g. to verify the F-7 VAR_IN_OUT write refusal path with a
+  /// readable=false sentinel.
+  @visibleForTesting
+  void debugInjectSymbol(ResolvedSymbol sym) {
+    _symbolCache[sym.path] = sym;
+    _symbolCacheBuilt = true;
+  }
+
+  /// TD-004 (v1.1.x) test hook: force a session-state transition so
+  /// the adapter's [EffectiveDeviceStatus] stream emits without
+  /// having to drive a real handshake. Used by tests that need to
+  /// verify the unhealthy / paired transitions without relying on
+  /// the stub server's pairing flow.
+  @visibleForTesting
+  void debugSetSessionState(UmasSessionState newState) {
+    _setState(newState);
+  }
+
   UmasClient({
     required this.sendFn,
     this.unitId,
     this.keepAliveInterval = const Duration(seconds: 10),
+    this.projectCrcCheckInterval = const Duration(seconds: 30),
     Future<void> Function(Duration)? backoffDelay,
-  }) : _delayFn = backoffDelay ?? ((d) => Future.delayed(d));
+    bool useMonitorPlc = false,
+  })  : _delayFn = backoffDelay ?? ((d) => Future.delayed(d)),
+        _useMonitorPlc = useMonitorPlc;
 
   /// Start periodic keep-alive timer. Cancels any existing timer first.
   ///
   /// The timer calls [sendKeepAlive] every [keepAliveInterval]. If the
   /// session is not in PAIRED state, the tick is skipped. If sendKeepAlive
   /// throws, the session is reset to uninitialized via [_handleSessionError].
+  ///
+  /// F-8 (v1.1.x): also starts the separate [_projectCrcTimer] that
+  /// periodically re-reads memory block 0x30 to detect PLC reprograms
+  /// without a session-level error.
   void startKeepAlive() {
     stopKeepAlive();
     _keepAliveTimer = Timer.periodic(keepAliveInterval, (_) async {
@@ -184,18 +283,34 @@ class UmasClient {
         _handleSessionError();
       }
     });
+    _projectCrcTimer = Timer.periodic(projectCrcCheckInterval, (_) async {
+      if (_stateValue != UmasSessionState.paired) return;
+      try {
+        await refreshProjectMetadata();
+      } catch (e) {
+        // Best-effort: a single failed CRC read should NOT bring down
+        // the session. The next tick will retry; if the underlying
+        // session is genuinely broken, keep-alive will catch it.
+        _log.w('UmasClient projectCrc tick failed: $e');
+      }
+    });
   }
 
-  /// Stop the keep-alive timer.
+  /// Stop the keep-alive timer (and the F-8 project-CRC timer).
   void stopKeepAlive() {
     _keepAliveTimer?.cancel();
     _keepAliveTimer = null;
+    _projectCrcTimer?.cancel();
+    _projectCrcTimer = null;
   }
 
   /// Release resources (cancels keep-alive timer and closes the session state stream).
   void dispose() {
     stopKeepAlive();
     _stateSubject.close();
+    if (!_projectCrcSubject.isClosed) {
+      _projectCrcSubject.close();
+    }
   }
 
   /// Current session state.
@@ -314,6 +429,12 @@ class UmasClient {
   ///   pdu[1] = PairingKey
   ///   pdu[2] = Status (0xFE=success, 0xFD=error, other=error code)
   ///   pdu[3+] = Payload (on success) or error code (on 0xFD error)
+  ///
+  /// SWEEP-03 (v1.1): always prefixes the [operation] token (e.g.
+  /// `"writeVariable"`, `"readDD02(blockNo=0x...)"`) so operator log
+  /// greps can isolate failures by sub-function. Every caller passes
+  /// a stable operation name — the previous implementation did so
+  /// inconsistently; this is now the contract.
   void _checkStatus(Uint8List pdu, String operation) {
     if (pdu.length < 3) {
       throw UmasException(
@@ -322,8 +443,13 @@ class UmasClient {
     final status = pdu[2];
     if (status == _statusError) {
       final errorCode = pdu.length > 3 ? pdu[3] : 0;
+      // TD-017 (v1.1.x): forward the second error byte when present so
+      // [readVariables] can require 0xA1A1 (not bare 0xA1) for M580
+      // auto-detection.
+      final secondaryErrorCode = pdu.length > 4 ? pdu[4] : null;
       throw UmasException(
           errorCode: errorCode,
+          secondaryErrorCode: secondaryErrorCode,
           message: 'UMAS $operation error: '
               '0x${errorCode.toRadixString(16)}');
     }
@@ -553,31 +679,117 @@ class UmasClient {
     });
   }
 
-  /// Extract the longest contiguous run of printable ASCII characters
-  /// from [data]. Returns null if no run of 2+ printable chars is found.
+  /// Extract a best-effort human-readable project name from a raw
+  /// [readProjectInfo] payload.
+  ///
+  /// **TD-016 (v1.1.x):** Schneider PLCs in non-Western locales (Kanji,
+  /// Cyrillic, accented Latin) embed project names as UTF-8 in the
+  /// 0x03 response. The previous implementation hard-coded
+  /// `0x20..0x7E` and returned null or garbage for such projects.
+  ///
+  /// Strategy:
+  ///   1. Find every contiguous run of non-control / non-zero bytes
+  ///      (skip 0x00 NUL, 0x01..0x1F C0-controls except tab/lf, and
+  ///      the C1-range 0x7F..0x9F).
+  ///   2. For each candidate run, attempt `utf8.decode(allowMalformed: true)`.
+  ///      Score the decoded string by the ratio of alpha-numeric +
+  ///      symbol characters to total characters; reject if too many
+  ///      replacement characters (U+FFFD) leak through.
+  ///   3. Return the highest-scoring run of >=2 characters.
+  ///
+  /// Falls back to a pure-ASCII run when no UTF-8 run scores well —
+  /// matches the previous behavior for the common case of plain-ASCII
+  /// names.
+  /// Test hook for TD-016: exposes the (now UTF-8-aware) project-name
+  /// extraction so the unit test can pin behavior without mocking a
+  /// full readProjectInfo round-trip.
+  @visibleForTesting
+  static String? debugExtractProjectName(Uint8List data) =>
+      _extractLongestAsciiRun(data);
+
   static String? _extractLongestAsciiRun(Uint8List data) {
-    String? longest;
-    int longestLen = 0;
+    // Collect candidate runs (start, end-exclusive).
+    final runs = <(int, int)>[];
     int runStart = -1;
+    bool isPrintableByte(int b) {
+      // Allow any byte that could plausibly be UTF-8: skip C0 controls
+      // (0x00..0x1F) and DEL (0x7F). High-bit bytes (>=0x80) stay in
+      // because they're UTF-8 continuation or lead bytes.
+      return b >= 0x20 && b != 0x7F;
+    }
 
     for (int i = 0; i <= data.length; i++) {
-      final isPrintable = i < data.length && data[i] >= 0x20 && data[i] <= 0x7E;
-      if (isPrintable) {
+      final inRun = i < data.length && isPrintableByte(data[i]);
+      if (inRun) {
         if (runStart < 0) runStart = i;
       } else {
         if (runStart >= 0) {
-          final runLen = i - runStart;
-          if (runLen > longestLen) {
-            longestLen = runLen;
-            longest = String.fromCharCodes(data, runStart, i);
-          }
+          runs.add((runStart, i));
           runStart = -1;
         }
       }
     }
 
-    // Require at least 2 printable chars to avoid false positives
-    return longestLen >= 2 ? longest : null;
+    String? bestUtf8;
+    int bestUtf8Score = 0;
+    String? bestAscii;
+    int bestAsciiLen = 0;
+
+    for (final (start, end) in runs) {
+      final len = end - start;
+      if (len < 2) continue;
+      final slice = data.sublist(start, end);
+
+      // Try UTF-8 decode (allowMalformed leaves U+FFFD on bad
+      // sequences instead of throwing). Score by the count of
+      // characters that aren't the replacement marker so a
+      // mostly-binary run with a few accidental valid lead bytes
+      // doesn't beat a clean ASCII run.
+      try {
+        final decoded = utf8.decode(slice, allowMalformed: true);
+        var score = 0;
+        for (final cp in decoded.runes) {
+          if (cp == 0xFFFD) continue; // replacement char
+          if (cp < 0x20) continue; // control
+          score++;
+        }
+        // Require at least 50% of the run to decode to valid
+        // characters — otherwise we're looking at binary that
+        // happened to have a few printable ASCII bytes.
+        if (score >= 2 && score * 2 >= decoded.runes.length) {
+          if (score > bestUtf8Score) {
+            bestUtf8Score = score;
+            bestUtf8 = decoded.replaceAll('�', '');
+          }
+        }
+      } catch (_) {
+        // utf8.decode shouldn't throw with allowMalformed=true, but
+        // belt-and-suspenders.
+      }
+
+      // Also track the longest pure-ASCII (0x20..0x7E) sub-run as a
+      // conservative fallback. This preserves the previous behavior
+      // for the common Western-PLC case where the UTF-8 decode and
+      // ASCII match degenerate to the same thing.
+      var asciiStart = -1;
+      for (int j = start; j <= end; j++) {
+        final isAscii =
+            j < end && data[j] >= 0x20 && data[j] <= 0x7E;
+        if (isAscii) {
+          if (asciiStart < 0) asciiStart = j;
+        } else if (asciiStart >= 0) {
+          final asciiLen = j - asciiStart;
+          if (asciiLen > bestAsciiLen) {
+            bestAsciiLen = asciiLen;
+            bestAscii = String.fromCharCodes(data, asciiStart, j);
+          }
+          asciiStart = -1;
+        }
+      }
+    }
+
+    if (bestUtf8 != null && bestUtf8Score >= 2) return bestUtf8;
+    return bestAsciiLen >= 2 ? bestAscii : null;
   }
 
   /// Build the full 13-byte payload for 0x26 (ReadDataDictionary) requests.
@@ -623,9 +835,17 @@ class UmasClient {
   /// header per entry). blockNo=<typeId> returns the member layout of
   /// that struct/FB type (8-byte record header per entry, since the
   /// flags+unknown4 bytes are absent for member records).
+  ///
+  /// [parentClassId] — when this block represents a member layout, the
+  /// classIdentifier of the parent type (2=STRUCT/UDT, 7=FB). Direction
+  /// classification only runs when parentClassId==7 (FB members). For
+  /// non-FB UDTs the direction stays null so the UI renders members
+  /// undecorated (F-1 v1.1: fixes the case where the byte-classifier
+  /// fired on arbitrary UDT struct fields).
   Future<List<UmasVariable>> _readDD02Block({
     required int blockNo,
     required bool isMemberLayout,
+    int? parentClassId,
   }) async {
     final all = <UmasVariable>[];
     int offset = 0x0000;
@@ -656,8 +876,11 @@ class UmasClient {
             errorCode: 0, message: 'Empty data dictionary response');
       }
       _checkStatus(pdu, 'readDD02(blockNo=0x${blockNo.toRadixString(16)})');
-      final (nextAddress, variables) =
-          _parseVariableRecords(pdu.sublist(3), isMemberLayout: isMemberLayout);
+      final (nextAddress, variables) = _parseVariableRecords(
+        pdu.sublist(3),
+        isMemberLayout: isMemberLayout,
+        parentClassId: parentClassId,
+      );
       all.addAll(variables);
       offset = nextAddress;
     }
@@ -669,9 +892,17 @@ class UmasClient {
   /// Returns the members; each [UmasVariable]'s `blockNo` is the byte offset
   /// of that member within the parent struct, and `dataTypeId` is the member's
   /// own type id (resolved against [readDataTypes]).
-  Future<List<UmasVariable>> readStructMembers(int typeId) async {
-    return _withSessionAndRecovery(
-        () => _readDD02Block(blockNo: typeId, isMemberLayout: true));
+  ///
+  /// [parentClassId] — the classIdentifier of the parent type (2 for
+  /// STRUCT/UDT, 7 for FB). When omitted, direction classification is
+  /// suppressed (safe default) — callers that know the parent is an FB
+  /// should pass 7 to get per-member direction in the returned values.
+  Future<List<UmasVariable>> readStructMembers(int typeId,
+      {int? parentClassId}) async {
+    return _withSessionAndRecovery(() => _readDD02Block(
+        blockNo: typeId,
+        isMemberLayout: true,
+        parentClassId: parentClassId));
   }
 
   /// Read raw DD02 response bytes for [blockNo].
@@ -729,6 +960,7 @@ class UmasClient {
   (int nextAddress, List<UmasVariable>) _parseVariableRecords(
     Uint8List data, {
     required bool isMemberLayout,
+    int? parentClassId,
   }) {
     if (data.length < 7) return (0, []);
 
@@ -752,6 +984,24 @@ class UmasClient {
       final dataTypeId = view.getUint16(0, Endian.little);
       final blockNo = view.getUint16(2, Endian.little);
       final offset = view.getUint32(4, Endian.little);
+
+      // Phase 3 / v1.1 calibration: for member-layout records, the two
+      // uint16 LE values at bytes 4-5 and 6-7 are plc4j's `unknown5` and
+      // `unknown4` fields (see UmasUDTDefinition mspec). Bytes 4-7 are
+      // also re-read above as a uint32 `offset` — the two views coexist
+      // because Dart's getUint32(LE) is identical to (getUint16(4,LE) |
+      // getUint16(6,LE) << 16). Live-PLC calibration on the M580 at
+      // 192.168.112.159 (see tools/umas_direction_calibration.dart)
+      // showed that only `unknown4` carries direction; `unknown5` is
+      // always zero. F-1: only classify when the parent is an FB
+      // (classIdentifier==7); non-FB UDT struct members keep
+      // direction=null so the UI renders them undecorated.
+      UmasFbMemberDirection? direction;
+      if (isMemberLayout && parentClassId == 7) {
+        final unknown5 = view.getUint16(4, Endian.little);
+        final unknown4 = view.getUint16(6, Endian.little);
+        direction = classifyFbMemberDirection(unknown5, unknown4);
+      }
       pos += headerSize;
 
       int end = pos;
@@ -771,6 +1021,7 @@ class UmasClient {
         blockNo: blockNo,
         offset: offset,
         dataTypeId: dataTypeId,
+        direction: direction,
       ));
     }
 
@@ -1073,7 +1324,19 @@ class UmasClient {
   /// Acquire exclusive PLC write reservation (sub-function 0x10).
   ///
   /// Sets [hasReservation] to true on success.
-  /// Throws [UmasReservationException] if another client holds the reservation.
+  ///
+  /// **Exception taxonomy (TD-014, v1.1.x):**
+  /// - Transport-level errors (e.g. Modbus exception code, no PDU) →
+  ///   plain [UmasException]. These are not reservation conflicts;
+  ///   they're network / framing failures and callers should not
+  ///   special-case them as "another client holds the lock."
+  /// - PLC-side reservation conflict (UMAS status error byte with the
+  ///   well-known 0x06 conflict error code, or any other non-success
+  ///   status accompanied by a UMAS-error payload) → [UmasReservationException]
+  ///   so the UI/operator workflow can present a graceful "wait for
+  ///   the other client to release" affordance instead of a generic
+  ///   "something failed" red banner.
+  ///
   /// Uses [_withSession] to auto-initialize if not yet paired.
   Future<void> takePlcReservation() async {
     return _withSession(() async {
@@ -1085,9 +1348,13 @@ class UmasClient {
       final code = await sendFn(request);
 
       if (code != ModbusResponseCode.requestSucceed) {
-        throw UmasReservationException(
+        // TD-014: transport-level failure is NOT a reservation conflict.
+        // Surface as plain UmasException so callers don't false-positive
+        // on "another client holds the lock" UX when the network is just
+        // down.
+        throw UmasException(
           errorCode: code.code,
-          message: 'Another client holds the PLC reservation',
+          message: 'UMAS takePlcReservation transport error: ${code.name}',
         );
       }
 
@@ -1099,12 +1366,25 @@ class UmasClient {
         );
       }
 
-      // Check for UMAS-level error (0xFD status = conflict)
+      // Check for UMAS-level error. The conflict-byte 0x06 ("another
+      // client holds the reservation") is the only condition that
+      // should be surfaced as UmasReservationException; other status
+      // errors (e.g. 0x83 Data Dictionary disabled, 0xC0 access
+      // denied) are real protocol errors that callers MUST NOT treat
+      // as a transient reservation conflict.
       if (pdu[2] == _statusError || pdu[2] != _statusSuccess) {
         final errorCode = pdu.length > 3 ? pdu[3] : 0;
-        throw UmasReservationException(
+        if (errorCode == 0x06) {
+          throw UmasReservationException(
+            errorCode: errorCode,
+            message: 'Another client holds the PLC reservation',
+          );
+        }
+        throw UmasException(
           errorCode: errorCode,
-          message: 'Another client holds the PLC reservation',
+          message: 'UMAS takePlcReservation failed: status=0x'
+              '${pdu[2].toRadixString(16).padLeft(2, '0')} '
+              'errorCode=0x${errorCode.toRadixString(16).padLeft(2, '0')}',
         );
       }
 
@@ -1162,6 +1442,14 @@ class UmasClient {
   /// Reset all session state when UMAS session is invalidated.
   /// Called when error responses indicate the pairing key is no longer valid
   /// (PLC reboot, engineering tool connection, TCP reconnection).
+  ///
+  /// SWEEP-04 (v1.1): also clears [_projectCrc] so a PLC reboot
+  /// mid-session does not carry a stale project CRC into the
+  /// post-reboot session. Without this, after a PLC reprogramming
+  /// reboot, the next 0x22 / 0x23 request would send the old
+  /// project CRC and either silently match the wrong project or be
+  /// rejected with a CRC-mismatch error attributed to the wrong
+  /// cause.
   void _handleSessionError() {
     _log.i('UMAS session invalidated, resetting to uninitialized');
     _pairingKey = 0x00;
@@ -1169,10 +1457,228 @@ class UmasClient {
     _index = null;
     maxFrameSize = null;
     _previousCrcs = null;
+    _projectCrc = null; // SWEEP-04
     _hasReservation = false;
-    _useMonitorPlc = false;
+    // TD-009 (v1.1.x): do NOT reset _useMonitorPlc. The M580-detected
+    // bit is a hardware fingerprint that does not change across PLC
+    // reboots / session resets. Clearing it would cause the next read
+    // to re-probe via 0x22 → 0xA1 → 0x50 fallback (one wasted RTT).
+    // The adapter wraps this client and reseeds _useMonitorPlc across
+    // client re-creates; we only reset when the underlying serverAlias
+    // (and therefore the PLC identity) changes.
     _monitorTable.reset();
+    // B-3: drop the symbol cache too — a session reset usually means the
+    // PLC rebooted or the engineering tool reset the connection, and any
+    // cached symbol→(blockNo, offset) mapping may now point at a moved
+    // variable in a freshly-downloaded project. Force re-browse next time.
+    _clearSymbolCache();
     _setState(UmasSessionState.uninitialized);
+  }
+
+  /// Clear the symbol cache + cross-call browse caches. Forces the next
+  /// [lookupSymbol] (or [readVariableByName] / [writeVariableByName]) to
+  /// re-browse the PLC.
+  void _clearSymbolCache() {
+    _symbolCache.clear();
+    _persistentMemberCache.clear();
+    _persistentArrayCache.clear();
+    _symbolCacheBuilt = false;
+    _symbolCacheProjectCrc = null;
+  }
+
+  /// Public hook for callers that detect a project change (e.g. a poll
+  /// loop that calls [readPlcStatus] and observes `crcChanged=true`).
+  /// Drops the symbol cache if the project CRC changed since the cache
+  /// was built. Safe to call repeatedly — no-op when CRCs match.
+  ///
+  /// F-8 (v1.1.x): now invoked from the periodic [_projectCrcTimer]
+  /// via [refreshProjectMetadata] so PLC reprograms are detected
+  /// without waiting for a session-level error. On a CRC change this
+  /// method clears the symbol cache AND emits on [projectCrcChanges];
+  /// downstream consumers (the MonitorPlc batched poller in
+  /// `ModbusDeviceClientAdapter`) listen on that stream so their own
+  /// caches invalidate atomically with the symbol cache.
+  void invalidateSymbolCacheIfProjectChanged() {
+    if (!_symbolCacheBuilt) return;
+    if (_projectCrc != _symbolCacheProjectCrc) {
+      _log.i('UMAS symbolCache: project CRC changed '
+          '(${_symbolCacheProjectCrc} -> $_projectCrc) — clearing');
+      _clearSymbolCache();
+    }
+  }
+
+  /// F-8: re-read memory block 0x30 to refresh [_projectCrc], then fire
+  /// the invalidation chain. The CRC-watch timer drives this every
+  /// [projectCrcCheckInterval]; tests can call it directly to assert
+  /// deterministic invalidation behaviour.
+  ///
+  /// On a CRC change this method:
+  ///   1. Drops the symbol cache (via [invalidateSymbolCacheIfProjectChanged]
+  ///      — no-op if the cache wasn't built yet).
+  ///   2. Emits the new CRC on [projectCrcChanges] so external caches
+  ///      (e.g. the MonitorPlc batched table in `ModbusDeviceClientAdapter`)
+  ///      can drop their state and rebuild against the fresh project.
+  ///
+  /// Returns true if the project CRC differed from the previous value
+  /// (so the caller — typically a test — can assert the watched
+  /// transition fired).
+  Future<bool> refreshProjectMetadata() async {
+    if (_stateValue != UmasSessionState.paired) return false;
+    final before = _projectCrc;
+    try {
+      await _readProjectBlock();
+    } catch (e) {
+      _log.w('refreshProjectMetadata: _readProjectBlock failed: $e');
+      return false;
+    }
+    final after = _projectCrc;
+    if (before == after) return false;
+    // Drop symbol cache (no-op if not yet built).
+    invalidateSymbolCacheIfProjectChanged();
+    // Always notify external listeners — the MonitorPlc table caches
+    // `(blockNo, offset)` pairs that move under a fresh project even
+    // if no symbol was ever looked up. Don't gate the stream on
+    // `_symbolCacheBuilt`.
+    if (after != null && !_projectCrcSubject.isClosed) {
+      _projectCrcSubject.add(after);
+    }
+    return true;
+  }
+
+  /// Build the symbol cache from a full [browse]. Concurrent first-time
+  /// callers wait on the same browse via [_symbolCacheLock] so multiple
+  /// keys reading at startup don't fan out into N parallel browses.
+  Future<void> _ensureSymbolCache() async {
+    if (_symbolCacheBuilt) return;
+    if (_symbolCacheLock != null) {
+      await _symbolCacheLock!.future;
+      return;
+    }
+    _symbolCacheLock = Completer<void>();
+    // Avoid unhandled-async-error if no one awaits the lock.
+    _symbolCacheLock!.future.ignore();
+    try {
+      final tree = await browse();
+      _symbolCache.clear();
+      void walk(UmasVariableTreeNode node) {
+        if (node.variable != null && node.dataType != null) {
+          _symbolCache[node.path] = ResolvedSymbol(
+            path: node.path,
+            variable: node.variable!,
+            dataType: node.dataType!,
+            readable: node.readable,
+            unreadableReason: node.unreadableReason,
+          );
+        }
+        for (final c in node.children) {
+          walk(c);
+        }
+      }
+
+      for (final root in tree) {
+        walk(root);
+      }
+      _symbolCacheBuilt = true;
+      _symbolCacheProjectCrc = _projectCrc;
+      _log.i('UMAS symbolCache: built ${_symbolCache.length} entries '
+          '(projectCrc=${_symbolCacheProjectCrc == null ? 'n/a' : '0x${_symbolCacheProjectCrc!.toRadixString(16)}'})');
+      _symbolCacheLock!.complete();
+    } catch (e) {
+      _symbolCacheLock!.completeError(e);
+      rethrow;
+    } finally {
+      _symbolCacheLock = null;
+    }
+  }
+
+  /// Resolve a UMAS symbol path (e.g. `B_F1_RC_01_Front` or
+  /// `M_Elevator.speed`) to its [ResolvedSymbol]. Triggers a one-time
+  /// [browse] if the cache is empty; concurrent first-time callers share
+  /// the same browse via [_ensureSymbolCache].
+  ///
+  /// **Case sensitivity (TD-013, v1.1.x):** Schneider M580 / M340 UMAS
+  /// symbols are *case-sensitive on the wire*. Verified against live
+  /// PLC at 192.168.112.159: the same byte-for-byte symbol path with
+  /// different casing (`B_Elevator_F1_A` vs `b_elevator_f1_a`) returns
+  /// "not found" for the lowercase variant. This is the inverse of IEC
+  /// 61131-3 source-level case-insensitivity, which is enforced by the
+  /// engineering tool (EcoStruxure) rather than the firmware.
+  ///
+  /// Operators (and LLMs generating symbol paths) frequently get the
+  /// case wrong. We do a case-insensitive fallback scan on miss so the
+  /// error names the correct casing instead of just "not found":
+  ///
+  ///   `UMAS symbol not found in data dictionary: "elevator.speed".
+  ///    Did you mean "Elevator.speed"? (Schneider symbol paths are
+  ///    case-sensitive on the wire.)`
+  ///
+  /// The fallback is O(N) in the cache size — acceptable because it
+  /// only runs on the miss path. On the hit path, the existing O(1)
+  /// hash lookup is unchanged.
+  ///
+  /// Throws [UmasException] when the symbol does not exist in the PLC's
+  /// Data Dictionary (with the "did you mean" suggestion when a
+  /// case-insensitive match exists).
+  Future<ResolvedSymbol> lookupSymbol(String path) async {
+    await _ensureSymbolCache();
+    final hit = _symbolCache[path];
+    if (hit != null) return hit;
+    // TD-013: case-insensitive fallback — surface the correct casing
+    // in the error message so the operator can fix the typo without
+    // re-browsing the data dictionary manually.
+    final lower = path.toLowerCase();
+    String? caseSuggestion;
+    for (final cachedPath in _symbolCache.keys) {
+      if (cachedPath.toLowerCase() == lower) {
+        caseSuggestion = cachedPath;
+        break;
+      }
+    }
+    final suffix = caseSuggestion == null
+        ? ''
+        : '. Did you mean "$caseSuggestion"? '
+            '(Schneider symbol paths are case-sensitive on the wire.)';
+    throw UmasException(
+      errorCode: 0,
+      message: 'UMAS symbol not found in data dictionary: "$path"$suffix',
+    );
+  }
+
+  /// Read a single UMAS variable by name. Resolves via [lookupSymbol]
+  /// then issues [readVariables] for one symbol. Returns the parsed
+  /// typed value.
+  Future<TypedVariableValue> readVariableByName(String path) async {
+    final sym = await lookupSymbol(path);
+    final values = await readVariables([(sym.variable, sym.dataType)]);
+    if (values.isEmpty) {
+      throw UmasException(
+          errorCode: 0,
+          message: 'UMAS readVariableByName($path) returned empty result');
+    }
+    return values.first;
+  }
+
+  /// Write a single UMAS variable by name. Resolves via [lookupSymbol]
+  /// then issues [writeVariable] with the value encoded per the
+  /// resolved data type. The [value] is encoded by [encodeVariableValue]
+  /// (see umas_types.dart).
+  ///
+  /// F-7: refuses VAR_IN_OUT (and any other [ResolvedSymbol] with
+  /// `readable == false`) client-side. The PLC would reject these with
+  /// 0x94 anyway; surfacing the precise [ResolvedSymbol.unreadableReason]
+  /// gives operators a clearer error than the raw protocol code, and
+  /// avoids burning a round-trip on a guaranteed failure.
+  Future<void> writeVariableByName(String path, dynamic value) async {
+    final sym = await lookupSymbol(path);
+    if (!sym.readable) {
+      throw UmasException(
+        errorCode: 0,
+        message: 'Cannot write ${sym.path}: '
+            '${sym.unreadableReason ?? "marked as not readable"}',
+      );
+    }
+    final ref = VariableWriteRef.fromVariable(sym.variable, sym.dataType, value);
+    await writeVariable([ref]);
   }
 
   /// Wraps [_withSession] with session recovery: on any [UmasException],
@@ -1208,10 +1714,18 @@ class UmasClient {
         );
       }
 
-      // Cap refs to max 255 (variableCount is 1 byte) -- T-05-02 DoS mitigation
+      // Cap refs to max 255 (variableCount is 1 byte) -- T-05-02 DoS mitigation.
+      // SWEEP-05 (v1.1): warn when truncation drops refs so callers see the
+      // truncation in operator logs instead of only via a returned-shorter
+      // ReadVariableResult.
       final cappedRefs = refs.length > _maxReadVariableRefs
           ? refs.sublist(0, _maxReadVariableRefs)
           : refs;
+      if (refs.length > _maxReadVariableRefs) {
+        _log.w('UMAS readVariable: truncated request from ${refs.length} to '
+            '$_maxReadVariableRefs refs (cap is 1 byte). '
+            '${refs.length - _maxReadVariableRefs} refs were NOT read.');
+      }
 
       // Build payload: crc(4 LE) + count(1) + [ref.toBytes()]*
       // Per PLC4X reference driver, the CRC is the project-level CRC from
@@ -1288,7 +1802,13 @@ class UmasClient {
       final result = await readVariable(refs);
       return parseVariableValues(result.rawBytes, types);
     } on UmasException catch (e) {
-      if (e.errorCode == 0xA1) {
+      // TD-017 (v1.1.x): the Schneider M580 marker for "use MonitorPlc
+      // instead of ReadVariable" is the 2-byte sequence 0xA1 0xA1 in
+      // pdu[3..4]. The single-byte 0xA1 alone could plausibly come from
+      // an unrelated firmware path; flipping to MonitorPlc on the
+      // weaker signal would silently mask non-M580 protocol errors.
+      // Require BOTH bytes to match before switching modes.
+      if (e.errorCode == 0xA1 && e.secondaryErrorCode == 0xA1) {
         // M580 detected: 0x22 returns 0xA1A1 error
         _useMonitorPlc = true;
         return monitorRegisterAndRead(variables);
@@ -1317,10 +1837,18 @@ class UmasClient {
         );
       }
 
-      // Cap refs to max 255 (variableCount is 1 byte) -- T-06-05 DoS mitigation
+      // Cap refs to max 255 (variableCount is 1 byte) -- T-06-05 DoS mitigation.
+      // SWEEP-05 (v1.1): warn when truncation drops refs so callers see the
+      // silent data loss in operator logs instead of treating the Future
+      // resolution as success-for-all.
       final cappedRefs = refs.length > _maxWriteVariableRefs
           ? refs.sublist(0, _maxWriteVariableRefs)
           : refs;
+      if (refs.length > _maxWriteVariableRefs) {
+        _log.w('UMAS writeVariable: truncated request from ${refs.length} to '
+            '$_maxWriteVariableRefs refs (cap is 1 byte). '
+            '${refs.length - _maxWriteVariableRefs} refs were NOT written.');
+      }
 
       // Build payload: crc(4 LE) + count(1) + [ref.toBytes()]*
       // See readVariable for projectCrc rationale.
@@ -1554,6 +2082,20 @@ class UmasClient {
   /// Assigns variable indices sequentially and registers each variable's
   /// data type in the local registration table for response parsing.
   /// Returns the assigned variable indices.
+  ///
+  /// **Failure semantics (TD-015, v1.1.x):** if `_sendMonitorPlc` throws
+  /// mid-batch (e.g. PLC errored on the 50th of 100 refs), the PLC may
+  /// have registered SOME subset of the requested variables while the
+  /// local `_monitorTable` still has none. A subsequent `monitorReadAll`
+  /// (0x07) would then receive bytes for indices the local table can't
+  /// parse, silently producing wrong values for every key in the batch.
+  ///
+  /// On exception we issue `monitorReset` (0x0B) to flush the PLC side
+  /// so client and PLC re-converge on the empty state. The caller can
+  /// re-issue `monitorRegister` after fixing the root cause. The reset
+  /// itself is best-effort — if it also fails, we log and re-raise the
+  /// original exception (a stuck-PLC condition is already worse than a
+  /// missed reset).
   Future<List<int>> monitorRegister(
       List<(UmasVariable, UmasDataTypeRef)> variables) async {
     return _withSessionAndRecovery(() async {
@@ -1563,14 +2105,40 @@ class UmasClient {
       buffer.addByte(0x00); // unknown
       buffer.addByte(variables.length & 0xFF); // numberOfSubOps
 
-      for (final (variable, dataType) in variables) {
+      for (final (variable, _) in variables) {
         final idx = _monitorTable.allocateIndex();
         indices.add(idx);
         final ref = MonitorPlcRef.fromVariable(idx, variable);
         buffer.add(ref.toRegisterBytes());
       }
 
-      await _sendMonitorPlc(Uint8List.fromList(buffer.toBytes()));
+      try {
+        await _sendMonitorPlc(Uint8List.fromList(buffer.toBytes()));
+      } catch (e) {
+        // TD-015 (v1.1.x): the PLC may have registered SOME subset of
+        // the batch before erroring. The local _monitorTable has no
+        // entries yet (we only register on success below). Without a
+        // reset, a subsequent monitorReadAll would receive bytes for
+        // PLC-registered indices the local table can't parse —
+        // silently producing wrong values for every key.
+        //
+        // Reset semantics: flush PLC-side state via 0x0B and clear
+        // the local index allocator so client and PLC re-converge on
+        // the empty state. The reset itself is best-effort; if it
+        // also fails, the original exception is what the caller cares
+        // about — re-raise it. The caller can retry monitorRegister
+        // from scratch after fixing the root cause.
+        _log.w('monitorRegister failed mid-batch: $e — issuing '
+            'monitorReset to re-sync PLC state');
+        try {
+          await _sendMonitorPlc(Uint8List.fromList([0x0B]));
+        } catch (resetErr) {
+          _log.w('monitorReset after partial-failure also failed: '
+              '$resetErr (state may be out of sync until next session reset)');
+        }
+        _monitorTable.reset();
+        rethrow;
+      }
 
       // On success, register types in local table
       for (int i = 0; i < variables.length; i++) {
@@ -1791,8 +2359,13 @@ class UmasClient {
       // First, dot-split top-level variable names (CodeSys style: e.g.
       // "Application.GVL.temperature") into folder nodes. Then expand any
       // leaf that resolves to a struct/FB type into its members.
-      final memberCache = <int, List<UmasVariable>>{};
-      final arrayCache = <int, UmasArrayTypeDefinition?>{};
+      //
+      // B-3 (v1.1.x): the member / array caches are hoisted to per-client
+      // lifetime (`_persistentMemberCache`, `_persistentArrayCache`) so
+      // back-to-back browses don't reissue DD02 for the same custom
+      // type id. Per-browse aliases below preserve the inner-API names.
+      final memberCache = _persistentMemberCache;
+      final arrayCache = _persistentArrayCache;
       final builder = _TreeBuilder();
       for (final v in variables) {
         builder.insert(v, dataTypes);
@@ -1866,6 +2439,18 @@ class UmasClient {
   }
 
   /// Recursively expand a variable into its struct/FB members or array elements.
+  ///
+  /// plc4j(UmasProtocolLogic.java:1079-1097, 1130-1146): for any custom-type
+  /// reference whose `classIdentifier != 0`, plc4j issues a DD02 request keyed
+  /// on the type's index (NOT 0xFFFF) and discriminates on the first response
+  /// byte. `classId == 0x04` ⇒ UmasArrayTypeDefinition; anything else ⇒
+  /// UmasPDUReadUmasUDTDefinitionResponse (member records). We extend this
+  /// gate to ALSO fire for variables whose `dataTypeId` did not appear in
+  /// DD03 at all — the live M580 at 192.168.112.159 omits FB types from DD03
+  /// even though their UDT bodies are accessible via DD02-on-typeIndex. plc4j
+  /// strictly gates on the non-zero classIdentifier of a *resolved* DD03
+  /// record and would silently drop these FB instances; we resolve
+  /// speculatively to surface them. See `.planning/phases/02-fb-visibility-bug-b-core/02-RESEARCH.md`.
   Future<UmasVariableTreeNode> _expandVariable({
     required UmasVariable variable,
     required String path,
@@ -1875,10 +2460,102 @@ class UmasClient {
     required int depth,
     required int maxDepth,
   }) async {
-    final type = UmasDataTypes.resolve(variable.dataTypeId, dataTypes);
-    final isStructOrFb =
-        type != null && (type.classIdentifier == 2 || type.classIdentifier == 7);
-    final isArray = type != null && type.classIdentifier == 4;
+    UmasDataTypeRef? type =
+        UmasDataTypes.resolve(variable.dataTypeId, dataTypes);
+    bool isStructOrFb = type != null &&
+        (type.classIdentifier == 2 || type.classIdentifier == 7);
+    bool isArray = type != null && type.classIdentifier == 4;
+
+    // Speculative FB / UDT resolution for variables whose type was not
+    // enumerated in DD03 and is not a built-in scalar. Mirrors plc4j
+    // `parseCustomTypeBlock`'s classId discriminator (UmasProtocolLogic.java:1130-1146):
+    // the first byte of the DD02-on-typeIndex response selects between
+    // UmasArrayTypeDefinition (0x04) and UmasPDUReadUmasUDTDefinitionResponse
+    // (anything else, including FB instances).
+    final isCandidateForSpeculativeResolve = type == null &&
+        depth < maxDepth &&
+        variable.dataTypeId != 0 &&
+        !UmasDataTypes.builtIn.containsKey(variable.dataTypeId);
+    if (isCandidateForSpeculativeResolve) {
+      // Honour caches before reissuing network I/O. A non-null entry in
+      // arrayCache means a previous resolve discovered an array def;
+      // a non-empty entry in memberCache means an FB/UDT body.
+      final cachedArray = arrayCache[variable.dataTypeId];
+      final cachedMembers = memberCache[variable.dataTypeId];
+      if (cachedArray != null) {
+        isArray = true;
+        type = UmasDataTypeRef(
+          id: variable.dataTypeId,
+          name: '?',
+          byteSize: 0,
+          classIdentifier: 4,
+          dataType: cachedArray.elementTypeId,
+        );
+      } else if (cachedMembers != null && cachedMembers.isNotEmpty) {
+        isStructOrFb = true;
+        type = UmasDataTypeRef(
+          id: variable.dataTypeId,
+          name: 'FB',
+          byteSize: 0,
+          classIdentifier: 7,
+          dataType: variable.dataTypeId,
+        );
+      } else if (cachedMembers == null && !arrayCache.containsKey(variable.dataTypeId)) {
+        // No cache entry either way — fire the speculative DD02 once.
+        try {
+          final raw = await readDD02Raw(variable.dataTypeId);
+          final asArray = UmasArrayTypeDefinition.tryParse(raw);
+          if (asArray != null) {
+            arrayCache[variable.dataTypeId] = asArray;
+            isArray = true;
+            // Synthesize a minimal array-class type so the existing
+            // array branch can pick it up. byteSize 0 disables the
+            // total-bytes / element-count derivation; the array branch
+            // will degrade gracefully to a children-less node when
+            // byteSize <= 0 (already handled at L1917).
+            type = UmasDataTypeRef(
+              id: variable.dataTypeId,
+              name: '?',
+              byteSize: 0,
+              classIdentifier: 4,
+              dataType: asArray.elementTypeId,
+            );
+          } else {
+            // Reissue via _readDD02Block(isMemberLayout: true) so the
+            // response is parsed through the shared
+            // _parseVariableRecords code path — same wire layout as
+            // plc4j's UmasPDUReadUmasUDTDefinitionResponse / UmasUDTDefinition.
+            // Speculative-resolved types that aren't arrays are treated
+            // as FBs (classId=7) — see the synthesized type below — so
+            // direction classification fires for their members.
+            final members = await _readDD02Block(
+                blockNo: variable.dataTypeId,
+                isMemberLayout: true,
+                parentClassId: 7);
+            memberCache[variable.dataTypeId] = members;
+            if (members.isNotEmpty) {
+              isStructOrFb = true;
+              type = UmasDataTypeRef(
+                id: variable.dataTypeId,
+                name: 'FB',
+                byteSize: 0,
+                classIdentifier: 7,
+                dataType: variable.dataTypeId,
+              );
+            }
+            // Empty member list ⇒ leaf (observed on M580 for
+            // M_Elevator typeId 0xb6, where the PLC returns a single
+            // byte 0x00 — firmware-dependent). The cached empty list
+            // prevents per-instance retry.
+          }
+        } on UmasException catch (e) {
+          _log.w('Speculative DD02 resolution failed for type '
+              '0x${variable.dataTypeId.toRadixString(16)}: ${e.message}');
+          // Cache empty so other instances of this type don't retry.
+          memberCache[variable.dataTypeId] = const [];
+        }
+      }
+    }
 
     if (depth >= maxDepth || (!isStructOrFb && !isArray)) {
       return UmasVariableTreeNode(
@@ -1889,6 +2566,12 @@ class UmasClient {
         dataType: type,
       );
     }
+
+    // Past the gate, `isStructOrFb || isArray` holds, which is only set
+    // when `type` is non-null (either via DD03 resolve or via the
+    // speculative DD02 branch above). Pin a local non-null view so the
+    // downstream branches keep working without a sea of `!` operators.
+    final resolvedType = type!;
 
     if (isArray) {
       // Fetch the array type definition (PLC4X UmasArrayTypeDefinition) by
@@ -1904,7 +2587,7 @@ class UmasClient {
           final raw = await readDD02Raw(variable.dataTypeId);
           arrayDef = UmasArrayTypeDefinition.tryParse(raw);
         } on UmasException catch (e) {
-          _log.w('Array DD02 fetch failed for type ${type.name}: ${e.message}');
+          _log.w('Array DD02 fetch failed for type ${resolvedType.name}: ${e.message}');
           arrayDef = null;
         }
         arrayCache[variable.dataTypeId] = arrayDef;
@@ -1914,7 +2597,7 @@ class UmasClient {
       if (arrayDef == null ||
           totalElements <= 0 ||
           totalElements > _maxArrayElements ||
-          type.byteSize <= 0) {
+          resolvedType.byteSize <= 0) {
         return UmasVariableTreeNode(
           name: variable.name,
           path: path,
@@ -1926,7 +2609,7 @@ class UmasClient {
 
       // Element size derived from total array byte size (works for arrays of
       // builtin scalars, UDTs, and atypically-sized strings alike).
-      final elementSize = type.byteSize ~/ totalElements;
+      final elementSize = resolvedType.byteSize ~/ totalElements;
       if (elementSize <= 0) {
         return UmasVariableTreeNode(
           name: variable.name,
@@ -2015,17 +2698,22 @@ class UmasClient {
       );
     }
 
-    // Fetch struct member layout (cached per typeId).
+    // Fetch struct member layout (cached per typeId). Forward
+    // resolvedType.classIdentifier so the per-member direction
+    // classifier only fires for FB members (classId=7) and NOT for
+    // arbitrary UDT struct fields (classId=2). F-1 v1.1.
     List<UmasVariable> members;
     try {
       members = memberCache.putIfAbsent(
           variable.dataTypeId, () => <UmasVariable>[]);
       if (members.isEmpty) {
         memberCache[variable.dataTypeId] = members = await _readDD02Block(
-            blockNo: variable.dataTypeId, isMemberLayout: true);
+            blockNo: variable.dataTypeId,
+            isMemberLayout: true,
+            parentClassId: resolvedType.classIdentifier);
       }
     } on UmasException catch (e) {
-      _log.w('Struct expansion failed for type ${type.name}: ${e.message}');
+      _log.w('Struct expansion failed for type ${resolvedType.name}: ${e.message}');
       return UmasVariableTreeNode(
         name: variable.name,
         path: path,
@@ -2040,13 +2728,18 @@ class UmasClient {
       // For struct members, the parser puts the byte-offset-within-parent
       // into `blockNo`. Compute the member's absolute address by combining
       // it with the parent's address.
+      // Phase 3 (v1.1): forward the member's `direction` so the tree node
+      // can render input/output/public/in_out distinctly. `m.direction` is
+      // populated by `_parseVariableRecords` when `isMemberLayout == true`
+      // (null for non-FB struct members).
       final memberAddr = UmasVariable(
         name: m.name,
         blockNo: variable.blockNo,
         offset: variable.offset + m.blockNo,
         dataTypeId: m.dataTypeId,
+        direction: m.direction,
       );
-      children.add(await _expandVariable(
+      final childNode = await _expandVariable(
         variable: memberAddr,
         path: '$path.${m.name}',
         dataTypes: dataTypes,
@@ -2054,6 +2747,28 @@ class UmasClient {
         arrayCache: arrayCache,
         depth: depth + 1,
         maxDepth: maxDepth,
+      );
+      // Surface direction on the tree node so downstream consumers
+      // (browser tree, CLI --show-direction) can read it without
+      // peeking into UmasVariable. `_expandVariable` doesn't carry the
+      // direction parameter; rebuild the node with the direction attached.
+      // F-5 wiring: VAR_IN_OUT members are pointer-backed (PLC returns
+      // 0x94 on read); mark them unreadable with a human-readable reason
+      // so the UI renders the "not readable" affordance instead of
+      // silently dropping them.
+      final dir = m.direction;
+      final readable = dir == null ? true : isReadableForDirection(dir);
+      final unreadableReason =
+          dir == null ? null : unreadableReasonForDirection(dir);
+      children.add(UmasVariableTreeNode(
+        name: childNode.name,
+        path: childNode.path,
+        children: childNode.children,
+        variable: childNode.variable,
+        dataType: childNode.dataType,
+        direction: dir,
+        readable: readable,
+        unreadableReason: unreadableReason,
       ));
     }
 
