@@ -18,6 +18,16 @@
 // Fix B: _hardwareId is split into _plcIdHardwareId (from sub-function
 //        0x02) and _projectHardwareId (from memory block 0x30). The
 //        latter is the value Data Dictionary (0x26) requests need.
+//
+// CACHE-COMPLETENESS regression (May 2026, debug/umas-cache-completeness):
+// Before Fix A, every benign UmasException in the keep-alive timer
+// nuked the symbol cache (via _handleSessionError → _clearSymbolCache)
+// before the next poll tick. The visible symptom was the HMI logging
+// 'UMAS symbol not found in data dictionary: "B_Elevator_F1_A"' for
+// top-level non-FB scalars whose poll tick fired during the rebuild
+// window. After Fix A the cache survives non-fatal errors, so any
+// symbol previously resolved through `lookupSymbol` (top-level scalar
+// or FB member alike) stays resolvable.
 
 import 'dart:async';
 import 'dart:typed_data';
@@ -394,6 +404,123 @@ void main() {
           reason: '_resetHardwareIdentifiers clears _plcIdHardwareId');
       expect(client.projectHardwareId, isNull,
           reason: '_resetHardwareIdentifiers clears _projectHardwareId');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Cache-completeness regression (debug/umas-cache-completeness, May 2026)
+  // ---------------------------------------------------------------------------
+  //
+  // The originally-reported symptom was:
+  //   HMI poll log: 'UMAS symbol not found in data dictionary: "B_Elevator_F1_A"'
+  //   even though `umas_cli read 192.168.112.159 B_Elevator_F1_A` succeeded.
+  //
+  // Root cause: the keep-alive timer (and per-attempt _initWithRetry) called
+  // _handleSessionError on every benign UmasException, which cleared the
+  // symbol cache via _clearSymbolCache. Top-level non-FB scalars like
+  // `B_Elevator_F1_A` would briefly disappear from the cache while the next
+  // browse re-built it; a poll tick that landed in that window logged
+  // "symbol not found". Fixed by commit 3ee73b2a (Fix A predicate).
+  //
+  // These tests pin the new invariant: the symbol cache MUST survive
+  // non-fatal errors so a previously-resolved top-level BOOL stays
+  // resolvable across them.
+
+  group('Cache completeness: symbol cache survives non-fatal errors', () {
+    /// Helper: seed the symbol cache with a top-level non-FB BOOL whose
+    /// name shape mirrors the live `B_Elevator_F1_A` symptom.
+    void _injectTopLevelScalar(UmasClient client, String path) {
+      client.debugInjectSymbol(ResolvedSymbol(
+        path: path,
+        variable: const UmasVariable(
+          name: 'B_Elevator_F1_A',
+          blockNo: 0xAD,
+          offset: 0x0A,
+          dataTypeId: 1, // BOOL
+        ),
+        dataType: const UmasDataTypeRef(id: 1, name: 'BOOL', byteSize: 1),
+      ));
+    }
+
+    test(
+        'top-level BOOL stays in cache after errorCode=0 client-side parse '
+        'failure', () async {
+      final mock = _Mock();
+      _seedInit(mock);
+      final client = UmasClient(sendFn: mock.send);
+      await client.readPlcId();
+      await client.init();
+      await client.refreshProjectMetadata();
+
+      _injectTopLevelScalar(client, 'B_Elevator_F1_A');
+      expect(client.symbolCacheBuilt, isTrue);
+      final sizeBefore = client.symbolCacheSize;
+
+      // Trigger a benign UmasException via readDataTypes (truncated response).
+      mock.clearResponses(0x26);
+      mock.respond(0x26, Uint8List.fromList([0x5A, 0x42, 0xFE]));
+      try {
+        await client.readDataTypes();
+      } catch (_) {}
+
+      // The session and the cache must both survive untouched.
+      expect(client.sessionState, UmasSessionState.paired);
+      expect(client.symbolCacheBuilt, isTrue,
+          reason: 'Fix A: non-fatal error must not flush the symbol cache');
+      expect(client.symbolCacheSize, sizeBefore,
+          reason: 'No symbols added or evicted by a non-fatal error');
+
+      // The poll-loop equivalent of looking the scalar up by name must
+      // hit the cached entry (no re-browse, no "symbol not found").
+      final sym = await client.lookupSymbol('B_Elevator_F1_A');
+      expect(sym.dataType.name, 'BOOL');
+      expect(sym.variable.blockNo, 0xAD);
+      expect(sym.variable.offset, 0x0A);
+    });
+
+    test(
+        'top-level BOOL stays in cache across multiple non-fatal keep-alive '
+        'errors (simulates the HMI poll-loop "session re-pair storm" window)',
+        () async {
+      final mock = _Mock();
+      _seedInit(mock);
+      final client = UmasClient(
+        sendFn: mock.send,
+        keepAliveInterval: const Duration(milliseconds: 40),
+      );
+      await client.readPlcId();
+      await client.init();
+      await client.refreshProjectMetadata();
+
+      _injectTopLevelScalar(client, 'B_Elevator_F1_A');
+      final sizeBefore = client.symbolCacheSize;
+      expect(sizeBefore, greaterThan(0));
+
+      // Queue several keep-alive byte-level error responses. Under the
+      // OLD policy each would invalidate the session and clear the
+      // cache; under Fix A they're all non-fatal.
+      mock.clearResponses(0x12);
+      for (var i = 0; i < 6; i++) {
+        mock.respond(0x12, _errorPdu(0x01, pairingKey: 0x42));
+      }
+
+      client.startKeepAlive();
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+      client.stopKeepAlive();
+
+      // Session survived → cache survived → symbol still resolvable.
+      expect(client.sessionState, UmasSessionState.paired,
+          reason: 'Non-fatal keep-alive errors must not reset session');
+      expect(client.symbolCacheBuilt, isTrue,
+          reason: 'Cache must persist across the storm window');
+      expect(client.symbolCacheSize, sizeBefore,
+          reason: 'No entries lost during the storm window');
+
+      // This is the exact lookup the HMI poll loop does after a benign
+      // tick — must NOT throw "symbol not found in data dictionary".
+      final sym = await client.lookupSymbol('B_Elevator_F1_A');
+      expect(sym.path, 'B_Elevator_F1_A');
+      expect(sym.dataType.name, 'BOOL');
     });
   });
 }
