@@ -47,6 +47,13 @@ dependencies:
   args: ^2.4.2
   basic_utils: ^5.7.0
 
+  # EcoStruxure .ZEF / .XEF offline project export parser (bit-alias map).
+  # archive: ZIP container for .ZEF; pinned via dependency_overrides below
+  # because >4.0.2 clashes with pointycastle on basic_utils.
+  # xml: tolerant XML parsing for the inner .XEF document.
+  archive: ^4.0.2
+  xml: ^6.5.0
+
 dependency_overrides:
   postgres:
     git:

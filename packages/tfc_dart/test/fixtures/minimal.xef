@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  SYNTHETIC FIXTURE — hand-crafted minimal .XEF resembling Schneider
+  EcoStruxure Control Expert "Application Exchange File" XML.
+
+  This is NOT a real exported file. It encodes the structures the
+  ecostruxure_zef parser must recognise:
+    * elementary located variable (scalar)
+    * derived (DDT instance) variable with %MW address
+    * DDT type definition with WORD member + extracted bit aliases
+    * unlocated variable (missing topological address)
+    * variable missing optional fields (no comment, no type attrs)
+
+  Schema names follow the Schneider Unity Pro / Control Expert
+  "openness" convention as documented in third-party tooling
+  (ZEF_splitter, EPLAN PlcDCXmlExchangerSchneider, Paul Rickard's
+  blog write-up) and the V15 release notes that confirm extracted
+  bits in DDT are XEF-first-class since V7.0.
+-->
+<FileExchangeFile>
+  <FileHeader>
+    <Version>v1.0</Version>
+    <SchneiderApp>ControlExpert</SchneiderApp>
+  </FileHeader>
+  <contents>
+    <dataBlock>
+      <dataBlockTypeDef>
+        <DDT name="MOTOR_STATUS_DDT">
+          <comment>Motor status flags packed into one WORD</comment>
+          <structElement name="raw" typeName="WORD"/>
+          <structElement name="run" typeName="BOOL">
+            <extractedBit parent="raw" bit="0"/>
+          </structElement>
+          <structElement name="fault" typeName="BOOL">
+            <extractedBit parent="raw" bit="1"/>
+          </structElement>
+          <structElement name="ready" typeName="BOOL">
+            <extractedBit parent="raw" bit="7"/>
+          </structElement>
+        </DDT>
+        <DDT name="EMPTY_DDT">
+          <!-- DDT with no structElements; parser must not crash -->
+        </DDT>
+      </dataBlockTypeDef>
+      <variables>
+        <elementaryVariable name="speed_setpoint"
+                            typeName="INT"
+                            topologicalAddress="%MW100"/>
+        <elementaryVariable name="run_command"
+                            typeName="BOOL"
+                            topologicalAddress="%M5"/>
+        <derivedVariable name="motor1"
+                         typeName="MOTOR_STATUS_DDT"
+                         topologicalAddress="%MW200"/>
+        <elementaryVariable name="unlocated_temp" typeName="REAL"/>
+        <elementaryVariable name="no_type_attr"/>
+      </variables>
+    </dataBlock>
+  </contents>
+</FileExchangeFile>
