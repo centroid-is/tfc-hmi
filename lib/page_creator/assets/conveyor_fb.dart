@@ -26,20 +26,18 @@ import 'package:rxdart/rxdart.dart';
 import 'package:tfc_dart/core/umas_bit_alias.dart';
 
 import '../../providers/state_man.dart';
+import '../../providers/umas.dart' show bitAliasDecoderProvider;
 import 'common.dart';
 
 part 'conveyor_fb.g.dart';
 
-/// Riverpod hook for the bit-alias decoder.
-///
-/// Defaults to [StubBitAliasDecoder] (everything -> null -> "?" in UI).
-/// The real `UmasBitAliasDecoder` is wired up by the
-/// `bitalias-impl` agent in a sibling task; once that lands its provider
-/// override can be applied at the top of the widget tree (e.g. in
-/// `main.dart`'s ProviderScope) without changing this file.
-final bitAliasDecoderProvider = Provider<BitAliasDecoder>((ref) {
-  return const StubBitAliasDecoder();
-});
+// The bit-alias decoder is sourced from
+// `lib/providers/umas.dart#bitAliasDecoderProvider(serverAlias)` — a
+// per-PLC `Provider.family<BitAliasDecoder, String?>`. We resolve the
+// serverAlias from the bound `fbInstanceName`'s KeyMappings entry so the
+// asset uses the correct PLC's alias map. Returns `StubBitAliasDecoder`
+// (everything -> "?") when the alias is unknown, the connection isn't
+// up, or `ensureBitAliasMap` failed.
 
 /// Standard FB member field names this asset knows how to render.
 ///
@@ -155,10 +153,9 @@ class ConveyorFb extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final decoder = ref.watch(bitAliasDecoderProvider);
-
     // Preview mode — no live streams; render with empty data so the
-    // asset is selectable in the page editor.
+    // asset is selectable in the page editor. Use stub decoder since
+    // we have no connection context.
     if (config.fbInstanceName == null ||
         config.fbInstanceName!.isEmpty ||
         config.fbInstanceName == ConveyorFbConfig.previewStr) {
@@ -166,7 +163,7 @@ class ConveyorFb extends ConsumerWidget {
         fbInstanceName: config.fbInstanceName ?? '(unset)',
         fbValue: null,
         parentWordValue: null,
-        decoder: decoder,
+        decoder: ref.watch(bitAliasDecoderProvider(null)),
       );
     }
 
@@ -174,14 +171,25 @@ class ConveyorFb extends ConsumerWidget {
       future: ref.watch(stateManProvider.future),
       builder: (context, smSnap) {
         if (!smSnap.hasData) {
+          // StateMan not ready yet — render with stub decoder; the
+          // widget will rebuild once StateMan resolves and the real
+          // decoder becomes available.
           return ConveyorFbView(
             fbInstanceName: config.fbInstanceName!,
             fbValue: null,
             parentWordValue: null,
-            decoder: decoder,
+            decoder: ref.watch(bitAliasDecoderProvider(null)),
           );
         }
         final stateMan = smSnap.data!;
+
+        // Resolve the serverAlias that owns the bound FB instance so
+        // we pull the bit-alias decoder for the correct PLC. The FB
+        // instance name is a StateMan key; its KeyMappings entry
+        // carries the modbus serverAlias.
+        final entry = stateMan.keyMappings.nodes[config.fbInstanceName!];
+        final serverAlias = entry?.modbusNode?.serverAlias;
+        final decoder = ref.watch(bitAliasDecoderProvider(serverAlias));
 
         // Build the FB stream.
         final fbStream =
