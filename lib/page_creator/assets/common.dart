@@ -1213,6 +1213,9 @@ class _KeyMappingEntryDialogState extends ConsumerState<KeyMappingEntryDialog> {
               modbusNode: _protocol == _DialogProtocol.modbus
                   ? _entry.modbusNode
                   : null,
+              variableName: _protocol == _DialogProtocol.modbus
+                  ? _entry.variableName
+                  : null,
               m2400Node: _protocol == _DialogProtocol.m2400
                   ? _entry.m2400Node
                   : null,
