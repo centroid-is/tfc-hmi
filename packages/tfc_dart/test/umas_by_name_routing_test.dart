@@ -1041,6 +1041,59 @@ void main() {
         adapter.dispose();
       }
     });
+
+    // -----------------------------------------------------------------------
+    // umas-fb-freeze-loop (2026-05-19): the UMAS Browse dialog used to
+    // construct its OWN UmasClient against the raw `tcpClient.send`, racing
+    // a second UMAS session against the adapter's poll-loop client on the
+    // same TCP socket. The PLC only supports one paired session per TCP
+    // connection, so the duplicate pair() invalidated the poll client's
+    // session, the next poll tripped _handleSessionError, both clients
+    // raced to re-pair, and the symbol-cache rebuild storm froze the UI.
+    //
+    // The fix promoted `_getUmasClient()` to a public `umasClient` getter
+    // and rewired the dialog to borrow that shared instance. This test
+    // pins the new invariant: repeated `umasClient` accesses on a connected
+    // adapter ALWAYS return the same UmasClient instance — and that
+    // instance is identical to the one used by the adapter's own
+    // readUmasVariable path. Constructing a parallel UmasClient against
+    // `tcpClient.send` is therefore guaranteed to be unnecessary.
+    test(
+        'umas-fb-freeze-loop: public umasClient getter shares the adapter\'s '
+        'session across browse + poll callers (no duplicate UmasClient)',
+        () async {
+      final wrapper = await _connectedWrapper();
+      final adapter = ModbusDeviceClientAdapter(
+        wrapper,
+        specs: const {},
+        serverAlias: 'plc1',
+        variableNames: const {
+          'temperature': 'Application.GVL.temperature',
+        },
+        umasEnabled: true,
+      );
+      try {
+        // Drive a real read so the adapter has paired its session.
+        await adapter.readUmasVariable('temperature');
+
+        // Two back-to-back public accesses must return the SAME instance —
+        // i.e. the getter doesn't allocate a fresh client per call (which
+        // would re-trigger the freeze loop on a live M580).
+        final a = adapter.umasClient;
+        final b = adapter.umasClient;
+        expect(a, isNotNull);
+        expect(identical(a, b), isTrue,
+            reason: 'umasClient must return the cached, shared instance');
+
+        // And it must be IDENTICAL to the internally-cached client used by
+        // readUmasVariable — otherwise the dialog and the poll loop are
+        // racing two separate UMAS sessions.
+        expect(identical(a, adapter.debugUmasClient), isTrue,
+            reason: 'umasClient must alias the adapter\'s internal client');
+      } finally {
+        adapter.dispose();
+      }
+    });
   });
 
   // ---------------------------------------------------------------------------

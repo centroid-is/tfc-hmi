@@ -574,6 +574,25 @@ class ModbusDeviceClientAdapter implements DeviceClient {
   /// internal cache state (e.g. TD-005: blockCrcs reuse).
   UmasClient? get debugUmasClient => _umasClient;
 
+  /// Public accessor that returns the adapter's shared [UmasClient],
+  /// lazy-initializing it against the current TCP socket if the wrapper
+  /// is connected. Returns null when the wrapper has no live socket yet.
+  ///
+  /// UI features that need ad-hoc UMAS access (e.g. the Browse dialog's
+  /// FB-instance inspection-layer fan-out read) MUST go through this
+  /// accessor rather than instantiate their own `UmasClient(sendFn: ...)`
+  /// against the raw `tcpClient.send`. A duplicate client would share
+  /// the TCP socket with the adapter's poll-loop client but maintain a
+  /// SEPARATE UMAS session (pairing key, hardware id, symbol cache),
+  /// and the PLC only supports one paired UMAS session per TCP
+  /// connection — the second `pair()` invalidates the first, the next
+  /// poll-loop read trips `_handleSessionError`, both clients fight to
+  /// re-pair, and the symbol cache rebuild storm freezes the UI.
+  ///
+  /// See debug session `umas-fb-freeze-loop` (2026-05-19) for the
+  /// reproduction that motivated promoting this accessor.
+  UmasClient? get umasClient => _getUmasClient();
+
   /// TD-003 (v1.1.x): release every per-key resource the adapter
   /// allocates for a UMAS-by-name [key]. Called from
   /// [updateVariableNames] when the operator removes or renames a

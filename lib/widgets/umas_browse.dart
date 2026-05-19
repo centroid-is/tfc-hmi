@@ -302,9 +302,11 @@ BrowseErrorInfo? _umasErrorMapper(Object error) {
 
 /// Convenience function to open UMAS browse dialog for a Modbus server.
 ///
-/// Finds the [ModbusDeviceClientAdapter] matching [serverAlias], creates a
-/// [UmasClient] from its TCP transport, and opens [showBrowseDialog] with a
-/// [UmasBrowseDataSource].
+/// Finds the [ModbusDeviceClientAdapter] matching [serverAlias] and reuses
+/// its shared [UmasClient] (via [ModbusDeviceClientAdapter.umasClient]) so
+/// the dialog's fetchDetail reads serialize against the adapter's poll
+/// loop instead of opening a duplicate UMAS session on the same TCP
+/// socket. See debug session `umas-fb-freeze-loop` (2026-05-19).
 Future<BrowseNode?> browseUmasNode({
   required BuildContext context,
   required StateMan stateMan,
@@ -342,7 +344,29 @@ Future<BrowseNode?> browseUmasNode({
     return null;
   }
 
-  final umasClient = UmasClient(sendFn: tcpClient.send);
+  // BUG (umas-fb-freeze-loop, 2026-05-19): the dialog used to construct
+  // its OWN `UmasClient(sendFn: tcpClient.send)` here, which shared the
+  // TCP socket with the adapter's poll-loop client but kept a SEPARATE
+  // UMAS session (pairing key, hardware id, symbol cache). The M580
+  // only supports one paired UMAS session per TCP connection — the
+  // dialog's `pair()` invalidated the poll-loop's session, the next
+  // poll tripped `_handleSessionError`, both clients raced to re-pair,
+  // and the symbol-cache rebuild storm (1077 entries × N round-trips
+  // on the main isolate) froze the UI.
+  //
+  // Fix: borrow the adapter's already-paired client via the public
+  // `umasClient` accessor. fetchDetail batched reads now serialize
+  // against the poll loop through the client's own `_initLock` /
+  // `_withSession`, and the symbol cache is built ONCE per project.
+  final umasClient = adapter.umasClient;
+  if (umasClient == null) {
+    if (!context.mounted) return null;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+          content: Text('UMAS client not ready. Try again in a moment.')),
+    );
+    return null;
+  }
   final dataSource = UmasBrowseDataSource(umasClient);
 
   return showBrowseDialog(
