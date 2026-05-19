@@ -11,6 +11,10 @@ ArrowConfig _$ArrowConfigFromJson(Map<String, dynamic> json) => ArrowConfig(
       label: json['label'] as String,
       color: _$JsonConverterFromJson<Map<String, dynamic>, Color>(
           json['color'], const ColorConverter().fromJson),
+      upInputKey: json['upInputKey'] as String?,
+      downInputKey: json['downInputKey'] as String?,
+      leftInputKey: json['leftInputKey'] as String?,
+      rightInputKey: json['rightInputKey'] as String?,
     )
       ..variant = json['asset_name'] as String
       ..coordinates =
@@ -33,6 +37,10 @@ Map<String, dynamic> _$ArrowConfigToJson(ArrowConfig instance) =>
       'key': instance.key,
       'label': instance.label,
       'color': const ColorConverter().toJson(instance.color),
+      if (instance.upInputKey case final value?) 'upInputKey': value,
+      if (instance.downInputKey case final value?) 'downInputKey': value,
+      if (instance.leftInputKey case final value?) 'leftInputKey': value,
+      if (instance.rightInputKey case final value?) 'rightInputKey': value,
     };
 
 Value? _$JsonConverterFromJson<Json, Value>(

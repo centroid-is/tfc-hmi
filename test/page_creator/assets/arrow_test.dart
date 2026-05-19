@@ -155,4 +155,120 @@ void main() {
       expect(arrow.color.value, Colors.purple.value);
     });
   });
+
+  group('Per-direction bool input keys', () {
+    // ARROW-DIR-01: A freshly-constructed ArrowConfig with no direction
+    // keys set must JSON round-trip unchanged. The `<dir>InputKey` fields
+    // use `@JsonKey(includeIfNull: false)` so legacy pages stay
+    // byte-equivalent — nothing new appears in the serialized payload.
+    test('all-null direction keys round-trip with no extra JSON fields', () {
+      final config = ArrowConfig(key: '', label: '');
+      expect(config.upInputKey, isNull);
+      expect(config.downInputKey, isNull);
+      expect(config.leftInputKey, isNull);
+      expect(config.rightInputKey, isNull);
+
+      final json = config.toJson();
+      expect(json.containsKey('upInputKey'), isFalse);
+      expect(json.containsKey('downInputKey'), isFalse);
+      expect(json.containsKey('leftInputKey'), isFalse);
+      expect(json.containsKey('rightInputKey'), isFalse);
+
+      final restored = ArrowConfig.fromJson(jsonDecode(jsonEncode(json))
+          as Map<String, dynamic>);
+      expect(restored.upInputKey, isNull);
+      expect(restored.downInputKey, isNull);
+      expect(restored.leftInputKey, isNull);
+      expect(restored.rightInputKey, isNull);
+      expect(restored.hasDirectionInputs, isFalse);
+    });
+
+    // ARROW-DIR-02: Setting a subset of direction keys round-trips just
+    // those fields; the unset ones stay null and stay out of JSON.
+    test('partial direction keys round-trip and unset stays unset', () {
+      final config = ArrowConfig(
+        key: '',
+        label: '',
+        upInputKey: 'tag.upBool',
+        leftInputKey: 'tag.leftBool',
+      );
+
+      final json = jsonDecode(jsonEncode(config.toJson()))
+          as Map<String, dynamic>;
+      expect(json['upInputKey'], 'tag.upBool');
+      expect(json['leftInputKey'], 'tag.leftBool');
+      expect(json.containsKey('downInputKey'), isFalse);
+      expect(json.containsKey('rightInputKey'), isFalse);
+
+      final restored = ArrowConfig.fromJson(json);
+      expect(restored.upInputKey, 'tag.upBool');
+      expect(restored.downInputKey, isNull);
+      expect(restored.leftInputKey, 'tag.leftBool');
+      expect(restored.rightInputKey, isNull);
+      expect(restored.hasDirectionInputs, isTrue);
+    });
+
+    // ARROW-DIR-03: All four direction keys round-trip cleanly.
+    test('all direction keys round-trip', () {
+      final config = ArrowConfig(
+        key: 'legacy_key',
+        label: '',
+        upInputKey: 'up.bool',
+        downInputKey: 'down.bool',
+        leftInputKey: 'left.bool',
+        rightInputKey: 'right.bool',
+      );
+
+      final restored = ArrowConfig.fromJson(
+          jsonDecode(jsonEncode(config.toJson())) as Map<String, dynamic>);
+      expect(restored.upInputKey, 'up.bool');
+      expect(restored.downInputKey, 'down.bool');
+      expect(restored.leftInputKey, 'left.bool');
+      expect(restored.rightInputKey, 'right.bool');
+      // Legacy key is still preserved alongside the per-direction inputs.
+      expect(restored.key, 'legacy_key');
+      expect(restored.hasDirectionInputs, isTrue);
+    });
+
+    // ARROW-DIR-04: Legacy JSON saved before this change (no `<dir>InputKey`
+    // entries) must deserialize with all direction keys null and
+    // `hasDirectionInputs` false, so the runtime takes the legacy path.
+    test(
+        'legacy JSON without direction keys deserializes with all nulls',
+        () {
+      final legacyJson = <String, dynamic>{
+        'asset_name': 'ArrowConfig',
+        'key': 'old_key',
+        'label': '',
+        'coordinates': {'x': 0.0, 'y': 0.0},
+        'size': {'width': 0.03, 'height': 0.03},
+      };
+      final config = ArrowConfig.fromJson(legacyJson);
+      expect(config.upInputKey, isNull);
+      expect(config.downInputKey, isNull);
+      expect(config.leftInputKey, isNull);
+      expect(config.rightInputKey, isNull);
+      expect(config.hasDirectionInputs, isFalse,
+          reason:
+              'Legacy pages must skip the per-direction path and use the original single-key behaviour.');
+    });
+
+    // ARROW-DIR-05: The empty-string trick the editor uses to "clear" a
+    // direction picker must surface as null on the next save.
+    test('empty-string direction keys do not count as configured', () {
+      final config = ArrowConfig(
+        key: '',
+        label: '',
+      );
+      // Simulate the editor explicitly clearing each field — the editor
+      // normalises empty input to null, but we sanity-check the
+      // `hasDirectionInputs` guard treats explicit empty strings the
+      // same as null.
+      config.upInputKey = '';
+      config.downInputKey = '';
+      config.leftInputKey = '';
+      config.rightInputKey = '';
+      expect(config.hasDirectionInputs, isFalse);
+    });
+  });
 }
