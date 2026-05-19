@@ -6,6 +6,7 @@ import 'package:logger/logger.dart';
 import 'package:meta/meta.dart';
 import 'package:modbus_client/modbus_client.dart';
 import 'package:rxdart/rxdart.dart';
+import 'package:tfc_dart/core/umas_bit_alias_map.dart';
 import 'package:tfc_dart/core/umas_fb_direction.dart';
 import 'package:tfc_dart/core/umas_types.dart';
 import 'package:tfc_dart/core/umas_var_in_out.dart';
@@ -260,6 +261,27 @@ class UmasClient {
 
   /// True if a symbol cache build has completed for the current session.
   bool get symbolCacheBuilt => _symbolCacheBuilt;
+
+  // ---------------------------------------------------------------------------
+  // Bit-alias map (v1.1 located-bit enumeration).
+  // ---------------------------------------------------------------------------
+  //
+  // Background: see /tmp/bitalias-swarm-v2/trailer-probe.md. The PLC project
+  // declares its located-bit allocations as `ARRAY[..] OF BOOL` types in
+  // DD02 IDX 0x1B..0x2A. Each such array, when referenced by a top-level
+  // UmasVariable, becomes N readable bits at known (block, offset, bitOffset).
+  // The map is populated on demand (first call to [ensureBitAliasMap]),
+  // cached, and invalidated alongside the symbol cache.
+
+  UmasBitAliasMap? _bitAliasMap;
+  bool _bitAliasMapBuilt = false;
+  Completer<void>? _bitAliasMapLock;
+
+  /// Cached located-bit / bit-alias map. Null until [ensureBitAliasMap] has
+  /// run successfully at least once. Cleared by [_clearSymbolCache] /
+  /// [invalidateSymbolCacheIfProjectChanged] so a reprogrammed PLC forces
+  /// a rebuild.
+  UmasBitAliasMap? get bitAliases => _bitAliasMap;
 
   /// Inject a [ResolvedSymbol] directly into the cache for tests that
   /// need to assert behavior of [readVariableByName] / [writeVariableByName]
@@ -1596,6 +1618,11 @@ class UmasClient {
     _persistentArrayCache.clear();
     _symbolCacheBuilt = false;
     _symbolCacheProjectCrc = null;
+    // v1.1 bit-alias map shares lifecycle with the symbol cache: both
+    // depend on DD02 catalog state that goes stale across project
+    // reprograms / PLC reboots.
+    _bitAliasMap = null;
+    _bitAliasMapBuilt = false;
   }
 
   /// Fix B: Clear both hardware-ID fields. Called from [_handleSessionError]
@@ -1708,6 +1735,147 @@ class UmasClient {
     } finally {
       _symbolCacheLock = null;
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // v1.1 bit-alias enumeration — located-bit registry built from DD02
+  // ARRAY[..] OF BOOL short records and the top-level variable list.
+  // ---------------------------------------------------------------------------
+
+  /// Build (or return the cached) [UmasBitAliasMap] for this session.
+  ///
+  /// Strategy (read-only, no reservation):
+  /// 1. Read every top-level variable (`readVariableNames`).
+  /// 2. For each variable whose `dataTypeId` falls outside the built-in
+  ///    type table, speculatively fetch the DD02 type body via
+  ///    [readDD02Raw] and try to parse it as an [UmasArrayTypeDefinition].
+  ///    Cache the result in [_persistentArrayCache] so a follow-on
+  ///    [browse] doesn't refetch.
+  /// 3. Filter to BOOL arrays (`elementTypeId == 0x0001`) and expand each
+  ///    into per-bit [BitAliasEntry] rows via
+  ///    [UmasBitAliasMap.buildFromArrayDefinition], pinned to the
+  ///    variable's `(blockNo, offset)` pair.
+  /// 4. Build the [UmasBitAliasMap], cache it on the client, and return it.
+  ///
+  /// Concurrent first-time callers share one build via
+  /// [_bitAliasMapLock].
+  ///
+  /// Background: `/tmp/bitalias-swarm-v2/trailer-probe.md` documents the
+  /// underlying protocol finding — recordType=0xDD02 dispatch is by IDX
+  /// alone (no separate sub-op), and `ARRAY[..] OF BOOL` type bodies
+  /// live at IDX 0x1B..0x2A on the live M580.
+  Future<UmasBitAliasMap> ensureBitAliasMap() async {
+    if (_bitAliasMapBuilt && _bitAliasMap != null) return _bitAliasMap!;
+    if (_bitAliasMapLock != null) {
+      await _bitAliasMapLock!.future;
+      if (_bitAliasMap != null) return _bitAliasMap!;
+    }
+    _bitAliasMapLock = Completer<void>();
+    _bitAliasMapLock!.future.ignore();
+    try {
+      final map = await _withSessionAndRecovery(_buildBitAliasMapInner);
+      _bitAliasMap = map;
+      _bitAliasMapBuilt = true;
+      _bitAliasMapLock!.complete();
+      _log.i('UMAS bitAliasMap: built ${map.length} entries');
+      return map;
+    } catch (e) {
+      _bitAliasMapLock!.completeError(e);
+      rethrow;
+    } finally {
+      _bitAliasMapLock = null;
+    }
+  }
+
+  /// Inner builder — runs inside the session-recovery wrapper. See
+  /// [ensureBitAliasMap] for the high-level contract.
+  Future<UmasBitAliasMap> _buildBitAliasMapInner() async {
+    final variables = await _readVariableNamesInner();
+    final entries = <BitAliasEntry>[];
+    for (final v in variables) {
+      // Built-in scalar types (BOOL, INT, WORD, …) can never be the parent
+      // of a bit-alias array — they're leaves themselves. Skip the
+      // speculative DD02 fetch for those.
+      if (UmasDataTypes.builtIn.containsKey(v.dataTypeId)) continue;
+      // Already resolved as non-array (an FB / UDT body) in a previous
+      // browse — the cache holds null for those. Honour that.
+      if (_persistentArrayCache.containsKey(v.dataTypeId) &&
+          _persistentArrayCache[v.dataTypeId] == null) {
+        continue;
+      }
+
+      UmasArrayTypeDefinition? def =
+          _persistentArrayCache[v.dataTypeId];
+      if (def == null) {
+        try {
+          final raw = await readDD02Raw(v.dataTypeId);
+          def = UmasArrayTypeDefinition.tryParse(raw);
+          // Always cache: null means "tried, not an array" so the browse
+          // path doesn't refetch.
+          _persistentArrayCache[v.dataTypeId] = def;
+        } on UmasException catch (e) {
+          // Defensive: a single record-not-found shouldn't kill the whole
+          // sweep. Log and move on; the map will just be smaller.
+          _log.w('UMAS bitAliasMap: DD02 fetch failed for typeId '
+              '0x${v.dataTypeId.toRadixString(16)} '
+              '(variable "${v.name}"): ${e.message}');
+          continue;
+        }
+      }
+      if (def == null) continue;
+      if (def.elementTypeId != 0x0001) continue;
+      entries.addAll(UmasBitAliasMap.buildFromArrayDefinition(
+        definition: def,
+        parentVariableName: v.name,
+        parentBlock: v.blockNo,
+        parentByteOffset: v.offset,
+        aliasPrefix: '${v.name}[',
+      ).map((e) => BitAliasEntry(
+            // buildFromArrayDefinition emits names of the form
+            // "<aliasPrefix><arrayIndex>", so with aliasPrefix='name[' we
+            // get 'name[5'. Tack on the closing bracket here to produce
+            // the canonical 'name[5]' form that matches the existing
+            // browse-tree leaf naming convention (line ~2812).
+            aliasName: '${e.aliasName}]',
+            parentBlock: e.parentBlock,
+            parentByteOffset: e.parentByteOffset,
+            bitOffset: e.bitOffset,
+            parentVariableName: e.parentVariableName,
+          )));
+    }
+    return UmasBitAliasMap(entries);
+  }
+
+  /// Convenience: read a single bit-alias by canonical name.
+  ///
+  /// Looks the alias up in the [bitAliases] map (auto-building it on
+  /// first call), issues a 2-byte ReadVariable against the parent WORD,
+  /// then extracts the requested bit. Returns null when the alias is
+  /// unknown.
+  Future<bool?> readBitAlias(String aliasName) async {
+    final map = await ensureBitAliasMap();
+    final entry = map.lookup(aliasName);
+    if (entry == null) return null;
+    // Synthesize a minimal UmasVariable / UmasDataTypeRef pair for a
+    // 2-byte raw read at (parentBlock, parentByteOffset). Reuses the
+    // existing readVariables path so M580 MonitorPlc / M340 ReadVariable
+    // selection is honoured transparently.
+    final parentVar = UmasVariable(
+      name: aliasName,
+      blockNo: entry.parentBlock,
+      offset: entry.parentByteOffset,
+      dataTypeId: 22, // WORD
+    );
+    const wordType = UmasDataTypeRef(
+      id: 22,
+      name: 'WORD',
+      byteSize: 2,
+    );
+    final values = await readVariables([(parentVar, wordType)]);
+    if (values.isEmpty) return null;
+    final dynamic v = values.first.value;
+    if (v is! int) return null;
+    return ((v >> entry.bitOffset) & 1) == 1;
   }
 
   /// Resolve a UMAS symbol path (e.g. `B_F1_RC_01_Front` or
