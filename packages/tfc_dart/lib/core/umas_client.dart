@@ -85,10 +85,31 @@ class UmasClient {
 
   int? maxFrameSize;
 
-  /// Hardware ID from 0x02 (Read PLC Identification) response.
-  int? _hardwareId;
+  /// Hardware identification value parsed from the PLC ident (sub-function
+  /// 0x02) response. On the M580 this is a small board/firmware code
+  /// (e.g. `0x60b`) — it is NOT the project-level hardware ID that Data
+  /// Dictionary (0x26) requests need. See [_projectHardwareId] for the
+  /// value used by ReadVariable / WriteVariable / DD requests.
+  ///
+  /// Kept for diagnostic logging only. Cleared by [_resetHardwareIdentifiers].
+  int? _plcIdHardwareId;
 
-  /// Memory block index from 0x02 response, used in 0x26 payloads.
+  /// Project-level hardware ID parsed from memory block 0x30 (read during
+  /// the init sequence by [_readProjectBlock]). On the M580 this is a
+  /// large 32-bit value (e.g. `0x10c3b4e8`). Used by [_build0x26Payload]
+  /// for every Data Dictionary (0x26) request — ReadVariable,
+  /// WriteVariable, and DD02/DD03 traversal.
+  ///
+  /// Previously this and [_plcIdHardwareId] were stored in a single
+  /// `_hardwareId` field; the two readers (`_readPlcId` and
+  /// `_readProjectBlock`) wrote different semantic values to it, which
+  /// produced misleading log noise on every re-pair and risked DD
+  /// requests using the wrong ID between the two reads.
+  int? _projectHardwareId;
+
+  /// Memory block index from the 0x30 project block (or from 0x02 as a
+  /// fallback before the project block has been read). Used in 0x26
+  /// payloads.
   int? _index;
 
   /// Block CRC checksums from the last PlcStatus (0x04) response.
@@ -104,6 +125,16 @@ class UmasClient {
 
   /// Project-level CRC for ReadVariable / WriteVariable. See [_projectCrc].
   int? get projectCrc => _projectCrc;
+
+  /// PLC-ident hardware code, as parsed from sub-function 0x02. See
+  /// [_plcIdHardwareId]. Exposed for diagnostic tooling and Fix B tests.
+  @visibleForTesting
+  int? get plcIdHardwareId => _plcIdHardwareId;
+
+  /// Project-level hardware ID, as parsed from memory block 0x30. See
+  /// [_projectHardwareId]. Exposed for diagnostic tooling and Fix B tests.
+  @visibleForTesting
+  int? get projectHardwareId => _projectHardwareId;
 
   /// CRCs from the previous successful PlcStatus poll, used for change detection.
   /// Null until the first successful readPlcStatus() call.
@@ -510,7 +541,10 @@ class UmasClient {
       index = pd.getUint16(7, Endian.little);
     }
 
-    _hardwareId = hardwareId;
+    // Fix B: store the PLC-ident hardware code in its own field. Data
+    // Dictionary requests use [_projectHardwareId] (from memory block
+    // 0x30), populated by _readProjectBlock during the init sequence.
+    _plcIdHardwareId = hardwareId;
     _index = index;
     _setState(UmasSessionState.identified);
 
@@ -627,13 +661,18 @@ class UmasClient {
       projectCrc = (hash1 + hash2) & 0xFFFFFFFF;
     }
 
+    // Fix B: log the previous PROJECT hardware ID (not the PLC-ident one)
+    // so the "was:" hint actually compares like-for-like. Previously the
+    // field was shared, so this line printed the readPlcId value on every
+    // re-pair regardless of the real prior project hardware ID.
     _log.i('Project block 0x30: index=$projectIndex, '
         'hardwareId=0x${projectHardwareId.toRadixString(16)}, '
         'projectCrc=${projectCrc == null ? 'n/a' : '0x${projectCrc.toRadixString(16)}'} '
-        '(was: index=${_index}, hwId=0x${(_hardwareId ?? 0).toRadixString(16)})');
+        '(was: index=${_index}, '
+        'projectHwId=0x${(_projectHardwareId ?? 0).toRadixString(16)})');
 
     _index = projectIndex;
-    _hardwareId = projectHardwareId;
+    _projectHardwareId = projectHardwareId;
     _projectCrc = projectCrc;
   }
 
@@ -808,7 +847,15 @@ class UmasClient {
     final bd = ByteData(includeBlank ? 13 : 11);
     bd.setUint16(0, recordType, Endian.little);
     bd.setUint8(2, _index ?? 0);
-    bd.setUint32(3, _hardwareId ?? 0, Endian.little);
+    // Fix B: Data Dictionary requests need the PROJECT-level hardware ID
+    // (from memory block 0x30). The init sequence calls _readProjectBlock
+    // so this is normally non-null by the time 0x26 requests fire. Fall
+    // back to the readPlcId-level value when block 0x30 was unavailable
+    // — this matches the long-standing "using readPlcId values for DD
+    // requests" log inside _readProjectBlock and preserves the pre-Fix-B
+    // behaviour against PLCs that don't expose block 0x30.
+    bd.setUint32(
+        3, _projectHardwareId ?? _plcIdHardwareId ?? 0, Endian.little);
     bd.setUint16(7, blockNo, Endian.little);
     bd.setUint16(9, offset, Endian.little);
     if (includeBlank) {
@@ -1453,7 +1500,7 @@ class UmasClient {
   void _handleSessionError() {
     _log.i('UMAS session invalidated, resetting to uninitialized');
     _pairingKey = 0x00;
-    _hardwareId = null;
+    _resetHardwareIdentifiers();
     _index = null;
     maxFrameSize = null;
     _previousCrcs = null;
@@ -1484,6 +1531,13 @@ class UmasClient {
     _persistentArrayCache.clear();
     _symbolCacheBuilt = false;
     _symbolCacheProjectCrc = null;
+  }
+
+  /// Fix B: Clear both hardware-ID fields. Called from [_handleSessionError]
+  /// and any other path that needs to reset the identification cache.
+  void _resetHardwareIdentifiers() {
+    _plcIdHardwareId = null;
+    _projectHardwareId = null;
   }
 
   /// Public hook for callers that detect a project change (e.g. a poll
