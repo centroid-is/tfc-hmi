@@ -23,10 +23,10 @@ import 'dart:typed_data';
 
 import 'package:tfc_dart/core/umas_types.dart';
 
-/// Wire-format layout enum. Public (re-exported via static fields on
-/// [UmasBitAliasMap]) but only meaningfully constructed through the
-/// `bitArrayLayout*` constants — the type itself is private.
-enum _BitArrayLayout {
+/// Wire-format layout of an `ARRAY[..] OF BOOL` on the Schneider UMAS
+/// catalog. Re-exported via the `bitArrayLayout*` static fields on
+/// [UmasBitAliasMap] for ergonomic call-sites.
+enum BitArrayLayout {
   /// 16 BOOLs packed per 2-byte WORD; `bitOffset = i % 16`,
   /// `parentByteOffset += (i ~/ 16) * 2`.
   packedBits16,
@@ -142,8 +142,8 @@ class UmasBitAliasMap {
   ///     `ARRAY[..] OF BOOL` fields inside DFB instances — see
   ///     `Elevator.BMEP58_ECPU_EXT.DROP_HEALTH` whose array `byteSize`
   ///     equals the element count (31 → 31 bytes).
-  static const bitArrayLayoutPackedBits16 = _BitArrayLayout.packedBits16;
-  static const bitArrayLayoutBytePerBool = _BitArrayLayout.bytePerBool;
+  static const bitArrayLayoutPackedBits16 = BitArrayLayout.packedBits16;
+  static const bitArrayLayoutBytePerBool = BitArrayLayout.bytePerBool;
 
   /// Expand a single `ARRAY[..] OF BOOL` definition (decoded from a DD02
   /// short record via [UmasArrayTypeDefinition.tryParse]) into
@@ -173,7 +173,7 @@ class UmasBitAliasMap {
     required int parentBlock,
     required int parentByteOffset,
     required String aliasPrefix,
-    _BitArrayLayout layout = _BitArrayLayout.bytePerBool,
+    BitArrayLayout layout = BitArrayLayout.bytePerBool,
   }) {
     if (definition.elementTypeId != 0x0001) return const [];
     if (definition.dimensions.length != 1) return const [];
@@ -186,11 +186,11 @@ class UmasBitAliasMap {
       final int byteOff;
       final int bit;
       switch (layout) {
-        case _BitArrayLayout.packedBits16:
+        case BitArrayLayout.packedBits16:
           byteOff = parentByteOffset + (i ~/ 16) * 2;
           bit = i % 16;
           break;
-        case _BitArrayLayout.bytePerBool:
+        case BitArrayLayout.bytePerBool:
           byteOff = parentByteOffset + i;
           bit = 0;
           break;

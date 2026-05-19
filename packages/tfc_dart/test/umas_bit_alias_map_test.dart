@@ -1,7 +1,7 @@
-/// Tests for [UmasBitAliasMap] — pure data, no network.
-///
-/// Source of truth for the data model used by [UmasBitAliasDecoder]
-/// and the `bit-aliases` CLI subcommand.
+// Tests for UmasBitAliasMap — pure data, no network.
+//
+// Source of truth for the data model used by UmasBitAliasDecoder
+// and the `bit-aliases` CLI subcommand.
 import 'package:test/test.dart';
 import 'package:tfc_dart/core/umas_bit_alias_map.dart';
 

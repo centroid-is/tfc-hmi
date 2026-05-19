@@ -1,9 +1,9 @@
-/// Tests for [UmasBitAliasDecoder] — synchronous bit extraction.
-///
-/// The decoder is intentionally trivial (single bit-shift) but the
-/// shape of the API matters for the parallel Conveyor agent: it
-/// consumes [BitAliasDecoder.decodeBit] and must see a stable
-/// `(int parentWordValue, String aliasName) -> bool?` signature.
+// Tests for UmasBitAliasDecoder — synchronous bit extraction.
+//
+// The decoder is intentionally trivial (single bit-shift) but the
+// shape of the API matters for the parallel Conveyor agent: it
+// consumes BitAliasDecoder.decodeBit and must see a stable
+// `(int parentWordValue, String aliasName) -> bool?` signature.
 import 'package:test/test.dart';
 import 'package:tfc_dart/core/umas_bit_alias.dart';
 import 'package:tfc_dart/core/umas_bit_alias_map.dart';

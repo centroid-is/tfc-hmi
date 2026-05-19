@@ -1,17 +1,16 @@
-/// Fixture-based parsing tests for the DD02 12-byte short array records
-/// returned for IDX 0x1B..0x23 on the live M580 at 192.168.112.159.
-///
-/// Source: `/tmp/bitalias-swarm-v2/trailer-probe-raw.json` (Phase 7 of the
-/// swarm3-trailer probe). The records below are byte-for-byte copies of
-/// what the M580 actually sent — locking them in as a regression fixture
-/// guards against silent parser drift.
-///
-/// The parser under test is the existing
-/// [UmasArrayTypeDefinition.tryParse], which already understands the
-/// 12-byte wire shape. These tests prove the BOOL-array records this
-/// task targets are decoded with the right [classId], [elementTypeId],
-/// startIndex, and upperBound — the four fields the
-/// [UmasBitAliasMap] builder needs to emit per-bit entries.
+// Fixture-based parsing tests for the DD02 12-byte short array records
+// returned for IDX 0x1B..0x23 on the live M580 at 192.168.112.159.
+//
+// Source: `/tmp/bitalias-swarm-v2/trailer-probe-raw.json` (Phase 7 of the
+// swarm3-trailer probe). The records below are byte-for-byte copies of
+// what the M580 actually sent — locking them in as a regression fixture
+// guards against silent parser drift.
+//
+// The parser under test is the existing UmasArrayTypeDefinition.tryParse,
+// which already understands the 12-byte wire shape. These tests prove the
+// BOOL-array records this task targets are decoded with the right
+// classId, elementTypeId, startIndex, and upperBound — the four fields the
+// UmasBitAliasMap builder needs to emit per-bit entries.
 import 'dart:typed_data';
 
 import 'package:test/test.dart';
