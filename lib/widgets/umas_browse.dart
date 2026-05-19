@@ -81,12 +81,7 @@ class UmasBrowseDataSource implements BrowseDataSource {
           value = '${typed.first.value}';
         }
       } catch (e) {
-        // JOB-A (v1.1): never surface raw exception text (e.g. "Buffer
-        // underflow: ...") in the read-out — that's how the operator sees
-        // the literal word "underflow" in the UMAS browse dialog. Render
-        // a neutral placeholder; the structured exception is still
-        // available via standard error reporting / logs for diagnostics.
-        value = '—';
+        value = 'read error: $e';
       }
     }
     return BrowseNodeDetail(
