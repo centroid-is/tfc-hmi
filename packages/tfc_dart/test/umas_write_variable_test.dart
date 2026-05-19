@@ -492,12 +492,17 @@ void main() {
       final bd = ByteData.sublistView(bytes);
       expect(bd.getUint16(1, Endian.little), 1);
 
-      // Per the Schneider byte-addressing fix in fromVariable, the byte
-      // address (9) lives in the `offset` field (bytes 5-6), not in
-      // baseOffset (bytes 3-4). baseOffset holds the high half of the
-      // address (here 0).
-      expect(bd.getUint16(3, Endian.little), 0);
-      expect(bd.getUint16(5, Endian.little), 9);
+      // SCHNEIDER WRITE-PATH ADDRESS SWAP (v1.1.x): the live M580 at
+      // 192.168.112.159 rejects writes whose paged address is laid out
+      // the same way as the read path (status 0x94). Plc4j's Python
+      // implementation (`UmasVariables.py:108-126`) swaps the two
+      // fields when building the write reference — `base_offset` gets
+      // the low byte, `offset` gets the high byte. We match that.
+      //
+      // For byte address 9: low=9 lands in baseOffset (bytes 3-4) and
+      // high=0 lands in offset (bytes 5-6).
+      expect(bd.getUint16(3, Endian.little), 9);
+      expect(bd.getUint16(5, Endian.little), 0);
 
       // data: 42 as int16 LE
       expect(bd.getInt16(7, Endian.little), 42);

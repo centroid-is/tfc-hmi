@@ -1131,13 +1131,36 @@ class VariableWriteRef {
 
     final encodedData = encodeVariableValue(value, dataType);
 
-    // Per the Schneider paged-address convention (see VariableReadRef):
-    // baseOffset is the 256-byte page index, offset is the low byte.
+    // SCHNEIDER WRITE-PATH ADDRESS SWAP (v1.1.x, M580-verified):
+    //
+    // For FC 0x22 (read), `baseOffset` carries the high byte of the paged
+    // address and `offset` carries the low byte — same convention as
+    // `VariableReadRef.fromVariable`. The mspec at
+    // `umas-v1.mspec:427-434` matches this layout.
+    //
+    // For FC 0x23 (write), the live M580 at 192.168.112.159 *rejects*
+    // the same paging order with status 0x94 ("address out of range") —
+    // even though plc4j's mspec at `umas-v1.mspec:440-449` documents the
+    // write reference as if the two fields had the same meaning. The
+    // reference Python implementation (`plc4j-sources/UmasVariables.py`
+    // lines 108-126) however *swaps* the two fields when building the
+    // write reference:
+    //
+    //   VariableWriteRequestReference(
+    //     base_offset=self.offset,     // low byte goes here
+    //     offset=self.base_offset,     // high byte goes here
+    //     ...)
+    //
+    // Switching to the swapped layout makes M580 accept the write
+    // (verified end-to-end against `FB_S_F2_OrdElev.p_xHmiButton` —
+    // block 0xe9, offset 0x38, BOOL — read-after-write reflects the
+    // new value). This is the only difference between a write that
+    // returns 0xFE 0x01 0x94 0x94 and one that lands.
     final addr = variable.offset;
     return VariableWriteRef(
       blockNo: variable.blockNo,
-      baseOffset: addr >> 8,
-      offset: addr & 0xFF,
+      baseOffset: addr & 0xFF,
+      offset: addr >> 8,
       dataSizeIndex: dataSizeIndexFromByteSize(
           isArray
               ? (UmasDataTypes.builtIn[dataType.dataType]?.byteSize ??
