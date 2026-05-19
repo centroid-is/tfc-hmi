@@ -84,6 +84,12 @@ List<Map<String, dynamic>> _childrenToJson(List<ElevatorChildEntry> list) =>
 // ElevatorChildEntry — locked wrapper schema
 // ---------------------------------------------------------------------------
 
+// Monotonic suffix appended to ElevatorChildEntry ids. Windows clock
+// resolution (~15ms) can cause back-to-back DateTime.now() calls to
+// return identical microseconds; the suffix guarantees uniqueness
+// regardless of clock granularity.
+int _nextElevatorChildEntryIdSuffix = 0;
+
 /// Wrapper for a child asset attached to an Elevator's platform.
 ///
 /// Schema locked in Phase 2 (ROADMAP key decision) from day one — even
@@ -94,8 +100,9 @@ List<Map<String, dynamic>> _childrenToJson(List<ElevatorChildEntry> list) =>
 @JsonSerializable(explicitToJson: true)
 class ElevatorChildEntry {
   /// Stable identity for ValueKey use (Pitfall 1 — Phase 3).
-  /// Defaults to microsecond-resolution timestamp; switch to
-  /// `package:uuid` only if a real collision risk surfaces.
+  /// Defaults to a microsecond timestamp suffixed with a monotonic
+  /// counter — the suffix prevents collisions on Windows where
+  /// DateTime resolution is coarse.
   String id;
 
   /// Lateral position on the platform (0.0 = far left, 1.0 = far
@@ -118,7 +125,7 @@ class ElevatorChildEntry {
     this.offsetX = 0.5,
     this.offsetY = 0.0,
     required this.child,
-  }) : id = id ?? DateTime.now().microsecondsSinceEpoch.toString();
+  }) : id = id ?? '${DateTime.now().microsecondsSinceEpoch}-${_nextElevatorChildEntryIdSuffix++}';
 
   factory ElevatorChildEntry.fromJson(Map<String, dynamic> json) =>
       _$ElevatorChildEntryFromJson(json);
