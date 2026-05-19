@@ -14,9 +14,11 @@ import 'package:tfc/widgets/browse_panel.dart';
 class FakeBrowseDataSource implements BrowseDataSource {
   final Map<String, List<BrowseNode>> _children;
   final Map<String, BrowseNodeDetail> _details;
+  final Map<String, List<BrowseNode>> _resolveChains;
   int fetchRootsCallCount = 0;
   int fetchChildrenCallCount = 0;
   int fetchDetailCallCount = 0;
+  int resolvePathCallCount = 0;
 
   /// When non-null, fetchRoots() will await this completer instead of
   /// returning immediately. Call [rootsCompleter]!.complete() from the test
@@ -27,12 +29,14 @@ class FakeBrowseDataSource implements BrowseDataSource {
     required List<BrowseNode> roots,
     Map<String, List<BrowseNode>>? children,
     Map<String, BrowseNodeDetail>? details,
+    Map<String, List<BrowseNode>>? resolveChains,
     this.rootsCompleter,
   })  : _children = {
           '__roots__': roots,
           ...?children,
         },
-        _details = details ?? {};
+        _details = details ?? {},
+        _resolveChains = resolveChains ?? const {};
 
   @override
   Future<List<BrowseNode>> fetchRoots() async {
@@ -52,6 +56,12 @@ class FakeBrowseDataSource implements BrowseDataSource {
     fetchDetailCallCount++;
     return _details[node.id] ?? const BrowseNodeDetail();
   }
+
+  @override
+  Future<List<BrowseNode>?> resolvePath(String targetId) async {
+    resolvePathCallCount++;
+    return _resolveChains[targetId];
+  }
 }
 
 class FailingBrowseDataSource implements BrowseDataSource {
@@ -69,6 +79,9 @@ class FailingBrowseDataSource implements BrowseDataSource {
   Future<BrowseNodeDetail> fetchDetail(BrowseNode node) async {
     throw Exception('Connection refused');
   }
+
+  @override
+  Future<List<BrowseNode>?> resolvePath(String targetId) async => null;
 }
 
 // ---------------------------------------------------------------------------
@@ -408,6 +421,179 @@ void main() {
             (w) => w is FaIcon && w.icon == FontAwesomeIcons.tag),
         findsOneWidget,
       );
+    });
+  });
+
+  // -----------------------------------------------------------------
+  // initialPath — pre-selection of an existing binding.
+  //
+  // Goal: when an operator re-opens Browse on a key that already has
+  // a value bound, the dialog opens with that path SELECTED and the
+  // tree EXPANDED so the leaf is visible — no manual re-navigation.
+  // -----------------------------------------------------------------
+  group('BrowsePanel initialPath', () {
+    testWidgets('expands ancestors and selects leaf when chain resolves',
+        (tester) async {
+      const leaf2 = BrowseNode(
+        id: 'Folder.A.Leaf2',
+        displayName: 'Leaf2',
+        type: BrowseNodeType.variable,
+      );
+      const leaf1 = BrowseNode(
+        id: 'Folder.A.Leaf1',
+        displayName: 'Leaf1',
+        type: BrowseNodeType.variable,
+      );
+      const folderA = BrowseNode(
+        id: 'Folder.A',
+        displayName: 'A',
+        type: BrowseNodeType.folder,
+      );
+      const folderB = BrowseNode(
+        id: 'Folder.B',
+        displayName: 'B',
+        type: BrowseNodeType.folder,
+      );
+      const rootFolder = BrowseNode(
+        id: 'Folder',
+        displayName: 'Folder',
+        type: BrowseNodeType.folder,
+      );
+      final ds = FakeBrowseDataSource(
+        roots: [rootFolder],
+        children: {
+          'Folder': [folderA, folderB],
+          'Folder.A': [leaf1, leaf2],
+        },
+        details: {
+          'Folder.A.Leaf2': const BrowseNodeDetail(value: '99'),
+        },
+        resolveChains: {
+          'Folder.A.Leaf2': const [rootFolder, folderA, leaf2],
+        },
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: BrowsePanel(
+              dataSource: ds,
+              serverAlias: 'TestServer',
+              initialPath: 'Folder.A.Leaf2',
+              onSelected: (_) {},
+              onCancelled: () {},
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // Tree is expanded down to the leaf: Folder, A, and Leaf2 all
+      // visible. (Names also appear in the breadcrumb post-selection,
+      // so use findsAtLeast(1) for ancestors.)
+      expect(find.text('Folder'), findsAtLeast(1));
+      expect(find.text('A'), findsAtLeast(1));
+      expect(find.text('Leaf2'), findsAtLeast(1));
+
+      // Detail strip shows the leaf's value — confirms a detail fetch
+      // was triggered post-resolve.
+      expect(find.byType(VariableDetailStrip), findsOneWidget);
+      expect(find.text('99'), findsOneWidget);
+
+      // Select button is enabled (variable selected).
+      final selectButton =
+          tester.widget<TextButton>(find.widgetWithText(TextButton, 'Select'));
+      expect(selectButton.onPressed, isNotNull);
+
+      // resolvePath was hit exactly once.
+      expect(ds.resolvePathCallCount, 1);
+    });
+
+    testWidgets(
+        'null initialPath leaves the tree collapsed and nothing selected',
+        (tester) async {
+      const folderA = BrowseNode(
+        id: 'Folder.A',
+        displayName: 'A',
+        type: BrowseNodeType.folder,
+      );
+      const rootFolder = BrowseNode(
+        id: 'Folder',
+        displayName: 'Folder',
+        type: BrowseNodeType.folder,
+      );
+      final ds = FakeBrowseDataSource(
+        roots: [rootFolder],
+        children: {
+          'Folder': [folderA],
+        },
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: BrowsePanel(
+              dataSource: ds,
+              serverAlias: 'TestServer',
+              onSelected: (_) {},
+              onCancelled: () {},
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // Root visible (the tree row), child folder NOT expanded.
+      expect(find.text('Folder'), findsAtLeast(1));
+      expect(find.text('A'), findsNothing);
+
+      // No detail strip, no selection.
+      expect(find.byType(VariableDetailStrip), findsNothing);
+      final selectButton =
+          tester.widget<TextButton>(find.widgetWithText(TextButton, 'Select'));
+      expect(selectButton.onPressed, isNull);
+
+      // resolvePath was NOT called when initialPath is null.
+      expect(ds.resolvePathCallCount, 0);
+    });
+
+    testWidgets(
+        'unresolvable initialPath surfaces a stale-binding hint without '
+        'crashing', (tester) async {
+      const rootFolder = BrowseNode(
+        id: 'Folder',
+        displayName: 'Folder',
+        type: BrowseNodeType.folder,
+      );
+      final ds = FakeBrowseDataSource(
+        roots: [rootFolder],
+        // No resolveChain registered for the requested path → returns null.
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: BrowsePanel(
+              dataSource: ds,
+              serverAlias: 'TestServer',
+              initialPath: 'Nonexistent.Path',
+              onSelected: (_) {},
+              onCancelled: () {},
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // Tree still renders, no crash, no selection.
+      expect(find.text('Folder'), findsAtLeast(1));
+      expect(find.byType(VariableDetailStrip), findsNothing);
+
+      // Stale-binding hint surfaces the requested id.
+      expect(find.textContaining('Nonexistent.Path'), findsOneWidget);
+
+      // resolvePath was called exactly once.
+      expect(ds.resolvePathCallCount, 1);
     });
   });
 

@@ -298,6 +298,36 @@ class UmasBrowseDataSource implements BrowseDataSource {
   UmasVariableTreeNode? _findTreeNode(String path) {
     return _pathIndex?[path];
   }
+
+  /// Pre-selection support: rebuild the chain of ancestors from the
+  /// dotted UMAS path. Returns null when the path is unknown to the
+  /// cached tree (stale binding) — the panel surfaces that as a hint.
+  ///
+  /// Tree paths look like `App.GVL.temperature`. The chain is the
+  /// successive prefixes: `App`, `App.GVL`, `App.GVL.temperature`.
+  @override
+  Future<List<BrowseNode>?> resolvePath(String targetId) async {
+    if (targetId.isEmpty) return null;
+    // Ensure roots (and the path index) are loaded so a freshly-opened
+    // dialog can resolve without an explicit prior fetchRoots.
+    _tree ??= await _client.browse();
+    if (_pathIndex == null) _buildPathIndex(_tree!);
+
+    final leaf = _pathIndex?[targetId];
+    if (leaf == null) return null;
+
+    final segments = targetId.split('.');
+    final chain = <BrowseNode>[];
+    final builder = StringBuffer();
+    for (var i = 0; i < segments.length; i++) {
+      if (i > 0) builder.write('.');
+      builder.write(segments[i]);
+      final node = _pathIndex?[builder.toString()];
+      if (node == null) return null;
+      chain.add(_toBrowseNode(node));
+    }
+    return chain;
+  }
 }
 
 /// Maps UMAS exceptions to user-friendly error info.
@@ -322,6 +352,7 @@ Future<BrowseNode?> browseUmasNode({
   required BuildContext context,
   required StateMan stateMan,
   required String? serverAlias,
+  String? initialPath,
 }) async {
   // Find the ModbusDeviceClientAdapter for this server alias.
   // StateMan exposes `deviceClients: List<DeviceClient>`.
@@ -385,5 +416,6 @@ Future<BrowseNode?> browseUmasNode({
     dataSource: dataSource,
     serverAlias: serverAlias ?? '',
     errorMapper: _umasErrorMapper,
+    initialPath: initialPath,
   );
 }

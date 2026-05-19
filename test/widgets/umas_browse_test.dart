@@ -774,6 +774,45 @@ void main() {
       expect(detail.value, isNull);
       expect(detail.description, 'App.EmptyA');
     });
+
+    // -----------------------------------------------------------------
+    // resolvePath — pre-selection support for opening Browse with the
+    // current value already selected and tree expanded down to it.
+    // -----------------------------------------------------------------
+
+    test('resolvePath returns root→leaf chain for a known dotted path',
+        () async {
+      fakeClient = FakeUmasClient(sampleTree());
+      dataSource = UmasBrowseDataSource(fakeClient);
+
+      final chain = await dataSource.resolvePath('App.GVL.temperature');
+
+      expect(chain, isNotNull);
+      expect(chain!.map((n) => n.id).toList(),
+          ['App', 'App.GVL', 'App.GVL.temperature'],
+          reason: 'chain is ordered root→leaf with each prefix resolved');
+      expect(chain.last.displayName, 'temperature');
+      expect(chain.last.type, BrowseNodeType.variable);
+    });
+
+    test('resolvePath returns null for an unknown path (stale binding)',
+        () async {
+      fakeClient = FakeUmasClient(sampleTree());
+      dataSource = UmasBrowseDataSource(fakeClient);
+
+      final chain = await dataSource.resolvePath('App.Missing.var');
+
+      expect(chain, isNull,
+          reason: 'unknown leaf must not produce a chain — caller falls '
+              'back to empty-selection state');
+    });
+
+    test('resolvePath returns null for empty input', () async {
+      fakeClient = FakeUmasClient(sampleTree());
+      dataSource = UmasBrowseDataSource(fakeClient);
+
+      expect(await dataSource.resolvePath(''), isNull);
+    });
   });
 
   group('ModbusConfig.umasEnabled serialization', () {

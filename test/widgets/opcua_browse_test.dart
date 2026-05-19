@@ -629,6 +629,63 @@ void main() {
       expect(result.endsWith('...'), true);
     });
   });
+
+  // -----------------------------------------------------------------
+  // resolvePath — pre-selection support for OPC-UA. Walks the address
+  // space looking for the chain to the target NodeId, using prefix
+  // matching under the dotted `ns=X;s=A.B.C` convention.
+  // -----------------------------------------------------------------
+  group('OpcUaBrowseDataSource.resolvePath', () {
+    test('returns root→leaf chain via dotted prefix walking', () async {
+      // Tree: Objects → ns=2;s=GVL → ns=2;s=GVL.Motor → ns=2;s=GVL.Motor.speed
+      final client = FakeClientApi(
+        browseResults: {
+          NodeId.objectsFolder: [_object('GVL', id: 'GVL')],
+          _nodeId(2, 'GVL'): [_object('Motor', id: 'GVL.Motor')],
+          _nodeId(2, 'GVL.Motor'): [
+            _variable('speed', id: 'GVL.Motor.speed'),
+          ],
+        },
+      );
+      final ds = OpcUaBrowseDataSource(client);
+
+      final chain = await ds.resolvePath('ns=2;s=GVL.Motor.speed');
+
+      expect(chain, isNotNull);
+      expect(chain!.map((n) => n.id).toList(), [
+        'ns=2;s=GVL',
+        'ns=2;s=GVL.Motor',
+        'ns=2;s=GVL.Motor.speed',
+      ]);
+      expect(chain.last.type, BrowseNodeType.variable);
+    });
+
+    test('returns null when target is unknown', () async {
+      final client = FakeClientApi(
+        browseResults: {
+          NodeId.objectsFolder: [_object('OnlyThis', id: 'OnlyThis')],
+          _nodeId(2, 'OnlyThis'): const [],
+        },
+      );
+      final ds = OpcUaBrowseDataSource(client);
+
+      final chain = await ds.resolvePath('ns=2;s=Missing.Path');
+
+      expect(chain, isNull,
+          reason:
+              'unresolvable target surfaces as null — caller falls back '
+              'to empty-selection state');
+    });
+
+    test('returns null for empty input without browsing', () async {
+      final client = FakeClientApi();
+      final ds = OpcUaBrowseDataSource(client);
+
+      expect(await ds.resolvePath(''), isNull);
+      expect(client.browseCallCount, 0,
+          reason: 'empty target short-circuits before hitting the wire');
+    });
+  });
 }
 
 // ---------------------------------------------------------------------------
