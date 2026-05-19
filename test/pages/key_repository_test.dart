@@ -540,6 +540,53 @@ void main() {
       await tester.tap(find.text('main_server').last);
       await tester.pumpAndSettle();
     });
+
+    // Regression: editing an expanded key's name used to collapse the
+    // card on every keystroke because the card's widget identity was
+    // `ValueKey(entry.key)` — i.e. tied to the mutable name. Renaming
+    // changed the key, Flutter saw a brand-new widget, threw away the
+    // ExpansionTile's expanded state. With a stable GlobalKey
+    // (migrated old→new inside `_renameKey`), the same State sticks
+    // around through the rename so the card stays expanded.
+    testWidgets(
+        'editing the key name in an expanded card keeps the card expanded',
+        (tester) async {
+      await tester.pumpWidget(buildTestableKeyRepository(
+        keyMappings: KeyMappings(nodes: {
+          'before_rename': KeyMappingEntry(
+            opcuaNode: OpcUANodeConfig(namespace: 1, identifier: 'OldNode'),
+          ),
+        }),
+      ));
+      await tester.pumpAndSettle();
+
+      // Expand the card.
+      await tester.tap(find.text('before_rename'));
+      await tester.pumpAndSettle();
+
+      // Sanity: the expanded section is showing the OPC UA fields.
+      expect(find.widgetWithText(TextField, 'before_rename'), findsOneWidget,
+          reason:
+              'The expanded card should expose the Key Name TextField with the current name.');
+      expect(find.widgetWithText(TextField, 'OldNode'), findsOneWidget,
+          reason:
+              'Identifier field belongs to the expanded section — pre-rename baseline.');
+
+      // Rename without pressing Enter; the bug fires per keystroke.
+      final keyNameField =
+          find.widgetWithText(TextField, 'before_rename');
+      await tester.enterText(keyNameField, 'after_rename');
+      await tester.pumpAndSettle();
+
+      // The TextField label changes (it now matches the new name), but
+      // the expanded section must still be visible — the Identifier
+      // field is the canary that proves expansion state survived.
+      expect(find.widgetWithText(TextField, 'after_rename'), findsOneWidget,
+          reason: 'Renamed key name should reflect in the title/field.');
+      expect(find.widgetWithText(TextField, 'OldNode'), findsOneWidget,
+          reason:
+              'Card must still be expanded after rename — Identifier field is only visible while expanded.');
+    });
   });
 
   // ==================== Group 5: Collection Configuration ====================

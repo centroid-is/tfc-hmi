@@ -666,11 +666,20 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
                     itemBuilder: (context, index) {
                       final entry = filtered[index];
                       final isNew = entry.key == _newlyAddedKey;
-                      if (isNew) {
-                        _cardKeys.putIfAbsent(entry.key, () => GlobalKey());
-                      }
+                      // Every card gets a stable GlobalKey, not just
+                      // newly-added ones. Pre-fix the widget key was
+                      // `ValueKey(entry.key)` for existing cards, which
+                      // means the key name itself was the widget
+                      // identity — so renaming a key destroyed and
+                      // rebuilt the card, collapsing the ExpansionTile
+                      // on every keystroke. `_renameKey` already
+                      // migrates the GlobalKey from old → new name, so
+                      // assigning a GlobalKey upfront keeps the same
+                      // State (and thus the ExpansionTile's expansion
+                      // state) alive across a rename.
+                      _cardKeys.putIfAbsent(entry.key, () => GlobalKey());
                       return _KeyMappingCard(
-                        key: _cardKeys[entry.key] ?? ValueKey(entry.key),
+                        key: _cardKeys[entry.key],
                         keyName: entry.key,
                         entry: entry.value,
                         serverAliases: _serverAliases,
