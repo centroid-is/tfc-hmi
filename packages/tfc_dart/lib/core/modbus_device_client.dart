@@ -224,25 +224,48 @@ class ModbusDeviceClientAdapter implements DeviceClient {
   /// listener also triggers the MonitorPlc table build.
   void _initUmasLifecycle() {
     if (!umasEnabled) return;
+    // Helper: fire the appropriate pair/build path for a connected wrapper.
+    // Hoisted so we can invoke it both from the stream listener AND, below,
+    // synchronously when the wrapper is already in the connected state at
+    // the moment this adapter is constructed (hot-reload of the provider
+    // graph while the wrapper outlives the adapter; or any future construction
+    // order where `connect()` is invoked before the listener attaches).
+    void onConnected() {
+      if (_umasKeysByGroup.isEmpty) {
+        // No MonitorPlc registrations needed — just pair the session
+        // so the chip surfaces real UMAS health.
+        Future.microtask(_eagerPairUmasSession);
+      } else {
+        // The table-build path already calls `readPlcStatus` internally,
+        // which pairs the session as a side effect. No need to fire
+        // both.
+        Future.microtask(_buildUmasTableAndStartTimers);
+      }
+    }
+
     _umasConnectionSub = wrapper.connectionStream.listen((status) {
       if (status == ConnectionStatus.connected) {
-        // Defer to a microtask so listeners don't fight `_getClientWrapper`
-        // ordering on the very first connected emission.
-        if (_umasKeysByGroup.isEmpty) {
-          // No MonitorPlc registrations needed — just pair the session
-          // so the chip surfaces real UMAS health.
-          Future.microtask(_eagerPairUmasSession);
-        } else {
-          // The table-build path already calls `readPlcStatus` internally,
-          // which pairs the session as a side effect. No need to fire
-          // both.
-          Future.microtask(_buildUmasTableAndStartTimers);
-        }
+        onConnected();
       } else {
         _stopUmasTimers();
         _umasTableBuiltFor = null;
       }
     });
+
+    // v1.1.x: also fire synchronously when the wrapper is ALREADY connected
+    // at adapter-construction time. `connectionStream` is a BehaviorSubject
+    // and will replay the current value to the listener above via a
+    // microtask, but a replayed `disconnected` followed by a missed
+    // `connected` (e.g. the wrapper was already connected before this
+    // adapter existed, or a hot-reload rewired the listener after the
+    // event) would leave the UMAS session unpaired and `_umasKeysByGroup`'s
+    // MonitorPlc table never built. Cheap belt-and-suspenders: if the TCP
+    // is already up at this exact moment, kick off the pair/build path
+    // directly so the chip and operator widgets see fresh data without
+    // waiting for a reconnect.
+    if (wrapper.connectionStatus == ConnectionStatus.connected) {
+      onConnected();
+    }
   }
 
   /// v1.1.x Bug A real fix: fire `readPlcStatus()` on a freshly-
