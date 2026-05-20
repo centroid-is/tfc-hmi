@@ -49,6 +49,20 @@ void main() {
       expect(info.detail.toLowerCase(), contains('ecostruxure'));
     });
 
+    test('0x81 (M580 dialect) maps to reservation-conflict guidance', () {
+      // /tmp/umas-fuzz/fuzz-reservation.md: live M580 returns 0x81 while
+      // another HMI holds the lock. Catalog must share the 0x06 mapping
+      // so operators see the same actionable hint.
+      final info = mapUmasError(const UmasException(
+        errorCode: 0x81,
+        message: 'reservation conflict (M580)',
+      ));
+      expect(info, isNotNull);
+      expect(info!.summary, contains('0x81'));
+      expect(info.summary.toLowerCase(), contains('reservation'));
+      expect(info.detail.toLowerCase(), contains('ecostruxure'));
+    });
+
     test('0x86 maps to write-rejected guidance', () {
       final info = mapUmasError(const UmasException(
         errorCode: 0x86,

@@ -1455,12 +1455,19 @@ class UmasClient {
   ///   plain [UmasException]. These are not reservation conflicts;
   ///   they're network / framing failures and callers should not
   ///   special-case them as "another client holds the lock."
-  /// - PLC-side reservation conflict (UMAS status error byte with the
-  ///   well-known 0x06 conflict error code, or any other non-success
-  ///   status accompanied by a UMAS-error payload) → [UmasReservationException]
-  ///   so the UI/operator workflow can present a graceful "wait for
-  ///   the other client to release" affordance instead of a generic
-  ///   "something failed" red banner.
+  /// - PLC-side reservation conflict → [UmasReservationException] so the
+  ///   UI/operator workflow can present a graceful "wait for the other
+  ///   client to release" affordance instead of a generic "something
+  ///   failed" red banner. The recognized conflict byte set is:
+  ///     * `0x06` — canonical UMAS reservation-conflict code.
+  ///     * `0x81` — M580 dialect, observed live on
+  ///       192.168.112.159 (see `/tmp/umas-fuzz/fuzz-reservation.md`:
+  ///       every acquire attempt while another HMI held the lock
+  ///       returned `status=0xFD errorCode=0x81`).
+  ///   All other non-success status bytes (`0x83` Data Dictionary
+  ///   disabled, `0xC0` access denied, etc.) remain real protocol
+  ///   errors and surface as plain [UmasException] — callers MUST NOT
+  ///   special-case them as transient reservation conflicts.
   ///
   /// Uses [_withSession] to auto-initialize if not yet paired.
   Future<void> takePlcReservation() async {
@@ -1491,15 +1498,17 @@ class UmasClient {
         );
       }
 
-      // Check for UMAS-level error. The conflict-byte 0x06 ("another
-      // client holds the reservation") is the only condition that
-      // should be surfaced as UmasReservationException; other status
-      // errors (e.g. 0x83 Data Dictionary disabled, 0xC0 access
-      // denied) are real protocol errors that callers MUST NOT treat
-      // as a transient reservation conflict.
+      // Check for UMAS-level error. The recognized reservation-conflict
+      // byte set is 0x06 (canonical) and 0x81 (M580 dialect observed
+      // live on 192.168.112.159 — see
+      // `/tmp/umas-fuzz/fuzz-reservation.md`). Both surface as
+      // UmasReservationException. Other status errors (e.g. 0x83 Data
+      // Dictionary disabled, 0xC0 access denied) are real protocol
+      // errors that callers MUST NOT treat as a transient reservation
+      // conflict.
       if (pdu[2] == _statusError || pdu[2] != _statusSuccess) {
         final errorCode = pdu.length > 3 ? pdu[3] : 0;
-        if (errorCode == 0x06) {
+        if (errorCode == 0x06 || errorCode == 0x81) {
           throw UmasReservationException(
             errorCode: errorCode,
             message: 'Another client holds the PLC reservation',

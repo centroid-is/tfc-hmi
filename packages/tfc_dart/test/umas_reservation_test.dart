@@ -158,6 +158,36 @@ void main() {
     });
 
     test(
+        'throws UmasReservationException on M580 dialect conflict '
+        '(errorCode=0x81)', () async {
+      await tcp.connect();
+
+      // /tmp/umas-fuzz/fuzz-reservation.md: live M580 192.168.112.159
+      // refuses every reservation acquire while another HMI holds the
+      // lock with `status=0xFD errorCode=0x81`. Mirror the 0x06 test
+      // pattern with the M580 dialect byte so UI code that catches
+      // UmasReservationException triggers correctly.
+      final umas = UmasClient(sendFn: (request) async {
+        if (request is UmasRequest &&
+            request.umasSubFunction !=
+                UmasSubFunction.takePlcReservation.code) {
+          return tcp.send(request);
+        }
+        if (request is UmasRequest) {
+          final pdu = Uint8List.fromList([0x5A, 0x00, 0xFD, 0x81]);
+          request.internalSetFromPduResponse(pdu);
+          return ModbusResponseCode.requestSucceed;
+        }
+        return ModbusResponseCode.requestSucceed;
+      });
+
+      expect(
+        () => umas.takePlcReservation(),
+        throwsA(isA<UmasReservationException>()),
+      );
+    });
+
+    test(
         'TD-014: non-conflict status errors throw plain UmasException, not '
         'UmasReservationException', () async {
       await tcp.connect();
