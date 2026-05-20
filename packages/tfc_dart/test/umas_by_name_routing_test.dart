@@ -853,6 +853,28 @@ void main() {
       umas.invalidateSymbolCacheIfProjectChanged();
       expect(umas.symbolCacheBuilt, isTrue);
     });
+
+    test(
+        'invalidateSymbolCacheIfProjectChanged is a no-op before the symbol '
+        'cache is built (documented precondition)', () async {
+      // /tmp/umas-fuzz/fuzz-browse-stability.md observed that calling
+      // `invalidateSymbolCacheIfProjectChanged()` after only browse() +
+      // ensureBitAliasMap() silently no-ops: the method short-circuits
+      // on `!_symbolCacheBuilt`. browse() does NOT prime the symbol
+      // cache by itself — only `_ensureSymbolCache` (via lookupSymbol /
+      // readVariableByName) does. Lock that precondition into a test so
+      // future refactors don't quietly flip the flag from browse().
+      await tcp.connect();
+      final umas = UmasClient(sendFn: tcp.send);
+      await umas.readPlcStatus();
+      await umas.browse();
+      expect(umas.symbolCacheBuilt, isFalse,
+          reason: 'browse() alone must not flip _symbolCacheBuilt');
+      // No-op: would early-return on the !_symbolCacheBuilt guard.
+      umas.invalidateSymbolCacheIfProjectChanged();
+      expect(umas.symbolCacheBuilt, isFalse,
+          reason: 'invalidation is a no-op when cache not yet built');
+    });
   });
 
   // ---------------------------------------------------------------------------

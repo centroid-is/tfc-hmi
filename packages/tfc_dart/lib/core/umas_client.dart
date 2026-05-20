@@ -1682,6 +1682,25 @@ class UmasClient {
   /// Drops the symbol cache if the project CRC changed since the cache
   /// was built. Safe to call repeatedly — no-op when CRCs match.
   ///
+  /// **Precondition (fuzz-browse-stability.md):** has no effect when
+  /// the symbol cache hasn't been built yet — the method short-circuits
+  /// on `!_symbolCacheBuilt` and never compares CRCs. The cache is
+  /// built inside [_ensureSymbolCache] (driven by [lookupSymbol] /
+  /// [readVariableByName] / [writeVariableByName]) and by direct
+  /// [debugInjectSymbol] in tests; a bare [browse] does NOT flip
+  /// `_symbolCacheBuilt`. Idempotent on a not-yet-built cache.
+  ///
+  /// Practical implications:
+  /// - Production flow is fine: the first `readVariableByName` primes
+  ///   the cache, after which CRC-watch invalidation fires as expected.
+  /// - Callers that need to drop the bit-alias map at the same time
+  ///   MUST verify a symbol-lookup has happened, or call
+  ///   [_clearSymbolCache] directly (e.g. from a test drill that only
+  ///   ran [browse] + [ensureBitAliasMap]). The bit-alias map shares
+  ///   lifecycle with the symbol cache inside [_clearSymbolCache], so
+  ///   skipping the lookup leaves stale bit aliases referencing the
+  ///   previous project.
+  ///
   /// F-8 (v1.1.x): now invoked from the periodic [_projectCrcTimer]
   /// via [refreshProjectMetadata] so PLC reprograms are detected
   /// without waiting for a session-level error. On a CRC change this
