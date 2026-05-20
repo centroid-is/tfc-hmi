@@ -300,7 +300,7 @@ class _ButtonState extends ConsumerState<Button> {
         .subscribe(dk)
         .asStream()
         .asyncExpand((s) => s)
-        .map((value) => _resolveDisabled(value?.asBool ?? false))
+        .map((value) => _resolveDisabled(value.asBool))
         .startWith(_disabled);
   }
 
@@ -887,6 +887,86 @@ class _ConfigContentState extends State<_ConfigContent> {
           },
         ),
         const SizedBox(height: 16),
+
+        // ----- Disabled gate (optional) -----
+        const Text(
+          'Disabled Gate',
+          style: TextStyle(fontWeight: FontWeight.bold),
+        ),
+        const SizedBox(height: 4),
+        const Text(
+          'Bind a BOOL key whose live value makes the button '
+          'non-interactive. Leave empty to keep the button always enabled.',
+          style: TextStyle(fontSize: 12, color: Colors.grey),
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            const Text('Disabled Key'),
+            const SizedBox(width: 8),
+            Expanded(
+              child: KeyField(
+                initialValue: widget.config.disabledKey ?? '',
+                onChanged: (value) {
+                  setState(() {
+                    widget.config.disabledKey =
+                        value.isEmpty ? null : value;
+                  });
+                },
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+
+        // Polarity — only meaningful when a key is bound, but always shown
+        // so users can pre-set the intended polarity before they pick the
+        // key (mirrors the SegmentedButton pattern used by Sensor).
+        const Text('Disabled Polarity'),
+        const SizedBox(height: 4),
+        SegmentedButton<DisabledPolarity>(
+          segments: const [
+            ButtonSegment(
+              value: DisabledPolarity.disableWhenTrue,
+              label: Text('Disable when TRUE'),
+            ),
+            ButtonSegment(
+              value: DisabledPolarity.disableWhenFalse,
+              label: Text('Disable when FALSE'),
+            ),
+          ],
+          selected: {widget.config.disabledPolarity},
+          onSelectionChanged: (newSelection) {
+            setState(() {
+              widget.config.disabledPolarity = newSelection.first;
+            });
+          },
+        ),
+        const SizedBox(height: 8),
+
+        // Color swatch — only useful when a disabled key is bound (the
+        // color is never rendered otherwise), so hide it in that case to
+        // reduce visual noise.
+        if (widget.config.disabledKey != null &&
+            widget.config.disabledKey!.isNotEmpty) ...[
+          Row(
+            children: [
+              const Text('Disabled Color'),
+              const SizedBox(width: 8),
+              Expanded(
+                child: BlockPicker(
+                  pickerColor: widget.config.disabledColor,
+                  onColorChanged: (value) {
+                    setState(() {
+                      widget.config.disabledColor = value;
+                    });
+                  },
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+        ],
       ],
     );
   }
