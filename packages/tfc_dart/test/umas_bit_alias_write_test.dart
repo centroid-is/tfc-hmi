@@ -256,6 +256,15 @@ void main() {
         ),
       ));
       umas.debugSetProjectCrc(0xCAFEBABE);
+      // writeVariable refuses to send until block CRCs are seeded
+      // (normally populated by readPlcStatus). _projectCrc takes
+      // precedence on the wire, so the actual contents here don't
+      // matter — only that the guard is satisfied.
+      umas.debugSetBlockCrcs(const [0xDEADBEEF]);
+      // Mark the session as paired so _withSession short-circuits and
+      // does NOT try to drive the init handshake against our mock
+      // sendFn (which only knows how to answer writeVariable PDUs).
+      umas.debugSetSessionState(UmasSessionState.paired);
 
       await umas.writeBitAlias(aliasName, true);
 
@@ -324,6 +333,8 @@ void main() {
             const UmasDataTypeRef(id: 1, name: 'BOOL', byteSize: 1),
       ));
       umas.debugSetProjectCrc(0xCAFEBABE);
+      umas.debugSetBlockCrcs(const [0xDEADBEEF]);
+      umas.debugSetSessionState(UmasSessionState.paired);
 
       await umas.writeBitAlias(aliasName, false);
 

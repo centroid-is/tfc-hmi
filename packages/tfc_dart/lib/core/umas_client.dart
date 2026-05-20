@@ -304,6 +304,42 @@ class UmasClient {
     _setState(newState);
   }
 
+  /// Test hook: inject a fully-built [UmasBitAliasMap] directly into
+  /// the cache so [writeBitAlias] / [readBitAlias] can be exercised
+  /// without standing up a full browse against the Python stub. Marks
+  /// the map as built so [ensureBitAliasMap] short-circuits.
+  ///
+  /// Mirrors [debugInjectSymbol] for the symbol cache.
+  @visibleForTesting
+  void debugInjectBitAliasMap(UmasBitAliasMap map) {
+    _bitAliasMap = map;
+    _bitAliasMapBuilt = true;
+  }
+
+  /// Test hook: override the project CRC used by ReadVariable /
+  /// WriteVariable requests. Lets unit tests drive [writeVariable]
+  /// (and therefore [writeVariableByName] / [writeBitAlias]) without
+  /// running the full session-init handshake that normally populates
+  /// [_projectCrc] via [_readProjectBlock].
+  @visibleForTesting
+  void debugSetProjectCrc(int crc) {
+    _projectCrc = crc;
+  }
+
+  /// Test hook: override the block-CRC list. [writeVariable] guards on
+  /// `_blockCrcs != null && _blockCrcs.isNotEmpty` to refuse writes
+  /// before the first [readPlcStatus] response; this hook lets unit
+  /// tests bypass that guard without driving a real status poll.
+  ///
+  /// On the wire, [writeVariable] prefers [_projectCrc] over
+  /// `blockCrcs[0]` — so for tests that also set [debugSetProjectCrc]
+  /// the contents here are only used to clear the guard, not on the
+  /// PDU itself.
+  @visibleForTesting
+  void debugSetBlockCrcs(List<int> crcs) {
+    _blockCrcs = List<int>.from(crcs);
+  }
+
   UmasClient({
     required this.sendFn,
     this.unitId,
@@ -1909,6 +1945,74 @@ class UmasClient {
     final dynamic v = values.first.value;
     if (v is! int) return null;
     return ((v >> entry.bitOffset) & 1) == 1;
+  }
+
+  /// Convenience: write a single bit-alias by canonical name.
+  ///
+  /// Mirrors [readBitAlias] on the write side. Looks the alias up in
+  /// [bitAliases] (auto-building the map on first call), then dispatches
+  /// by layout:
+  ///
+  ///   * `bitOffset == 0` — **byte-per-bool** (Schneider M580 default
+  ///     for `ARRAY[..] OF BOOL`): rides the standard BOOL write path
+  ///     via [writeVariableByName]. The same symbol resolution as the
+  ///     read path produces a one-byte address;
+  ///     [encodeVariableValue] turns `true` into `0x01` and `false`
+  ///     into `0x00`. Atomic — only the targeted byte changes, sibling
+  ///     array elements are not touched. Riding [writeVariableByName]
+  ///     gives this path the same session recovery, case-fallback,
+  ///     and readable-gate behaviour as every other write.
+  ///
+  ///   * `bitOffset > 0` — **packed-bits-16**: NOT supported. Writing
+  ///     one bit in a packed WORD requires read-modify-write of the
+  ///     parent WORD, which is not implemented here. A naive
+  ///     [writeVariableByName] of a BOOL value to the parent WORD's
+  ///     address would silently overwrite the other 15 sibling bits
+  ///     with whatever [encodeVariableValue] produces for a 2-byte
+  ///     write. We fail loudly with [UnsupportedError] instead so the
+  ///     caller can either (a) write the whole word via
+  ///     [writeVariableByName] explicitly, or (b) wait for an RMW
+  ///     implementation.
+  ///
+  /// Throws:
+  ///   * [StateError] when [aliasName] is unknown to [bitAliases].
+  ///   * [UnsupportedError] when the alias lives in a packed-bits-16
+  ///     array (i.e. `entry.bitOffset > 0`).
+  ///   * Anything [writeVariableByName] throws (session errors,
+  ///     [UmasException] on per-symbol PLC errors, type-mismatch on
+  ///     the symbol's resolved data type, etc.).
+  Future<void> writeBitAlias(String aliasName, bool value) async {
+    final map = await ensureBitAliasMap();
+    final entry = map.lookup(aliasName);
+    if (entry == null) {
+      throw StateError(
+        'writeBitAlias: unknown alias "$aliasName". '
+        'The bit-alias map has ${map.length} entries; '
+        'check the PLC catalog or rebuild the map after a project change.',
+      );
+    }
+    if (entry.bitOffset != 0) {
+      // Packed-bits-16: bitOffset > 0 means the alias is one bit of a
+      // packed WORD. We cannot safely write just one bit without
+      // read-modify-write of the parent WORD, which is not implemented
+      // here. Fail loudly so a naive call cannot corrupt sibling bits.
+      throw UnsupportedError(
+        'writeBitAlias: alias "$aliasName" lives at bit ${entry.bitOffset} '
+        'of a packed WORD (parentBlock='
+        '0x${entry.parentBlock.toRadixString(16)} '
+        'parentByteOffset=0x${entry.parentByteOffset.toRadixString(16)}). '
+        'Writing one bit in a packed-bits-16 array requires read-modify-write '
+        'of the parent WORD, which is not yet implemented. Use '
+        'writeVariableByName on the parent WORD instead, or read the '
+        'parent WORD first, flip the bit, and write it back atomically.',
+      );
+    }
+    // Byte-per-bool: ride the standard BOOL write pipeline. The alias
+    // name itself is the canonical browse-tree path (e.g.
+    // 'Elevator.BMEP58_ECPU_EXT.DROP_HEALTH[5]') and resolves to a
+    // one-byte BOOL via lookupSymbol; encodeVariableValue produces
+    // [0x01] / [0x00] depending on `value`.
+    await writeVariableByName(aliasName, value);
   }
 
   /// Resolve a UMAS symbol path (e.g. `B_F1_RC_01_Front` or
