@@ -524,6 +524,58 @@ int dataSizeIndexFromByteSize(int byteSize) {
   return index;
 }
 
+/// Canonical Schneider array name pattern: `ARRAY[..] OF <ELEM>` or
+/// `ARRAY[..,..] OF <ELEM>` (multi-dim). Captures the element type name.
+final RegExp _arrayElementTypeNameRe =
+    RegExp(r'\bARRAY\s*\[.*?\]\s+OF\s+([A-Z_][A-Z0-9_]*)', caseSensitive: false);
+
+/// Recover the byte size of an array's element type from a
+/// [UmasDataTypeRef] whose `classIdentifier == 4`.
+///
+/// **Why this exists (DROP_HEALTH underflow, v1.1.x):** The live M580
+/// DD03 emits ARRAY records whose `dataType` byte equals the array's
+/// OWN type id, NOT the element type id. For `ARRAY[1..31] OF BOOL`
+/// the record is `id=0x1F, dataType=0x1F, byteSize=31, classId=4`.
+/// Looking up `builtIn[0x1F]` returns null and the legacy fallback
+/// (`dataType.byteSize`) clamps to dsi=3 (4 bytes/element) -- which
+/// asks the PLC for 7x4 = 28 bytes and silently drops the last 3
+/// BOOLs. plc4j hits the same wire shape and recovers from the DD02
+/// `UmasArrayTypeDefinition.elementTypeId`; the tree builder here
+/// already does that for per-element children but the whole-array
+/// read path goes straight through the encoder with the raw DD03
+/// shape.
+///
+/// Strategy (in order of trust):
+///   1. `builtIn[dataType.dataType]` -- the path that works when the
+///      tree builder / speculative-resolve branch has already
+///      rewritten `dataType` to the real element type id (e.g. for
+///      arrays of UDT or arrays surfaced via the DD02-keyed path).
+///   2. If `dataType.dataType` == `dataType.id` (self-referencing,
+///      the live-M580 DD03 shape), parse the canonical Schneider
+///      type name `ARRAY[..] OF <ELEM>` and look the element up in
+///      `builtIn` by name. Schneider firmware emits these names
+///      consistently for built-in element types -- we observe BOOL,
+///      INT, UINT, WORD, DINT, UDINT, REAL, BYTE, DATE, TIME,
+///      TIME_OF_DAY, DATE_AND_TIME, STRING on M580 / M340.
+///   3. Fall back to `dataType.byteSize` (the legacy behaviour).
+///      Worst case the caller asks the PLC for a wide read and gets
+///      a clamped response -- noisy but at least no underflow.
+int _arrayElementByteSize(UmasDataTypeRef dataType) {
+  final byId = UmasDataTypes.builtIn[dataType.dataType];
+  if (byId != null) return byId.byteSize;
+  // (2) Name parse for the DD03 self-referencing shape.
+  if (dataType.dataType == dataType.id) {
+    final m = _arrayElementTypeNameRe.firstMatch(dataType.name);
+    if (m != null) {
+      final elemName = m.group(1)!.toUpperCase();
+      for (final t in UmasDataTypes.builtIn.values) {
+        if (t.name.toUpperCase() == elemName) return t.byteSize;
+      }
+    }
+  }
+  return dataType.byteSize;
+}
+
 /// A reference to a variable for ReadVariable (0x22) requests.
 ///
 /// Encodes the wire format: isArray:4bits + dataSizeIndex:4bits (1 byte)
@@ -549,19 +601,21 @@ class VariableReadRef {
   /// Create a [VariableReadRef] from a [UmasVariable] and its resolved [UmasDataTypeRef].
   ///
   /// Detects array variables via [UmasDataTypeRef.classIdentifier] == 4.
-  /// For arrays, computes [arrayLength] as byteSize / element size (using
-  /// the base data type size from [UmasDataTypeRef.dataType]).
+  /// For arrays, computes [arrayLength] as `dataType.byteSize / elementSize`
+  /// where `elementSize` is resolved via [_arrayElementByteSize] (which
+  /// handles the live-M580 DD03 self-referencing-dataType shape that would
+  /// otherwise drop the last 3 BOOLs of `ARRAY[1..31] OF BOOL`).
   factory VariableReadRef.fromVariable(
       UmasVariable variable, UmasDataTypeRef dataType) {
     final isArray = dataType.classIdentifier == 4;
     int arrayLength = 0;
+    int sizeForDsi = dataType.byteSize;
 
     if (isArray) {
-      // Determine element size from the base data type ID
-      final elementType = UmasDataTypes.builtIn[dataType.dataType];
-      final elementSize = elementType?.byteSize ?? 4; // default to 4 bytes
+      final elementSize = _arrayElementByteSize(dataType);
       arrayLength =
           elementSize > 0 ? dataType.byteSize ~/ elementSize : 1;
+      sizeForDsi = elementSize > 0 ? elementSize : dataType.byteSize;
     }
 
     // Per PLC4X driver, the Schneider VariableReadRef uses a paged byte
@@ -575,8 +629,7 @@ class VariableReadRef {
       blockNo: variable.blockNo,
       baseOffset: addr >> 8,
       offset: addr & 0xFF,
-      dataSizeIndex: dataSizeIndexFromByteSize(
-          isArray ? (UmasDataTypes.builtIn[dataType.dataType]?.byteSize ?? dataType.byteSize) : dataType.byteSize),
+      dataSizeIndex: dataSizeIndexFromByteSize(sizeForDsi),
       isArray: isArray,
       arrayLength: arrayLength,
     );
@@ -1117,16 +1170,21 @@ class VariableWriteRef {
   /// [UmasDataTypeRef], and the value to write.
   ///
   /// Detects array variables via [UmasDataTypeRef.classIdentifier] == 4.
+  /// Uses [_arrayElementByteSize] so live-M580 DD03 self-referencing
+  /// shapes for `ARRAY[..] OF <ELEM>` recover the real element width
+  /// instead of clamping to the 4-byte wide read (symmetric with
+  /// [VariableReadRef.fromVariable]).
   factory VariableWriteRef.fromVariable(
       UmasVariable variable, UmasDataTypeRef dataType, dynamic value) {
     final isArray = dataType.classIdentifier == 4;
     int arrayLength = 0;
+    int sizeForDsi = dataType.byteSize;
 
     if (isArray) {
-      final elementType = UmasDataTypes.builtIn[dataType.dataType];
-      final elementSize = elementType?.byteSize ?? 4;
+      final elementSize = _arrayElementByteSize(dataType);
       arrayLength =
           elementSize > 0 ? dataType.byteSize ~/ elementSize : 1;
+      sizeForDsi = elementSize > 0 ? elementSize : dataType.byteSize;
     }
 
     final encodedData = encodeVariableValue(value, dataType);
@@ -1161,11 +1219,7 @@ class VariableWriteRef {
       blockNo: variable.blockNo,
       baseOffset: addr & 0xFF,
       offset: addr >> 8,
-      dataSizeIndex: dataSizeIndexFromByteSize(
-          isArray
-              ? (UmasDataTypes.builtIn[dataType.dataType]?.byteSize ??
-                  dataType.byteSize)
-              : dataType.byteSize),
+      dataSizeIndex: dataSizeIndexFromByteSize(sizeForDsi),
       isArray: isArray,
       arrayLength: arrayLength,
       data: encodedData,
