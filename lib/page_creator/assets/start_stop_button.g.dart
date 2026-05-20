@@ -15,6 +15,9 @@ StartStopPillButtonConfig _$StartStopPillButtonConfigFromJson(
       stoppedKey: json['stoppedKey'] as String,
       cleanKey: json['cleanKey'] as String?,
       cleaningKey: json['cleaningKey'] as String?,
+      manualStateKey: json['manual_state_key'] as String?,
+      manualCommandKey: json['manual_command_key'] as String?,
+      manualLabel: json['manual_label'] as String?,
     )
       ..variant = json['asset_name'] as String
       ..coordinates =
@@ -41,6 +44,9 @@ Map<String, dynamic> _$StartStopPillButtonConfigToJson(
       'runningKey': instance.runningKey,
       'stoppedKey': instance.stoppedKey,
       'cleaningKey': instance.cleaningKey,
+      'manual_state_key': instance.manualStateKey,
+      'manual_command_key': instance.manualCommandKey,
+      'manual_label': instance.manualLabel,
     };
 
 const _$TextPosEnumMap = {
