@@ -18,8 +18,11 @@ import 'dart:collection';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:open62541/open62541.dart' show DynamicValue;
+import 'package:open62541/open62541.dart' show DynamicValue, NodeId;
+import 'package:rxdart/rxdart.dart';
 import 'package:tfc/page_creator/assets/conveyor_fb.dart';
+import 'package:tfc/providers/state_man.dart';
+import 'package:tfc_dart/core/state_man.dart';
 
 void main() {
   Widget wrap(Widget child) => ProviderScope(
@@ -355,4 +358,132 @@ void main() {
       expect(find.text('FB_Conveyor_42'), findsOneWidget);
     });
   });
+
+  group('ConveyorFbConfig — config editor (multi-select picker)', () {
+    testWidgets('toggling a checkbox updates displayedMembers', (tester) async {
+      // Fake StateMan that returns an FB DynamicValue map for the bound
+      // FB instance. The picker should discover those members and
+      // surface them as checkboxes alongside the currently-selected set.
+      final fake = _FakeStateMan();
+      fake.pushFb('Elevator', LinkedHashMap<String, dynamic>.from({
+        // Match the default starter set so they're visible AND
+        // checked. We then test deselect AND a new add via discovery.
+        'p_Stat_xRunningFwd': true,
+        'p_Stat_xFault': false,
+        'p_Mode_xAuto': true,
+        'red': false,
+        'grey': true,
+        'green': false,
+        // Extra member that's NOT in the default starter set — used
+        // for the "discover & add new" path.
+        'p_Stat_iThermalFaults': 0,
+      }));
+
+      final config = ConveyorFbConfig(
+        fbInstanceName: 'Elevator',
+        displayedMembers: List<String>.from(kConveyorFbDefaultMembers),
+      );
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            stateManProvider.overrideWith((_) async => fake),
+          ],
+          child: MaterialApp(
+            home: Scaffold(
+              body: Builder(
+                builder: (ctx) => config.configure(ctx),
+              ),
+            ),
+          ),
+        ),
+      );
+      // Let stateMan future + stream emit.
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+
+      // Sanity: starter member 'red' is currently selected.
+      expect(config.displayedMembers, contains('red'));
+      // Sanity: the unselected discovered member is NOT in the list.
+      expect(config.displayedMembers, isNot(contains('p_Stat_iThermalFaults')));
+
+      // The picker lives in a constrained ListView so individual
+      // checkboxes may be outside the painted viewport. We invoke the
+      // CheckboxListTile.onChanged callback directly to test the
+      // wiring contract (toggle → displayedMembers mutation) without
+      // depending on hit-test geometry.
+      CheckboxListTile findCheckbox(String name) {
+        return tester.widget<CheckboxListTile>(find.byKey(
+          ValueKey('conveyor-fb-member-checkbox:$name'),
+          skipOffstage: false,
+        ));
+      }
+
+      // 'red' is currently checked — toggle it OFF.
+      final redCheckbox = findCheckbox('red');
+      expect(redCheckbox.value, isTrue,
+          reason: '"red" starts in the selected set');
+      redCheckbox.onChanged!(false);
+      await tester.pump();
+
+      expect(config.displayedMembers, isNot(contains('red')),
+          reason: 'toggling red OFF removes it from displayedMembers');
+
+      // 'p_Stat_iThermalFaults' is discovered but unchecked — toggle
+      // it ON.
+      final thermalCheckbox = findCheckbox('p_Stat_iThermalFaults');
+      expect(thermalCheckbox.value, isFalse,
+          reason: 'discovered-but-unselected member starts unchecked');
+      thermalCheckbox.onChanged!(true);
+      await tester.pump();
+
+      expect(config.displayedMembers, contains('p_Stat_iThermalFaults'),
+          reason: 'toggling a new member ON adds it to displayedMembers');
+    });
+  });
+}
+
+/// Fake StateMan that returns FB DynamicValue maps for keys pushed via
+/// [pushFb] (or bool scalars via [push] for back-compat with other
+/// tests). Backs the `stateManProvider` override.
+class _FakeStateMan implements StateMan {
+  final Map<String, BehaviorSubject<DynamicValue>> _streams = {};
+
+  // KeyField widget pulls `.keys` to populate its autocomplete list;
+  // return the set of streams we've pushed so it doesn't throw.
+  @override
+  List<String> get keys => _streams.keys.toList();
+
+  /// Push a flat `{member: value}` map as the latest value for [key].
+  void pushFb(String key, LinkedHashMap<String, dynamic> members) {
+    final s = _streams.putIfAbsent(
+      key,
+      () => BehaviorSubject<DynamicValue>(),
+    );
+    s.add(DynamicValue.fromMap(members));
+  }
+
+  void push(String key, bool value) {
+    final s = _streams.putIfAbsent(
+      key,
+      () => BehaviorSubject<DynamicValue>(),
+    );
+    s.add(DynamicValue(value: value, typeId: NodeId.boolean));
+  }
+
+  @override
+  Future<Stream<DynamicValue>> subscribe(String key) async {
+    final s = _streams.putIfAbsent(
+      key,
+      () => BehaviorSubject<DynamicValue>(),
+    );
+    return s.stream;
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) {
+    throw UnimplementedError(
+      '_FakeStateMan: ${invocation.memberName} not implemented in test scope',
+    );
+  }
 }
