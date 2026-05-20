@@ -52,6 +52,16 @@ VARIABLES = [
     # Forces the speculative-DD02 path through _expandVariable
     # (plc4j parseCustomTypeBlock:1130-1146).
     ("Application.Motors.M_Elevator", 5, 0, 200),
+    # Regression for bitalias-cardinality-mismatch: an ARRAY[1..3] OF BOOL
+    # variable whose typeId (130) is intentionally ABSENT from DATA_TYPES
+    # (DD03) but PRESENT in ARRAY_TYPES (DD02). Mirrors the live M580
+    # behaviour for FB members like BMEP58_ECPU_EXT.DIO_HEALTH /
+    # .DIO_CTRL / .LS_HEALTH — the speculative-DD02 path resolves the
+    # array body but the speculative-type's byteSize is synthesized as 0
+    # (umas_client.dart speculative branch at L2998). The browse tree
+    # MUST still expand this into per-index leaves so that lookupSymbol
+    # / readVariableByName can resolve `...health_bits[N]`.
+    ("Application.GVL.health_bits", 6, 0, 130),
 ]
 
 DATA_TYPES = [
@@ -77,7 +87,13 @@ DATA_TYPES = [
 #
 #   typeId -> (elementTypeId, [(startIndex, upperBound), ...])
 ARRAY_TYPES = {
-    120: (5, [(1, 4)]),  # ARRAY[1..4] OF UINT
+    120: (5, [(1, 4)]),   # ARRAY[1..4] OF UINT
+    # Regression: ARRAY[1..3] OF BOOL whose typeId is NOT in DATA_TYPES.
+    # Forces _expandVariable down the speculative-DD02 path (a synthesized
+    # type with byteSize=0). Element typeId 1 (BOOL) is a built-in scalar,
+    # so the browse tree builder can derive elementSize from the built-in
+    # without needing the parent's total byteSize.
+    130: (1, [(1, 3)]),
 }
 
 # UDT / FB member layouts returned by DD02 queries keyed on a typeId
@@ -158,6 +174,12 @@ def _init_variable_store():
         (5, 0): struct.pack("<f", 1450.0),        # M_Elevator.speed REAL
         (5, 4): struct.pack("<f", 92.5),          # M_Elevator.torque REAL
         (5, 8): struct.pack("B", 1),              # M_Elevator.enabled BOOL
+        # health_bits (block=6, typeId=130 → ARRAY[1..3] OF BOOL) — one
+        # byte per BOOL on M580. Regression for bitalias-cardinality
+        # mismatch.
+        (6, 0): struct.pack("B", 1),              # health_bits[1] = true
+        (6, 1): struct.pack("B", 0),              # health_bits[2] = false
+        (6, 2): struct.pack("B", 1),              # health_bits[3] = true
     }
     store.update(initial_values)
     return store
