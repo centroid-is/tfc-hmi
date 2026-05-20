@@ -323,7 +323,7 @@ class _PrettyPill extends StatelessWidget {
         _Segment.run => FontAwesomeIcons.play,
         _Segment.clean => FontAwesomeIcons.droplet,
         _Segment.stop => FontAwesomeIcons.stop,
-        _Segment.manual => FontAwesomeIcons.hand,
+        _Segment.manual => FontAwesomeIcons.screwdriverWrench,
       };
 
   @override
