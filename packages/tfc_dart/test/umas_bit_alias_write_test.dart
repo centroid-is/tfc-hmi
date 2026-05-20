@@ -296,6 +296,207 @@ void main() {
       );
     });
 
+    // -------------------------------------------------------------------------
+    // Regression net for the fuzz finding "writeBitAlias driver gap":
+    //
+    // 11/30 byte-per-bool aliases (DIO_CTRL[#], DIO_HEALTH[#], LS_HEALTH[#])
+    // threw "symbol not found in data dictionary" on write because the old
+    // implementation rode writeVariableByName → lookupSymbol. Those alias
+    // names live ONLY in the bit-alias map (synthesized from DD02 ARRAY OF
+    // BOOL short-records), NOT in the DD03 symbol space.
+    //
+    // The fix: writeBitAlias must synthesize a UmasVariable from the
+    // BitAliasEntry directly (mirroring readBitAlias) and call
+    // writeVariable() — bypassing lookupSymbol entirely.
+    // -------------------------------------------------------------------------
+    test(
+        'writeBitAlias synthesizes UmasVariable for aliases NOT in the '
+        'DD03 symbol cache (DIO_CTRL[#] regression)', () async {
+      // Verifies: even with an EMPTY symbol cache, writeBitAlias must
+      // succeed for a byte-per-bool alias that exists only in the
+      // bit-alias map. Pre-fix, lookupSymbol would throw
+      // UmasException(0, "symbol not found in data dictionary").
+      final sent = <UmasRequest>[];
+      final umas = UmasClient(
+        sendFn: (req) async {
+          if (req is! UmasRequest) {
+            return ModbusResponseCode.requestRxFailed;
+          }
+          sent.add(req);
+          req.setFromPduResponse(Uint8List.fromList([0x5A, 0x00, 0xFE]));
+          return ModbusResponseCode.requestSucceed;
+        },
+      );
+
+      const aliasName = 'BMEP58_ECPU_EXT.DIO_CTRL[5]';
+      umas.debugInjectBitAliasMap(UmasBitAliasMap(const [
+        BitAliasEntry(
+          aliasName: aliasName,
+          parentBlock: 0x44,
+          parentByteOffset: 0xA5,
+          bitOffset: 0,
+          parentVariableName: 'DIO_CTRL',
+        ),
+      ]));
+      // NB: NO debugInjectSymbol call — the alias is intentionally
+      // absent from the symbol cache, exactly mirroring the live PLC
+      // behaviour where DD03 has no entry for these synthesized names.
+      umas.debugSetProjectCrc(0xCAFEBABE);
+      umas.debugSetBlockCrcs(const [0xDEADBEEF]);
+      umas.debugSetSessionState(UmasSessionState.paired);
+
+      await umas.writeBitAlias(aliasName, true);
+
+      final writeReqs = sent
+          .where((r) =>
+              r.umasSubFunction == UmasSubFunction.writeVariable.code)
+          .toList();
+      expect(writeReqs, hasLength(1),
+          reason: 'writeBitAlias must succeed without a symbol-cache hit');
+
+      // The embedded ref must encode the synthesized (block=0x44,
+      // offset=0xA5) — proving the write rode the synthesized
+      // UmasVariable, not a lookupSymbol() result.
+      final payload = writeReqs.single.umasPayload;
+      final ref = payload.sublist(5);
+      expect(
+        ref,
+        equals(Uint8List.fromList([
+          0x01,           // (isArray=0) | (dataSizeIndex=1)
+          0x44, 0x00,     // blockNo LE  (synthesized from entry.parentBlock)
+          0xA5, 0x00,     // baseOffset LE = low byte of entry.parentByteOffset
+          0x00, 0x00,     // offset LE     = high byte of entry.parentByteOffset
+          0x01,           // data (true)
+        ])),
+        reason:
+            'wire address must come from BitAliasEntry, not from a '
+            'lookupSymbol() symbol cache entry',
+      );
+    });
+
+    test(
+        'symmetric read/write parity: both paths derive the same '
+        '(block, byteOffset) from the BitAliasEntry without a symbol '
+        'cache entry', () async {
+      // Both readBitAlias and writeBitAlias must build the SAME wire
+      // address from the SAME BitAliasEntry — and neither may depend on
+      // the symbol cache. We assert this by running both with an empty
+      // symbol cache and checking that the read-side ReadVariable PDU
+      // and the write-side WriteVariable PDU encode the same
+      // (blockNo, baseOffset, offset) triple.
+      final sent = <UmasRequest>[];
+      final umas = UmasClient(
+        sendFn: (req) async {
+          if (req is! UmasRequest) {
+            return ModbusResponseCode.requestRxFailed;
+          }
+          sent.add(req);
+          // Generic success — for read we also need to provide a
+          // plausible 0x22 response body. The minimum payload that
+          // parseVariableValues accepts for a 1-byte BOOL: status
+          // header + 1 data byte. We don't actually assert the
+          // returned bool value here — only the request shape.
+          req.setFromPduResponse(Uint8List.fromList([0x5A, 0x00, 0xFE, 0x01]));
+          return ModbusResponseCode.requestSucceed;
+        },
+      );
+
+      const aliasName = 'BMEP58_ECPU_EXT.DIO_HEALTH[3]';
+      const block = 0x44;
+      const byteOffset = 0x12C;
+      umas.debugInjectBitAliasMap(UmasBitAliasMap(const [
+        BitAliasEntry(
+          aliasName: aliasName,
+          parentBlock: block,
+          parentByteOffset: byteOffset,
+          bitOffset: 0,
+          parentVariableName: 'DIO_HEALTH',
+        ),
+      ]));
+      umas.debugSetProjectCrc(0xCAFEBABE);
+      umas.debugSetBlockCrcs(const [0xDEADBEEF]);
+      umas.debugSetSessionState(UmasSessionState.paired);
+
+      // Drive both paths. Either may legally throw on the synthetic
+      // response shape (read parser is strict); the assertion is that
+      // BOTH issued a PDU with the same wire address, NOT that they
+      // succeeded end-to-end on a hand-rolled fake.
+      try {
+        await umas.readBitAlias(aliasName);
+      } catch (_) {
+        // Parser may bail on the synthetic payload — fine, we only
+        // care about the outgoing request shape.
+      }
+      try {
+        await umas.writeBitAlias(aliasName, true);
+      } catch (_) {
+        // Same — protect against response-parsing strictness.
+      }
+
+      expect(
+        sent,
+        isNotEmpty,
+        reason: 'both read and write must issue PDUs without symbol cache',
+      );
+
+      final readReqs = sent
+          .where((r) =>
+              r.umasSubFunction == UmasSubFunction.readVariable.code)
+          .toList();
+      final writeReqs = sent
+          .where((r) =>
+              r.umasSubFunction == UmasSubFunction.writeVariable.code)
+          .toList();
+      expect(readReqs, isNotEmpty,
+          reason: 'readBitAlias must issue a ReadVariable (0x22) PDU '
+              'without consulting the symbol cache');
+      expect(writeReqs, hasLength(1),
+          reason: 'writeBitAlias must issue exactly one WriteVariable '
+              '(0x23) PDU without consulting the symbol cache');
+
+      // Pull the embedded address bytes out of each ref. Wire layouts
+      // (umas_types.dart): both PDUs share `crc(4 LE) + count(1)` before
+      // the first ref, hence the `.sublist(5)` strip.
+      //
+      // VariableReadRef.toBytes() — 7 bytes for a scalar:
+      //   [0]    size byte
+      //   [1..2] blockNo LE
+      //   [3]    constant 0x01
+      //   [4..5] baseOffset LE (= addr >> 8 — HIGH byte of paged addr)
+      //   [6]    offset        (= addr & 0xFF — LOW  byte of paged addr)
+      //
+      // VariableWriteRef.toBytes() — 7-byte header + data for a scalar:
+      //   [0]    size byte
+      //   [1..2] blockNo LE
+      //   [3..4] baseOffset LE (= addr & 0xFF — LOW  byte; write-path swap)
+      //   [5..6] offset LE     (= addr >> 8  — HIGH byte; write-path swap)
+      //   [7..]  data
+      final readPayload = readReqs.first.umasPayload;
+      final readRef = readPayload.sublist(5); // skip crc(4) + count(1)
+      final readBlock = readRef[1] | (readRef[2] << 8);
+      final readBaseHi = readRef[4] | (readRef[5] << 8);
+      final readOffLo = readRef[6];
+      final readTargetByte = (readBaseHi << 8) | readOffLo;
+
+      final writePayload = writeReqs.single.umasPayload;
+      final writeRef = writePayload.sublist(5);
+      final writeBlock = writeRef[1] | (writeRef[2] << 8);
+      final writeBaseLo = writeRef[3] | (writeRef[4] << 8);
+      final writeOffHi = writeRef[5] | (writeRef[6] << 8);
+      final writeTargetByte = (writeOffHi << 8) | writeBaseLo;
+
+      expect(readBlock, equals(block),
+          reason: 'read path block must come from BitAliasEntry');
+      expect(writeBlock, equals(block),
+          reason: 'write path block must come from BitAliasEntry');
+      expect(readTargetByte, equals(byteOffset),
+          reason: 'read path must target BitAliasEntry.parentByteOffset');
+      expect(writeTargetByte, equals(byteOffset),
+          reason: 'write path must target BitAliasEntry.parentByteOffset');
+      expect(readTargetByte, equals(writeTargetByte),
+          reason: 'read and write must target the same byte address');
+    });
+
     test(
         'byte-per-bool writeBitAlias(..., false) encodes 0x00 in the '
         'data byte', () async {
