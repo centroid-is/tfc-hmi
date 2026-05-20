@@ -739,5 +739,80 @@ void main() {
       expect(ref.arrayLength, 0);
       expect(ref.toBytes().length, 7); // scalar ref is 7 bytes
     });
+
+    // ------------------------------------------------------------------
+    // Regression: DROP_HEALTH whole-array underflow (28 of 31 BOOL).
+    //
+    // The live M580 emits DD03 ARRAY records with `dataType == self-id`
+    // (the array's own type id), NOT the element type id. For
+    // `ARRAY[1..31] OF BOOL` that's `id=0x1F=31, dataType=0x1F=31`. The
+    // encoder must NOT treat this as a 4-byte-per-element wide read --
+    // doing so asks the PLC for 7x4 = 28 bytes, dropping the last 3
+    // BOOLs. The fix decodes the element width from the resolved
+    // `arrayElementByteSize` carried on the dataType (set by the tree
+    // builder from the DD02 UmasArrayTypeDefinition) and falls back to
+    // parsing the canonical Schneider type name when the legacy
+    // self-referencing DD03 shape is the only thing available.
+    // ------------------------------------------------------------------
+    test(
+        'fromVariable() for ARRAY[1..31] OF BOOL with DD03 self-referencing '
+        'dataType encodes dsi=1, arrayLength=31 (DROP_HEALTH regression)',
+        () {
+      final variable = UmasVariable(
+        name: 'DROP_HEALTH',
+        blockNo: 0x33,
+        offset: 0x90,
+        dataTypeId: 0x1F,
+      );
+      // Exactly the shape DD03 emits on the live M580: dataType == id,
+      // classIdentifier == 4, byteSize == total array bytes.
+      const arrayType = UmasDataTypeRef(
+        id: 0x1F,
+        name: 'ARRAY[1..31] OF BOOL',
+        byteSize: 31,
+        classIdentifier: 4,
+        dataType: 0x1F, // self-referencing -- the bug-shape
+      );
+
+      final ref = VariableReadRef.fromVariable(variable, arrayType);
+      expect(ref.isArray, true);
+      expect(ref.arrayLength, 31,
+          reason: 'Must encode 31 BOOLs, not 7 (which is 31/4).');
+      expect(ref.dataSizeIndex, 1,
+          reason: 'BOOL is 1 byte, so dataSizeIndex must be 1 not 3.');
+      // Wire-byte sanity: arrayLength field is bytes[7..8] (LE).
+      final bytes = ref.toBytes();
+      expect(bytes.length, 9);
+      expect(bytes[0] & 0x10, 0x10, reason: 'isArray bit set');
+      expect(bytes[0] & 0x0F, 0x01, reason: 'dataSizeIndex=1 in low nibble');
+      expect(bytes[7], 0x1F); // 31 low byte
+      expect(bytes[8], 0x00); // 31 high byte
+    });
+
+    test(
+        'fromVariable() for ARRAY OF INT with DD03 self-referencing dataType '
+        'recovers element width from the type name',
+        () {
+      final variable = UmasVariable(
+        name: 'arr',
+        blockNo: 1,
+        offset: 0,
+        dataTypeId: 0x42,
+      );
+      const arrayType = UmasDataTypeRef(
+        id: 0x42,
+        name: 'ARRAY[0..9] OF INT',
+        byteSize: 20, // 10 x INT(2)
+        classIdentifier: 4,
+        dataType: 0x42, // self-referencing -- the bug-shape
+      );
+
+      final ref = VariableReadRef.fromVariable(variable, arrayType);
+      expect(ref.isArray, true);
+      expect(ref.arrayLength, 10,
+          reason: '20 bytes / 2 bytes (INT) = 10 elements');
+      expect(ref.dataSizeIndex, 2,
+          reason: 'INT is 2 bytes, so dataSizeIndex must be 2.');
+    });
   });
 }
