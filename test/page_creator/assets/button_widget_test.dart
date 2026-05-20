@@ -202,21 +202,21 @@ void main() {
 /// for a given key. Only the methods used by Button (`subscribe`) are
 /// implemented; everything else throws so accidental usage is loud.
 class _FakeStateMan implements StateMan {
-  final Map<String, BehaviorSubject<DynamicValue?>> _streams = {};
+  final Map<String, BehaviorSubject<DynamicValue>> _streams = {};
 
   void push(String key, bool value) {
     final s = _streams.putIfAbsent(
       key,
-      () => BehaviorSubject<DynamicValue?>(),
+      () => BehaviorSubject<DynamicValue>(),
     );
     s.add(DynamicValue(value: value, typeId: NodeId.boolean));
   }
 
   @override
-  Future<Stream<DynamicValue?>> subscribe(String key) async {
+  Future<Stream<DynamicValue>> subscribe(String key) async {
     final s = _streams.putIfAbsent(
       key,
-      () => BehaviorSubject<DynamicValue?>(),
+      () => BehaviorSubject<DynamicValue>(),
     );
     return s.stream;
   }

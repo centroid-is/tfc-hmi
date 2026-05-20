@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tfc/page_creator/assets/button.dart';
@@ -105,17 +107,25 @@ void main() {
         ..disabledPolarity = DisabledPolarity.disableWhenFalse
         ..disabledColor = const Color(0xFF334455);
 
-      final json = config.toJson();
+      // ButtonConfig.toJson() produces a shallow map where nested
+      // typed fields (e.g. Coordinates) remain as their typed instances.
+      // The persistence path (Preferences → PostgreSQL) round-trips this
+      // via `jsonEncode` / `jsonDecode`, which invokes nested toJson()s
+      // and re-parses everything as plain Map<String, dynamic>. We mirror
+      // that here so the fromJson contract is exercised honestly.
+      final raw = jsonDecode(jsonEncode(config.toJson()))
+          as Map<String, dynamic>;
+
       // Wire-format keys are stable — these are persisted to PostgreSQL via
       // Preferences, so the snake_case names are part of the on-disk contract.
-      expect(json.containsKey('disabled_key'), isTrue,
+      expect(raw.containsKey('disabled_key'), isTrue,
           reason: 'wire key "disabled_key" must be present');
-      expect(json.containsKey('disabled_polarity'), isTrue,
+      expect(raw.containsKey('disabled_polarity'), isTrue,
           reason: 'wire key "disabled_polarity" must be present');
-      expect(json.containsKey('disabled_color'), isTrue,
+      expect(raw.containsKey('disabled_color'), isTrue,
           reason: 'wire key "disabled_color" must be present');
 
-      final restored = ButtonConfig.fromJson(json);
+      final restored = ButtonConfig.fromJson(raw);
       expect(restored.disabledKey, 'safety/interlock');
       expect(restored.disabledPolarity, DisabledPolarity.disableWhenFalse);
       // ColorConverter is RGB-with-alpha (channel doubles). Re-encoding then

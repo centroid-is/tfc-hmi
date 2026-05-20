@@ -13,7 +13,8 @@ import 'common.dart';
 import 'icon.dart'; // Reuse IconConfig + IconAsset
 import '../../providers/state_man.dart';
 import 'package:tfc_dart/core/state_man.dart';
-import 'package:tfc/converter/color_converter.dart';
+import 'package:tfc/converter/color_converter.dart'
+    show ColorConverter, OptionalColorConverter;
 
 part 'button.g.dart';
 
@@ -34,6 +35,22 @@ class FeedbackConfig {
 enum ButtonType {
   circle,
   square,
+}
+
+/// Drives how a [ButtonConfig]'s `disabledKey` stream maps to the
+/// disabled/enabled visual + interactive state of the button.
+///
+///   - [disableWhenTrue]:  stream value `true`  → disabled
+///                         stream value `false` → enabled  (default)
+///   - [disableWhenFalse]: stream value `true`  → enabled
+///                         stream value `false` → disabled
+///
+/// When `disabledKey` is null/empty the polarity is irrelevant and the
+/// button is always interactive.
+@JsonEnum()
+enum DisabledPolarity {
+  disableWhenTrue,
+  disableWhenFalse,
 }
 
 @JsonSerializable()
@@ -69,6 +86,61 @@ class ButtonConfig extends BaseAsset {
 
   @JsonKey(name: 'server_writes_low')
   bool serverWritesLow = false;
+
+  /// Optional key (from the Key Repository) whose live BOOL value gates
+  /// whether this button is interactive. When `null` or empty, the button
+  /// behaves identically to before this field existed.
+  ///
+  /// Wire key: `disabled_key` (nullable string).
+  @JsonKey(name: 'disabled_key')
+  String? disabledKey;
+
+  /// Whether a `true` or `false` value on [disabledKey] disables the
+  /// button. Defaults to [DisabledPolarity.disableWhenTrue].
+  ///
+  /// Wire key: `disabled_polarity` (string enum). Legacy records without
+  /// this key fall back to [DisabledPolarity.disableWhenTrue].
+  @JsonKey(
+    name: 'disabled_polarity',
+    defaultValue: DisabledPolarity.disableWhenTrue,
+    unknownEnumValue: DisabledPolarity.disableWhenTrue,
+  )
+  DisabledPolarity disabledPolarity;
+
+  /// Background color rendered while the button is in the disabled state.
+  /// Stored on disk as a nullable RGB map (same shape as the existing
+  /// [ColorConverter]); legacy records without this key fall back to a
+  /// muted gray via [_disabledColorFromJson].
+  ///
+  /// Wire key: `disabled_color` (nullable RGB map).
+  @JsonKey(
+    name: 'disabled_color',
+    fromJson: _disabledColorFromJson,
+    toJson: _disabledColorToJson,
+  )
+  Color disabledColor;
+
+  /// Default fill color for the disabled state when nothing has been
+  /// configured. Picked to be unambiguously inert against the typical
+  /// outward palette (green / red / blue) while still letting the button
+  /// label / icon remain visible.
+  static const Color defaultDisabledColor = Color(0xFF9E9E9E);
+
+  // ---- disabled_color JSON helpers ----
+  //
+  // Use a field-level converter pair instead of `@OptionalColorConverter`
+  // because the in-memory field is non-nullable: legacy JSON records
+  // predating this field have no `disabled_color` key, and we need
+  // `fromJson` to substitute [defaultDisabledColor] in that case.
+
+  static Color _disabledColorFromJson(Map<String, dynamic>? json) {
+    final c = const OptionalColorConverter().fromJson(json);
+    return c ?? defaultDisabledColor;
+  }
+
+  static Map<String, dynamic>? _disabledColorToJson(Color color) {
+    return const OptionalColorConverter().toJson(color);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -113,7 +185,10 @@ class ButtonConfig extends BaseAsset {
     this.feedback,
     this.isToggle = false,
     this.serverWritesLow = false,
-  });
+    this.disabledKey,
+    this.disabledPolarity = DisabledPolarity.disableWhenTrue,
+    Color? disabledColor,
+  }) : disabledColor = disabledColor ?? defaultDisabledColor;
 
   static const previewStr = 'Button preview';
 
@@ -125,7 +200,10 @@ class ButtonConfig extends BaseAsset {
         icon = null,
         feedback = null,
         isToggle = false,
-        serverWritesLow = false {
+        serverWritesLow = false,
+        disabledKey = null,
+        disabledPolarity = DisabledPolarity.disableWhenTrue,
+        disabledColor = defaultDisabledColor {
     textPos = TextPos.right;
   }
 
@@ -135,6 +213,9 @@ class ButtonConfig extends BaseAsset {
     if (key.isNotEmpty) keys.add(key);
     if (feedback != null && feedback!.key.isNotEmpty) {
       keys.add(feedback!.key);
+    }
+    if (disabledKey != null && disabledKey!.isNotEmpty) {
+      keys.add(disabledKey!);
     }
     return keys.toList();
   }
@@ -169,6 +250,7 @@ class _ButtonState extends ConsumerState<Button> {
   bool _isPressed = false;
   bool _feedbackActive = false;
   bool _isToggled = false; // Add toggle state
+  bool _disabled = false; // Current resolved disabled state (key + polarity)
 
   @override
   void dispose() {
@@ -192,6 +274,36 @@ class _ButtonState extends ConsumerState<Button> {
     }
   }
 
+  /// Translates a raw boolean value from the `disabledKey` stream into the
+  /// resolved disabled state given the current polarity. Returns `false`
+  /// (not disabled) whenever `disabledKey` is unset.
+  bool _resolveDisabled(bool raw) {
+    final dk = widget.config.disabledKey;
+    if (dk == null || dk.isEmpty) return false;
+    switch (widget.config.disabledPolarity) {
+      case DisabledPolarity.disableWhenTrue:
+        return raw;
+      case DisabledPolarity.disableWhenFalse:
+        return !raw;
+    }
+  }
+
+  /// Stream of resolved disabled-state for this widget. Emits `false`
+  /// immediately when `disabledKey` is null/empty so the combineLatest
+  /// downstream never stalls.
+  Stream<bool> _disabledStream(StateMan stateMan) {
+    final dk = widget.config.disabledKey;
+    if (dk == null || dk.isEmpty) {
+      return Stream<bool>.value(false);
+    }
+    return stateMan
+        .subscribe(dk)
+        .asStream()
+        .asyncExpand((s) => s)
+        .map((value) => _resolveDisabled(value?.asBool ?? false))
+        .startWith(_disabled);
+  }
+
   Stream<Color> colorStream(StateMan stateMan) {
     final feedbackStream = widget.config.feedback == null
         ? Stream<bool>.value(false)
@@ -203,12 +315,21 @@ class _ButtonState extends ConsumerState<Button> {
             .startWith(_feedbackActive);
 
     final pressedStream = _pressedController.stream.startWith(_isPressed);
+    final disabledStream = _disabledStream(stateMan);
 
-    return Rx.combineLatest2<bool, bool, Color>(
+    return Rx.combineLatest3<bool, bool, bool, Color>(
       feedbackStream,
       pressedStream,
-      (feedbackActive, isPressed) {
+      disabledStream,
+      (feedbackActive, isPressed, disabled) {
         _feedbackActive = feedbackActive;
+        // Update _disabled outside of setState — Flutter rebuilds via the
+        // StreamBuilder's snapshot, and the build method reads _disabled
+        // through `_buildButton`'s onPressed gating.
+        _disabled = disabled;
+        if (disabled) {
+          return widget.config.disabledColor;
+        }
         if (feedbackActive) {
           return widget.config.feedback!.color;
         }
@@ -224,6 +345,9 @@ class _ButtonState extends ConsumerState<Button> {
 
   Widget _buildButton(Color color) {
     final isPreview = widget.config.key == ButtonConfig.previewStr;
+    // When the disabled-key gate is asserted, all tap callbacks must be
+    // null so InkWell renders + behaves as non-interactive.
+    final disabled = _disabled;
 
     return Material(
       color: Colors.transparent,
@@ -231,7 +355,7 @@ class _ButtonState extends ConsumerState<Button> {
         customBorder: widget.config.buttonType == ButtonType.circle
             ? const CircleBorder()
             : const RoundedRectangleBorder(),
-        onTapDown: (_) async {
+        onTapDown: disabled ? null : (_) async {
           if (!widget.config.isToggle) {
             _setPressed(true);
           }
@@ -252,7 +376,7 @@ class _ButtonState extends ConsumerState<Button> {
             }
           }
         },
-        onTapUp: (_) async {
+        onTapUp: disabled ? null : (_) async {
           if (!widget.config.isToggle) {
             _setPressed(false);
           }
@@ -272,7 +396,7 @@ class _ButtonState extends ConsumerState<Button> {
             }
           }
         },
-        onTapCancel: () async {
+        onTapCancel: disabled ? null : () async {
           if (!widget.config.isToggle) {
             _setPressed(false);
           }
