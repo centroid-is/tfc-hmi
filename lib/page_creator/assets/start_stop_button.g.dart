@@ -15,6 +15,13 @@ StartStopPillButtonConfig _$StartStopPillButtonConfigFromJson(
       stoppedKey: json['stoppedKey'] as String,
       cleanKey: json['cleanKey'] as String?,
       cleaningKey: json['cleaningKey'] as String?,
+      manualModeKey: json['manual_mode_key'] as String?,
+      manualModePolarity: $enumDecodeNullable(
+              _$ManualModePolarityEnumMap, json['manual_mode_polarity'],
+              unknownValue: ManualModePolarity.manualWhenTrue) ??
+          ManualModePolarity.manualWhenTrue,
+      inactiveColor: StartStopPillButtonConfig._inactiveColorFromJson(
+          json['inactive_color'] as Map<String, dynamic>?),
     )
       ..variant = json['asset_name'] as String
       ..coordinates =
@@ -41,7 +48,17 @@ Map<String, dynamic> _$StartStopPillButtonConfigToJson(
       'runningKey': instance.runningKey,
       'stoppedKey': instance.stoppedKey,
       'cleaningKey': instance.cleaningKey,
+      'manual_mode_key': instance.manualModeKey,
+      'manual_mode_polarity':
+          _$ManualModePolarityEnumMap[instance.manualModePolarity]!,
+      'inactive_color': StartStopPillButtonConfig._inactiveColorToJson(
+          instance.inactiveColor),
     };
+
+const _$ManualModePolarityEnumMap = {
+  ManualModePolarity.manualWhenTrue: 'manualWhenTrue',
+  ManualModePolarity.manualWhenFalse: 'manualWhenFalse',
+};
 
 const _$TextPosEnumMap = {
   TextPos.above: 'above',
