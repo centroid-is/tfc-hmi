@@ -381,6 +381,45 @@ class UmasReservationException extends UmasException {
   String toString() => 'UmasReservationException($errorCode): $message';
 }
 
+/// Exception thrown when [UmasClient.readVariableByName] /
+/// [UmasClient.writeVariableByName] is invoked on a non-scalar root such as
+/// a Function Block (FB) instance.
+///
+/// fuzz #7 (v1.1.x): previously the read path silently returned an empty
+/// [TypedVariableValue] (FB type, byteSize 0) for FB instances — the
+/// `default:` branch of [parseVariableValue] returned a zero-length slice
+/// without raising. Operators saw a blank in FB-DynamicValue / Key
+/// Repository with no error message, which made the bug invisible.
+///
+/// The browse tree (UMAS-by-name FB browse / Key Repository member picker)
+/// enumerates FB members via its own walk, so it does NOT depend on
+/// `readVariableByName(fbRoot)`. The gate that throws this exception only
+/// fires for callers that asked for the FB root itself — which is buggy.
+///
+/// The [message] is operator-facing: it names the path and suggests the
+/// `path.<member>` notation so the operator can recover without re-browsing.
+class UmasNotScalarException extends UmasException {
+  /// Path that the caller tried to read/write as a scalar.
+  final String path;
+
+  /// Human-readable kind name from the resolved [UmasDataTypeRef]
+  /// (e.g. `FB`, `STRUCT`, `ARRAY`).
+  final String typeKind;
+
+  UmasNotScalarException({
+    required this.path,
+    required this.typeKind,
+  }) : super(
+          errorCode: 0,
+          message: 'UMAS variable "$path" is a $typeKind, not a scalar. '
+              'Use "$path.<member>" to read individual members of this '
+              '$typeKind.',
+        );
+
+  @override
+  String toString() => 'UmasNotScalarException: $message';
+}
+
 /// Result of UMAS init communication (sub-function 0x01).
 class UmasInitResult {
   final int maxFrameSize;

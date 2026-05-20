@@ -520,6 +520,148 @@ void main() {
   });
 
   // ---------------------------------------------------------------------------
+  // fuzz #7 (v1.1.x): readVariableByName on an FB-instance root must throw a
+  // typed UmasNotScalarException instead of silently returning
+  // TypedVariableValue(FB: []). The browse tree enumerates FB members via its
+  // own walk — operators (and adapter callers) that ask for the FB root by
+  // name are buggy and should get a clear, actionable error rather than empty
+  // data that renders as nothing in FB-DynamicValue / Key Repository.
+  //
+  // Whole-array reads (classIdentifier == 4) are intentionally NOT gated
+  // here — that case is owned by the parallel bug-droparray fix.
+  // ---------------------------------------------------------------------------
+  group('UmasClient.readVariableByName — FB-instance root gate (fuzz #7)', () {
+    test(
+        'throws UmasNotScalarException when symbol resolves to an FB instance '
+        '(classIdentifier == 7); no bytes sent downstream',
+        () async {
+      var sendCalls = 0;
+      final umas = UmasClient(
+        sendFn: (req) async {
+          sendCalls++;
+          return ModbusResponseCode.requestSucceed;
+        },
+      );
+      // Mirror the speculative-resolve synthesis at umas_client.dart:2973-2981:
+      // FB instances land in _symbolCache with name='FB', byteSize=0,
+      // classIdentifier=7.
+      umas.debugInjectSymbol(ResolvedSymbol(
+        path: 'Elevator',
+        variable: const UmasVariable(
+          name: 'Elevator',
+          blockNo: 5,
+          offset: 0,
+          dataTypeId: 0xb6,
+        ),
+        dataType: const UmasDataTypeRef(
+          id: 0xb6,
+          name: 'FB',
+          byteSize: 0,
+          classIdentifier: 7,
+        ),
+      ));
+
+      try {
+        await umas.readVariableByName('Elevator');
+        fail('expected UmasNotScalarException for FB-instance root');
+      } on UmasNotScalarException catch (e) {
+        expect(e.message, contains('Elevator'));
+        // Operator-actionable hint: how to read members instead.
+        expect(e.message, contains('.<member>'));
+      }
+      // The classIdentifier gate must short-circuit before any PDU is
+      // sent to the underlying transport.
+      expect(sendCalls, 0,
+          reason: 'readVariableByName must not send bytes when the resolved '
+              'symbol is a non-scalar (FB) root');
+    });
+
+    test(
+        'scalar reads still work — control case (regression guard)',
+        () async {
+      // Synthesize a minimal scalar symbol (REAL) and exercise the same
+      // gate. The gate must NOT fire for scalars: classIdentifier 0
+      // (elementary) flows through readVariables as usual.
+      //
+      // No real PDU exchange — just assert the gate doesn't throw before
+      // the readVariables call. We expect a downstream UmasException
+      // (blockCrcs guard) instead of UmasNotScalarException, which proves
+      // the FB-instance gate did NOT fire for a scalar.
+      final umas = UmasClient(
+        sendFn: (req) async => ModbusResponseCode.requestSucceed,
+      );
+      umas.debugInjectSymbol(ResolvedSymbol(
+        path: 'Application.GVL.temperature',
+        variable: const UmasVariable(
+          name: 'temperature',
+          blockNo: 1,
+          offset: 0,
+          dataTypeId: 6,
+        ),
+        dataType: const UmasDataTypeRef(
+          id: 6,
+          name: 'REAL',
+          byteSize: 4,
+          // classIdentifier == 0 (elementary) — scalar, must pass the gate.
+        ),
+      ));
+
+      try {
+        await umas.readVariableByName('Application.GVL.temperature');
+        fail('expected a downstream UmasException (not '
+            'UmasNotScalarException) — the minimal harness has no real '
+            'session, so the readVariables guards must fire');
+      } on UmasNotScalarException {
+        fail('scalar reads must NOT trip the FB-instance gate');
+      } on UmasException {
+        // Any non-NotScalar UmasException here proves the gate already
+        // passed and we reached the readVariables / session-init path —
+        // exact downstream error depends on harness state (blockCrcs
+        // guard, session-init transport stub), but it must NOT be
+        // UmasNotScalarException.
+      }
+    });
+
+    test(
+        'writeVariableByName on FB-instance root also throws '
+        'UmasNotScalarException (symmetric gate)',
+        () async {
+      var sendCalls = 0;
+      final umas = UmasClient(
+        sendFn: (req) async {
+          sendCalls++;
+          return ModbusResponseCode.requestSucceed;
+        },
+      );
+      umas.debugInjectSymbol(ResolvedSymbol(
+        path: 'Elevator',
+        variable: const UmasVariable(
+          name: 'Elevator',
+          blockNo: 5,
+          offset: 0,
+          dataTypeId: 0xb6,
+        ),
+        dataType: const UmasDataTypeRef(
+          id: 0xb6,
+          name: 'FB',
+          byteSize: 0,
+          classIdentifier: 7,
+        ),
+      ));
+
+      try {
+        await umas.writeVariableByName('Elevator', 0);
+        fail('expected UmasNotScalarException for FB-instance root write');
+      } on UmasNotScalarException catch (e) {
+        expect(e.message, contains('Elevator'));
+      }
+      expect(sendCalls, 0,
+          reason: 'writeVariableByName must not send bytes when the resolved '
+              'symbol is a non-scalar (FB) root');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
   // buildVariableNamesFromKeyMappings (no PLC)
   // ---------------------------------------------------------------------------
   group('buildVariableNamesFromKeyMappings', () {

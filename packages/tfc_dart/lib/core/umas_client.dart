@@ -2113,8 +2113,24 @@ class UmasClient {
   /// Read a single UMAS variable by name. Resolves via [lookupSymbol]
   /// then issues [readVariables] for one symbol. Returns the parsed
   /// typed value.
+  ///
+  /// fuzz #7 (v1.1.x): rejects FB-instance roots up-front with
+  /// [UmasNotScalarException]. Before the gate, reading an FB instance by
+  /// its root name (e.g. `Elevator`) silently returned an empty
+  /// [TypedVariableValue] because the synthesized FB type carries
+  /// `byteSize == 0` and the `default:` branch of [parseVariableValue]
+  /// just returned a zero-length slice — operators saw a blank in
+  /// FB-DynamicValue / Key Repository with no diagnostic. Operators (and
+  /// callers like [ModbusDeviceClientAdapter.readUmasVariable]) that need
+  /// FB data must address members directly (`Elevator.q_xUp`); the browse
+  /// tree enumerates members via its own walk and does not rely on this
+  /// path. Array (classIdentifier == 4) and UDT (== 2) roots are
+  /// intentionally NOT gated here — the whole-array case is owned by the
+  /// parallel bug-droparray fix; nested UDT reads still work today via the
+  /// browse-walk path.
   Future<TypedVariableValue> readVariableByName(String path) async {
     final sym = await lookupSymbol(path);
+    _guardScalarOrThrow(sym, path);
     final values = await readVariables([(sym.variable, sym.dataType)]);
     if (values.isEmpty) {
       throw UmasException(
@@ -2134,8 +2150,14 @@ class UmasClient {
   /// 0x94 anyway; surfacing the precise [ResolvedSymbol.unreadableReason]
   /// gives operators a clearer error than the raw protocol code, and
   /// avoids burning a round-trip on a guaranteed failure.
+  ///
+  /// fuzz #7 (v1.1.x): also refuses FB-instance roots — symmetric with
+  /// [readVariableByName]. Writing to an FB root is meaningless (the
+  /// "value" is a struct of members); the gate keeps the error surface
+  /// uniform across read / write.
   Future<void> writeVariableByName(String path, dynamic value) async {
     final sym = await lookupSymbol(path);
+    _guardScalarOrThrow(sym, path);
     if (!sym.readable) {
       throw UmasException(
         errorCode: 0,
@@ -2145,6 +2167,30 @@ class UmasClient {
     }
     final ref = VariableWriteRef.fromVariable(sym.variable, sym.dataType, value);
     await writeVariable([ref]);
+  }
+
+  /// fuzz #7 (v1.1.x): throw [UmasNotScalarException] when [sym] resolves
+  /// to a Function Block instance (`classIdentifier == 7`).
+  ///
+  /// `classIdentifier` semantics (see [UmasDataTypeRef.classIdentifier]):
+  /// * `2` — UDT/struct (not gated; nested UDT reads still work via the
+  ///   browse walk and remain a non-issue for the current FB-only fix)
+  /// * `4` — array  (not gated; whole-array reads are owned by a parallel
+  ///   bug-droparray fix to avoid stepping on it)
+  /// * `7` — FB instance (gated here)
+  /// * other — elementary scalar (passes through unchanged)
+  ///
+  /// The thrown message names the path and suggests the `path.<member>`
+  /// notation so operators can recover without re-browsing the data
+  /// dictionary.
+  void _guardScalarOrThrow(ResolvedSymbol sym, String path) {
+    final classId = sym.dataType.classIdentifier;
+    if (classId == 7) {
+      throw UmasNotScalarException(
+        path: path,
+        typeKind: 'FB',
+      );
+    }
   }
 
   /// Wraps [_withSession] with session recovery: on a FATAL [UmasException]
