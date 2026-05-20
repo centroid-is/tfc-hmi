@@ -1,0 +1,230 @@
+import 'dart:async';
+
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:open62541/open62541.dart' show DynamicValue, NodeId;
+import 'package:rxdart/rxdart.dart';
+import 'package:tfc/page_creator/assets/button.dart';
+import 'package:tfc/providers/state_man.dart';
+import 'package:tfc_dart/core/state_man.dart';
+
+/// Widget tests for the disabled-key gating in ButtonConfig.
+///
+/// These tests exercise the public `_buildButton` render path through the
+/// `Button` widget by feeding fake key streams via a `_FakeStateMan` /
+/// `stateManProvider` override.
+///
+/// The contract under test:
+///   - `disabledKey == null`                              → always interactive
+///   - stream=true  + polarity=disableWhenTrue            → DISABLED
+///   - stream=false + polarity=disableWhenTrue            → interactive
+///   - stream=true  + polarity=disableWhenFalse           → interactive
+///   - stream=false + polarity=disableWhenFalse           → DISABLED
+///
+/// "DISABLED" means: the InkWell rendered by Button has no tap callbacks
+/// AND the button face paints in `disabledColor`.
+void main() {
+  Widget wrap({
+    required Widget child,
+    List<Override> overrides = const [],
+  }) {
+    return ProviderScope(
+      overrides: overrides,
+      child: MaterialApp(
+        home: Scaffold(body: Center(child: child)),
+      ),
+    );
+  }
+
+  /// Finds the button's interactive `InkWell` — the one that holds the
+  /// onTapDown/Up/Cancel callbacks. There is exactly one inside `Button`.
+  Finder buttonInkWell() => find.descendant(
+        of: find.byType(Button),
+        matching: find.byType(InkWell),
+      );
+
+  /// Reads the rendered face color via the `ButtonPainter` painter.
+  Color paintedColor(WidgetTester tester) {
+    final cp = tester.widget<CustomPaint>(
+      find.descendant(
+        of: find.byType(Button),
+        matching: find.byType(CustomPaint),
+      ),
+    );
+    return (cp.painter as ButtonPainter).color;
+  }
+
+  group('disabledKey == null → always interactive', () {
+    testWidgets('preview button with no disabledKey has tap callbacks',
+        (tester) async {
+      final config = ButtonConfig.preview();
+      await tester.pumpWidget(wrap(
+        child: SizedBox(width: 80, height: 80, child: Button(config)),
+      ));
+      // Allow the stateManProvider future to settle (preview path falls
+      // through to outwardColor on error).
+      await tester.pump();
+
+      final inkwell = tester.widget<InkWell>(buttonInkWell());
+      expect(inkwell.onTapDown, isNotNull,
+          reason:
+              'preview button without disabledKey must remain interactive');
+      expect(inkwell.onTapUp, isNotNull);
+      expect(inkwell.onTapCancel, isNotNull);
+    });
+  });
+
+  group('disabledKey set + stream true', () {
+    testWidgets('polarity=disableWhenTrue + stream=true → disabled + tinted',
+        (tester) async {
+      final fake = _FakeStateMan();
+      fake.push('lock/key', true);
+
+      final config = ButtonConfig(
+        key: 'cmd/start',
+        outwardColor: Colors.green,
+        inwardColor: Colors.grey,
+        buttonType: ButtonType.circle,
+      )
+        ..disabledKey = 'lock/key'
+        ..disabledPolarity = DisabledPolarity.disableWhenTrue
+        ..disabledColor = const Color(0xFFAABBCC);
+
+      await tester.pumpWidget(wrap(
+        overrides: [stateManProvider.overrideWith((_) async => fake)],
+        child: SizedBox(width: 80, height: 80, child: Button(config)),
+      ));
+      // Let async chain (stateMan future + subscribe stream) settle.
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+
+      final inkwell = tester.widget<InkWell>(buttonInkWell());
+      expect(inkwell.onTapDown, isNull,
+          reason: 'disableWhenTrue + stream=true must clear onTapDown');
+      expect(inkwell.onTapUp, isNull);
+      expect(inkwell.onTapCancel, isNull);
+      expect(paintedColor(tester), const Color(0xFFAABBCC),
+          reason: 'disabled state must render in disabledColor');
+    });
+
+    testWidgets('polarity=disableWhenFalse + stream=true → interactive',
+        (tester) async {
+      final fake = _FakeStateMan();
+      fake.push('lock/key', true);
+
+      final config = ButtonConfig(
+        key: 'cmd/start',
+        outwardColor: Colors.green,
+        inwardColor: Colors.grey,
+        buttonType: ButtonType.circle,
+      )
+        ..disabledKey = 'lock/key'
+        ..disabledPolarity = DisabledPolarity.disableWhenFalse
+        ..disabledColor = const Color(0xFFAABBCC);
+
+      await tester.pumpWidget(wrap(
+        overrides: [stateManProvider.overrideWith((_) async => fake)],
+        child: SizedBox(width: 80, height: 80, child: Button(config)),
+      ));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+
+      final inkwell = tester.widget<InkWell>(buttonInkWell());
+      expect(inkwell.onTapDown, isNotNull,
+          reason:
+              'disableWhenFalse + stream=true must leave button interactive');
+      expect(inkwell.onTapUp, isNotNull);
+      expect(inkwell.onTapCancel, isNotNull);
+    });
+  });
+
+  group('disabledKey set + stream false', () {
+    testWidgets('polarity=disableWhenTrue + stream=false → interactive',
+        (tester) async {
+      final fake = _FakeStateMan();
+      fake.push('lock/key', false);
+
+      final config = ButtonConfig(
+        key: 'cmd/start',
+        outwardColor: Colors.green,
+        inwardColor: Colors.grey,
+        buttonType: ButtonType.circle,
+      )
+        ..disabledKey = 'lock/key'
+        ..disabledPolarity = DisabledPolarity.disableWhenTrue;
+
+      await tester.pumpWidget(wrap(
+        overrides: [stateManProvider.overrideWith((_) async => fake)],
+        child: SizedBox(width: 80, height: 80, child: Button(config)),
+      ));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+
+      final inkwell = tester.widget<InkWell>(buttonInkWell());
+      expect(inkwell.onTapDown, isNotNull);
+      expect(inkwell.onTapUp, isNotNull);
+      expect(inkwell.onTapCancel, isNotNull);
+    });
+
+    testWidgets('polarity=disableWhenFalse + stream=false → disabled + tinted',
+        (tester) async {
+      final fake = _FakeStateMan();
+      fake.push('lock/key', false);
+
+      final config = ButtonConfig(
+        key: 'cmd/start',
+        outwardColor: Colors.green,
+        inwardColor: Colors.grey,
+        buttonType: ButtonType.circle,
+      )
+        ..disabledKey = 'lock/key'
+        ..disabledPolarity = DisabledPolarity.disableWhenFalse
+        ..disabledColor = const Color(0xFF112233);
+
+      await tester.pumpWidget(wrap(
+        overrides: [stateManProvider.overrideWith((_) async => fake)],
+        child: SizedBox(width: 80, height: 80, child: Button(config)),
+      ));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+
+      final inkwell = tester.widget<InkWell>(buttonInkWell());
+      expect(inkwell.onTapDown, isNull);
+      expect(inkwell.onTapUp, isNull);
+      expect(inkwell.onTapCancel, isNull);
+      expect(paintedColor(tester), const Color(0xFF112233));
+    });
+  });
+}
+
+/// Minimal stand-in for [StateMan] that lets tests push synchronous values
+/// for a given key. Only the methods used by Button (`subscribe`) are
+/// implemented; everything else throws so accidental usage is loud.
+class _FakeStateMan implements StateMan {
+  final Map<String, BehaviorSubject<DynamicValue?>> _streams = {};
+
+  void push(String key, bool value) {
+    final s = _streams.putIfAbsent(
+      key,
+      () => BehaviorSubject<DynamicValue?>(),
+    );
+    s.add(DynamicValue(value: value, typeId: NodeId.boolean));
+  }
+
+  @override
+  Future<Stream<DynamicValue?>> subscribe(String key) async {
+    final s = _streams.putIfAbsent(
+      key,
+      () => BehaviorSubject<DynamicValue?>(),
+    );
+    return s.stream;
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) {
+    throw UnimplementedError(
+      '_FakeStateMan: ${invocation.memberName} not implemented in test scope',
+    );
+  }
+}
