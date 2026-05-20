@@ -135,9 +135,11 @@ void main() {
     final childNames = app.children.map((c) => c.name).toSet();
     expect(childNames, containsAll(['GVL', 'Motor', 'Counters', 'Motors']));
 
-    // GVL has 6 variables (5 scalars + 1 array)
+    // GVL has 7 variables (5 scalars + 1 UINT array + 1 BOOL array whose
+    // typeId is absent from DD03 — regression for
+    // bitalias-cardinality-mismatch).
     final gvl = app.children.firstWhere((c) => c.name == 'GVL');
-    expect(gvl.children, hasLength(6));
+    expect(gvl.children, hasLength(7));
     expect(gvl.isFolder, isTrue);
 
     // Check a leaf variable -- verify data survived the format change
@@ -255,8 +257,9 @@ void main() {
     await umas.init();
 
     final vars = await umas.readVariableNames();
-    // 12 vars: 11 original + Application.Motors.M_Elevator (Phase 2 FB fixture).
-    expect(vars, hasLength(12));
+    // 13 vars: 11 original + Application.Motors.M_Elevator (Phase 2 FB fixture)
+    // + Application.GVL.health_bits (bitalias-cardinality-mismatch regression).
+    expect(vars, hasLength(13));
 
     // Check first variable
     expect(vars[0].name, 'Application.GVL.temperature');

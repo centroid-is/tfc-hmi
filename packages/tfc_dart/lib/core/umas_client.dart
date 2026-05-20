@@ -3075,8 +3075,7 @@ class UmasClient {
       final totalElements = arrayDef?.totalElementCount ?? 0;
       if (arrayDef == null ||
           totalElements <= 0 ||
-          totalElements > _maxArrayElements ||
-          resolvedType.byteSize <= 0) {
+          totalElements > _maxArrayElements) {
         return UmasVariableTreeNode(
           name: variable.name,
           path: path,
@@ -3088,7 +3087,30 @@ class UmasClient {
 
       // Element size derived from total array byte size (works for arrays of
       // builtin scalars, UDTs, and atypically-sized strings alike).
-      final elementSize = resolvedType.byteSize ~/ totalElements;
+      //
+      // Fix for bitalias-cardinality-mismatch (fuzz-bitalias-read.md,
+      // 2026-05-19): when the speculative-DD02 path synthesized the
+      // array's type with `byteSize: 0` (because the typeId was absent
+      // from DD03 — observed on the live M580 for FB members like
+      // `BMEP58_ECPU_EXT.DIO_HEALTH`, `.DIO_CTRL`, `.LS_HEALTH`), the
+      // division below yields 0 and the array bails out as a leaf,
+      // leaving `lookupSymbol("...DIO_HEALTH[519]")` to throw "symbol
+      // not found" even though `readBitAlias` reads the same name
+      // happily via the cached `arrayDef`. When the element type is a
+      // known built-in scalar, derive `elementSize` from the built-in
+      // directly. This mirrors what `UmasBitAliasMap.buildFromArray
+      // Definition` does (use `dim.startIndex` / `upperBound` directly
+      // from the array def), so the symbol cache and the bit-alias map
+      // now agree element-for-element.
+      final builtin = UmasDataTypes.builtIn[arrayDef.elementTypeId];
+      final int elementSize;
+      if (resolvedType.byteSize > 0) {
+        elementSize = resolvedType.byteSize ~/ totalElements;
+      } else if (builtin != null && builtin.byteSize > 0) {
+        elementSize = builtin.byteSize;
+      } else {
+        elementSize = 0;
+      }
       if (elementSize <= 0) {
         return UmasVariableTreeNode(
           name: variable.name,
@@ -3120,7 +3142,6 @@ class UmasClient {
       // synthesize a ref keyed on the built-in's name with the actual size.
       UmasDataTypeRef? resolvedElementType =
           UmasDataTypes.resolve(arrayDef.elementTypeId, dataTypes);
-      final builtin = UmasDataTypes.builtIn[arrayDef.elementTypeId];
       if (builtin != null && resolvedElementType?.byteSize != elementSize) {
         resolvedElementType = UmasDataTypeRef(
           id: builtin.id,
