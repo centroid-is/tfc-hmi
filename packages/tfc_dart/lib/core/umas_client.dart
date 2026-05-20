@@ -1903,25 +1903,59 @@ class UmasClient {
   /// Returns null when the alias is unknown. Reuses the existing
   /// [readVariables] path so M580 MonitorPlc / M340 ReadVariable
   /// selection is honoured transparently.
+  /// Synthesize the `(UmasVariable, UmasDataTypeRef)` pair that
+  /// addresses the byte-per-bool slot described by [entry] directly,
+  /// without going through [lookupSymbol] / the DD03 symbol cache.
+  ///
+  /// Bit-alias names (`...DIO_CTRL[5]`, `...DROP_HEALTH[3]`, etc.) are
+  /// synthesized from DD02 ARRAY OF BOOL short-records and live ONLY
+  /// in [bitAliases] — they have no DD03 entry on Schneider M580
+  /// firmware. A 2026-05-19 fuzz of `umas_cli writeBitAlias` against
+  /// the live PLC at 192.168.112.159 failed 11/30 attempts with
+  /// `UmasException(code=0, "symbol not found in data dictionary")`
+  /// because the old write path called [writeVariableByName] →
+  /// [lookupSymbol]. The read path always synthesized the address
+  /// from the [BitAliasEntry] directly, which is why reads worked.
+  ///
+  /// This helper is the shared synthesizer used by both [readBitAlias]
+  /// (byte-per-bool branch) and [writeBitAlias] so the two paths
+  /// cannot drift. Caller is responsible for screening out
+  /// `entry.bitOffset != 0` (packed-bits-16) before calling.
+  ///
+  /// Returns BOOL: `dataTypeId == 1`, `byteSize == 1`. The wire
+  /// encoder ([VariableWriteRef.fromVariable], [VariableReadRef.fromVariable])
+  /// applies the M580 paging / write-path baseOffset/offset swap; we
+  /// only carry the flat `(blockNo, byteOffset)` here.
+  ({UmasVariable variable, UmasDataTypeRef dataType})
+      _synthesizeBoolForBitAlias(BitAliasEntry entry, String aliasName) {
+    final variable = UmasVariable(
+      name: aliasName,
+      blockNo: entry.parentBlock,
+      offset: entry.parentByteOffset,
+      dataTypeId: 1, // BOOL
+    );
+    const dataType = UmasDataTypeRef(
+      id: 1,
+      name: 'BOOL',
+      byteSize: 1,
+    );
+    return (variable: variable, dataType: dataType);
+  }
+
   Future<bool?> readBitAlias(String aliasName) async {
     final map = await ensureBitAliasMap();
     final entry = map.lookup(aliasName);
     if (entry == null) return null;
     if (entry.bitOffset == 0) {
-      // Byte-per-bool — one-byte BOOL read directly at the byte offset.
-      // BOOL byteSize=1 in UmasDataTypes.builtIn; dataTypeId=1 is BOOL.
-      final parentVar = UmasVariable(
-        name: aliasName,
-        blockNo: entry.parentBlock,
-        offset: entry.parentByteOffset,
-        dataTypeId: 1, // BOOL
-      );
-      const boolType = UmasDataTypeRef(
-        id: 1,
-        name: 'BOOL',
-        byteSize: 1,
-      );
-      final values = await readVariables([(parentVar, boolType)]);
+      // Byte-per-bool — one-byte BOOL read directly at the byte
+      // offset. Synthesize the (UmasVariable, UmasDataTypeRef) pair
+      // straight from the BitAliasEntry. We deliberately do NOT
+      // consult [lookupSymbol] here: bit-alias names are synthesized
+      // from DD02 ARRAY OF BOOL short-records and are absent from
+      // DD03 on Schneider M580. See [_synthesizeBoolForBitAlias].
+      final synth = _synthesizeBoolForBitAlias(entry, aliasName);
+      final values =
+          await readVariables([(synth.variable, synth.dataType)]);
       if (values.isEmpty) return null;
       final v = values.first.value;
       if (v is bool) return v;
@@ -1954,33 +1988,37 @@ class UmasClient {
   /// by layout:
   ///
   ///   * `bitOffset == 0` — **byte-per-bool** (Schneider M580 default
-  ///     for `ARRAY[..] OF BOOL`): rides the standard BOOL write path
-  ///     via [writeVariableByName]. The same symbol resolution as the
-  ///     read path produces a one-byte address;
-  ///     [encodeVariableValue] turns `true` into `0x01` and `false`
-  ///     into `0x00`. Atomic — only the targeted byte changes, sibling
-  ///     array elements are not touched. Riding [writeVariableByName]
-  ///     gives this path the same session recovery, case-fallback,
-  ///     and readable-gate behaviour as every other write.
+  ///     for `ARRAY[..] OF BOOL`): synthesizes a [UmasVariable]
+  ///     directly from the [BitAliasEntry] via
+  ///     [_synthesizeBoolForBitAlias] and issues a [writeVariable]
+  ///     (0x23) PDU. We deliberately do NOT go through
+  ///     [writeVariableByName] / [lookupSymbol] — see
+  ///     [_synthesizeBoolForBitAlias] for the rationale (DD02-only
+  ///     alias names are absent from DD03 on M580 firmware, so
+  ///     lookupSymbol throws "symbol not found"). Atomic — only the
+  ///     targeted byte changes, sibling array elements are not
+  ///     touched. [encodeVariableValue] turns `true` into `0x01` and
+  ///     `false` into `0x00`. Session recovery is inherited from
+  ///     [writeVariable]'s `_withSessionAndRecovery` wrapper.
   ///
   ///   * `bitOffset > 0` — **packed-bits-16**: NOT supported. Writing
   ///     one bit in a packed WORD requires read-modify-write of the
-  ///     parent WORD, which is not implemented here. A naive
-  ///     [writeVariableByName] of a BOOL value to the parent WORD's
-  ///     address would silently overwrite the other 15 sibling bits
-  ///     with whatever [encodeVariableValue] produces for a 2-byte
-  ///     write. We fail loudly with [UnsupportedError] instead so the
-  ///     caller can either (a) write the whole word via
-  ///     [writeVariableByName] explicitly, or (b) wait for an RMW
-  ///     implementation.
+  ///     parent WORD, which is not implemented here. A naive BOOL
+  ///     write to the parent WORD's address would silently overwrite
+  ///     the other 15 sibling bits with whatever [encodeVariableValue]
+  ///     produces for a 2-byte write. We fail loudly with
+  ///     [UnsupportedError] instead so the caller can either (a) write
+  ///     the whole word via [writeVariableByName] explicitly, or
+  ///     (b) wait for an RMW implementation.
   ///
   /// Throws:
   ///   * [StateError] when [aliasName] is unknown to [bitAliases].
   ///   * [UnsupportedError] when the alias lives in a packed-bits-16
   ///     array (i.e. `entry.bitOffset > 0`).
-  ///   * Anything [writeVariableByName] throws (session errors,
-  ///     [UmasException] on per-symbol PLC errors, type-mismatch on
-  ///     the symbol's resolved data type, etc.).
+  ///   * Anything [writeVariable] throws (session errors, per-symbol
+  ///     PLC error codes from `_checkStatus`, the
+  ///     "blockCrcs not available" guard before the first
+  ///     [readPlcStatus], etc.).
   Future<void> writeBitAlias(String aliasName, bool value) async {
     final map = await ensureBitAliasMap();
     final entry = map.lookup(aliasName);
@@ -2007,12 +2045,16 @@ class UmasClient {
         'parent WORD first, flip the bit, and write it back atomically.',
       );
     }
-    // Byte-per-bool: ride the standard BOOL write pipeline. The alias
-    // name itself is the canonical browse-tree path (e.g.
-    // 'Elevator.BMEP58_ECPU_EXT.DROP_HEALTH[5]') and resolves to a
-    // one-byte BOOL via lookupSymbol; encodeVariableValue produces
-    // [0x01] / [0x00] depending on `value`.
-    await writeVariableByName(aliasName, value);
+    // Byte-per-bool: synthesize the BOOL (UmasVariable, UmasDataTypeRef)
+    // pair directly from the BitAliasEntry — mirror of the read path
+    // — and issue a single-ref writeVariable. Bypasses lookupSymbol
+    // because DD03 does not contain bit-alias entries on Schneider
+    // M580 firmware. See _synthesizeBoolForBitAlias for the full
+    // rationale + fuzz finding.
+    final synth = _synthesizeBoolForBitAlias(entry, aliasName);
+    final ref = VariableWriteRef.fromVariable(
+        synth.variable, synth.dataType, value);
+    await writeVariable([ref]);
   }
 
   /// Resolve a UMAS symbol path (e.g. `B_F1_RC_01_Front` or
