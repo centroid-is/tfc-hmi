@@ -289,6 +289,124 @@ void main() {
           reason: 'exactly one ref in the batched ReadVariable PDU');
     });
 
+    test('falls back to per-leaf reads when the batched ReadVariable '
+        'response trips a parse error (live-PLC reality: STRING members '
+        'inside an FB confuse the byteSize accounting in '
+        'parseVariableValues — the FB members must still surface '
+        'individually instead of disappearing wholesale)', () async {
+      // Two BOOLs + one STRING under an FB. The first send (batched
+      // 0x22) returns a too-short body, causing a "buffer underflow"
+      // UmasException. The helper must then fall back to per-leaf
+      // reads — each leaf gets its own 0x22, the per-leaf STRING
+      // succeeds because parseVariableValues handles a single STRING
+      // gracefully via the isStringy carve-out.
+      var batchedCalls = 0;
+      var perLeafCalls = 0;
+      final umas = UmasClient(
+        sendFn: (req) async {
+          if (req is! UmasRequest) {
+            return ModbusResponseCode.requestRxFailed;
+          }
+          if (req.umasSubFunction !=
+              UmasSubFunction.readVariable.code) {
+            return ModbusResponseCode.requestSucceed;
+          }
+          final refCount = req.umasPayload[4];
+          if (refCount > 1) {
+            batchedCalls++;
+            // Return too-short body to simulate the live-PLC
+            // STRING-in-FB underflow.
+            req.setFromPduResponse(_buildReadVariableSuccessPdu(
+              Uint8List.fromList([0x00]),
+            ));
+            return ModbusResponseCode.requestSucceed;
+          }
+          // Per-leaf path: refCount == 1. Reply with a plausible
+          // single-leaf body (1 byte BOOL or 16-byte STRING — for
+          // simplicity always return 1 byte true; STRING parser
+          // accepts short reads).
+          perLeafCalls++;
+          req.setFromPduResponse(_buildReadVariableSuccessPdu(
+            Uint8List.fromList([0x01]),
+          ));
+          return ModbusResponseCode.requestSucceed;
+        },
+      );
+      umas.debugInjectSymbol(ResolvedSymbol(
+        path: 'M_F2_RC_01',
+        variable: const UmasVariable(
+          name: 'M_F2_RC_01',
+          blockNo: 0xB2,
+          offset: 0,
+          dataTypeId: 0xC1,
+        ),
+        dataType: const UmasDataTypeRef(
+          id: 0xC1,
+          name: 'FB',
+          byteSize: 0,
+          classIdentifier: 7,
+        ),
+      ));
+      umas.debugInjectSymbol(ResolvedSymbol(
+        path: 'M_F2_RC_01.i_xFwd',
+        variable: const UmasVariable(
+          name: 'i_xFwd',
+          blockNo: 0xB2,
+          offset: 1,
+          dataTypeId: 1,
+        ),
+        dataType: const UmasDataTypeRef(
+          id: 1,
+          name: 'BOOL',
+          byteSize: 1,
+        ),
+      ));
+      umas.debugInjectSymbol(ResolvedSymbol(
+        path: 'M_F2_RC_01.q_sStatus',
+        variable: const UmasVariable(
+          name: 'q_sStatus',
+          blockNo: 0xB2,
+          offset: 0x27,
+          dataTypeId: 11,
+        ),
+        dataType: const UmasDataTypeRef(
+          id: 11,
+          name: 'STRING',
+          byteSize: 16,
+        ),
+      ));
+      umas.debugInjectSymbol(ResolvedSymbol(
+        path: 'M_F2_RC_01.q_xMotorBrakeOff',
+        variable: const UmasVariable(
+          name: 'q_xMotorBrakeOff',
+          blockNo: 0xB2,
+          offset: 0x26,
+          dataTypeId: 1,
+        ),
+        dataType: const UmasDataTypeRef(
+          id: 1,
+          name: 'BOOL',
+          byteSize: 1,
+        ),
+      ));
+      umas.debugSetProjectCrc(0xCAFEBABE);
+      umas.debugSetBlockCrcs(const [0xDEADBEEF]);
+      umas.debugSetSessionState(UmasSessionState.paired);
+
+      final members = await umas.readFbInstanceMembers('M_F2_RC_01');
+
+      expect(batchedCalls, equals(1),
+          reason: 'must attempt the batched 0x22 first');
+      expect(perLeafCalls, greaterThanOrEqualTo(2),
+          reason: 'fall-back must issue per-leaf 0x22 reads');
+      // The map must include every member whose per-leaf read succeeded.
+      expect(members.keys, containsAll(<String>[
+        'i_xFwd',
+        'q_xMotorBrakeOff',
+        'q_sStatus',
+      ]));
+    });
+
     test('throws UmasException when the FB root has no members in the '
         'already-primed symbol cache (no implicit browse)', () async {
       // Cache is primed (debugInjectSymbol marks it built), but the
@@ -555,6 +673,32 @@ void main() {
       } finally {
         adapter.dispose();
         wrapper.dispose();
+      }
+    });
+
+    test('write to an FB-bound key still throws UmasNotScalarException — '
+        'writes against FB roots are meaningless and must NOT silently '
+        'no-op even with the read-side fall-back in place', () async {
+      // Symmetry check: the catch lives in readUmasVariable, NOT in
+      // writeUmasVariable. Writing into an FB root has no meaningful
+      // semantics ("write the value of the whole FB"), so the symmetric
+      // UmasNotScalarException gate in writeVariableByName must keep
+      // firing.
+      final umas = buildPrimedUmas();
+      final pair = buildAdapterForFb(umas);
+      final adapter = pair.adapter;
+
+      try {
+        try {
+          await adapter.writeUmasVariable(
+              'UppiInntokuband', DynamicValue(value: 0));
+          fail('expected UmasNotScalarException on FB-root write');
+        } on UmasNotScalarException catch (e) {
+          expect(e.message, contains('M_F2_RC_01'));
+        }
+      } finally {
+        adapter.dispose();
+        pair.wrapper.dispose();
       }
     });
   });
