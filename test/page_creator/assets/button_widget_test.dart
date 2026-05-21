@@ -197,6 +197,172 @@ void main() {
     });
   });
 
+  // ----- feedback color follows live PLC bit, not local press state -----
+  //
+  // The Button asset's `FeedbackConfig` binds a PLC bool key. The visual
+  // contract:
+  //
+  //   * feedback key value == true    → button face = feedback!.color,
+  //                                     REGARDLESS of whether the operator
+  //                                     is currently touching the button.
+  //                                     This is the bug the user reported:
+  //                                     releasing the touch must NOT flip
+  //                                     the color back to outwardColor while
+  //                                     the PLC has the feedback bit latched.
+  //   * feedback key value == false   → button paints in inward/outward
+  //                                     based purely on local press state
+  //                                     (current behaviour predating this
+  //                                     contract).
+  //   * `disabled` still trumps feedback (highest priority).
+  //
+  // These tests pump a feedback BOOL value into a fake StateMan and then
+  // simulate a press-and-release gesture. The painted color is read via
+  // `paintedColor(tester)`.
+  group('feedback color follows live PLC bit, not local press state', () {
+    testWidgets('feedback==true + tap down + tap up → stays feedbackColor',
+        (tester) async {
+      final fake = _FakeStateMan();
+      fake.push('fb/key', true); // PLC has latched feedback on
+
+      final config = ButtonConfig(
+        key: 'cmd/start',
+        outwardColor: const Color(0xFFFF0000), // red
+        inwardColor: const Color(0xFF800000), // dark red
+        buttonType: ButtonType.square,
+      )..feedback = (FeedbackConfig()
+        ..key = 'fb/key'
+        ..color = const Color(0xFF00FF00) /* green */);
+
+      await tester.pumpWidget(wrap(
+        overrides: [stateManProvider.overrideWith((_) async => fake)],
+        child: SizedBox(width: 80, height: 80, child: Button(config)),
+      ));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+
+      // Sanity: idle paint while feedback==true must already be green —
+      // press has not happened yet.
+      expect(paintedColor(tester), const Color(0xFF00FF00),
+          reason: 'idle + feedback=true must paint feedbackColor');
+
+      // Press the button.
+      final gesture =
+          await tester.startGesture(tester.getCenter(find.byType(Button)));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+
+      // While pressed AND feedback bit still true → must still be green.
+      expect(paintedColor(tester), const Color(0xFF00FF00),
+          reason:
+              'pressed + feedback=true must paint feedbackColor (feedback '
+              'wins over local press state)');
+
+      // Release the gesture. Feedback bit is still latched true on the PLC.
+      await gesture.up();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+
+      // The bug: after release, color flips back to outwardColor even
+      // though the PLC feedback bit is still true. Correct behaviour:
+      // color must remain feedbackColor until the PLC's feedback bit
+      // itself goes false.
+      expect(paintedColor(tester), const Color(0xFF00FF00),
+          reason:
+              'released + feedback=true must STILL paint feedbackColor '
+              '(the PLC has not cleared its feedback bit yet)');
+    });
+
+    testWidgets('feedback==false + tap down → inwardColor (press visible)',
+        (tester) async {
+      final fake = _FakeStateMan();
+      fake.push('fb/key', false); // PLC has NOT latched feedback
+
+      final config = ButtonConfig(
+        key: 'cmd/start',
+        outwardColor: const Color(0xFFFF0000),
+        inwardColor: const Color(0xFF800000),
+        buttonType: ButtonType.square,
+      )..feedback = (FeedbackConfig()
+        ..key = 'fb/key'
+        ..color = const Color(0xFF00FF00));
+
+      await tester.pumpWidget(wrap(
+        overrides: [stateManProvider.overrideWith((_) async => fake)],
+        child: SizedBox(width: 80, height: 80, child: Button(config)),
+      ));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+
+      // Idle + feedback=false → outwardColor.
+      expect(paintedColor(tester), const Color(0xFFFF0000),
+          reason: 'idle + feedback=false must paint outwardColor');
+
+      // Press. Feedback still false. The local press should show through.
+      final gesture =
+          await tester.startGesture(tester.getCenter(find.byType(Button)));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+
+      expect(paintedColor(tester), const Color(0xFF800000),
+          reason:
+              'pressed + feedback=false must paint inwardColor — the PLC '
+              'has not asserted feedback, so the operator still gets a '
+              'momentary tactile press visual');
+
+      await gesture.up();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+
+      // Release + still false → outwardColor.
+      expect(paintedColor(tester), const Color(0xFFFF0000),
+          reason: 'released + feedback=false must paint outwardColor');
+    });
+
+    testWidgets('feedback flips true→false mid-hold → color flips back',
+        (tester) async {
+      final fake = _FakeStateMan();
+      fake.push('fb/key', true);
+
+      final config = ButtonConfig(
+        key: 'cmd/start',
+        outwardColor: const Color(0xFFFF0000),
+        inwardColor: const Color(0xFF800000),
+        buttonType: ButtonType.square,
+      )..feedback = (FeedbackConfig()
+        ..key = 'fb/key'
+        ..color = const Color(0xFF00FF00));
+
+      await tester.pumpWidget(wrap(
+        overrides: [stateManProvider.overrideWith((_) async => fake)],
+        child: SizedBox(width: 80, height: 80, child: Button(config)),
+      ));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+
+      final gesture =
+          await tester.startGesture(tester.getCenter(find.byType(Button)));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+      expect(paintedColor(tester), const Color(0xFF00FF00));
+
+      // PLC clears the feedback bit while operator is still holding.
+      fake.push('fb/key', false);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+
+      // Color should now follow the live bit → inwardColor (still
+      // pressed, but feedback is gone).
+      expect(paintedColor(tester), const Color(0xFF800000),
+          reason:
+              'feedback flipping to false mid-hold must surface the press '
+              'visual (inwardColor)');
+
+      await gesture.up();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+    });
+  });
+
   // ----- textColor (optional label color override) editor tests -----
   //
   // The editor mirrors the `disabledColor` pattern but adds an explicit
@@ -292,10 +458,14 @@ void main() {
 }
 
 /// Minimal stand-in for [StateMan] that lets tests push synchronous values
-/// for a given key. Only the methods used by Button (`subscribe`) are
-/// implemented; everything else throws so accidental usage is loud.
+/// for a given key. Only the methods used by Button (`subscribe`, `write`)
+/// are implemented; everything else throws so accidental usage is loud.
 class _FakeStateMan implements StateMan {
   final Map<String, BehaviorSubject<DynamicValue>> _streams = {};
+
+  /// Record of every `write(key, value)` Button has made. Tests can assert
+  /// against this when the press path needs to be verified.
+  final List<(String, bool)> writes = <(String, bool)>[];
 
   void push(String key, bool value) {
     final s = _streams.putIfAbsent(
@@ -312,6 +482,13 @@ class _FakeStateMan implements StateMan {
       () => BehaviorSubject<DynamicValue>(),
     );
     return s.stream;
+  }
+
+  /// Records the write so the press-path doesn't crash on noSuchMethod when
+  /// the production button writes to its command key on tap-down/up/cancel.
+  @override
+  Future<void> write(String key, DynamicValue value) async {
+    writes.add((key, value.asBool));
   }
 
   // KeyField (used by the editor's KeyField widgets) reads `keys` to
