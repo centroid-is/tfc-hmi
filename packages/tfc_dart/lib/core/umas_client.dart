@@ -2168,6 +2168,92 @@ class UmasClient {
     return values.first;
   }
 
+  /// Read every readable scalar member of an FB instance rooted at [fbPath].
+  ///
+  /// Walks the already-built symbol cache for entries whose path starts with
+  /// `<fbPath>.` and issues a single batched [readVariables] for the readable
+  /// scalar leaves. Returns a map keyed by the member sub-path (the suffix
+  /// after the FB root + `.`).
+  ///
+  /// **Why a dedicated helper, not just N `readVariableByName` calls?**
+  /// The MonitorPlc fallback path in [ModbusDeviceClientAdapter] catches
+  /// [UmasNotScalarException] when a poll-loop key is bound to an FB
+  /// instance. The original silent-blank symptom (commit `8c03c68d`'s
+  /// motivation) and the noisy per-tick log this helper replaces both
+  /// point to the same root cause: the poll loop never had a way to
+  /// realise the binding meant "fan out across members". This helper
+  /// does the fan-out in ONE round-trip so the per-tick cost matches a
+  /// scalar read closely enough to drop into the existing fallback poll
+  /// without a per-key re-architecture.
+  ///
+  /// **Member naming.** Sub-paths preserve dotted notation for nested
+  /// members. For an FB `M_F2_RC_01` with a nested `HMI` sub-instance,
+  /// the map carries keys like `HMI.p_Stat_xRunningFwd` — flat (one map
+  /// level deep) rather than recursively nested. This matches the shape
+  /// the existing FB-DynamicValue widget / Conveyor FB asset already
+  /// consume (`fb[memberName]` on a flat `Map<String, DynamicValue>`).
+  ///
+  /// **Unreadable members.** Members marked `readable == false`
+  /// (VAR_IN_OUT, etc.) are silently dropped from the batched read AND
+  /// from the returned map. The PLC would reject them with 0x94, and
+  /// the rest of the FB members must still get values this tick.
+  ///
+  /// **Errors.**
+  /// - Throws [UmasException] when [fbPath] is unknown to the symbol
+  ///   cache (neither the root nor any `<fbPath>.<...>` entries exist).
+  /// - Throws [UmasException] when the FB root resolves but has no
+  ///   readable members under it (e.g. all members are VAR_IN_OUT, or
+  ///   the FB is genuinely empty in the data dictionary).
+  ///
+  /// Callers MUST have a primed session (paired + block CRCs) — the
+  /// same precondition [readVariables] enforces. In production the
+  /// adapter's [ModbusDeviceClientAdapter.readUmasVariable] calls
+  /// [readPlcStatus] before reaching this method.
+  Future<Map<String, TypedVariableValue>> readFbInstanceMembers(
+      String fbPath) async {
+    // Ensure the symbol cache is populated. If the cache is empty
+    // browse() will run and walk the tree; if [fbPath] is genuinely
+    // unknown after that, _ensureSymbolCache stays empty for that
+    // prefix and we surface the error below.
+    await _ensureSymbolCache();
+
+    final prefix = '$fbPath.';
+    final orderedPairs = <(UmasVariable, UmasDataTypeRef)>[];
+    final orderedSubPaths = <String>[];
+    for (final entry in _symbolCache.entries) {
+      final p = entry.key;
+      if (!p.startsWith(prefix)) continue;
+      final sym = entry.value;
+      if (!sym.readable) continue;
+      // Skip nested-FB roots — they have classIdentifier 7 and
+      // byteSize 0; the leaves inside them are already enumerated as
+      // separate entries in the symbol cache (the browse walker
+      // recurses into FBs in _ensureSymbolCache.walk).
+      if (sym.dataType.classIdentifier == 7) continue;
+      orderedPairs.add((sym.variable, sym.dataType));
+      orderedSubPaths.add(p.substring(prefix.length));
+    }
+
+    if (orderedPairs.isEmpty) {
+      throw UmasException(
+        errorCode: 0,
+        message: 'UMAS readFbInstanceMembers("$fbPath"): no readable scalar '
+            'members are cached for this FB instance. The FB root may be '
+            'unknown to the data dictionary, or every member is VAR_IN_OUT.',
+      );
+    }
+
+    final values = await readVariables(orderedPairs);
+    final out = <String, TypedVariableValue>{};
+    final n = values.length < orderedSubPaths.length
+        ? values.length
+        : orderedSubPaths.length;
+    for (var i = 0; i < n; i++) {
+      out[orderedSubPaths[i]] = values[i];
+    }
+    return out;
+  }
+
   /// Write a single UMAS variable by name. Resolves via [lookupSymbol]
   /// then issues [writeVariable] with the value encoded per the
   /// resolved data type. The [value] is encoded by [encodeVariableValue]

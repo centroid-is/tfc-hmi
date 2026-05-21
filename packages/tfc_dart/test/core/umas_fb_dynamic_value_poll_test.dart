@@ -284,25 +284,46 @@ void main() {
           reason: 'exactly one ref in the batched ReadVariable PDU');
     });
 
-    test('throws UmasException when the FB root itself is unknown to '
-        'the symbol cache', () async {
-      // Empty cache — `lookupSymbol` would normally trigger a browse(),
-      // but the test harness has no PLC. Hitting an unknown root must
-      // surface a clear error, not an empty success.
+    test('throws UmasException when the FB root has no members in the '
+        'already-primed symbol cache (no implicit browse)', () async {
+      // Cache is primed (debugInjectSymbol marks it built), but the
+      // requested FB root has no children. We MUST surface a clear
+      // operator-facing error here rather than (a) silently returning an
+      // empty map or (b) trying to do an implicit browse() — the poll
+      // loop catches UmasNotScalarException from the FB root itself,
+      // which means the root IS in the cache. If there are no readable
+      // members, that's a configuration/PLC problem, not a missing-data
+      // one. The error must name the path so operators know which key
+      // is broken.
       final umas = UmasClient(
         sendFn: (req) async => ModbusResponseCode.requestSucceed,
       );
+      // Inject ONE unrelated symbol so debugInjectSymbol marks the cache
+      // built. The lookup for Unknown_FB.<...> finds nothing.
+      umas.debugInjectSymbol(ResolvedSymbol(
+        path: 'Unrelated_Symbol',
+        variable: const UmasVariable(
+          name: 'Unrelated_Symbol',
+          blockNo: 0,
+          offset: 0,
+          dataTypeId: 6,
+        ),
+        dataType: const UmasDataTypeRef(
+          id: 6,
+          name: 'REAL',
+          byteSize: 4,
+        ),
+      ));
       umas.debugSetProjectCrc(0x0);
       umas.debugSetBlockCrcs(const [0x0]);
       umas.debugSetSessionState(UmasSessionState.paired);
 
       try {
         await umas.readFbInstanceMembers('Unknown_FB');
-        fail('expected UmasException for unknown FB root');
+        fail('expected UmasException for FB root with no cached members');
       } on UmasException catch (e) {
-        expect(e.message.toLowerCase(),
-            anyOf(contains('unknown'), contains('not found'), contains('no member')));
         expect(e.message, contains('Unknown_FB'));
+        expect(e.message.toLowerCase(), contains('member'));
       }
     });
   });
