@@ -289,7 +289,8 @@ Future<void> main(List<String> argv) async {
     stdout.writeln('  status 0xFE (success): $okCount');
     stdout.writeln('  status 0xFD (error)  : $errCount');
     if (errCount == 0) {
-      stdout.writeln('  >>> ZERO 0xFD errors over 30s of ticks — FIX VERIFIED');
+      stdout.writeln(
+          '  >>> ZERO 0xFD errors over ${timerSeconds}s of ticks — FIX VERIFIED');
     } else {
       stdout.writeln('  >>> $errCount errors observed — fix may be incomplete');
     }
