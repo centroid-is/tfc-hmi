@@ -1,14 +1,18 @@
 // ConveyorFb (FB-binding conveyor asset) tests.
 //
-// New contract (member-toggle UI on top of an FB DynamicValue subscription):
-//  - `ConveyorFbConfig.displayedMembers` controls which FB members the
-//    widget renders. Order is preserved.
-//  - `fromJson` without `displayedMembers` populates the starter set
-//    (REGRESSION GUARD: old saved configs keep loading).
-//  - Rendering filters the FB DynamicValue map to only the selected
-//    members and renders each by Dart type (bool / int / double / string).
-//  - Missing members render as "?" (NOT a crash).
-//  - Empty `displayedMembers` renders an empty grid + helpful hint.
+// New contract (schema picker on top of an FB DynamicValue subscription):
+//  - `ConveyorFbConfig.schema` (a `ConveyorSchema?`) selects which vendor
+//    convention the bound FB conforms to. Two values are supported:
+//      * `ConveyorSchema.beckhoff`  — TwinCAT-style Hungarian-prefix members
+//      * `ConveyorSchema.schneider` — Schneider HMI sub-FB style
+//    Default is `null` → asset renders a config hint instead of a value grid.
+//  - The schema is the *only* thing that decides which FB member names the
+//    asset reads from the live DynamicValue map. There is no longer a
+//    free-form `displayedMembers` toggle.
+//  - The legacy `displayedMembers` field is GONE. Old saved JSON loses that
+//    data silently (intentional — schema picker replaces the toggle UI).
+//  - Members missing from the FB map (e.g. `HMI.Color.red` before the
+//    named-bit-decoder agent has landed) render as "?" — never a crash.
 //
 // All view-level tests bypass Riverpod by exercising the pure
 // `ConveyorFbView` widget directly.
@@ -36,15 +40,15 @@ void main() {
   }
 
   group('ConveyorFbConfig — defaults & JSON round-trip', () {
-    test('default constructor populates the starter member set', () {
+    test('default constructor leaves schema null', () {
       final config = ConveyorFbConfig();
-      expect(config.displayedMembers, isNotEmpty);
-      expect(config.displayedMembers, kConveyorFbDefaultMembers);
+      expect(config.schema, isNull);
     });
 
-    test('fromJson without displayedMembers populates starter set '
+    test('fromJson without schema field defaults to null '
         '(REGRESSION GUARD for old saved pages)', () {
-      // Simulate an old saved Conveyor config (pre-displayedMembers).
+      // Simulate an old saved Conveyor config (pre-schema, also pre-removal
+      // of `displayedMembers`).
       final json = <String, dynamic>{
         'asset_name': 'ConveyorFbConfig',
         'coordinates': {'x': 0.1, 'y': 0.2, 'angle': 0.0},
@@ -55,27 +59,38 @@ void main() {
         'plcAssetKey': null,
         'fbInstanceName': 'Elevator',
         'parentWordKey': 'plc.fb01.status_word',
+        // Legacy `displayedMembers` payload — ignored by the new model.
+        'displayedMembers': ['p_Stat_xRunningFwd', 'p_Stat_xFault'],
       };
       final restored = ConveyorFbConfig.fromJson(json);
-      expect(restored.displayedMembers, kConveyorFbDefaultMembers);
+      expect(restored.schema, isNull,
+          reason: 'no schema field → null (config hint)');
       expect(restored.fbInstanceName, 'Elevator');
       expect(restored.parentWordKey, 'plc.fb01.status_word');
     });
 
-    test('round-trip preserves displayedMembers', () {
+    test('round-trip preserves schema=schneider', () {
       final config = ConveyorFbConfig(
         fbInstanceName: 'FB_Conveyor_01',
         parentWordKey: 'plc.fb01.status_word',
-        displayedMembers: ['p_Stat_xRunningFwd', 'p_Stat_iThermalFaults'],
+        schema: ConveyorSchema.schneider,
       );
       final json = config.toJson();
       final restored = ConveyorFbConfig.fromJson(json);
       expect(restored.fbInstanceName, 'FB_Conveyor_01');
       expect(restored.parentWordKey, 'plc.fb01.status_word');
-      expect(
-        restored.displayedMembers,
-        ['p_Stat_xRunningFwd', 'p_Stat_iThermalFaults'],
+      expect(restored.schema, ConveyorSchema.schneider);
+    });
+
+    test('round-trip preserves schema=beckhoff', () {
+      final config = ConveyorFbConfig(
+        fbInstanceName: 'FB_Conveyor_02',
+        schema: ConveyorSchema.beckhoff,
       );
+      final json = config.toJson();
+      final restored = ConveyorFbConfig.fromJson(json);
+      expect(restored.fbInstanceName, 'FB_Conveyor_02');
+      expect(restored.schema, ConveyorSchema.beckhoff);
     });
 
     test('serializes and deserializes with all fields null (defaults)', () {
@@ -84,7 +99,7 @@ void main() {
       final restored = ConveyorFbConfig.fromJson(json);
       expect(restored.fbInstanceName, isNull);
       expect(restored.parentWordKey, isNull);
-      expect(restored.displayedMembers, kConveyorFbDefaultMembers);
+      expect(restored.schema, isNull);
     });
 
     test('asset_name discriminator is "ConveyorFbConfig"', () {
@@ -97,291 +112,240 @@ void main() {
       final config = ConveyorFbConfig.preview();
       expect(config, isNotNull);
       expect(config.assetName, 'ConveyorFbConfig');
-      // Preview also has displayedMembers (the starter set).
-      expect(config.displayedMembers, isNotEmpty);
+      // Preview ships with a sensible schema so the asset is visible in
+      // the page-editor catalogue rather than just a config hint.
+      expect(config.schema, isNotNull);
     });
   });
 
-  group('ConveyorFbView — selected-member rendering', () {
-    testWidgets('renders only members in displayedMembers, '
-        'ignores unselected map entries', (tester) async {
-      // FB exposes more than the displayed set; we should only see the
-      // selected three.
+  group('ConveyorFbView — schema=schneider', () {
+    testWidgets('reads Schneider HMI member names from the FB map',
+        (tester) async {
       final fb = fbValue({
-        'p_Stat_xRunningFwd': true,
-        'p_Stat_xFault': false,
-        'p_Stat_iThermalFaults': 0,
-        'p_Mode_xAuto': true,
-        'red': false,
-        'grey': true,
-        'green': false,
-        // Extra members not in displayedMembers — must not appear.
-        'p_Stat_diRuntime': 9876,
-        'p_Stat_rVelocity': 1.5,
+        'HMI.p_Stat_xRunningFwd': true,
+        'HMI.p_Stat_xFault': false,
+        'HMI.p_Mode_xMan': false,
+        'HMI.p_Stat_iThermalFaults': 0,
+        'HMI.p_Stat_diRuntime': 12345,
+        'HMI.p_Stat_rVelocity': 1.5,
+        'HMI.Color.red': false,
+        'HMI.Color.grey': true,
+        'HMI.Color.green': false,
       });
       await tester.pumpWidget(wrap(
         SizedBox(
-          width: 400,
+          width: 600,
           height: 400,
           child: ConveyorFbView(
             fbInstanceName: 'FB_Conveyor_01',
             fbValue: fb,
-            displayedMembers: const [
-              'p_Stat_xRunningFwd',
-              'p_Stat_iThermalFaults',
-              'grey',
-            ],
+            schema: ConveyorSchema.schneider,
           ),
         ),
       ));
 
-      // Labels for selected members appear.
-      expect(find.text('p_Stat_xRunningFwd'), findsOneWidget);
-      expect(find.text('p_Stat_iThermalFaults'), findsOneWidget);
-      expect(find.text('grey'), findsOneWidget);
+      // BOOLs render via the bool-dot lamp keyed by their canonical
+      // concept name (NOT the raw vendor member path).
+      expect(
+        find.byKey(const ValueKey(
+          'conveyor-fb-member:running:bool:on',
+        )),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey(
+          'conveyor-fb-member:fault:bool:off',
+        )),
+        findsOneWidget,
+      );
 
-      // Labels for unselected members do NOT appear.
-      expect(find.text('p_Stat_xFault'), findsNothing);
-      expect(find.text('p_Mode_xAuto'), findsNothing);
-      expect(find.text('p_Stat_diRuntime'), findsNothing);
-      expect(find.text('p_Stat_rVelocity'), findsNothing);
-      expect(find.text('red'), findsNothing);
-      expect(find.text('green'), findsNothing);
+      // Color indicators (grey active, red+green off).
+      expect(
+        find.byKey(const ValueKey(
+          'conveyor-fb-member:colorGrey:bool:on',
+        )),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey(
+          'conveyor-fb-member:colorRed:bool:off',
+        )),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey(
+          'conveyor-fb-member:colorGreen:bool:off',
+        )),
+        findsOneWidget,
+      );
+
+      // Numerics (INT/DINT plain digits; REAL 1-decimal).
+      expect(find.text('12345'), findsOneWidget); // runtime DINT
+      expect(find.text('1.5'), findsOneWidget); // velocity REAL
     });
 
-    testWidgets('renders BOOL as on/off lamp keyed by state', (tester) async {
+    testWidgets('missing Schneider Color.* members render "?" '
+        '(graceful when named-bit-decoder not yet landed)', (tester) async {
+      // Bare FB map — none of the HMI.Color.* keys exist (simulating the
+      // named-bit-decoder agent's work not yet landed).
       final fb = fbValue({
-        'p_Stat_xRunningFwd': true,
-        'p_Stat_xFault': false,
+        'HMI.p_Stat_xRunningFwd': true,
+        'HMI.p_Stat_xFault': false,
       });
       await tester.pumpWidget(wrap(
         SizedBox(
-          width: 400,
-          height: 300,
+          width: 600,
+          height: 400,
           child: ConveyorFbView(
-            fbInstanceName: 'FB',
+            fbInstanceName: 'FB_Conveyor_01',
             fbValue: fb,
-            displayedMembers: const ['p_Stat_xRunningFwd', 'p_Stat_xFault'],
+            schema: ConveyorSchema.schneider,
+          ),
+        ),
+      ));
+
+      // Running/fault present → render normally.
+      expect(
+        find.byKey(const ValueKey(
+          'conveyor-fb-member:running:bool:on',
+        )),
+        findsOneWidget,
+      );
+
+      // Color members absent → "?" placeholder, NOT a crash.
+      expect(
+        find.byKey(const ValueKey(
+          'conveyor-fb-member:colorRed:unknown',
+        )),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey(
+          'conveyor-fb-member:colorGrey:unknown',
+        )),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey(
+          'conveyor-fb-member:colorGreen:unknown',
+        )),
+        findsOneWidget,
+      );
+    });
+  });
+
+  group('ConveyorFbView — schema=beckhoff', () {
+    testWidgets('reads Beckhoff/TwinCAT Hungarian-prefix member names',
+        (tester) async {
+      final fb = fbValue({
+        'bRunning': true,
+        'bFault': false,
+        'bMan': true,
+        'rActSpeed': 2.5,
+      });
+      await tester.pumpWidget(wrap(
+        SizedBox(
+          width: 600,
+          height: 400,
+          child: ConveyorFbView(
+            fbInstanceName: 'FB_Motor_01',
+            fbValue: fb,
+            schema: ConveyorSchema.beckhoff,
           ),
         ),
       ));
 
       expect(
         find.byKey(const ValueKey(
-          'conveyor-fb-member:p_Stat_xRunningFwd:bool:on',
+          'conveyor-fb-member:running:bool:on',
         )),
         findsOneWidget,
       );
       expect(
         find.byKey(const ValueKey(
-          'conveyor-fb-member:p_Stat_xFault:bool:off',
+          'conveyor-fb-member:fault:bool:off',
         )),
         findsOneWidget,
       );
-    });
-
-    testWidgets('renders numeric INT/DINT as digits', (tester) async {
-      final fb = fbValue({
-        'p_Stat_iThermalFaults': 3,
-        'p_Stat_diRuntime': 12345,
-      });
-      await tester.pumpWidget(wrap(
-        SizedBox(
-          width: 400,
-          height: 300,
-          child: ConveyorFbView(
-            fbInstanceName: 'FB',
-            fbValue: fb,
-            displayedMembers: const [
-              'p_Stat_iThermalFaults',
-              'p_Stat_diRuntime',
-            ],
-          ),
-        ),
-      ));
-
-      expect(find.text('3'), findsOneWidget);
-      expect(find.text('12345'), findsOneWidget);
-    });
-
-    testWidgets('renders REAL with 1 decimal place', (tester) async {
-      final fb = fbValue({
-        'p_Stat_rVelocity': 1.5,
-      });
-      await tester.pumpWidget(wrap(
-        SizedBox(
-          width: 400,
-          height: 300,
-          child: ConveyorFbView(
-            fbInstanceName: 'FB',
-            fbValue: fb,
-            displayedMembers: const ['p_Stat_rVelocity'],
-          ),
-        ),
-      ));
-
+      expect(
+        find.byKey(const ValueKey(
+          'conveyor-fb-member:mode:bool:on',
+        )),
+        findsOneWidget,
+      );
       // REAL formatted to 1 decimal.
-      expect(find.text('1.5'), findsOneWidget);
+      expect(find.text('2.5'), findsOneWidget);
     });
+  });
 
-    testWidgets('renders STRING as text', (tester) async {
-      final fb = fbValue({
-        'p_Stat_sName': 'CONV-01',
-      });
-      await tester.pumpWidget(wrap(
-        SizedBox(
-          width: 400,
-          height: 300,
-          child: ConveyorFbView(
-            fbInstanceName: 'FB',
-            fbValue: fb,
-            displayedMembers: const ['p_Stat_sName'],
-          ),
-        ),
-      ));
-
-      expect(find.text('CONV-01'), findsOneWidget);
-    });
-
-    testWidgets('member missing from FB map renders "?" placeholder, '
-        'does NOT crash', (tester) async {
-      // displayedMembers includes a name not present in the FB map.
-      final fb = fbValue({
-        'p_Stat_xRunningFwd': true,
-        // 'p_Stat_xMissing' intentionally NOT in map.
-      });
-      await tester.pumpWidget(wrap(
-        SizedBox(
-          width: 400,
-          height: 300,
-          child: ConveyorFbView(
-            fbInstanceName: 'FB',
-            fbValue: fb,
-            displayedMembers: const [
-              'p_Stat_xRunningFwd',
-              'p_Stat_xMissing',
-            ],
-          ),
-        ),
-      ));
-
-      // Label still rendered.
-      expect(find.text('p_Stat_xMissing'), findsOneWidget);
-      // "?" placeholder shows for the missing one.
-      expect(
-        find.byKey(const ValueKey(
-          'conveyor-fb-member:p_Stat_xMissing:unknown',
-        )),
-        findsOneWidget,
-      );
-    });
-
-    testWidgets('null fbValue tolerated — every displayed member is unknown',
+  group('ConveyorFbView — schema=null', () {
+    testWidgets('null schema renders config hint, no value grid',
         (tester) async {
+      final fb = fbValue({'bRunning': true, 'p_Stat_xRunningFwd': true});
       await tester.pumpWidget(wrap(
         SizedBox(
           width: 400,
           height: 300,
           child: ConveyorFbView(
-            fbInstanceName: 'FB',
-            fbValue: null,
-            displayedMembers: const [
-              'p_Stat_xRunningFwd',
-              'p_Stat_xFault',
-              'grey',
-            ],
-          ),
-        ),
-      ));
-
-      // No crash; every label rendered with "?" placeholder.
-      expect(
-        find.byKey(const ValueKey(
-          'conveyor-fb-member:p_Stat_xRunningFwd:unknown',
-        )),
-        findsOneWidget,
-      );
-      expect(
-        find.byKey(const ValueKey(
-          'conveyor-fb-member:p_Stat_xFault:unknown',
-        )),
-        findsOneWidget,
-      );
-      expect(
-        find.byKey(const ValueKey('conveyor-fb-member:grey:unknown')),
-        findsOneWidget,
-      );
-    });
-
-    testWidgets('empty displayedMembers renders a "no members selected" hint',
-        (tester) async {
-      final fb = fbValue({'p_Stat_xRunningFwd': true});
-      await tester.pumpWidget(wrap(
-        SizedBox(
-          width: 400,
-          height: 300,
-          child: ConveyorFbView(
-            fbInstanceName: 'FB_Empty',
+            fbInstanceName: 'FB_Unconfigured',
             fbValue: fb,
-            displayedMembers: const [],
+            schema: null,
           ),
         ),
       ));
 
       // FB header still appears.
-      expect(find.text('FB_Empty'), findsOneWidget);
-      // Empty-state hint is visible.
+      expect(find.text('FB_Unconfigured'), findsOneWidget);
+      // Config hint visible.
       expect(
-        find.byKey(const ValueKey('conveyor-fb-empty-hint')),
+        find.byKey(const ValueKey('conveyor-fb-schema-hint')),
         findsOneWidget,
       );
       // No member cells rendered.
-      expect(
-        find.byType(ConveyorFbMemberCell),
-        findsNothing,
-      );
-    });
-
-    testWidgets('renders FB instance name as header', (tester) async {
-      final fb = fbValue({'p_Stat_xRunningFwd': true});
-      await tester.pumpWidget(wrap(
-        SizedBox(
-          width: 400,
-          height: 300,
-          child: ConveyorFbView(
-            fbInstanceName: 'FB_Conveyor_42',
-            fbValue: fb,
-            displayedMembers: const ['p_Stat_xRunningFwd'],
-          ),
-        ),
-      ));
-      expect(find.text('FB_Conveyor_42'), findsOneWidget);
+      expect(find.byType(ConveyorFbMemberCell), findsNothing);
     });
   });
 
-  group('ConveyorFbConfig — config editor (multi-select picker)', () {
-    testWidgets('toggling a checkbox updates displayedMembers', (tester) async {
-      // Fake StateMan that returns an FB DynamicValue map for the bound
-      // FB instance. The picker should discover those members and
-      // surface them as checkboxes alongside the currently-selected set.
-      final fake = _FakeStateMan();
-      fake.pushFb('Elevator', LinkedHashMap<String, dynamic>.from({
-        // Match the default starter set so they're visible AND
-        // checked. We then test deselect AND a new add via discovery.
-        'p_Stat_xRunningFwd': true,
-        'p_Stat_xFault': false,
-        'p_Mode_xAuto': true,
-        'red': false,
-        'grey': true,
-        'green': false,
-        // Extra member that's NOT in the default starter set — used
-        // for the "discover & add new" path.
-        'p_Stat_iThermalFaults': 0,
-      }));
+  group('ConveyorFbView — null fbValue handling', () {
+    testWidgets('null fbValue with a schema renders all concepts as "?"',
+        (tester) async {
+      await tester.pumpWidget(wrap(
+        SizedBox(
+          width: 600,
+          height: 400,
+          child: ConveyorFbView(
+            fbInstanceName: 'FB',
+            fbValue: null,
+            schema: ConveyorSchema.schneider,
+          ),
+        ),
+      ));
 
+      // No crash; canonical concepts present as unknown.
+      expect(
+        find.byKey(const ValueKey('conveyor-fb-member:running:unknown')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('conveyor-fb-member:fault:unknown')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('conveyor-fb-member:colorRed:unknown')),
+        findsOneWidget,
+      );
+    });
+  });
+
+  group('ConveyorFbConfig — config editor (schema dropdown)', () {
+    testWidgets('changing the schema dropdown updates the saved config',
+        (tester) async {
+      // Fake StateMan present so the FutureBuilder inside the editor does
+      // not need a real PLC.
+      final fake = _FakeStateMan();
       final config = ConveyorFbConfig(
         fbInstanceName: 'Elevator',
-        displayedMembers: List<String>.from(kConveyorFbDefaultMembers),
+        schema: ConveyorSchema.schneider,
       );
 
       await tester.pumpWidget(
@@ -398,47 +362,29 @@ void main() {
           ),
         ),
       );
-      // Let stateMan future + stream emit.
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 50));
 
-      // Sanity: starter member 'red' is currently selected.
-      expect(config.displayedMembers, contains('red'));
-      // Sanity: the unselected discovered member is NOT in the list.
-      expect(config.displayedMembers, isNot(contains('p_Stat_iThermalFaults')));
+      // The schema dropdown is keyed for stable test discovery.
+      final dropdownFinder = find.byKey(
+        const ValueKey('conveyor-fb-schema-dropdown'),
+      );
+      expect(dropdownFinder, findsOneWidget);
 
-      // The picker lives in a constrained ListView so individual
-      // checkboxes may be outside the painted viewport. We invoke the
-      // CheckboxListTile.onChanged callback directly to test the
-      // wiring contract (toggle → displayedMembers mutation) without
-      // depending on hit-test geometry.
-      CheckboxListTile findCheckbox(String name) {
-        return tester.widget<CheckboxListTile>(find.byKey(
-          ValueKey('conveyor-fb-member-checkbox:$name'),
-          skipOffstage: false,
-        ));
-      }
+      // Resolve current value via the widget — sanity.
+      expect(config.schema, ConveyorSchema.schneider);
 
-      // 'red' is currently checked — toggle it OFF.
-      final redCheckbox = findCheckbox('red');
-      expect(redCheckbox.value, isTrue,
-          reason: '"red" starts in the selected set');
-      redCheckbox.onChanged!(false);
+      // Simulate the user picking Beckhoff. We invoke the onChanged
+      // callback directly to side-step layout issues with hit-testing
+      // a popup menu inside a constrained-size SingleChildScrollView.
+      final dropdown = tester.widget<DropdownButton<ConveyorSchema?>>(
+        dropdownFinder,
+      );
+      dropdown.onChanged!(ConveyorSchema.beckhoff);
       await tester.pump();
 
-      expect(config.displayedMembers, isNot(contains('red')),
-          reason: 'toggling red OFF removes it from displayedMembers');
-
-      // 'p_Stat_iThermalFaults' is discovered but unchecked — toggle
-      // it ON.
-      final thermalCheckbox = findCheckbox('p_Stat_iThermalFaults');
-      expect(thermalCheckbox.value, isFalse,
-          reason: 'discovered-but-unselected member starts unchecked');
-      thermalCheckbox.onChanged!(true);
-      await tester.pump();
-
-      expect(config.displayedMembers, contains('p_Stat_iThermalFaults'),
-          reason: 'toggling a new member ON adds it to displayedMembers');
+      expect(config.schema, ConveyorSchema.beckhoff,
+          reason: 'selecting Beckhoff updates the saved config');
     });
   });
 }
