@@ -26,7 +26,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:open62541/open62541.dart' show DynamicValue, NodeId;
+import 'package:open62541/open62541.dart' show DynamicValue;
 import 'package:rxdart/rxdart.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:shared_preferences_platform_interface/in_memory_shared_preferences_async.dart';
@@ -139,7 +139,13 @@ void main() {
       // Tap directly on the label text. With the bug present, the label's
       // GestureDetector (or its Text child via deferToChild) absorbs the
       // tap; nothing reaches the InkWell, so no write is recorded.
-      await tester.tap(find.text('GO'));
+      //
+      // `warnIfMissed: false` because the FIX wraps the label Text in
+      // IgnorePointer — `find.text('GO')` finds the Text widget but its
+      // RenderParagraph is now non-hit-testing. That is exactly the
+      // shape we want: the tap lands on the InkWell directly below the
+      // label, which is what `fake.writes` will prove.
+      await tester.tap(find.text('GO'), warnIfMissed: false);
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 50));
 
