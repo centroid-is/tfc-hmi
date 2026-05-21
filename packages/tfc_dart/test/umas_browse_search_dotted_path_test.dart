@@ -34,7 +34,6 @@ List<UmasVariableTreeNode> _buildFixtureTree() {
           blockNo: 0xb2,
           offset: off,
           dataTypeId: 0x0001, // BOOL
-          dataTypeName: 'BOOL',
         ),
         dataType: const UmasDataTypeRef(
           id: 0x0001,
@@ -54,7 +53,6 @@ List<UmasVariableTreeNode> _buildFixtureTree() {
           blockNo: 0xb2,
           offset: off,
           dataTypeId: 0x0005, // WORD
-          dataTypeName: 'WORD',
         ),
         dataType: const UmasDataTypeRef(
           id: 0x0005,

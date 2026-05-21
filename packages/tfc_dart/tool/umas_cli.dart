@@ -68,6 +68,7 @@ import 'package:modbus_client/modbus_client.dart';
 import 'package:modbus_client_tcp/modbus_client_tcp.dart';
 import 'package:tfc_dart/core/ecostruxure_zef.dart';
 import 'package:tfc_dart/core/umas_bit_alias_map.dart';
+import 'package:tfc_dart/core/umas_browse_search.dart';
 import 'package:tfc_dart/core/umas_client.dart';
 import 'package:tfc_dart/core/umas_error_messages.dart';
 import 'package:tfc_dart/core/umas_types.dart';
@@ -439,7 +440,13 @@ Future<int> _checkCommand(
 
 Future<int> _readCommand(UmasClient umas, String name) async {
   final tree = await umas.browse();
-  final node = _findByName(tree, name);
+  // Accept BOTH leaf-only ("p_CMD_xManFwd") and full dotted-path
+  // ("M_F2_RC_01.p_CMD_xManFwd") forms. Bug 2026-05-20: dotted-path
+  // queries used to fail silently because the local matcher only
+  // compared against `node.name` (leaf segment) and never the path —
+  // operators got "Variable not found" for symbols that
+  // `readVariableByName` could resolve. See umas_browse_search.dart.
+  final node = findUmasNodeByPathOrName(tree, name);
   if (node == null) {
     stderr.writeln('Variable not found: $name');
     return 1;
@@ -501,31 +508,6 @@ Future<int> _readCommand(UmasClient umas, String name) async {
 
   print('\n$ok ok / $fail fail');
   return fail == 0 ? 0 : 1;
-}
-
-UmasVariableTreeNode? _findByName(
-    List<UmasVariableTreeNode> roots, String name) {
-  UmasVariableTreeNode? hit;
-  void walk(UmasVariableTreeNode n) {
-    if (hit != null) return;
-    if (n.name == name) {
-      hit = n;
-      return;
-    }
-    for (final c in n.children) {
-      walk(c);
-    }
-  }
-
-  // TD-019 (v1.1.x): break out as soon as a root walk finds the
-  // target. Previously the outer loop kept iterating roots even after
-  // `hit` was set — on PLCs with many roots this wasted up to N
-  // traversals worth of work per lookup.
-  for (final r in roots) {
-    walk(r);
-    if (hit != null) break;
-  }
-  return hit;
 }
 
 // ---------------------------------------------------------------------------
