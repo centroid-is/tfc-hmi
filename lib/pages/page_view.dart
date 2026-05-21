@@ -194,10 +194,21 @@ class _AssetStackState extends ConsumerState<AssetStack> {
 
           final textScaler = TextScaler.linear(
               math.min(asset.size.width * W, asset.size.height * H) / 25);
-          final labelStyle = DefaultTextStyle.of(context).style.copyWith(
-                fontSize: textScaler
-                    .scale(DefaultTextStyle.of(context).style.fontSize ?? 16),
-              );
+          // Build the label style starting from the ambient DefaultTextStyle
+          // and overlaying:
+          //   - the scaled font size (preserves the pre-existing behaviour
+          //     that labels grow with the asset's bounding box), and
+          //   - the per-asset `labelColor` override when non-null
+          //     (e.g. `ButtonConfig.textColor`). A null override leaves the
+          //     ambient color untouched so assets without a configurable
+          //     label color render byte-for-byte as before.
+          final ambientStyle = DefaultTextStyle.of(context).style;
+          var labelStyle = ambientStyle.copyWith(
+            fontSize: textScaler.scale(ambientStyle.fontSize ?? 16),
+          );
+          if (asset.labelColor != null) {
+            labelStyle = labelStyle.copyWith(color: asset.labelColor);
+          }
 
           // 4) measure text size if any
           Size textSize = Size.zero;

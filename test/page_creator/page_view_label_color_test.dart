@@ -51,13 +51,7 @@ class _LabelColorTestAsset extends BaseAsset {
   // Default in BaseAsset returns null; ButtonConfig overrides this with
   // its `textColor` field. We expose a parameterised override here so the
   // test asserts the page-view consumes whatever the asset reports.
-  //
-  // `@override` is deliberately omitted in the RED commit: BaseAsset does
-  // not yet declare `labelColor`, so the annotation would fail to compile
-  // and we want the RED to surface as an assertion failure (page_view
-  // ignores the field) rather than a static error. The GREEN commit adds
-  // the base getter — at which point the `@override` is implicitly
-  // satisfied here.
+  @override
   Color? get labelColor => _labelColor;
 
   @override

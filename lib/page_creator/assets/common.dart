@@ -91,6 +91,20 @@ abstract class Asset {
   set coordinates(Coordinates coordinates);
   RelativeSize get size;
   set size(RelativeSize size);
+
+  /// Optional override for the painted label color.
+  ///
+  /// When non-null, `AssetStack` paints the asset's label using this
+  /// color via `DefaultTextStyle.style.copyWith(color: ...)`. When null,
+  /// the label inherits the surrounding `DefaultTextStyle` color
+  /// (the historic, pre-field behaviour).
+  ///
+  /// Concrete `Asset` implementations are expected to extend
+  /// `BaseAsset`, which provides a `null` default so per-asset opt-in
+  /// is additive: only assets that want a configurable label color need
+  /// to override this getter (currently only `ButtonConfig.textColor`).
+  Color? get labelColor;
+
   Widget build(BuildContext context);
   Widget configure(BuildContext context);
   Map<String, dynamic> toJson();
@@ -199,6 +213,16 @@ abstract class BaseAsset implements Asset {
   /// PLC code blocks and variables when diagnosing equipment.
   @JsonKey(name: 'plcAssetKey')
   String? plcAssetKey;
+
+  /// Default label-color override is `null` — meaning the label inherits
+  /// the ambient `DefaultTextStyle` color in `AssetStack`. Subclasses
+  /// such as `ButtonConfig` override this getter to expose a
+  /// configurable color (`ButtonConfig.textColor`). Keeping the default
+  /// here means existing assets do not need any modification when this
+  /// feature lands.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  @override
+  Color? get labelColor => null;
 
   /// Returns all PLC/OPC-UA tag keys referenced by this asset.
   ///

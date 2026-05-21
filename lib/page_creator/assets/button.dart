@@ -147,6 +147,15 @@ class ButtonConfig extends BaseAsset {
   @JsonKey(name: 'text_color', defaultValue: null)
   Color? textColor;
 
+  /// `Asset.labelColor` is consumed by `AssetStack` in `page_view.dart`
+  /// to paint the label. For buttons it is just the configured
+  /// `textColor` (see field above). Other asset types currently leave
+  /// the default `null` from `BaseAsset` and so render with the ambient
+  /// `DefaultTextStyle` color.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  @override
+  Color? get labelColor => textColor;
+
   /// Default fill color for the disabled state when nothing has been
   /// configured. Picked to be unambiguously inert against the typical
   /// outward palette (green / red / blue) while still letting the button
