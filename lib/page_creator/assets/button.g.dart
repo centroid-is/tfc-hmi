@@ -40,6 +40,8 @@ ButtonConfig _$ButtonConfigFromJson(Map<String, dynamic> json) => ButtonConfig(
           DisabledPolarity.disableWhenTrue,
       disabledColor: ButtonConfig._disabledColorFromJson(
           json['disabled_color'] as Map<String, dynamic>?),
+      textColor: const OptionalColorConverter()
+          .fromJson(json['text_color'] as Map<String, dynamic>?),
     )
       ..variant = json['asset_name'] as String
       ..coordinates =
@@ -72,6 +74,7 @@ Map<String, dynamic> _$ButtonConfigToJson(ButtonConfig instance) =>
           _$DisabledPolarityEnumMap[instance.disabledPolarity]!,
       'disabled_color':
           ButtonConfig._disabledColorToJson(instance.disabledColor),
+      'text_color': const OptionalColorConverter().toJson(instance.textColor),
     };
 
 const _$ButtonTypeEnumMap = {

@@ -37,6 +37,19 @@ enum ButtonType {
   square,
 }
 
+/// Internal segmented-button state for the [ButtonConfig] editor's
+/// "Text Color" toggle. Not serialized — it's purely a UI mode derived
+/// from `ButtonConfig.textColor == null` (useDefault) or non-null
+/// (custom). Kept private to this library to avoid leaking editor
+/// internals into asset JSON.
+enum _TextColorMode { useDefault, custom }
+
+/// Seed value used when the operator first switches the Text Color
+/// toggle from "Default" to "Custom" — pure black so the picker swatch
+/// renders something visible immediately. The operator is expected to
+/// pick their actual color from the BlockPicker that appears underneath.
+const Color _defaultTextColorSeed = Color(0xFF000000);
+
 /// Drives how a [ButtonConfig]'s `disabledKey` stream maps to the
 /// disabled/enabled visual + interactive state of the button.
 ///
@@ -120,6 +133,20 @@ class ButtonConfig extends BaseAsset {
   )
   Color disabledColor;
 
+  /// Optional override for the button label color. When `null`, the label
+  /// renders with the ambient theme default (current behaviour predating
+  /// this field). When non-null, the label paints in this color.
+  ///
+  /// The editor's "Default" / "Custom" toggle derives its state from this
+  /// field — there is no separate `useDefaultTextColor` JSON key. Existing
+  /// persisted records without `text_color` load as `null`, preserving the
+  /// pre-field rendering byte-for-byte.
+  ///
+  /// Wire key: `text_color` (nullable RGB map).
+  @OptionalColorConverter()
+  @JsonKey(name: 'text_color', defaultValue: null)
+  Color? textColor;
+
   /// Default fill color for the disabled state when nothing has been
   /// configured. Picked to be unambiguously inert against the typical
   /// outward palette (green / red / blue) while still letting the button
@@ -188,6 +215,7 @@ class ButtonConfig extends BaseAsset {
     this.disabledKey,
     this.disabledPolarity = DisabledPolarity.disableWhenTrue,
     Color? disabledColor,
+    this.textColor,
   }) : disabledColor = disabledColor ?? defaultDisabledColor;
 
   static const previewStr = 'Button preview';
@@ -203,7 +231,8 @@ class ButtonConfig extends BaseAsset {
         serverWritesLow = false,
         disabledKey = null,
         disabledPolarity = DisabledPolarity.disableWhenTrue,
-        disabledColor = defaultDisabledColor {
+        disabledColor = defaultDisabledColor,
+        textColor = null {
     textPos = TextPos.right;
   }
 
@@ -654,6 +683,65 @@ class _ConfigContentState extends State<_ConfigContent> {
             ),
           ],
         ),
+        const SizedBox(height: 16),
+
+        // ----- Text color (optional override) -----
+        //
+        // Mirrors the `disabledColor` editor pattern but adds an explicit
+        // Default/Custom toggle so the operator can return to the theme
+        // default at any time. State is derived from `textColor == null`
+        // — there is no separate `useDefaultTextColor` JSON field.
+        const Text('Text Color'),
+        const SizedBox(height: 4),
+        SegmentedButton<_TextColorMode>(
+          key: const ValueKey('text-color-mode'),
+          segments: const [
+            ButtonSegment(
+              value: _TextColorMode.useDefault,
+              label: Text('Default'),
+            ),
+            ButtonSegment(
+              value: _TextColorMode.custom,
+              label: Text('Custom'),
+            ),
+          ],
+          selected: {
+            widget.config.textColor == null
+                ? _TextColorMode.useDefault
+                : _TextColorMode.custom,
+          },
+          onSelectionChanged: (newSelection) {
+            setState(() {
+              if (newSelection.first == _TextColorMode.useDefault) {
+                widget.config.textColor = null;
+              } else {
+                // Seed a sensible default so the picker has something to
+                // render and the operator can immediately see the
+                // selection take effect.
+                widget.config.textColor ??= _defaultTextColorSeed;
+              }
+            });
+          },
+        ),
+        if (widget.config.textColor != null) ...[
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              const Text('Color'),
+              const SizedBox(width: 8),
+              Expanded(
+                child: BlockPicker(
+                  pickerColor: widget.config.textColor!,
+                  onColorChanged: (value) {
+                    setState(() {
+                      widget.config.textColor = value;
+                    });
+                  },
+                ),
+              ),
+            ],
+          ),
+        ],
         const SizedBox(height: 16),
 
         // Text position

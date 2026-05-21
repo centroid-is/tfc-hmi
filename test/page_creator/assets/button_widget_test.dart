@@ -249,8 +249,17 @@ void main() {
       final config = ButtonConfig.preview()..textColor = const Color(0xFFAB12CD);
       await pumpEditor(tester, config);
 
-      // The "Default" segment label.
-      await tester.tap(find.text('Default'));
+      // The editor lives in a SingleChildScrollView; the toggle is part
+      // of the way down the form, so make sure it's visible before
+      // tapping. Find by key first (unique), then by segment label.
+      await tester.ensureVisible(find.byKey(const ValueKey('text-color-mode')));
+      await tester.pumpAndSettle();
+
+      // The "Default" segment label sits inside the segmented button.
+      await tester.tap(find.descendant(
+        of: find.byKey(const ValueKey('text-color-mode')),
+        matching: find.text('Default'),
+      ));
       await tester.pumpAndSettle();
 
       expect(config.textColor, isNull,
@@ -265,7 +274,13 @@ void main() {
 
       await pumpEditor(tester, config);
 
-      await tester.tap(find.text('Custom'));
+      await tester.ensureVisible(find.byKey(const ValueKey('text-color-mode')));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.descendant(
+        of: find.byKey(const ValueKey('text-color-mode')),
+        matching: find.text('Custom'),
+      ));
       await tester.pumpAndSettle();
 
       expect(config.textColor, isNotNull,
@@ -298,6 +313,12 @@ class _FakeStateMan implements StateMan {
     );
     return s.stream;
   }
+
+  // KeyField (used by the editor's KeyField widgets) reads `keys` to
+  // populate its search dialog. Return an empty list so tests don't
+  // crash building the editor.
+  @override
+  List<String> get keys => const <String>[];
 
   @override
   dynamic noSuchMethod(Invocation invocation) {
