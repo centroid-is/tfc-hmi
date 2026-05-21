@@ -928,6 +928,17 @@ class _KeyMappingCardState extends State<_KeyMappingCard> {
   String _buildSubtitle() {
     if (_isModbus) {
       final node = widget.entry.modbusNode!;
+      final variableName = widget.entry.variableName;
+      // Prefer the UMAS symbol path over the Modbus address when the
+      // mapping is bound by name — operators recognise their FB-instance
+      // member names, not 'holdingRegister[N]'.
+      if (variableName != null && variableName.isNotEmpty) {
+        var subtitle = variableName;
+        if (node.serverAlias != null && node.serverAlias!.isNotEmpty) {
+          subtitle += ' @ ${node.serverAlias}';
+        }
+        return subtitle;
+      }
       var subtitle = '${node.registerType.name}[${node.address}]';
       subtitle += ' ${node.dataType.name}';
       if (node.serverAlias != null && node.serverAlias!.isNotEmpty) {
