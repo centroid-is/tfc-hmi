@@ -196,6 +196,84 @@ void main() {
       expect(paintedColor(tester), const Color(0xFF112233));
     });
   });
+
+  // ----- textColor (optional label color override) editor tests -----
+  //
+  // The editor mirrors the `disabledColor` pattern but adds an explicit
+  // "Default" / "Custom" SegmentedButton so the operator can return to the
+  // theme default (textColor=null) at any time. The toggle's state is
+  // *derived* from `textColor == null` — there is no separate
+  // `useDefaultTextColor` JSON field.
+  group('ButtonConfig editor — textColor toggle', () {
+    // The asset's `configure(context)` builds the editor inside a
+    // ProviderScope-free MaterialApp. It uses providers for KeyField, so
+    // we override `stateManProvider` with a _FakeStateMan to prevent
+    // network/native code from running during the test.
+    Future<void> pumpEditor(
+      WidgetTester tester,
+      ButtonConfig config,
+    ) async {
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            stateManProvider.overrideWith((_) async => _FakeStateMan()),
+          ],
+          child: MaterialApp(
+            home: Scaffold(
+              body: Builder(
+                builder: (ctx) => config.configure(ctx),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+    }
+
+    testWidgets('editor renders the Default/Custom toggle', (tester) async {
+      final config = ButtonConfig.preview();
+      await pumpEditor(tester, config);
+
+      // The toggle is identified by an exported key so external tests can
+      // probe it without depending on private types.
+      expect(find.byKey(const ValueKey('text-color-mode')), findsOneWidget,
+          reason:
+              'editor must expose a segmented toggle keyed "text-color-mode"');
+      expect(find.text('Default'), findsWidgets);
+      expect(find.text('Custom'), findsWidgets);
+    });
+
+    testWidgets(
+        'toggling Custom -> Default clears textColor to null',
+        (tester) async {
+      final config = ButtonConfig.preview()..textColor = const Color(0xFFAB12CD);
+      await pumpEditor(tester, config);
+
+      // The "Default" segment label.
+      await tester.tap(find.text('Default'));
+      await tester.pumpAndSettle();
+
+      expect(config.textColor, isNull,
+          reason: 'switching to Default must null out the configured color');
+    });
+
+    testWidgets(
+        'toggling Default -> Custom assigns a non-null textColor',
+        (tester) async {
+      final config = ButtonConfig.preview();
+      expect(config.textColor, isNull);
+
+      await pumpEditor(tester, config);
+
+      await tester.tap(find.text('Custom'));
+      await tester.pumpAndSettle();
+
+      expect(config.textColor, isNotNull,
+          reason:
+              'switching to Custom must set a non-null seed color so the '
+              'picker has something to render');
+    });
+  });
 }
 
 /// Minimal stand-in for [StateMan] that lets tests push synchronous values

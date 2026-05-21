@@ -147,4 +147,77 @@ void main() {
       expect(json['disabled_key'], isNull);
     });
   });
+
+  // ----- textColor (optional label color override) -----
+  //
+  // Default behaviour: `textColor == null` means "use the default theme
+  // color" for the asset label (the existing behaviour predating this
+  // field). A non-null value replaces the default color for the label.
+  group('ButtonConfig.textColor (optional label color)', () {
+    test('default textColor is null (use theme default)', () {
+      final config = ButtonConfig.preview();
+      expect(config.textColor, isNull,
+          reason:
+              'default textColor must be null so existing buttons keep the '
+              'theme default label color');
+    });
+
+    test('legacy JSON without text_color loads as null', () {
+      // Existing persisted ButtonConfig records predate this field. The
+      // loader must tolerate a missing `text_color` key and yield null
+      // (= keep theme default — zero visible regression).
+      final legacyJson = baseJson();
+      expect(legacyJson.containsKey('text_color'), isFalse,
+          reason: 'sanity: baseJson must not include text_color');
+      final config = ButtonConfig.fromJson(legacyJson);
+      expect(config.textColor, isNull);
+    });
+
+    test('round-trips when textColor is set', () {
+      final config = ButtonConfig(
+        key: 'btn/start',
+        outwardColor: const Color(0xFF00FF00),
+        inwardColor: const Color(0xFF808080),
+        buttonType: ButtonType.square,
+      )..textColor = const Color(0xFFAB12CD);
+
+      // Match the persistence contract used elsewhere in this file: take
+      // the typed toJson() through jsonEncode/jsonDecode so nested
+      // converters re-emit raw maps (mirrors Preferences -> Postgres).
+      final raw = jsonDecode(jsonEncode(config.toJson()))
+          as Map<String, dynamic>;
+
+      expect(raw.containsKey('text_color'), isTrue,
+          reason: 'wire key "text_color" must be present when non-null');
+
+      final restored = ButtonConfig.fromJson(raw);
+      expect(restored.textColor, isNotNull);
+      expect((restored.textColor!.r * 255).round(),
+          (config.textColor!.r * 255).round());
+      expect((restored.textColor!.g * 255).round(),
+          (config.textColor!.g * 255).round());
+      expect((restored.textColor!.b * 255).round(),
+          (config.textColor!.b * 255).round());
+    });
+
+    test('round-trips when textColor is explicitly null', () {
+      // Explicit null must survive serialization — it's the "use the
+      // theme default color" signal and is semantically distinct from
+      // any concrete color.
+      final config = ButtonConfig.preview();
+      expect(config.textColor, isNull);
+
+      final raw = jsonDecode(jsonEncode(config.toJson()))
+          as Map<String, dynamic>;
+      // Either key is absent or its value is null — both encode the
+      // "use default" state. The JSON-generator emits the key with a
+      // null value, which is the shape we accept.
+      if (raw.containsKey('text_color')) {
+        expect(raw['text_color'], isNull);
+      }
+
+      final restored = ButtonConfig.fromJson(raw);
+      expect(restored.textColor, isNull);
+    });
+  });
 }
