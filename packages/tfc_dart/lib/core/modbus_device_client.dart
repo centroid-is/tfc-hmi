@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'dart:collection';
 
 import 'package:logger/logger.dart';
+import 'package:meta/meta.dart';
 import 'package:open62541/open62541.dart' show DynamicValue, NodeId;
 import 'package:modbus_client/modbus_client.dart' show ModbusEndianness;
 import 'package:modbus_client_tcp/modbus_client_tcp.dart' show ModbusClientTcp;
@@ -21,6 +23,7 @@ import 'package:tfc_dart/core/umas_types.dart'
     show
         TypedVariableValue,
         UmasException,
+        UmasNotScalarException,
         UmasSessionState,
         UmasVariable,
         UmasDataTypeRef;
@@ -574,6 +577,30 @@ class ModbusDeviceClientAdapter implements DeviceClient {
   /// internal cache state (e.g. TD-005: blockCrcs reuse).
   UmasClient? get debugUmasClient => _umasClient;
 
+  /// True when [debugSetUmasClient] has primed the adapter with a
+  /// hand-built [UmasClient]. Short-circuits [_getUmasClient] so unit
+  /// tests can exercise [readUmasVariable] / [writeUmasVariable]
+  /// without driving a real socket through the wrapper.
+  bool _umasClientInjectedForTest = false;
+
+  /// Test-only seam: prime the adapter's UmasClient with an externally
+  /// built (and pre-primed via `debugInjectSymbol` + `debugSet*Crc` +
+  /// `debugSetSessionState`) client. Bypasses [_getUmasClient]'s
+  /// wrapper-connection gate so the adapter can be exercised end-to-end
+  /// against a mock `sendFn` without a live PLC.
+  ///
+  /// Used by the FB-DynamicValue poll-loop fall-back tests
+  /// (`umas_fb_dynamic_value_poll_test.dart`) to verify the adapter
+  /// catches [UmasNotScalarException] and routes through
+  /// [UmasClient.readFbInstanceMembers]. Production code must NOT
+  /// call this — the lazy [_getUmasClient] path is the only supported
+  /// runtime wiring.
+  @visibleForTesting
+  void debugSetUmasClient(UmasClient client) {
+    _umasClient = client;
+    _umasClientInjectedForTest = true;
+  }
+
   /// Public accessor that returns the adapter's shared [UmasClient],
   /// lazy-initializing it against the current TCP socket if the wrapper
   /// is connected. Returns null when the wrapper has no live socket yet.
@@ -662,6 +689,12 @@ class ModbusDeviceClientAdapter implements DeviceClient {
   /// TCP client. Returns null if the wrapper is disconnected (no
   /// underlying ModbusClientTcp yet).
   UmasClient? _getUmasClient() {
+    // Test seam — when [debugSetUmasClient] has primed an injected
+    // client, return it unconditionally regardless of wrapper state.
+    // The injected client owns its own (mock) sendFn and session state.
+    if (_umasClientInjectedForTest) {
+      return _umasClient;
+    }
     final tcp = wrapper.client;
     if (tcp == null) {
       // Connection torn down — drop the stale client so the next
@@ -829,8 +862,25 @@ class ModbusDeviceClientAdapter implements DeviceClient {
     if (umas.blockCrcs == null) {
       await umas.readPlcStatus();
     }
-    final typed = await umas.readVariableByName(variableName);
-    final dv = _typedVariableToDynamicValue(typed);
+    DynamicValue dv;
+    try {
+      final typed = await umas.readVariableByName(variableName);
+      dv = _typedVariableToDynamicValue(typed);
+    } on UmasNotScalarException {
+      // FB-instance binding: the operator (or LLM-generated key
+      // mapping) pointed a single key at an FB instance root rather
+      // than a scalar member. Fall back to a batched fan-out read so
+      // the subject emits a struct DynamicValue (`{member: value}`)
+      // that the FB-DynamicValue widget / Conveyor FB asset render
+      // directly — matching the OPC-UA struct-value contract.
+      //
+      // Pre-fix this throw bubbled out of every poll tick as
+      // "UMAS fallback poll for key … failed: UmasNotScalarException".
+      // See commit 8c03c68d for the exception's introduction and the
+      // umas-fb-dynamic-value branch for this fall-back's rationale.
+      final members = await umas.readFbInstanceMembers(variableName);
+      dv = _fbMembersToDynamicValue(members);
+    }
     _umasLastValues[key] = dv;
     // F-1: push the fresh value to any active subscribers so
     // StreamBuilder / StreamProvider keep updating across reads. Only
@@ -841,6 +891,31 @@ class ModbusDeviceClientAdapter implements DeviceClient {
       subject.add(dv);
     }
     return dv;
+  }
+
+  /// Build a struct [DynamicValue] from a flat `{memberSubPath: TypedVariableValue}`
+  /// map returned by [UmasClient.readFbInstanceMembers].
+  ///
+  /// The result mirrors the shape an OPC-UA struct read produces:
+  /// `value` is a [LinkedHashMap<String, DynamicValue>] so
+  /// `DynamicValue.isObject` returns `true` and `asObject` exposes the
+  /// member map. Each leaf carries the correct [NodeId] typeId so
+  /// `asBool` / `asDouble` / `asInt` on the leaves preserves UMAS
+  /// type semantics.
+  ///
+  /// Nested-FB members appear as dotted keys (e.g.
+  /// `HMI.p_Stat_xRunningFwd`) rather than nested sub-maps. The
+  /// existing FB-DynamicValue consumers (`Conveyor FB`,
+  /// `StartStopButton`) use `fb[memberName]` lookups against the
+  /// flat string-keyed map; keeping the keys dotted matches that
+  /// contract without a second-level walk.
+  static DynamicValue _fbMembersToDynamicValue(
+      Map<String, TypedVariableValue> members) {
+    final map = LinkedHashMap<String, DynamicValue>();
+    for (final entry in members.entries) {
+      map[entry.key] = _typedVariableToDynamicValue(entry.value);
+    }
+    return DynamicValue(value: map);
   }
 
   /// Write a single UMAS-by-name key. Same UX contract as
