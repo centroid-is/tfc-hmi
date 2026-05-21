@@ -21,10 +21,15 @@
 @TestOn('vm')
 library;
 
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:modbus_client/modbus_client.dart';
+import 'package:modbus_client_tcp/modbus_client_tcp.dart';
+import 'package:open62541/open62541.dart' show DynamicValue;
 import 'package:test/test.dart';
+import 'package:tfc_dart/core/modbus_client_wrapper.dart';
+import 'package:tfc_dart/core/modbus_device_client.dart';
 import 'package:tfc_dart/core/umas_client.dart';
 import 'package:tfc_dart/core/umas_types.dart';
 
@@ -324,6 +329,232 @@ void main() {
       } on UmasException catch (e) {
         expect(e.message, contains('Unknown_FB'));
         expect(e.message.toLowerCase(), contains('member'));
+      }
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // ModbusDeviceClientAdapter.readUmasVariable — FB fall-back integration
+  //
+  // When the bound symbol resolves to an FB instance (classIdentifier == 7),
+  // readUmasVariable used to bubble UmasNotScalarException out of every poll
+  // tick. The fix catches the exception and routes through
+  // [UmasClient.readFbInstanceMembers], producing a struct DynamicValue
+  // (value: LinkedHashMap<String, DynamicValue>) that FB consumers
+  // (FB-DynamicValue widget, Conveyor FB asset) can render directly.
+  // ---------------------------------------------------------------------------
+
+  group('ModbusDeviceClientAdapter.readUmasVariable — FB fallback', () {
+    UmasClient buildPrimedUmas() {
+      final umas = UmasClient(
+        sendFn: (req) async {
+          if (req is! UmasRequest) {
+            return ModbusResponseCode.requestRxFailed;
+          }
+          // Two BOOLs + one REAL — same layout as the helper happy-path.
+          final payload = Uint8List.fromList([
+            0x01,
+            0x00,
+            0x00, 0x00, 0x48, 0x41, // 12.5f LE
+          ]);
+          req.setFromPduResponse(_buildReadVariableSuccessPdu(payload));
+          return ModbusResponseCode.requestSucceed;
+        },
+      );
+      _injectFbAndMembers(umas);
+      umas.debugSetProjectCrc(0xCAFEBABE);
+      umas.debugSetBlockCrcs(const [0xDEADBEEF]);
+      umas.debugSetSessionState(UmasSessionState.paired);
+      return umas;
+    }
+
+    /// Build a connected wrapper + adapter routed for an FB-bound key.
+    ({
+      ModbusClientWrapper wrapper,
+      ModbusDeviceClientAdapter adapter,
+    }) buildAdapterForFb(UmasClient umas) {
+      final wrapper = ModbusClientWrapper('mock', 0, 1,
+          clientFactory: (h, p, u) => ModbusClientTcp(h,
+              serverPort: p,
+              unitId: u,
+              connectionMode: ModbusConnectionMode.doNotConnect));
+      final adapter = ModbusDeviceClientAdapter(
+        wrapper,
+        specs: const {},
+        variableNames: const {'UppiInntokuband': 'M_F2_RC_01'},
+        umasEnabled: true,
+        serverAlias: 'plc1',
+      );
+      adapter.debugSetUmasClient(umas);
+      return (wrapper: wrapper, adapter: adapter);
+    }
+
+    test('catches UmasNotScalarException and emits a struct DynamicValue '
+        'with one entry per readable member', () async {
+      final umas = buildPrimedUmas();
+      final pair = buildAdapterForFb(umas);
+      final adapter = pair.adapter;
+
+      try {
+        final dv = await adapter.readUmasVariable('UppiInntokuband');
+        // Must be a struct DV — isObject true, asObject contains the
+        // expected member sub-paths.
+        expect(dv.isObject, isTrue,
+            reason: 'FB fall-back must produce a struct DynamicValue '
+                '(map of {member: value})');
+        final asMap = dv.asObject;
+        expect(asMap.keys, containsAll(<String>[
+          'HMI.p_Stat_xRunningFwd',
+          'HMI.p_Stat_xStopped',
+          'q_rVelocity',
+        ]));
+        expect(asMap['HMI.p_Stat_xRunningFwd']!.asBool, isTrue);
+        expect(asMap['HMI.p_Stat_xStopped']!.asBool, isFalse);
+        expect(asMap['q_rVelocity']!.asDouble, closeTo(12.5, 0.001));
+      } finally {
+        adapter.dispose();
+        pair.wrapper.dispose();
+      }
+    });
+
+    test('caches the struct DynamicValue and pushes it onto the per-key '
+        'BehaviorSubject so subscribers see the FB map', () async {
+      final umas = buildPrimedUmas();
+      final pair = buildAdapterForFb(umas);
+      final adapter = pair.adapter;
+
+      try {
+        // subscribe() lazy-emits a one-shot read; assert the subject
+        // catches the struct DV via the read path.
+        final received = <DynamicValue>[];
+        final sub = adapter.subscribe('UppiInntokuband').listen(received.add);
+        await adapter.readUmasVariable('UppiInntokuband');
+        // Give the synchronous subject add a microtask to flush.
+        await Future<void>.delayed(Duration.zero);
+        await sub.cancel();
+
+        expect(received, isNotEmpty,
+            reason: 'subject must emit the struct DV from the FB fallback');
+        expect(received.last.isObject, isTrue);
+        expect(received.last.asObject.keys, contains('q_rVelocity'));
+
+        // Cached: a follow-up read() (sync) returns the same struct shape.
+        final cached = adapter.read('UppiInntokuband');
+        expect(cached, isNotNull);
+        expect(cached!.isObject, isTrue);
+      } finally {
+        adapter.dispose();
+        pair.wrapper.dispose();
+      }
+    });
+
+    test('scalar binding is unaffected — UmasNotScalarException is NOT '
+        'thrown for scalars, so the catch path does NOT engage', () async {
+      // Mock send returns a 4-byte REAL = 7.25f.
+      final umas = UmasClient(
+        sendFn: (req) async {
+          if (req is! UmasRequest) {
+            return ModbusResponseCode.requestRxFailed;
+          }
+          // For session-init noise the only PDU we are asked is the read.
+          req.setFromPduResponse(_buildReadVariableSuccessPdu(
+            // 7.25f little-endian
+            Uint8List.fromList([0x00, 0x00, 0xE8, 0x40]),
+          ));
+          return ModbusResponseCode.requestSucceed;
+        },
+      );
+      umas.debugInjectSymbol(ResolvedSymbol(
+        path: 'B_Elevator_F1_A',
+        variable: const UmasVariable(
+          name: 'B_Elevator_F1_A',
+          blockNo: 0x10,
+          offset: 0,
+          dataTypeId: 6,
+        ),
+        dataType: const UmasDataTypeRef(
+          id: 6,
+          name: 'REAL',
+          byteSize: 4,
+        ),
+      ));
+      umas.debugSetProjectCrc(0xCAFEBABE);
+      umas.debugSetBlockCrcs(const [0xDEADBEEF]);
+      umas.debugSetSessionState(UmasSessionState.paired);
+
+      final wrapper = ModbusClientWrapper('mock', 0, 1,
+          clientFactory: (h, p, u) => ModbusClientTcp(h,
+              serverPort: p,
+              unitId: u,
+              connectionMode: ModbusConnectionMode.doNotConnect));
+      final adapter = ModbusDeviceClientAdapter(
+        wrapper,
+        specs: const {},
+        variableNames: const {'speed': 'B_Elevator_F1_A'},
+        umasEnabled: true,
+        serverAlias: 'plc1',
+      );
+      adapter.debugSetUmasClient(umas);
+
+      try {
+        final dv = await adapter.readUmasVariable('speed');
+        expect(dv.isObject, isFalse,
+            reason: 'scalar reads must NOT produce a struct DV');
+        expect(dv.asDouble, closeTo(7.25, 0.001));
+      } finally {
+        adapter.dispose();
+        wrapper.dispose();
+      }
+    });
+
+    test('readFbInstanceMembers errors are surfaced like scalar errors — '
+        'caller sees the exception, subject keeps last value (SCADA '
+        'semantics)', () async {
+      // FB root resolved but fan-out call fails (e.g. transport error).
+      // The adapter must NOT crash the poll loop; the exception bubbles
+      // to the caller of readUmasVariable so the poll-loop log path
+      // handles it. Subscribers retain their last value.
+      final umas = UmasClient(
+        sendFn: (req) async {
+          if (req is! UmasRequest) {
+            return ModbusResponseCode.requestRxFailed;
+          }
+          // Transport-level failure on the FB fan-out batched 0x22.
+          return ModbusResponseCode.requestTimeout;
+        },
+      );
+      _injectFbAndMembers(umas);
+      umas.debugSetProjectCrc(0xCAFEBABE);
+      umas.debugSetBlockCrcs(const [0xDEADBEEF]);
+      umas.debugSetSessionState(UmasSessionState.paired);
+
+      final wrapper = ModbusClientWrapper('mock', 0, 1,
+          clientFactory: (h, p, u) => ModbusClientTcp(h,
+              serverPort: p,
+              unitId: u,
+              connectionMode: ModbusConnectionMode.doNotConnect));
+      final adapter = ModbusDeviceClientAdapter(
+        wrapper,
+        specs: const {},
+        variableNames: const {'UppiInntokuband': 'M_F2_RC_01'},
+        umasEnabled: true,
+        serverAlias: 'plc1',
+      );
+      adapter.debugSetUmasClient(umas);
+
+      try {
+        try {
+          await adapter.readUmasVariable('UppiInntokuband');
+          fail('expected UmasException to bubble from FB fan-out failure');
+        } on UmasException {
+          // Expected — fan-out failure surfaces like a scalar read failure,
+          // and the existing _pollUmasGroup catch handles it with a warn.
+        } catch (e) {
+          fail('expected UmasException, got ${e.runtimeType}');
+        }
+      } finally {
+        adapter.dispose();
+        wrapper.dispose();
       }
     });
   });
