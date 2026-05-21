@@ -10,17 +10,7 @@ ConveyorFbConfig _$ConveyorFbConfigFromJson(Map<String, dynamic> json) =>
     ConveyorFbConfig(
       fbInstanceName: json['fbInstanceName'] as String?,
       parentWordKey: json['parentWordKey'] as String?,
-      displayedMembers: (json['displayedMembers'] as List<dynamic>?)
-              ?.map((e) => e as String)
-              .toList() ??
-          [
-            'p_Stat_xRunningFwd',
-            'p_Stat_xFault',
-            'p_Mode_xAuto',
-            'red',
-            'grey',
-            'green'
-          ],
+      schema: $enumDecodeNullable(_$ConveyorSchemaEnumMap, json['schema']),
     )
       ..variant = json['asset_name'] as String
       ..coordinates =
@@ -42,8 +32,13 @@ Map<String, dynamic> _$ConveyorFbConfigToJson(ConveyorFbConfig instance) =>
       'plcAssetKey': instance.plcAssetKey,
       'fbInstanceName': instance.fbInstanceName,
       'parentWordKey': instance.parentWordKey,
-      'displayedMembers': instance.displayedMembers,
+      'schema': _$ConveyorSchemaEnumMap[instance.schema],
     };
+
+const _$ConveyorSchemaEnumMap = {
+  ConveyorSchema.beckhoff: 'beckhoff',
+  ConveyorSchema.schneider: 'schneider',
+};
 
 const _$TextPosEnumMap = {
   TextPos.above: 'above',
