@@ -1193,6 +1193,78 @@ void main() {
     });
   });
 
+  // ==================== Group 11b: UMAS variable name in subtitle ====================
+  group('UMAS variable name in subtitle', () {
+    testWidgets(
+        'subtitle shows variableName instead of holdingRegister[N] when set',
+        (tester) async {
+      await tester.pumpWidget(buildTestableKeyRepository(
+        keyMappings: KeyMappings(nodes: {
+          'umas_named_key': KeyMappingEntry(
+            modbusNode: ModbusNodeConfig(
+              serverAlias: 'schneider_plc',
+              registerType: ModbusRegisterType.holdingRegister,
+              address: 0,
+              dataType: ModbusDataType.uint16,
+              pollGroup: 'default',
+            ),
+            variableName: 'Elevator.q_xUp',
+          ),
+        }),
+        stateManConfig: sampleStateManConfigWithUmas(),
+      ));
+      await tester.pumpAndSettle();
+
+      // Subtitle should show the variable name, not the Modbus address.
+      expect(find.textContaining('Elevator.q_xUp'), findsOneWidget);
+      expect(find.textContaining('@ schneider_plc'), findsOneWidget);
+      expect(find.textContaining('holdingRegister'), findsNothing,
+          reason:
+              'variableName-bound keys should not show holdingRegister[N]');
+    });
+
+    testWidgets(
+        'subtitle falls back to holdingRegister[N] when variableName is null',
+        (tester) async {
+      await tester.pumpWidget(buildTestableKeyRepository(
+        keyMappings: sampleModbusKeyMappings(),
+        stateManConfig: sampleStateManConfigWithModbus(),
+      ));
+      await tester.pumpAndSettle();
+
+      // No variableName on these keys → existing subtitle format.
+      expect(find.textContaining('holdingRegister[100]'), findsOneWidget);
+      expect(find.textContaining('float32'), findsOneWidget);
+      expect(find.textContaining('@ plc_1'), findsNWidgets(2));
+    });
+
+    testWidgets(
+        'subtitle without serverAlias renders just the variable name',
+        (tester) async {
+      await tester.pumpWidget(buildTestableKeyRepository(
+        keyMappings: KeyMappings(nodes: {
+          'orphan_named_key': KeyMappingEntry(
+            modbusNode: ModbusNodeConfig(
+              serverAlias: null,
+              registerType: ModbusRegisterType.holdingRegister,
+              address: 0,
+              dataType: ModbusDataType.uint16,
+              pollGroup: 'default',
+            ),
+            variableName: 'M_Pump.i_isAuto',
+          ),
+        }),
+        stateManConfig: sampleStateManConfigWithUmas(),
+      ));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('M_Pump.i_isAuto'), findsOneWidget);
+      expect(find.textContaining('holdingRegister'), findsNothing);
+      // No trailing '@ <alias>' when alias is absent.
+      expect(find.textContaining('@'), findsNothing);
+    });
+  });
+
   // ==================== Group 12: UMAS Browse Button ====================
   group('UMAS browse button', () {
     testWidgets('Browse button visible when UMAS enabled on selected server',
