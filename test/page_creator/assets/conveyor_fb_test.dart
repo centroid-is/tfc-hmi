@@ -118,19 +118,37 @@ void main() {
     });
   });
 
-  group('ConveyorFbView — schema=schneider', () {
-    testWidgets('reads Schneider HMI member names from the FB map',
-        (tester) async {
+  group('ConveyorFbView — schema=schneider (WORD-bit decode)', () {
+    // The Schneider FB_ATV320 layout packs status / command / mode / color
+    // BOOLs into parent WORDs declared in the FB's inner `HMI` sub-FB.
+    // The asset reads those WORDs from the FB DynamicValue map and masks
+    // the canonical bit positions client-side. This mirrors the Aveva HMI
+    // approach (local schema + WORD-only wire reads) and matches the
+    // declaration order observed on the live M580 (see commit message).
+    //
+    // Bit positions (Schneider FB_ATV320 public block):
+    //   HMI.Status : bit 2  → p_Stat_xFault         (concept: fault)
+    //                bit 4  → p_Stat_xRunningFwd    (concept: running)
+    //   HMI.Mode   : bit 1  → p_Mode_xMan           (concept: mode)
+    //   HMI.Color  : bit 0  → red, 1 → grey, 2 → green
+    //
+    // Scalar members (`p_Stat_diRuntime`, `p_Stat_rVelocity`,
+    // `p_Stat_iThermalFaults`) remain real leaf entries in the FB map and
+    // are read directly with no bit-masking.
+
+    testWidgets(
+        'decodes Schneider HMI.Status / HMI.Mode / HMI.Color bits '
+        'from parent WORDs', (tester) async {
+      // HMI.Status = 0x0014 sets bits 2 (fault) AND 4 (running).
+      // HMI.Mode   = 0x0002 sets bit 1 (manual mode active).
+      // HMI.Color  = 0x0002 sets bit 1 (grey lamp; red+green off).
       final fb = fbValue({
-        'HMI.p_Stat_xRunningFwd': true,
-        'HMI.p_Stat_xFault': false,
-        'HMI.p_Mode_xMan': false,
+        'HMI.Status': 0x0014,
+        'HMI.Mode': 0x0002,
+        'HMI.Color': 0x0002,
         'HMI.p_Stat_iThermalFaults': 0,
         'HMI.p_Stat_diRuntime': 12345,
         'HMI.p_Stat_rVelocity': 1.5,
-        'HMI.Color.red': false,
-        'HMI.Color.grey': true,
-        'HMI.Color.green': false,
       });
       await tester.pumpWidget(wrap(
         SizedBox(
@@ -145,7 +163,7 @@ void main() {
       ));
 
       // BOOLs render via the bool-dot lamp keyed by their canonical
-      // concept name (NOT the raw vendor member path).
+      // concept name (NOT the raw vendor member path / not the WORD key).
       expect(
         find.byKey(const ValueKey(
           'conveyor-fb-member:running:bool:on',
@@ -154,7 +172,13 @@ void main() {
       );
       expect(
         find.byKey(const ValueKey(
-          'conveyor-fb-member:fault:bool:off',
+          'conveyor-fb-member:fault:bool:on',
+        )),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey(
+          'conveyor-fb-member:mode:bool:on',
         )),
         findsOneWidget,
       );
@@ -179,18 +203,25 @@ void main() {
         findsOneWidget,
       );
 
-      // Numerics (INT/DINT plain digits; REAL 1-decimal).
+      // Scalar numerics (INT/DINT plain digits; REAL 1-decimal) still
+      // read directly from member keys, NOT from a WORD mask.
       expect(find.text('12345'), findsOneWidget); // runtime DINT
       expect(find.text('1.5'), findsOneWidget); // velocity REAL
     });
 
-    testWidgets('missing Schneider Color.* members render "?" '
-        '(graceful when named-bit-decoder not yet landed)', (tester) async {
-      // Bare FB map — none of the HMI.Color.* keys exist (simulating the
-      // named-bit-decoder agent's work not yet landed).
+    testWidgets(
+        'all bits clear on WORD=0 → every Schneider concept renders off',
+        (tester) async {
+      // Mirrors the live-M580 quiescent state: every HMI WORD is 0 → every
+      // derived bit should be `false` (and the bool-dot keyed `:off`),
+      // never an unknown placeholder.
       final fb = fbValue({
-        'HMI.p_Stat_xRunningFwd': true,
-        'HMI.p_Stat_xFault': false,
+        'HMI.Status': 0,
+        'HMI.Mode': 0,
+        'HMI.Color': 0,
+        'HMI.p_Stat_iThermalFaults': 0,
+        'HMI.p_Stat_diRuntime': 0,
+        'HMI.p_Stat_rVelocity': 0.0,
       });
       await tester.pumpWidget(wrap(
         SizedBox(
@@ -204,32 +235,131 @@ void main() {
         ),
       ));
 
-      // Running/fault present → render normally.
-      expect(
-        find.byKey(const ValueKey(
-          'conveyor-fb-member:running:bool:on',
-        )),
-        findsOneWidget,
-      );
+      for (final concept in const [
+        'running',
+        'fault',
+        'mode',
+        'colorRed',
+        'colorGrey',
+        'colorGreen',
+      ]) {
+        expect(
+          find.byKey(ValueKey('conveyor-fb-member:$concept:bool:off')),
+          findsOneWidget,
+          reason: '$concept must be off when its parent WORD is 0',
+        );
+      }
+    });
 
-      // Color members absent → "?" placeholder, NOT a crash.
+    testWidgets(
+        'missing parent WORDs render bit concepts as "?" '
+        '(graceful when the FB is not bound / stream has not arrived)',
+        (tester) async {
+      // No HMI.Status / HMI.Mode / HMI.Color in the map (e.g. before the
+      // first stream value arrives, or if the FB browse did not include
+      // them). The asset must NOT crash — every bit concept renders as
+      // unknown.
+      final fb = fbValue({
+        'HMI.p_Stat_diRuntime': 999,
+      });
+      await tester.pumpWidget(wrap(
+        SizedBox(
+          width: 600,
+          height: 400,
+          child: ConveyorFbView(
+            fbInstanceName: 'FB_Conveyor_01',
+            fbValue: fb,
+            schema: ConveyorSchema.schneider,
+          ),
+        ),
+      ));
+
+      for (final concept in const [
+        'running',
+        'fault',
+        'mode',
+        'colorRed',
+        'colorGrey',
+        'colorGreen',
+      ]) {
+        expect(
+          find.byKey(ValueKey('conveyor-fb-member:$concept:unknown')),
+          findsOneWidget,
+          reason: '$concept must be "?" when its parent WORD is missing',
+        );
+      }
+
+      // Scalar that IS present still renders.
+      expect(find.text('999'), findsOneWidget);
+    });
+
+    testWidgets(
+        'each Color bit position decodes independently '
+        '(red=bit0, grey=bit1, green=bit2)', (tester) async {
+      // Set only Color.green (bit 2) → 0x0004.
+      final fb = fbValue({
+        'HMI.Status': 0,
+        'HMI.Mode': 0,
+        'HMI.Color': 0x0004,
+      });
+      await tester.pumpWidget(wrap(
+        SizedBox(
+          width: 600,
+          height: 400,
+          child: ConveyorFbView(
+            fbInstanceName: 'FB_Conveyor_01',
+            fbValue: fb,
+            schema: ConveyorSchema.schneider,
+          ),
+        ),
+      ));
       expect(
-        find.byKey(const ValueKey(
-          'conveyor-fb-member:colorRed:unknown',
-        )),
+        find.byKey(const ValueKey('conveyor-fb-member:colorGreen:bool:on')),
         findsOneWidget,
       );
       expect(
-        find.byKey(const ValueKey(
-          'conveyor-fb-member:colorGrey:unknown',
-        )),
+        find.byKey(const ValueKey('conveyor-fb-member:colorRed:bool:off')),
         findsOneWidget,
       );
       expect(
-        find.byKey(const ValueKey(
-          'conveyor-fb-member:colorGreen:unknown',
-        )),
+        find.byKey(const ValueKey('conveyor-fb-member:colorGrey:bool:off')),
         findsOneWidget,
+      );
+    });
+
+    testWidgets(
+        'WORD value can be supplied as a Dart int (matches real wire shape)',
+        (tester) async {
+      // Smoke test against the live wire shape — the WORD comes back as
+      // an int from DynamicValue, not as a bool or string.
+      final fb = fbValue({
+        'HMI.Status': 0x0001, // bit 0 = p_Stat_xAuto (not currently surfaced
+        // as a canonical concept, so we just check that the present bits
+        // decode without crashing the renderer).
+        'HMI.Mode': 0x0001, // bit 0 = p_Mode_xAuto → "mode" concept reads
+        // p_Mode_xMan (bit 1) so this must render off.
+        'HMI.Color': 0x0001, // bit 0 = red.
+      });
+      await tester.pumpWidget(wrap(
+        SizedBox(
+          width: 600,
+          height: 400,
+          child: ConveyorFbView(
+            fbInstanceName: 'FB_Conveyor_01',
+            fbValue: fb,
+            schema: ConveyorSchema.schneider,
+          ),
+        ),
+      ));
+      expect(
+        find.byKey(const ValueKey('conveyor-fb-member:mode:bool:off')),
+        findsOneWidget,
+        reason: 'mode = HMI.Mode bit 1; only bit 0 set → off',
+      );
+      expect(
+        find.byKey(const ValueKey('conveyor-fb-member:colorRed:bool:on')),
+        findsOneWidget,
+        reason: 'colorRed = HMI.Color bit 0; bit 0 set → on',
       );
     });
   });
