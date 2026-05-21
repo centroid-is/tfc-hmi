@@ -632,7 +632,11 @@ void main() {
       // The adapter must NOT crash the poll loop; the exception bubbles
       // to the caller of readUmasVariable so the poll-loop log path
       // handles it. Subscribers retain their last value.
+      //
+      // backoffDelay short-circuited so the per-leaf fall-back's session
+      // recovery doesn't drag the test out for tens of seconds.
       final umas = UmasClient(
+        backoffDelay: (_) async {},
         sendFn: (req) async {
           if (req is! UmasRequest) {
             return ModbusResponseCode.requestRxFailed;

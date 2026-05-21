@@ -2243,13 +2243,59 @@ class UmasClient {
       );
     }
 
-    final values = await readVariables(orderedPairs);
+    // Fast path: one batched ReadVariable (0x22). Works for FBs whose
+    // members are all fixed-width scalars (BOOL/INT/REAL/etc.).
+    try {
+      final values = await readVariables(orderedPairs);
+      final out = <String, TypedVariableValue>{};
+      final n = values.length < orderedSubPaths.length
+          ? values.length
+          : orderedSubPaths.length;
+      for (var i = 0; i < n; i++) {
+        out[orderedSubPaths[i]] = values[i];
+      }
+      // The batched call must produce one value per readable leaf. If
+      // it returned fewer (the PLC truncated or the count was off), fall
+      // through to per-leaf so the missing members get a fresh chance.
+      if (n == orderedPairs.length) return out;
+    } on UmasException catch (e) {
+      // Live-PLC reality: an FB with a STRING (or any non-fixed-width
+      // member) trips parseVariableValues' byteSize accounting on the
+      // batched response because STRING leaves advance differently
+      // than the bound-check assumes. Fall back to per-leaf reads so
+      // every leaf parses against its own response buffer — N RTTs but
+      // correct under the live wire format. This mirrors the
+      // CLI `read <fb>` command's per-leaf strategy in umas_cli.dart,
+      // which has been the workaround on the production M580.
+      _log.w('UMAS readFbInstanceMembers("$fbPath"): batched read failed '
+          '(${e.message}); falling back to per-leaf reads');
+    }
+
+    // Slow path: per-leaf reads. Each leaf gets its own 0x22; per-leaf
+    // failures are logged and SKIPPED — the rest of the FB still
+    // surfaces values. This matches the SCADA-style "best-effort" the
+    // poll loop expects: a single bad member shouldn't black out the
+    // whole FB.
     final out = <String, TypedVariableValue>{};
-    final n = values.length < orderedSubPaths.length
-        ? values.length
-        : orderedSubPaths.length;
-    for (var i = 0; i < n; i++) {
-      out[orderedSubPaths[i]] = values[i];
+    for (var i = 0; i < orderedPairs.length; i++) {
+      final pair = orderedPairs[i];
+      try {
+        final v = await readVariables([pair]);
+        if (v.isNotEmpty) {
+          out[orderedSubPaths[i]] = v.first;
+        }
+      } catch (e) {
+        _log.w('UMAS readFbInstanceMembers("$fbPath"): per-leaf read of '
+            '"${orderedSubPaths[i]}" failed: $e — skipping this member');
+      }
+    }
+    if (out.isEmpty) {
+      throw UmasException(
+        errorCode: 0,
+        message: 'UMAS readFbInstanceMembers("$fbPath"): every per-leaf '
+            'read failed. The FB instance may be unreachable or the PLC '
+            'session has degraded.',
+      );
     }
     return out;
   }
