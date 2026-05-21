@@ -96,69 +96,131 @@ extension on _ConveyorConcept {
   String get id => name;
 }
 
-/// Per-schema mapping of canonical concept → vendor member key in the
-/// FB DynamicValue map.
+/// A canonical-concept binding for one vendor schema.
 ///
-/// Schneider mapping is anchored on the `FB_ATV320` shape seen on the
-/// live M580: HMI sub-FB with `p_Stat_*` / `p_Mode_*` members plus a
-/// `Color` sub-record with named bit aliases.
+/// Either:
+///   * [memberKey] is set → the concept resolves to a single named
+///     member in the FB DynamicValue map. Direct passthrough; the
+///     value's runtime Dart type drives the renderer (BOOL → lamp,
+///     num → numeric badge, ...).
+///   * [wordKey] + [bitOffset] are set → the concept is a single bit
+///     inside a parent WORD member of the FB map. The asset reads the
+///     WORD value as an int and masks `(word >> bitOffset) & 1` to
+///     derive the BOOL. Used for Schneider FB_ATV320 layouts whose
+///     status / command / mode / color bits are packed into WORDs
+///     declared in the inner `HMI` sub-FB.
+class _ConceptBinding {
+  /// Direct member key. Mutually exclusive with [wordKey].
+  final String? memberKey;
+
+  /// Parent WORD member key. Mutually exclusive with [memberKey].
+  final String? wordKey;
+
+  /// Bit position within [wordKey]'s value (0..15 for a 16-bit WORD).
+  /// Required when [wordKey] is set.
+  final int? bitOffset;
+
+  const _ConceptBinding.direct(this.memberKey)
+      : wordKey = null,
+        bitOffset = null;
+
+  const _ConceptBinding.bit(this.wordKey, this.bitOffset)
+      : memberKey = null;
+}
+
+/// Schneider FB_ATV320 public-block bit layout — declaration order
+/// straight off the customer's `.STU` import (verified against the
+/// `<public>` section screenshots; declaration order = bit position,
+/// starting at bit 0).
+///
+/// Live-PLC verification (192.168.112.159 / 64 FB instances):
+/// every observed FB was quiescent — every HMI.Status / HMI.CMD /
+/// HMI.Mode / HMI.Color WORD read 0 and every FB-root duplicate BOOL
+/// read `false`. The 8 ground-truth duplicates (`p_Stat_xAuto`,
+/// `p_Stat_xCleaning`, `p_CMD_xManFwd/Rev/Reset/Stop/Cleaning`,
+/// `p_MODE_xAuto`) trivially agreed with bit==0 of word==0 for every
+/// position, so the verification confirms "no contradiction" but does
+/// NOT discriminate the table from any other on the wire today. The
+/// positions below are taken from the customer's authoritative
+/// declaration; bumping is a follow-up if a non-quiescent PLC ever
+/// disagrees.
+///
+/// Currently only the bits the asset surfaces as canonical concepts are
+/// actually consulted — the wider list is documented in
+/// [_schneiderBitTableComment] so a future iteration (e.g. a CMD lamp)
+/// can re-light up without rediscovering the positions.
+const Map<_ConveyorConcept, _ConceptBinding> _kSchneiderBindings = {
+  // HMI.Status bits:
+  //   0 p_Stat_xAuto              8  p_Stat_xPermissiveFwd
+  //   1 p_Stat_xCleaning          9  p_Stat_xPermissiveRev
+  //   2 p_Stat_xFault             10 p_Stat_xSTO
+  //   3 p_Stat_xWarning           11 p_Stat_xFailedToRun
+  //   4 p_Stat_xRunningFwd        12 p_Stat_xMotorTemperatureFault
+  //   5 p_Stat_xRunningRev        13 p_Stat_xParentConvFault
+  //   6 p_Stat_xLocal
+  //   7 p_Stat_xStopped
+  _ConveyorConcept.running: _ConceptBinding.bit('HMI.Status', 4),
+  _ConveyorConcept.fault: _ConceptBinding.bit('HMI.Status', 2),
+  // HMI.Mode bits:
+  //   0 p_Mode_xAuto
+  //   1 p_Mode_xMan
+  // The `mode` concept reads the manual bit (on = manual, off = auto)
+  // to match the prior contract.
+  _ConveyorConcept.mode: _ConceptBinding.bit('HMI.Mode', 1),
+  // HMI.Color bits:
+  //   0 red    3 blue
+  //   1 grey   4 yellow
+  //   2 green  5 pink
+  _ConveyorConcept.colorRed: _ConceptBinding.bit('HMI.Color', 0),
+  _ConveyorConcept.colorGrey: _ConceptBinding.bit('HMI.Color', 1),
+  _ConveyorConcept.colorGreen: _ConceptBinding.bit('HMI.Color', 2),
+  // Scalar leaves — read directly from the FB map.
+  _ConveyorConcept.runtime: _ConceptBinding.direct('HMI.p_Stat_diRuntime'),
+  _ConveyorConcept.velocity: _ConceptBinding.direct('HMI.p_Stat_rVelocity'),
+  _ConveyorConcept.thermalFaults:
+      _ConceptBinding.direct('HMI.p_Stat_iThermalFaults'),
+};
+
+/// Documentation-only echo of the full Schneider FB_ATV320 public bit
+/// table. Kept as a doc constant so future iterations can wire up
+/// additional concepts (e.g. a stopped lamp, permissive indicator)
+/// without rediscovering the layout.
+///
+/// HMI.CMD bits (not currently surfaced):
+///   0 p_CMD_xManRev   3 p_CMD_xAutotune
+///   1 p_CMD_xManFwd   4 p_CMD_xResetRuntime
+///   2 p_CMD_xReset    5 p_CMD_xStop
+// ignore: unused_element
+const String _schneiderBitTableComment =
+    'See _kSchneiderBindings for the live mapping.';
+
+/// Per-schema binding table — concept → direct member or bit-in-WORD.
+///
+/// Schneider mapping is anchored on the `FB_ATV320` shape observed on
+/// the live M580: an inner `HMI` sub-FB with WORD-packed status / mode
+/// / color flags plus scalar runtime / velocity / thermal members.
 ///
 /// Beckhoff mapping uses the TwinCAT 3 Hungarian-prefix convention
 /// (`bRunning`, `bFault`, ... `rActSpeed`). The convention is broadly
 /// consistent across Beckhoff FB libraries but is NOT a hard standard
-/// the way the Schneider HMI sub-FB is — see the comments on each
-/// concept for which entries are best-effort. Beckhoff FBs typically
-/// do NOT encode status colors as named bit aliases (they expose
-/// individual status BOOLs directly), so Color.* concepts are
+/// the way the Schneider HMI sub-FB is. Beckhoff FBs typically do NOT
+/// encode status colors as named bit aliases, so Color.* concepts are
 /// intentionally absent from the Beckhoff schema and will render as
-/// "?" — that's the correct UX (operator sees the running/fault BOOLs
-/// instead).
-const Map<ConveyorSchema, Map<_ConveyorConcept, String>> _kSchemaMembers = {
-  ConveyorSchema.schneider: {
-    // Either-direction running. The Schneider HMI block exposes
-    // both `p_Stat_xRunningFwd` and `p_Stat_xRunningRev`; for a
-    // single-direction conveyor visualization the forward bit is the
-    // operator-facing "running" lamp.
-    _ConveyorConcept.running: 'HMI.p_Stat_xRunningFwd',
-    _ConveyorConcept.fault: 'HMI.p_Stat_xFault',
-    // `p_Mode_xMan` true → manual mode active; rendered as a BOOL lamp
-    // (on = manual, off = auto). p_Mode_xAuto is the inverse signal
-    // and is not surfaced — one lamp is enough.
-    _ConveyorConcept.mode: 'HMI.p_Mode_xMan',
-    // The named-bit-decoder agent (commit a7d3de2d) will surface these
-    // keys as first-class entries on the FB DynamicValue map. Until it
-    // lands they will be missing → "?" placeholder (no crash).
-    _ConveyorConcept.colorRed: 'HMI.Color.red',
-    _ConveyorConcept.colorGrey: 'HMI.Color.grey',
-    _ConveyorConcept.colorGreen: 'HMI.Color.green',
-    _ConveyorConcept.runtime: 'HMI.p_Stat_diRuntime',
-    _ConveyorConcept.velocity: 'HMI.p_Stat_rVelocity',
-    _ConveyorConcept.thermalFaults: 'HMI.p_Stat_iThermalFaults',
-  },
+/// "?".
+const Map<ConveyorSchema, Map<_ConveyorConcept, _ConceptBinding>>
+    _kSchemaBindings = {
+  ConveyorSchema.schneider: _kSchneiderBindings,
   ConveyorSchema.beckhoff: {
-    // TwinCAT Hungarian-prefix members on the FB root.
-    _ConveyorConcept.running: 'bRunning',
+    _ConveyorConcept.running: _ConceptBinding.direct('bRunning'),
     // `bFault` is the broad TwinCAT convention; some Beckhoff
     // libraries use `bError` instead. If a customer's FB exposes the
-    // error name we'll need a follow-up schema variant — deliberately
-    // not adding the variant yet to keep this iteration tight.
-    _ConveyorConcept.fault: 'bFault',
-    // Best-effort mode flag. TwinCAT libraries vary on the exact
-    // name; `bMan` is the most common (true = manual mode). Falls
-    // back to "?" if the FB doesn't carry it.
-    _ConveyorConcept.mode: 'bMan',
+    // error name we'll need a follow-up schema variant.
+    _ConveyorConcept.fault: _ConceptBinding.direct('bFault'),
+    // Best-effort manual-mode flag.
+    _ConveyorConcept.mode: _ConceptBinding.direct('bMan'),
     // Beckhoff FBs do NOT typically expose Color.red/grey/green
-    // status alias bits (that's a Schneider-FB-ATV320 convention).
-    // Omitting these from the mapping means they render as "?",
-    // which is the correct UX for a Beckhoff binding.
-    // No Color.* entries here.
-    //
-    // `rActSpeed` mirrors the `oop_motor.st` fixture in
-    // packages/tfc_mcp_server. There is no universal Beckhoff name
-    // for runtime hours / thermal faults — best-effort guesses
-    // (`nRunTime`, `iThermalFaults`) would be invention rather than
-    // observation, so they are intentionally absent and render "?".
-    _ConveyorConcept.velocity: 'rActSpeed',
+    // status alias bits — Color.* concepts are intentionally absent.
+    _ConveyorConcept.velocity: _ConceptBinding.direct('rActSpeed'),
   },
 };
 
@@ -402,19 +464,22 @@ class ConveyorFbView extends StatelessWidget {
   /// order matches the [_ConveyorConcept] enum declaration (running →
   /// fault → mode → color* → runtime → velocity → thermalFaults).
   ///
-  /// Concepts whose schema entry is missing from [_kSchemaMembers] are
+  /// Concepts whose schema entry is missing from [_kSchemaBindings] are
   /// included as "?" cells so the operator can see that the schema
   /// doesn't surface them (e.g. Beckhoff schema for `colorRed`).
   List<ConveyorFbMemberCell> _cellsFor(ConveyorSchema s) {
-    final mapping = _kSchemaMembers[s] ?? const {};
+    final mapping = _kSchemaBindings[s] ?? const {};
     return [
       for (final concept in _ConveyorConcept.values)
         _buildCell(concept, mapping[concept]),
     ];
   }
 
-  ConveyorFbMemberCell _buildCell(_ConveyorConcept concept, String? memberKey) {
-    if (memberKey == null) {
+  ConveyorFbMemberCell _buildCell(
+    _ConveyorConcept concept,
+    _ConceptBinding? binding,
+  ) {
+    if (binding == null) {
       // Schema doesn't define this concept → render as unknown.
       return ConveyorFbMemberCell(
         name: concept.id,
@@ -422,6 +487,41 @@ class ConveyorFbView extends StatelessWidget {
         present: false,
       );
     }
+
+    // Bit-in-WORD binding: read the parent WORD from the FB map and
+    // mask the configured bit position. Missing parent WORD ⇒ unknown
+    // (present=false, rawValue=null). Present-but-non-int ⇒ unknown
+    // too (defensive — DynamicValue should always surface a WORD as an
+    // int, but a buggy stream value should not crash the page).
+    if (binding.wordKey != null) {
+      final wordKey = binding.wordKey!;
+      final bit = binding.bitOffset!;
+      if (!_isPresent(fbValue, wordKey)) {
+        return ConveyorFbMemberCell(
+          name: concept.id,
+          rawValue: null,
+          present: false,
+        );
+      }
+      final raw = _resolveRaw(fbValue, wordKey);
+      if (raw is! int) {
+        return ConveyorFbMemberCell(
+          name: concept.id,
+          rawValue: null,
+          present: false,
+        );
+      }
+      final on = ((raw >> bit) & 1) == 1;
+      return ConveyorFbMemberCell(
+        name: concept.id,
+        rawValue: on,
+        present: true,
+      );
+    }
+
+    // Direct member binding (scalar leaves, Beckhoff Hungarian-prefix
+    // BOOLs, etc.).
+    final memberKey = binding.memberKey!;
     return ConveyorFbMemberCell(
       name: concept.id,
       rawValue: _resolveRaw(fbValue, memberKey),
