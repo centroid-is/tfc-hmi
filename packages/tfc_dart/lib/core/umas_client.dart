@@ -352,19 +352,38 @@ class UmasClient {
 
   /// Start periodic keep-alive timer. Cancels any existing timer first.
   ///
-  /// The timer calls [sendKeepAlive] every [keepAliveInterval]. If the
-  /// session is not in PAIRED state, the tick is skipped. If sendKeepAlive
-  /// throws, the session is reset to uninitialized via [_handleSessionError].
+  /// The timer calls [readPlcStatus] (sub-function 0x04) every
+  /// [keepAliveInterval]. If the session is not in PAIRED state, the
+  /// tick is skipped. A transport-level failure resets the session via
+  /// [_handleSessionError]; a byte-level UMAS error from the PLC is
+  /// logged at warning and does NOT reset the session (Fix A).
+  ///
+  /// **Why plcStatus, not the dedicated KeepAlive (0x12) sub-function?**
+  /// UMAS 0x12 is `umas_QueryKeepPLCReservation` — it queries whether
+  /// the caller's reservation is still alive. On the M580 firmware
+  /// (verified live against 192.168.112.159, 2026-05-20 byte capture in
+  /// `tools/umas_keepalive_probe.dart`) the PLC rejects every 0x12 from
+  /// a non-reserved client with `status=0xFD errorCode=0x81
+  /// secondary=0x80`. The HMI is a read-only client and never calls
+  /// [takePlcReservation], so 0x12 would generate a continuous warning
+  /// log every interval. plc4j's umas.mspec has no 0x12 case for the
+  /// same reason — it relies on harmless read traffic as the heartbeat.
+  /// `readPlcStatus()` (0x04, public, no reservation required) is the
+  /// idiomatic choice and has the side-benefit of refreshing
+  /// `_projectCrc` / `_blockCrcs` on every tick.
   ///
   /// F-8 (v1.1.x): also starts the separate [_projectCrcTimer] that
   /// periodically re-reads memory block 0x30 to detect PLC reprograms
-  /// without a session-level error.
+  /// without a session-level error. With the timer now driven by 0x04
+  /// (which already returns the project CRC list), the CRC timer is
+  /// strictly belt-and-suspenders — keep it for now to preserve test
+  /// coverage of refreshProjectMetadata.
   void startKeepAlive() {
     stopKeepAlive();
     _keepAliveTimer = Timer.periodic(keepAliveInterval, (_) async {
       if (_stateValue != UmasSessionState.paired) return;
       try {
-        await sendKeepAlive();
+        await readPlcStatus();
       } on UmasException catch (e) {
         // Fix A: only invalidate for genuine transport-level failures.
         // A malformed-echo / parse error should not flush the session
@@ -1369,7 +1388,24 @@ class UmasClient {
     });
   }
 
-  /// Send a KeepAlive (0x12) to maintain the UMAS session.
+  /// Send a KeepAlive (0x12) request. **Diagnostic-only API — not used
+  /// by [startKeepAlive].**
+  ///
+  /// UMAS sub-function 0x12 is `umas_QueryKeepPLCReservation`. It only
+  /// makes sense when the client holds an exclusive write reservation
+  /// (acquired via [takePlcReservation], 0x10). On the M580 firmware,
+  /// 0x12 from a non-reserved client is rejected with `status=0xFD
+  /// errorCode=0x81 secondary=0x80` (live byte capture against
+  /// 192.168.112.159, 2026-05-20 — see
+  /// `tools/umas_keepalive_probe.dart`).
+  ///
+  /// plc4j's umas.mspec defines no 0x12 case; it never sends this
+  /// sub-function. The periodic [startKeepAlive] timer uses
+  /// [readPlcStatus] (0x04) instead.
+  ///
+  /// This method is retained for parity / diagnostic tooling that wants
+  /// to exercise the 0x12 frame explicitly (e.g. fuzzing or firmware
+  /// dialect probing). Production code paths should not call this.
   ///
   /// Uses [_withSession] to auto-initialize if not yet paired.
   /// Returns void on success; throws [UmasException] on error.

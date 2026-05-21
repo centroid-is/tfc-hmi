@@ -1118,15 +1118,23 @@ void main() {
           buildSuccessResponse(0x01, leUint16(240), pairingKey: pairingKey));
     }
 
-    test('startKeepAlive causes sendKeepAlive to be called periodically',
+    test('startKeepAlive causes plcStatus (0x04) to be called periodically',
         () async {
+      // KEEPALIVE-WIRE-CHANGE (2026-05-20): the periodic timer sends
+      // 0x04 plcStatus instead of 0x12 KeepAlive — M580 rejects 0x12
+      // from non-reserved clients (live byte capture in
+      // tools/umas_keepalive_probe.dart).
       final mock = MockUmasSender();
       setupInitSequence(mock);
 
-      // Queue multiple keepAlive success responses
+      // Queue multiple plcStatus success responses. Minimum payload:
+      // statusByte(1) + notUsed2(2) + numberOfBlocks(1=0) = 4 bytes.
       for (int i = 0; i < 5; i++) {
         mock.whenSubFunction(
-            0x12, buildSuccessResponse(0x12, Uint8List(0), pairingKey: 0x42));
+            0x04,
+            buildSuccessResponse(
+                0x04, Uint8List.fromList([0x00, 0x00, 0x00, 0x00]),
+                pairingKey: 0x42));
       }
 
       final client = UmasClient(
@@ -1144,21 +1152,32 @@ void main() {
 
       client.stopKeepAlive();
 
+      final plcStatusCount = mock.sentRequests
+          .where((r) => r.protocolDataUnit[2] == 0x04)
+          .length;
+      expect(plcStatusCount, greaterThanOrEqualTo(2),
+          reason: 'Timer should have fired at least twice');
+      // Timer must NEVER send 0x12 KeepAlive — M580 rejects it.
       final keepAliveCount = mock.sentRequests
           .where((r) => r.protocolDataUnit[2] == 0x12)
           .length;
-      expect(keepAliveCount, greaterThanOrEqualTo(2),
-          reason: 'Timer should have fired at least twice');
+      expect(keepAliveCount, 0,
+          reason: 'Timer must not send 0x12 KeepAlive — M580 rejects '
+              'with 0xFD 0x81 0x80');
     });
 
     test('stopKeepAlive stops the timer -- no more keepAlive calls after stop',
         () async {
+      // KEEPALIVE-WIRE-CHANGE (2026-05-20): timer now sends 0x04.
       final mock = MockUmasSender();
       setupInitSequence(mock);
 
       for (int i = 0; i < 10; i++) {
         mock.whenSubFunction(
-            0x12, buildSuccessResponse(0x12, Uint8List(0), pairingKey: 0x42));
+            0x04,
+            buildSuccessResponse(
+                0x04, Uint8List.fromList([0x00, 0x00, 0x00, 0x00]),
+                pairingKey: 0x42));
       }
 
       final client = UmasClient(
@@ -1173,18 +1192,18 @@ void main() {
       client.stopKeepAlive();
 
       final countAfterStop = mock.sentRequests
-          .where((r) => r.protocolDataUnit[2] == 0x12)
+          .where((r) => r.protocolDataUnit[2] == 0x04)
           .length;
 
       // Wait more time -- no new keepAlives should appear
       await Future<void>.delayed(const Duration(milliseconds: 150));
 
       final countLater = mock.sentRequests
-          .where((r) => r.protocolDataUnit[2] == 0x12)
+          .where((r) => r.protocolDataUnit[2] == 0x04)
           .length;
 
       expect(countLater, countAfterStop,
-          reason: 'No new keepAlive calls after stopKeepAlive');
+          reason: 'No new keepAlive (plcStatus) calls after stopKeepAlive');
     });
 
     test('transport-level failed keepAlive transitions session to uninitialized',
@@ -1192,14 +1211,18 @@ void main() {
       // Fix A: a transport-level keep-alive failure invalidates the
       // session. A byte-level UMAS error from keep-alive does NOT (the
       // session is intact; the next operation can still proceed).
+      // KEEPALIVE-WIRE-CHANGE (2026-05-20): timer now sends 0x04.
       final mock = MockUmasSender();
       setupInitSequence(mock);
 
-      // First keepAlive succeeds; second transport-fails (timeout).
+      // First plcStatus succeeds; second transport-fails (timeout).
       mock.whenSubFunction(
-          0x12, buildSuccessResponse(0x12, Uint8List(0), pairingKey: 0x42));
+          0x04,
+          buildSuccessResponse(
+              0x04, Uint8List.fromList([0x00, 0x00, 0x00, 0x00]),
+              pairingKey: 0x42));
       mock.whenSubFunctionTransportFails(
-          0x12, ModbusResponseCode.requestTimeout);
+          0x04, ModbusResponseCode.requestTimeout);
 
       final client = UmasClient(
         sendFn: mock.send,
@@ -1226,14 +1249,18 @@ void main() {
       // Fix A regression guard: a byte-level UMAS error from the
       // keep-alive tick must not nuke the session — that was the
       // visible "session re-pair storm" in field logs.
+      // KEEPALIVE-WIRE-CHANGE (2026-05-20): timer now sends 0x04.
       final mock = MockUmasSender();
       setupInitSequence(mock);
 
-      // First keepAlive succeeds; second returns a UMAS byte error.
+      // First plcStatus succeeds; second returns a UMAS byte error.
       mock.whenSubFunction(
-          0x12, buildSuccessResponse(0x12, Uint8List(0), pairingKey: 0x42));
+          0x04,
+          buildSuccessResponse(
+              0x04, Uint8List.fromList([0x00, 0x00, 0x00, 0x00]),
+              pairingKey: 0x42));
       mock.whenSubFunction(
-          0x12, buildErrorResponse(0x01, subFunc: 0x12, pairingKey: 0x42));
+          0x04, buildErrorResponse(0x01, subFunc: 0x04, pairingKey: 0x42));
 
       final client = UmasClient(
         sendFn: mock.send,
@@ -1255,12 +1282,16 @@ void main() {
     });
 
     test('dispose cancels the keep-alive timer', () async {
+      // KEEPALIVE-WIRE-CHANGE (2026-05-20): timer now sends 0x04.
       final mock = MockUmasSender();
       setupInitSequence(mock);
 
       for (int i = 0; i < 10; i++) {
         mock.whenSubFunction(
-            0x12, buildSuccessResponse(0x12, Uint8List(0), pairingKey: 0x42));
+            0x04,
+            buildSuccessResponse(
+                0x04, Uint8List.fromList([0x00, 0x00, 0x00, 0x00]),
+                pairingKey: 0x42));
       }
 
       final client = UmasClient(
@@ -1275,26 +1306,30 @@ void main() {
       client.dispose();
 
       final countAfterDispose = mock.sentRequests
-          .where((r) => r.protocolDataUnit[2] == 0x12)
+          .where((r) => r.protocolDataUnit[2] == 0x04)
           .length;
 
       await Future<void>.delayed(const Duration(milliseconds: 150));
 
       final countLater = mock.sentRequests
-          .where((r) => r.protocolDataUnit[2] == 0x12)
+          .where((r) => r.protocolDataUnit[2] == 0x04)
           .length;
 
       expect(countLater, countAfterDispose,
-          reason: 'No keepAlive calls after dispose');
+          reason: 'No keepAlive (plcStatus) calls after dispose');
     });
 
     test('calling startKeepAlive twice replaces the previous timer', () async {
+      // KEEPALIVE-WIRE-CHANGE (2026-05-20): timer now sends 0x04.
       final mock = MockUmasSender();
       setupInitSequence(mock);
 
       for (int i = 0; i < 20; i++) {
         mock.whenSubFunction(
-            0x12, buildSuccessResponse(0x12, Uint8List(0), pairingKey: 0x42));
+            0x04,
+            buildSuccessResponse(
+                0x04, Uint8List.fromList([0x00, 0x00, 0x00, 0x00]),
+                pairingKey: 0x42));
       }
 
       final client = UmasClient(
@@ -1313,13 +1348,13 @@ void main() {
 
       client.stopKeepAlive();
 
-      final keepAliveCount = mock.sentRequests
-          .where((r) => r.protocolDataUnit[2] == 0x12)
+      final plcStatusCount = mock.sentRequests
+          .where((r) => r.protocolDataUnit[2] == 0x04)
           .length;
 
       // With one timer at 50ms, after 80ms we expect 1 tick.
       // If two timers were running, we'd see 2 ticks.
-      expect(keepAliveCount, 1,
+      expect(plcStatusCount, 1,
           reason: 'Only one timer should be active (not two)');
     });
   });
@@ -1349,8 +1384,9 @@ void main() {
 
       // Fix A: trigger session loss with a TRANSPORT-level keepAlive failure
       // (byte-level UMAS errors no longer invalidate).
+      // KEEPALIVE-WIRE-CHANGE (2026-05-20): timer now sends 0x04 plcStatus.
       mock.whenSubFunctionTransportFails(
-          0x12, ModbusResponseCode.requestTimeout);
+          0x04, ModbusResponseCode.requestTimeout);
 
       final delays = <Duration>[];
       final client = UmasClient(
@@ -1513,13 +1549,17 @@ void main() {
     });
 
     test('keep-alive timer restarts after successful re-init', () async {
+      // KEEPALIVE-WIRE-CHANGE (2026-05-20): timer now sends 0x04.
       final mock = MockUmasSender();
       setupInitSequence(mock, pairingKey: 0x42);
 
-      // KeepAlive responses for after re-init
+      // plcStatus responses for after re-init
       for (int i = 0; i < 10; i++) {
         mock.whenSubFunction(
-            0x12, buildSuccessResponse(0x12, Uint8List(0), pairingKey: 0x55));
+            0x04,
+            buildSuccessResponse(
+                0x04, Uint8List.fromList([0x00, 0x00, 0x00, 0x00]),
+                pairingKey: 0x55));
       }
 
       // First browse succeeds
@@ -1565,7 +1605,7 @@ void main() {
       await Future<void>.delayed(const Duration(milliseconds: 120));
 
       final keepAliveCount = mock.sentRequests
-          .where((r) => r.protocolDataUnit[2] == 0x12)
+          .where((r) => r.protocolDataUnit[2] == 0x04)
           .length;
       expect(keepAliveCount, greaterThanOrEqualTo(1),
           reason: 'Keep-alive timer should restart after successful re-init');

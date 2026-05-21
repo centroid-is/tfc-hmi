@@ -235,7 +235,11 @@ void main() {
       expect(client.sessionState, UmasSessionState.paired);
 
       // Queue a transport timeout for the next keep-alive tick.
-      mock.transportFail(0x12, ModbusResponseCode.requestTimeout);
+      // KEEPALIVE-WIRE-CHANGE (2026-05-20): the timer now sends 0x04
+      // plcStatus (the M580 rejects the dedicated 0x12 KeepAlive from
+      // non-reserved clients). The Fix A contract — transport-level
+      // failure IS fatal — must still hold for the new wire choice.
+      mock.transportFail(0x04, ModbusResponseCode.requestTimeout);
 
       client.startKeepAlive();
       await Future<void>.delayed(const Duration(milliseconds: 120));
@@ -264,9 +268,15 @@ void main() {
       expect(client.sessionState, UmasSessionState.paired);
 
       // Byte-level UMAS error from keep-alive — should NOT invalidate.
-      mock.clearResponses(0x12);
-      mock.respond(0x12, _errorPdu(0x01, pairingKey: 0x42));
-      mock.respond(0x12, _errorPdu(0x01, pairingKey: 0x42));
+      // KEEPALIVE-WIRE-CHANGE (2026-05-20): the periodic timer now sends
+      // sub-function 0x04 (plcStatus) instead of 0x12 (KeepAlive), because
+      // the M580 categorically rejects 0x12 from non-reserved clients.
+      // The Fix A contract — a byte-level error from the keep-alive call
+      // does NOT invalidate the session — must still hold for the new
+      // wire choice. So we queue 0x04 byte-level errors here.
+      mock.clearResponses(0x04);
+      mock.respond(0x04, _errorPdu(0x01, pairingKey: 0x42));
+      mock.respond(0x04, _errorPdu(0x01, pairingKey: 0x42));
 
       client.startKeepAlive();
       await Future<void>.delayed(const Duration(milliseconds: 120));
@@ -499,9 +509,12 @@ void main() {
       // Queue several keep-alive byte-level error responses. Under the
       // OLD policy each would invalidate the session and clear the
       // cache; under Fix A they're all non-fatal.
-      mock.clearResponses(0x12);
+      // KEEPALIVE-WIRE-CHANGE (2026-05-20): the periodic timer now sends
+      // 0x04 plcStatus instead of 0x12 KeepAlive (M580 rejects 0x12 from
+      // non-reserved clients), so queue errors against 0x04.
+      mock.clearResponses(0x04);
       for (var i = 0; i < 6; i++) {
-        mock.respond(0x12, _errorPdu(0x01, pairingKey: 0x42));
+        mock.respond(0x04, _errorPdu(0x01, pairingKey: 0x42));
       }
 
       client.startKeepAlive();
