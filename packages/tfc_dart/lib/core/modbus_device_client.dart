@@ -943,6 +943,22 @@ class ModbusDeviceClientAdapter implements DeviceClient {
     final variableName = _variableNames[key];
     if (variableName != null) {
       final subject = _umasSubjectFor(key);
+      // Phase 7 / SPEC Req #2 (v1.1.x): auto-register this key for live
+      // MonitorPlc polling if it isn't already in the poll set. Without
+      // this, a UMAS-by-name key bound after adapter construction (e.g.
+      // via Key Repository or a fresh page asset) gets the TD-021 eager
+      // seed below but never receives subsequent updates — the home
+      // screen widget renders the seed value forever.
+      //
+      // addUmasKey is idempotent (D-05): if `key` is already in any
+      // _umasKeysByGroup[*] list (e.g. it was registered at construction
+      // or via an earlier subscribe), this call is a silent no-op.
+      // We call it unconditionally rather than precheck because the
+      // membership probe is identical inside addUmasKey itself; saves
+      // a duplicate linear scan (per D-03 the planner-suggested shape
+      // was an explicit precheck — equivalent behavior, less code).
+      addUmasKey(key);
+
       // TD-021 (v1.1.x): subscribers should see a live value within ~1
       // poll-cycle of mounting, not "stale until somebody else triggers
       // a read". When MonitorPlc registration succeeded the next tick of
