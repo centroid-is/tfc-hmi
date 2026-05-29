@@ -725,6 +725,74 @@ class ModbusDeviceClientAdapter implements DeviceClient {
     _log.i('UMAS addUmasKey: registered "$key" in group "$group"');
   }
 
+  /// Phase 7 / SPEC Req #3 (v1.1.x): drop a UMAS-by-name [key] from the
+  /// live poll set.
+  ///
+  /// State changes (in order, per D-08):
+  ///   1. Close the cached [BehaviorSubject] (if any) and remove it from
+  ///      [_umasSubjects] so any active subscriber sees `onDone` exactly
+  ///      once (clean closure) rather than the subject staying open and
+  ///      never updating.
+  ///   2. Drop the cached typed last-value in [_umasLastValues] so a
+  ///      future [subscribe] re-runs the TD-021 seed path against a
+  ///      fresh symbol read (SPEC Constraints §"Symbol/cache
+  ///      invalidation contract").
+  ///   3. Remove [key] from every [_umasKeysByGroup] group's key list.
+  ///   4. Remove [key] from [_umasKeyOrder] (the registered-this-cycle
+  ///      sequence).
+  ///   5. Null [_umasTableBuiltFor] so the next [_pollUmasGroup] tick
+  ///      triggers [_buildUmasTableAndStartTimers] and re-registers
+  ///      the MonitorPlc table without the dropped entry.
+  ///
+  /// Silent no-op when [key] is not in any [_umasKeysByGroup] list AND
+  /// not in [_umasSubjects] (D-05 idempotency — matches `Set.remove`
+  /// ergonomics: no log, no `_umasTableBuiltFor` mutation).
+  ///
+  /// W4 / Option B2: kept as a separate sibling method from the
+  /// pre-existing [unsubscribeUmas]. [unsubscribeUmas] remains the
+  /// TD-003 [updateVariableNames] caller with its (no-log) behavior so
+  /// operators do not see new INFO log noise from the existing key-edit
+  /// path. Collapsing the two methods (Option B1) is a possible
+  /// follow-up cleanup only — see 07-02-PLAN.md Step B for the
+  /// equivalence-test requirement that consolidation would need.
+  ///
+  /// TD-009 / TD-021 / TD-022 are NOT touched (D-10): this method does
+  /// not read or write [_useMonitorPlc], the eager-read on [subscribe],
+  /// or the MonitorPlc degraded breaker.
+  void removeUmasKey(String key) {
+    // Idempotency probe: was this key ever registered? (D-05)
+    var wasRegistered = false;
+    for (final keys in _umasKeysByGroup.values) {
+      if (keys.contains(key)) {
+        wasRegistered = true;
+        break;
+      }
+    }
+    if (!wasRegistered && !_umasSubjects.containsKey(key)) return;
+
+    // D-08: close the subject BEFORE removing the map entry so any
+    // active subscriber sees onDone exactly once (clean closure).
+    final subject = _umasSubjects[key];
+    if (subject != null && !subject.isClosed) {
+      subject.close();
+    }
+    _umasSubjects.remove(key);
+    _umasLastValues.remove(key);
+    String? droppedFrom;
+    for (final entry in _umasKeysByGroup.entries) {
+      if (entry.value.remove(key)) {
+        droppedFrom = entry.key;
+        // Continue: defensive — duplicate-add is already guarded by
+        // addUmasKey, but the linear scan handles legacy callers that
+        // may have populated the same key into multiple groups.
+      }
+    }
+    _umasKeyOrder.remove(key);
+    _umasTableBuiltFor = null;
+    _log.i('UMAS removeUmasKey: dropped "$key"'
+        '${droppedFrom != null ? ' from group "$droppedFrom"' : ''}');
+  }
+
   /// TD-003 (v1.1.x): release every per-key resource the adapter
   /// allocates for a UMAS-by-name [key]. Called from
   /// [updateVariableNames] when the operator removes or renames a
