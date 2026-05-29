@@ -1,4 +1,5 @@
 import 'dart:io' show Platform;
+import 'dart:ui' show ImageByteFormat, PictureRecorder;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -771,6 +772,147 @@ void main() {
       expect(r.debugLabelColour, Colors.grey);
       expect(o.debugLabelColour, Colors.grey);
       expect(i.debugLabelColour, Colors.grey);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Label counter-rotation when widget is rotated 180°
+  //
+  // Bug: when the Sensor asset is rotated 180° via `Coordinates.angle = 180`,
+  // its `LayoutRotatedBox` wraps the painter at `pi` radians — the in-painter
+  // label text comes out upside-down and operators can no longer read the
+  // tag. Fix contract: the painter accepts a `counterRotateLabel` flag and,
+  // when true, rotates ONLY the label glyph around its own centre by `pi`
+  // so the text reads upright while the sensor geometry stays inverted
+  // (the inverted geometry is correct — beam direction, cone orientation,
+  // bubble side all flip with the asset).
+  //
+  // Scope: 180°-only. Other angles are out of scope; the flag is a bool.
+  // Strategy: paint to a `PictureRecorder`, encode to PNG bytes, and assert
+  // that flipping the flag produces a different byte stream. Bytes-differ
+  // is sufficient — we don't need golden-file pixel comparisons for this
+  // contract.
+  // ---------------------------------------------------------------------------
+  group('Label counter-rotation at widget angle 180°', () {
+    const size = Size(256, 128);
+    const label = 'PE-101A';
+
+    Future<List<int>> renderToPng(CustomPainter painter) async {
+      final recorder = PictureRecorder();
+      final canvas = Canvas(recorder);
+      // White background so the text alpha shows up clearly in byte form.
+      canvas.drawRect(
+        Offset.zero & size,
+        Paint()..color = const Color(0xFFFFFFFF),
+      );
+      painter.paint(canvas, size);
+      final picture = recorder.endRecording();
+      final image =
+          await picture.toImage(size.width.toInt(), size.height.toInt());
+      final bytes = await image.toByteData(format: ImageByteFormat.png);
+      return bytes!.buffer.asUint8List();
+    }
+
+    testWidgets(
+        'RedLightBeamPainter with counterRotateLabel=true differs from =false',
+        (tester) async {
+      final upright = RedLightBeamPainter(
+        isActive: false,
+        activeColor: Colors.green,
+        inactiveColor: Colors.grey.shade400,
+        label: label,
+        counterRotateLabel: false,
+      );
+      final flipped = RedLightBeamPainter(
+        isActive: false,
+        activeColor: Colors.green,
+        inactiveColor: Colors.grey.shade400,
+        label: label,
+        counterRotateLabel: true,
+      );
+      final a = await renderToPng(upright);
+      final b = await renderToPng(flipped);
+      expect(a, isNot(equals(b)),
+          reason:
+              'When counterRotateLabel=true the label glyph must render '
+              'rotated 180° around its centre — produces a different image '
+              'than the upright label.');
+    });
+
+    testWidgets(
+        'OpticFieldPainter with counterRotateLabel=true differs from =false',
+        (tester) async {
+      final upright = OpticFieldPainter(
+        isActive: false,
+        activeColor: Colors.green,
+        inactiveColor: Colors.grey.shade400,
+        label: label,
+        counterRotateLabel: false,
+      );
+      final flipped = OpticFieldPainter(
+        isActive: false,
+        activeColor: Colors.green,
+        inactiveColor: Colors.grey.shade400,
+        label: label,
+        counterRotateLabel: true,
+      );
+      final a = await renderToPng(upright);
+      final b = await renderToPng(flipped);
+      expect(a, isNot(equals(b)));
+    });
+
+    testWidgets(
+        'InductiveFieldPainter with counterRotateLabel=true differs from =false',
+        (tester) async {
+      final upright = InductiveFieldPainter(
+        isActive: false,
+        activeColor: Colors.green,
+        inactiveColor: Colors.grey.shade400,
+        label: label,
+        counterRotateLabel: false,
+      );
+      final flipped = InductiveFieldPainter(
+        isActive: false,
+        activeColor: Colors.green,
+        inactiveColor: Colors.grey.shade400,
+        label: label,
+        counterRotateLabel: true,
+      );
+      final a = await renderToPng(upright);
+      final b = await renderToPng(flipped);
+      expect(a, isNot(equals(b)));
+    });
+
+    test(
+        'counterRotateLabel default is false (back-compat — existing callers unchanged)',
+        () {
+      final p = RedLightBeamPainter(
+        isActive: false,
+        activeColor: Colors.green,
+        inactiveColor: Colors.grey,
+        label: 'X',
+      );
+      expect(p.counterRotateLabel, isFalse);
+    });
+
+    test(
+        'shouldRepaint TRUE when counterRotateLabel flips (rotation must invalidate cache)',
+        () {
+      final a = RedLightBeamPainter(
+        isActive: false,
+        activeColor: Colors.green,
+        inactiveColor: Colors.grey,
+        label: 'X',
+        counterRotateLabel: false,
+      );
+      final b = RedLightBeamPainter(
+        isActive: false,
+        activeColor: Colors.green,
+        inactiveColor: Colors.grey,
+        label: 'X',
+        counterRotateLabel: true,
+      );
+      expect(a.shouldRepaint(b), isTrue);
     });
   });
 }
