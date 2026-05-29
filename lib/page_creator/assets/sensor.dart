@@ -221,6 +221,17 @@ class _SensorState extends ConsumerState<Sensor> {
     required bool isStale,
   }) {
     final label = widget.config.tag;
+    // When the asset is placed at ≈ 180° via Coordinates.angle, the outer
+    // LayoutRotatedBox flips the painter — without intervention the label
+    // text also flips and operators can no longer read it. We pass a
+    // `counterRotateLabel` hint to the painter so ONLY the label glyph is
+    // rotated back to upright; the sensor geometry (beam direction, cone,
+    // bubble) stays inverted as intended. Tolerance of 0.5° absorbs the
+    // float-noise that creeps in from saved coordinate values (e.g.
+    // 179.999) — exact equality on a double would silently miss those.
+    // Scope is 180°-only by design; other angles are out of scope.
+    final angleDeg = widget.config.coordinates.angle ?? 0.0;
+    final counterRotateLabel = (angleDeg - 180).abs() < 0.5;
     switch (widget.config.kind) {
       case SensorKind.redLight:
         return RedLightBeamPainter(
@@ -229,6 +240,7 @@ class _SensorState extends ConsumerState<Sensor> {
           inactiveColor: widget.config.inactiveColor,
           label: label,
           isStale: isStale,
+          counterRotateLabel: counterRotateLabel,
         );
       case SensorKind.opticField:
         return OpticFieldPainter(
@@ -237,6 +249,7 @@ class _SensorState extends ConsumerState<Sensor> {
           inactiveColor: widget.config.inactiveColor,
           label: label,
           isStale: isStale,
+          counterRotateLabel: counterRotateLabel,
         );
       case SensorKind.inductiveField:
         return InductiveFieldPainter(
@@ -245,6 +258,7 @@ class _SensorState extends ConsumerState<Sensor> {
           inactiveColor: widget.config.inactiveColor,
           label: label,
           isStale: isStale,
+          counterRotateLabel: counterRotateLabel,
         );
     }
   }

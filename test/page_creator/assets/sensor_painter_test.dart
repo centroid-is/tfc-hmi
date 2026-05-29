@@ -1,4 +1,5 @@
 import 'dart:io' show Platform;
+import 'dart:typed_data' show Uint8List;
 import 'dart:ui' show ImageByteFormat, PictureRecorder;
 
 import 'package:flutter/material.dart';
@@ -797,7 +798,13 @@ void main() {
     const size = Size(256, 128);
     const label = 'PE-101A';
 
-    Future<List<int>> renderToPng(CustomPainter painter) async {
+    /// Drives a painter through a fresh [Canvas]/[PictureRecorder] pair and
+    /// returns the RGBA bytes of the rendered picture. `toImageSync` +
+    /// `toByteData` runs synchronously inside the widget-test fake-async
+    /// scheduler when wrapped in [WidgetTester.runAsync] — that's the only
+    /// way to escape the fake-async loop for engine work.
+    Future<Uint8List> renderToBytes(
+        WidgetTester tester, CustomPainter painter) async {
       final recorder = PictureRecorder();
       final canvas = Canvas(recorder);
       // White background so the text alpha shows up clearly in byte form.
@@ -808,8 +815,11 @@ void main() {
       painter.paint(canvas, size);
       final picture = recorder.endRecording();
       final image =
-          await picture.toImage(size.width.toInt(), size.height.toInt());
-      final bytes = await image.toByteData(format: ImageByteFormat.png);
+          picture.toImageSync(size.width.toInt(), size.height.toInt());
+      final bytes = await tester
+          .runAsync(() => image.toByteData(format: ImageByteFormat.png));
+      image.dispose();
+      picture.dispose();
       return bytes!.buffer.asUint8List();
     }
 
@@ -830,8 +840,8 @@ void main() {
         label: label,
         counterRotateLabel: true,
       );
-      final a = await renderToPng(upright);
-      final b = await renderToPng(flipped);
+      final a = await renderToBytes(tester, upright);
+      final b = await renderToBytes(tester, flipped);
       expect(a, isNot(equals(b)),
           reason:
               'When counterRotateLabel=true the label glyph must render '
@@ -856,8 +866,8 @@ void main() {
         label: label,
         counterRotateLabel: true,
       );
-      final a = await renderToPng(upright);
-      final b = await renderToPng(flipped);
+      final a = await renderToBytes(tester, upright);
+      final b = await renderToBytes(tester, flipped);
       expect(a, isNot(equals(b)));
     });
 
@@ -878,8 +888,8 @@ void main() {
         label: label,
         counterRotateLabel: true,
       );
-      final a = await renderToPng(upright);
-      final b = await renderToPng(flipped);
+      final a = await renderToBytes(tester, upright);
+      final b = await renderToBytes(tester, flipped);
       expect(a, isNot(equals(b)));
     });
 

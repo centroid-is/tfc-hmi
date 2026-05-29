@@ -1,3 +1,5 @@
+import 'dart:math' show pi;
+
 import 'package:flutter/material.dart';
 
 // ---------------------------------------------------------------------------
@@ -81,7 +83,20 @@ double _glyphHeight(Size size, String? label) {
 /// `BaseAsset.text` is also rendered separately by the page editor chrome,
 /// so the painter label is opt-in for kinds that want a tag baked into the
 /// glyph itself).
-void _paintLabel(Canvas canvas, Size size, String? label, Color color) {
+///
+/// When [counterRotateLabel] is true, the label glyph is rotated 180° around
+/// its own centre before painting. This compensates for an outer
+/// `LayoutRotatedBox` at `pi` radians (the Sensor widget's runtime path when
+/// `coordinates.angle == 180`) so the operator-facing tag reads upright
+/// while the sensor geometry (beam direction, cone, bubble) stays inverted
+/// as intended. The flag is a bool — 180° is the only supported case.
+void _paintLabel(
+  Canvas canvas,
+  Size size,
+  String? label,
+  Color color, {
+  bool counterRotateLabel = false,
+}) {
   if (label == null || label.isEmpty) return;
   final tp = TextPainter(
     text: TextSpan(
@@ -97,13 +112,25 @@ void _paintLabel(Canvas canvas, Size size, String? label, Color color) {
   final glyphH = _glyphHeight(size, label);
   final bandTop = glyphH;
   final bandHeight = size.height - glyphH;
-  tp.paint(
-    canvas,
-    Offset(
-      (size.width - tp.width) / 2,
-      bandTop + (bandHeight - tp.height) / 2,
-    ),
+  final origin = Offset(
+    (size.width - tp.width) / 2,
+    bandTop + (bandHeight - tp.height) / 2,
   );
+  if (counterRotateLabel) {
+    // Rotate the label glyph 180° around its own centre so it reads upright
+    // when the outer LayoutRotatedBox flips the whole widget. The geometry
+    // (puck/beam/cone/bubble) is left to flip with the widget — only this
+    // text run is counter-rotated.
+    final centre = Offset(origin.dx + tp.width / 2, origin.dy + tp.height / 2);
+    canvas.save();
+    canvas.translate(centre.dx, centre.dy);
+    canvas.rotate(pi);
+    canvas.translate(-centre.dx, -centre.dy);
+    tp.paint(canvas, origin);
+    canvas.restore();
+    return;
+  }
+  tp.paint(canvas, origin);
 }
 
 /// Draws a horizontal dashed line from `a` to `b` using absolute on/off
@@ -163,6 +190,7 @@ class RedLightBeamPainter extends CustomPainter {
     required this.inactiveColor,
     this.label,
     this.isStale = false,
+    this.counterRotateLabel = false,
   });
 
   final bool isActive;
@@ -170,6 +198,11 @@ class RedLightBeamPainter extends CustomPainter {
   final Color inactiveColor;
   final String? label;
   final bool isStale;
+
+  /// True when the surrounding widget rotates the painter 180° and the
+  /// label must be counter-rotated to stay readable. Geometry (beam, pucks)
+  /// is unchanged — only the text glyph rotates.
+  final bool counterRotateLabel;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -226,7 +259,8 @@ class RedLightBeamPainter extends CustomPainter {
     // grey panels when this used `inactiveColor`. SENS-13 lock:
     // stale → grey, else `Colors.black87`.
     final labelColour = isStale ? Colors.grey : Colors.black87;
-    _paintLabel(canvas, size, label, labelColour);
+    _paintLabel(canvas, size, label, labelColour,
+        counterRotateLabel: counterRotateLabel);
   }
 
   /// Test-visibility hook for the locked label-colour formula
@@ -243,7 +277,8 @@ class RedLightBeamPainter extends CustomPainter {
         o.activeColor != activeColor ||
         o.inactiveColor != inactiveColor ||
         o.label != label ||
-        o.isStale != isStale;
+        o.isStale != isStale ||
+        o.counterRotateLabel != counterRotateLabel;
   }
 }
 
@@ -266,6 +301,7 @@ class OpticFieldPainter extends CustomPainter {
     required this.inactiveColor,
     this.label,
     this.isStale = false,
+    this.counterRotateLabel = false,
   });
 
   final bool isActive;
@@ -273,6 +309,11 @@ class OpticFieldPainter extends CustomPainter {
   final Color inactiveColor;
   final String? label;
   final bool isStale;
+
+  /// True when the surrounding widget rotates the painter 180° and the
+  /// label must be counter-rotated to stay readable. Geometry (housing,
+  /// cone) is unchanged — only the text glyph rotates.
+  final bool counterRotateLabel;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -340,7 +381,8 @@ class OpticFieldPainter extends CustomPainter {
 
     // SENS-13: label must contrast against the panel — see Plan 04-02.
     final labelColour = isStale ? Colors.grey : Colors.black87;
-    _paintLabel(canvas, size, label, labelColour);
+    _paintLabel(canvas, size, label, labelColour,
+        counterRotateLabel: counterRotateLabel);
   }
 
   /// Test-visibility hook for the locked label-colour formula
@@ -356,7 +398,8 @@ class OpticFieldPainter extends CustomPainter {
         o.activeColor != activeColor ||
         o.inactiveColor != inactiveColor ||
         o.label != label ||
-        o.isStale != isStale;
+        o.isStale != isStale ||
+        o.counterRotateLabel != counterRotateLabel;
   }
 }
 
@@ -379,6 +422,7 @@ class InductiveFieldPainter extends CustomPainter {
     required this.inactiveColor,
     this.label,
     this.isStale = false,
+    this.counterRotateLabel = false,
   });
 
   final bool isActive;
@@ -386,6 +430,11 @@ class InductiveFieldPainter extends CustomPainter {
   final Color inactiveColor;
   final String? label;
   final bool isStale;
+
+  /// True when the surrounding widget rotates the painter 180° and the
+  /// label must be counter-rotated to stay readable. Geometry (housing,
+  /// bubble) is unchanged — only the text glyph rotates.
+  final bool counterRotateLabel;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -452,7 +501,8 @@ class InductiveFieldPainter extends CustomPainter {
 
     // SENS-13: label must contrast against the panel — see Plan 04-02.
     final labelColour = isStale ? Colors.grey : Colors.black87;
-    _paintLabel(canvas, size, label, labelColour);
+    _paintLabel(canvas, size, label, labelColour,
+        counterRotateLabel: counterRotateLabel);
   }
 
   /// Test-visibility hook for the locked label-colour formula
@@ -468,7 +518,8 @@ class InductiveFieldPainter extends CustomPainter {
         o.activeColor != activeColor ||
         o.inactiveColor != inactiveColor ||
         o.label != label ||
-        o.isStale != isStale;
+        o.isStale != isStale ||
+        o.counterRotateLabel != counterRotateLabel;
   }
 }
 
