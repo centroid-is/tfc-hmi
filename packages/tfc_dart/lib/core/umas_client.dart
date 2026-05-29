@@ -220,6 +220,33 @@ class UmasClient {
   /// True after detecting M580 via 0xA1 error from ReadVariable (0x22).
   bool get useMonitorPlc => _useMonitorPlc;
 
+  // TD-022 (v1.1.x): MonitorPlc degraded-circuit breaker. Observed in
+  // production on M580 at 192.168.112.159 after ~1 week uptime: every
+  // 0x50 started returning 0x82, the per-key fallback in
+  // ModbusDeviceClientAdapter cascaded forever because [readVariables]
+  // always routes through MonitorPlc when [_useMonitorPlc] is true.
+  // When tripped, [readVariables] bypasses the 0x50 branch and uses
+  // the legacy 0x22 ReadVariable path. The existing 0xA1A1 catch in
+  // [readVariables] still re-flips to MonitorPlc if the PLC insists,
+  // so the breaker is safe: at worst one wasted RTT. [_useMonitorPlc]
+  // itself is never reset (TD-009 — sticky M580 fingerprint).
+  bool _monitorPlcDegraded = false;
+  int _monitorPlc0x82Count = 0;
+  DateTime? _monitorPlcDegradedSince;
+  static const int _monitorPlc0x82TripThreshold = 3;
+  static const Duration _monitorPlcDegradedRetryAfter = Duration(seconds: 60);
+
+  /// Whether the MonitorPlc degraded-circuit breaker is currently latched.
+  /// Exposed for adapter telemetry and TD-022 tests.
+  bool get monitorPlcDegraded => _monitorPlcDegraded;
+
+  /// Injectable clock for TD-022 tests that advance time past
+  /// [_monitorPlcDegradedRetryAfter] without real-time delays.
+  DateTime Function() _nowFn = DateTime.now;
+
+  @visibleForTesting
+  set nowFn(DateTime Function() fn) => _nowFn = fn;
+
   /// MonitorPlc (0x50) registration table for tracking registered variables.
   final MonitorPlcRegistrationTable _monitorTable =
       MonitorPlcRegistrationTable();
@@ -2507,7 +2534,14 @@ class UmasClient {
     // If M580 already detected, go directly to MonitorPlc (0x50).
     // Reset registrations first to avoid accumulating stale entries
     // from previous calls with different variable sets.
-    if (_useMonitorPlc) {
+    //
+    // TD-022: when the degraded breaker is tripped (sustained 0x82 from
+    // MonitorPlc — observed on M580 after ~1 week uptime), bypass 0x50
+    // and run the 0x22 ReadVariable path. The 0xA1A1 catch below will
+    // re-flip to MonitorPlc if the PLC still insists; the breaker
+    // auto-clears after _monitorPlcDegradedRetryAfter.
+    _clearMonitorPlcDegradedIfStale();
+    if (_useMonitorPlc && !_monitorPlcDegraded) {
       await monitorReset();
       return monitorRegisterAndRead(variables);
     }
@@ -2794,7 +2828,27 @@ class UmasClient {
         message: 'Empty UMAS monitorPlc response',
       );
     }
-    _checkStatus(pdu, 'monitorPlc');
+    // TD-022: track consecutive 0x82 outcomes so the degraded breaker in
+    // [readVariables] can flip the read path away from MonitorPlc.
+    try {
+      _checkStatus(pdu, 'monitorPlc');
+    } on UmasException catch (e) {
+      if (e.errorCode == 0x82) {
+        _monitorPlc0x82Count++;
+        if (_monitorPlc0x82Count >= _monitorPlc0x82TripThreshold &&
+            !_monitorPlcDegraded) {
+          _monitorPlcDegraded = true;
+          _monitorPlcDegradedSince = _nowFn();
+          _log.w('UMAS MonitorPlc degraded breaker tripped after '
+              '$_monitorPlc0x82Count consecutive 0x82 responses; '
+              'subsequent reads bypass MonitorPlc until retry window.');
+        }
+      } else {
+        _monitorPlc0x82Count = 0;
+      }
+      rethrow;
+    }
+    _monitorPlc0x82Count = 0;
     return pdu.sublist(3);
   }
 
@@ -2927,6 +2981,20 @@ class UmasClient {
       await _sendMonitorPlc(Uint8List.fromList([0x0B]));
       _monitorTable.reset();
     });
+  }
+
+  /// TD-022: clear the MonitorPlc degraded flag if the retry window
+  /// elapsed. Called by [readVariables] on each entry so the next batch
+  /// naturally re-probes MonitorPlc.
+  void _clearMonitorPlcDegradedIfStale() {
+    if (!_monitorPlcDegraded) return;
+    final since = _monitorPlcDegradedSince;
+    if (since == null) return;
+    if (_nowFn().difference(since) < _monitorPlcDegradedRetryAfter) return;
+    _monitorPlcDegraded = false;
+    _monitorPlcDegradedSince = null;
+    _monitorPlc0x82Count = 0;
+    _log.i('UMAS MonitorPlc degraded breaker cleared; retrying MonitorPlc.');
   }
 
   // ---------------------------------------------------------------------------
