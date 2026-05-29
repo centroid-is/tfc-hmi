@@ -167,10 +167,8 @@ void main() {
         names: {'foo': 'A.b', 'bar': 'C.d'},
         groupByKey: {'foo': 'slow', 'bar': 'fast'},
         pollGroups: [
-          ModbusPollGroupConfig(
-              name: 'slow', interval: const Duration(seconds: 5)),
-          ModbusPollGroupConfig(
-              name: 'fast', interval: const Duration(milliseconds: 100)),
+          ModbusPollGroupConfig(name: 'slow', intervalMs: 5000),
+          ModbusPollGroupConfig(name: 'fast', intervalMs: 100),
         ],
       );
       try {
@@ -222,8 +220,7 @@ void main() {
       final adapter = buildAdapter(
         names: {'foo': 'A.b'},
         pollGroups: [
-          ModbusPollGroupConfig(
-              name: 'default', interval: const Duration(seconds: 1)),
+          ModbusPollGroupConfig(name: 'default', intervalMs: 1000),
         ],
       );
       try {

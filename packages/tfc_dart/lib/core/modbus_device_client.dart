@@ -113,6 +113,21 @@ class ModbusDeviceClientAdapter implements DeviceClient {
   final Map<String, Timer> _umasTimers = {};
   ModbusClientTcp? _umasTableBuiltFor;
 
+  /// Phase 7 / D-04 (v1.1.x): retained per-key poll-group mapping from
+  /// the constructor's `umasPollGroupByKey` argument. Consulted by
+  /// [addUmasKey] (and Plan 02/03 follow-ups) to decide which poll-group
+  /// bucket a runtime-registered key lands in.
+  ///
+  /// If a key is absent from this map at registration time, [addUmasKey]
+  /// uses `'default'`. If the mapped group has no entry in
+  /// [_umasPollGroups], [addUmasKey] falls back to `'default'` AND logs
+  /// a warn.
+  ///
+  /// Mutable to support [debugSetUmasPollGroupForKey] — a
+  /// @visibleForTesting seam; production callers do not change a key's
+  /// poll-group at runtime.
+  final Map<String, String> _umasPollGroupByKey = {};
+
   /// Guard so we don't kick off two concurrent table-build attempts when
   /// a poll tick races with the connection-state listener.
   bool _umasTableBuildInFlight = false;
@@ -184,6 +199,10 @@ class ModbusDeviceClientAdapter implements DeviceClient {
     required Map<String, String> umasPollGroupByKey,
     required List<ModbusPollGroupConfig> pollGroups,
   }) {
+    // Phase 7 / D-04: retain the per-key group mapping so post-
+    // construction registrations via [addUmasKey] inherit the same
+    // pollGroup the KeyMapping specified.
+    _umasPollGroupByKey.addAll(umasPollGroupByKey);
     final groupIntervals = <String, Duration>{};
     for (final pg in pollGroups) {
       groupIntervals[pg.name] = pg.interval;
@@ -601,6 +620,43 @@ class ModbusDeviceClientAdapter implements DeviceClient {
     _umasClientInjectedForTest = true;
   }
 
+  /// @visibleForTesting (Phase 7): read-only view of the per-group key
+  /// registration. Tests assert membership mutations after [addUmasKey]
+  /// (Plan 02 will add [removeUmasKey]) without touching private fields.
+  @visibleForTesting
+  Map<String, List<String>> get debugUmasKeysByGroup => UnmodifiableMapView(
+        _umasKeysByGroup
+            .map((g, ks) => MapEntry(g, List<String>.unmodifiable(ks))),
+      );
+
+  /// @visibleForTesting (Phase 7): current "table is built for which
+  /// ModbusClientTcp identity" flag. Null after [addUmasKey] until the
+  /// next [_pollUmasGroup] tick rebuilds the table.
+  @visibleForTesting
+  ModbusClientTcp? get debugUmasTableBuiltFor => _umasTableBuiltFor;
+
+  /// @visibleForTesting (Phase 7): override the retained per-key
+  /// poll-group mapping for [key]. Used by tests that exercise the
+  /// "wanted group has no timer → fall back to default + warn" branch
+  /// of [addUmasKey] without rebuilding the whole adapter. Production
+  /// callers MUST NOT call this; the poll-group is part of the immutable
+  /// KeyMapping contract.
+  @visibleForTesting
+  void debugSetUmasPollGroupForKey(String key, String group) {
+    _umasPollGroupByKey[key] = group;
+  }
+
+  /// @visibleForTesting (Phase 7 / SPEC Acceptance #2): drive one
+  /// synthetic poll tick for [group] so tests can assert that
+  /// [addUmasKey] actually causes the next tick to pick up the new key.
+  /// Delegates directly to the private [_pollUmasGroup] method. Caller
+  /// is expected to have already injected a fake UmasClient via
+  /// [debugSetUmasClient] (line 599) so the resulting reads / register
+  /// calls land on a recorder rather than a real socket. Production
+  /// callers MUST NOT use this; the real driver is [_startUmasTimers].
+  @visibleForTesting
+  Future<void> debugPumpPollTick(String group) => _pollUmasGroup(group);
+
   /// Public accessor that returns the adapter's shared [UmasClient],
   /// lazy-initializing it against the current TCP socket if the wrapper
   /// is connected. Returns null when the wrapper has no live socket yet.
@@ -619,6 +675,55 @@ class ModbusDeviceClientAdapter implements DeviceClient {
   /// See debug session `umas-fb-freeze-loop` (2026-05-19) for the
   /// reproduction that motivated promoting this accessor.
   UmasClient? get umasClient => _getUmasClient();
+
+  /// Phase 7 / SPEC Req #1 (v1.1.x): register a UMAS-by-name [key] for
+  /// live MonitorPlc polling AFTER construction. Resolves the poll-group
+  /// via the retained [_umasPollGroupByKey] map (or `'default'` when
+  /// absent), appends [key] to [_umasKeysByGroup] for that group, and
+  /// nulls [_umasTableBuiltFor] so the next [_pollUmasGroup] tick
+  /// rebuilds the MonitorPlc table.
+  ///
+  /// Silent no-op when:
+  ///   * [key] is unknown to [_variableNames] or [_variableNames[key]]
+  ///     is null (classic Modbus key — UMAS poll set is not the right
+  ///     venue).
+  ///   * [key] is already present in any [_umasKeysByGroup] list (D-05
+  ///     — matches `Set.add` ergonomics).
+  ///
+  /// When the resolved poll-group has no entry in [_umasPollGroups]
+  /// (i.e. no timer would ever fire for it), falls back to `'default'`
+  /// AND emits a warn log per D-04.
+  ///
+  /// W3 (defensive): the no-timer-fallback branch is only reachable
+  /// through the [debugSetUmasPollGroupForKey] @visibleForTesting seam
+  /// on the public-API path — `_initUmasPollGroups`' `putIfAbsent` (see
+  /// modbus_device_client.dart constructor) already seeds a
+  /// [_umasPollGroups] entry for every group named in the original
+  /// `umasPollGroupByKey`. Kept for defensive symmetry; documented here
+  /// so a future cleanup does not delete it as dead code.
+  ///
+  /// TD-009 / TD-021 / TD-022 are NOT touched (D-10): this method does
+  /// not read or write [_useMonitorPlc], the eager-read on [subscribe],
+  /// or the MonitorPlc degraded breaker.
+  void addUmasKey(String key) {
+    if (_variableNames[key] == null) return; // not a UMAS-by-name key
+    // Linear scan per D-03 — N is small; no reverse index needed.
+    for (final keys in _umasKeysByGroup.values) {
+      if (keys.contains(key)) return; // D-05 idempotency
+    }
+    var group = _umasPollGroupByKey[key] ?? 'default';
+    if (!_umasPollGroups.containsKey(group)) {
+      _log.w('UMAS addUmasKey: key "$key" wanted group "$group" but no '
+          'timer exists; falling back to default');
+      group = 'default';
+      // Make sure 'default' has at least the canonical interval so any
+      // future _startUmasTimers run schedules a tick for it.
+      _umasPollGroups.putIfAbsent('default', () => _defaultPollInterval);
+    }
+    _umasKeysByGroup.putIfAbsent(group, () => <String>[]).add(key);
+    _umasTableBuiltFor = null;
+    _log.i('UMAS addUmasKey: registered "$key" in group "$group"');
+  }
 
   /// TD-003 (v1.1.x): release every per-key resource the adapter
   /// allocates for a UMAS-by-name [key]. Called from
