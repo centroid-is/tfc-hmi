@@ -20,20 +20,6 @@ import 'conveyor_gate.dart';
 
 part 'conveyor.g.dart';
 
-// [CONV-DBG] Temporary file-scoped logger used by `itemBatchFor` and any
-// other top-level helpers that can't reach `_ConveyorState._log`. Remove
-// alongside the rest of the [CONV-DBG] traces once item-position is
-// diagnosed.
-final Logger _convLog = Logger(
-  printer: PrettyPrinter(
-    methodCount: 0,
-    errorMethodCount: 2,
-    lineLength: 80,
-    colors: true,
-    printEmojis: false,
-  ),
-);
-
 /// Deserialize gates list with backward compatibility for old format.
 ///
 /// Old format: gate config at root level with "asset_name" key.
@@ -552,11 +538,6 @@ class _ConveyorState extends ConsumerState<Conveyor>
   // periodic timer for batches
   Timer? _simulateBatchesTimer;
 
-  // [CONV-DBG] One-shot guard so the per-build config log fires only once
-  // per State instance (we don't want to flood for every rebuild). Remove
-  // with the rest of the [CONV-DBG] instrumentation.
-  bool _convDbgLoggedConfigOnce = false;
-
   // Auger animation — ValueNotifier repaints only the CustomPaint, no setState
   final ValueNotifier<double> _augerPhase = ValueNotifier(0.0);
   Timer? _augerAnimationTimer;
@@ -679,24 +660,6 @@ class _ConveyorState extends ConsumerState<Conveyor>
       return _buildConveyorVisual(context, Colors.grey);
     }
 
-    // [CONV-DBG] Log the configured keys once per State instance so we can
-    // confirm which streams should be subscribed. Removed once item-position
-    // diagnosis lands.
-    if (!_convDbgLoggedConfigOnce) {
-      _convDbgLoggedConfigOnce = true;
-      _log.i(
-        '[CONV-DBG] build(first) config: key=${widget.config.key} '
-        'batchesKey=${widget.config.batchesKey} '
-        'frequencyKey=${widget.config.frequencyKey} '
-        'tripKey=${widget.config.tripKey} '
-        'itemPositionKey=${widget.config.itemPositionKey} '
-        'augerRpmKey=${widget.config.augerRpmKey} '
-        'conveyorLengthMm=${widget.config.conveyorLengthMm} '
-        'itemLengthMm=${widget.config.itemLengthMm} '
-        'itemPositionEdge=${widget.config.itemPositionEdge}',
-      );
-    }
-
     // The "Simulate batches" toggle is independent of any PLC stream — it
     // must drive the timer even when no keys are configured and even before
     // the first stream tick arrives. Evaluate it here, outside StreamBuilder.
@@ -772,12 +735,6 @@ class _ConveyorState extends ConsumerState<Conveyor>
                 .switchMap((s) => s),
           ));
       streamLabels.add('itemPosition');
-      // [CONV-DBG] Confirm the itemPosition stream was actually added and
-      // see how it interleaves with the other configured streams.
-      _log.i(
-        '[CONV-DBG] subscribed itemPositionKey=${widget.config.itemPositionKey} '
-        'streamLabels=$streamLabels (count=${streamLabels.length})',
-      );
     }
 
     // If no streams are configured, show error state
@@ -800,15 +757,6 @@ class _ConveyorState extends ConsumerState<Conveyor>
         if (widget.config.key == null || widget.config.key == '') {
           // print('no key');
         }
-        // [CONV-DBG] Log every StreamBuilder emission with high-level shape
-        // (no DynamicValue dumps to keep the volume sane). This is the
-        // primary trace for "feature shows up, freezes, disappears".
-        _log.i(
-          '[CONV-DBG] emit hasData=${snapshot.hasData} '
-          'hasError=${snapshot.hasError} '
-          'keys=${snapshot.data?.keys.toList()} '
-          'itemPositionNull=${snapshot.data?["itemPosition"] == null}',
-        );
         if (snapshot.hasError) {
           _log.e(
             'Error fetching dynamic values, error: ${snapshot.error}',
@@ -864,57 +812,22 @@ class _ConveyorState extends ConsumerState<Conveyor>
         }
 
         if (dynValue['itemPosition'] != null) {
-          final dv = dynValue['itemPosition']!;
-          // [CONV-DBG] Entering the item-position branch — capture the raw
-          // value + type so we can spot stuck snapshots vs missing emissions.
-          _log.i(
-            '[CONV-DBG] item branch enter: dv=$dv '
-            'runtimeType=${dv.runtimeType}',
-          );
           try {
-            final positionMm = dv.asDouble;
+            final positionMm = dynValue['itemPosition']!.asDouble;
             final batch = itemBatchFor(
               positionMm: positionMm,
               lengthMm: widget.config.conveyorLengthMm,
               itemLengthMm: widget.config.itemLengthMm,
               edge: widget.config.itemPositionEdge ?? ItemPositionEdge.rear,
             );
-            // [CONV-DBG] Log the computed inputs+outputs so we can see
-            // whether positionMm is changing per emission and whether
-            // itemBatchFor produced a batch or nulled out.
-            _log.i(
-              '[CONV-DBG] item branch compute: positionMm=$positionMm '
-              'conveyorLengthMm=${widget.config.conveyorLengthMm} '
-              'itemLengthMm=${widget.config.itemLengthMm} '
-              'edge=${widget.config.itemPositionEdge ?? ItemPositionEdge.rear} '
-              'batch=${batch == null ? 'null' : 'start=${batch.start} end=${batch.end}'}',
-            );
             if (batch != null) {
               _batches['item'] = batch;
-              _log.i(
-                "[CONV-DBG] item branch: wrote _batches['item']=start=${batch.start},end=${batch.end}",
-              );
             } else {
               _batches.remove('item');
-              _log.w(
-                "[CONV-DBG] item branch: batch=null → removed _batches['item']",
-              );
             }
-          } catch (e, st) {
+          } catch (_) {
             _batches.remove('item');
-            _log.w(
-              "[CONV-DBG] item branch: exception → removed _batches['item'] "
-              'err=$e stack=${st.toString().split('\n').take(2).join(' | ')}',
-            );
           }
-        } else {
-          // [CONV-DBG] Useful contrast trace: the conveyor configured the
-          // itemPositionKey, the stream label exists, but this emission
-          // didn't carry an itemPosition entry.
-          _log.w(
-            '[CONV-DBG] item branch SKIPPED: dynValue["itemPosition"] is null '
-            '(keys=${dynValue.keys.toList()})',
-          );
         }
 
         final hasMainKey =
@@ -931,21 +844,6 @@ class _ConveyorState extends ConsumerState<Conveyor>
   }
 
   void _updateBatches(DynamicValue dynConveyor) {
-    // [CONV-DBG] Cross-traffic visibility: if the operator has BOTH a
-    // batchesKey AND an itemPositionKey configured, the PLC-side batches
-    // path may be clobbering the 'item' entry via the painter's batch map.
-    double? convLen;
-    int? batchCount;
-    try {
-      convLen = dynConveyor['p_stat_Length'].asDouble;
-    } catch (_) {}
-    try {
-      batchCount = dynConveyor['p_stat_Batches'].asArray.length;
-    } catch (_) {}
-    _log.i(
-      '[CONV-DBG] _updateBatches enter: conveyorLength=$convLen '
-      'batches.length=$batchCount',
-    );
     final conveyorLength = dynConveyor['p_stat_Length'].asDouble;
     const batchLength = 500; // todo variable mm
     var idx = 0;
@@ -1497,23 +1395,7 @@ Batch? itemBatchFor({
   required double? itemLengthMm,
   ItemPositionEdge edge = ItemPositionEdge.rear,
 }) {
-  // [CONV-DBG] Trace every entry so we can prove the helper was called and
-  // observe the exact inputs the conveyor handed us.
-  _convLog.i(
-    '[CONV-DBG] itemBatchFor enter: positionMm=$positionMm '
-    'lengthMm=$lengthMm itemLengthMm=$itemLengthMm edge=$edge',
-  );
-  if (lengthMm == null || lengthMm <= 0 || itemLengthMm == null) {
-    // [CONV-DBG] Identify which guard tripped so we can tell config gaps
-    // apart from a 0/negative conveyor length coming from the PLC.
-    _convLog.w(
-      '[CONV-DBG] itemBatchFor → null: '
-      'lengthMmNull=${lengthMm == null} '
-      'lengthMmNonPositive=${lengthMm != null && lengthMm <= 0} '
-      'itemLengthMmNull=${itemLengthMm == null}',
-    );
-    return null;
-  }
+  if (lengthMm == null || lengthMm <= 0 || itemLengthMm == null) return null;
   switch (edge) {
     case ItemPositionEdge.rear:
       final relativeStart = positionMm / lengthMm;
