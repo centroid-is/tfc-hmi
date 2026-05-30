@@ -298,21 +298,18 @@ class _ConveyorConfigContentState extends State<_ConveyorConfigContent> {
               val.isEmpty ? null : double.tryParse(val)),
         ),
         const SizedBox(height: 8),
-        Row(
-          children: [
-            const Text('Item position represents:'),
-            const SizedBox(width: 8),
-            DropdownButton<ItemPositionEdge>(
-              value: widget.config.itemPositionEdge ?? ItemPositionEdge.rear,
-              onChanged: (val) =>
-                  setState(() => widget.config.itemPositionEdge = val),
-              items: const [
-                DropdownMenuItem(
-                    value: ItemPositionEdge.rear, child: Text('Rear edge')),
-                DropdownMenuItem(
-                    value: ItemPositionEdge.front, child: Text('Front edge')),
-              ],
-            ),
+        const Text('Item position represents:'),
+        const SizedBox(height: 4),
+        DropdownButton<ItemPositionEdge>(
+          isExpanded: true,
+          value: widget.config.itemPositionEdge ?? ItemPositionEdge.rear,
+          onChanged: (val) =>
+              setState(() => widget.config.itemPositionEdge = val),
+          items: const [
+            DropdownMenuItem(
+                value: ItemPositionEdge.rear, child: Text('Rear edge')),
+            DropdownMenuItem(
+                value: ItemPositionEdge.front, child: Text('Front edge')),
           ],
         ),
         const SizedBox(height: 16),
