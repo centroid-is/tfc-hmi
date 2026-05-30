@@ -186,6 +186,7 @@ class ConveyorConfig extends BaseAsset {
   String? itemPositionKey;
   double? conveyorLengthMm;
   double? itemLengthMm;
+  ItemPositionEdge? itemPositionEdge;
 
   @JsonKey(fromJson: _gatesFromJson, toJson: _gatesToJson)
   List<ChildGateEntry> gates;
@@ -205,6 +206,7 @@ class ConveyorConfig extends BaseAsset {
       this.itemPositionKey,
       this.conveyorLengthMm,
       this.itemLengthMm,
+      this.itemPositionEdge,
       List<ChildGateEntry>? gates})
       : gates = gates != null ? List<ChildGateEntry>.of(gates) : [];
 
@@ -294,6 +296,24 @@ class _ConveyorConfigContentState extends State<_ConveyorConfigContent> {
           keyboardType: TextInputType.number,
           onChanged: (val) => setState(() => widget.config.itemLengthMm =
               val.isEmpty ? null : double.tryParse(val)),
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            const Text('Item position represents:'),
+            const SizedBox(width: 8),
+            DropdownButton<ItemPositionEdge>(
+              value: widget.config.itemPositionEdge ?? ItemPositionEdge.rear,
+              onChanged: (val) =>
+                  setState(() => widget.config.itemPositionEdge = val),
+              items: const [
+                DropdownMenuItem(
+                    value: ItemPositionEdge.rear, child: Text('Rear edge')),
+                DropdownMenuItem(
+                    value: ItemPositionEdge.front, child: Text('Front edge')),
+              ],
+            ),
+          ],
         ),
         const SizedBox(height: 16),
         Row(
@@ -801,6 +821,7 @@ class _ConveyorState extends ConsumerState<Conveyor>
               positionMm: positionMm,
               lengthMm: widget.config.conveyorLengthMm,
               itemLengthMm: widget.config.itemLengthMm,
+              edge: widget.config.itemPositionEdge ?? ItemPositionEdge.rear,
             );
             if (batch != null) {
               _batches['item'] = batch;
@@ -1337,19 +1358,38 @@ class Batch {
   Batch({required this.start, required this.end, this.color = Colors.white});
 }
 
-/// Maps a PLC-supplied item rear-edge position (mm) onto the normalized 0..1
-/// Batch unit consumed by `_ConveyorPainter`. Returns null when the feature is
-/// disabled or misconfigured (null/non-positive length, null itemLength).
+/// Which physical edge of the tracked item the PLC's position value reports.
+///
+/// In conveyor flow direction:
+/// - [rear]: trailing edge (back of item). Item extends FORWARD from there.
+/// - [front]: leading edge (front of item). Item extends BACKWARD from there.
+///
+/// Default (null on config) preserves the original behaviour: [rear].
+enum ItemPositionEdge { rear, front }
+
+/// Maps a PLC-supplied item edge position (mm) onto the normalized 0..1 Batch
+/// unit consumed by `_ConveyorPainter`. The [edge] arg selects whether
+/// [positionMm] is the item's rear (default) or front edge — see
+/// [ItemPositionEdge]. Returns null when the feature is disabled or
+/// misconfigured (null/non-positive length, null itemLength).
 /// No clamping — the painter already tolerates start<0 / end>1 (see [Batch]).
 Batch? itemBatchFor({
   required double positionMm,
   required double? lengthMm,
   required double? itemLengthMm,
+  ItemPositionEdge edge = ItemPositionEdge.rear,
 }) {
   if (lengthMm == null || lengthMm <= 0 || itemLengthMm == null) return null;
-  final relativeStart = positionMm / lengthMm;
-  final relativeEnd = (positionMm + itemLengthMm) / lengthMm;
-  return Batch(start: relativeStart, end: relativeEnd);
+  switch (edge) {
+    case ItemPositionEdge.rear:
+      final relativeStart = positionMm / lengthMm;
+      final relativeEnd = (positionMm + itemLengthMm) / lengthMm;
+      return Batch(start: relativeStart, end: relativeEnd);
+    case ItemPositionEdge.front:
+      final relativeEnd = positionMm / lengthMm;
+      final relativeStart = (positionMm - itemLengthMm) / lengthMm;
+      return Batch(start: relativeStart, end: relativeEnd);
+  }
 }
 
 class _ConveyorPainter extends CustomPainter {
