@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show mapEquals;
 import 'package:flutter/material.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -999,7 +1000,11 @@ class _ConveyorState extends ConsumerState<Conveyor>
         reverseDirection: widget.config.reverseDirection ?? false,
         showFrequency: widget.config.showFrequency ?? false,
         frequency: frequency,
-        batches: _batches,
+        // Snapshot copy: `_batches` is mutated in place by both the
+        // simulator timer and the per-stream listeners. Without a copy,
+        // `shouldRepaint` compares the same Map identity against itself
+        // and always returns false — see #issue (item-position freeze).
+        batches: Map<String, Batch>.from(_batches),
         angle: widget.config.coordinates.angle ?? 0.0,
       ),
     );
@@ -1454,6 +1459,21 @@ class Batch {
   Color color;
 
   Batch({required this.start, required this.end, this.color = Colors.white});
+
+  // Value equality so `mapEquals(oldBatches, newBatches)` in
+  // `_ConveyorPainter.shouldRepaint` detects content changes when the
+  // surrounding map identity is preserved (e.g. simulator timer mutates
+  // entries in place) or when two structurally-equal maps are compared.
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is Batch &&
+          other.start == start &&
+          other.end == end &&
+          other.color == color;
+
+  @override
+  int get hashCode => Object.hash(start, end, color);
 }
 
 /// Which physical edge of the tracked item the PLC's position value reports.
@@ -1679,7 +1699,8 @@ class _ConveyorPainter extends CustomPainter {
       oldDelegate.showExclamation != showExclamation ||
       oldDelegate.bidirectional != bidirectional ||
       oldDelegate.showFrequency != showFrequency ||
-      oldDelegate.frequency != frequency;
+      oldDelegate.frequency != frequency ||
+      !mapEquals(oldDelegate.batches, batches);
 }
 
 /// Test-only factory exposing the library-private `_ConveyorPainter` so unit
