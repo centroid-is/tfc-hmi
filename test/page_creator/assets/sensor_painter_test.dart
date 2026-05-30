@@ -4,6 +4,7 @@ import 'dart:ui' show ImageByteFormat, PictureRecorder;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:tfc/page_creator/assets/sensor.dart';
 import 'package:tfc/page_creator/assets/sensor_painter.dart';
 
 /// Tests for the three sensor `CustomPainter` subclasses defined in
@@ -923,6 +924,43 @@ void main() {
         counterRotateLabel: true,
       );
       expect(a.shouldRepaint(b), isTrue);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // SensorConfig routes its tag through Asset.text so AssetStack paints the
+  // label outside the rotated subtree (the same path Button uses). Without
+  // this routing, the sensor painter would have to draw the label itself
+  // inside the rotated geometry — and at angle 180° the label would be
+  // painted at the screen-top with upside-down glyphs (the bug this contract
+  // supersedes the obsolete `counterRotateLabel` hack for).
+  //
+  // The contract here is purely on the SensorConfig model: `text` is an
+  // alias of `tag`. AssetStack reads `asset.text` and `asset.labelColor` —
+  // see `lib/pages/page_view.dart` (label rendering block around line 420).
+  // ---------------------------------------------------------------------------
+  group('SensorConfig.text routes through to tag (label-via-AssetStack contract)', () {
+    test('Asset.text returns the tag value (so AssetStack paints it)', () {
+      final config = SensorConfig(tag: 'PE-101A');
+      expect(config.text, 'PE-101A',
+          reason: 'SensorConfig.text must expose `tag` so the page-view '
+              'AssetStack picks it up via the Asset.text contract — same '
+              'path Button uses for its caption.');
+    });
+
+    test('Setting Asset.text writes through to tag (load-path tolerance)', () {
+      final config = SensorConfig(tag: 'PE-101A');
+      config.text = 'NEW-TAG';
+      expect(config.tag, 'NEW-TAG',
+          reason: 'Setting `text` must update `tag` so JSON deserialization '
+              'paths (which call `..text = json[\'text\']`) keep working.');
+    });
+
+    test('Default SensorConfig.text is null when no tag is set', () {
+      final config = SensorConfig();
+      expect(config.text, isNull,
+          reason: 'An unconfigured tag must yield a null text — AssetStack '
+              'short-circuits the label render block on null/empty text.');
     });
   });
 }
