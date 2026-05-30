@@ -1682,6 +1682,45 @@ class _ConveyorPainter extends CustomPainter {
       oldDelegate.frequency != frequency;
 }
 
+/// Test-only factory exposing the library-private `_ConveyorPainter` so unit
+/// tests can assert its `shouldRepaint` contract without instantiating the
+/// widget. Returns the painter typed as `CustomPainter` so callers don't need
+/// to name the private type.
+@visibleForTesting
+CustomPainter debugBuildConveyorPainterForTest({
+  required Color color,
+  required Map<String, Batch> batches,
+  bool showExclamation = false,
+  bool bidirectional = false,
+  bool reverseDirection = false,
+  bool showFrequency = false,
+  double? frequency,
+  double angle = 0.0,
+}) {
+  return _ConveyorPainter(
+    color: color,
+    showExclamation: showExclamation,
+    bidirectional: bidirectional,
+    reverseDirection: reverseDirection,
+    showFrequency: showFrequency,
+    frequency: frequency,
+    batches: batches,
+    angle: angle,
+  );
+}
+
+/// Test-only adapter so unit tests can invoke `shouldRepaint` on the private
+/// `_ConveyorPainter` without naming the type. Mirrors the
+/// `newPainter.shouldRepaint(oldPainter)` call convention used by the Flutter
+/// framework.
+@visibleForTesting
+bool debugConveyorPainterShouldRepaint(
+  CustomPainter newPainter,
+  CustomPainter oldPainter,
+) {
+  return newPainter.shouldRepaint(oldPainter);
+}
+
 class ConveyorStatsGraph extends ConsumerStatefulWidget {
   final Collector? collector;
   final String keyName;
