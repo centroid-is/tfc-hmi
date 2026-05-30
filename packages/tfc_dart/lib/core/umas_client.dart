@@ -2566,6 +2566,12 @@ class UmasClient {
       if (e.errorCode == 0xA1 && e.secondaryErrorCode == 0xA1) {
         // M580 detected: 0x22 returns 0xA1A1 error
         _useMonitorPlc = true;
+        // TD-022 follow-up: when the degraded breaker is latched, do NOT
+        // re-enter MonitorPlc — that would cascade 0x82 within the same
+        // call and defeat the bypass. Rethrow so the per-key fallback in
+        // ModbusDeviceClientAdapter sees the error; the breaker's
+        // auto-clear retries MonitorPlc after the retry window.
+        if (_monitorPlcDegraded) rethrow;
         return monitorRegisterAndRead(variables);
       }
       rethrow;
