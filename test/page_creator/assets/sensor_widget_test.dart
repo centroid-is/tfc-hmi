@@ -527,10 +527,14 @@ void main() {
       final config = SensorConfig();
       await openConfigEditor(tester, config);
 
-      // Open the dropdown and pick "above". Use the menu item finder
-      // (the dropdown collapses on open and re-renders menu items in an
-      // overlay; tapping the "above" text in the overlay selects it).
-      await tester.tap(find.byType(DropdownButton<TextPos>));
+      // Editor body lives in a SingleChildScrollView; the dropdown sits
+      // below the fold. Scroll it into view before tapping.
+      final dropdown = find.byType(DropdownButton<TextPos>);
+      await tester.ensureVisible(dropdown);
+      await tester.pumpAndSettle();
+      // Open the dropdown and pick "above". The menu items render in an
+      // overlay; tapping the "above" text in the overlay selects it.
+      await tester.tap(dropdown);
       await tester.pumpAndSettle();
       // Tap the menu item for `above`. There can be multiple `above` texts
       // (collapsed item + overlay item); the overlay-rendered one is `last`.

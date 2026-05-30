@@ -92,7 +92,12 @@ class SensorConfig extends BaseAsset {
     Color? inactiveColor,
     this.tag,
   })  : activeColor = activeColor ?? Colors.green,
-        inactiveColor = inactiveColor ?? Colors.grey.shade400;
+        inactiveColor = inactiveColor ?? Colors.grey.shade400 {
+    // Default label position — matches LED/Button convention (those default
+    // to TextPos.right). Sensors carry short tag labels and read most
+    // naturally below the glyph on a busy HMI canvas.
+    textPos = TextPos.below;
+  }
 
   /// Preview factory with reasonable defaults for the asset palette.
   SensorConfig.preview() : this();
@@ -123,8 +128,8 @@ class SensorConfig extends BaseAsset {
 /// Locked formula (per `01-UI-SPEC.md` §Polarity inversion semantics):
 /// `isActive = invertActivePolarity ? !rawBool : rawBool`.
 ///
-/// The tooltip and label are NOT affected by polarity inversion — polarity is
-/// purely a visual-mapping concern.
+/// The label is NOT affected by polarity inversion — polarity is purely a
+/// visual-mapping concern.
 bool sensorIsActive({
   required bool rawBool,
   required bool invertActivePolarity,
@@ -339,63 +344,51 @@ class _SensorState extends ConsumerState<Sensor> {
     );
   }
 
-  /// Wraps the painter in a Tooltip + tap-receiving GestureDetector + a
-  /// rotating layout box. The GestureDetector is the single tap source —
-  /// never painter hit-testing (UI-SPEC §Interaction Contract).
+  /// Wraps the painter in a tap-receiving GestureDetector + a rotating
+  /// layout box. The GestureDetector is the single tap source — never
+  /// painter hit-testing (UI-SPEC §Interaction Contract).
   ///
   /// Layering order (outer → inner):
-  ///   Tooltip → GestureDetector → LayoutRotatedBox → LayoutBuilder → CustomPaint
+  ///   GestureDetector → LayoutRotatedBox → LayoutBuilder → CustomPaint
   ///
-  /// Tooltip is the OUTERMOST wrapper (UI-SPEC §Tooltip trigger): hover
-  /// (desktop) and long-press (touch) both fire the tooltip without
-  /// consuming the tap. The Tooltip's content widget mounts on open and
-  /// unmounts on dismiss — this is what scopes the rising/falling delay
-  /// subscriptions to the open lifetime (CONTEXT lock §Tooltip subscription
-  /// lifecycle).
+  /// The hover tooltip path was removed — operators read full state via
+  /// `_showDetailsDialog` on tap. No floating panel sits above the sensor
+  /// on a busy HMI canvas.
   ///
   /// The GestureDetector lives OUTSIDE LayoutRotatedBox because
   /// `LayoutRotatedBox._RenderLayoutRotatedBox.hitTest` (in `common.dart`)
   /// does not forward hits to its child — it only adds a self-entry. This
-  /// matches the existing `_buildGate` pattern in `conveyor_gate.dart` where
-  /// every `GestureDetector` wraps `LayoutRotatedBox` from the outside, not
-  /// the inside. Tap-through-`Transform.translate` (UI-SPEC §Interaction
-  /// Contract — Phase 3 forward-compat) is unaffected: `Transform.translate`
-  /// defaults `transformHitTests: true`.
+  /// matches the existing `_buildGate` pattern in `conveyor_gate.dart`.
+  /// Tap-through-`Transform.translate` (Phase 3 forward-compat) is
+  /// unaffected: `Transform.translate` defaults `transformHitTests: true`.
   ///
   /// The inner `LayoutBuilder` propagates the parent's bounded constraints
   /// into `CustomPaint.size:` so the painter fills the asset rect — and so
-  /// the GestureDetector has a non-zero hit-test box. Mirrors the
-  /// `_buildGate` pattern in `conveyor_gate.dart`.
+  /// the GestureDetector has a non-zero hit-test box.
   Widget _buildPaint(CustomPainter painter) {
     final angleDeg = widget.config.coordinates.angle ?? 0.0;
-    return Tooltip(
-      richMessage: WidgetSpan(
-        alignment: PlaceholderAlignment.middle,
-        child: _SensorTooltipContent(config: widget.config),
-      ),
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: () => _showDetailsDialog(context),
-        child: LayoutRotatedBox(
-          angle: angleDeg * pi / 180,
-          child: LayoutBuilder(
-            builder: (context, constraints) {
-              // When placed inside a parent with bounded constraints (the
-              // asset rect), use them directly. Otherwise fall back to the
-              // config size resolved against the screen — standalone path.
-              final Size paintSize;
-              if (constraints.hasBoundedWidth && constraints.hasBoundedHeight) {
-                paintSize = Size(constraints.maxWidth, constraints.maxHeight);
-              } else {
-                paintSize =
-                    widget.config.size.toSize(MediaQuery.of(context).size);
-              }
-              return CustomPaint(
-                size: paintSize,
-                painter: painter,
-              );
-            },
-          ),
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () => _showDetailsDialog(context),
+      child: LayoutRotatedBox(
+        angle: angleDeg * pi / 180,
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            // When placed inside a parent with bounded constraints (the
+            // asset rect), use them directly. Otherwise fall back to the
+            // config size resolved against the screen — standalone path.
+            final Size paintSize;
+            if (constraints.hasBoundedWidth && constraints.hasBoundedHeight) {
+              paintSize = Size(constraints.maxWidth, constraints.maxHeight);
+            } else {
+              paintSize =
+                  widget.config.size.toSize(MediaQuery.of(context).size);
+            }
+            return CustomPaint(
+              size: paintSize,
+              painter: painter,
+            );
+          },
         ),
       ),
     );
@@ -420,86 +413,6 @@ class _SensorState extends ConsumerState<Sensor> {
           invertActivePolarity: widget.config.invertActivePolarity,
         );
         return _buildPaint(_createPainter(isActive: isActive, isStale: false));
-      },
-    );
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Tooltip content
-// ---------------------------------------------------------------------------
-
-/// Tooltip content for the Sensor asset.
-///
-/// Subscribes to rising/falling edge-delay state keys ONLY while this widget
-/// is mounted. Flutter mounts tooltip content widgets when the tooltip opens
-/// and unmounts them on dismiss — this satisfies the locked subscribe-on-open,
-/// cancel-on-close contract from `01-CONTEXT.md` §Tooltip lifecycle without
-/// explicit subscription bookkeeping.
-///
-/// Locked copy (UI-SPEC §Copywriting Contract):
-/// - Empty `detectionKey` → "Detection key not set"
-/// - Both delay rows when key is empty → `"<label>: —"` (em-dash)
-/// - Configured key without value yet → `"<label>: …"` (ellipsis)
-/// - Configured key with value → `"<label>: <ms>ms"`
-class _SensorTooltipContent extends ConsumerWidget {
-  final SensorConfig config;
-  const _SensorTooltipContent({required this.config});
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    // Stale path: no detection key configured. UI-SPEC locks this string.
-    if (config.detectionKey.isEmpty) {
-      return const Text('Detection key not set');
-    }
-
-    return DefaultTextStyle(
-      style: Theme.of(context).textTheme.bodySmall ??
-          const TextStyle(color: Colors.white, fontSize: 12),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _DelayRow(label: 'Rising', stateKey: config.risingEdgeDelayKey),
-          _DelayRow(label: 'Falling', stateKey: config.fallingEdgeDelayKey),
-        ],
-      ),
-    );
-  }
-}
-
-/// Single-line `"Rising: <ms>ms"` / `"Rising: —"` / `"Rising: …"` row.
-///
-/// `stateKey` (not `key` — that name is reserved for `Widget.key`) is the
-/// PLC state key from `SensorConfig.risingEdgeDelayKey` /
-/// `fallingEdgeDelayKey`. When empty, the row short-circuits to the em-dash
-/// without subscribing — preserves the lifecycle contract for unconfigured
-/// keys (no monitored item created at all).
-class _DelayRow extends ConsumerWidget {
-  final String label;
-  final String stateKey;
-  const _DelayRow({required this.label, required this.stateKey});
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    if (stateKey.isEmpty) {
-      return Text('$label: —');
-    }
-    return StreamBuilder<num>(
-      stream: ref
-          .read(stateManProvider.future)
-          .asStream()
-          .asyncExpand((sm) => sm.subscribe(stateKey).asStream())
-          .asyncExpand((s) => s)
-          .map((dv) => dv.asInt),
-      builder: (context, snapshot) {
-        if (snapshot.hasError) {
-          return Text('$label: —');
-        }
-        if (!snapshot.hasData) {
-          return Text('$label: …');
-        }
-        return Text('$label: ${snapshot.data}ms');
       },
     );
   }
@@ -760,6 +673,29 @@ class _SensorConfigEditorState extends State<_SensorConfigEditor> {
                   config.tag = v.isEmpty ? null : v;
                 });
               },
+            ),
+            const SizedBox(height: 16),
+
+            // -- Label Position (mirrors button.dart:758 / led.dart:164) --
+            Text('Label Position',
+                style: Theme.of(context).textTheme.bodySmall),
+            const SizedBox(height: 4),
+            DropdownButton<TextPos>(
+              // Coalesce null → TextPos.below for legacy persisted pages
+              // that pre-date this picker (text_pos: null in JSON).
+              value: config.textPos ?? TextPos.below,
+              isExpanded: true,
+              onChanged: (value) {
+                setState(() {
+                  config.textPos = value!;
+                });
+              },
+              items: TextPos.values
+                  .map((e) => DropdownMenuItem<TextPos>(
+                        value: e,
+                        child: Text(e.name),
+                      ))
+                  .toList(),
             ),
             const SizedBox(height: 16),
 
