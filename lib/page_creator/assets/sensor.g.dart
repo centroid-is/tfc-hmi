@@ -24,17 +24,16 @@ SensorConfig _$SensorConfigFromJson(Map<String, dynamic> json) => SensorConfig(
       ..coordinates =
           Coordinates.fromJson(json['coordinates'] as Map<String, dynamic>)
       ..size = RelativeSize.fromJson(json['size'] as Map<String, dynamic>)
-      ..text = json['text'] as String?
       ..textPos = $enumDecodeNullable(_$TextPosEnumMap, json['textPos'])
       ..techDocId = (json['techDocId'] as num?)?.toInt()
-      ..plcAssetKey = json['plcAssetKey'] as String?;
+      ..plcAssetKey = json['plcAssetKey'] as String?
+      ..text = json['text'] as String?;
 
 Map<String, dynamic> _$SensorConfigToJson(SensorConfig instance) =>
     <String, dynamic>{
       'asset_name': instance.variant,
       'coordinates': instance.coordinates.toJson(),
       'size': instance.size.toJson(),
-      'text': instance.text,
       'textPos': _$TextPosEnumMap[instance.textPos],
       'techDocId': instance.techDocId,
       'plcAssetKey': instance.plcAssetKey,
@@ -46,6 +45,7 @@ Map<String, dynamic> _$SensorConfigToJson(SensorConfig instance) =>
       'activeColor': const ColorConverter().toJson(instance.activeColor),
       'inactiveColor': const ColorConverter().toJson(instance.inactiveColor),
       'tag': instance.tag,
+      'text': instance.text,
     };
 
 const _$SensorKindEnumMap = {
