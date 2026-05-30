@@ -183,6 +183,9 @@ class ConveyorConfig extends BaseAsset {
   bool? showAuger;
   String? augerRpmKey;
   AugerOpenEnd? augerOpenEnd;
+  String? itemPositionKey;
+  double? conveyorLengthMm;
+  double? itemLengthMm;
 
   @JsonKey(fromJson: _gatesFromJson, toJson: _gatesToJson)
   List<ChildGateEntry> gates;
@@ -199,6 +202,9 @@ class ConveyorConfig extends BaseAsset {
       this.showAuger,
       this.augerRpmKey,
       this.augerOpenEnd,
+      this.itemPositionKey,
+      this.conveyorLengthMm,
+      this.itemLengthMm,
       List<ChildGateEntry>? gates})
       : gates = gates != null ? List<ChildGateEntry>.of(gates) : [];
 
@@ -264,6 +270,30 @@ class _ConveyorConfigContentState extends State<_ConveyorConfigContent> {
           initialValue: widget.config.tripKey,
           onChanged: (val) => setState(() => widget.config.tripKey = val),
           label: 'Trip key',
+        ),
+        const SizedBox(height: 8),
+        KeyField(
+          initialValue: widget.config.itemPositionKey,
+          onChanged: (val) =>
+              setState(() => widget.config.itemPositionKey = val),
+          label: 'Item position key (mm)',
+        ),
+        const SizedBox(height: 8),
+        TextFormField(
+          initialValue: widget.config.conveyorLengthMm?.toString() ?? '',
+          decoration: const InputDecoration(labelText: 'Conveyor length (mm)'),
+          keyboardType: TextInputType.number,
+          onChanged: (val) => setState(() =>
+              widget.config.conveyorLengthMm =
+                  val.isEmpty ? null : double.tryParse(val)),
+        ),
+        const SizedBox(height: 8),
+        TextFormField(
+          initialValue: widget.config.itemLengthMm?.toString() ?? '',
+          decoration: const InputDecoration(labelText: 'Item length (mm)'),
+          keyboardType: TextInputType.number,
+          onChanged: (val) => setState(() => widget.config.itemLengthMm =
+              val.isEmpty ? null : double.tryParse(val)),
         ),
         const SizedBox(height: 16),
         Row(
@@ -679,6 +709,17 @@ class _ConveyorState extends ConsumerState<Conveyor>
       streamLabels.add('augerRpm');
     }
 
+    if (widget.config.itemPositionKey != null &&
+        widget.config.itemPositionKey!.isNotEmpty) {
+      streams.add(ref.watch(stateManProvider.future).asStream().switchMap(
+            (stateMan) => stateMan
+                .subscribe(widget.config.itemPositionKey!)
+                .asStream()
+                .switchMap((s) => s),
+          ));
+      streamLabels.add('itemPosition');
+    }
+
     // If no streams are configured, show error state
     if (streams.isEmpty) {
       return _buildConveyorVisual(context, Colors.grey, true);
@@ -751,6 +792,24 @@ class _ConveyorState extends ConsumerState<Conveyor>
         if (!(widget.config.simulateBatches ?? false) &&
             dynValue['batches'] != null) {
           _updateBatches(dynValue['batches']!);
+        }
+
+        if (dynValue['itemPosition'] != null) {
+          try {
+            final positionMm = dynValue['itemPosition']!.asDouble;
+            final batch = itemBatchFor(
+              positionMm: positionMm,
+              lengthMm: widget.config.conveyorLengthMm,
+              itemLengthMm: widget.config.itemLengthMm,
+            );
+            if (batch != null) {
+              _batches['item'] = batch;
+            } else {
+              _batches.remove('item');
+            }
+          } catch (_) {
+            _batches.remove('item');
+          }
         }
 
         final hasMainKey =
@@ -1276,6 +1335,21 @@ class Batch {
   Color color;
 
   Batch({required this.start, required this.end, this.color = Colors.white});
+}
+
+/// Maps a PLC-supplied item rear-edge position (mm) onto the normalized 0..1
+/// Batch unit consumed by `_ConveyorPainter`. Returns null when the feature is
+/// disabled or misconfigured (null/non-positive length, null itemLength).
+/// No clamping — the painter already tolerates start<0 / end>1 (see [Batch]).
+Batch? itemBatchFor({
+  required double positionMm,
+  required double? lengthMm,
+  required double? itemLengthMm,
+}) {
+  if (lengthMm == null || lengthMm <= 0 || itemLengthMm == null) return null;
+  final relativeStart = positionMm / lengthMm;
+  final relativeEnd = (positionMm + itemLengthMm) / lengthMm;
+  return Batch(start: relativeStart, end: relativeEnd);
 }
 
 class _ConveyorPainter extends CustomPainter {
