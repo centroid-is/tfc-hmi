@@ -150,32 +150,26 @@ void main() {
   });
 
   group('Tag pass-through', () {
-    testWidgets('config.tag is passed to painter as label', (tester) async {
+    // Pre-refactor (commit 5509d610) these tests asserted that
+    // `config.tag` flowed to the painter as a `label:` constructor arg.
+    // The painter no longer draws the label — `AssetStack` does, via
+    // `Asset.text` (aliased onto `tag` by `SensorConfig`). The tests
+    // are kept at the same conceptual level (tag pass-through from the
+    // config) but assert the new contract: `config.text == config.tag`.
+    test('config.tag is exposed through Asset.text', () {
       final config = SensorConfig(detectionKey: '', tag: 'PE-101A');
-      await tester.pumpWidget(wrap(
-        SizedBox(width: 80, height: 40, child: Sensor(config: config)),
-      ));
-      final cp = tester.widget<CustomPaint>(
-        find.descendant(
-          of: find.byType(Sensor),
-          matching: find.byType(CustomPaint),
-        ),
-      );
-      expect((cp.painter as RedLightBeamPainter).label, 'PE-101A');
+      expect(config.text, 'PE-101A',
+          reason: 'AssetStack reads asset.text to paint the label outside '
+              'the rotated subtree (lib/pages/page_view.dart). SensorConfig '
+              'must alias tag onto text so this path picks it up.');
     });
 
-    testWidgets('null tag flows through as null label', (tester) async {
+    test('null tag yields null Asset.text', () {
       final config = SensorConfig(detectionKey: '');
-      await tester.pumpWidget(wrap(
-        SizedBox(width: 80, height: 40, child: Sensor(config: config)),
-      ));
-      final cp = tester.widget<CustomPaint>(
-        find.descendant(
-          of: find.byType(Sensor),
-          matching: find.byType(CustomPaint),
-        ),
-      );
-      expect((cp.painter as RedLightBeamPainter).label, isNull);
+      expect(config.text, isNull,
+          reason: 'AssetStack short-circuits the label render block on '
+              'null/empty text — a sensor without a tag must produce a null '
+              'text so no label widget is positioned.');
     });
   });
 

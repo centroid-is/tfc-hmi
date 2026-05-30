@@ -60,6 +60,28 @@ class SensorConfig extends BaseAsset {
   /// Optional human-readable label (e.g. `"PE-101A"`).
   String? tag;
 
+  /// `Asset.text` is what `AssetStack` (in `lib/pages/page_view.dart`) reads
+  /// to paint the label OUTSIDE the asset's rotated subtree. By aliasing
+  /// `text` onto `tag` here, the sensor label rides the same path as Button's
+  /// caption (`ButtonConfig.labelColor => textColor`) and stays upright
+  /// regardless of `Coordinates.angle` — which supersedes the in-painter
+  /// label machinery (counterRotateLabel / _paintLabel) introduced as a
+  /// 180° hack in 5509d610.
+  @override
+  String? get text => tag;
+
+  /// Setter accepts non-null writes only. The generated `fromJson` calls
+  /// `..text = json['text']` AFTER the constructor has already set `tag`
+  /// from the JSON `tag` key. Legacy persisted pages have `text: null` and
+  /// a non-null `tag` — adopting `null` here would clobber that tag and
+  /// silently erase the operator's label on first load. Non-null adoption
+  /// preserves both the legacy load path and the new round-trip (where
+  /// `text` and `tag` hold the same value because the getter aliases them).
+  @override
+  set text(String? value) {
+    if (value != null) tag = value;
+  }
+
   SensorConfig({
     this.kind = SensorKind.redLight,
     this.detectionKey = '',
@@ -213,52 +235,36 @@ class _SensorState extends ConsumerState<Sensor> {
   /// adding a future SensorKind value is a compile error here, not a runtime
   /// surprise). One painter class per kind closes Pitfall 3.
   ///
-  /// `config.tag` flows through `label:` on every painter; the painter's
-  /// `_paintLabel` helper short-circuits when the value is null/empty, so
-  /// passing it unconditionally is safe (SENS-13).
+  /// The painter no longer draws the label — that is handled by `AssetStack`
+  /// in `lib/pages/page_view.dart` via `Asset.text` (aliased onto `tag` by
+  /// `SensorConfig`). Routing the label outside the rotated subtree means
+  /// it stays upright at any `Coordinates.angle`, which obsoletes the
+  /// in-painter `counterRotateLabel` hack from 5509d610.
   CustomPainter _createPainter({
     required bool isActive,
     required bool isStale,
   }) {
-    final label = widget.config.tag;
-    // When the asset is placed at ≈ 180° via Coordinates.angle, the outer
-    // LayoutRotatedBox flips the painter — without intervention the label
-    // text also flips and operators can no longer read it. We pass a
-    // `counterRotateLabel` hint to the painter so ONLY the label glyph is
-    // rotated back to upright; the sensor geometry (beam direction, cone,
-    // bubble) stays inverted as intended. Tolerance of 0.5° absorbs the
-    // float-noise that creeps in from saved coordinate values (e.g.
-    // 179.999) — exact equality on a double would silently miss those.
-    // Scope is 180°-only by design; other angles are out of scope.
-    final angleDeg = widget.config.coordinates.angle ?? 0.0;
-    final counterRotateLabel = (angleDeg - 180).abs() < 0.5;
     switch (widget.config.kind) {
       case SensorKind.redLight:
         return RedLightBeamPainter(
           isActive: isActive,
           activeColor: widget.config.activeColor,
           inactiveColor: widget.config.inactiveColor,
-          label: label,
           isStale: isStale,
-          counterRotateLabel: counterRotateLabel,
         );
       case SensorKind.opticField:
         return OpticFieldPainter(
           isActive: isActive,
           activeColor: widget.config.activeColor,
           inactiveColor: widget.config.inactiveColor,
-          label: label,
           isStale: isStale,
-          counterRotateLabel: counterRotateLabel,
         );
       case SensorKind.inductiveField:
         return InductiveFieldPainter(
           isActive: isActive,
           activeColor: widget.config.activeColor,
           inactiveColor: widget.config.inactiveColor,
-          label: label,
           isStale: isStale,
-          counterRotateLabel: counterRotateLabel,
         );
     }
   }
@@ -608,7 +614,9 @@ class _SensorConfigEditorState extends State<_SensorConfigEditor> {
 
   /// Per-kind painter dispatch for the live preview. Mirrors the runtime
   /// dispatch in `_SensorState._createPainter` but always renders
-  /// `isActive: true` so the preview shows the active visual.
+  /// `isActive: true` so the preview shows the active visual. The preview
+  /// glyph is intentionally label-free — operators can read the tag in the
+  /// adjacent `TextFormField` below.
   CustomPainter _previewPainter(SensorConfig config) {
     switch (config.kind) {
       case SensorKind.redLight:
@@ -616,21 +624,18 @@ class _SensorConfigEditorState extends State<_SensorConfigEditor> {
           isActive: true,
           activeColor: config.activeColor,
           inactiveColor: config.inactiveColor,
-          label: config.tag,
         );
       case SensorKind.opticField:
         return OpticFieldPainter(
           isActive: true,
           activeColor: config.activeColor,
           inactiveColor: config.inactiveColor,
-          label: config.tag,
         );
       case SensorKind.inductiveField:
         return InductiveFieldPainter(
           isActive: true,
           activeColor: config.activeColor,
           inactiveColor: config.inactiveColor,
-          label: config.tag,
         );
     }
   }
