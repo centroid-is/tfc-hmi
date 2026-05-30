@@ -255,5 +255,67 @@ void main() {
       expect(client.useMonitorPlc, isTrue);
       client.dispose();
     });
+
+    test(
+        'when degraded breaker is tripped, 0xA1A1 from 0x22 path '
+        'does NOT re-enter MonitorPlc', () async {
+      // TD-022 follow-up: the existing breaker gates the top of
+      // readVariables, but the 0xA1A1 catch in the 0x22 fallback path
+      // unconditionally calls monitorRegisterAndRead(...). On M580
+      // firmware that returns 0xA1A1 from 0x22, every read after the
+      // breaker latches still re-enters MonitorPlc and gets 0x82 again
+      // — the bypass becomes a no-op. The catch MUST honor the
+      // breaker: when degraded, rethrow instead of re-entering 0x50.
+      final log = <int>[];
+      // 0x22 returns the M580 marker 0xA1A1 (errorCode=0xA1, sec=0xA1).
+      Uint8List error0xA1A1() =>
+          Uint8List.fromList([0x5A, 0x42, 0xFD, 0xA1, 0xA1]);
+      final client = UmasClient(
+        sendFn: buildSendFn(
+          subFunctionLog: log,
+          on0x50: error0x82,
+          on0x22: error0xA1A1,
+        ),
+        backoffDelay: (_) async {},
+        useMonitorPlc: true,
+      );
+
+      await client.readPlcStatus();
+
+      // Trip the breaker via three consecutive 0x82 from MonitorPlc.
+      for (var i = 0; i < 3; i++) {
+        await expectLater(
+          () => client.readVariables(variables),
+          throwsA(isA<UmasException>().having(
+              (e) => e.errorCode, 'errorCode (trip call $i)', 0x82)),
+        );
+      }
+      expect(client.monitorPlcDegraded, isTrue,
+          reason: 'precondition: breaker must be latched');
+
+      // Snapshot MonitorPlc (0x50) traffic after the trip.
+      final monitorCountAfterTrip = log.where((s) => s == 0x50).length;
+
+      // Fourth call: gate bypasses 0x50 → 0x22 path runs → 0x22 returns
+      // 0xA1A1 → catch MUST rethrow (not re-enter MonitorPlc).
+      await expectLater(
+        () => client.readVariables(variables),
+        throwsA(isA<UmasException>().having(
+            (e) => e.errorCode, 'errorCode (post-trip)', 0xA1)),
+        reason: '0xA1A1 catch MUST honor the breaker and rethrow',
+      );
+
+      final monitorCountAfter4thCall = log.where((s) => s == 0x50).length;
+      expect(monitorCountAfter4thCall, equals(monitorCountAfterTrip),
+          reason: 'post-trip, 0xA1A1 catch MUST NOT issue any new '
+              'MonitorPlc (0x50) request — the bypass would otherwise '
+              'be defeated and the 0x82 cascade resumes');
+
+      // TD-009 invariant: M580 hardware fingerprint is sticky.
+      expect(client.useMonitorPlc, isTrue,
+          reason: 'TD-009: _useMonitorPlc must remain set');
+
+      client.dispose();
+    });
   });
 }
