@@ -115,6 +115,158 @@ void main() {
     });
   });
 
+  group('itemBatchFor — front edge interpretation', () {
+    test('front edge: position 500 / length 10000 / item 500 → '
+        'item rear at 0%, front at 5%', () {
+      final batch = itemBatchFor(
+        positionMm: 500,
+        lengthMm: 10000,
+        itemLengthMm: 500,
+        edge: ItemPositionEdge.front,
+      );
+      expect(batch, isNotNull);
+      expect(batch!.start, closeTo(0.0, 1e-9));
+      expect(batch.end, closeTo(0.05, 1e-9));
+    });
+
+    test('front edge: position 10000 / length 10000 / item 500 → '
+        'item fully on, about to exit', () {
+      final batch = itemBatchFor(
+        positionMm: 10000,
+        lengthMm: 10000,
+        itemLengthMm: 500,
+        edge: ItemPositionEdge.front,
+      );
+      expect(batch, isNotNull);
+      expect(batch!.start, closeTo(0.95, 1e-9));
+      expect(batch.end, closeTo(1.0, 1e-9));
+    });
+
+    test('front edge: position 0 / length 10000 / item 500 → '
+        'item entirely off the back (start < 0)', () {
+      final batch = itemBatchFor(
+        positionMm: 0,
+        lengthMm: 10000,
+        itemLengthMm: 500,
+        edge: ItemPositionEdge.front,
+      );
+      expect(batch, isNotNull);
+      expect(batch!.start, closeTo(-0.05, 1e-9));
+      expect(batch.end, closeTo(0.0, 1e-9));
+    });
+
+    test('explicit edge=rear matches default behaviour (no regression)', () {
+      final batch = itemBatchFor(
+        positionMm: 500,
+        lengthMm: 1000,
+        itemLengthMm: 200,
+        edge: ItemPositionEdge.rear,
+      );
+      expect(batch, isNotNull);
+      expect(batch!.start, closeTo(0.5, 1e-9));
+      expect(batch.end, closeTo(0.7, 1e-9));
+    });
+
+    test('front edge respects null/non-positive length guards', () {
+      expect(
+        itemBatchFor(
+          positionMm: 500,
+          lengthMm: null,
+          itemLengthMm: 200,
+          edge: ItemPositionEdge.front,
+        ),
+        isNull,
+      );
+      expect(
+        itemBatchFor(
+          positionMm: 500,
+          lengthMm: 1000,
+          itemLengthMm: null,
+          edge: ItemPositionEdge.front,
+        ),
+        isNull,
+      );
+      expect(
+        itemBatchFor(
+          positionMm: 500,
+          lengthMm: 0,
+          itemLengthMm: 200,
+          edge: ItemPositionEdge.front,
+        ),
+        isNull,
+      );
+    });
+  });
+
+  group('ConveyorConfig — item position edge toggle', () {
+    test('itemPositionEdge defaults to null (backwards-compatible)', () {
+      final config = ConveyorConfig();
+      expect(config.itemPositionEdge, isNull);
+    });
+
+    test('constructor accepts itemPositionEdge', () {
+      final config = ConveyorConfig(
+        itemPositionEdge: ItemPositionEdge.front,
+      );
+      expect(config.itemPositionEdge, ItemPositionEdge.front);
+    });
+
+    test('JSON round-trip preserves itemPositionEdge = front', () {
+      final original = ConveyorConfig(
+        itemPositionKey: 'plant.line1.itemPos',
+        conveyorLengthMm: 10000.0,
+        itemLengthMm: 500.0,
+        itemPositionEdge: ItemPositionEdge.front,
+      );
+      final json = original.toJson();
+      expect(json['itemPositionEdge'], 'front');
+
+      final restored = ConveyorConfig.fromJson(json);
+      expect(restored.itemPositionEdge, ItemPositionEdge.front);
+    });
+
+    test('JSON round-trip preserves itemPositionEdge = rear', () {
+      final original = ConveyorConfig(
+        itemPositionEdge: ItemPositionEdge.rear,
+      );
+      final json = original.toJson();
+      expect(json['itemPositionEdge'], 'rear');
+
+      final restored = ConveyorConfig.fromJson(json);
+      expect(restored.itemPositionEdge, ItemPositionEdge.rear);
+    });
+
+    test('fromJson without itemPositionEdge defaults to null '
+        '(REGRESSION GUARD for old saved pages)', () {
+      final json = <String, dynamic>{
+        'asset_name': 'ConveyorConfig',
+        'coordinates': {'x': 0.1, 'y': 0.2, 'angle': 0.0},
+        'size': {'width': 0.05, 'height': 0.05},
+        'text': null,
+        'textPos': null,
+        'techDocId': null,
+        'plcAssetKey': null,
+        'key': null,
+        'batchesKey': null,
+        'frequencyKey': null,
+        'tripKey': null,
+        'simulateBatches': null,
+        'bidirectional': null,
+        'reverseDirection': null,
+        'showFrequency': null,
+        'showAuger': null,
+        'augerRpmKey': null,
+        'augerOpenEnd': null,
+        'itemPositionKey': null,
+        'conveyorLengthMm': null,
+        'itemLengthMm': null,
+        'gates': <dynamic>[],
+      };
+      final config = ConveyorConfig.fromJson(json);
+      expect(config.itemPositionEdge, isNull);
+    });
+  });
+
   group('ConveyorConfig — new item-tracking fields', () {
     test('defaults to null for all three new fields', () {
       final config = ConveyorConfig();
