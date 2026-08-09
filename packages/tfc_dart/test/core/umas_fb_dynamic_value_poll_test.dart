@@ -35,7 +35,7 @@ import 'package:tfc_dart/core/umas_types.dart';
 
 // ---------------------------------------------------------------------------
 // Helpers — mirror the wire-level mocking patterns from
-// umas_bit_alias_write_test.dart and umas_coils_registers_test.dart.
+// umas_coils_registers_test.dart.
 // ---------------------------------------------------------------------------
 
 /// Build a minimal ReadVariable (0x22) success PDU.

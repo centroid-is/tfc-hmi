@@ -858,8 +858,8 @@ void main() {
         'invalidateSymbolCacheIfProjectChanged is a no-op before the symbol '
         'cache is built (documented precondition)', () async {
       // /tmp/umas-fuzz/fuzz-browse-stability.md observed that calling
-      // `invalidateSymbolCacheIfProjectChanged()` after only browse() +
-      // ensureBitAliasMap() silently no-ops: the method short-circuits
+      // `invalidateSymbolCacheIfProjectChanged()` after only browse()
+      // silently no-ops: the method short-circuits
       // on `!_symbolCacheBuilt`. browse() does NOT prime the symbol
       // cache by itself — only `_ensureSymbolCache` (via lookupSymbol /
       // readVariableByName) does. Lock that precondition into a test so

@@ -6,7 +6,6 @@ import 'package:logger/logger.dart';
 import 'package:meta/meta.dart';
 import 'package:modbus_client/modbus_client.dart';
 import 'package:rxdart/rxdart.dart';
-import 'package:tfc_dart/core/umas_bit_alias_map.dart';
 import 'package:tfc_dart/core/umas_fb_direction.dart';
 import 'package:tfc_dart/core/umas_types.dart';
 import 'package:tfc_dart/core/umas_var_in_out.dart';
@@ -289,27 +288,6 @@ class UmasClient {
   /// True if a symbol cache build has completed for the current session.
   bool get symbolCacheBuilt => _symbolCacheBuilt;
 
-  // ---------------------------------------------------------------------------
-  // Bit-alias map (v1.1 located-bit enumeration).
-  // ---------------------------------------------------------------------------
-  //
-  // Background: see /tmp/bitalias-swarm-v2/trailer-probe.md. The PLC project
-  // declares its located-bit allocations as `ARRAY[..] OF BOOL` types in
-  // DD02 IDX 0x1B..0x2A. Each such array, when referenced by a top-level
-  // UmasVariable, becomes N readable bits at known (block, offset, bitOffset).
-  // The map is populated on demand (first call to [ensureBitAliasMap]),
-  // cached, and invalidated alongside the symbol cache.
-
-  UmasBitAliasMap? _bitAliasMap;
-  bool _bitAliasMapBuilt = false;
-  Completer<void>? _bitAliasMapLock;
-
-  /// Cached located-bit / bit-alias map. Null until [ensureBitAliasMap] has
-  /// run successfully at least once. Cleared by [_clearSymbolCache] /
-  /// [invalidateSymbolCacheIfProjectChanged] so a reprogrammed PLC forces
-  /// a rebuild.
-  UmasBitAliasMap? get bitAliases => _bitAliasMap;
-
   /// Inject a [ResolvedSymbol] directly into the cache for tests that
   /// need to assert behavior of [readVariableByName] / [writeVariableByName]
   /// without standing up a full browse against the Python stub. Used
@@ -331,21 +309,9 @@ class UmasClient {
     _setState(newState);
   }
 
-  /// Test hook: inject a fully-built [UmasBitAliasMap] directly into
-  /// the cache so [writeBitAlias] / [readBitAlias] can be exercised
-  /// without standing up a full browse against the Python stub. Marks
-  /// the map as built so [ensureBitAliasMap] short-circuits.
-  ///
-  /// Mirrors [debugInjectSymbol] for the symbol cache.
-  @visibleForTesting
-  void debugInjectBitAliasMap(UmasBitAliasMap map) {
-    _bitAliasMap = map;
-    _bitAliasMapBuilt = true;
-  }
-
   /// Test hook: override the project CRC used by ReadVariable /
   /// WriteVariable requests. Lets unit tests drive [writeVariable]
-  /// (and therefore [writeVariableByName] / [writeBitAlias]) without
+  /// (and therefore [writeVariableByName]) without
   /// running the full session-init handshake that normally populates
   /// [_projectCrc] via [_readProjectBlock].
   @visibleForTesting
@@ -1725,11 +1691,6 @@ class UmasClient {
     _persistentArrayCache.clear();
     _symbolCacheBuilt = false;
     _symbolCacheProjectCrc = null;
-    // v1.1 bit-alias map shares lifecycle with the symbol cache: both
-    // depend on DD02 catalog state that goes stale across project
-    // reprograms / PLC reboots.
-    _bitAliasMap = null;
-    _bitAliasMapBuilt = false;
   }
 
   /// Fix B: Clear both hardware-ID fields. Called from [_handleSessionError]
@@ -1755,13 +1716,6 @@ class UmasClient {
   /// Practical implications:
   /// - Production flow is fine: the first `readVariableByName` primes
   ///   the cache, after which CRC-watch invalidation fires as expected.
-  /// - Callers that need to drop the bit-alias map at the same time
-  ///   MUST verify a symbol-lookup has happened, or call
-  ///   [_clearSymbolCache] directly (e.g. from a test drill that only
-  ///   ran [browse] + [ensureBitAliasMap]). The bit-alias map shares
-  ///   lifecycle with the symbol cache inside [_clearSymbolCache], so
-  ///   skipping the lookup leaves stale bit aliases referencing the
-  ///   previous project.
   ///
   /// F-8 (v1.1.x): now invoked from the periodic [_projectCrcTimer]
   /// via [refreshProjectMetadata] so PLC reprograms are detected
@@ -1861,290 +1815,6 @@ class UmasClient {
     } finally {
       _symbolCacheLock = null;
     }
-  }
-
-  // ---------------------------------------------------------------------------
-  // v1.1 bit-alias enumeration — located-bit registry built from DD02
-  // ARRAY[..] OF BOOL short records and the top-level variable list.
-  // ---------------------------------------------------------------------------
-
-  /// Build (or return the cached) [UmasBitAliasMap] for this session.
-  ///
-  /// Strategy (read-only, no reservation):
-  /// 1. Read every top-level variable (`readVariableNames`).
-  /// 2. For each variable whose `dataTypeId` falls outside the built-in
-  ///    type table, speculatively fetch the DD02 type body via
-  ///    [readDD02Raw] and try to parse it as an [UmasArrayTypeDefinition].
-  ///    Cache the result in [_persistentArrayCache] so a follow-on
-  ///    [browse] doesn't refetch.
-  /// 3. Filter to BOOL arrays (`elementTypeId == 0x0001`) and expand each
-  ///    into per-bit [BitAliasEntry] rows via
-  ///    [UmasBitAliasMap.buildFromArrayDefinition], pinned to the
-  ///    variable's `(blockNo, offset)` pair.
-  /// 4. Build the [UmasBitAliasMap], cache it on the client, and return it.
-  ///
-  /// Concurrent first-time callers share one build via
-  /// [_bitAliasMapLock].
-  ///
-  /// Background: `/tmp/bitalias-swarm-v2/trailer-probe.md` documents the
-  /// underlying protocol finding — recordType=0xDD02 dispatch is by IDX
-  /// alone (no separate sub-op), and `ARRAY[..] OF BOOL` type bodies
-  /// live at IDX 0x1B..0x2A on the live M580.
-  Future<UmasBitAliasMap> ensureBitAliasMap() async {
-    if (_bitAliasMapBuilt && _bitAliasMap != null) return _bitAliasMap!;
-    if (_bitAliasMapLock != null) {
-      await _bitAliasMapLock!.future;
-      if (_bitAliasMap != null) return _bitAliasMap!;
-    }
-    _bitAliasMapLock = Completer<void>();
-    _bitAliasMapLock!.future.ignore();
-    try {
-      final map = await _withSessionAndRecovery(_buildBitAliasMapInner);
-      _bitAliasMap = map;
-      _bitAliasMapBuilt = true;
-      _bitAliasMapLock!.complete();
-      _log.i('UMAS bitAliasMap: built ${map.length} entries');
-      return map;
-    } catch (e) {
-      _bitAliasMapLock!.completeError(e);
-      rethrow;
-    } finally {
-      _bitAliasMapLock = null;
-    }
-  }
-
-  /// Inner builder — runs inside the session-recovery wrapper. See
-  /// [ensureBitAliasMap] for the high-level contract.
-  ///
-  /// Walks the full [browse] tree (not just top-level variables) so
-  /// `ARRAY[..] OF BOOL` fields buried inside DFB / UDT instances are
-  /// also picked up. The live M580 / B_Elevator project, for example,
-  /// puts a 31-element BOOL array `DROP_HEALTH` inside the
-  /// `Elevator.BMEP58_ECPU_EXT` DFB at `block=0x33 off=0x90` — it is
-  /// not reachable from the top-level variable list alone.
-  ///
-  /// Performance: reuses the cached browse tree's `(blockNo, offset)`
-  /// pairs and the `_persistentArrayCache` populated during the same
-  /// browse; no additional UMAS round-trips beyond what `browse()` had
-  /// to do anyway.
-  Future<UmasBitAliasMap> _buildBitAliasMapInner() async {
-    final tree = await browse();
-    final entries = <BitAliasEntry>[];
-
-    void visit(UmasVariableTreeNode node, String path) {
-      final type = node.dataType;
-      final variable = node.variable;
-      if (type != null &&
-          variable != null &&
-          type.classIdentifier == 4 /* array */) {
-        // Resolve the array body from the cache (browse populates it
-        // when it expands the variable). For BOOL arrays specifically
-        // the byteSize == element count (1 byte per BOOL on M580).
-        final def = _persistentArrayCache[variable.dataTypeId];
-        if (def != null && def.elementTypeId == 0x0001) {
-          entries.addAll(UmasBitAliasMap.buildFromArrayDefinition(
-            definition: def,
-            parentVariableName: node.name,
-            parentBlock: variable.blockNo,
-            parentByteOffset: variable.offset,
-            aliasPrefix: '$path[',
-          ).map((e) => BitAliasEntry(
-                // Append the closing bracket so the alias matches the
-                // existing browse-tree leaf naming convention
-                // ("path[N]"), giving operators a single canonical name
-                // for every located bit.
-                aliasName: '${e.aliasName}]',
-                parentBlock: e.parentBlock,
-                parentByteOffset: e.parentByteOffset,
-                bitOffset: e.bitOffset,
-                parentVariableName: e.parentVariableName,
-              )));
-        }
-      }
-      for (final child in node.children) {
-        // Children carry their own path component via node.name; the
-        // existing browse code uses '.' as the separator and '[N]' for
-        // array elements, so we mirror it here.
-        final isArrayElem = child.name.startsWith('[') &&
-            child.name.endsWith(']');
-        final childPath = isArrayElem ? '$path${child.name}' : '$path.${child.name}';
-        visit(child, childPath);
-      }
-    }
-
-    for (final root in tree) {
-      visit(root, root.name);
-    }
-    return UmasBitAliasMap(entries);
-  }
-
-  /// Convenience: read a single bit-alias by canonical name.
-  ///
-  /// Looks the alias up in the [bitAliases] map (auto-building it on
-  /// first call). The read path branches by layout:
-  ///
-  ///   * `bitOffset == 0` — byte-per-bool layout (Schneider M580 default):
-  ///     issues a 1-byte BOOL read against `(parentBlock,
-  ///     parentByteOffset)` via [readVariables], returns the resulting
-  ///     bool directly.
-  ///   * `bitOffset > 0` — packed-bits-16 layout: reads the parent WORD
-  ///     and bit-shifts the requested bit out of it.
-  ///
-  /// Returns null when the alias is unknown. Reuses the existing
-  /// [readVariables] path so M580 MonitorPlc / M340 ReadVariable
-  /// selection is honoured transparently.
-  /// Synthesize the `(UmasVariable, UmasDataTypeRef)` pair that
-  /// addresses the byte-per-bool slot described by [entry] directly,
-  /// without going through [lookupSymbol] / the DD03 symbol cache.
-  ///
-  /// Bit-alias names (`...DIO_CTRL[5]`, `...DROP_HEALTH[3]`, etc.) are
-  /// synthesized from DD02 ARRAY OF BOOL short-records and live ONLY
-  /// in [bitAliases] — they have no DD03 entry on Schneider M580
-  /// firmware. A 2026-05-19 fuzz of `umas_cli writeBitAlias` against
-  /// the live PLC at 192.168.112.159 failed 11/30 attempts with
-  /// `UmasException(code=0, "symbol not found in data dictionary")`
-  /// because the old write path called [writeVariableByName] →
-  /// [lookupSymbol]. The read path always synthesized the address
-  /// from the [BitAliasEntry] directly, which is why reads worked.
-  ///
-  /// This helper is the shared synthesizer used by both [readBitAlias]
-  /// (byte-per-bool branch) and [writeBitAlias] so the two paths
-  /// cannot drift. Caller is responsible for screening out
-  /// `entry.bitOffset != 0` (packed-bits-16) before calling.
-  ///
-  /// Returns BOOL: `dataTypeId == 1`, `byteSize == 1`. The wire
-  /// encoder ([VariableWriteRef.fromVariable], [VariableReadRef.fromVariable])
-  /// applies the M580 paging / write-path baseOffset/offset swap; we
-  /// only carry the flat `(blockNo, byteOffset)` here.
-  ({UmasVariable variable, UmasDataTypeRef dataType})
-      _synthesizeBoolForBitAlias(BitAliasEntry entry, String aliasName) {
-    final variable = UmasVariable(
-      name: aliasName,
-      blockNo: entry.parentBlock,
-      offset: entry.parentByteOffset,
-      dataTypeId: 1, // BOOL
-    );
-    const dataType = UmasDataTypeRef(
-      id: 1,
-      name: 'BOOL',
-      byteSize: 1,
-    );
-    return (variable: variable, dataType: dataType);
-  }
-
-  Future<bool?> readBitAlias(String aliasName) async {
-    final map = await ensureBitAliasMap();
-    final entry = map.lookup(aliasName);
-    if (entry == null) return null;
-    if (entry.bitOffset == 0) {
-      // Byte-per-bool — one-byte BOOL read directly at the byte
-      // offset. Synthesize the (UmasVariable, UmasDataTypeRef) pair
-      // straight from the BitAliasEntry. We deliberately do NOT
-      // consult [lookupSymbol] here: bit-alias names are synthesized
-      // from DD02 ARRAY OF BOOL short-records and are absent from
-      // DD03 on Schneider M580. See [_synthesizeBoolForBitAlias].
-      final synth = _synthesizeBoolForBitAlias(entry, aliasName);
-      final values =
-          await readVariables([(synth.variable, synth.dataType)]);
-      if (values.isEmpty) return null;
-      final v = values.first.value;
-      if (v is bool) return v;
-      if (v is int) return v != 0;
-      return null;
-    }
-    // Packed-bits — read the parent WORD and shift the requested bit.
-    final parentVar = UmasVariable(
-      name: aliasName,
-      blockNo: entry.parentBlock,
-      offset: entry.parentByteOffset,
-      dataTypeId: 22, // WORD
-    );
-    const wordType = UmasDataTypeRef(
-      id: 22,
-      name: 'WORD',
-      byteSize: 2,
-    );
-    final values = await readVariables([(parentVar, wordType)]);
-    if (values.isEmpty) return null;
-    final dynamic v = values.first.value;
-    if (v is! int) return null;
-    return ((v >> entry.bitOffset) & 1) == 1;
-  }
-
-  /// Convenience: write a single bit-alias by canonical name.
-  ///
-  /// Mirrors [readBitAlias] on the write side. Looks the alias up in
-  /// [bitAliases] (auto-building the map on first call), then dispatches
-  /// by layout:
-  ///
-  ///   * `bitOffset == 0` — **byte-per-bool** (Schneider M580 default
-  ///     for `ARRAY[..] OF BOOL`): synthesizes a [UmasVariable]
-  ///     directly from the [BitAliasEntry] via
-  ///     [_synthesizeBoolForBitAlias] and issues a [writeVariable]
-  ///     (0x23) PDU. We deliberately do NOT go through
-  ///     [writeVariableByName] / [lookupSymbol] — see
-  ///     [_synthesizeBoolForBitAlias] for the rationale (DD02-only
-  ///     alias names are absent from DD03 on M580 firmware, so
-  ///     lookupSymbol throws "symbol not found"). Atomic — only the
-  ///     targeted byte changes, sibling array elements are not
-  ///     touched. [encodeVariableValue] turns `true` into `0x01` and
-  ///     `false` into `0x00`. Session recovery is inherited from
-  ///     [writeVariable]'s `_withSessionAndRecovery` wrapper.
-  ///
-  ///   * `bitOffset > 0` — **packed-bits-16**: NOT supported. Writing
-  ///     one bit in a packed WORD requires read-modify-write of the
-  ///     parent WORD, which is not implemented here. A naive BOOL
-  ///     write to the parent WORD's address would silently overwrite
-  ///     the other 15 sibling bits with whatever [encodeVariableValue]
-  ///     produces for a 2-byte write. We fail loudly with
-  ///     [UnsupportedError] instead so the caller can either (a) write
-  ///     the whole word via [writeVariableByName] explicitly, or
-  ///     (b) wait for an RMW implementation.
-  ///
-  /// Throws:
-  ///   * [StateError] when [aliasName] is unknown to [bitAliases].
-  ///   * [UnsupportedError] when the alias lives in a packed-bits-16
-  ///     array (i.e. `entry.bitOffset > 0`).
-  ///   * Anything [writeVariable] throws (session errors, per-symbol
-  ///     PLC error codes from `_checkStatus`, the
-  ///     "blockCrcs not available" guard before the first
-  ///     [readPlcStatus], etc.).
-  Future<void> writeBitAlias(String aliasName, bool value) async {
-    final map = await ensureBitAliasMap();
-    final entry = map.lookup(aliasName);
-    if (entry == null) {
-      throw StateError(
-        'writeBitAlias: unknown alias "$aliasName". '
-        'The bit-alias map has ${map.length} entries; '
-        'check the PLC catalog or rebuild the map after a project change.',
-      );
-    }
-    if (entry.bitOffset != 0) {
-      // Packed-bits-16: bitOffset > 0 means the alias is one bit of a
-      // packed WORD. We cannot safely write just one bit without
-      // read-modify-write of the parent WORD, which is not implemented
-      // here. Fail loudly so a naive call cannot corrupt sibling bits.
-      throw UnsupportedError(
-        'writeBitAlias: alias "$aliasName" lives at bit ${entry.bitOffset} '
-        'of a packed WORD (parentBlock='
-        '0x${entry.parentBlock.toRadixString(16)} '
-        'parentByteOffset=0x${entry.parentByteOffset.toRadixString(16)}). '
-        'Writing one bit in a packed-bits-16 array requires read-modify-write '
-        'of the parent WORD, which is not yet implemented. Use '
-        'writeVariableByName on the parent WORD instead, or read the '
-        'parent WORD first, flip the bit, and write it back atomically.',
-      );
-    }
-    // Byte-per-bool: synthesize the BOOL (UmasVariable, UmasDataTypeRef)
-    // pair directly from the BitAliasEntry — mirror of the read path
-    // — and issue a single-ref writeVariable. Bypasses lookupSymbol
-    // because DD03 does not contain bit-alias entries on Schneider
-    // M580 firmware. See _synthesizeBoolForBitAlias for the full
-    // rationale + fuzz finding.
-    final synth = _synthesizeBoolForBitAlias(entry, aliasName);
-    final ref = VariableWriteRef.fromVariable(
-        synth.variable, synth.dataType, value);
-    await writeVariable([ref]);
   }
 
   /// Resolve a UMAS symbol path (e.g. `B_F1_RC_01_Front` or
@@ -3403,20 +3073,18 @@ class UmasClient {
       // Element size derived from total array byte size (works for arrays of
       // builtin scalars, UDTs, and atypically-sized strings alike).
       //
-      // Fix for bitalias-cardinality-mismatch (fuzz-bitalias-read.md,
+      // Fix for the speculative-DD02 cardinality mismatch (fuzz,
       // 2026-05-19): when the speculative-DD02 path synthesized the
       // array's type with `byteSize: 0` (because the typeId was absent
       // from DD03 — observed on the live M580 for FB members like
       // `BMEP58_ECPU_EXT.DIO_HEALTH`, `.DIO_CTRL`, `.LS_HEALTH`), the
       // division below yields 0 and the array bails out as a leaf,
       // leaving `lookupSymbol("...DIO_HEALTH[519]")` to throw "symbol
-      // not found" even though `readBitAlias` reads the same name
-      // happily via the cached `arrayDef`. When the element type is a
-      // known built-in scalar, derive `elementSize` from the built-in
-      // directly. This mirrors what `UmasBitAliasMap.buildFromArray
-      // Definition` does (use `dim.startIndex` / `upperBound` directly
-      // from the array def), so the symbol cache and the bit-alias map
-      // now agree element-for-element.
+      // not found" even though the cached `arrayDef` describes the
+      // elements. When the element type is a known built-in scalar,
+      // derive `elementSize` from the built-in directly (using
+      // `dim.startIndex` / `upperBound` from the array def), so the
+      // symbol cache agrees element-for-element with DD02.
       final builtin = UmasDataTypes.builtIn[arrayDef.elementTypeId];
       final int elementSize;
       if (resolvedType.byteSize > 0) {

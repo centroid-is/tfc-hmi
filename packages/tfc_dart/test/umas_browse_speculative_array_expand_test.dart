@@ -1,9 +1,10 @@
-/// Regression for the bitalias-cardinality-mismatch bug.
+/// Regression for the speculative-DD02 array-cardinality-mismatch bug.
 ///
-/// Symptom (fuzz-bitalias-read.md, 2026-05-19): on the live M580 at
-/// 192.168.112.159, `readBitAlias("BMEP58_ECPU_EXT.DIO_HEALTH[519]")`
-/// succeeds, but `readVariableByName(...)` of the same canonical name
-/// throws "symbol not found in data dictionary". 8 of 20 strided
+/// Symptom (live fuzz, 2026-05-19): on the live M580 at
+/// 192.168.112.159, a direct DD02-arrayDef-based read of
+/// `BMEP58_ECPU_EXT.DIO_HEALTH[519]` succeeds, but
+/// `readVariableByName(...)` of the same canonical name throws
+/// "symbol not found in data dictionary". 8 of 20 strided
 /// cross-checks diverged this way (all in `DIO_HEALTH[519+]` /
 /// `DIO_CTRL[540+]` / `LS_HEALTH[N]`).
 ///
@@ -16,15 +17,13 @@
 /// the children expansion is skipped. The symbol cache then walks a
 /// tree that has no `[N]` leaves under those arrays — and
 /// `readVariableByName("...DIO_HEALTH[519]")` fails for exactly those
-/// names that `readBitAlias` happily reads via the cached `arrayDef`.
+/// names the cached `arrayDef` describes.
 ///
 /// Fix: when the parent array's synthesized byteSize is 0 but the
 /// element type is a built-in scalar with a known size (BOOL=1, INT=2,
 /// etc.), derive `elementSize` from the built-in directly instead of
-/// dividing the parent byteSize by `totalElementCount`. The bit-alias
-/// builder already does this implicitly via the
-/// `UmasArrayTypeDefinition.dimensions`, so the browse tree builder
-/// must agree.
+/// dividing the parent byteSize by `totalElementCount`, using the
+/// `UmasArrayTypeDefinition.dimensions` bounds.
 ///
 /// Test fixture: the Python stub now exposes `Application.GVL.health_bits`
 /// referencing typeId 130 (ARRAY[1..3] OF BOOL). Type 130 is present in
@@ -185,36 +184,6 @@ void main() {
           await umas.readVariableByName('Application.GVL.health_bits[3]');
       expect(r3.value, isTrue,
           reason: 'stub initialises health_bits[3] = true');
-    });
-
-    test('readBitAlias and readVariableByName agree on every element', () async {
-      // This is the cross-check the live-PLC fuzz performed: the two
-      // paths MUST produce the same value for every alias the bit-alias
-      // map enumerates. After the fix, the symbol cache contains
-      // exactly the same set of array-element leaves as the bit-alias
-      // map (for BOOL-array members whose typeId is absent from DD03).
-      await tcp.connect();
-      final umas = UmasClient(sendFn: tcp.send);
-      // readBitAlias issues a writeable-style ReadVariable request that
-      // requires the project CRC + block-CRC guards to be populated;
-      // calling readPlcStatus once primes both.
-      await umas.readPlcStatus();
-      final aliases = await umas.ensureBitAliasMap();
-
-      final hbAliases = aliases.entries
-          .where((e) => e.aliasName.contains('health_bits'))
-          .toList();
-      expect(hbAliases, hasLength(3),
-          reason: 'bit-alias map must enumerate all 3 BOOL elements');
-
-      for (final alias in hbAliases) {
-        final viaBitAlias = await umas.readBitAlias(alias.aliasName);
-        final viaSymbol =
-            await umas.readVariableByName(alias.aliasName);
-        expect(viaBitAlias, viaSymbol.value,
-            reason: 'readBitAlias(${alias.aliasName})=$viaBitAlias must '
-                'agree with readVariableByName=${viaSymbol.value}');
-      }
     });
   });
 }
