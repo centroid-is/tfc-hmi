@@ -1122,8 +1122,8 @@ void main() {
         () async {
       // KEEPALIVE-WIRE-CHANGE (2026-05-20): the periodic timer sends
       // 0x04 plcStatus instead of 0x12 KeepAlive — M580 rejects 0x12
-      // from non-reserved clients (live byte capture in
-      // tools/umas_keepalive_probe.dart).
+      // from non-reserved clients (verified via live byte capture,
+      // 192.168.112.159).
       final mock = MockUmasSender();
       setupInitSequence(mock);
 

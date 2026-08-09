@@ -388,8 +388,8 @@ class UmasClient {
   /// **Why plcStatus, not the dedicated KeepAlive (0x12) sub-function?**
   /// UMAS 0x12 is `umas_QueryKeepPLCReservation` — it queries whether
   /// the caller's reservation is still alive. On the M580 firmware
-  /// (verified live against 192.168.112.159, 2026-05-20 byte capture in
-  /// `tools/umas_keepalive_probe.dart`) the PLC rejects every 0x12 from
+  /// (verified via live byte capture against 192.168.112.159,
+  /// 2026-05-20) the PLC rejects every 0x12 from
   /// a non-reserved client with `status=0xFD errorCode=0x81
   /// secondary=0x80`. The HMI is a read-only client and never calls
   /// [takePlcReservation], so 0x12 would generate a continuous warning
@@ -1423,8 +1423,7 @@ class UmasClient {
   /// (acquired via [takePlcReservation], 0x10). On the M580 firmware,
   /// 0x12 from a non-reserved client is rejected with `status=0xFD
   /// errorCode=0x81 secondary=0x80` (live byte capture against
-  /// 192.168.112.159, 2026-05-20 — see
-  /// `tools/umas_keepalive_probe.dart`).
+  /// 192.168.112.159, 2026-05-20).
   ///
   /// plc4j's umas.mspec defines no 0x12 case; it never sends this
   /// sub-function. The periodic [startKeepAlive] timer uses

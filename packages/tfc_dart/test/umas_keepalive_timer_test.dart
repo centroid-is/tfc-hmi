@@ -4,8 +4,7 @@
 // secondary=0x80`, which previously generated a continuous warning log
 // every keep-alive interval on the live HMI.
 //
-// Live-PLC byte evidence (192.168.112.159, captured 2026-05-20 via
-// `dart run packages/tfc_dart/tool/umas_keepalive_probe.dart`):
+// Live-PLC byte evidence (192.168.112.159, captured 2026-05-20):
 //
 //   >>> 5a 00 12                (KeepAlive, no body)
 //   <<< 5a 00 fd 81 80 c0 c6 2d 00 00 00 00 00
@@ -140,7 +139,7 @@ void main() {
           .toList();
       expect(keepAliveSent, isEmpty,
           reason: 'timer must NOT send 0x12 KeepAlive — M580 rejects it '
-              'with 0xFD 0x81 0x80 (see umas_keepalive_probe output)');
+              'with 0xFD 0x81 0x80 (live byte capture, 2026-05-20)');
 
       // Every timer-sent request should be sub-function 0x04 plcStatus.
       for (final r in timerSent) {
