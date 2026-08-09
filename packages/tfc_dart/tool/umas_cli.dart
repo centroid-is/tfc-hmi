@@ -34,10 +34,6 @@
 ///                              UmasArrayTypeDefinition payload). Useful
 ///                              when reverse-engineering a new wire
 ///                              variant.
-///   parse-zef <path>           Parse a Schneider EcoStruxure `.ZEF` or
-///                              `.XEF` project export and print the
-///                              extracted variable + DDT + bit-alias map.
-///                              Offline — does not touch the PLC.
 ///
 /// Options:
 ///   --port <N>      Modbus TCP port (default 502).
@@ -56,9 +52,6 @@
 ///   --quiet         `write` only — suppress the resolved-symbol summary
 ///                   so the command emits a single line on success.
 ///                   Useful for tight write→read shell loops.
-///   --out <path>    `parse-zef` only — write JSON output to <path>.
-///                   When omitted, parse-zef prints a human-readable
-///                   summary to stdout.
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -66,7 +59,6 @@ import 'dart:typed_data';
 import 'package:args/args.dart';
 import 'package:modbus_client/modbus_client.dart';
 import 'package:modbus_client_tcp/modbus_client_tcp.dart';
-import 'package:tfc_dart/core/ecostruxure_zef.dart';
 import 'package:tfc_dart/core/umas_bit_alias_map.dart';
 import 'package:tfc_dart/core/umas_browse_search.dart';
 import 'package:tfc_dart/core/umas_client.dart';
@@ -102,7 +94,6 @@ Future<int> _main(List<String> args) async {
     ..addFlag('json', defaultsTo: false, negatable: false)
     ..addFlag('show-direction', defaultsTo: false, negatable: false)
     ..addFlag('quiet', defaultsTo: false, negatable: false)
-    ..addOption('out')
     ..addFlag('help', abbr: 'h', defaultsTo: false, negatable: false);
 
   final ArgResults parsed;
@@ -129,7 +120,6 @@ Future<int> _main(List<String> args) async {
   final emitJson = parsed['json'] as bool;
   final showDirection = parsed['show-direction'] as bool;
   final quiet = parsed['quiet'] as bool;
-  final outPath = parsed['out'] as String?;
 
   switch (command) {
     case 'browse':
@@ -161,9 +151,6 @@ Future<int> _main(List<String> args) async {
       _need(rest, 1, 'bit-aliases <host>');
       return _withClient(rest[0], port, unit, timeout,
           (umas) => _bitAliasesCommand(umas, emitJson: emitJson));
-    case 'parse-zef':
-      _need(rest, 1, 'parse-zef <path>');
-      return _parseZefCommand(rest[0], outPath);
     default:
       stderr.writeln('Unknown command: $command\n');
       _printUsage(parser);
@@ -187,9 +174,7 @@ void _printUsage(ArgParser parser) {
   stderr.writeln(
       '  dump-array <host> <typeId> Dump raw DD02 bytes for an array type id');
   stderr.writeln(
-      '  bit-aliases <host>         Enumerate every located-bit / bit alias');
-  stderr.writeln(
-      '  parse-zef  <path>          Parse a .ZEF / .XEF project export\n');
+      '  bit-aliases <host>         Enumerate every located-bit / bit alias\n');
   stderr.writeln('Options:\n${parser.usage}');
 }
 
@@ -785,74 +770,6 @@ String _hex(Uint8List bytes) {
     buf.write(bytes[i].toRadixString(16).padLeft(2, '0'));
   }
   return buf.toString();
-}
-
-// ---------------------------------------------------------------------------
-// parse-zef — offline .ZEF / .XEF parser
-// ---------------------------------------------------------------------------
-
-Future<int> _parseZefCommand(String inputPath, String? outPath) async {
-  final f = File(inputPath);
-  if (!f.existsSync()) {
-    stderr.writeln('parse-zef: file not found: $inputPath');
-    return 1;
-  }
-
-  final ZefProject project;
-  try {
-    if (inputPath.toLowerCase().endsWith('.xef')) {
-      project = parseXef(f.readAsStringSync());
-    } else {
-      // Default to .zef (ZIP) for anything else. parseZef will also
-      // fall back to picking up `.xml` entries inside the archive.
-      project = parseZef(f);
-    }
-  } on FormatException catch (e) {
-    stderr.writeln('parse-zef: ${e.message}');
-    return 1;
-  } catch (e) {
-    stderr.writeln('parse-zef: unexpected error: $e');
-    return 1;
-  }
-
-  final aliases = project.resolveBitAliases();
-
-  if (outPath != null) {
-    final json = const JsonEncoder.withIndent('  ').convert({
-      'project': project.toJson(),
-      'resolvedBitAliases': aliases.map((a) => a.toJson()).toList(),
-    });
-    File(outPath).writeAsStringSync(json);
-    print('parse-zef: wrote ${project.variables.length} variable(s), '
-        '${project.ddts.length} DDT(s), ${aliases.length} resolved bit '
-        'alias(es) → $outPath');
-  } else {
-    print('Variables: ${project.variables.length}');
-    for (final v in project.variables.values) {
-      final addr = v.rawAddress ?? '<unlocated>';
-      final type = v.typeName ?? '<no type>';
-      print('  ${v.name}  $type  $addr');
-    }
-    print('\nDDTs: ${project.ddts.length}');
-    for (final d in project.ddts) {
-      print('  ${d.name}  (${d.members.length} member(s))');
-      for (final m in d.members) {
-        final bitInfo = m.bitOffset != null
-            ? '  ← bit ${m.bitOffset} of ${m.parentMemberName}'
-            : '';
-        print('    ${m.name}  ${m.typeName ?? '<no type>'}$bitInfo');
-      }
-    }
-    print('\nResolved bit aliases: ${aliases.length}');
-    for (final a in aliases) {
-      print('  ${a.aliasFullName}  '
-          '→ parent=${a.parentVariableName}.${a.parentMemberName}  '
-          'bit=${a.bitOffset}  '
-          'addr=${a.parentRawAddress ?? '<unlocated>'}');
-    }
-  }
-
-  return 0;
 }
 
 // ---------------------------------------------------------------------------
