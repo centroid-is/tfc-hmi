@@ -150,32 +150,26 @@ void main() {
   });
 
   group('Tag pass-through', () {
-    testWidgets('config.tag is passed to painter as label', (tester) async {
+    // Pre-refactor (commit 5509d610) these tests asserted that
+    // `config.tag` flowed to the painter as a `label:` constructor arg.
+    // The painter no longer draws the label — `AssetStack` does, via
+    // `Asset.text` (aliased onto `tag` by `SensorConfig`). The tests
+    // are kept at the same conceptual level (tag pass-through from the
+    // config) but assert the new contract: `config.text == config.tag`.
+    test('config.tag is exposed through Asset.text', () {
       final config = SensorConfig(detectionKey: '', tag: 'PE-101A');
-      await tester.pumpWidget(wrap(
-        SizedBox(width: 80, height: 40, child: Sensor(config: config)),
-      ));
-      final cp = tester.widget<CustomPaint>(
-        find.descendant(
-          of: find.byType(Sensor),
-          matching: find.byType(CustomPaint),
-        ),
-      );
-      expect((cp.painter as RedLightBeamPainter).label, 'PE-101A');
+      expect(config.text, 'PE-101A',
+          reason: 'AssetStack reads asset.text to paint the label outside '
+              'the rotated subtree (lib/pages/page_view.dart). SensorConfig '
+              'must alias tag onto text so this path picks it up.');
     });
 
-    testWidgets('null tag flows through as null label', (tester) async {
+    test('null tag yields null Asset.text', () {
       final config = SensorConfig(detectionKey: '');
-      await tester.pumpWidget(wrap(
-        SizedBox(width: 80, height: 40, child: Sensor(config: config)),
-      ));
-      final cp = tester.widget<CustomPaint>(
-        find.descendant(
-          of: find.byType(Sensor),
-          matching: find.byType(CustomPaint),
-        ),
-      );
-      expect((cp.painter as RedLightBeamPainter).label, isNull);
+      expect(config.text, isNull,
+          reason: 'AssetStack short-circuits the label render block on '
+              'null/empty text — a sensor without a tag must produce a null '
+              'text so no label widget is positioned.');
     });
   });
 
@@ -329,166 +323,34 @@ void main() {
     });
   });
 
-  group('Tooltip presence', () {
-    testWidgets(
-        'Sensor widget tree contains a Tooltip ancestor of GestureDetector',
+  group('Tooltip removed', () {
+    // The hover tooltip + `_SensorTooltipContent` widget are gone. Operators
+    // still get the full detail panel via tap → `_showDetailsDialog`; the
+    // tooltip path was redundant and noisy on a busy HMI canvas.
+    testWidgets('Sensor widget tree contains NO Tooltip',
         (tester) async {
       final config = SensorConfig(detectionKey: '');
       await tester.pumpWidget(wrap(
         SizedBox(width: 80, height: 40, child: Sensor(config: config)),
       ));
-      // Use find.descendant rooted at Sensor to avoid matching the dialog
-      // chrome's own internal Tooltip widgets if they ever appear.
       final tooltip = find.descendant(
         of: find.byType(Sensor),
         matching: find.byType(Tooltip),
       );
-      expect(tooltip, findsOneWidget);
-      // Tooltip must be an ancestor (outer) of GestureDetector — UI-SPEC
-      // §Tooltip trigger requires Tooltip(child: GestureDetector(...)).
-      final gesture = find.descendant(
-        of: tooltip,
-        matching: find.byType(GestureDetector),
-      );
-      expect(gesture, findsAtLeastNWidgets(1));
-    });
-  });
-
-  group('Tooltip content (copy contract)', () {
-    testWidgets(
-        'Tooltip content shows "Detection key not set" when detectionKey empty',
-        (tester) async {
-      final config = SensorConfig(detectionKey: '');
-      await tester.pumpWidget(wrap(
-        SizedBox(width: 80, height: 40, child: Sensor(config: config)),
-      ));
-      final gesture =
-          await tester.startGesture(tester.getCenter(find.byType(Sensor)));
-      // Long-press threshold: ~500ms; pump 600 to be safe.
-      await tester.pump(const Duration(milliseconds: 600));
-      await tester.pumpAndSettle();
-      expect(find.text('Detection key not set'), findsOneWidget);
-      await gesture.up();
+      expect(tooltip, findsNothing,
+          reason: 'Sensor must not wrap its painter in a Tooltip — the '
+              'tap-to-open details dialog replaces the hover affordance.');
     });
 
-    testWidgets(
-        'Tooltip content shows "Rising: —\\nFalling: —" when both delay keys empty',
-        (tester) async {
-      final config = SensorConfig(
-        detectionKey: '/some/key',
-        risingEdgeDelayKey: '',
-        fallingEdgeDelayKey: '',
-      );
-      await tester.pumpWidget(wrap(
-        SizedBox(width: 80, height: 40, child: Sensor(config: config)),
-      ));
-      final gesture =
-          await tester.startGesture(tester.getCenter(find.byType(Sensor)));
-      await tester.pump(const Duration(milliseconds: 600));
-      await tester.pumpAndSettle();
-      expect(find.text('Rising: —'), findsOneWidget);
-      expect(find.text('Falling: —'), findsOneWidget);
-      await gesture.up();
-    });
-
-    testWidgets(
-        'Tooltip content shows "Rising: —" portion when rising key empty and falling key set',
-        (tester) async {
-      final config = SensorConfig(
-        detectionKey: '/some/key',
-        risingEdgeDelayKey: '',
-        fallingEdgeDelayKey: '/falling',
-      );
-      await tester.pumpWidget(wrap(
-        SizedBox(width: 80, height: 40, child: Sensor(config: config)),
-      ));
-      final gesture =
-          await tester.startGesture(tester.getCenter(find.byType(Sensor)));
-      await tester.pump(const Duration(milliseconds: 600));
-      await tester.pumpAndSettle();
-      // Rising key empty → em-dash row.
-      expect(find.text('Rising: —'), findsOneWidget);
-      // Falling key configured but no value emitted yet — without a
-      // `stateManProvider` override the configured-key path resolves to
-      // either the loading state ('Falling: …') or the error state
-      // ('Falling: —') depending on host microtask scheduling. Ubuntu
-      // tends to leave the future unresolved through pumpAndSettle (→ '…');
-      // macOS/Windows deliver the missing-provider error fast enough that
-      // snapshot.hasError flips to true (→ '—'). Both are documented
-      // outcomes in the copy contract; the row's presence is what locks
-      // the contract here.
-      expect(
-        find.text('Falling: …').evaluate().isNotEmpty ||
-            find.text('Falling: —').evaluate().isNotEmpty,
-        isTrue,
-        reason:
-            'Configured falling key must render either "Falling: …" (loading) '
-            'or "Falling: —" (error fallback), depending on host microtask '
-            'scheduling without a stateManProvider override.',
-      );
-      await gesture.up();
-    });
-  });
-
-  group('Tooltip subscription lifecycle', () {
-    // Locks CONTEXT.md decision: "Edge-delay tooltip subscriptions: subscribe
-    // to the rising/falling keys only while the tooltip is open; cancel on
-    // close (avoids persistent per-instance subscription overhead)." The
-    // implementation satisfies this implicitly — _DelayRow.build invokes
-    // ref.read(stateManProvider.future)…subscribe(stateKey) only when the
-    // tooltip's content widget is mounted; Flutter mounts the content widget
-    // on tooltip open and unmounts on close.
-
-    testWidgets('Tooltip content is not mounted when tooltip is closed',
-        (tester) async {
-      final config = SensorConfig(
-        detectionKey: '',
-        risingEdgeDelayKey: '/r',
-        fallingEdgeDelayKey: '/f',
-      );
-      await tester.pumpWidget(wrap(
-        SizedBox(width: 80, height: 40, child: Sensor(config: config)),
-      ));
-      await tester.pumpAndSettle();
-
-      // No long-press yet — _SensorTooltipContent must NOT be mounted, so
-      // its rendered "Detection key not set" copy must be absent from the
-      // widget tree.
-      expect(find.text('Detection key not set'), findsNothing,
-          reason:
-              'Tooltip content widget must remain unmounted while the tooltip is closed');
-    });
-
-    testWidgets('Tooltip content unmounts when tooltip is dismissed',
-        (tester) async {
-      final config = SensorConfig(
-        detectionKey: '/d',
-        risingEdgeDelayKey: '',
-        fallingEdgeDelayKey: '',
-      );
-      await tester.pumpWidget(wrap(
-        SizedBox(width: 80, height: 40, child: Sensor(config: config)),
-      ));
-
-      // Open tooltip via long-press.
-      final gesture =
-          await tester.startGesture(tester.getCenter(find.byType(Sensor)));
-      await tester.pump(const Duration(milliseconds: 600));
-      await tester.pumpAndSettle();
-      // Tooltip content visible.
-      expect(find.text('Rising: —'), findsOneWidget);
-      expect(find.text('Falling: —'), findsOneWidget);
-
-      // Release + dismiss (Tooltip auto-dismisses after its show-duration on
-      // touch; pumping past it triggers the unmount).
-      await gesture.up();
-      await tester.pump(const Duration(seconds: 3));
-      await tester.pumpAndSettle();
-
-      expect(find.text('Rising: —'), findsNothing,
-          reason:
-              'Tooltip content should unmount after dismissal (subscription scope ends here)');
-      expect(find.text('Falling: —'), findsNothing);
+    test(
+        'sensor.dart source has no Tooltip or _SensorTooltipContent references',
+        () async {
+      final source =
+          await File('lib/page_creator/assets/sensor.dart').readAsString();
+      expect(source, isNot(contains('Tooltip')),
+          reason: 'Tooltip wrapper has been removed from Sensor.');
+      expect(source, isNot(contains('_SensorTooltipContent')),
+          reason: 'Tooltip content widget has been removed from Sensor.');
     });
   });
 
@@ -645,6 +507,40 @@ void main() {
       final config = SensorConfig();
       await openConfigEditor(tester, config);
       expect(find.byType(CoordinatesField), findsOneWidget);
+    });
+
+    testWidgets('config dialog exposes a DropdownButton<TextPos>',
+        (tester) async {
+      // Mirrors Button (button.dart:758) / LED (led.dart:164) — operators
+      // must be able to pick where the asset label sits (above/below/left/
+      // right/inside). The field+storage already exist on BaseAsset; this
+      // test pins the picker's presence in the sensor's editor body.
+      final config = SensorConfig();
+      await openConfigEditor(tester, config);
+      expect(find.byType(DropdownButton<TextPos>), findsOneWidget,
+          reason: 'Sensor config dialog must expose a DropdownButton<TextPos> '
+              'so operators can choose label position.');
+    });
+
+    testWidgets('changing TextPos via dropdown updates config.textPos',
+        (tester) async {
+      final config = SensorConfig();
+      await openConfigEditor(tester, config);
+
+      // Editor body lives in a SingleChildScrollView; the dropdown sits
+      // below the fold. Scroll it into view before tapping.
+      final dropdown = find.byType(DropdownButton<TextPos>);
+      await tester.ensureVisible(dropdown);
+      await tester.pumpAndSettle();
+      // Open the dropdown and pick "above". The menu items render in an
+      // overlay; tapping the "above" text in the overlay selects it.
+      await tester.tap(dropdown);
+      await tester.pumpAndSettle();
+      // Tap the menu item for `above`. There can be multiple `above` texts
+      // (collapsed item + overlay item); the overlay-rendered one is `last`.
+      await tester.tap(find.text('above').last);
+      await tester.pumpAndSettle();
+      expect(config.textPos, TextPos.above);
     });
   });
 }

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:tfc_dart/core/umas_fb_browse_types.dart';
@@ -60,6 +62,20 @@ abstract class BrowseDataSource {
   Future<List<BrowseNode>> fetchRoots();
   Future<List<BrowseNode>> fetchChildren(BrowseNode parent);
   Future<BrowseNodeDetail> fetchDetail(BrowseNode node);
+
+  /// Resolves the full chain of nodes from root to the node identified by
+  /// [targetId], for pre-selection when opening the browse panel with an
+  /// already-bound value (e.g. an existing UMAS `variableName` or an OPC-UA
+  /// NodeId).
+  ///
+  /// The returned list MUST be ordered root → … → leaf, with the last entry
+  /// being the target node itself. Returns null if the target cannot be
+  /// resolved (stale binding) or if the data source does not support
+  /// pre-selection.
+  ///
+  /// The default implementation returns null (no preselection). Subclasses
+  /// override this to walk their backing tree / browse hierarchy.
+  Future<List<BrowseNode>?> resolvePath(String targetId) async => null;
 }
 
 // ---------------------------------------------------------------------------
@@ -102,11 +118,17 @@ typedef BrowseErrorMapper = BrowseErrorInfo? Function(Object error);
 
 /// Shows an address-space browser in a dialog sized at 80% of the screen.
 /// Returns the selected [BrowseNode] or null if cancelled.
+///
+/// When [initialPath] is non-null, the panel opens with that path
+/// pre-selected, the tree expanded down to it, and the detail strip
+/// populated. Stale bindings (target no longer resolves) fall back to the
+/// default empty-selection state without crashing.
 Future<BrowseNode?> showBrowseDialog({
   required BuildContext context,
   required BrowseDataSource dataSource,
   required String serverAlias,
   BrowseErrorMapper? errorMapper,
+  String? initialPath,
 }) {
   return showDialog<BrowseNode>(
     context: context,
@@ -129,6 +151,7 @@ Future<BrowseNode?> showBrowseDialog({
               dataSource: dataSource,
               serverAlias: serverAlias,
               errorMapper: errorMapper,
+              initialPath: initialPath,
               onSelected: (node) => Navigator.of(context).pop(node),
               onCancelled: () => Navigator.of(context).pop(),
             ),
@@ -150,6 +173,16 @@ class BrowsePanel extends StatefulWidget {
   final VoidCallback onCancelled;
   final BrowseErrorMapper? errorMapper;
 
+  /// When non-null, after roots load the panel asks
+  /// [BrowseDataSource.resolvePath] for the chain to this target id,
+  /// expands every ancestor along it, selects the leaf, and triggers a
+  /// detail fetch — so operators who re-open Browse on an existing
+  /// binding land on the current selection instead of a collapsed root.
+  ///
+  /// Stale bindings (path no longer resolves) silently fall back to the
+  /// default empty-selection state.
+  final String? initialPath;
+
   const BrowsePanel({
     super.key,
     required this.dataSource,
@@ -157,6 +190,7 @@ class BrowsePanel extends StatefulWidget {
     required this.onSelected,
     required this.onCancelled,
     this.errorMapper,
+    this.initialPath,
   });
 
   @override
@@ -173,6 +207,13 @@ class BrowsePanelState extends State<BrowsePanel> {
   bool _rootLoading = true;
   String? _error;
   String? _errorHelp;
+  // Surfaced by [_applyInitialPath] when the requested initialPath does
+  // not resolve in the freshly-loaded tree (stale binding). Rendered as
+  // a subtle hint above the tree so the operator knows why the dialog
+  // didn't open on their previous selection.
+  String? _staleInitialPath;
+
+  final ScrollController _treeScrollController = ScrollController();
 
   // Detail strip state for selected variable
   String? _detailDescription;
@@ -189,6 +230,10 @@ class BrowsePanelState extends State<BrowsePanel> {
   bool get rootLoading => _rootLoading;
   @visibleForTesting
   String? get error => _error;
+  @visibleForTesting
+  Set<String> get expandedIds => Set.unmodifiable(_expanded);
+  @visibleForTesting
+  String? get staleInitialPath => _staleInitialPath;
 
   static const String _rootParentId = '__root__';
 
@@ -228,6 +273,12 @@ class BrowsePanelState extends State<BrowsePanel> {
     _loadRoots();
   }
 
+  @override
+  void dispose() {
+    _treeScrollController.dispose();
+    super.dispose();
+  }
+
   Future<void> _loadRoots() async {
     try {
       final results = await widget.dataSource.fetchRoots();
@@ -245,6 +296,12 @@ class BrowsePanelState extends State<BrowsePanel> {
         _rootLoading = false;
       });
       _prefetchChildren(roots);
+      if (widget.initialPath != null && widget.initialPath!.isNotEmpty) {
+        // Fire-and-forget: failure (e.g. stale binding) is captured by
+        // `_staleInitialPath` inside the helper and never crashes the
+        // dialog.
+        unawaited(_applyInitialPath(widget.initialPath!));
+      }
     } catch (e) {
       if (!mounted) return;
       final info = widget.errorMapper?.call(e);
@@ -254,6 +311,116 @@ class BrowsePanelState extends State<BrowsePanel> {
         _rootLoading = false;
       });
     }
+  }
+
+  /// Test-only entrypoint that drives [_applyInitialPath] after the panel
+  /// is mounted (so tests can exercise the resolution code path without
+  /// piping through `showBrowseDialog`).
+  @visibleForTesting
+  Future<void> applyInitialPathForTest(String targetId) =>
+      _applyInitialPath(targetId);
+
+  /// Resolves [targetId] via the data source, expands every ancestor on
+  /// the path, selects the leaf entry, and triggers its detail fetch.
+  ///
+  /// On any failure (unsupported, not found, or thrown exception), records
+  /// the requested path in [_staleInitialPath] so the UI can surface a
+  /// gentle hint, but never throws or crashes the dialog.
+  Future<void> _applyInitialPath(String targetId) async {
+    List<BrowseNode>? chain;
+    try {
+      chain = await widget.dataSource.resolvePath(targetId);
+    } catch (_) {
+      chain = null;
+    }
+    if (!mounted) return;
+    if (chain == null || chain.isEmpty) {
+      setState(() => _staleInitialPath = targetId);
+      return;
+    }
+
+    // Walk the chain root → leaf. For each non-leaf ancestor:
+    //   - Ensure children are loaded (cache miss → fetchChildren).
+    //   - Add to _expanded.
+    // The leaf gets selected; its detail fetch is fired afterwards.
+    //
+    // Depth is derived from the chain position rather than parent.depth+1
+    // so the synthesized entries match what `_loadChildren` would produce
+    // naturally — keeps flattenTree() indentation correct.
+    final entries = <BrowseTreeEntry>[];
+    var parentId = _rootParentId;
+    for (var i = 0; i < chain.length; i++) {
+      final node = chain[i];
+      final entry = BrowseTreeEntry(
+        node: node,
+        depth: i,
+        parentId: parentId,
+      );
+      entries.add(entry);
+      parentId = node.id;
+    }
+
+    // Roots: ensure the resolved root matches one we already have. If
+    // not, the chain doesn't belong to this tree — bail out.
+    final rootEntry = entries.first;
+    final hasMatchingRoot = _roots.any((r) => r.id == rootEntry.id);
+    if (!hasMatchingRoot) {
+      setState(() => _staleInitialPath = targetId);
+      return;
+    }
+
+    // For each non-leaf ancestor: hydrate _children with the next entry
+    // (which we already have from the chain) plus any siblings the
+    // data source returns from fetchChildren, then mark it expanded.
+    for (var i = 0; i < entries.length - 1; i++) {
+      final ancestor = entries[i];
+      if (!_children.containsKey(ancestor.id)) {
+        try {
+          final kids = await widget.dataSource.fetchChildren(ancestor.node);
+          if (!mounted) return;
+          _children[ancestor.id] = kids
+              .map((n) => BrowseTreeEntry(
+                    node: n,
+                    depth: ancestor.depth + 1,
+                    parentId: ancestor.id,
+                  ))
+              .toList()
+            ..sort((a, b) => a.displayName.compareTo(b.displayName));
+        } catch (_) {
+          // Children load failed — drop in just the next chain entry so
+          // the expansion still renders the path even if siblings are
+          // unavailable.
+          _children[ancestor.id] = [entries[i + 1]];
+        }
+      }
+    }
+
+    if (!mounted) return;
+    setState(() {
+      for (final e in entries.take(entries.length - 1)) {
+        _expanded.add(e.id);
+      }
+      _selected = entries.last;
+      _staleInitialPath = null;
+    });
+
+    // Trigger detail fetch for the leaf so the right-hand strip is
+    // populated immediately, matching the post-click behavior.
+    if (entries.last.isVariable) {
+      unawaited(_loadVariableDetails(entries.last));
+    }
+
+    // Scroll the leaf into view on the next frame.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_treeScrollController.hasClients) return;
+      final flat = flattenTree();
+      final leafIndex = flat.indexWhere((e) => e.id == entries.last.id);
+      if (leafIndex < 0) return;
+      const tileHeight = 36.0;
+      final target = leafIndex * tileHeight;
+      final maxScroll = _treeScrollController.position.maxScrollExtent;
+      _treeScrollController.jumpTo(target.clamp(0.0, maxScroll));
+    });
   }
 
   Future<void> _loadChildren(String nodeId, BrowseNode browseNode,
@@ -506,6 +673,31 @@ class BrowsePanelState extends State<BrowsePanel> {
           ),
         ),
         Divider(height: 1, color: cs.surfaceContainerLow),
+        // Stale initial-path hint: surfaces when an initialPath was
+        // supplied but the data source could not resolve it. Kept
+        // unobtrusive (single muted row) so a stale binding doesn't feel
+        // like an error.
+        if (_staleInitialPath != null)
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            color: cs.surface,
+            child: Row(
+              children: [
+                Icon(Icons.info_outline, size: 12, color: cs.secondary),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    'Original value "${_staleInitialPath!}" no longer found',
+                    style: TextStyle(color: cs.secondary, fontSize: 11),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        if (_staleInitialPath != null)
+          Divider(height: 1, color: cs.surfaceContainerLow),
         // Tree
         Expanded(
           child: _rootLoading
@@ -556,6 +748,7 @@ class BrowsePanelState extends State<BrowsePanel> {
                           ),
                         )
                       : ListView.builder(
+                          controller: _treeScrollController,
                           itemCount: flatNodes.length,
                           itemBuilder: (context, index) {
                             final treeNode = flatNodes[index];

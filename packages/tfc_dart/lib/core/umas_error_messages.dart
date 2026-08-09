@@ -72,7 +72,13 @@ UmasErrorInfo? mapUmasError(Object error) {
     );
   }
 
-  if (error.errorCode == 0x06) {
+  // 0x06: canonical UMAS reservation-conflict byte. 0x81: M580 dialect
+  // observed live on 192.168.112.159 (see /tmp/umas-fuzz/fuzz-reservation.md
+  // — every takePlcReservation while another HMI held the lock returned
+  // status=0xFD errorCode=0x81). Both surface through
+  // UmasReservationException so callers render the same "wait for the
+  // other client" affordance.
+  if (error.errorCode == 0x06 || error.errorCode == 0x81) {
     return UmasErrorInfo(
       summary: '$hex: Another client holds the PLC reservation',
       detail: 'The PLC currently has an exclusive write reservation held '

@@ -86,10 +86,25 @@ class _OpcUaConfigSectionState extends ConsumerState<OpcUaConfigSection> {
       return;
     }
 
+    // Pre-select the currently-bound node so re-opening Browse on an
+    // existing key lands on its value, not the collapsed root.
+    final ns = int.tryParse(_namespaceController.text);
+    final idText = _identifierController.text.trim();
+    String? initialNodeId;
+    if (ns != null && idText.isNotEmpty) {
+      // OPC-UA NodeIds: numeric identifiers parse as `i=N`, anything else
+      // is treated as a string identifier (`s=...`). The full NodeId
+      // string is what `OpcUaBrowseDataSource` uses as the canonical id.
+      final asInt = int.tryParse(idText);
+      initialNodeId =
+          asInt != null ? 'ns=$ns;i=$asInt' : 'ns=$ns;s=$idText';
+    }
+
     final result = await browseOpcUaNode(
       context: context,
       stateMan: stateMan,
       serverAlias: _selectedAlias,
+      initialNodeId: initialNodeId,
     );
 
     if (result != null) {
@@ -565,10 +580,13 @@ class _ModbusConfigSectionState extends ConsumerState<ModbusConfigSection> {
     final stateMan = stateManAsync.valueOrNull;
     if (stateMan == null) return;
 
+    // Pre-select the bound UMAS symbol so re-opening Browse on an existing
+    // key lands on its variable, not the collapsed root.
     final result = await browseUmasNode(
       context: context,
       stateMan: stateMan,
       serverAlias: _selectedAlias,
+      initialPath: widget.variableName,
     );
 
     if (result != null) {

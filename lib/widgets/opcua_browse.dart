@@ -18,6 +18,7 @@ Future<BrowseResultItem?> browseOpcUaNode({
   required BuildContext context,
   required StateMan stateMan,
   required String? serverAlias,
+  String? initialNodeId,
 }) async {
   ClientApi? client;
   for (final wrapper in stateMan.clients) {
@@ -43,6 +44,7 @@ Future<BrowseResultItem?> browseOpcUaNode({
     context: context,
     dataSource: dataSource,
     serverAlias: alias,
+    initialPath: initialNodeId,
   );
 
   if (result == null) return null;
@@ -68,6 +70,101 @@ class OpcUaBrowseDataSource implements BrowseDataSource {
     final results = await client.browse(nodeId);
     return results.map(_toBrowseNode).toList()
       ..sort((a, b) => a.displayName.compareTo(b.displayName));
+  }
+
+  /// Pre-selection support for OPC-UA. Walks the address space from
+  /// `Objects` downwards, choosing at each level the child whose id is
+  /// either an exact match for [targetId] or a prefix of it under the
+  /// `ns=X;s=A.B.C` dotted-string convention. Falls back to a bounded
+  /// BFS (depth-limited by [_kResolveMaxDepth]) when no child looks like
+  /// a prefix — covers nodes that don't follow the dotted convention.
+  ///
+  /// Returns null on failure (unknown target, transport error, depth
+  /// exceeded) — never throws so the BrowsePanel can fall back to
+  /// empty-selection without surfacing a fatal error.
+  @override
+  Future<List<BrowseNode>?> resolvePath(String targetId) async {
+    if (targetId.isEmpty) return null;
+    try {
+      final roots = await fetchRoots();
+      // Direct hit on a root.
+      for (final root in roots) {
+        if (root.id == targetId) return [root];
+      }
+      // Prefix walk: pick at each level the child whose id is a prefix
+      // of the target. This handles the dotted `ns=X;s=A.B.C` shape.
+      final prefixChain = await _resolveByPrefix(roots, targetId);
+      if (prefixChain != null) return prefixChain;
+      // Fallback: bounded BFS from each root.
+      for (final root in roots) {
+        final bfsChain = await _resolveByBfs(root, targetId);
+        if (bfsChain != null) return bfsChain;
+      }
+      return null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static const int _kResolveMaxDepth = 8;
+
+  Future<List<BrowseNode>?> _resolveByPrefix(
+      List<BrowseNode> roots, String targetId) async {
+    BrowseNode? cursor;
+    for (final r in roots) {
+      if (_isPrefixOf(r.id, targetId)) {
+        cursor = r;
+        break;
+      }
+    }
+    if (cursor == null) return null;
+    final chain = <BrowseNode>[cursor];
+    for (var depth = 0; depth < _kResolveMaxDepth; depth++) {
+      if (cursor!.id == targetId) return chain;
+      final kids = await fetchChildren(cursor);
+      BrowseNode? next;
+      for (final k in kids) {
+        if (k.id == targetId) {
+          chain.add(k);
+          return chain;
+        }
+        if (_isPrefixOf(k.id, targetId)) {
+          next = k;
+          break;
+        }
+      }
+      if (next == null) return null;
+      chain.add(next);
+      cursor = next;
+    }
+    return null;
+  }
+
+  Future<List<BrowseNode>?> _resolveByBfs(
+      BrowseNode root, String targetId) async {
+    final visited = <String>{root.id};
+    final queue = <List<BrowseNode>>[
+      [root]
+    ];
+    while (queue.isNotEmpty) {
+      final path = queue.removeAt(0);
+      final node = path.last;
+      if (node.id == targetId) return path;
+      if (path.length > _kResolveMaxDepth) continue;
+      final kids = await fetchChildren(node);
+      for (final k in kids) {
+        if (!visited.add(k.id)) continue;
+        queue.add([...path, k]);
+      }
+    }
+    return null;
+  }
+
+  /// `ns=X;s=Foo.Bar` is a prefix of `ns=X;s=Foo.Bar.Baz` under the dotted
+  /// convention; bare equality is also accepted.
+  static bool _isPrefixOf(String prefix, String full) {
+    if (prefix == full) return true;
+    return full.startsWith('$prefix.');
   }
 
   @override

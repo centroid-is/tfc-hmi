@@ -520,6 +520,148 @@ void main() {
   });
 
   // ---------------------------------------------------------------------------
+  // fuzz #7 (v1.1.x): readVariableByName on an FB-instance root must throw a
+  // typed UmasNotScalarException instead of silently returning
+  // TypedVariableValue(FB: []). The browse tree enumerates FB members via its
+  // own walk — operators (and adapter callers) that ask for the FB root by
+  // name are buggy and should get a clear, actionable error rather than empty
+  // data that renders as nothing in FB-DynamicValue / Key Repository.
+  //
+  // Whole-array reads (classIdentifier == 4) are intentionally NOT gated
+  // here — that case is owned by the parallel bug-droparray fix.
+  // ---------------------------------------------------------------------------
+  group('UmasClient.readVariableByName — FB-instance root gate (fuzz #7)', () {
+    test(
+        'throws UmasNotScalarException when symbol resolves to an FB instance '
+        '(classIdentifier == 7); no bytes sent downstream',
+        () async {
+      var sendCalls = 0;
+      final umas = UmasClient(
+        sendFn: (req) async {
+          sendCalls++;
+          return ModbusResponseCode.requestSucceed;
+        },
+      );
+      // Mirror the speculative-resolve synthesis at umas_client.dart:2973-2981:
+      // FB instances land in _symbolCache with name='FB', byteSize=0,
+      // classIdentifier=7.
+      umas.debugInjectSymbol(ResolvedSymbol(
+        path: 'Elevator',
+        variable: const UmasVariable(
+          name: 'Elevator',
+          blockNo: 5,
+          offset: 0,
+          dataTypeId: 0xb6,
+        ),
+        dataType: const UmasDataTypeRef(
+          id: 0xb6,
+          name: 'FB',
+          byteSize: 0,
+          classIdentifier: 7,
+        ),
+      ));
+
+      try {
+        await umas.readVariableByName('Elevator');
+        fail('expected UmasNotScalarException for FB-instance root');
+      } on UmasNotScalarException catch (e) {
+        expect(e.message, contains('Elevator'));
+        // Operator-actionable hint: how to read members instead.
+        expect(e.message, contains('.<member>'));
+      }
+      // The classIdentifier gate must short-circuit before any PDU is
+      // sent to the underlying transport.
+      expect(sendCalls, 0,
+          reason: 'readVariableByName must not send bytes when the resolved '
+              'symbol is a non-scalar (FB) root');
+    });
+
+    test(
+        'scalar reads still work — control case (regression guard)',
+        () async {
+      // Synthesize a minimal scalar symbol (REAL) and exercise the same
+      // gate. The gate must NOT fire for scalars: classIdentifier 0
+      // (elementary) flows through readVariables as usual.
+      //
+      // No real PDU exchange — just assert the gate doesn't throw before
+      // the readVariables call. We expect a downstream UmasException
+      // (blockCrcs guard) instead of UmasNotScalarException, which proves
+      // the FB-instance gate did NOT fire for a scalar.
+      final umas = UmasClient(
+        sendFn: (req) async => ModbusResponseCode.requestSucceed,
+      );
+      umas.debugInjectSymbol(ResolvedSymbol(
+        path: 'Application.GVL.temperature',
+        variable: const UmasVariable(
+          name: 'temperature',
+          blockNo: 1,
+          offset: 0,
+          dataTypeId: 6,
+        ),
+        dataType: const UmasDataTypeRef(
+          id: 6,
+          name: 'REAL',
+          byteSize: 4,
+          // classIdentifier == 0 (elementary) — scalar, must pass the gate.
+        ),
+      ));
+
+      try {
+        await umas.readVariableByName('Application.GVL.temperature');
+        fail('expected a downstream UmasException (not '
+            'UmasNotScalarException) — the minimal harness has no real '
+            'session, so the readVariables guards must fire');
+      } on UmasNotScalarException {
+        fail('scalar reads must NOT trip the FB-instance gate');
+      } on UmasException {
+        // Any non-NotScalar UmasException here proves the gate already
+        // passed and we reached the readVariables / session-init path —
+        // exact downstream error depends on harness state (blockCrcs
+        // guard, session-init transport stub), but it must NOT be
+        // UmasNotScalarException.
+      }
+    });
+
+    test(
+        'writeVariableByName on FB-instance root also throws '
+        'UmasNotScalarException (symmetric gate)',
+        () async {
+      var sendCalls = 0;
+      final umas = UmasClient(
+        sendFn: (req) async {
+          sendCalls++;
+          return ModbusResponseCode.requestSucceed;
+        },
+      );
+      umas.debugInjectSymbol(ResolvedSymbol(
+        path: 'Elevator',
+        variable: const UmasVariable(
+          name: 'Elevator',
+          blockNo: 5,
+          offset: 0,
+          dataTypeId: 0xb6,
+        ),
+        dataType: const UmasDataTypeRef(
+          id: 0xb6,
+          name: 'FB',
+          byteSize: 0,
+          classIdentifier: 7,
+        ),
+      ));
+
+      try {
+        await umas.writeVariableByName('Elevator', 0);
+        fail('expected UmasNotScalarException for FB-instance root write');
+      } on UmasNotScalarException catch (e) {
+        expect(e.message, contains('Elevator'));
+      }
+      expect(sendCalls, 0,
+          reason: 'writeVariableByName must not send bytes when the resolved '
+              'symbol is a non-scalar (FB) root');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
   // buildVariableNamesFromKeyMappings (no PLC)
   // ---------------------------------------------------------------------------
   group('buildVariableNamesFromKeyMappings', () {
@@ -710,6 +852,28 @@ void main() {
       expect(result.blockCrcs, isNotEmpty);
       umas.invalidateSymbolCacheIfProjectChanged();
       expect(umas.symbolCacheBuilt, isTrue);
+    });
+
+    test(
+        'invalidateSymbolCacheIfProjectChanged is a no-op before the symbol '
+        'cache is built (documented precondition)', () async {
+      // /tmp/umas-fuzz/fuzz-browse-stability.md observed that calling
+      // `invalidateSymbolCacheIfProjectChanged()` after only browse()
+      // silently no-ops: the method short-circuits
+      // on `!_symbolCacheBuilt`. browse() does NOT prime the symbol
+      // cache by itself — only `_ensureSymbolCache` (via lookupSymbol /
+      // readVariableByName) does. Lock that precondition into a test so
+      // future refactors don't quietly flip the flag from browse().
+      await tcp.connect();
+      final umas = UmasClient(sendFn: tcp.send);
+      await umas.readPlcStatus();
+      await umas.browse();
+      expect(umas.symbolCacheBuilt, isFalse,
+          reason: 'browse() alone must not flip _symbolCacheBuilt');
+      // No-op: would early-return on the !_symbolCacheBuilt guard.
+      umas.invalidateSymbolCacheIfProjectChanged();
+      expect(umas.symbolCacheBuilt, isFalse,
+          reason: 'invalidation is a no-op when cache not yet built');
     });
   });
 
@@ -1038,6 +1202,59 @@ void main() {
         expect(transitions.last, EffectiveDeviceStatus.connected);
       } finally {
         await sub.cancel();
+        adapter.dispose();
+      }
+    });
+
+    // -----------------------------------------------------------------------
+    // umas-fb-freeze-loop (2026-05-19): the UMAS Browse dialog used to
+    // construct its OWN UmasClient against the raw `tcpClient.send`, racing
+    // a second UMAS session against the adapter's poll-loop client on the
+    // same TCP socket. The PLC only supports one paired session per TCP
+    // connection, so the duplicate pair() invalidated the poll client's
+    // session, the next poll tripped _handleSessionError, both clients
+    // raced to re-pair, and the symbol-cache rebuild storm froze the UI.
+    //
+    // The fix promoted `_getUmasClient()` to a public `umasClient` getter
+    // and rewired the dialog to borrow that shared instance. This test
+    // pins the new invariant: repeated `umasClient` accesses on a connected
+    // adapter ALWAYS return the same UmasClient instance — and that
+    // instance is identical to the one used by the adapter's own
+    // readUmasVariable path. Constructing a parallel UmasClient against
+    // `tcpClient.send` is therefore guaranteed to be unnecessary.
+    test(
+        'umas-fb-freeze-loop: public umasClient getter shares the adapter\'s '
+        'session across browse + poll callers (no duplicate UmasClient)',
+        () async {
+      final wrapper = await _connectedWrapper();
+      final adapter = ModbusDeviceClientAdapter(
+        wrapper,
+        specs: const {},
+        serverAlias: 'plc1',
+        variableNames: const {
+          'temperature': 'Application.GVL.temperature',
+        },
+        umasEnabled: true,
+      );
+      try {
+        // Drive a real read so the adapter has paired its session.
+        await adapter.readUmasVariable('temperature');
+
+        // Two back-to-back public accesses must return the SAME instance —
+        // i.e. the getter doesn't allocate a fresh client per call (which
+        // would re-trigger the freeze loop on a live M580).
+        final a = adapter.umasClient;
+        final b = adapter.umasClient;
+        expect(a, isNotNull);
+        expect(identical(a, b), isTrue,
+            reason: 'umasClient must return the cached, shared instance');
+
+        // And it must be IDENTICAL to the internally-cached client used by
+        // readUmasVariable — otherwise the dialog and the poll loop are
+        // racing two separate UMAS sessions.
+        expect(identical(a, adapter.debugUmasClient), isTrue,
+            reason: 'umasClient must alias the adapter\'s internal client');
+      } finally {
         adapter.dispose();
       }
     });

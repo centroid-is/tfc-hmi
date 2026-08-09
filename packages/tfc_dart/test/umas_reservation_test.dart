@@ -158,6 +158,36 @@ void main() {
     });
 
     test(
+        'throws UmasReservationException on M580 dialect conflict '
+        '(errorCode=0x81)', () async {
+      await tcp.connect();
+
+      // /tmp/umas-fuzz/fuzz-reservation.md: live M580 192.168.112.159
+      // refuses every reservation acquire while another HMI holds the
+      // lock with `status=0xFD errorCode=0x81`. Mirror the 0x06 test
+      // pattern with the M580 dialect byte so UI code that catches
+      // UmasReservationException triggers correctly.
+      final umas = UmasClient(sendFn: (request) async {
+        if (request is UmasRequest &&
+            request.umasSubFunction !=
+                UmasSubFunction.takePlcReservation.code) {
+          return tcp.send(request);
+        }
+        if (request is UmasRequest) {
+          final pdu = Uint8List.fromList([0x5A, 0x00, 0xFD, 0x81]);
+          request.internalSetFromPduResponse(pdu);
+          return ModbusResponseCode.requestSucceed;
+        }
+        return ModbusResponseCode.requestSucceed;
+      });
+
+      expect(
+        () => umas.takePlcReservation(),
+        throwsA(isA<UmasReservationException>()),
+      );
+    });
+
+    test(
         'TD-014: non-conflict status errors throw plain UmasException, not '
         'UmasReservationException', () async {
       await tcp.connect();
@@ -272,8 +302,12 @@ void main() {
       final umas = UmasClient(sendFn: (request) async {
         if (failBrowse &&
             request is UmasRequest &&
-            request.umasSubFunction == UmasSubFunction.readDataDictionary.code) {
-          throw UmasException(errorCode: 0, message: 'connection lost');
+            request.umasSubFunction ==
+                UmasSubFunction.readDataDictionary.code) {
+          // Fix A: simulate a TRANSPORT-level failure. A byte-level
+          // UmasException(errorCode: 0) is now non-fatal and would not
+          // trigger _handleSessionError — see _isFatalSessionError.
+          return ModbusResponseCode.requestTimeout;
         }
         return tcp.send(request);
       });
@@ -283,7 +317,7 @@ void main() {
       expect(umas.hasReservation, isTrue);
 
       // Now make next operation fail -- browse uses _withSessionAndRecovery
-      // which calls _handleSessionError on UmasException
+      // which calls _handleSessionError on fatal UmasException.
       failBrowse = true;
       try {
         await umas.browse();

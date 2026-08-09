@@ -194,10 +194,21 @@ class _AssetStackState extends ConsumerState<AssetStack> {
 
           final textScaler = TextScaler.linear(
               math.min(asset.size.width * W, asset.size.height * H) / 25);
-          final labelStyle = DefaultTextStyle.of(context).style.copyWith(
-                fontSize: textScaler
-                    .scale(DefaultTextStyle.of(context).style.fontSize ?? 16),
-              );
+          // Build the label style starting from the ambient DefaultTextStyle
+          // and overlaying:
+          //   - the scaled font size (preserves the pre-existing behaviour
+          //     that labels grow with the asset's bounding box), and
+          //   - the per-asset `labelColor` override when non-null
+          //     (e.g. `ButtonConfig.textColor`). A null override leaves the
+          //     ambient color untouched so assets without a configurable
+          //     label color render byte-for-byte as before.
+          final ambientStyle = DefaultTextStyle.of(context).style;
+          var labelStyle = ambientStyle.copyWith(
+            fontSize: textScaler.scale(ambientStyle.fontSize ?? 16),
+          );
+          if (asset.labelColor != null) {
+            labelStyle = labelStyle.copyWith(color: asset.labelColor);
+          }
 
           // 4) measure text size if any
           Size textSize = Size.zero;
@@ -415,15 +426,33 @@ class _AssetStackState extends ConsumerState<AssetStack> {
               pos = pos == TextPos.above ? TextPos.below : TextPos.above;
             }
             final labelOff = labelOffset(center, assetSize, textSize, pos);
-            // In editor mode, the label must NOT intercept pointer events —
-            // otherwise dragging an asset whose label overlaps the body
-            // (e.g. a button with TextPos.inside) is hijacked by the Text
-            // widget's hit-test, and the operator can't move the asset.
-            // Wrap in IgnorePointer when absorb=true so all events fall
-            // through to the editor's overlay GestureDetector below.
+            // The label `Positioned` is added AFTER the asset visual in
+            // `positionedChildren`, so it paints (and hit-tests) on TOP
+            // of the asset. If the label is allowed to consume primary
+            // pointer events, it eats taps that should reach the asset's
+            // own GestureDetectors / InkWell underneath — most visibly
+            // for a Button with `TextPos.inside`.
+            //
+            // In editor mode (`absorb=true`) we wrap the label in
+            // `IgnorePointer` so the editor's overlay GestureDetector
+            // sitting beneath gets every event (drag / select / context
+            // menu) — otherwise an asset whose label overlaps its body
+            // can't be moved.
+            //
+            // In runtime mode (`absorb=false`) we keep the secondary-tap
+            // (right-click → AI context menu) binding so operators can
+            // open the AI menu by right-clicking the label, but we wrap
+            // the underlying Text in `IgnorePointer` so it does not
+            // hit-test for primary taps. Combined with
+            // `HitTestBehavior.translucent` on the wrapping
+            // GestureDetector, primary taps on the label fall through to
+            // the asset body below (Stack hit-testing visits earlier
+            // children when a translucent detector reports a hit but has
+            // no matching gesture handler).
             final labelWidget = widget.absorb
                 ? IgnorePointer(child: Text(asset.text!, style: labelStyle))
                 : GestureDetector(
+                    behavior: HitTestBehavior.translucent,
                     onSecondaryTapUp: isMcpChatAvailable()
                         ? (details) {
                             showAssetContextMenu(
@@ -433,7 +462,9 @@ class _AssetStackState extends ConsumerState<AssetStack> {
                             );
                           }
                         : null,
-                    child: Text(asset.text!, style: labelStyle),
+                    child: IgnorePointer(
+                      child: Text(asset.text!, style: labelStyle),
+                    ),
                   );
             positionedChildren.add(
               Positioned(

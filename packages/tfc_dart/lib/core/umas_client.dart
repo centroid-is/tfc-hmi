@@ -85,10 +85,31 @@ class UmasClient {
 
   int? maxFrameSize;
 
-  /// Hardware ID from 0x02 (Read PLC Identification) response.
-  int? _hardwareId;
+  /// Hardware identification value parsed from the PLC ident (sub-function
+  /// 0x02) response. On the M580 this is a small board/firmware code
+  /// (e.g. `0x60b`) — it is NOT the project-level hardware ID that Data
+  /// Dictionary (0x26) requests need. See [_projectHardwareId] for the
+  /// value used by ReadVariable / WriteVariable / DD requests.
+  ///
+  /// Kept for diagnostic logging only. Cleared by [_resetHardwareIdentifiers].
+  int? _plcIdHardwareId;
 
-  /// Memory block index from 0x02 response, used in 0x26 payloads.
+  /// Project-level hardware ID parsed from memory block 0x30 (read during
+  /// the init sequence by [_readProjectBlock]). On the M580 this is a
+  /// large 32-bit value (e.g. `0x10c3b4e8`). Used by [_build0x26Payload]
+  /// for every Data Dictionary (0x26) request — ReadVariable,
+  /// WriteVariable, and DD02/DD03 traversal.
+  ///
+  /// Previously this and [_plcIdHardwareId] were stored in a single
+  /// `_hardwareId` field; the two readers (`_readPlcId` and
+  /// `_readProjectBlock`) wrote different semantic values to it, which
+  /// produced misleading log noise on every re-pair and risked DD
+  /// requests using the wrong ID between the two reads.
+  int? _projectHardwareId;
+
+  /// Memory block index from the 0x30 project block (or from 0x02 as a
+  /// fallback before the project block has been read). Used in 0x26
+  /// payloads.
   int? _index;
 
   /// Block CRC checksums from the last PlcStatus (0x04) response.
@@ -104,6 +125,16 @@ class UmasClient {
 
   /// Project-level CRC for ReadVariable / WriteVariable. See [_projectCrc].
   int? get projectCrc => _projectCrc;
+
+  /// PLC-ident hardware code, as parsed from sub-function 0x02. See
+  /// [_plcIdHardwareId]. Exposed for diagnostic tooling and Fix B tests.
+  @visibleForTesting
+  int? get plcIdHardwareId => _plcIdHardwareId;
+
+  /// Project-level hardware ID, as parsed from memory block 0x30. See
+  /// [_projectHardwareId]. Exposed for diagnostic tooling and Fix B tests.
+  @visibleForTesting
+  int? get projectHardwareId => _projectHardwareId;
 
   /// CRCs from the previous successful PlcStatus poll, used for change detection.
   /// Null until the first successful readPlcStatus() call.
@@ -188,6 +219,33 @@ class UmasClient {
   /// True after detecting M580 via 0xA1 error from ReadVariable (0x22).
   bool get useMonitorPlc => _useMonitorPlc;
 
+  // TD-022 (v1.1.x): MonitorPlc degraded-circuit breaker. Observed in
+  // production on M580 at 192.168.112.159 after ~1 week uptime: every
+  // 0x50 started returning 0x82, the per-key fallback in
+  // ModbusDeviceClientAdapter cascaded forever because [readVariables]
+  // always routes through MonitorPlc when [_useMonitorPlc] is true.
+  // When tripped, [readVariables] bypasses the 0x50 branch and uses
+  // the legacy 0x22 ReadVariable path. The existing 0xA1A1 catch in
+  // [readVariables] still re-flips to MonitorPlc if the PLC insists,
+  // so the breaker is safe: at worst one wasted RTT. [_useMonitorPlc]
+  // itself is never reset (TD-009 — sticky M580 fingerprint).
+  bool _monitorPlcDegraded = false;
+  int _monitorPlc0x82Count = 0;
+  DateTime? _monitorPlcDegradedSince;
+  static const int _monitorPlc0x82TripThreshold = 3;
+  static const Duration _monitorPlcDegradedRetryAfter = Duration(seconds: 60);
+
+  /// Whether the MonitorPlc degraded-circuit breaker is currently latched.
+  /// Exposed for adapter telemetry and TD-022 tests.
+  bool get monitorPlcDegraded => _monitorPlcDegraded;
+
+  /// Injectable clock for TD-022 tests that advance time past
+  /// [_monitorPlcDegradedRetryAfter] without real-time delays.
+  DateTime Function() _nowFn = DateTime.now;
+
+  @visibleForTesting
+  set nowFn(DateTime Function() fn) => _nowFn = fn;
+
   /// MonitorPlc (0x50) registration table for tracking registered variables.
   final MonitorPlcRegistrationTable _monitorTable =
       MonitorPlcRegistrationTable();
@@ -251,6 +309,30 @@ class UmasClient {
     _setState(newState);
   }
 
+  /// Test hook: override the project CRC used by ReadVariable /
+  /// WriteVariable requests. Lets unit tests drive [writeVariable]
+  /// (and therefore [writeVariableByName]) without
+  /// running the full session-init handshake that normally populates
+  /// [_projectCrc] via [_readProjectBlock].
+  @visibleForTesting
+  void debugSetProjectCrc(int crc) {
+    _projectCrc = crc;
+  }
+
+  /// Test hook: override the block-CRC list. [writeVariable] guards on
+  /// `_blockCrcs != null && _blockCrcs.isNotEmpty` to refuse writes
+  /// before the first [readPlcStatus] response; this hook lets unit
+  /// tests bypass that guard without driving a real status poll.
+  ///
+  /// On the wire, [writeVariable] prefers [_projectCrc] over
+  /// `blockCrcs[0]` — so for tests that also set [debugSetProjectCrc]
+  /// the contents here are only used to clear the guard, not on the
+  /// PDU itself.
+  @visibleForTesting
+  void debugSetBlockCrcs(List<int> crcs) {
+    _blockCrcs = List<int>.from(crcs);
+  }
+
   UmasClient({
     required this.sendFn,
     this.unitId,
@@ -263,23 +345,51 @@ class UmasClient {
 
   /// Start periodic keep-alive timer. Cancels any existing timer first.
   ///
-  /// The timer calls [sendKeepAlive] every [keepAliveInterval]. If the
-  /// session is not in PAIRED state, the tick is skipped. If sendKeepAlive
-  /// throws, the session is reset to uninitialized via [_handleSessionError].
+  /// The timer calls [readPlcStatus] (sub-function 0x04) every
+  /// [keepAliveInterval]. If the session is not in PAIRED state, the
+  /// tick is skipped. A transport-level failure resets the session via
+  /// [_handleSessionError]; a byte-level UMAS error from the PLC is
+  /// logged at warning and does NOT reset the session (Fix A).
+  ///
+  /// **Why plcStatus, not the dedicated KeepAlive (0x12) sub-function?**
+  /// UMAS 0x12 is `umas_QueryKeepPLCReservation` — it queries whether
+  /// the caller's reservation is still alive. On the M580 firmware
+  /// (verified via live byte capture against 192.168.112.159,
+  /// 2026-05-20) the PLC rejects every 0x12 from
+  /// a non-reserved client with `status=0xFD errorCode=0x81
+  /// secondary=0x80`. The HMI is a read-only client and never calls
+  /// [takePlcReservation], so 0x12 would generate a continuous warning
+  /// log every interval. plc4j's umas.mspec has no 0x12 case for the
+  /// same reason — it relies on harmless read traffic as the heartbeat.
+  /// `readPlcStatus()` (0x04, public, no reservation required) is the
+  /// idiomatic choice and has the side-benefit of refreshing
+  /// `_projectCrc` / `_blockCrcs` on every tick.
   ///
   /// F-8 (v1.1.x): also starts the separate [_projectCrcTimer] that
   /// periodically re-reads memory block 0x30 to detect PLC reprograms
-  /// without a session-level error.
+  /// without a session-level error. With the timer now driven by 0x04
+  /// (which already returns the project CRC list), the CRC timer is
+  /// strictly belt-and-suspenders — keep it for now to preserve test
+  /// coverage of refreshProjectMetadata.
   void startKeepAlive() {
     stopKeepAlive();
     _keepAliveTimer = Timer.periodic(keepAliveInterval, (_) async {
       if (_stateValue != UmasSessionState.paired) return;
       try {
-        await sendKeepAlive();
-      } on UmasException {
-        _handleSessionError();
-      } catch (_) {
-        // Prevent unhandled exceptions in timer callback
+        await readPlcStatus();
+      } on UmasException catch (e) {
+        // Fix A: only invalidate for genuine transport-level failures.
+        // A malformed-echo / parse error should not flush the session
+        // and trigger a 1082-entry symbol-cache rebuild on the next tick.
+        if (_isFatalSessionError(e)) {
+          _handleSessionError();
+        } else {
+          _log.w('UmasClient keep-alive failed (non-fatal): $e');
+        }
+      } catch (e) {
+        // Unknown / non-UmasException — assume the worst (transport
+        // imploded). Prevent unhandled exceptions in timer callback.
+        _log.w('UmasClient keep-alive threw non-UmasException: $e');
         _handleSessionError();
       }
     });
@@ -384,14 +494,25 @@ class UmasClient {
         return;
       } catch (e) {
         lastError = e;
-        _handleSessionError(); // Reset state for clean retry
+        // Fix A: do NOT call _handleSessionError on every failed attempt.
+        // A single root failure would otherwise produce up to
+        // (_maxRetries + 1) "session invalidated" log entries in quick
+        // succession. Reset only the state-machine bits so the next
+        // attempt re-runs readPlcId / init cleanly; the full invalidate
+        // (which nukes the symbol cache) waits until the WHOLE retry
+        // loop has been exhausted, below.
+        _setState(UmasSessionState.uninitialized);
+        _pairingKey = 0x00;
         if (attempt < _maxRetries) {
           final delay = _computeBackoff(attempt);
           await _delayFn(delay);
         }
       }
     }
-    // All retries exhausted
+    // All retries exhausted — only NOW do we nuke the full session +
+    // symbol cache. Anything that resumes after this will re-pair from
+    // scratch.
+    _handleSessionError();
     if (lastError is Exception) {
       throw lastError;
     }
@@ -510,7 +631,10 @@ class UmasClient {
       index = pd.getUint16(7, Endian.little);
     }
 
-    _hardwareId = hardwareId;
+    // Fix B: store the PLC-ident hardware code in its own field. Data
+    // Dictionary requests use [_projectHardwareId] (from memory block
+    // 0x30), populated by _readProjectBlock during the init sequence.
+    _plcIdHardwareId = hardwareId;
     _index = index;
     _setState(UmasSessionState.identified);
 
@@ -627,13 +751,18 @@ class UmasClient {
       projectCrc = (hash1 + hash2) & 0xFFFFFFFF;
     }
 
+    // Fix B: log the previous PROJECT hardware ID (not the PLC-ident one)
+    // so the "was:" hint actually compares like-for-like. Previously the
+    // field was shared, so this line printed the readPlcId value on every
+    // re-pair regardless of the real prior project hardware ID.
     _log.i('Project block 0x30: index=$projectIndex, '
         'hardwareId=0x${projectHardwareId.toRadixString(16)}, '
         'projectCrc=${projectCrc == null ? 'n/a' : '0x${projectCrc.toRadixString(16)}'} '
-        '(was: index=${_index}, hwId=0x${(_hardwareId ?? 0).toRadixString(16)})');
+        '(was: index=${_index}, '
+        'projectHwId=0x${(_projectHardwareId ?? 0).toRadixString(16)})');
 
     _index = projectIndex;
-    _hardwareId = projectHardwareId;
+    _projectHardwareId = projectHardwareId;
     _projectCrc = projectCrc;
   }
 
@@ -808,7 +937,15 @@ class UmasClient {
     final bd = ByteData(includeBlank ? 13 : 11);
     bd.setUint16(0, recordType, Endian.little);
     bd.setUint8(2, _index ?? 0);
-    bd.setUint32(3, _hardwareId ?? 0, Endian.little);
+    // Fix B: Data Dictionary requests need the PROJECT-level hardware ID
+    // (from memory block 0x30). The init sequence calls _readProjectBlock
+    // so this is normally non-null by the time 0x26 requests fire. Fall
+    // back to the readPlcId-level value when block 0x30 was unavailable
+    // — this matches the long-standing "using readPlcId values for DD
+    // requests" log inside _readProjectBlock and preserves the pre-Fix-B
+    // behaviour against PLCs that don't expose block 0x30.
+    bd.setUint32(
+        3, _projectHardwareId ?? _plcIdHardwareId ?? 0, Endian.little);
     bd.setUint16(7, blockNo, Endian.little);
     bd.setUint16(9, offset, Endian.little);
     if (includeBlank) {
@@ -1244,7 +1381,23 @@ class UmasClient {
     });
   }
 
-  /// Send a KeepAlive (0x12) to maintain the UMAS session.
+  /// Send a KeepAlive (0x12) request. **Diagnostic-only API — not used
+  /// by [startKeepAlive].**
+  ///
+  /// UMAS sub-function 0x12 is `umas_QueryKeepPLCReservation`. It only
+  /// makes sense when the client holds an exclusive write reservation
+  /// (acquired via [takePlcReservation], 0x10). On the M580 firmware,
+  /// 0x12 from a non-reserved client is rejected with `status=0xFD
+  /// errorCode=0x81 secondary=0x80` (live byte capture against
+  /// 192.168.112.159, 2026-05-20).
+  ///
+  /// plc4j's umas.mspec defines no 0x12 case; it never sends this
+  /// sub-function. The periodic [startKeepAlive] timer uses
+  /// [readPlcStatus] (0x04) instead.
+  ///
+  /// This method is retained for parity / diagnostic tooling that wants
+  /// to exercise the 0x12 frame explicitly (e.g. fuzzing or firmware
+  /// dialect probing). Production code paths should not call this.
   ///
   /// Uses [_withSession] to auto-initialize if not yet paired.
   /// Returns void on success; throws [UmasException] on error.
@@ -1330,12 +1483,19 @@ class UmasClient {
   ///   plain [UmasException]. These are not reservation conflicts;
   ///   they're network / framing failures and callers should not
   ///   special-case them as "another client holds the lock."
-  /// - PLC-side reservation conflict (UMAS status error byte with the
-  ///   well-known 0x06 conflict error code, or any other non-success
-  ///   status accompanied by a UMAS-error payload) → [UmasReservationException]
-  ///   so the UI/operator workflow can present a graceful "wait for
-  ///   the other client to release" affordance instead of a generic
-  ///   "something failed" red banner.
+  /// - PLC-side reservation conflict → [UmasReservationException] so the
+  ///   UI/operator workflow can present a graceful "wait for the other
+  ///   client to release" affordance instead of a generic "something
+  ///   failed" red banner. The recognized conflict byte set is:
+  ///     * `0x06` — canonical UMAS reservation-conflict code.
+  ///     * `0x81` — M580 dialect, observed live on
+  ///       192.168.112.159 (see `/tmp/umas-fuzz/fuzz-reservation.md`:
+  ///       every acquire attempt while another HMI held the lock
+  ///       returned `status=0xFD errorCode=0x81`).
+  ///   All other non-success status bytes (`0x83` Data Dictionary
+  ///   disabled, `0xC0` access denied, etc.) remain real protocol
+  ///   errors and surface as plain [UmasException] — callers MUST NOT
+  ///   special-case them as transient reservation conflicts.
   ///
   /// Uses [_withSession] to auto-initialize if not yet paired.
   Future<void> takePlcReservation() async {
@@ -1366,15 +1526,17 @@ class UmasClient {
         );
       }
 
-      // Check for UMAS-level error. The conflict-byte 0x06 ("another
-      // client holds the reservation") is the only condition that
-      // should be surfaced as UmasReservationException; other status
-      // errors (e.g. 0x83 Data Dictionary disabled, 0xC0 access
-      // denied) are real protocol errors that callers MUST NOT treat
-      // as a transient reservation conflict.
+      // Check for UMAS-level error. The recognized reservation-conflict
+      // byte set is 0x06 (canonical) and 0x81 (M580 dialect observed
+      // live on 192.168.112.159 — see
+      // `/tmp/umas-fuzz/fuzz-reservation.md`). Both surface as
+      // UmasReservationException. Other status errors (e.g. 0x83 Data
+      // Dictionary disabled, 0xC0 access denied) are real protocol
+      // errors that callers MUST NOT treat as a transient reservation
+      // conflict.
       if (pdu[2] == _statusError || pdu[2] != _statusSuccess) {
         final errorCode = pdu.length > 3 ? pdu[3] : 0;
-        if (errorCode == 0x06) {
+        if (errorCode == 0x06 || errorCode == 0x81) {
           throw UmasReservationException(
             errorCode: errorCode,
             message: 'Another client holds the PLC reservation',
@@ -1439,6 +1601,51 @@ class UmasClient {
     }
   }
 
+  /// Fix A: Predicate distinguishing fatal session errors (which justify
+  /// nuking the pairing key + rebuilding the symbol cache) from
+  /// per-operation errors (which do not).
+  ///
+  /// Without this gate, every benign `UmasException` thrown from
+  /// `_withSessionAndRecovery`, the keep-alive timer, or a single init
+  /// retry attempt would call [_handleSessionError] and force a full
+  /// re-pair + 1082-entry symbol-cache rebuild. In the field this
+  /// produced a tight "paired -> uninitialized -> identified -> paired"
+  /// log loop on the live HMI; the symbol-cache rebuild also burned
+  /// real wall-clock time and disrupted reads.
+  ///
+  /// **Fatal (session must be invalidated):**
+  /// - Transport-level Modbus codes 0xF0..0xF6 + 0xFF
+  ///   (timeout, connectionFailed, tx/rx failed, wrong unit id /
+  ///   function code / checksum, undefined). These mean the wire was
+  ///   unusable; the next operation must re-handshake.
+  ///
+  /// **NOT fatal (do not invalidate):**
+  /// - `errorCode == 0`: client-side parse / empty response / range
+  ///   guard / lookup miss. The session is fine; the caller can retry.
+  /// - PLC-side UMAS error bytes such as 0x06 (reservation conflict),
+  ///   0x83 (Data Dictionary disabled), 0x86 (memory block not found),
+  ///   0x94 (not writable), 0xC0 (DD not accessible). These are
+  ///   operation-specific and surface via the response status byte —
+  ///   they do NOT indicate the pairing key is invalid.
+  /// - Standard Modbus exception codes 0x01..0x0B. The PLC accepted
+  ///   the modbus frame but rejected the operation; the session is
+  ///   intact.
+  ///
+  /// TODO(session-error-tuning): once we have field data showing the
+  /// specific code/message the M580 returns when the engineering tool
+  /// steals the session, add it explicitly to the fatal set. Until
+  /// then, the conservative policy here is "transport-level only" —
+  /// see the test expectations in
+  /// `umas_client_session_error_test.dart`.
+  bool _isFatalSessionError(UmasException e) {
+    final code = e.errorCode;
+    // Transport-level failures from ModbusResponseCode. The non-success
+    // sentinels live in 0xF0..0xF6 and 0xFF (see ModbusResponseCode).
+    if (code == 0xFF) return true;
+    if (code >= 0xF0 && code <= 0xF6) return true;
+    return false;
+  }
+
   /// Reset all session state when UMAS session is invalidated.
   /// Called when error responses indicate the pairing key is no longer valid
   /// (PLC reboot, engineering tool connection, TCP reconnection).
@@ -1453,7 +1660,7 @@ class UmasClient {
   void _handleSessionError() {
     _log.i('UMAS session invalidated, resetting to uninitialized');
     _pairingKey = 0x00;
-    _hardwareId = null;
+    _resetHardwareIdentifiers();
     _index = null;
     maxFrameSize = null;
     _previousCrcs = null;
@@ -1486,10 +1693,29 @@ class UmasClient {
     _symbolCacheProjectCrc = null;
   }
 
+  /// Fix B: Clear both hardware-ID fields. Called from [_handleSessionError]
+  /// and any other path that needs to reset the identification cache.
+  void _resetHardwareIdentifiers() {
+    _plcIdHardwareId = null;
+    _projectHardwareId = null;
+  }
+
   /// Public hook for callers that detect a project change (e.g. a poll
   /// loop that calls [readPlcStatus] and observes `crcChanged=true`).
   /// Drops the symbol cache if the project CRC changed since the cache
   /// was built. Safe to call repeatedly — no-op when CRCs match.
+  ///
+  /// **Precondition (fuzz-browse-stability.md):** has no effect when
+  /// the symbol cache hasn't been built yet — the method short-circuits
+  /// on `!_symbolCacheBuilt` and never compares CRCs. The cache is
+  /// built inside [_ensureSymbolCache] (driven by [lookupSymbol] /
+  /// [readVariableByName] / [writeVariableByName]) and by direct
+  /// [debugInjectSymbol] in tests; a bare [browse] does NOT flip
+  /// `_symbolCacheBuilt`. Idempotent on a not-yet-built cache.
+  ///
+  /// Practical implications:
+  /// - Production flow is fine: the first `readVariableByName` primes
+  ///   the cache, after which CRC-watch invalidation fires as expected.
   ///
   /// F-8 (v1.1.x): now invoked from the periodic [_projectCrcTimer]
   /// via [refreshProjectMetadata] so PLC reprograms are detected
@@ -1647,8 +1873,24 @@ class UmasClient {
   /// Read a single UMAS variable by name. Resolves via [lookupSymbol]
   /// then issues [readVariables] for one symbol. Returns the parsed
   /// typed value.
+  ///
+  /// fuzz #7 (v1.1.x): rejects FB-instance roots up-front with
+  /// [UmasNotScalarException]. Before the gate, reading an FB instance by
+  /// its root name (e.g. `Elevator`) silently returned an empty
+  /// [TypedVariableValue] because the synthesized FB type carries
+  /// `byteSize == 0` and the `default:` branch of [parseVariableValue]
+  /// just returned a zero-length slice — operators saw a blank in
+  /// FB-DynamicValue / Key Repository with no diagnostic. Operators (and
+  /// callers like [ModbusDeviceClientAdapter.readUmasVariable]) that need
+  /// FB data must address members directly (`Elevator.q_xUp`); the browse
+  /// tree enumerates members via its own walk and does not rely on this
+  /// path. Array (classIdentifier == 4) and UDT (== 2) roots are
+  /// intentionally NOT gated here — the whole-array case is owned by the
+  /// parallel bug-droparray fix; nested UDT reads still work today via the
+  /// browse-walk path.
   Future<TypedVariableValue> readVariableByName(String path) async {
     final sym = await lookupSymbol(path);
+    _guardScalarOrThrow(sym, path);
     final values = await readVariables([(sym.variable, sym.dataType)]);
     if (values.isEmpty) {
       throw UmasException(
@@ -1656,6 +1898,138 @@ class UmasClient {
           message: 'UMAS readVariableByName($path) returned empty result');
     }
     return values.first;
+  }
+
+  /// Read every readable scalar member of an FB instance rooted at [fbPath].
+  ///
+  /// Walks the already-built symbol cache for entries whose path starts with
+  /// `<fbPath>.` and issues a single batched [readVariables] for the readable
+  /// scalar leaves. Returns a map keyed by the member sub-path (the suffix
+  /// after the FB root + `.`).
+  ///
+  /// **Why a dedicated helper, not just N `readVariableByName` calls?**
+  /// The MonitorPlc fallback path in [ModbusDeviceClientAdapter] catches
+  /// [UmasNotScalarException] when a poll-loop key is bound to an FB
+  /// instance. The original silent-blank symptom (commit `8c03c68d`'s
+  /// motivation) and the noisy per-tick log this helper replaces both
+  /// point to the same root cause: the poll loop never had a way to
+  /// realise the binding meant "fan out across members". This helper
+  /// does the fan-out in ONE round-trip so the per-tick cost matches a
+  /// scalar read closely enough to drop into the existing fallback poll
+  /// without a per-key re-architecture.
+  ///
+  /// **Member naming.** Sub-paths preserve dotted notation for nested
+  /// members. For an FB `M_F2_RC_01` with a nested `HMI` sub-instance,
+  /// the map carries keys like `HMI.p_Stat_xRunningFwd` — flat (one map
+  /// level deep) rather than recursively nested. This matches the shape
+  /// the existing FB-DynamicValue widget / Conveyor FB asset already
+  /// consume (`fb[memberName]` on a flat `Map<String, DynamicValue>`).
+  ///
+  /// **Unreadable members.** Members marked `readable == false`
+  /// (VAR_IN_OUT, etc.) are silently dropped from the batched read AND
+  /// from the returned map. The PLC would reject them with 0x94, and
+  /// the rest of the FB members must still get values this tick.
+  ///
+  /// **Errors.**
+  /// - Throws [UmasException] when [fbPath] is unknown to the symbol
+  ///   cache (neither the root nor any `<fbPath>.<...>` entries exist).
+  /// - Throws [UmasException] when the FB root resolves but has no
+  ///   readable members under it (e.g. all members are VAR_IN_OUT, or
+  ///   the FB is genuinely empty in the data dictionary).
+  ///
+  /// Callers MUST have a primed session (paired + block CRCs) — the
+  /// same precondition [readVariables] enforces. In production the
+  /// adapter's [ModbusDeviceClientAdapter.readUmasVariable] calls
+  /// [readPlcStatus] before reaching this method.
+  Future<Map<String, TypedVariableValue>> readFbInstanceMembers(
+      String fbPath) async {
+    // Ensure the symbol cache is populated. If the cache is empty
+    // browse() will run and walk the tree; if [fbPath] is genuinely
+    // unknown after that, _ensureSymbolCache stays empty for that
+    // prefix and we surface the error below.
+    await _ensureSymbolCache();
+
+    final prefix = '$fbPath.';
+    final orderedPairs = <(UmasVariable, UmasDataTypeRef)>[];
+    final orderedSubPaths = <String>[];
+    for (final entry in _symbolCache.entries) {
+      final p = entry.key;
+      if (!p.startsWith(prefix)) continue;
+      final sym = entry.value;
+      if (!sym.readable) continue;
+      // Skip nested-FB roots — they have classIdentifier 7 and
+      // byteSize 0; the leaves inside them are already enumerated as
+      // separate entries in the symbol cache (the browse walker
+      // recurses into FBs in _ensureSymbolCache.walk).
+      if (sym.dataType.classIdentifier == 7) continue;
+      orderedPairs.add((sym.variable, sym.dataType));
+      orderedSubPaths.add(p.substring(prefix.length));
+    }
+
+    if (orderedPairs.isEmpty) {
+      throw UmasException(
+        errorCode: 0,
+        message: 'UMAS readFbInstanceMembers("$fbPath"): no readable scalar '
+            'members are cached for this FB instance. The FB root may be '
+            'unknown to the data dictionary, or every member is VAR_IN_OUT.',
+      );
+    }
+
+    // Fast path: one batched ReadVariable (0x22). Works for FBs whose
+    // members are all fixed-width scalars (BOOL/INT/REAL/etc.).
+    try {
+      final values = await readVariables(orderedPairs);
+      final out = <String, TypedVariableValue>{};
+      final n = values.length < orderedSubPaths.length
+          ? values.length
+          : orderedSubPaths.length;
+      for (var i = 0; i < n; i++) {
+        out[orderedSubPaths[i]] = values[i];
+      }
+      // The batched call must produce one value per readable leaf. If
+      // it returned fewer (the PLC truncated or the count was off), fall
+      // through to per-leaf so the missing members get a fresh chance.
+      if (n == orderedPairs.length) return out;
+    } on UmasException catch (e) {
+      // Live-PLC reality: an FB with a STRING (or any non-fixed-width
+      // member) trips parseVariableValues' byteSize accounting on the
+      // batched response because STRING leaves advance differently
+      // than the bound-check assumes. Fall back to per-leaf reads so
+      // every leaf parses against its own response buffer — N RTTs but
+      // correct under the live wire format. This mirrors the
+      // CLI `read <fb>` command's per-leaf strategy in umas_cli.dart,
+      // which has been the workaround on the production M580.
+      _log.w('UMAS readFbInstanceMembers("$fbPath"): batched read failed '
+          '(${e.message}); falling back to per-leaf reads');
+    }
+
+    // Slow path: per-leaf reads. Each leaf gets its own 0x22; per-leaf
+    // failures are logged and SKIPPED — the rest of the FB still
+    // surfaces values. This matches the SCADA-style "best-effort" the
+    // poll loop expects: a single bad member shouldn't black out the
+    // whole FB.
+    final out = <String, TypedVariableValue>{};
+    for (var i = 0; i < orderedPairs.length; i++) {
+      final pair = orderedPairs[i];
+      try {
+        final v = await readVariables([pair]);
+        if (v.isNotEmpty) {
+          out[orderedSubPaths[i]] = v.first;
+        }
+      } catch (e) {
+        _log.w('UMAS readFbInstanceMembers("$fbPath"): per-leaf read of '
+            '"${orderedSubPaths[i]}" failed: $e — skipping this member');
+      }
+    }
+    if (out.isEmpty) {
+      throw UmasException(
+        errorCode: 0,
+        message: 'UMAS readFbInstanceMembers("$fbPath"): every per-leaf '
+            'read failed. The FB instance may be unreachable or the PLC '
+            'session has degraded.',
+      );
+    }
+    return out;
   }
 
   /// Write a single UMAS variable by name. Resolves via [lookupSymbol]
@@ -1668,8 +2042,14 @@ class UmasClient {
   /// 0x94 anyway; surfacing the precise [ResolvedSymbol.unreadableReason]
   /// gives operators a clearer error than the raw protocol code, and
   /// avoids burning a round-trip on a guaranteed failure.
+  ///
+  /// fuzz #7 (v1.1.x): also refuses FB-instance roots — symmetric with
+  /// [readVariableByName]. Writing to an FB root is meaningless (the
+  /// "value" is a struct of members); the gate keeps the error surface
+  /// uniform across read / write.
   Future<void> writeVariableByName(String path, dynamic value) async {
     final sym = await lookupSymbol(path);
+    _guardScalarOrThrow(sym, path);
     if (!sym.readable) {
       throw UmasException(
         errorCode: 0,
@@ -1681,14 +2061,51 @@ class UmasClient {
     await writeVariable([ref]);
   }
 
-  /// Wraps [_withSession] with session recovery: on any [UmasException],
-  /// resets session state so the next call re-initializes. Does NOT retry
-  /// automatically — the caller must explicitly retry to avoid infinite loops.
+  /// fuzz #7 (v1.1.x): throw [UmasNotScalarException] when [sym] resolves
+  /// to a Function Block instance (`classIdentifier == 7`).
+  ///
+  /// `classIdentifier` semantics (see [UmasDataTypeRef.classIdentifier]):
+  /// * `2` — UDT/struct (not gated; nested UDT reads still work via the
+  ///   browse walk and remain a non-issue for the current FB-only fix)
+  /// * `4` — array  (not gated; whole-array reads are owned by a parallel
+  ///   bug-droparray fix to avoid stepping on it)
+  /// * `7` — FB instance (gated here)
+  /// * other — elementary scalar (passes through unchanged)
+  ///
+  /// The thrown message names the path and suggests the `path.<member>`
+  /// notation so operators can recover without re-browsing the data
+  /// dictionary.
+  void _guardScalarOrThrow(ResolvedSymbol sym, String path) {
+    final classId = sym.dataType.classIdentifier;
+    if (classId == 7) {
+      throw UmasNotScalarException(
+        path: path,
+        typeKind: 'FB',
+      );
+    }
+  }
+
+  /// Wraps [_withSession] with session recovery: on a FATAL [UmasException]
+  /// (see [_isFatalSessionError]), resets session state so the next call
+  /// re-initializes. Per-operation errors (parse failures, range guards,
+  /// per-symbol 0x83/0x86/0x94/0xC0 codes, etc.) propagate WITHOUT
+  /// tearing down the session.
+  ///
+  /// Fix A: previously this method invalidated on every UmasException.
+  /// That made benign errors (e.g. a single parse failure on a malformed
+  /// reply, a CRC mismatch from a stale block) trigger a full re-pair
+  /// + 1082-entry symbol-cache rebuild, which was the visible "session
+  /// re-pair storm" in live HMI logs.
+  ///
+  /// Does NOT retry automatically — the caller must explicitly retry
+  /// to avoid infinite loops.
   Future<T> _withSessionAndRecovery<T>(Future<T> Function() operation) async {
     try {
       return await _withSession(operation);
-    } on UmasException {
-      _handleSessionError();
+    } on UmasException catch (e) {
+      if (_isFatalSessionError(e)) {
+        _handleSessionError();
+      }
       rethrow;
     }
   }
@@ -1786,7 +2203,14 @@ class UmasClient {
     // If M580 already detected, go directly to MonitorPlc (0x50).
     // Reset registrations first to avoid accumulating stale entries
     // from previous calls with different variable sets.
-    if (_useMonitorPlc) {
+    //
+    // TD-022: when the degraded breaker is tripped (sustained 0x82 from
+    // MonitorPlc — observed on M580 after ~1 week uptime), bypass 0x50
+    // and run the 0x22 ReadVariable path. The 0xA1A1 catch below will
+    // re-flip to MonitorPlc if the PLC still insists; the breaker
+    // auto-clears after _monitorPlcDegradedRetryAfter.
+    _clearMonitorPlcDegradedIfStale();
+    if (_useMonitorPlc && !_monitorPlcDegraded) {
       await monitorReset();
       return monitorRegisterAndRead(variables);
     }
@@ -1811,6 +2235,12 @@ class UmasClient {
       if (e.errorCode == 0xA1 && e.secondaryErrorCode == 0xA1) {
         // M580 detected: 0x22 returns 0xA1A1 error
         _useMonitorPlc = true;
+        // TD-022 follow-up: when the degraded breaker is latched, do NOT
+        // re-enter MonitorPlc — that would cascade 0x82 within the same
+        // call and defeat the bypass. Rethrow so the per-key fallback in
+        // ModbusDeviceClientAdapter sees the error; the breaker's
+        // auto-clear retries MonitorPlc after the retry window.
+        if (_monitorPlcDegraded) rethrow;
         return monitorRegisterAndRead(variables);
       }
       rethrow;
@@ -2073,7 +2503,27 @@ class UmasClient {
         message: 'Empty UMAS monitorPlc response',
       );
     }
-    _checkStatus(pdu, 'monitorPlc');
+    // TD-022: track consecutive 0x82 outcomes so the degraded breaker in
+    // [readVariables] can flip the read path away from MonitorPlc.
+    try {
+      _checkStatus(pdu, 'monitorPlc');
+    } on UmasException catch (e) {
+      if (e.errorCode == 0x82) {
+        _monitorPlc0x82Count++;
+        if (_monitorPlc0x82Count >= _monitorPlc0x82TripThreshold &&
+            !_monitorPlcDegraded) {
+          _monitorPlcDegraded = true;
+          _monitorPlcDegradedSince = _nowFn();
+          _log.w('UMAS MonitorPlc degraded breaker tripped after '
+              '$_monitorPlc0x82Count consecutive 0x82 responses; '
+              'subsequent reads bypass MonitorPlc until retry window.');
+        }
+      } else {
+        _monitorPlc0x82Count = 0;
+      }
+      rethrow;
+    }
+    _monitorPlc0x82Count = 0;
     return pdu.sublist(3);
   }
 
@@ -2206,6 +2656,20 @@ class UmasClient {
       await _sendMonitorPlc(Uint8List.fromList([0x0B]));
       _monitorTable.reset();
     });
+  }
+
+  /// TD-022: clear the MonitorPlc degraded flag if the retry window
+  /// elapsed. Called by [readVariables] on each entry so the next batch
+  /// naturally re-probes MonitorPlc.
+  void _clearMonitorPlcDegradedIfStale() {
+    if (!_monitorPlcDegraded) return;
+    final since = _monitorPlcDegradedSince;
+    if (since == null) return;
+    if (_nowFn().difference(since) < _monitorPlcDegradedRetryAfter) return;
+    _monitorPlcDegraded = false;
+    _monitorPlcDegradedSince = null;
+    _monitorPlc0x82Count = 0;
+    _log.i('UMAS MonitorPlc degraded breaker cleared; retrying MonitorPlc.');
   }
 
   // ---------------------------------------------------------------------------
@@ -2596,8 +3060,7 @@ class UmasClient {
       final totalElements = arrayDef?.totalElementCount ?? 0;
       if (arrayDef == null ||
           totalElements <= 0 ||
-          totalElements > _maxArrayElements ||
-          resolvedType.byteSize <= 0) {
+          totalElements > _maxArrayElements) {
         return UmasVariableTreeNode(
           name: variable.name,
           path: path,
@@ -2609,7 +3072,28 @@ class UmasClient {
 
       // Element size derived from total array byte size (works for arrays of
       // builtin scalars, UDTs, and atypically-sized strings alike).
-      final elementSize = resolvedType.byteSize ~/ totalElements;
+      //
+      // Fix for the speculative-DD02 cardinality mismatch (fuzz,
+      // 2026-05-19): when the speculative-DD02 path synthesized the
+      // array's type with `byteSize: 0` (because the typeId was absent
+      // from DD03 — observed on the live M580 for FB members like
+      // `BMEP58_ECPU_EXT.DIO_HEALTH`, `.DIO_CTRL`, `.LS_HEALTH`), the
+      // division below yields 0 and the array bails out as a leaf,
+      // leaving `lookupSymbol("...DIO_HEALTH[519]")` to throw "symbol
+      // not found" even though the cached `arrayDef` describes the
+      // elements. When the element type is a known built-in scalar,
+      // derive `elementSize` from the built-in directly (using
+      // `dim.startIndex` / `upperBound` from the array def), so the
+      // symbol cache agrees element-for-element with DD02.
+      final builtin = UmasDataTypes.builtIn[arrayDef.elementTypeId];
+      final int elementSize;
+      if (resolvedType.byteSize > 0) {
+        elementSize = resolvedType.byteSize ~/ totalElements;
+      } else if (builtin != null && builtin.byteSize > 0) {
+        elementSize = builtin.byteSize;
+      } else {
+        elementSize = 0;
+      }
       if (elementSize <= 0) {
         return UmasVariableTreeNode(
           name: variable.name,
@@ -2641,7 +3125,6 @@ class UmasClient {
       // synthesize a ref keyed on the built-in's name with the actual size.
       UmasDataTypeRef? resolvedElementType =
           UmasDataTypes.resolve(arrayDef.elementTypeId, dataTypes);
-      final builtin = UmasDataTypes.builtIn[arrayDef.elementTypeId];
       if (builtin != null && resolvedElementType?.byteSize != elementSize) {
         resolvedElementType = UmasDataTypeRef(
           id: builtin.id,

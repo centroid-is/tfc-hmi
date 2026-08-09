@@ -78,19 +78,38 @@ jobs:
     - name: Install TimescaleDB natively (macOS)
       if: runner.os == 'macOS'
       run: |
-        export PATH="/opt/homebrew/opt/postgresql@17/bin:$PATH"
-        echo "/opt/homebrew/opt/postgresql@17/bin" >> $GITHUB_PATH
-
+        # Newer Homebrew refuses formulae from third-party taps unless the
+        # tap is explicitly trusted ("Refusing to load formula ... from
+        # untrusted tap"). `|| true` keeps older brew (no trust subcommand)
+        # working.
+        brew trust timescale/tap || true
         brew install timescale/tap/timescaledb
+
+        # The timescaledb formula decides which PostgreSQL major it links
+        # against (was postgresql@17, currently postgresql@18) — resolve the
+        # installed keg from the filesystem instead of hardcoding a version.
+        # (brew deps proved unreliable here — it printed nothing on the CI
+        # runner even though the postgresql@18 keg was installed.)
+        PG_FORMULA=$(basename "$(ls -d /opt/homebrew/opt/postgresql@* 2>/dev/null | sort -V | tail -1)")
+        if [ -z "$PG_FORMULA" ]; then
+          echo "ERROR: no postgresql@* keg found under /opt/homebrew/opt" >&2
+          ls /opt/homebrew/opt >&2
+          exit 1
+        fi
+        echo "Using $PG_FORMULA"
+        export PATH="/opt/homebrew/opt/${PG_FORMULA}/bin:$PATH"
+        echo "/opt/homebrew/opt/${PG_FORMULA}/bin" >> $GITHUB_PATH
 
         # Move TimescaleDB extension files into PostgreSQL directories
         /opt/homebrew/bin/timescaledb_move.sh
 
         # Configure shared_preload_libraries manually
         # (skip timescaledb-tune - it ships as x86-only and fails on arm64)
-        echo "shared_preload_libraries = 'timescaledb'" >> /opt/homebrew/var/postgresql@17/postgresql.conf
+        PG_DATA="/opt/homebrew/var/${PG_FORMULA}"
+        [ -f "${PG_DATA}/postgresql.conf" ] || initdb "${PG_DATA}"
+        echo "shared_preload_libraries = 'timescaledb'" >> "${PG_DATA}/postgresql.conf"
 
-        brew services start postgresql@17
+        brew services start "$PG_FORMULA"
         sleep 5
         pg_isready
 

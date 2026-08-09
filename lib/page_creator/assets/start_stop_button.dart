@@ -14,7 +14,7 @@ import 'package:tfc_dart/core/state_man.dart';
 
 part 'start_stop_button.g.dart';
 
-enum _Segment { run, clean, stop }
+enum _Segment { run, clean, stop, manual }
 
 @JsonSerializable()
 class StartStopPillButtonConfig extends BaseAsset {
@@ -33,6 +33,28 @@ class StartStopPillButtonConfig extends BaseAsset {
   String stoppedKey;
   String? cleaningKey; // optional
 
+  /// Manual is a **peer mode** alongside run / clean / stop. Same shape as
+  /// the existing modes: a state BOOL (`manualStateKey`) for "is the
+  /// system currently in manual mode" + a command BOOL (`manualCommandKey`)
+  /// pulsed on tap to ask the PLC to switch into manual mode. NOT a
+  /// disable / lockout gate — every other segment stays individually
+  /// tappable regardless of the manual state.
+  ///
+  /// When BOTH manual_* keys are null/empty the manual segment is hidden
+  /// (pill keeps its legacy 2- or 3-segment layout).
+  ///
+  /// Wire keys: `manual_state_key`, `manual_command_key`, `manual_label`.
+  @JsonKey(name: 'manual_state_key')
+  String? manualStateKey;
+
+  @JsonKey(name: 'manual_command_key')
+  String? manualCommandKey;
+
+  /// Optional override for the manual-mode tooltip / a11y label
+  /// (default is "Manual"). Wire key: `manual_label`.
+  @JsonKey(name: 'manual_label')
+  String? manualLabel;
+
   StartStopPillButtonConfig({
     required this.runKey,
     required this.stopKey,
@@ -40,6 +62,9 @@ class StartStopPillButtonConfig extends BaseAsset {
     required this.stoppedKey,
     this.cleanKey,
     this.cleaningKey,
+    this.manualStateKey,
+    this.manualCommandKey,
+    this.manualLabel,
   }) {
     textPos = TextPos.right;
   }
@@ -50,7 +75,10 @@ class StartStopPillButtonConfig extends BaseAsset {
         runningKey = previewStr,
         stoppedKey = previewStr,
         cleanKey = null,
-        cleaningKey = null {
+        cleaningKey = null,
+        manualStateKey = null,
+        manualCommandKey = null,
+        manualLabel = null {
     textPos = TextPos.right;
   }
 
@@ -125,16 +153,23 @@ class _StartStopPillButtonState extends ConsumerState<StartStopPillButton> {
         .startWith(seed);
   }
 
-  // precedence: stopped > running > cleaning
+  // precedence: manual > stopped > cleaning > running
+  //
+  // Manual takes the highest precedence as the active visual indicator —
+  // industrial convention is that "operator is in charge" dominates any
+  // other mode the PLC may also be reporting.
   Stream<_Segment> _stateStream(StateMan sm) {
     final running$ = _boolKey(sm, widget.config.runningKey);
     final stopped$ = _boolKey(sm, widget.config.stoppedKey);
     final cleaning$ = _boolKey(sm, widget.config.cleaningKey);
-    return Rx.combineLatest3<bool, bool, bool, _Segment>(
+    final manual$ = _boolKey(sm, widget.config.manualStateKey);
+    return Rx.combineLatest4<bool, bool, bool, bool, _Segment>(
       running$,
       stopped$,
       cleaning$,
-      (r, s, c) {
+      manual$,
+      (r, s, c, m) {
+        if (m) return _Segment.manual;
         if (s) return _Segment.stop;
         if (c) return _Segment.clean;
         if (r) return _Segment.run;
@@ -162,6 +197,9 @@ class _StartStopPillButtonState extends ConsumerState<StartStopPillButton> {
       case _Segment.stop:
         key = widget.config.stopKey;
         break;
+      case _Segment.manual:
+        key = widget.config.manualCommandKey;
+        break;
     }
     if (key == null || key.isEmpty) return;
     _activeWriteKey = key;
@@ -186,6 +224,18 @@ class _StartStopPillButtonState extends ConsumerState<StartStopPillButton> {
     }
   }
 
+  bool get _hasClean =>
+      widget.config.cleanKey != null && widget.config.cleanKey!.isNotEmpty;
+
+  /// Manual segment is rendered whenever the user has wired EITHER the
+  /// state-feedback BOOL or the command-pulse BOOL (or both). Mirrors how
+  /// `_hasClean` works for the clean mode.
+  bool get _hasManual =>
+      (widget.config.manualStateKey != null &&
+          widget.config.manualStateKey!.isNotEmpty) ||
+      (widget.config.manualCommandKey != null &&
+          widget.config.manualCommandKey!.isNotEmpty);
+
   @override
   Widget build(BuildContext context) {
     final smAsync = ref.watch(stateManProvider);
@@ -195,8 +245,8 @@ class _StartStopPillButtonState extends ConsumerState<StartStopPillButton> {
         builder: (context, snapshot) {
           final active = snapshot.data;
           return _PrettyPill(
-            hasClean: (widget.config.cleanKey != null &&
-                widget.config.cleanKey!.isNotEmpty),
+            hasClean: _hasClean,
+            hasManual: _hasManual,
             active: active,
             pressed: _pressed,
             onDown: _onTapDown,
@@ -205,16 +255,16 @@ class _StartStopPillButtonState extends ConsumerState<StartStopPillButton> {
         },
       ),
       loading: () => _PrettyPill(
-        hasClean: (widget.config.cleanKey != null &&
-            widget.config.cleanKey!.isNotEmpty),
+        hasClean: _hasClean,
+        hasManual: _hasManual,
         active: null,
         pressed: _pressed,
         onDown: _onTapDown,
         onEnd: _onTapEnd,
       ),
       error: (_, __) => _PrettyPill(
-        hasClean: (widget.config.cleanKey != null &&
-            widget.config.cleanKey!.isNotEmpty),
+        hasClean: _hasClean,
+        hasManual: _hasManual,
         active: null,
         pressed: _pressed,
         onDown: _onTapDown,
@@ -226,6 +276,7 @@ class _StartStopPillButtonState extends ConsumerState<StartStopPillButton> {
 
 class _PrettyPill extends StatelessWidget {
   final bool hasClean;
+  final bool hasManual;
   final _Segment? active;
   final _Segment? pressed;
   final void Function(_Segment) onDown;
@@ -233,14 +284,24 @@ class _PrettyPill extends StatelessWidget {
 
   const _PrettyPill({
     required this.hasClean,
+    required this.hasManual,
     required this.active,
     required this.pressed,
     required this.onDown,
     required this.onEnd,
   });
 
-  List<_Segment> get _segments =>
-      [_Segment.run, if (hasClean) _Segment.clean, _Segment.stop];
+  // Layout order: run | clean? | stop | manual?
+  //
+  // Manual is appended at the end so the existing run / clean / stop
+  // layout positions stay stable for users with no manual wiring (which
+  // is the v1.0 → v1.1 backwards-compat contract).
+  List<_Segment> get _segments => [
+        _Segment.run,
+        if (hasClean) _Segment.clean,
+        _Segment.stop,
+        if (hasManual) _Segment.manual,
+      ];
 
   int _indexOf(_Segment seg) => _segments.indexOf(seg);
 
@@ -252,6 +313,9 @@ class _PrettyPill extends StatelessWidget {
         return Colors.blue;
       case _Segment.stop:
         return Colors.red;
+      case _Segment.manual:
+        // Industrial convention: operator override = orange / amber.
+        return Colors.orange;
     }
   }
 
@@ -259,6 +323,7 @@ class _PrettyPill extends StatelessWidget {
         _Segment.run => FontAwesomeIcons.play,
         _Segment.clean => FontAwesomeIcons.droplet,
         _Segment.stop => FontAwesomeIcons.stop,
+        _Segment.manual => FontAwesomeIcons.screwdriverWrench,
       };
 
   @override
@@ -476,6 +541,38 @@ class _ConfigContentState extends State<_ConfigContent> {
           initialValue: cfg.cleaningKey ?? '',
           onChanged: (v) =>
               setState(() => cfg.cleaningKey = v.isEmpty ? null : v),
+        ),
+        const SizedBox(height: 20),
+        const Text('Manual Mode (optional peer mode)',
+            style: TextStyle(fontWeight: FontWeight.bold)),
+        const SizedBox(height: 4),
+        const Text(
+          'Wires manual as a 4th peer segment alongside run / clean / '
+          'stop. Leave BOTH keys empty to hide the manual segment.',
+          style: TextStyle(fontSize: 12, color: Colors.grey),
+        ),
+        const SizedBox(height: 8),
+        const Text('Manual Command Key (pulse on tap)'),
+        KeyField(
+          initialValue: cfg.manualCommandKey ?? '',
+          onChanged: (v) => setState(
+              () => cfg.manualCommandKey = v.isEmpty ? null : v),
+        ),
+        const SizedBox(height: 12),
+        const Text('Manual State Key (bool feedback)'),
+        KeyField(
+          initialValue: cfg.manualStateKey ?? '',
+          onChanged: (v) =>
+              setState(() => cfg.manualStateKey = v.isEmpty ? null : v),
+        ),
+        const SizedBox(height: 12),
+        TextFormField(
+          initialValue: cfg.manualLabel ?? '',
+          decoration: const InputDecoration(
+            labelText: 'Manual Label (optional, defaults to "Manual")',
+          ),
+          onChanged: (v) =>
+              setState(() => cfg.manualLabel = v.isEmpty ? null : v),
         ),
         const SizedBox(height: 20),
         TextFormField(

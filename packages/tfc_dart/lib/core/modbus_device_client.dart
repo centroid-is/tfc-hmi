@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'dart:collection';
 
 import 'package:logger/logger.dart';
+import 'package:meta/meta.dart';
 import 'package:open62541/open62541.dart' show DynamicValue, NodeId;
 import 'package:modbus_client/modbus_client.dart' show ModbusEndianness;
 import 'package:modbus_client_tcp/modbus_client_tcp.dart' show ModbusClientTcp;
@@ -21,6 +23,7 @@ import 'package:tfc_dart/core/umas_types.dart'
     show
         TypedVariableValue,
         UmasException,
+        UmasNotScalarException,
         UmasSessionState,
         UmasVariable,
         UmasDataTypeRef;
@@ -110,6 +113,21 @@ class ModbusDeviceClientAdapter implements DeviceClient {
   final Map<String, Timer> _umasTimers = {};
   ModbusClientTcp? _umasTableBuiltFor;
 
+  /// Phase 7 / D-04 (v1.1.x): retained per-key poll-group mapping from
+  /// the constructor's `umasPollGroupByKey` argument. Consulted by
+  /// [addUmasKey] (and Plan 02/03 follow-ups) to decide which poll-group
+  /// bucket a runtime-registered key lands in.
+  ///
+  /// If a key is absent from this map at registration time, [addUmasKey]
+  /// uses `'default'`. If the mapped group has no entry in
+  /// [_umasPollGroups], [addUmasKey] falls back to `'default'` AND logs
+  /// a warn.
+  ///
+  /// Mutable to support [debugSetUmasPollGroupForKey] — a
+  /// @visibleForTesting seam; production callers do not change a key's
+  /// poll-group at runtime.
+  final Map<String, String> _umasPollGroupByKey = {};
+
   /// Guard so we don't kick off two concurrent table-build attempts when
   /// a poll tick races with the connection-state listener.
   bool _umasTableBuildInFlight = false;
@@ -181,6 +199,10 @@ class ModbusDeviceClientAdapter implements DeviceClient {
     required Map<String, String> umasPollGroupByKey,
     required List<ModbusPollGroupConfig> pollGroups,
   }) {
+    // Phase 7 / D-04: retain the per-key group mapping so post-
+    // construction registrations via [addUmasKey] inherit the same
+    // pollGroup the KeyMapping specified.
+    _umasPollGroupByKey.addAll(umasPollGroupByKey);
     final groupIntervals = <String, Duration>{};
     for (final pg in pollGroups) {
       groupIntervals[pg.name] = pg.interval;
@@ -574,6 +596,203 @@ class ModbusDeviceClientAdapter implements DeviceClient {
   /// internal cache state (e.g. TD-005: blockCrcs reuse).
   UmasClient? get debugUmasClient => _umasClient;
 
+  /// True when [debugSetUmasClient] has primed the adapter with a
+  /// hand-built [UmasClient]. Short-circuits [_getUmasClient] so unit
+  /// tests can exercise [readUmasVariable] / [writeUmasVariable]
+  /// without driving a real socket through the wrapper.
+  bool _umasClientInjectedForTest = false;
+
+  /// Test-only seam: prime the adapter's UmasClient with an externally
+  /// built (and pre-primed via `debugInjectSymbol` + `debugSet*Crc` +
+  /// `debugSetSessionState`) client. Bypasses [_getUmasClient]'s
+  /// wrapper-connection gate so the adapter can be exercised end-to-end
+  /// against a mock `sendFn` without a live PLC.
+  ///
+  /// Used by the FB-DynamicValue poll-loop fall-back tests
+  /// (`umas_fb_dynamic_value_poll_test.dart`) to verify the adapter
+  /// catches [UmasNotScalarException] and routes through
+  /// [UmasClient.readFbInstanceMembers]. Production code must NOT
+  /// call this — the lazy [_getUmasClient] path is the only supported
+  /// runtime wiring.
+  @visibleForTesting
+  void debugSetUmasClient(UmasClient client) {
+    _umasClient = client;
+    _umasClientInjectedForTest = true;
+  }
+
+  /// @visibleForTesting (Phase 7): read-only view of the per-group key
+  /// registration. Tests assert membership mutations after [addUmasKey]
+  /// (Plan 02 will add [removeUmasKey]) without touching private fields.
+  @visibleForTesting
+  Map<String, List<String>> get debugUmasKeysByGroup => UnmodifiableMapView(
+        _umasKeysByGroup
+            .map((g, ks) => MapEntry(g, List<String>.unmodifiable(ks))),
+      );
+
+  /// @visibleForTesting (Phase 7): current "table is built for which
+  /// ModbusClientTcp identity" flag. Null after [addUmasKey] until the
+  /// next [_pollUmasGroup] tick rebuilds the table.
+  @visibleForTesting
+  ModbusClientTcp? get debugUmasTableBuiltFor => _umasTableBuiltFor;
+
+  /// @visibleForTesting (Phase 7): override the retained per-key
+  /// poll-group mapping for [key]. Used by tests that exercise the
+  /// "wanted group has no timer → fall back to default + warn" branch
+  /// of [addUmasKey] without rebuilding the whole adapter. Production
+  /// callers MUST NOT call this; the poll-group is part of the immutable
+  /// KeyMapping contract.
+  @visibleForTesting
+  void debugSetUmasPollGroupForKey(String key, String group) {
+    _umasPollGroupByKey[key] = group;
+  }
+
+  /// @visibleForTesting (Phase 7 / SPEC Acceptance #2): drive one
+  /// synthetic poll tick for [group] so tests can assert that
+  /// [addUmasKey] actually causes the next tick to pick up the new key.
+  /// Delegates directly to the private [_pollUmasGroup] method. Caller
+  /// is expected to have already injected a fake UmasClient via
+  /// [debugSetUmasClient] (line 599) so the resulting reads / register
+  /// calls land on a recorder rather than a real socket. Production
+  /// callers MUST NOT use this; the real driver is [_startUmasTimers].
+  @visibleForTesting
+  Future<void> debugPumpPollTick(String group) => _pollUmasGroup(group);
+
+  /// Public accessor that returns the adapter's shared [UmasClient],
+  /// lazy-initializing it against the current TCP socket if the wrapper
+  /// is connected. Returns null when the wrapper has no live socket yet.
+  ///
+  /// UI features that need ad-hoc UMAS access (e.g. the Browse dialog's
+  /// FB-instance inspection-layer fan-out read) MUST go through this
+  /// accessor rather than instantiate their own `UmasClient(sendFn: ...)`
+  /// against the raw `tcpClient.send`. A duplicate client would share
+  /// the TCP socket with the adapter's poll-loop client but maintain a
+  /// SEPARATE UMAS session (pairing key, hardware id, symbol cache),
+  /// and the PLC only supports one paired UMAS session per TCP
+  /// connection — the second `pair()` invalidates the first, the next
+  /// poll-loop read trips `_handleSessionError`, both clients fight to
+  /// re-pair, and the symbol cache rebuild storm freezes the UI.
+  ///
+  /// See debug session `umas-fb-freeze-loop` (2026-05-19) for the
+  /// reproduction that motivated promoting this accessor.
+  UmasClient? get umasClient => _getUmasClient();
+
+  /// Phase 7 / SPEC Req #1 (v1.1.x): register a UMAS-by-name [key] for
+  /// live MonitorPlc polling AFTER construction. Resolves the poll-group
+  /// via the retained [_umasPollGroupByKey] map (or `'default'` when
+  /// absent), appends [key] to [_umasKeysByGroup] for that group, and
+  /// nulls [_umasTableBuiltFor] so the next [_pollUmasGroup] tick
+  /// rebuilds the MonitorPlc table.
+  ///
+  /// Silent no-op when:
+  ///   * [key] is unknown to [_variableNames] or [_variableNames[key]]
+  ///     is null (classic Modbus key — UMAS poll set is not the right
+  ///     venue).
+  ///   * [key] is already present in any [_umasKeysByGroup] list (D-05
+  ///     — matches `Set.add` ergonomics).
+  ///
+  /// When the resolved poll-group has no entry in [_umasPollGroups]
+  /// (i.e. no timer would ever fire for it), falls back to `'default'`
+  /// AND emits a warn log per D-04.
+  ///
+  /// W3 (defensive): the no-timer-fallback branch is only reachable
+  /// through the [debugSetUmasPollGroupForKey] @visibleForTesting seam
+  /// on the public-API path — `_initUmasPollGroups`' `putIfAbsent` (see
+  /// modbus_device_client.dart constructor) already seeds a
+  /// [_umasPollGroups] entry for every group named in the original
+  /// `umasPollGroupByKey`. Kept for defensive symmetry; documented here
+  /// so a future cleanup does not delete it as dead code.
+  ///
+  /// TD-009 / TD-021 / TD-022 are NOT touched (D-10): this method does
+  /// not read or write [_useMonitorPlc], the eager-read on [subscribe],
+  /// or the MonitorPlc degraded breaker.
+  void addUmasKey(String key) {
+    if (_variableNames[key] == null) return; // not a UMAS-by-name key
+    // Linear scan per D-03 — N is small; no reverse index needed.
+    for (final keys in _umasKeysByGroup.values) {
+      if (keys.contains(key)) return; // D-05 idempotency
+    }
+    var group = _umasPollGroupByKey[key] ?? 'default';
+    if (!_umasPollGroups.containsKey(group)) {
+      _log.w('UMAS addUmasKey: key "$key" wanted group "$group" but no '
+          'timer exists; falling back to default');
+      group = 'default';
+      // Make sure 'default' has at least the canonical interval so any
+      // future _startUmasTimers run schedules a tick for it.
+      _umasPollGroups.putIfAbsent('default', () => _defaultPollInterval);
+    }
+    _umasKeysByGroup.putIfAbsent(group, () => <String>[]).add(key);
+    _umasTableBuiltFor = null;
+    _log.i('UMAS addUmasKey: registered "$key" in group "$group"');
+  }
+
+  /// Phase 7 / SPEC Req #3 (v1.1.x): drop a UMAS-by-name [key] from the
+  /// live poll set.
+  ///
+  /// State changes (in order, per D-08):
+  ///   1. Close the cached [BehaviorSubject] (if any) and remove it from
+  ///      [_umasSubjects] so any active subscriber sees `onDone` exactly
+  ///      once (clean closure) rather than the subject staying open and
+  ///      never updating.
+  ///   2. Drop the cached typed last-value in [_umasLastValues] so a
+  ///      future [subscribe] re-runs the TD-021 seed path against a
+  ///      fresh symbol read (SPEC Constraints §"Symbol/cache
+  ///      invalidation contract").
+  ///   3. Remove [key] from every [_umasKeysByGroup] group's key list.
+  ///   4. Remove [key] from [_umasKeyOrder] (the registered-this-cycle
+  ///      sequence).
+  ///   5. Null [_umasTableBuiltFor] so the next [_pollUmasGroup] tick
+  ///      triggers [_buildUmasTableAndStartTimers] and re-registers
+  ///      the MonitorPlc table without the dropped entry.
+  ///
+  /// Silent no-op when [key] is not in any [_umasKeysByGroup] list AND
+  /// not in [_umasSubjects] (D-05 idempotency — matches `Set.remove`
+  /// ergonomics: no log, no `_umasTableBuiltFor` mutation).
+  ///
+  /// W4 / Option B2: kept as a separate sibling method from the
+  /// pre-existing [unsubscribeUmas]. [unsubscribeUmas] remains the
+  /// TD-003 [updateVariableNames] caller with its (no-log) behavior so
+  /// operators do not see new INFO log noise from the existing key-edit
+  /// path. Collapsing the two methods (Option B1) is a possible
+  /// follow-up cleanup only — see 07-02-PLAN.md Step B for the
+  /// equivalence-test requirement that consolidation would need.
+  ///
+  /// TD-009 / TD-021 / TD-022 are NOT touched (D-10): this method does
+  /// not read or write [_useMonitorPlc], the eager-read on [subscribe],
+  /// or the MonitorPlc degraded breaker.
+  void removeUmasKey(String key) {
+    // Idempotency probe: was this key ever registered? (D-05)
+    var wasRegistered = false;
+    for (final keys in _umasKeysByGroup.values) {
+      if (keys.contains(key)) {
+        wasRegistered = true;
+        break;
+      }
+    }
+    if (!wasRegistered && !_umasSubjects.containsKey(key)) return;
+
+    // D-08: close the subject BEFORE removing the map entry so any
+    // active subscriber sees onDone exactly once (clean closure).
+    final subject = _umasSubjects[key];
+    if (subject != null && !subject.isClosed) {
+      subject.close();
+    }
+    _umasSubjects.remove(key);
+    _umasLastValues.remove(key);
+    String? droppedFrom;
+    for (final entry in _umasKeysByGroup.entries) {
+      if (entry.value.remove(key)) {
+        droppedFrom = entry.key;
+        // Continue: defensive — duplicate-add is already guarded by
+        // addUmasKey, but the linear scan handles legacy callers that
+        // may have populated the same key into multiple groups.
+      }
+    }
+    _umasKeyOrder.remove(key);
+    _umasTableBuiltFor = null;
+    _log.i('UMAS removeUmasKey: dropped "$key"'
+        '${droppedFrom != null ? ' from group "$droppedFrom"' : ''}');
+  }
+
   /// TD-003 (v1.1.x): release every per-key resource the adapter
   /// allocates for a UMAS-by-name [key]. Called from
   /// [updateVariableNames] when the operator removes or renames a
@@ -643,6 +862,12 @@ class ModbusDeviceClientAdapter implements DeviceClient {
   /// TCP client. Returns null if the wrapper is disconnected (no
   /// underlying ModbusClientTcp yet).
   UmasClient? _getUmasClient() {
+    // Test seam — when [debugSetUmasClient] has primed an injected
+    // client, return it unconditionally regardless of wrapper state.
+    // The injected client owns its own (mock) sendFn and session state.
+    if (_umasClientInjectedForTest) {
+      return _umasClient;
+    }
     final tcp = wrapper.client;
     if (tcp == null) {
       // Connection torn down — drop the stale client so the next
@@ -718,6 +943,22 @@ class ModbusDeviceClientAdapter implements DeviceClient {
     final variableName = _variableNames[key];
     if (variableName != null) {
       final subject = _umasSubjectFor(key);
+      // Phase 7 / SPEC Req #2 (v1.1.x): auto-register this key for live
+      // MonitorPlc polling if it isn't already in the poll set. Without
+      // this, a UMAS-by-name key bound after adapter construction (e.g.
+      // via Key Repository or a fresh page asset) gets the TD-021 eager
+      // seed below but never receives subsequent updates — the home
+      // screen widget renders the seed value forever.
+      //
+      // addUmasKey is idempotent (D-05): if `key` is already in any
+      // _umasKeysByGroup[*] list (e.g. it was registered at construction
+      // or via an earlier subscribe), this call is a silent no-op.
+      // We call it unconditionally rather than precheck because the
+      // membership probe is identical inside addUmasKey itself; saves
+      // a duplicate linear scan (per D-03 the planner-suggested shape
+      // was an explicit precheck — equivalent behavior, less code).
+      addUmasKey(key);
+
       // TD-021 (v1.1.x): subscribers should see a live value within ~1
       // poll-cycle of mounting, not "stale until somebody else triggers
       // a read". When MonitorPlc registration succeeded the next tick of
@@ -810,8 +1051,25 @@ class ModbusDeviceClientAdapter implements DeviceClient {
     if (umas.blockCrcs == null) {
       await umas.readPlcStatus();
     }
-    final typed = await umas.readVariableByName(variableName);
-    final dv = _typedVariableToDynamicValue(typed);
+    DynamicValue dv;
+    try {
+      final typed = await umas.readVariableByName(variableName);
+      dv = _typedVariableToDynamicValue(typed);
+    } on UmasNotScalarException {
+      // FB-instance binding: the operator (or LLM-generated key
+      // mapping) pointed a single key at an FB instance root rather
+      // than a scalar member. Fall back to a batched fan-out read so
+      // the subject emits a struct DynamicValue (`{member: value}`)
+      // that the FB-DynamicValue widget / Conveyor FB asset render
+      // directly — matching the OPC-UA struct-value contract.
+      //
+      // Pre-fix this throw bubbled out of every poll tick as
+      // "UMAS fallback poll for key … failed: UmasNotScalarException".
+      // See commit 8c03c68d for the exception's introduction and the
+      // umas-fb-dynamic-value branch for this fall-back's rationale.
+      final members = await umas.readFbInstanceMembers(variableName);
+      dv = _fbMembersToDynamicValue(members);
+    }
     _umasLastValues[key] = dv;
     // F-1: push the fresh value to any active subscribers so
     // StreamBuilder / StreamProvider keep updating across reads. Only
@@ -822,6 +1080,31 @@ class ModbusDeviceClientAdapter implements DeviceClient {
       subject.add(dv);
     }
     return dv;
+  }
+
+  /// Build a struct [DynamicValue] from a flat `{memberSubPath: TypedVariableValue}`
+  /// map returned by [UmasClient.readFbInstanceMembers].
+  ///
+  /// The result mirrors the shape an OPC-UA struct read produces:
+  /// `value` is a [LinkedHashMap<String, DynamicValue>] so
+  /// `DynamicValue.isObject` returns `true` and `asObject` exposes the
+  /// member map. Each leaf carries the correct [NodeId] typeId so
+  /// `asBool` / `asDouble` / `asInt` on the leaves preserves UMAS
+  /// type semantics.
+  ///
+  /// Nested-FB members appear as dotted keys (e.g.
+  /// `HMI.p_Stat_xRunningFwd`) rather than nested sub-maps. The
+  /// existing FB-DynamicValue consumers (`Conveyor FB`,
+  /// `StartStopButton`) use `fb[memberName]` lookups against the
+  /// flat string-keyed map; keeping the keys dotted matches that
+  /// contract without a second-level walk.
+  static DynamicValue _fbMembersToDynamicValue(
+      Map<String, TypedVariableValue> members) {
+    final map = LinkedHashMap<String, DynamicValue>();
+    for (final entry in members.entries) {
+      map[entry.key] = _typedVariableToDynamicValue(entry.value);
+    }
+    return DynamicValue(value: map);
   }
 
   /// Write a single UMAS-by-name key. Same UX contract as

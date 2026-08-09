@@ -33,6 +33,15 @@ ButtonConfig _$ButtonConfigFromJson(Map<String, dynamic> json) => ButtonConfig(
           : FeedbackConfig.fromJson(json['feedback'] as Map<String, dynamic>),
       isToggle: json['is_toggle'] as bool? ?? false,
       serverWritesLow: json['server_writes_low'] as bool? ?? false,
+      disabledKey: json['disabled_key'] as String?,
+      disabledPolarity: $enumDecodeNullable(
+              _$DisabledPolarityEnumMap, json['disabled_polarity'],
+              unknownValue: DisabledPolarity.disableWhenTrue) ??
+          DisabledPolarity.disableWhenTrue,
+      disabledColor: ButtonConfig._disabledColorFromJson(
+          json['disabled_color'] as Map<String, dynamic>?),
+      textColor: const OptionalColorConverter()
+          .fromJson(json['text_color'] as Map<String, dynamic>?),
     )
       ..variant = json['asset_name'] as String
       ..coordinates =
@@ -60,11 +69,22 @@ Map<String, dynamic> _$ButtonConfigToJson(ButtonConfig instance) =>
       'button_type': _$ButtonTypeEnumMap[instance.buttonType]!,
       'is_toggle': instance.isToggle,
       'server_writes_low': instance.serverWritesLow,
+      'disabled_key': instance.disabledKey,
+      'disabled_polarity':
+          _$DisabledPolarityEnumMap[instance.disabledPolarity]!,
+      'disabled_color':
+          ButtonConfig._disabledColorToJson(instance.disabledColor),
+      'text_color': const OptionalColorConverter().toJson(instance.textColor),
     };
 
 const _$ButtonTypeEnumMap = {
   ButtonType.circle: 'circle',
   ButtonType.square: 'square',
+};
+
+const _$DisabledPolarityEnumMap = {
+  DisabledPolarity.disableWhenTrue: 'disableWhenTrue',
+  DisabledPolarity.disableWhenFalse: 'disableWhenFalse',
 };
 
 const _$TextPosEnumMap = {

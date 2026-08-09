@@ -385,6 +385,39 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
     });
   }
 
+  /// Reorders the key at [oldIndex] to [newIndex] in the underlying
+  /// [_keyMappings.nodes] map.
+  ///
+  /// [oldIndex] and [newIndex] are indices into the current iteration
+  /// order of the map (which equals the rendered list when no search
+  /// filter is active — reorder is disabled while a search query is
+  /// in effect, so this assumption holds).
+  ///
+  /// Follows the ReorderableListView convention: if [newIndex] is
+  /// greater than [oldIndex], it must be decremented by one to land
+  /// at the intended slot (because the item is conceptually removed
+  /// first, then inserted).
+  void _reorderKey(int oldIndex, int newIndex) {
+    if (_keyMappings == null) return;
+    if (oldIndex == newIndex) return;
+    final entries = _keyMappings!.nodes.entries.toList();
+    if (oldIndex < 0 || oldIndex >= entries.length) return;
+    var target = newIndex;
+    if (target > oldIndex) target -= 1;
+    if (target < 0) target = 0;
+    if (target > entries.length - 1) target = entries.length - 1;
+    if (target == oldIndex) return;
+    final moved = entries.removeAt(oldIndex);
+    entries.insert(target, moved);
+    final newNodes = <String, KeyMappingEntry>{};
+    for (final kv in entries) {
+      newNodes[kv.key] = kv.value;
+    }
+    setState(() {
+      _keyMappings!.nodes = newNodes;
+    });
+  }
+
   List<MapEntry<String, KeyMappingEntry>> get _filteredEntries {
     if (_keyMappings == null) return [];
     final entries = _keyMappings!.nodes.entries.toList();
@@ -659,33 +692,69 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
                     height: 200,
                     child: _EmptyKeysWidget(),
                   )
-                : ListView.builder(
-                    shrinkWrap: true,
-                    physics: const NeverScrollableScrollPhysics(),
-                    itemCount: filtered.length,
-                    itemBuilder: (context, index) {
-                      final entry = filtered[index];
-                      final isNew = entry.key == _newlyAddedKey;
-                      if (isNew) {
-                        _cardKeys.putIfAbsent(entry.key, () => GlobalKey());
-                      }
-                      return _KeyMappingCard(
-                        key: _cardKeys[entry.key] ?? ValueKey(entry.key),
-                        keyName: entry.key,
-                        entry: entry.value,
-                        serverAliases: _serverAliases,
-                        jbtmServerAliases: _jbtmServerAliases,
-                        modbusServerAliases: _modbusServerAliases,
-                        modbusConfigs: _stateManConfig?.modbus ?? [],
-                        onUpdate: (updated) => _updateEntry(entry.key, updated),
-                        onRename: (newName) => _renameKey(entry.key, newName),
-                        onCopy: () => _duplicateKey(entry.key),
-                        onRemove: () => _showDeleteDialog(entry.key),
-                        initiallyExpanded: isNew,
-                        status: _keyStatuses[entry.key],
-                      );
-                    },
-                  ),
+                : _searchQuery.isEmpty
+                    ? ReorderableListView.builder(
+                        shrinkWrap: true,
+                        physics: const NeverScrollableScrollPhysics(),
+                        buildDefaultDragHandles: false,
+                        itemCount: filtered.length,
+                        onReorder: _reorderKey,
+                        itemBuilder: (context, index) {
+                          final entry = filtered[index];
+                          final isNew = entry.key == _newlyAddedKey;
+                          // Every card gets a stable GlobalKey keyed by entry name,
+                          // not just newly-added ones. _renameKey and _reorderKey
+                          // both keep the GlobalKey associated with the entry's
+                          // current name, so ExpansionTile expansion state survives
+                          // reorders and renames alike.
+                          _cardKeys.putIfAbsent(entry.key, () => GlobalKey());
+                          return _KeyMappingCard(
+                            key: _cardKeys[entry.key],
+                            keyName: entry.key,
+                            entry: entry.value,
+                            serverAliases: _serverAliases,
+                            jbtmServerAliases: _jbtmServerAliases,
+                            modbusServerAliases: _modbusServerAliases,
+                            modbusConfigs: _stateManConfig?.modbus ?? [],
+                            onUpdate: (updated) =>
+                                _updateEntry(entry.key, updated),
+                            onRename: (newName) =>
+                                _renameKey(entry.key, newName),
+                            onCopy: () => _duplicateKey(entry.key),
+                            onRemove: () => _showDeleteDialog(entry.key),
+                            initiallyExpanded: isNew,
+                            status: _keyStatuses[entry.key],
+                            reorderIndex: index,
+                          );
+                        },
+                      )
+                    : ListView.builder(
+                        shrinkWrap: true,
+                        physics: const NeverScrollableScrollPhysics(),
+                        itemCount: filtered.length,
+                        itemBuilder: (context, index) {
+                          final entry = filtered[index];
+                          final isNew = entry.key == _newlyAddedKey;
+                          _cardKeys.putIfAbsent(entry.key, () => GlobalKey());
+                          return _KeyMappingCard(
+                            key: _cardKeys[entry.key],
+                            keyName: entry.key,
+                            entry: entry.value,
+                            serverAliases: _serverAliases,
+                            jbtmServerAliases: _jbtmServerAliases,
+                            modbusServerAliases: _modbusServerAliases,
+                            modbusConfigs: _stateManConfig?.modbus ?? [],
+                            onUpdate: (updated) =>
+                                _updateEntry(entry.key, updated),
+                            onRename: (newName) =>
+                                _renameKey(entry.key, newName),
+                            onCopy: () => _duplicateKey(entry.key),
+                            onRemove: () => _showDeleteDialog(entry.key),
+                            initiallyExpanded: isNew,
+                            status: _keyStatuses[entry.key],
+                          );
+                        },
+                      ),
             const SizedBox(height: 16),
             // Save button
             Row(
@@ -780,6 +849,12 @@ class _KeyMappingCard extends StatefulWidget {
   final bool initiallyExpanded;
   final _KeyStatus? status;
 
+  /// When non-null, this card is rendered inside a [ReorderableListView]
+  /// and a drag handle is shown that lets the operator grab the card to
+  /// reorder it. The value is the card's index in the reorderable list,
+  /// which [ReorderableDragStartListener] uses to initiate the drag.
+  final int? reorderIndex;
+
   const _KeyMappingCard({
     super.key,
     required this.keyName,
@@ -794,6 +869,7 @@ class _KeyMappingCard extends StatefulWidget {
     required this.onRemove,
     this.initiallyExpanded = false,
     this.status,
+    this.reorderIndex,
   });
 
   @override
@@ -852,6 +928,17 @@ class _KeyMappingCardState extends State<_KeyMappingCard> {
   String _buildSubtitle() {
     if (_isModbus) {
       final node = widget.entry.modbusNode!;
+      final variableName = widget.entry.variableName;
+      // Prefer the UMAS symbol path over the Modbus address when the
+      // mapping is bound by name — operators recognise their FB-instance
+      // member names, not 'holdingRegister[N]'.
+      if (variableName != null && variableName.isNotEmpty) {
+        var subtitle = variableName;
+        if (node.serverAlias != null && node.serverAlias!.isNotEmpty) {
+          subtitle += ' @ ${node.serverAlias}';
+        }
+        return subtitle;
+      }
       var subtitle = '${node.registerType.name}[${node.address}]';
       subtitle += ' ${node.dataType.name}';
       if (node.serverAlias != null && node.serverAlias!.isNotEmpty) {
@@ -1029,11 +1116,37 @@ class _KeyMappingCardState extends State<_KeyMappingCard> {
       margin: const EdgeInsets.only(bottom: 8),
       child: ExpansionTile(
         initiallyExpanded: widget.initiallyExpanded,
-        leading: FaIcon(
-          FontAwesomeIcons.key,
-          size: 20,
-          color: _collectEnabled ? Colors.green : null,
-        ),
+        leading: widget.reorderIndex != null
+            ? Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  ReorderableDragStartListener(
+                    index: widget.reorderIndex!,
+                    child: const MouseRegion(
+                      cursor: SystemMouseCursors.grab,
+                      child: Padding(
+                        padding: EdgeInsets.symmetric(horizontal: 4.0),
+                        child: Icon(
+                          Icons.drag_indicator,
+                          size: 20,
+                          color: Colors.grey,
+                          semanticLabel: 'Drag to reorder',
+                        ),
+                      ),
+                    ),
+                  ),
+                  FaIcon(
+                    FontAwesomeIcons.key,
+                    size: 20,
+                    color: _collectEnabled ? Colors.green : null,
+                  ),
+                ],
+              )
+            : FaIcon(
+                FontAwesomeIcons.key,
+                size: 20,
+                color: _collectEnabled ? Colors.green : null,
+              ),
         title: Text(
           widget.keyName,
           style: const TextStyle(fontWeight: FontWeight.bold),

@@ -540,6 +540,53 @@ void main() {
       await tester.tap(find.text('main_server').last);
       await tester.pumpAndSettle();
     });
+
+    // Regression: editing an expanded key's name used to collapse the
+    // card on every keystroke because the card's widget identity was
+    // `ValueKey(entry.key)` — i.e. tied to the mutable name. Renaming
+    // changed the key, Flutter saw a brand-new widget, threw away the
+    // ExpansionTile's expanded state. With a stable GlobalKey
+    // (migrated old→new inside `_renameKey`), the same State sticks
+    // around through the rename so the card stays expanded.
+    testWidgets(
+        'editing the key name in an expanded card keeps the card expanded',
+        (tester) async {
+      await tester.pumpWidget(buildTestableKeyRepository(
+        keyMappings: KeyMappings(nodes: {
+          'before_rename': KeyMappingEntry(
+            opcuaNode: OpcUANodeConfig(namespace: 1, identifier: 'OldNode'),
+          ),
+        }),
+      ));
+      await tester.pumpAndSettle();
+
+      // Expand the card.
+      await tester.tap(find.text('before_rename'));
+      await tester.pumpAndSettle();
+
+      // Sanity: the expanded section is showing the OPC UA fields.
+      expect(find.widgetWithText(TextField, 'before_rename'), findsOneWidget,
+          reason:
+              'The expanded card should expose the Key Name TextField with the current name.');
+      expect(find.widgetWithText(TextField, 'OldNode'), findsOneWidget,
+          reason:
+              'Identifier field belongs to the expanded section — pre-rename baseline.');
+
+      // Rename without pressing Enter; the bug fires per keystroke.
+      final keyNameField =
+          find.widgetWithText(TextField, 'before_rename');
+      await tester.enterText(keyNameField, 'after_rename');
+      await tester.pumpAndSettle();
+
+      // The TextField label changes (it now matches the new name), but
+      // the expanded section must still be visible — the Identifier
+      // field is the canary that proves expansion state survived.
+      expect(find.widgetWithText(TextField, 'after_rename'), findsOneWidget,
+          reason: 'Renamed key name should reflect in the title/field.');
+      expect(find.widgetWithText(TextField, 'OldNode'), findsOneWidget,
+          reason:
+              'Card must still be expanded after rename — Identifier field is only visible while expanded.');
+    });
   });
 
   // ==================== Group 5: Collection Configuration ====================
@@ -1146,6 +1193,78 @@ void main() {
     });
   });
 
+  // ==================== Group 11b: UMAS variable name in subtitle ====================
+  group('UMAS variable name in subtitle', () {
+    testWidgets(
+        'subtitle shows variableName instead of holdingRegister[N] when set',
+        (tester) async {
+      await tester.pumpWidget(buildTestableKeyRepository(
+        keyMappings: KeyMappings(nodes: {
+          'umas_named_key': KeyMappingEntry(
+            modbusNode: ModbusNodeConfig(
+              serverAlias: 'schneider_plc',
+              registerType: ModbusRegisterType.holdingRegister,
+              address: 0,
+              dataType: ModbusDataType.uint16,
+              pollGroup: 'default',
+            ),
+            variableName: 'Elevator.q_xUp',
+          ),
+        }),
+        stateManConfig: sampleStateManConfigWithUmas(),
+      ));
+      await tester.pumpAndSettle();
+
+      // Subtitle should show the variable name, not the Modbus address.
+      expect(find.textContaining('Elevator.q_xUp'), findsOneWidget);
+      expect(find.textContaining('@ schneider_plc'), findsOneWidget);
+      expect(find.textContaining('holdingRegister'), findsNothing,
+          reason:
+              'variableName-bound keys should not show holdingRegister[N]');
+    });
+
+    testWidgets(
+        'subtitle falls back to holdingRegister[N] when variableName is null',
+        (tester) async {
+      await tester.pumpWidget(buildTestableKeyRepository(
+        keyMappings: sampleModbusKeyMappings(),
+        stateManConfig: sampleStateManConfigWithModbus(),
+      ));
+      await tester.pumpAndSettle();
+
+      // No variableName on these keys → existing subtitle format.
+      expect(find.textContaining('holdingRegister[100]'), findsOneWidget);
+      expect(find.textContaining('float32'), findsOneWidget);
+      expect(find.textContaining('@ plc_1'), findsNWidgets(2));
+    });
+
+    testWidgets(
+        'subtitle without serverAlias renders just the variable name',
+        (tester) async {
+      await tester.pumpWidget(buildTestableKeyRepository(
+        keyMappings: KeyMappings(nodes: {
+          'orphan_named_key': KeyMappingEntry(
+            modbusNode: ModbusNodeConfig(
+              serverAlias: null,
+              registerType: ModbusRegisterType.holdingRegister,
+              address: 0,
+              dataType: ModbusDataType.uint16,
+              pollGroup: 'default',
+            ),
+            variableName: 'M_Pump.i_isAuto',
+          ),
+        }),
+        stateManConfig: sampleStateManConfigWithUmas(),
+      ));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('M_Pump.i_isAuto'), findsOneWidget);
+      expect(find.textContaining('holdingRegister'), findsNothing);
+      // No trailing '@ <alias>' when alias is absent.
+      expect(find.textContaining('@'), findsNothing);
+    });
+  });
+
   // ==================== Group 12: UMAS Browse Button ====================
   group('UMAS browse button', () {
     testWidgets('Browse button visible when UMAS enabled on selected server',
@@ -1293,6 +1412,165 @@ void main() {
 
       // Should show Bit Mask section for OPC UA
       expect(find.text('Bit Mask (optional)'), findsOneWidget);
+    });
+  });
+
+  // ==================== Group: Reorder keys ====================
+  group('Reorder keys', () {
+    /// Returns the rendered title order by walking the ExpansionTile widgets
+    /// in the visual tree (which equals the iteration order of the underlying
+    /// nodes map, since `_searchQuery` is empty by default).
+    List<String> titleOrder(WidgetTester tester) {
+      final titles = <String>[];
+      // Use `find.descendant` per ExpansionTile to grab its `title` Text.
+      final tiles = find.byType(ExpansionTile);
+      for (var i = 0; i < tiles.evaluate().length; i++) {
+        final tileTitle = find.descendant(
+          of: tiles.at(i),
+          matching: find.byType(Text),
+        );
+        // The first Text descendant is the title (the bold key name).
+        // The next is the subtitle (server config string). Take the first.
+        final text = tester.widget<Text>(tileTitle.first);
+        titles.add(text.data ?? '');
+      }
+      return titles;
+    }
+
+    KeyMappings threeKeys() {
+      return KeyMappings(nodes: {
+        'alpha': KeyMappingEntry(
+          opcuaNode: OpcUANodeConfig(namespace: 1, identifier: 'A'),
+        ),
+        'bravo': KeyMappingEntry(
+          opcuaNode: OpcUANodeConfig(namespace: 2, identifier: 'B'),
+        ),
+        'charlie': KeyMappingEntry(
+          opcuaNode: OpcUANodeConfig(namespace: 3, identifier: 'C'),
+        ),
+      });
+    }
+
+    testWidgets('renders drag handles for each card when no search filter',
+        (tester) async {
+      await tester.pumpWidget(buildTestableKeyRepository(
+        keyMappings: threeKeys(),
+        stateManConfig: sampleStateManConfig(),
+      ));
+      await tester.pumpAndSettle();
+
+      // Exactly one drag handle per card.
+      expect(find.byIcon(Icons.drag_indicator), findsNWidgets(3));
+      // Uses a ReorderableListView (not plain ListView) when no filter.
+      expect(find.byType(ReorderableListView), findsOneWidget);
+    });
+
+    testWidgets('renders initial order alpha → bravo → charlie',
+        (tester) async {
+      await tester.pumpWidget(buildTestableKeyRepository(
+        keyMappings: threeKeys(),
+        stateManConfig: sampleStateManConfig(),
+      ));
+      await tester.pumpAndSettle();
+
+      expect(titleOrder(tester), ['alpha', 'bravo', 'charlie']);
+    });
+
+    testWidgets(
+        'invoking onReorder moves first card to last position and persists',
+        (tester) async {
+      await tester.pumpWidget(buildTestableKeyRepository(
+        keyMappings: threeKeys(),
+        stateManConfig: sampleStateManConfig(),
+      ));
+      await tester.pumpAndSettle();
+
+      // Sanity check: starting order.
+      expect(titleOrder(tester), ['alpha', 'bravo', 'charlie']);
+
+      // Capture provider container to inspect persisted prefs after save.
+      final BuildContext ctx = tester.element(find.byType(KeyRepositoryContent));
+      final container = ProviderScope.containerOf(ctx);
+
+      // Find the ReorderableListView and invoke its onReorder callback,
+      // simulating a drag of index 0 to the end-of-list slot (index 3).
+      // ReorderableListView convention: newIndex equals length when moving
+      // to the very end; the widget's internal logic and our _reorderKey
+      // both subtract 1 in that case.
+      final reorderable =
+          tester.widget<ReorderableListView>(find.byType(ReorderableListView));
+      reorderable.onReorder(0, 3);
+      await tester.pumpAndSettle();
+
+      // Visual order updated: alpha is now last.
+      expect(titleOrder(tester), ['bravo', 'charlie', 'alpha']);
+
+      // Tap save to flush the new order to preferences.
+      await tester.tap(find.text('Save Key Mappings'));
+      await tester.pumpAndSettle();
+
+      // Verify persisted JSON preserves the new order.
+      final prefs = await container.read(preferencesProvider.future);
+      final raw = await prefs.getString('key_mappings');
+      expect(raw, isNotNull);
+      final decoded = KeyMappings.fromJson(
+          jsonDecode(raw!) as Map<String, dynamic>);
+      expect(decoded.nodes.keys.toList(), ['bravo', 'charlie', 'alpha']);
+    });
+
+    testWidgets(
+        'reorder moves last card to first position and JSON roundtrip preserves order',
+        (tester) async {
+      await tester.pumpWidget(buildTestableKeyRepository(
+        keyMappings: threeKeys(),
+        stateManConfig: sampleStateManConfig(),
+      ));
+      await tester.pumpAndSettle();
+
+      final reorderable =
+          tester.widget<ReorderableListView>(find.byType(ReorderableListView));
+      // Drag last (index 2) to before-first (index 0).
+      reorderable.onReorder(2, 0);
+      await tester.pumpAndSettle();
+
+      expect(titleOrder(tester), ['charlie', 'alpha', 'bravo']);
+
+      // JSON roundtrip preserves the new order.
+      final BuildContext ctx = tester.element(find.byType(KeyRepositoryContent));
+      final container = ProviderScope.containerOf(ctx);
+      await tester.tap(find.text('Save Key Mappings'));
+      await tester.pumpAndSettle();
+
+      final prefs = await container.read(preferencesProvider.future);
+      final raw = await prefs.getString('key_mappings');
+      final decoded = KeyMappings.fromJson(
+          jsonDecode(raw!) as Map<String, dynamic>);
+      expect(decoded.nodes.keys.toList(), ['charlie', 'alpha', 'bravo']);
+    });
+
+    testWidgets('search filter disables reordering (no ReorderableListView)',
+        (tester) async {
+      await tester.pumpWidget(buildTestableKeyRepository(
+        keyMappings: threeKeys(),
+        stateManConfig: sampleStateManConfig(),
+      ));
+      await tester.pumpAndSettle();
+
+      // Locate the search field by its hintText.
+      final searchField = find.byWidgetPredicate((w) {
+        if (w is! TextField) return false;
+        final decoration = w.decoration;
+        if (decoration == null) return false;
+        return decoration.hintText == 'Search keys...';
+      });
+      expect(searchField, findsOneWidget);
+      await tester.enterText(searchField, 'alpha');
+      await tester.pumpAndSettle();
+
+      // Plain ListView is now used; no ReorderableListView visible.
+      expect(find.byType(ReorderableListView), findsNothing);
+      // Drag handles hidden because cards don't get a reorderIndex.
+      expect(find.byIcon(Icons.drag_indicator), findsNothing);
     });
   });
 }

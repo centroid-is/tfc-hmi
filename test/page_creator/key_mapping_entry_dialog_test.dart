@@ -264,6 +264,47 @@ void main() {
       expect(entry.opcuaNode!.serverAlias, 'opcua_srv');
       expect(entry.modbusNode, isNull);
     });
+
+    // Regression: the Save handler must carry forward `variableName` when a
+    // UMAS symbol has been picked via the Browse callback. Before the fix,
+    // the dialog dropped this field, so the saved key fell back to the
+    // address-based Modbus path instead of binding by name to the PLC
+    // symbol. The picker callback wires `_entry.variableName` directly on
+    // the dialog state, so simulating its outcome via `initialEntry` is a
+    // faithful proxy for the picker flow that the Save handler then sees.
+    testWidgets(
+        'submit with Modbus + variableName preserves variableName in result',
+        (tester) async {
+      final existingEntry = KeyMappingEntry(
+        modbusNode: ModbusNodeConfig(
+          serverAlias: 'modbus_srv',
+          registerType: ModbusRegisterType.holdingRegister,
+          address: 100,
+          pollGroup: 'default',
+        ),
+        variableName: 'M_F2_RC_01.i_xFwd',
+      );
+
+      await pumpAndLoad(
+        tester,
+        _buildTestableDialog(
+          initialKey: 'fb_member_key',
+          initialEntry: existingEntry,
+        ),
+      );
+      await openDialog(tester);
+
+      // Tap OK — no other edits, just round-trip through the Save handler.
+      await tester.tap(find.text('OK'));
+      await settle(tester);
+
+      expect(_lastDialogResult, isNotNull);
+      final entry = _lastDialogResult!['entry'] as KeyMappingEntry;
+      expect(entry.modbusNode, isNotNull);
+      expect(entry.modbusNode!.serverAlias, 'modbus_srv');
+      // The headline assertion: variableName must survive the Save handler.
+      expect(entry.variableName, 'M_F2_RC_01.i_xFwd');
+    });
   });
 
   // ==================== Group 4: Editing Existing Entry ====================
