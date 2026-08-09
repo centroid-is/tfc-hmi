@@ -3,7 +3,6 @@ import 'common.dart';
 import 'led.dart';
 import 'button.dart';
 import 'conveyor.dart';
-import 'conveyor_fb.dart';
 import 'arrow.dart';
 import 'led_column.dart';
 import 'drawn_box.dart';
@@ -40,7 +39,6 @@ class AssetRegistry {
     LEDConfig: LEDConfig.fromJson,
     ButtonConfig: ButtonConfig.fromJson,
     ConveyorConfig: ConveyorConfig.fromJson,
-    ConveyorFbConfig: ConveyorFbConfig.fromJson,
     ConveyorGateConfig: ConveyorGateConfig.fromJson,
     SensorConfig: SensorConfig.fromJson,
     ElevatorConfig: ElevatorConfig.fromJson,
@@ -88,7 +86,6 @@ class AssetRegistry {
     ButtonConfig: ButtonConfig.preview,
     ArrowConfig: ArrowConfig.preview,
     ConveyorConfig: ConveyorConfig.preview,
-    ConveyorFbConfig: ConveyorFbConfig.preview,
     ConveyorGateConfig: ConveyorGateConfig.preview,
     SensorConfig: SensorConfig.preview,
     ElevatorConfig: ElevatorConfig.preview,

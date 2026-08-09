@@ -1,4 +1,3 @@
-import 'package:flutter/foundation.dart' show mapEquals;
 import 'package:flutter/material.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -184,10 +183,6 @@ class ConveyorConfig extends BaseAsset {
   bool? showAuger;
   String? augerRpmKey;
   AugerOpenEnd? augerOpenEnd;
-  String? itemPositionKey;
-  double? conveyorLengthMm;
-  double? itemLengthMm;
-  ItemPositionEdge? itemPositionEdge;
 
   @JsonKey(fromJson: _gatesFromJson, toJson: _gatesToJson)
   List<ChildGateEntry> gates;
@@ -204,10 +199,6 @@ class ConveyorConfig extends BaseAsset {
       this.showAuger,
       this.augerRpmKey,
       this.augerOpenEnd,
-      this.itemPositionKey,
-      this.conveyorLengthMm,
-      this.itemLengthMm,
-      this.itemPositionEdge,
       List<ChildGateEntry>? gates})
       : gates = gates != null ? List<ChildGateEntry>.of(gates) : [];
 
@@ -273,44 +264,6 @@ class _ConveyorConfigContentState extends State<_ConveyorConfigContent> {
           initialValue: widget.config.tripKey,
           onChanged: (val) => setState(() => widget.config.tripKey = val),
           label: 'Trip key',
-        ),
-        const SizedBox(height: 8),
-        KeyField(
-          initialValue: widget.config.itemPositionKey,
-          onChanged: (val) =>
-              setState(() => widget.config.itemPositionKey = val),
-          label: 'Item position key (mm)',
-        ),
-        const SizedBox(height: 8),
-        TextFormField(
-          initialValue: widget.config.conveyorLengthMm?.toString() ?? '',
-          decoration: const InputDecoration(labelText: 'Conveyor length (mm)'),
-          keyboardType: TextInputType.number,
-          onChanged: (val) => setState(() => widget.config.conveyorLengthMm =
-              val.isEmpty ? null : double.tryParse(val)),
-        ),
-        const SizedBox(height: 8),
-        TextFormField(
-          initialValue: widget.config.itemLengthMm?.toString() ?? '',
-          decoration: const InputDecoration(labelText: 'Item length (mm)'),
-          keyboardType: TextInputType.number,
-          onChanged: (val) => setState(() => widget.config.itemLengthMm =
-              val.isEmpty ? null : double.tryParse(val)),
-        ),
-        const SizedBox(height: 8),
-        const Text('Item position represents:'),
-        const SizedBox(height: 4),
-        DropdownButton<ItemPositionEdge>(
-          isExpanded: true,
-          value: widget.config.itemPositionEdge ?? ItemPositionEdge.rear,
-          onChanged: (val) =>
-              setState(() => widget.config.itemPositionEdge = val),
-          items: const [
-            DropdownMenuItem(
-                value: ItemPositionEdge.rear, child: Text('Rear edge')),
-            DropdownMenuItem(
-                value: ItemPositionEdge.front, child: Text('Front edge')),
-          ],
         ),
         const SizedBox(height: 16),
         Row(
@@ -726,17 +679,6 @@ class _ConveyorState extends ConsumerState<Conveyor>
       streamLabels.add('augerRpm');
     }
 
-    if (widget.config.itemPositionKey != null &&
-        widget.config.itemPositionKey!.isNotEmpty) {
-      streams.add(ref.watch(stateManProvider.future).asStream().switchMap(
-            (stateMan) => stateMan
-                .subscribe(widget.config.itemPositionKey!)
-                .asStream()
-                .switchMap((s) => s),
-          ));
-      streamLabels.add('itemPosition');
-    }
-
     // If no streams are configured, show error state
     if (streams.isEmpty) {
       return _buildConveyorVisual(context, Colors.grey, true);
@@ -811,25 +753,6 @@ class _ConveyorState extends ConsumerState<Conveyor>
           _updateBatches(dynValue['batches']!);
         }
 
-        if (dynValue['itemPosition'] != null) {
-          try {
-            final positionMm = dynValue['itemPosition']!.asDouble;
-            final batch = itemBatchFor(
-              positionMm: positionMm,
-              lengthMm: widget.config.conveyorLengthMm,
-              itemLengthMm: widget.config.itemLengthMm,
-              edge: widget.config.itemPositionEdge ?? ItemPositionEdge.rear,
-            );
-            if (batch != null) {
-              _batches['item'] = batch;
-            } else {
-              _batches.remove('item');
-            }
-          } catch (_) {
-            _batches.remove('item');
-          }
-        }
-
         final hasMainKey =
             widget.config.key != null && widget.config.key!.isNotEmpty;
         if (hasMainKey) {
@@ -898,11 +821,7 @@ class _ConveyorState extends ConsumerState<Conveyor>
         reverseDirection: widget.config.reverseDirection ?? false,
         showFrequency: widget.config.showFrequency ?? false,
         frequency: frequency,
-        // Snapshot copy: `_batches` is mutated in place by both the
-        // simulator timer and the per-stream listeners. Without a copy,
-        // `shouldRepaint` compares the same Map identity against itself
-        // and always returns false — see #issue (item-position freeze).
-        batches: Map<String, Batch>.from(_batches),
+        batches: _batches,
         angle: widget.config.coordinates.angle ?? 0.0,
       ),
     );
@@ -1357,55 +1276,6 @@ class Batch {
   Color color;
 
   Batch({required this.start, required this.end, this.color = Colors.white});
-
-  // Value equality so `mapEquals(oldBatches, newBatches)` in
-  // `_ConveyorPainter.shouldRepaint` detects content changes when the
-  // surrounding map identity is preserved (e.g. simulator timer mutates
-  // entries in place) or when two structurally-equal maps are compared.
-  @override
-  bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is Batch &&
-          other.start == start &&
-          other.end == end &&
-          other.color == color;
-
-  @override
-  int get hashCode => Object.hash(start, end, color);
-}
-
-/// Which physical edge of the tracked item the PLC's position value reports.
-///
-/// In conveyor flow direction:
-/// - [rear]: trailing edge (back of item). Item extends FORWARD from there.
-/// - [front]: leading edge (front of item). Item extends BACKWARD from there.
-///
-/// Default (null on config) preserves the original behaviour: [rear].
-enum ItemPositionEdge { rear, front }
-
-/// Maps a PLC-supplied item edge position (mm) onto the normalized 0..1 Batch
-/// unit consumed by `_ConveyorPainter`. The [edge] arg selects whether
-/// [positionMm] is the item's rear (default) or front edge — see
-/// [ItemPositionEdge]. Returns null when the feature is disabled or
-/// misconfigured (null/non-positive length, null itemLength).
-/// No clamping — the painter already tolerates start<0 / end>1 (see [Batch]).
-Batch? itemBatchFor({
-  required double positionMm,
-  required double? lengthMm,
-  required double? itemLengthMm,
-  ItemPositionEdge edge = ItemPositionEdge.rear,
-}) {
-  if (lengthMm == null || lengthMm <= 0 || itemLengthMm == null) return null;
-  switch (edge) {
-    case ItemPositionEdge.rear:
-      final relativeStart = positionMm / lengthMm;
-      final relativeEnd = (positionMm + itemLengthMm) / lengthMm;
-      return Batch(start: relativeStart, end: relativeEnd);
-    case ItemPositionEdge.front:
-      final relativeEnd = positionMm / lengthMm;
-      final relativeStart = (positionMm - itemLengthMm) / lengthMm;
-      return Batch(start: relativeStart, end: relativeEnd);
-  }
 }
 
 class _ConveyorPainter extends CustomPainter {
@@ -1581,47 +1451,7 @@ class _ConveyorPainter extends CustomPainter {
       oldDelegate.showExclamation != showExclamation ||
       oldDelegate.bidirectional != bidirectional ||
       oldDelegate.showFrequency != showFrequency ||
-      oldDelegate.frequency != frequency ||
-      !mapEquals(oldDelegate.batches, batches);
-}
-
-/// Test-only factory exposing the library-private `_ConveyorPainter` so unit
-/// tests can assert its `shouldRepaint` contract without instantiating the
-/// widget. Returns the painter typed as `CustomPainter` so callers don't need
-/// to name the private type.
-@visibleForTesting
-CustomPainter debugBuildConveyorPainterForTest({
-  required Color color,
-  required Map<String, Batch> batches,
-  bool showExclamation = false,
-  bool bidirectional = false,
-  bool reverseDirection = false,
-  bool showFrequency = false,
-  double? frequency,
-  double angle = 0.0,
-}) {
-  return _ConveyorPainter(
-    color: color,
-    showExclamation: showExclamation,
-    bidirectional: bidirectional,
-    reverseDirection: reverseDirection,
-    showFrequency: showFrequency,
-    frequency: frequency,
-    batches: batches,
-    angle: angle,
-  );
-}
-
-/// Test-only adapter so unit tests can invoke `shouldRepaint` on the private
-/// `_ConveyorPainter` without naming the type. Mirrors the
-/// `newPainter.shouldRepaint(oldPainter)` call convention used by the Flutter
-/// framework.
-@visibleForTesting
-bool debugConveyorPainterShouldRepaint(
-  CustomPainter newPainter,
-  CustomPainter oldPainter,
-) {
-  return newPainter.shouldRepaint(oldPainter);
+      oldDelegate.frequency != frequency;
 }
 
 class ConveyorStatsGraph extends ConsumerStatefulWidget {

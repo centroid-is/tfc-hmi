@@ -54,11 +54,6 @@ ConveyorConfig _$ConveyorConfigFromJson(Map<String, dynamic> json) =>
       augerRpmKey: json['augerRpmKey'] as String?,
       augerOpenEnd:
           $enumDecodeNullable(_$AugerOpenEndEnumMap, json['augerOpenEnd']),
-      itemPositionKey: json['itemPositionKey'] as String?,
-      conveyorLengthMm: (json['conveyorLengthMm'] as num?)?.toDouble(),
-      itemLengthMm: (json['itemLengthMm'] as num?)?.toDouble(),
-      itemPositionEdge: $enumDecodeNullable(
-          _$ItemPositionEdgeEnumMap, json['itemPositionEdge']),
       gates: _gatesFromJson(json['gates'] as List?),
     )
       ..variant = json['asset_name'] as String
@@ -90,19 +85,10 @@ Map<String, dynamic> _$ConveyorConfigToJson(ConveyorConfig instance) =>
       'showAuger': instance.showAuger,
       'augerRpmKey': instance.augerRpmKey,
       'augerOpenEnd': _$AugerOpenEndEnumMap[instance.augerOpenEnd],
-      'itemPositionKey': instance.itemPositionKey,
-      'conveyorLengthMm': instance.conveyorLengthMm,
-      'itemLengthMm': instance.itemLengthMm,
-      'itemPositionEdge': _$ItemPositionEdgeEnumMap[instance.itemPositionEdge],
       'gates': _gatesToJson(instance.gates),
     };
 
 const _$AugerOpenEndEnumMap = {
   AugerOpenEnd.left: 'left',
   AugerOpenEnd.right: 'right',
-};
-
-const _$ItemPositionEdgeEnumMap = {
-  ItemPositionEdge.rear: 'rear',
-  ItemPositionEdge.front: 'front',
 };
