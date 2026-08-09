@@ -28,46 +28,16 @@ class ArrowConfig extends BaseAsset {
   @ColorConverter()
   Color color;
 
-  /// Optional per-direction bool input keys.
-  ///
-  /// When any of these are set, the runtime ignores the legacy single
-  /// `key` (which inferred direction from a stringified value) and
-  /// instead reads each bound key as a boolean. The first direction
-  /// whose bool reads `true` is rendered as the active direction
-  /// (priority: up, down, left, right). When none are active, the
-  /// arrow renders in its inactive ("lost") state. When all four are
-  /// null the asset falls back to the legacy single-key behaviour so
-  /// pages saved before this change round-trip bit-perfectly.
-  @JsonKey(includeIfNull: false)
-  String? upInputKey;
-  @JsonKey(includeIfNull: false)
-  String? downInputKey;
-  @JsonKey(includeIfNull: false)
-  String? leftInputKey;
-  @JsonKey(includeIfNull: false)
-  String? rightInputKey;
-
   ArrowConfig({
     required this.key,
     required this.label,
     Color? color,
-    this.upInputKey,
-    this.downInputKey,
-    this.leftInputKey,
-    this.rightInputKey,
   }) : color = color ?? Colors.black;
 
   ArrowConfig.preview()
       : key = "",
         label = "Arrow preview",
         color = Colors.black;
-
-  /// True when any per-direction bool input key is configured.
-  bool get hasDirectionInputs =>
-      (upInputKey != null && upInputKey!.isNotEmpty) ||
-      (downInputKey != null && downInputKey!.isNotEmpty) ||
-      (leftInputKey != null && leftInputKey!.isNotEmpty) ||
-      (rightInputKey != null && rightInputKey!.isNotEmpty);
 
   factory ArrowConfig.fromJson(Map<String, dynamic> json) =>
       _$ArrowConfigFromJson(json);
@@ -152,47 +122,6 @@ class _ArrowConfigEditorState extends State<_ArrowConfigEditor> {
           KeyField(
             initialValue: widget.config.key,
             onChanged: (value) => setState(() => widget.config.key = value),
-            label: 'Key (string → direction, optional)',
-          ),
-          const SizedBox(height: 16),
-          // -- Per-direction bool input keys --
-          //
-          // Each direction can be independently driven by a boolean tag.
-          // When any of these are set, the runtime prefers them over the
-          // legacy single "Key" above (which infers direction by string
-          // match). Leaving them all empty preserves the prior behaviour
-          // so legacy pages keep working unchanged.
-          Text(
-            'Per-direction bool inputs (optional)',
-            style: Theme.of(context).textTheme.titleSmall,
-          ),
-          const SizedBox(height: 8),
-          KeyField(
-            initialValue: widget.config.upInputKey,
-            onChanged: (value) => setState(
-                () => widget.config.upInputKey = value.isEmpty ? null : value),
-            label: 'Up input (bool)',
-          ),
-          const SizedBox(height: 8),
-          KeyField(
-            initialValue: widget.config.downInputKey,
-            onChanged: (value) => setState(() =>
-                widget.config.downInputKey = value.isEmpty ? null : value),
-            label: 'Down input (bool)',
-          ),
-          const SizedBox(height: 8),
-          KeyField(
-            initialValue: widget.config.leftInputKey,
-            onChanged: (value) => setState(() =>
-                widget.config.leftInputKey = value.isEmpty ? null : value),
-            label: 'Left input (bool)',
-          ),
-          const SizedBox(height: 8),
-          KeyField(
-            initialValue: widget.config.rightInputKey,
-            onChanged: (value) => setState(() =>
-                widget.config.rightInputKey = value.isEmpty ? null : value),
-            label: 'Right input (bool)',
           ),
           const SizedBox(height: 16),
           TextFormField(
@@ -309,69 +238,8 @@ class _ArrowWidgetState extends ConsumerState<ArrowWidget> {
     );
   }
 
-  /// Per-direction bool path.
-  ///
-  /// When the operator has wired any of `<dir>InputKey`, each set key is
-  /// subscribed and read as a boolean. The first direction whose value
-  /// reads `true` (priority up→down→left→right) becomes the active
-  /// direction; if none are true the arrow renders in its inactive
-  /// "lost" state. Unset directions contribute no stream.
-  Widget _buildPerDirection() {
-    final cfg = widget.config;
-    // Ordered (direction, key) pairs — priority follows list order.
-    final entries = <MapEntry<String, String>>[];
-    if (cfg.upInputKey != null && cfg.upInputKey!.isNotEmpty) {
-      entries.add(MapEntry('up', cfg.upInputKey!));
-    }
-    if (cfg.downInputKey != null && cfg.downInputKey!.isNotEmpty) {
-      entries.add(MapEntry('down', cfg.downInputKey!));
-    }
-    if (cfg.leftInputKey != null && cfg.leftInputKey!.isNotEmpty) {
-      entries.add(MapEntry('left', cfg.leftInputKey!));
-    }
-    if (cfg.rightInputKey != null && cfg.rightInputKey!.isNotEmpty) {
-      entries.add(MapEntry('right', cfg.rightInputKey!));
-    }
-
-    final streams = entries.map((e) {
-      return ref.watch(stateManProvider.future).asStream().switchMap(
-            (stateMan) => stateMan
-                .subscribe(e.value)
-                .asStream()
-                .switchMap((s) => s),
-          );
-    }).toList();
-
-    return StreamBuilder<List<DynamicValue>>(
-      stream: CombineLatestStream.list(streams),
-      builder: (context, snapshot) {
-        String operation = 'lost';
-        if (snapshot.hasData) {
-          for (int i = 0; i < entries.length; i++) {
-            try {
-              if (snapshot.data![i].asBool == true) {
-                operation = entries[i].key;
-                break;
-              }
-            } catch (_) {
-              // Non-bool value: skip — direction remains inactive.
-            }
-          }
-        }
-        return _buildIcon(operation, widget.config.color);
-      },
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
-    // Per-direction bool inputs take priority when any are configured.
-    // Falls through to legacy single-key behaviour when none are set so
-    // pages saved before this change keep rendering exactly as before.
-    if (widget.config.hasDirectionInputs) {
-      return _buildPerDirection();
-    }
-
     if (widget.config.key.isEmpty) {
       // No live key — render the configured arrow in its configured colour.
       // The operator's chosen colour applies in both editor and runtime
