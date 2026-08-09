@@ -81,6 +81,11 @@ jobs:
         export PATH="/opt/homebrew/opt/postgresql@17/bin:$PATH"
         echo "/opt/homebrew/opt/postgresql@17/bin" >> $GITHUB_PATH
 
+        # Newer Homebrew refuses formulae from third-party taps unless the
+        # tap is explicitly trusted ("Refusing to load formula ... from
+        # untrusted tap"). `|| true` keeps older brew (no trust subcommand)
+        # working.
+        brew trust timescale/tap || true
         brew install timescale/tap/timescaledb
 
         # Move TimescaleDB extension files into PostgreSQL directories
