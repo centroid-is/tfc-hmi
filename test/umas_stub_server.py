@@ -52,7 +52,7 @@ VARIABLES = [
     # Forces the speculative-DD02 path through _expandVariable
     # (plc4j parseCustomTypeBlock:1130-1146).
     ("Application.Motors.M_Elevator", 5, 0, 200),
-    # Regression for bitalias-cardinality-mismatch: an ARRAY[1..3] OF BOOL
+    # Regression for the speculative-DD02 array-cardinality-mismatch: an ARRAY[1..3] OF BOOL
     # variable whose typeId (130) is intentionally ABSENT from DATA_TYPES
     # (DD03) but PRESENT in ARRAY_TYPES (DD02). Mirrors the live M580
     # behaviour for FB members like BMEP58_ECPU_EXT.DIO_HEALTH /
@@ -175,8 +175,8 @@ def _init_variable_store():
         (5, 4): struct.pack("<f", 92.5),          # M_Elevator.torque REAL
         (5, 8): struct.pack("B", 1),              # M_Elevator.enabled BOOL
         # health_bits (block=6, typeId=130 → ARRAY[1..3] OF BOOL) — one
-        # byte per BOOL on M580. Regression for bitalias-cardinality
-        # mismatch.
+        # byte per BOOL on M580. Regression for the speculative-DD02
+        # array-cardinality-mismatch.
         (6, 0): struct.pack("B", 1),              # health_bits[1] = true
         (6, 1): struct.pack("B", 0),              # health_bits[2] = false
         (6, 2): struct.pack("B", 1),              # health_bits[3] = true

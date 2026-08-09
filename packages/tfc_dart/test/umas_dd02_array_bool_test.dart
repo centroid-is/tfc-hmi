@@ -1,8 +1,8 @@
 // Fixture-based parsing tests for the DD02 12-byte short array records
 // returned for IDX 0x1B..0x23 on the live M580 at 192.168.112.159.
 //
-// Source: `/tmp/bitalias-swarm-v2/trailer-probe-raw.json` (Phase 7 of the
-// swarm3-trailer probe). The records below are byte-for-byte copies of
+// Source: raw DD02 responses captured from the live M580 during the
+// 2026-05 protocol probes. The records below are byte-for-byte copies of
 // what the M580 actually sent — locking them in as a regression fixture
 // guards against silent parser drift.
 //

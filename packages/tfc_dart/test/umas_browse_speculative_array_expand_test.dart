@@ -123,7 +123,7 @@ void main() {
     await tcp.disconnect();
   });
 
-  group('Speculative-DD02 array expansion — bitalias-cardinality-mismatch', () {
+  group('Speculative-DD02 array expansion — array-cardinality-mismatch', () {
     test('browse() expands ARRAY[1..3] OF BOOL whose typeId is absent from DD03',
         () async {
       await tcp.connect();

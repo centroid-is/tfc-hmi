@@ -136,8 +136,8 @@ void main() {
     expect(childNames, containsAll(['GVL', 'Motor', 'Counters', 'Motors']));
 
     // GVL has 7 variables (5 scalars + 1 UINT array + 1 BOOL array whose
-    // typeId is absent from DD03 — regression for
-    // bitalias-cardinality-mismatch).
+    // typeId is absent from DD03 — regression for the speculative-DD02
+    // array-cardinality-mismatch).
     final gvl = app.children.firstWhere((c) => c.name == 'GVL');
     expect(gvl.children, hasLength(7));
     expect(gvl.isFolder, isTrue);
@@ -258,7 +258,7 @@ void main() {
 
     final vars = await umas.readVariableNames();
     // 13 vars: 11 original + Application.Motors.M_Elevator (Phase 2 FB fixture)
-    // + Application.GVL.health_bits (bitalias-cardinality-mismatch regression).
+    // + Application.GVL.health_bits (array-cardinality-mismatch regression).
     expect(vars, hasLength(13));
 
     // Check first variable
