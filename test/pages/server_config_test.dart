@@ -44,7 +44,7 @@ void main() {
 
       // Find the networkWired icon within the Modbus section
       final networkWiredIcons = find.byWidgetPredicate(
-          (w) => w is FaIcon && w.icon == FontAwesomeIcons.networkWired);
+          (w) => w is FaIcon && w.icon == FontAwesomeIcons.networkWired.data);
       expect(networkWiredIcons, findsAtLeastNWidgets(1));
     });
 
@@ -158,7 +158,7 @@ void main() {
       // Find trash icon buttons in the Modbus section area.
       // Tap the last trash button (belongs to Modbus card).
       final trashButtons = find.byWidgetPredicate(
-          (w) => w is FaIcon && w.icon == FontAwesomeIcons.trash);
+          (w) => w is FaIcon && w.icon == FontAwesomeIcons.trash.data);
       await tester.tap(trashButtons.last);
       await settle(tester);
 
@@ -186,7 +186,7 @@ void main() {
 
       // Tap delete (last trash button)
       final trashButtons = find.byWidgetPredicate(
-          (w) => w is FaIcon && w.icon == FontAwesomeIcons.trash);
+          (w) => w is FaIcon && w.icon == FontAwesomeIcons.trash.data);
       await tester.tap(trashButtons.last);
       await settle(tester);
 
@@ -352,7 +352,7 @@ void main() {
       // Find trash icons within poll group rows -- the small ones (size 14)
       // The server card trash is size 16, poll group trash is size 14
       final pollGroupTrashIcons = find.byWidgetPredicate(
-          (w) => w is FaIcon && w.icon == FontAwesomeIcons.trash && w.size == 14);
+          (w) => w is FaIcon && w.icon == FontAwesomeIcons.trash.data && w.size == 14);
       expect(pollGroupTrashIcons, findsAtLeastNWidgets(1));
 
       // Tap first poll group trash icon

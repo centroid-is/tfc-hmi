@@ -200,9 +200,13 @@ class _TechDocDropdownOverlay extends StatelessWidget {
             child: Material(
               elevation: 8,
               borderRadius: BorderRadius.circular(8),
+              // The surface colour lives on the Material rather than the
+              // Container below: ListTile paints its ink splashes on the
+              // nearest Material ancestor, so a coloured DecoratedBox in
+              // between would hide them (asserted by Flutter >= 3.44).
+              color: Theme.of(context).colorScheme.surface,
               child: Container(
                 decoration: BoxDecoration(
-                  color: Theme.of(context).colorScheme.surface,
                   borderRadius: BorderRadius.circular(8),
                   border: Border.all(color: Theme.of(context).dividerColor),
                 ),

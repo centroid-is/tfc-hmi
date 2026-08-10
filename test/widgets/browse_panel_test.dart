@@ -418,7 +418,7 @@ void main() {
       expect(find.byIcon(Icons.play_arrow), findsOneWidget);
       expect(
         find.byWidgetPredicate(
-            (w) => w is FaIcon && w.icon == FontAwesomeIcons.tag),
+            (w) => w is FaIcon && w.icon == FontAwesomeIcons.tag.data),
         findsOneWidget,
       );
     });
