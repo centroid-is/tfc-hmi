@@ -6,6 +6,20 @@ part of 'conveyor.dart';
 // JsonSerializableGenerator
 // **************************************************************************
 
+ConveyorTurnEntry _$ConveyorTurnEntryFromJson(Map<String, dynamic> json) =>
+    ConveyorTurnEntry(
+      position: (json['position'] as num?)?.toDouble() ?? 0.5,
+      angle: (json['angle'] as num?)?.toDouble() ?? 45,
+      radius: (json['radius'] as num?)?.toDouble() ?? 1.5,
+    );
+
+Map<String, dynamic> _$ConveyorTurnEntryToJson(ConveyorTurnEntry instance) =>
+    <String, dynamic>{
+      'position': instance.position,
+      'angle': instance.angle,
+      'radius': instance.radius,
+    };
+
 ConveyorColorPaletteConfig _$ConveyorColorPaletteConfigFromJson(
         Map<String, dynamic> json) =>
     ConveyorColorPaletteConfig()
@@ -54,7 +68,11 @@ ConveyorConfig _$ConveyorConfigFromJson(Map<String, dynamic> json) =>
       augerRpmKey: json['augerRpmKey'] as String?,
       augerOpenEnd:
           $enumDecodeNullable(_$AugerOpenEndEnumMap, json['augerOpenEnd']),
+      beltThickness: (json['beltThickness'] as num?)?.toDouble(),
       gates: _gatesFromJson(json['gates'] as List?),
+      turns: (json['turns'] as List<dynamic>?)
+          ?.map((e) => ConveyorTurnEntry.fromJson(e as Map<String, dynamic>))
+          .toList(),
     )
       ..variant = json['asset_name'] as String
       ..coordinates =
@@ -86,6 +104,8 @@ Map<String, dynamic> _$ConveyorConfigToJson(ConveyorConfig instance) =>
       'augerRpmKey': instance.augerRpmKey,
       'augerOpenEnd': _$AugerOpenEndEnumMap[instance.augerOpenEnd],
       'gates': _gatesToJson(instance.gates),
+      'turns': instance.turns.map((e) => e.toJson()).toList(),
+      'beltThickness': instance.beltThickness,
     };
 
 const _$AugerOpenEndEnumMap = {
