@@ -9,7 +9,11 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:tfc/providers/database.dart';
 import 'package:tfc_mcp_server/tfc_mcp_server.dart'
-    show McpConfig, McpToolToggles, readMcpConfigFromPreferences, writeMcpConfigToPreferences;
+    show
+        McpConfig,
+        McpToolToggles,
+        readMcpConfigFromPreferences,
+        writeMcpConfigToPreferences;
 
 import '../providers/mcp_bridge.dart';
 import '../providers/preferences.dart';
@@ -600,12 +604,28 @@ class PreferencesKeysWidget extends ConsumerStatefulWidget {
       _PreferencesKeysWidgetState();
 }
 
-class _PreferencesKeysWidgetState extends ConsumerState<PreferencesKeysWidget> {
+class _PreferencesKeysWidgetState extends ConsumerState<PreferencesKeysWidget>
+    with AutomaticKeepAliveClientMixin {
   Map<String, Object?>? _allPrefs;
   Map<String, bool>? _dbKeyFlags;
   Preferences? _preferences;
   SharedPreferencesWrapper? _localPrefs;
   bool _loading = true;
+
+  // Unsaved editor contents and which row is open, held here rather than in
+  // the row itself. Both lists below are lazy — the page-level ListView and
+  // the key list — so a row is unmounted (and its State disposed) as soon as
+  // it scrolls past the cache extent, and re-attaching the section rebuilds
+  // every row from scratch. Anything the user has typed must therefore live
+  // above both lists to survive.
+  final Map<String, String> _drafts = {};
+  String? _expandedKey;
+
+  // Keeps this section itself mounted when the page scrolls past it, which is
+  // what makes _drafts a safe place to keep that state (and avoids reloading
+  // every preference value on the way back).
+  @override
+  bool get wantKeepAlive => true;
 
   @override
   void initState() {
@@ -650,6 +670,7 @@ class _PreferencesKeysWidgetState extends ConsumerState<PreferencesKeysWidget> {
 
   @override
   Widget build(BuildContext context) {
+    super.build(context); // AutomaticKeepAliveClientMixin
     final prefsAsync = ref.watch(preferencesProvider);
 
     return prefsAsync.when(
@@ -695,68 +716,99 @@ class _PreferencesKeysWidgetState extends ConsumerState<PreferencesKeysWidget> {
                 ),
                 const SizedBox(height: 16),
                 Expanded(
-                  child: ListView(
-                    children: sortedEntries
-                        .map(
-                          (e) => _PreferenceKeyTile(
-                            keyName: e.key,
-                            value: e.value,
-                            isInDatabase: dbFlags[e.key] ?? false,
-                            onChanged: (newValue) async {
-                              final isInDb = dbFlags[e.key] ?? false;
-                              final target = isInDb ? prefs : localPrefs;
+                  // .builder, not ListView(children:): the latter constructs
+                  // every row up front, so a row re-mounted after scrolling
+                  // would reuse a widget still holding the draft/expansion
+                  // captured at the parent's last build — i.e. before the user
+                  // typed anything. Building per row reads current state.
+                  child: ListView.builder(
+                    itemCount: sortedEntries.length,
+                    itemBuilder: (context, index) {
+                      final e = sortedEntries[index];
+                      return _PreferenceKeyTile(
+                        // Identity must follow the preference key, not the
+                        // list position: adding or deleting a key reorders
+                        // the list, and without this a kept-alive tile
+                        // would rebind to a different preference.
+                        key: ValueKey(e.key),
+                        keyName: e.key,
+                        value: e.value,
+                        isInDatabase: dbFlags[e.key] ?? false,
+                        initiallyExpanded: _expandedKey == e.key,
+                        draft: _drafts[e.key],
+                        // No setState: the row already holds this text in
+                        // its own controller, and rebuilding the list on
+                        // every keystroke would fight the editor.
+                        onDraftChanged: (text) {
+                          if (text == null) {
+                            _drafts.remove(e.key);
+                          } else {
+                            _drafts[e.key] = text;
+                          }
+                        },
+                        onExpansionChanged: (expanded) {
+                          _expandedKey = expanded ? e.key : null;
+                        },
+                        onChanged: (newValue) async {
+                          final isInDb = dbFlags[e.key] ?? false;
+                          final target = isInDb ? prefs : localPrefs;
 
-                              if (newValue is bool) {
-                                await target.setBool(e.key, newValue);
-                              } else if (newValue is int) {
-                                await target.setInt(e.key, newValue);
-                              } else if (newValue is double) {
-                                await target.setDouble(e.key, newValue);
-                              } else if (newValue is List<String>) {
-                                await target.setStringList(e.key, newValue);
-                              } else if (newValue is String) {
-                                await target.setString(e.key, newValue);
-                              }
-                              // Reload data to reflect changes
-                              _loading = true;
-                              _loadData(prefs);
-                            },
-                            onDelete: () async {
-                              final confirmed = await showDialog<bool>(
-                                context: context,
-                                builder: (context) => AlertDialog(
-                                  title: const Text('Delete Preference'),
-                                  content: Text('Delete "${e.key}"?'),
-                                  actions: [
-                                    TextButton(
-                                      onPressed: () =>
-                                          Navigator.pop(context, false),
-                                      child: const Text('Cancel'),
-                                    ),
-                                    TextButton(
-                                      onPressed: () =>
-                                          Navigator.pop(context, true),
-                                      child: const Text('Delete'),
-                                    ),
-                                  ],
+                          if (newValue is bool) {
+                            await target.setBool(e.key, newValue);
+                          } else if (newValue is int) {
+                            await target.setInt(e.key, newValue);
+                          } else if (newValue is double) {
+                            await target.setDouble(e.key, newValue);
+                          } else if (newValue is List<String>) {
+                            await target.setStringList(e.key, newValue);
+                          } else if (newValue is String) {
+                            await target.setString(e.key, newValue);
+                          }
+                          // Reload data to reflect changes
+                          _loading = true;
+                          _loadData(prefs);
+                        },
+                        onDelete: () async {
+                          final confirmed = await showDialog<bool>(
+                            context: context,
+                            builder: (context) => AlertDialog(
+                              title: const Text('Delete Preference'),
+                              content: Text('Delete "${e.key}"?'),
+                              actions: [
+                                TextButton(
+                                  onPressed: () =>
+                                      Navigator.pop(context, false),
+                                  child: const Text('Cancel'),
                                 ),
-                              );
-                              if (confirmed == true) {
-                                final isInDb = dbFlags[e.key] ?? false;
-                                if (isInDb) {
-                                  await prefs.remove(e.key);
-                                } else {
-                                  await localPrefs.remove(e.key);
-                                }
-                                // Reload data and invalidate provider
-                                _loading = true;
-                                _loadData(prefs);
-                                ref.invalidate(preferencesProvider);
-                              }
-                            },
-                          ),
-                        )
-                        .toList(),
+                                TextButton(
+                                  // Focused on open so Enter confirms straight
+                                  // away when clearing out several keys in a
+                                  // row. Escape still dismisses without
+                                  // deleting.
+                                  autofocus: true,
+                                  onPressed: () => Navigator.pop(context, true),
+                                  child: const Text('Delete'),
+                                ),
+                              ],
+                            ),
+                          );
+                          if (confirmed == true) {
+                            final isInDb = dbFlags[e.key] ?? false;
+                            if (isInDb) {
+                              await prefs.remove(e.key);
+                            } else {
+                              await localPrefs.remove(e.key);
+                            }
+                            _drafts.remove(e.key);
+                            if (_expandedKey == e.key) _expandedKey = null;
+                            // Reload data and invalidate provider
+                            _loading = true;
+                            _loadData(prefs);
+                            ref.invalidate(preferencesProvider);
+                          }
+                        },
+                      );
+                    },
                   ),
                 ),
               ],
@@ -775,12 +827,24 @@ class _PreferenceKeyTile extends StatefulWidget {
   final ValueChanged<Object?> onChanged;
   final VoidCallback onDelete;
 
+  /// Expansion and in-progress edits are owned by the parent so they outlive
+  /// this tile being unmounted by the surrounding lazy lists.
+  final bool initiallyExpanded;
+  final String? draft;
+  final ValueChanged<String?> onDraftChanged;
+  final ValueChanged<bool> onExpansionChanged;
+
   const _PreferenceKeyTile({
+    super.key,
     required this.keyName,
     required this.value,
     required this.isInDatabase,
     required this.onChanged,
     required this.onDelete,
+    required this.initiallyExpanded,
+    required this.draft,
+    required this.onDraftChanged,
+    required this.onExpansionChanged,
   });
 
   @override
@@ -791,25 +855,45 @@ class _PreferenceKeyTileState extends State<_PreferenceKeyTile> {
   late TextEditingController _controller;
   final _expansionController =
       ExpansionTileController(); // todo deprecated since 3.31
-  bool _isExpanded = false;
+  late bool _isExpanded;
+
+  String get _valueAsText => widget.value is String
+      ? widget.value as String
+      : widget.value?.toString() ?? '';
 
   @override
   void initState() {
     super.initState();
-    _controller = TextEditingController(
-      text: widget.value is String
-          ? widget.value as String
-          : widget.value?.toString() ?? '',
+    _isExpanded = widget.initiallyExpanded;
+    // Seed from the parent-held draft so an edit that outlived this State
+    // (see PreferencesKeysWidget) is restored rather than reverted.
+    _controller = TextEditingController(text: widget.draft ?? _valueAsText);
+    _controller.addListener(_reportDraft);
+  }
+
+  void _reportDraft() {
+    widget.onDraftChanged(
+      _controller.text == _valueAsText ? null : _controller.text,
     );
+  }
+
+  @override
+  void dispose() {
+    _controller.removeListener(_reportDraft);
+    _controller.dispose();
+    super.dispose();
   }
 
   @override
   void didUpdateWidget(covariant _PreferenceKeyTile oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.value != oldWidget.value) {
-      _controller.text = widget.value is String
-          ? widget.value as String
-          : widget.value?.toString() ?? '';
+      // A new persisted value supersedes any draft, so adopt it without
+      // reporting the change back up as an unsaved edit.
+      _controller.removeListener(_reportDraft);
+      _controller.text = _valueAsText;
+      _controller.addListener(_reportDraft);
+      widget.onDraftChanged(null);
     }
   }
 
@@ -818,6 +902,7 @@ class _PreferenceKeyTileState extends State<_PreferenceKeyTile> {
     final value = widget.value;
     return ExpansionTile(
       controller: _expansionController,
+      initiallyExpanded: widget.initiallyExpanded,
       leading: FaIcon(
         widget.isInDatabase
             ? FontAwesomeIcons.database
@@ -857,6 +942,7 @@ class _PreferenceKeyTileState extends State<_PreferenceKeyTile> {
         setState(() {
           _isExpanded = expanded;
         });
+        widget.onExpansionChanged(expanded);
       },
       children: [
         if (value is bool)
@@ -927,7 +1013,12 @@ class _PreferenceKeyTileState extends State<_PreferenceKeyTile> {
       return _JsonEditor(
         keyName: widget.keyName,
         initialText: const JsonEncoder.withIndent('  ').convert(decoded),
-        onSave: (formatted) => widget.onChanged(formatted),
+        draft: widget.draft,
+        onDraftChanged: widget.onDraftChanged,
+        onSave: (formatted) {
+          widget.onDraftChanged(null);
+          widget.onChanged(formatted);
+        },
       );
     } else {
       return ListTile(
@@ -947,9 +1038,16 @@ class _JsonEditor extends StatefulWidget {
   final String initialText;
   final ValueChanged<String> onSave;
 
+  /// In-progress edit owned by the parent, so it survives this editor being
+  /// unmounted when the surrounding lazy lists scroll it out of view.
+  final String? draft;
+  final ValueChanged<String?> onDraftChanged;
+
   const _JsonEditor({
     required this.keyName,
     required this.initialText,
+    required this.draft,
+    required this.onDraftChanged,
     required this.onSave,
   });
 
@@ -965,7 +1063,22 @@ class _JsonEditorState extends State<_JsonEditor> {
   @override
   void initState() {
     super.initState();
-    _controller = TextEditingController(text: widget.initialText);
+    _controller =
+        TextEditingController(text: widget.draft ?? widget.initialText);
+    _controller.addListener(_reportDraft);
+  }
+
+  void _reportDraft() {
+    widget.onDraftChanged(
+      _controller.text == widget.initialText ? null : _controller.text,
+    );
+  }
+
+  @override
+  void dispose() {
+    _controller.removeListener(_reportDraft);
+    _controller.dispose();
+    super.dispose();
   }
 
   void _formatJson() {
