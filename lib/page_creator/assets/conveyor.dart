@@ -1,3 +1,5 @@
+import 'dart:ui' show PathMetric, Tangent;
+
 import 'package:flutter/material.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -49,6 +51,131 @@ List<ChildGateEntry> _gatesFromJson(List<dynamic>? json) {
 
 List<Map<String, dynamic>> _gatesToJson(List<ChildGateEntry> gates) =>
     gates.map((e) => e.toJson()).toList();
+
+/// A bend in the conveyor belt.
+///
+/// The belt runs straight until [position] (fraction of the configured belt
+/// length), then follows a circular arc of [radius] belt-widths sweeping
+/// [angle] degrees, and continues straight in the new direction. Positive
+/// angles turn towards the bottom of the screen, negative towards the top
+/// (before the asset's own rotation is applied).
+@JsonSerializable()
+class ConveyorTurnEntry {
+  /// Fractional position along the belt where the turn starts (0.0 = start).
+  double position;
+
+  /// Sweep of the turn in degrees. Positive = down/clockwise on screen.
+  double angle;
+
+  /// Turn radius expressed in belt widths (the conveyor's cross dimension).
+  double radius;
+
+  ConveyorTurnEntry({
+    this.position = 0.5,
+    this.angle = 45,
+    this.radius = 1.5,
+  });
+
+  factory ConveyorTurnEntry.fromJson(Map<String, dynamic> json) =>
+      _$ConveyorTurnEntryFromJson(json);
+  Map<String, dynamic> toJson() => _$ConveyorTurnEntryToJson(this);
+}
+
+/// Centerline geometry of a conveyor with one or more [ConveyorTurnEntry]
+/// bends, fitted into the asset's bounding box.
+///
+/// The centerline is built in "natural" units where the belt length equals the
+/// box width and the belt width equals the box height (matching the straight
+/// rendering), then uniformly scaled and centered so the whole belt stays
+/// inside the box. Fractional belt positions (batches, gates) map onto the
+/// path through its [PathMetric].
+class ConveyorPathGeometry {
+  final Path path;
+  final double beltWidth;
+  final double scale;
+  final PathMetric _metric;
+
+  ConveyorPathGeometry._(this.path, this.beltWidth, this.scale, this._metric);
+
+  double get length => _metric.length;
+
+  Tangent tangentAt(double fraction) =>
+      _metric.getTangentForOffset(fraction.clamp(0.0, 1.0) * length) ??
+      Tangent(Offset.zero, const Offset(1, 0));
+
+  Path extractFraction(double from, double to) => _metric.extractPath(
+      from.clamp(0.0, 1.0) * length, to.clamp(0.0, 1.0) * length);
+
+  static ConveyorPathGeometry? build(
+    List<ConveyorTurnEntry> turns,
+    Size size, {
+    double thicknessFactor = 1.0,
+  }) {
+    if (turns.isEmpty || size.width <= 0 || size.height <= 0) return null;
+    // Belt thickness relative to the box height. A bend needs a taller box to
+    // fit, which would otherwise force a fat belt — the factor lets e.g. an
+    // L-shaped conveyor in a square box keep a thin belt.
+    final beltWidth = size.height * thicknessFactor.clamp(0.05, 1.0);
+    final targetLength = size.width;
+    final sorted = List<ConveyorTurnEntry>.of(turns)
+      ..sort((a, b) => a.position.compareTo(b.position));
+
+    final path = Path()..moveTo(0, 0);
+    var point = Offset.zero;
+    var heading = 0.0;
+    var distance = 0.0;
+
+    void straight(double len) {
+      if (len <= 0) return;
+      point += Offset(cos(heading), sin(heading)) * len;
+      path.lineTo(point.dx, point.dy);
+      distance += len;
+    }
+
+    for (final turn in sorted) {
+      final sweep = turn.angle * pi / 180;
+      if (sweep == 0) continue;
+      final radius = max(turn.radius, 0.1) * beltWidth;
+      straight(turn.position.clamp(0.0, 1.0) * targetLength - distance);
+      // Arc center sits perpendicular to the travel direction, on the side
+      // the belt turns towards (screen coordinates, y down).
+      final centerDir = heading + (sweep > 0 ? pi / 2 : -pi / 2);
+      final center = point + Offset(cos(centerDir), sin(centerDir)) * radius;
+      final startAngle = centerDir + pi;
+      path.arcTo(
+        Rect.fromCircle(center: center, radius: radius),
+        startAngle,
+        sweep,
+        false,
+      );
+      heading += sweep;
+      point = center +
+          Offset(cos(startAngle + sweep), sin(startAngle + sweep)) * radius;
+      distance += radius * sweep.abs();
+    }
+    straight(targetLength - distance);
+
+    // Fit the belt outline (centerline inflated by half the belt width plus
+    // the border stroke) into the box, uniformly scaled and centered.
+    final bounds = path.getBounds().inflate(beltWidth / 2 + 2);
+    if (bounds.width <= 0 || bounds.height <= 0) return null;
+    final fit = min(size.width / bounds.width, size.height / bounds.height);
+    // Uniform scale by `fit`, then translate the bounds center to the box
+    // center (column-major 4x4).
+    final dx = size.width / 2 - bounds.center.dx * fit;
+    final dy = size.height / 2 - bounds.center.dy * fit;
+    final matrix = Matrix4(
+      fit, 0, 0, 0, //
+      0, fit, 0, 0, //
+      0, 0, 1, 0, //
+      dx, dy, 0, 1,
+    );
+    final fitted = path.transform(matrix.storage);
+    final metrics = fitted.computeMetrics().toList();
+    if (metrics.isEmpty) return null;
+    return ConveyorPathGeometry._(fitted, beltWidth * fit, fit, metrics.first);
+  }
+}
 
 @JsonSerializable(explicitToJson: true)
 class ConveyorColorPaletteConfig extends BaseAsset {
@@ -187,6 +314,15 @@ class ConveyorConfig extends BaseAsset {
   @JsonKey(fromJson: _gatesFromJson, toJson: _gatesToJson)
   List<ChildGateEntry> gates;
 
+  /// Bends along the belt; empty means a straight conveyor.
+  List<ConveyorTurnEntry> turns;
+
+  /// Belt thickness as a fraction of the box height (turned conveyors only).
+  ///
+  /// A bend needs a taller bounding box, which with the straight convention
+  /// (belt thickness = box height) would force a fat belt. Defaults to 1.0.
+  double? beltThickness;
+
   ConveyorConfig(
       {this.key,
       this.batchesKey,
@@ -199,13 +335,17 @@ class ConveyorConfig extends BaseAsset {
       this.showAuger,
       this.augerRpmKey,
       this.augerOpenEnd,
-      List<ChildGateEntry>? gates})
-      : gates = gates != null ? List<ChildGateEntry>.of(gates) : [];
+      this.beltThickness,
+      List<ChildGateEntry>? gates,
+      List<ConveyorTurnEntry>? turns})
+      : gates = gates != null ? List<ChildGateEntry>.of(gates) : [],
+        turns = turns != null ? List<ConveyorTurnEntry>.of(turns) : [];
 
   static const previewStr = 'Conveyor Preview';
 
   ConveyorConfig.preview()
       : gates = [],
+        turns = [],
         key = previewStr;
 
   @override
@@ -463,6 +603,112 @@ class _ConveyorConfigContentState extends State<_ConveyorConfigContent> {
               ),
             );
           }),
+        const SizedBox(height: 16),
+        const Divider(),
+        Text('Turns', style: Theme.of(context).textTheme.titleSmall),
+        const SizedBox(height: 8),
+        FilledButton.icon(
+          onPressed: () {
+            setState(() {
+              widget.config.turns.add(ConveyorTurnEntry());
+            });
+          },
+          icon: const Icon(Icons.add),
+          label: const Text('Add Turn'),
+        ),
+        const SizedBox(height: 8),
+        if (widget.config.turns.isEmpty)
+          Text('No turns configured — belt is straight',
+              style: Theme.of(context).textTheme.bodyMedium)
+        else ...[
+          if (widget.config.showAuger ?? false)
+            Text('Turns are ignored while "Auger conveyor" is enabled',
+                style: Theme.of(context).textTheme.bodySmall),
+          Text(
+            'Belt thickness: '
+            '${((widget.config.beltThickness ?? 1.0) * 100).round()}% of box height',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+          Slider(
+            min: 0.05,
+            max: 1.0,
+            divisions: 95,
+            value: (widget.config.beltThickness ?? 1.0).clamp(0.05, 1.0),
+            label:
+                '${((widget.config.beltThickness ?? 1.0) * 100).round()}%',
+            onChanged: (v) =>
+                setState(() => widget.config.beltThickness = v),
+          ),
+          ...widget.config.turns.asMap().entries.map((mapEntry) {
+            final entry = mapEntry.value;
+            return Card(
+              margin: const EdgeInsets.symmetric(vertical: 4),
+              child: Padding(
+                padding: const EdgeInsets.all(8.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            'Turn ${mapEntry.key + 1}',
+                            style: Theme.of(context).textTheme.bodyMedium,
+                          ),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.delete, size: 20),
+                          tooltip: 'Remove turn',
+                          onPressed: () => setState(() {
+                            widget.config.turns.remove(entry);
+                          }),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Belt Position: ${(entry.position * 100).round()}%',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                    Slider(
+                      min: 0.0,
+                      max: 1.0,
+                      divisions: 100,
+                      value: entry.position.clamp(0.0, 1.0),
+                      label: '${(entry.position * 100).round()}%',
+                      onChanged: (v) => setState(() => entry.position = v),
+                    ),
+                    Text(
+                      'Angle: ${entry.angle.round()}° '
+                      '(${entry.angle >= 0 ? 'down' : 'up'})',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                    Slider(
+                      min: -180,
+                      max: 180,
+                      divisions: 72,
+                      value: entry.angle.clamp(-180.0, 180.0),
+                      label: '${entry.angle.round()}°',
+                      onChanged: (v) => setState(() => entry.angle = v),
+                    ),
+                    Text(
+                      'Radius: ${entry.radius.toStringAsFixed(1)} × belt width',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                    Slider(
+                      min: 0.5,
+                      max: 5.0,
+                      divisions: 45,
+                      value: entry.radius.clamp(0.5, 5.0),
+                      label: entry.radius.toStringAsFixed(1),
+                      onChanged: (v) => setState(() => entry.radius = v),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          }),
+        ],
       ],
     );
   }
@@ -812,9 +1058,15 @@ class _ConveyorState extends ConsumerState<Conveyor>
       );
     }
 
+    final geometry = ConveyorPathGeometry.build(
+      widget.config.turns,
+      paintSize,
+      thicknessFactor: widget.config.beltThickness ?? 1.0,
+    );
+
     final conveyorPaint = CustomPaint(
       size: paintSize,
-      painter: _ConveyorPainter(
+      painter: ConveyorPainter(
         color: color,
         showExclamation: showExclamation ?? false,
         bidirectional: widget.config.bidirectional ?? false,
@@ -823,6 +1075,7 @@ class _ConveyorState extends ConsumerState<Conveyor>
         frequency: frequency,
         batches: _batches,
         angle: widget.config.coordinates.angle ?? 0.0,
+        geometry: geometry,
       ),
     );
 
@@ -840,7 +1093,7 @@ class _ConveyorState extends ConsumerState<Conveyor>
           children: [
             conveyorPaint,
             for (final entry in gateEntries)
-              _positionedChildGate(entry, paintSize),
+              _positionedChildGate(entry, paintSize, geometry),
           ],
         ),
       );
@@ -852,8 +1105,10 @@ class _ConveyorState extends ConsumerState<Conveyor>
     );
   }
 
-  Widget _positionedChildGate(ChildGateEntry entry, Size conveyorSize) {
-    final beltHeight = conveyorSize.height; // cross-belt dimension
+  Widget _positionedChildGate(
+      ChildGateEntry entry, Size conveyorSize, ConveyorPathGeometry? geometry) {
+    final beltHeight =
+        geometry?.beltWidth ?? conveyorSize.height; // cross-belt dimension
     final gateSize = beltHeight; // square so flap spans belt width
     final xCenter = entry.position * conveyorSize.width;
 
@@ -888,6 +1143,28 @@ class _ConveyorState extends ConsumerState<Conveyor>
         ),
       ),
     );
+
+    if (geometry != null) {
+      // Curved belt: place the gate along the centerline path, offset
+      // perpendicular to the travel direction and rotated to follow it.
+      final tangent = geometry.tangentAt(entry.position);
+      final v = tangent.vector; // unit vector along travel, screen coords
+      final leftNormal = Offset(v.dy, -v.dx); // "top" side of the belt
+      final distFromCenter = beltHeight / 2 + outsideOverhang - gateSize / 2;
+      final center = entry.side == GateSide.left
+          ? tangent.position + leftNormal * distFromCenter
+          : tangent.position - leftNormal * distFromCenter;
+      return Positioned(
+        left: center.dx - gateSize / 2,
+        top: center.dy - gateSize / 2,
+        width: gateSize,
+        height: gateSize,
+        child: Transform.rotate(
+          angle: atan2(v.dy, v.dx),
+          child: child,
+        ),
+      );
+    }
 
     if (entry.side == GateSide.left) {
       return Positioned(
@@ -1278,7 +1555,7 @@ class Batch {
   Batch({required this.start, required this.end, this.color = Colors.white});
 }
 
-class _ConveyorPainter extends CustomPainter {
+class ConveyorPainter extends CustomPainter {
   final Map<String, Batch> batches;
   final Color color;
   final bool showExclamation;
@@ -1287,8 +1564,9 @@ class _ConveyorPainter extends CustomPainter {
   final bool showFrequency;
   final double? frequency;
   final double angle;
+  final ConveyorPathGeometry? geometry;
 
-  _ConveyorPainter(
+  ConveyorPainter(
       {required this.color,
       this.showExclamation = false,
       this.bidirectional = false,
@@ -1296,10 +1574,15 @@ class _ConveyorPainter extends CustomPainter {
       this.showFrequency = false,
       this.frequency,
       required this.batches,
-      required this.angle});
+      required this.angle,
+      this.geometry});
 
   @override
   void paint(Canvas canvas, Size size) {
+    if (geometry != null) {
+      _paintTurnedBelt(canvas, size);
+      return;
+    }
     final rect = Offset.zero & size;
     final borderRadius = Radius.circular(
       size.shortestSide * 0.2,
@@ -1319,31 +1602,7 @@ class _ConveyorPainter extends CustomPainter {
 
     // Draw exclamation mark if needed
     if (showExclamation) {
-      canvas.save();
-      // Move origin to center of conveyor
-      canvas.translate(size.width / 2, size.height / 2);
-      // Counter-rotate
-      canvas.rotate(-angle * pi / 180);
-      // Draw exclamation mark centered at (0,0)
-      final textPainter = TextPainter(
-        text: TextSpan(
-          text: '!',
-          style: TextStyle(
-            color: Colors.white,
-            fontSize: size.shortestSide * 0.7,
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-        textAlign: TextAlign.center,
-        textDirection: TextDirection.ltr,
-      );
-      textPainter.layout();
-      final offset = Offset(
-        -textPainter.width / 2,
-        -textPainter.height / 2,
-      );
-      textPainter.paint(canvas, offset);
-      canvas.restore();
+      _drawExclamation(canvas, size);
       return;
     }
     // 2) draw each batch segment as a plain box
@@ -1377,81 +1636,199 @@ class _ConveyorPainter extends CustomPainter {
       canvas.drawRRect(rrect, paintBorder);
     }
 
-    // Draw direction arrow for bidirectional conveyors
-    if (bidirectional && frequency != null && frequency != 0) {
-      canvas.save();
-      canvas.translate(size.width / 2, size.height / 2);
+    _drawDirectionArrow(canvas, size);
+    _drawFrequency(canvas, size);
+  }
 
-      final arrowLength = size.width * 0.4;
-      final arrowSize = size.shortestSide * 0.25;
-      final arrowPaint = Paint()
-        ..color = Colors.black
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 2.0
-        ..strokeCap = StrokeCap.round
-        ..strokeJoin = StrokeJoin.round;
+  /// Path-based rendering used when the conveyor has turns configured.
+  ///
+  /// The belt is the centerline stroked at full belt width (rounded caps give
+  /// the rounded ends), batches are sub-paths of the same centerline stroked
+  /// slightly narrower, so both follow the bends.
+  void _paintTurnedBelt(Canvas canvas, Size size) {
+    final g = geometry!;
 
-      // Determine direction: positive frequency = right, unless reversed
-      final pointsRight = (frequency! > 0) ^ reverseDirection;
+    final borderPaint = Paint()
+      ..color = Colors.black
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = g.beltWidth + 4
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+    canvas.drawPath(g.path, borderPaint);
 
-      // Shaft
-      canvas.drawLine(
-        Offset(-arrowLength / 2, 0),
-        Offset(arrowLength / 2, 0),
-        arrowPaint,
-      );
+    final beltPaint = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = g.beltWidth
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+    canvas.drawPath(g.path, beltPaint);
 
-      // Single arrowhead in the running direction
-      if (pointsRight) {
-        final head = Path()
-          ..moveTo(arrowLength / 2 - arrowSize, -arrowSize * 0.5)
-          ..lineTo(arrowLength / 2, 0)
-          ..lineTo(arrowLength / 2 - arrowSize, arrowSize * 0.5);
-        canvas.drawPath(head, arrowPaint);
-      } else {
-        final head = Path()
-          ..moveTo(-arrowLength / 2 + arrowSize, -arrowSize * 0.5)
-          ..lineTo(-arrowLength / 2, 0)
-          ..lineTo(-arrowLength / 2 + arrowSize, arrowSize * 0.5);
-        canvas.drawPath(head, arrowPaint);
-      }
-
-      canvas.restore();
+    if (showExclamation) {
+      _drawExclamation(canvas, size);
+      return;
     }
 
-    // Draw frequency number in center
-    if (showFrequency && frequency != null) {
-      canvas.save();
-      canvas.translate(size.width / 2, size.height / 2);
-      canvas.rotate(-angle * pi / 180);
-      final textPainter = TextPainter(
-        text: TextSpan(
-          text: frequency!.toStringAsFixed(1),
-          style: TextStyle(
-            color: Colors.white,
-            fontSize: size.shortestSide * 0.5,
-            fontWeight: FontWeight.bold,
-          ),
+    final batchWidth = g.beltWidth * 0.8;
+    final batchBorderPaint = Paint()
+      ..color = Colors.black
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = batchWidth + 2
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+
+    // Round stroke caps extend half the stroke width past each end of the
+    // extracted segment, so shrink the segment by the cap radius to keep the
+    // painted batch at its true length.
+    final capInset = batchWidth / 2 / g.length;
+
+    for (final batch in batches.values) {
+      var start = batch.start.clamp(0.0, 1.0);
+      var end = batch.end.clamp(0.0, 1.0);
+      if (end <= start) continue; // not yet visible / already off
+      final mid = (start + end) / 2;
+      // Keep a sliver of length so short batches render as a round dot
+      // instead of disappearing.
+      start = min(start + capInset, mid - 1e-4);
+      end = max(end - capInset, mid + 1e-4);
+      final segment = g.extractFraction(start, end);
+      canvas.drawPath(segment, batchBorderPaint);
+      canvas.drawPath(
+        segment,
+        Paint()
+          ..color = batch.color
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = batchWidth
+          ..strokeCap = StrokeCap.round
+          ..strokeJoin = StrokeJoin.round,
+      );
+    }
+
+    _drawDirectionArrow(canvas, size);
+    _drawFrequency(canvas, size);
+  }
+
+  /// Reference dimension for centered text: the belt width. For straight
+  /// conveyors that is the box's short side; for turned conveyors the box is
+  /// taller than the belt, so use the fitted belt width instead.
+  double _textBasis(Size size) => geometry?.beltWidth ?? size.shortestSide;
+
+  /// Anchor for centered overlays: box center for straight belts, the
+  /// centerline midpoint for turned belts (the box center can be off-belt).
+  Offset _overlayCenter(Size size) =>
+      geometry?.tangentAt(0.5).position ??
+      Offset(size.width / 2, size.height / 2);
+
+  void _drawExclamation(Canvas canvas, Size size) {
+    canvas.save();
+    // Move origin to center of conveyor
+    final center = _overlayCenter(size);
+    canvas.translate(center.dx, center.dy);
+    // Counter-rotate
+    canvas.rotate(-angle * pi / 180);
+    // Draw exclamation mark centered at (0,0)
+    final textPainter = TextPainter(
+      text: TextSpan(
+        text: '!',
+        style: TextStyle(
+          color: Colors.white,
+          fontSize: _textBasis(size) * 0.7,
+          fontWeight: FontWeight.bold,
         ),
-        textAlign: TextAlign.center,
-        textDirection: TextDirection.ltr,
-      );
-      textPainter.layout();
-      textPainter.paint(
-        canvas,
-        Offset(-textPainter.width / 2, -textPainter.height / 2),
-      );
-      canvas.restore();
+      ),
+      textAlign: TextAlign.center,
+      textDirection: TextDirection.ltr,
+    );
+    textPainter.layout();
+    final offset = Offset(
+      -textPainter.width / 2,
+      -textPainter.height / 2,
+    );
+    textPainter.paint(canvas, offset);
+    canvas.restore();
+  }
+
+  void _drawDirectionArrow(Canvas canvas, Size size) {
+    // Draw direction arrow for bidirectional conveyors
+    if (!bidirectional || frequency == null || frequency == 0) return;
+    canvas.save();
+    final center = _overlayCenter(size);
+    canvas.translate(center.dx, center.dy);
+
+    final arrowLength = size.width * 0.4;
+    final arrowSize = _textBasis(size) * 0.25;
+    final arrowPaint = Paint()
+      ..color = Colors.black
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.0
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+
+    // Determine direction: positive frequency = right, unless reversed
+    final pointsRight = (frequency! > 0) ^ reverseDirection;
+
+    // Shaft
+    canvas.drawLine(
+      Offset(-arrowLength / 2, 0),
+      Offset(arrowLength / 2, 0),
+      arrowPaint,
+    );
+
+    // Single arrowhead in the running direction
+    if (pointsRight) {
+      final head = Path()
+        ..moveTo(arrowLength / 2 - arrowSize, -arrowSize * 0.5)
+        ..lineTo(arrowLength / 2, 0)
+        ..lineTo(arrowLength / 2 - arrowSize, arrowSize * 0.5);
+      canvas.drawPath(head, arrowPaint);
+    } else {
+      final head = Path()
+        ..moveTo(-arrowLength / 2 + arrowSize, -arrowSize * 0.5)
+        ..lineTo(-arrowLength / 2, 0)
+        ..lineTo(-arrowLength / 2 + arrowSize, arrowSize * 0.5);
+      canvas.drawPath(head, arrowPaint);
     }
+
+    canvas.restore();
+  }
+
+  void _drawFrequency(Canvas canvas, Size size) {
+    // Draw frequency number in center
+    if (!showFrequency || frequency == null) return;
+    canvas.save();
+    final center = _overlayCenter(size);
+    canvas.translate(center.dx, center.dy);
+    canvas.rotate(-angle * pi / 180);
+    final textPainter = TextPainter(
+      text: TextSpan(
+        text: frequency!.toStringAsFixed(1),
+        style: TextStyle(
+          color: Colors.white,
+          fontSize: _textBasis(size) * 0.5,
+          fontWeight: FontWeight.bold,
+        ),
+      ),
+      textAlign: TextAlign.center,
+      textDirection: TextDirection.ltr,
+    );
+    textPainter.layout();
+    textPainter.paint(
+      canvas,
+      Offset(-textPainter.width / 2, -textPainter.height / 2),
+    );
+    canvas.restore();
   }
 
   @override
-  bool shouldRepaint(covariant _ConveyorPainter oldDelegate) =>
+  bool shouldRepaint(covariant ConveyorPainter oldDelegate) =>
       oldDelegate.color != color ||
       oldDelegate.showExclamation != showExclamation ||
       oldDelegate.bidirectional != bidirectional ||
       oldDelegate.showFrequency != showFrequency ||
-      oldDelegate.frequency != frequency;
+      oldDelegate.frequency != frequency ||
+      // Geometry is rebuilt each frame when turns are configured, so curved
+      // conveyors repaint on every rebuild (needed for batch animation).
+      !identical(oldDelegate.geometry, geometry);
 }
 
 class ConveyorStatsGraph extends ConsumerStatefulWidget {

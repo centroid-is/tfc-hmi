@@ -97,3 +97,22 @@ jobs:
         with:
           name: centroid-hmi.msix
           path: ${{ steps.locate.outputs.msix }}
+
+      # Portable (no-install) build: the Release folder runs directly after
+      # unzip. The MSIX declares the VC++ runtime as a package dependency, but
+      # a bare exe needs the DLLs next to it — copy them in. Done after the
+      # MSIX is packaged so its contents stay unchanged.
+      - name: Make Release folder portable (bundle VC++ runtime)
+        shell: powershell
+        run: |
+          $release = "centroid-hmi/build/windows/x64/runner/Release"
+          foreach ($dll in "msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll") {
+            Copy-Item "C:\Windows\System32\$dll" $release
+          }
+          Get-ChildItem $release
+
+      - name: Upload portable exe artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: centroid-hmi-windows-portable
+          path: centroid-hmi/build/windows/x64/runner/Release/
