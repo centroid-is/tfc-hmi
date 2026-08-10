@@ -130,14 +130,25 @@ class _TestBoxAsset extends BaseAsset {
 
   final String name;
 
-  _TestBoxAsset(this.name, {required Coordinates coords}) {
+  /// Mirrors production assets that wrap their visual in their own
+  /// GestureDetector; used to prove a tap coordinate is really on the asset.
+  final VoidCallback? onInternalTap;
+
+  _TestBoxAsset(this.name, {required Coordinates coords, this.onInternalTap}) {
     coordinates = coords;
     size = const RelativeSize(width: 0.2, height: 0.2);
   }
 
   @override
-  Widget build(BuildContext context) =>
-      const ColoredBox(color: Color(0xFFFF0000));
+  Widget build(BuildContext context) {
+    const visual = ColoredBox(color: Color(0xFFFF0000));
+    if (onInternalTap == null) return visual;
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onInternalTap,
+      child: visual,
+    );
+  }
 
   @override
   Widget configure(BuildContext context) => const SizedBox.shrink();
@@ -149,6 +160,7 @@ class _TestBoxAsset extends BaseAsset {
 Widget _wrapStack({
   required List<Asset> assets,
   void Function(Asset, Offset)? onSecondaryTap,
+  bool absorb = true,
 }) {
   return ProviderScope(
     child: MaterialApp(
@@ -164,8 +176,7 @@ Widget _wrapStack({
                 selectedAssets: const {},
                 mirroringDisabled: true,
                 onSecondaryTap: onSecondaryTap,
-                // Edit mode — the only mode that offers editing actions.
-                absorb: true,
+                absorb: absorb,
               ),
             ),
           ),
@@ -213,6 +224,39 @@ void _secondaryTapTests() {
 
       expect(taps, ['right'],
           reason: 'host callback should receive the right-clicked asset');
+    });
+
+    testWidgets('is ignored in runtime mode', (tester) async {
+      // Runtime mode is the operator-facing path, where secondary tap belongs
+      // to the debug/chat menu. A host callback must not silently take it
+      // over and change what operators get.
+      var internalTaps = 0;
+      final asset = _TestBoxAsset(
+        'a',
+        coords: Coordinates(x: 0.5, y: 0.5),
+        onInternalTap: () => internalTaps++,
+      );
+
+      final taps = <String>[];
+      await tester.pumpWidget(_wrapStack(
+        assets: [asset],
+        absorb: false,
+        onSecondaryTap: (a, _) => taps.add('fired'),
+      ));
+      await tester.pumpAndSettle();
+
+      final point = _pointOn(tester, 0.5, 0.5);
+      // Prove the coordinate is on the asset, so the secondary-tap assertion
+      // below is a real result rather than a miss.
+      await tester.tapAt(point);
+      await tester.pumpAndSettle();
+      expect(internalTaps, 1, reason: 'coordinate should be on the asset');
+
+      await tester.tapAt(point, buttons: kSecondaryButton);
+      await tester.pumpAndSettle();
+
+      expect(taps, isEmpty,
+          reason: 'onSecondaryTap is documented as edit-mode only');
     });
 
     testWidgets('does not fire on a primary tap', (tester) async {

@@ -597,6 +597,11 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     );
 
     if (choice == null) return;
+    // The editor can be torn down while the menu is open — proposal events
+    // arriving over MCP navigate on their own — and both branches below touch
+    // State (setState / ref) that is invalid after dispose.
+    if (!mounted) return;
+
     if (choice == _sendToBackAction) {
       _sendToBack(targets);
     } else {
