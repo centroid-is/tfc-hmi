@@ -118,6 +118,11 @@ class AssetStack extends ConsumerStatefulWidget {
   final void Function(Asset asset)? onTap;
   final void Function(Asset asset, DragUpdateDetails details)? onPanUpdate;
   final void Function(Asset asset, DragStartDetails details)? onPanStart;
+
+  /// Secondary tap (right-click) on an asset in edit mode. When supplied the
+  /// host builds the whole context menu, so it can offer editing actions
+  /// alongside the AI ones. Falls back to the AI-only menu when null.
+  final void Function(Asset asset, Offset globalPosition)? onSecondaryTap;
   final bool absorb;
   final Set<Asset> selectedAssets;
   final bool mirroringDisabled;
@@ -133,6 +138,7 @@ class AssetStack extends ConsumerStatefulWidget {
     this.onTap,
     this.onPanUpdate,
     this.onPanStart,
+    this.onSecondaryTap,
     this.absorb = false,
     required this.selectedAssets,
     required this.mirroringDisabled,
@@ -350,16 +356,26 @@ class _AssetStackState extends ConsumerState<AssetStack> {
                                     ? (details) =>
                                         widget.onPanStart!(asset, details)
                                     : null,
-                                onSecondaryTapUp: isMcpChatAvailable()
-                                    ? (details) {
-                                        showEditorAssetContextMenu(
-                                          context,
-                                          ref,
-                                          details.globalPosition,
+                                // The host's menu wins when supplied: it
+                                // carries editing actions that must be
+                                // reachable whether or not MCP chat is
+                                // available, and folds the AI entries in
+                                // itself.
+                                onSecondaryTapUp: widget.onSecondaryTap != null
+                                    ? (details) => widget.onSecondaryTap!(
                                           asset,
-                                        );
-                                      }
-                                    : null,
+                                          details.globalPosition,
+                                        )
+                                    : isMcpChatAvailable()
+                                        ? (details) {
+                                            showEditorAssetContextMenu(
+                                              context,
+                                              ref,
+                                              details.globalPosition,
+                                              asset,
+                                            );
+                                          }
+                                        : null,
                               )
                             : GestureDetector(
                                 // Runtime view: only secondary tap is
