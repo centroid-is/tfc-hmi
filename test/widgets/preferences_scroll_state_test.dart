@@ -182,6 +182,46 @@ void main() {
           reason: 'unsaved edit was discarded when scrolling above the '
               'preferences keys section');
     });
+
+    testWidgets('two rows stay expanded independently across a scroll',
+        (tester) async {
+      // Rows expand independently, so opening a second one must not collapse
+      // the first when the list is rebuilt.
+      tester.view.physicalSize = const Size(800, 600);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      await tester.pumpWidget(
+        _wrap(const SizedBox(height: 600, child: PreferencesKeysWidget())),
+      );
+      await tester.pumpAndSettle();
+
+      // Open the first two rows. Note .first must come after .descendant:
+      // find.byType(Text).first would resolve globally before filtering.
+      Finder titleOf(int i) => find
+          .descendant(
+              of: find.byType(ExpansionTile).at(i), matching: find.byType(Text))
+          .first;
+      await tester.tap(titleOf(0));
+      await tester.pumpAndSettle();
+      await tester.tap(titleOf(1));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(TextField), findsNWidgets(2),
+          reason: 'both rows should be open at once');
+
+      // Force a rebuild of the rows by scrolling away and back.
+      final at = _positionAt(tester, 0);
+      final offset = at.pixels;
+      at.jumpTo(at.maxScrollExtent);
+      await tester.pumpAndSettle();
+      _positionAt(tester, 0).jumpTo(offset);
+      await tester.pumpAndSettle();
+
+      expect(find.byType(TextField), findsNWidgets(2),
+          reason: 'opening the second row must not collapse the first');
+    });
   });
 
   _deleteDialogTests();

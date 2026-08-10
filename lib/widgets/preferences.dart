@@ -619,7 +619,10 @@ class _PreferencesKeysWidgetState extends ConsumerState<PreferencesKeysWidget>
   // every row from scratch. Anything the user has typed must therefore live
   // above both lists to survive.
   final Map<String, String> _drafts = {};
-  String? _expandedKey;
+
+  // A set, not a single key: rows expand independently, so collapsing one on
+  // remount because another was opened would be a regression.
+  final Set<String> _expandedKeys = {};
 
   // Keeps this section itself mounted when the page scrolls past it, which is
   // what makes _drafts a safe place to keep that state (and avoids reloading
@@ -734,7 +737,7 @@ class _PreferencesKeysWidgetState extends ConsumerState<PreferencesKeysWidget>
                         keyName: e.key,
                         value: e.value,
                         isInDatabase: dbFlags[e.key] ?? false,
-                        initiallyExpanded: _expandedKey == e.key,
+                        initiallyExpanded: _expandedKeys.contains(e.key),
                         draft: _drafts[e.key],
                         // No setState: the row already holds this text in
                         // its own controller, and rebuilding the list on
@@ -747,7 +750,11 @@ class _PreferencesKeysWidgetState extends ConsumerState<PreferencesKeysWidget>
                           }
                         },
                         onExpansionChanged: (expanded) {
-                          _expandedKey = expanded ? e.key : null;
+                          if (expanded) {
+                            _expandedKeys.add(e.key);
+                          } else {
+                            _expandedKeys.remove(e.key);
+                          }
                         },
                         onChanged: (newValue) async {
                           final isInDb = dbFlags[e.key] ?? false;
@@ -800,7 +807,7 @@ class _PreferencesKeysWidgetState extends ConsumerState<PreferencesKeysWidget>
                               await localPrefs.remove(e.key);
                             }
                             _drafts.remove(e.key);
-                            if (_expandedKey == e.key) _expandedKey = null;
+                            _expandedKeys.remove(e.key);
                             // Reload data and invalidate provider
                             _loading = true;
                             _loadData(prefs);
