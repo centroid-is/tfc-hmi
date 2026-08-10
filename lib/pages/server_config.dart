@@ -747,7 +747,7 @@ class _OpcUAServersSectionState extends ConsumerState<_OpcUAServersSection> {
 }
 
 class _EmptyServersPlaceholder extends StatelessWidget {
-  final IconData icon;
+  final FaIconData icon;
   final String title;
   final String subtitle;
 
@@ -784,7 +784,7 @@ class _EmptyServersPlaceholder extends StatelessWidget {
 /// a responsive header row that collapses on narrow screens.
 class _ServerSectionHeader extends StatelessWidget {
   final String title;
-  final IconData icon;
+  final FaIconData icon;
   final bool hasUnsavedChanges;
   final VoidCallback onAdd;
 

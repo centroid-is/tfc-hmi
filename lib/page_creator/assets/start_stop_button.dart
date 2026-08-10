@@ -320,10 +320,10 @@ class _PrettyPill extends StatelessWidget {
   }
 
   IconData _icon(_Segment s) => switch (s) {
-        _Segment.run => FontAwesomeIcons.play,
-        _Segment.clean => FontAwesomeIcons.droplet,
-        _Segment.stop => FontAwesomeIcons.stop,
-        _Segment.manual => FontAwesomeIcons.screwdriverWrench,
+        _Segment.run => FontAwesomeIcons.play.data,
+        _Segment.clean => FontAwesomeIcons.droplet.data,
+        _Segment.stop => FontAwesomeIcons.stop.data,
+        _Segment.manual => FontAwesomeIcons.screwdriverWrench.data,
       };
 
   @override

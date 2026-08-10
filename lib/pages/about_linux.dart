@@ -248,7 +248,7 @@ class _AboutLinuxPageState extends State<AboutLinuxPage> {
     final confirmed = await _showConfirmDialog(
       title: 'Power Off',
       message: 'Are you sure you want to power off the system?',
-      icon: FontAwesomeIcons.powerOff,
+      icon: FontAwesomeIcons.powerOff.data,
       iconColor: Colors.red,
     );
 
@@ -270,7 +270,7 @@ class _AboutLinuxPageState extends State<AboutLinuxPage> {
     final confirmed = await _showConfirmDialog(
       title: 'Reboot',
       message: 'Are you sure you want to reboot the system?',
-      icon: FontAwesomeIcons.arrowsRotate,
+      icon: FontAwesomeIcons.arrowsRotate.data,
       iconColor: Colors.orange,
     );
 
@@ -432,7 +432,7 @@ class _AboutLinuxPageState extends State<AboutLinuxPage> {
 
                 // Facts
                 fact(
-                  icon: FontAwesomeIcons.microchip,
+                  icon: FontAwesomeIcons.microchip.data,
                   label: 'Kernel',
                   value: [
                     if (info.kernelName.isNotEmpty) info.kernelName,
@@ -442,13 +442,13 @@ class _AboutLinuxPageState extends State<AboutLinuxPage> {
                 ),
                 if (info.osPretty.isNotEmpty)
                   fact(
-                    icon: FontAwesomeIcons.boxArchive,
+                    icon: FontAwesomeIcons.boxArchive.data,
                     label: 'Operating System',
                     value: info.osPretty,
                   ),
                 if (info.osSupportEnd != null)
                   fact(
-                    icon: FontAwesomeIcons.calendarDay,
+                    icon: FontAwesomeIcons.calendarDay.data,
                     label: 'Support End',
                     value: _fmtDate(info.osSupportEnd!),
                     caption: 'From org.freedesktop.hostname1 (local time).',

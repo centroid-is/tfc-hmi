@@ -446,7 +446,7 @@ void main() {
       // FaIcon uses RichText, not Icon, so find.byIcon won't work
       expect(
         find.byWidgetPredicate(
-            (w) => w is FaIcon && w.icon == FontAwesomeIcons.tag),
+            (w) => w is FaIcon && w.icon == FontAwesomeIcons.tag.data),
         findsOneWidget,
       );
     });

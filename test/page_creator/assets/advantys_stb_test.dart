@@ -2999,7 +2999,7 @@ void main() {
 
         final reorderable = tester
             .widget<ReorderableListView>(find.byType(ReorderableListView));
-        reorderable.onReorder(0, 2);
+        reorderable.onReorder!(0, 2);
         await tester.pumpAndSettle();
 
         expect(cfg.subdevices.length, 3);

@@ -81,7 +81,7 @@ void main() {
         ),
       ));
       await tester.pump();
-      expect(iconByData(FontAwesomeIcons.screwdriverWrench), findsNothing,
+      expect(iconByData(FontAwesomeIcons.screwdriverWrench.data), findsNothing,
           reason: 'no manual_* keys → manual segment must not render');
       // Preview has no cleanKey either → 2 segments (run + stop).
       expect(segmentGestureDetectors(), findsNWidgets(2));
@@ -109,7 +109,7 @@ void main() {
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 50));
 
-      expect(iconByData(FontAwesomeIcons.screwdriverWrench), findsOneWidget,
+      expect(iconByData(FontAwesomeIcons.screwdriverWrench.data), findsOneWidget,
           reason: 'manualStateKey present → manual icon visible');
       // 3 segments: run + stop + manual.
       expect(segmentGestureDetectors(), findsNWidgets(3));
@@ -136,7 +136,7 @@ void main() {
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 50));
 
-      expect(iconByData(FontAwesomeIcons.screwdriverWrench), findsOneWidget,
+      expect(iconByData(FontAwesomeIcons.screwdriverWrench.data), findsOneWidget,
           reason: 'manualCommandKey present → manual icon visible');
     });
   });
@@ -167,7 +167,7 @@ void main() {
       await tester.pump(const Duration(milliseconds: 50));
 
       final manualIcon =
-          tester.widget<Icon>(iconByData(FontAwesomeIcons.screwdriverWrench));
+          tester.widget<Icon>(iconByData(FontAwesomeIcons.screwdriverWrench.data));
       // Manual's accent color is orange (industrial convention for
       // operator override).
       expect(manualIcon.color, Colors.orange,
@@ -202,7 +202,7 @@ void main() {
       await tester.pump(const Duration(milliseconds: 50));
 
       final manualIcon =
-          tester.widget<Icon>(iconByData(FontAwesomeIcons.screwdriverWrench));
+          tester.widget<Icon>(iconByData(FontAwesomeIcons.screwdriverWrench.data));
       expect(manualIcon.color, isNot(Colors.orange),
           reason: 'stream=false → manual icon does NOT paint in accent');
     });
@@ -236,7 +236,7 @@ void main() {
       // Tap the manual icon. Use tap-down to mirror how the other modes
       // pulse on press.
       final gesture =
-          await tester.startGesture(tester.getCenter(iconByData(FontAwesomeIcons.screwdriverWrench)));
+          await tester.startGesture(tester.getCenter(iconByData(FontAwesomeIcons.screwdriverWrench.data)));
       await tester.pump(const Duration(milliseconds: 20));
       await gesture.up();
       await tester.pump(const Duration(milliseconds: 20));

@@ -114,7 +114,7 @@ void main() {
 
       // Tap the copy button
       final copyButtons = find.byWidgetPredicate(
-          (w) => w is FaIcon && w.icon == FontAwesomeIcons.copy);
+          (w) => w is FaIcon && w.icon == FontAwesomeIcons.copy.data);
       expect(copyButtons, findsOneWidget);
       await tester.tap(copyButtons.first);
       await tester.pumpAndSettle();
@@ -160,7 +160,7 @@ void main() {
 
       // Copy the second key
       final copyButtons = find.byWidgetPredicate(
-          (w) => w is FaIcon && w.icon == FontAwesomeIcons.copy);
+          (w) => w is FaIcon && w.icon == FontAwesomeIcons.copy.data);
       // second_key is the 2nd card, so its copy button is at index 1
       await tester.tap(copyButtons.at(1));
       await tester.pumpAndSettle();
@@ -212,7 +212,7 @@ void main() {
 
       // Copy the key
       final copyButtons = find.byWidgetPredicate(
-          (w) => w is FaIcon && w.icon == FontAwesomeIcons.copy);
+          (w) => w is FaIcon && w.icon == FontAwesomeIcons.copy.data);
       await tester.tap(copyButtons.first);
       await tester.pumpAndSettle();
 
@@ -261,7 +261,7 @@ void main() {
 
       // Copy the key (creates 'original_copy', auto-expanded)
       final copyButton = find.byWidgetPredicate(
-          (w) => w is FaIcon && w.icon == FontAwesomeIcons.copy);
+          (w) => w is FaIcon && w.icon == FontAwesomeIcons.copy.data);
       await tester.tap(copyButton.first);
       await tester.pumpAndSettle();
 
@@ -302,7 +302,7 @@ void main() {
       // Copy twice — scroll back to the original's copy button each time
       for (var i = 0; i < 2; i++) {
         final copyButtons = find.byWidgetPredicate(
-            (w) => w is FaIcon && w.icon == FontAwesomeIcons.copy);
+            (w) => w is FaIcon && w.icon == FontAwesomeIcons.copy.data);
         await tester.ensureVisible(copyButtons.first);
         await tester.pumpAndSettle();
         await tester.tap(copyButtons.first);
@@ -327,7 +327,7 @@ void main() {
 
       // Tap the first delete button (trash icon)
       final trashButtons = find.byWidgetPredicate(
-          (w) => w is FaIcon && w.icon == FontAwesomeIcons.trash);
+          (w) => w is FaIcon && w.icon == FontAwesomeIcons.trash.data);
       await tester.tap(trashButtons.first);
       await tester.pumpAndSettle();
 
@@ -350,7 +350,7 @@ void main() {
 
       // Tap delete
       final trashButtons = find.byWidgetPredicate(
-          (w) => w is FaIcon && w.icon == FontAwesomeIcons.trash);
+          (w) => w is FaIcon && w.icon == FontAwesomeIcons.trash.data);
       await tester.tap(trashButtons.first);
       await tester.pumpAndSettle();
 
@@ -373,7 +373,7 @@ void main() {
 
       // Tap delete
       final trashButtons = find.byWidgetPredicate(
-          (w) => w is FaIcon && w.icon == FontAwesomeIcons.trash);
+          (w) => w is FaIcon && w.icon == FontAwesomeIcons.trash.data);
       await tester.tap(trashButtons.first);
       await tester.pumpAndSettle();
 
@@ -1499,7 +1499,7 @@ void main() {
       // both subtract 1 in that case.
       final reorderable =
           tester.widget<ReorderableListView>(find.byType(ReorderableListView));
-      reorderable.onReorder(0, 3);
+      reorderable.onReorder!(0, 3);
       await tester.pumpAndSettle();
 
       // Visual order updated: alpha is now last.
@@ -1530,7 +1530,7 @@ void main() {
       final reorderable =
           tester.widget<ReorderableListView>(find.byType(ReorderableListView));
       // Drag last (index 2) to before-first (index 0).
-      reorderable.onReorder(2, 0);
+      reorderable.onReorder!(2, 0);
       await tester.pumpAndSettle();
 
       expect(titleOrder(tester), ['charlie', 'alpha', 'bravo']);

@@ -657,169 +657,169 @@ class IconDataConverter implements JsonConverter<IconData, String> {
 
       // FontAwesome Icons
       case 'weight_scale':
-        return FontAwesomeIcons.weightScale;
+        return FontAwesomeIcons.weightScale.data;
       case 'scale_balanced':
-        return FontAwesomeIcons.scaleBalanced;
+        return FontAwesomeIcons.scaleBalanced.data;
       case 'weight_hanging':
-        return FontAwesomeIcons.weightHanging;
+        return FontAwesomeIcons.weightHanging.data;
       case 'bullseye':
-        return FontAwesomeIcons.bullseye;
+        return FontAwesomeIcons.bullseye.data;
       case 'ruler':
-        return FontAwesomeIcons.ruler;
+        return FontAwesomeIcons.ruler.data;
       case 'anchor':
-        return FontAwesomeIcons.anchor;
+        return FontAwesomeIcons.anchor.data;
       case 'magnifying_glass_location':
-        return FontAwesomeIcons.magnifyingGlassLocation;
+        return FontAwesomeIcons.magnifyingGlassLocation.data;
       case 'slash':
-        return FontAwesomeIcons.slash;
+        return FontAwesomeIcons.slash.data;
       case 'dumbbell':
-        return FontAwesomeIcons.dumbbell;
+        return FontAwesomeIcons.dumbbell.data;
       case 'play':
-        return FontAwesomeIcons.play;
+        return FontAwesomeIcons.play.data;
       case 'pause_fa':
-        return FontAwesomeIcons.pause;
+        return FontAwesomeIcons.pause.data;
       case 'stop_fa':
-        return FontAwesomeIcons.stop;
+        return FontAwesomeIcons.stop.data;
       case 'car':
-        return FontAwesomeIcons.car;
+        return FontAwesomeIcons.car.data;
       case 'droplet':
-        return FontAwesomeIcons.droplet;
+        return FontAwesomeIcons.droplet.data;
 
       // Additional commonly used FontAwesome icons
       case 'heart':
-        return FontAwesomeIcons.heart;
+        return FontAwesomeIcons.heart.data;
       case 'heart_solid':
-        return FontAwesomeIcons.solidHeart;
+        return FontAwesomeIcons.solidHeart.data;
       case 'user':
-        return FontAwesomeIcons.user;
+        return FontAwesomeIcons.user.data;
       case 'user_solid':
-        return FontAwesomeIcons.solidUser;
+        return FontAwesomeIcons.solidUser.data;
       case 'envelope':
-        return FontAwesomeIcons.envelope;
+        return FontAwesomeIcons.envelope.data;
       case 'envelope_solid':
-        return FontAwesomeIcons.solidEnvelope;
+        return FontAwesomeIcons.solidEnvelope.data;
       case 'fa_phone':
-        return FontAwesomeIcons.phone;
+        return FontAwesomeIcons.phone.data;
       case 'calendar':
-        return FontAwesomeIcons.calendar;
+        return FontAwesomeIcons.calendar.data;
       case 'calendar_solid':
-        return FontAwesomeIcons.solidCalendar;
+        return FontAwesomeIcons.solidCalendar.data;
       case 'clock':
-        return FontAwesomeIcons.clock;
+        return FontAwesomeIcons.clock.data;
       case 'clock_solid':
-        return FontAwesomeIcons.solidClock;
+        return FontAwesomeIcons.solidClock.data;
       case 'map_marker':
-        return FontAwesomeIcons.locationDot;
+        return FontAwesomeIcons.locationDot.data;
       case 'globe':
-        return FontAwesomeIcons.globe;
+        return FontAwesomeIcons.globe.data;
       case 'cog':
-        return FontAwesomeIcons.gear;
+        return FontAwesomeIcons.gear.data;
       case 'bars':
-        return FontAwesomeIcons.bars;
+        return FontAwesomeIcons.bars.data;
       case 'times':
-        return FontAwesomeIcons.xmark;
+        return FontAwesomeIcons.xmark.data;
       case 'check':
-        return FontAwesomeIcons.check;
+        return FontAwesomeIcons.check.data;
       case 'plus':
-        return FontAwesomeIcons.plus;
+        return FontAwesomeIcons.plus.data;
       case 'minus':
-        return FontAwesomeIcons.minus;
+        return FontAwesomeIcons.minus.data;
       case 'search':
-        return FontAwesomeIcons.magnifyingGlass;
+        return FontAwesomeIcons.magnifyingGlass.data;
       case 'edit':
-        return FontAwesomeIcons.penToSquare;
+        return FontAwesomeIcons.penToSquare.data;
       case 'trash':
-        return FontAwesomeIcons.trash;
+        return FontAwesomeIcons.trash.data;
       case 'download':
-        return FontAwesomeIcons.download;
+        return FontAwesomeIcons.download.data;
       case 'upload':
-        return FontAwesomeIcons.upload;
+        return FontAwesomeIcons.upload.data;
       case 'share':
-        return FontAwesomeIcons.share;
+        return FontAwesomeIcons.share.data;
       case 'eye':
-        return FontAwesomeIcons.eye;
+        return FontAwesomeIcons.eye.data;
       case 'eye_slash':
-        return FontAwesomeIcons.eyeSlash;
+        return FontAwesomeIcons.eyeSlash.data;
       case 'lock':
-        return FontAwesomeIcons.lock;
+        return FontAwesomeIcons.lock.data;
       case 'unlock':
-        return FontAwesomeIcons.unlock;
+        return FontAwesomeIcons.unlock.data;
       case 'key':
-        return FontAwesomeIcons.key;
+        return FontAwesomeIcons.key.data;
       case 'shield_alt':
-        return FontAwesomeIcons.shieldHalved;
+        return FontAwesomeIcons.shieldHalved.data;
       case 'star':
-        return FontAwesomeIcons.star;
+        return FontAwesomeIcons.star.data;
       case 'star_solid':
-        return FontAwesomeIcons.solidStar;
+        return FontAwesomeIcons.solidStar.data;
       case 'thumbs_up':
-        return FontAwesomeIcons.thumbsUp;
+        return FontAwesomeIcons.thumbsUp.data;
       case 'thumbs_down':
-        return FontAwesomeIcons.thumbsDown;
+        return FontAwesomeIcons.thumbsDown.data;
       case 'comment':
-        return FontAwesomeIcons.comment;
+        return FontAwesomeIcons.comment.data;
       case 'comment_solid':
-        return FontAwesomeIcons.solidComment;
+        return FontAwesomeIcons.solidComment.data;
       case 'bell':
-        return FontAwesomeIcons.bell;
+        return FontAwesomeIcons.bell.data;
       case 'bell_solid':
-        return FontAwesomeIcons.solidBell;
+        return FontAwesomeIcons.solidBell.data;
       case 'home':
-        return FontAwesomeIcons.house;
+        return FontAwesomeIcons.house.data;
       case 'chart_bar':
-        return FontAwesomeIcons.chartBar;
+        return FontAwesomeIcons.chartBar.data;
       case 'chart_line':
-        return FontAwesomeIcons.chartLine;
+        return FontAwesomeIcons.chartLine.data;
       case 'chart_pie':
-        return FontAwesomeIcons.chartPie;
+        return FontAwesomeIcons.chartPie.data;
       case 'database':
-        return FontAwesomeIcons.database;
+        return FontAwesomeIcons.database.data;
       case 'server':
-        return FontAwesomeIcons.server;
+        return FontAwesomeIcons.server.data;
       case 'wifi':
-        return FontAwesomeIcons.wifi;
+        return FontAwesomeIcons.wifi.data;
       case 'bluetooth':
-        return FontAwesomeIcons.bluetooth;
+        return FontAwesomeIcons.bluetooth.data;
       case 'usb':
-        return FontAwesomeIcons.usb;
+        return FontAwesomeIcons.usb.data;
       case 'plug':
-        return FontAwesomeIcons.plug;
+        return FontAwesomeIcons.plug.data;
       case 'battery_full':
-        return FontAwesomeIcons.batteryFull;
+        return FontAwesomeIcons.batteryFull.data;
       case 'battery_half':
-        return FontAwesomeIcons.batteryHalf;
+        return FontAwesomeIcons.batteryHalf.data;
       case 'battery_empty':
-        return FontAwesomeIcons.batteryEmpty;
+        return FontAwesomeIcons.batteryEmpty.data;
       case 'bolt':
-        return FontAwesomeIcons.bolt;
+        return FontAwesomeIcons.bolt.data;
       case 'fire':
-        return FontAwesomeIcons.fire;
+        return FontAwesomeIcons.fire.data;
       case 'snowflake':
-        return FontAwesomeIcons.snowflake;
+        return FontAwesomeIcons.snowflake.data;
       case 'sun':
-        return FontAwesomeIcons.sun;
+        return FontAwesomeIcons.sun.data;
       case 'moon':
-        return FontAwesomeIcons.moon;
+        return FontAwesomeIcons.moon.data;
       case 'cloud':
-        return FontAwesomeIcons.cloud;
+        return FontAwesomeIcons.cloud.data;
       case 'cloud_rain':
-        return FontAwesomeIcons.cloudRain;
+        return FontAwesomeIcons.cloudRain.data;
       case 'thermometer':
-        return FontAwesomeIcons.temperatureHalf;
+        return FontAwesomeIcons.temperatureHalf.data;
       case 'tachometer':
-        return FontAwesomeIcons.gaugeHigh;
+        return FontAwesomeIcons.gaugeHigh.data;
       case 'wrench':
-        return FontAwesomeIcons.wrench;
+        return FontAwesomeIcons.wrench.data;
       case 'hammer':
-        return FontAwesomeIcons.hammer;
+        return FontAwesomeIcons.hammer.data;
       case 'screwdriver':
-        return FontAwesomeIcons.screwdriver;
+        return FontAwesomeIcons.screwdriver.data;
       case 'toolbox':
-        return FontAwesomeIcons.toolbox;
+        return FontAwesomeIcons.toolbox.data;
       case 'industry':
-        return FontAwesomeIcons.industry;
+        return FontAwesomeIcons.industry.data;
       case 'warehouse_fa':
-        return FontAwesomeIcons.warehouse;
+        return FontAwesomeIcons.warehouse.data;
       case 'warehouse_open':
         return warehouse_open;
       case 'warehouse_open1':
@@ -829,41 +829,41 @@ class IconDataConverter implements JsonConverter<IconData, String> {
       case 'warehouse_closed':
         return warehouse_closed;
       case 'truck':
-        return FontAwesomeIcons.truck;
+        return FontAwesomeIcons.truck.data;
       case 'shipping_fast':
-        return FontAwesomeIcons.truckFast;
+        return FontAwesomeIcons.truckFast.data;
       case 'box':
-        return FontAwesomeIcons.box;
+        return FontAwesomeIcons.box.data;
       case 'boxes':
-        return FontAwesomeIcons.boxesStacked;
+        return FontAwesomeIcons.boxesStacked.data;
       case 'clipboard':
-        return FontAwesomeIcons.clipboard;
+        return FontAwesomeIcons.clipboard.data;
       case 'clipboard_list':
-        return FontAwesomeIcons.clipboardList;
+        return FontAwesomeIcons.clipboardList.data;
       case 'tasks':
-        return FontAwesomeIcons.listCheck;
+        return FontAwesomeIcons.listCheck.data;
       case 'project_diagram':
-        return FontAwesomeIcons.diagramProject;
+        return FontAwesomeIcons.diagramProject.data;
       case 'sitemap':
-        return FontAwesomeIcons.sitemap;
+        return FontAwesomeIcons.sitemap.data;
       case 'network_wired':
-        return FontAwesomeIcons.networkWired;
+        return FontAwesomeIcons.networkWired.data;
       case 'microchip':
-        return FontAwesomeIcons.microchip;
+        return FontAwesomeIcons.microchip.data;
       case 'memory':
-        return FontAwesomeIcons.memory;
+        return FontAwesomeIcons.memory.data;
       case 'hdd':
-        return FontAwesomeIcons.hardDrive;
+        return FontAwesomeIcons.hardDrive.data;
       case 'laptop':
-        return FontAwesomeIcons.laptop;
+        return FontAwesomeIcons.laptop.data;
       case 'mobile_alt':
-        return FontAwesomeIcons.mobileScreenButton;
+        return FontAwesomeIcons.mobileScreenButton.data;
       case 'tablet':
-        return FontAwesomeIcons.tablet;
+        return FontAwesomeIcons.tablet.data;
       case 'desktop':
-        return FontAwesomeIcons.desktop;
+        return FontAwesomeIcons.desktop.data;
       case 'tv':
-        return FontAwesomeIcons.tv;
+        return FontAwesomeIcons.tv.data;
 
       // Custom Icon
       case 'baader':
@@ -1195,112 +1195,112 @@ class IconDataConverter implements JsonConverter<IconData, String> {
     if (iconData == Icons.settings_voice) return 'settings_voice';
 
     // FontAwesome Icons
-    if (iconData == FontAwesomeIcons.weightScale) return 'weight_scale';
-    if (iconData == FontAwesomeIcons.scaleBalanced) return 'scale_balanced';
-    if (iconData == FontAwesomeIcons.weightHanging) return 'weight_hanging';
-    if (iconData == FontAwesomeIcons.bullseye) return 'bullseye';
-    if (iconData == FontAwesomeIcons.ruler) return 'ruler';
-    if (iconData == FontAwesomeIcons.anchor) return 'anchor';
-    if (iconData == FontAwesomeIcons.magnifyingGlassLocation)
+    if (iconData == FontAwesomeIcons.weightScale.data) return 'weight_scale';
+    if (iconData == FontAwesomeIcons.scaleBalanced.data) return 'scale_balanced';
+    if (iconData == FontAwesomeIcons.weightHanging.data) return 'weight_hanging';
+    if (iconData == FontAwesomeIcons.bullseye.data) return 'bullseye';
+    if (iconData == FontAwesomeIcons.ruler.data) return 'ruler';
+    if (iconData == FontAwesomeIcons.anchor.data) return 'anchor';
+    if (iconData == FontAwesomeIcons.magnifyingGlassLocation.data)
       return 'magnifying_glass_location';
-    if (iconData == FontAwesomeIcons.slash) return 'slash';
-    if (iconData == FontAwesomeIcons.dumbbell) return 'dumbbell';
-    if (iconData == FontAwesomeIcons.play) return 'play';
-    if (iconData == FontAwesomeIcons.pause) return 'pause_fa';
-    if (iconData == FontAwesomeIcons.stop) return 'stop_fa';
-    if (iconData == FontAwesomeIcons.car) return 'car';
-    if (iconData == FontAwesomeIcons.droplet) return 'droplet';
+    if (iconData == FontAwesomeIcons.slash.data) return 'slash';
+    if (iconData == FontAwesomeIcons.dumbbell.data) return 'dumbbell';
+    if (iconData == FontAwesomeIcons.play.data) return 'play';
+    if (iconData == FontAwesomeIcons.pause.data) return 'pause_fa';
+    if (iconData == FontAwesomeIcons.stop.data) return 'stop_fa';
+    if (iconData == FontAwesomeIcons.car.data) return 'car';
+    if (iconData == FontAwesomeIcons.droplet.data) return 'droplet';
 
     // Additional commonly used FontAwesome icons
-    if (iconData == FontAwesomeIcons.heart) return 'heart';
-    if (iconData == FontAwesomeIcons.solidHeart) return 'heart_solid';
-    if (iconData == FontAwesomeIcons.user) return 'user';
-    if (iconData == FontAwesomeIcons.solidUser) return 'user_solid';
-    if (iconData == FontAwesomeIcons.envelope) return 'envelope';
-    if (iconData == FontAwesomeIcons.solidEnvelope) return 'envelope_solid';
-    if (iconData == FontAwesomeIcons.phone) return 'fa_phone';
-    if (iconData == FontAwesomeIcons.calendar) return 'calendar';
-    if (iconData == FontAwesomeIcons.solidCalendar) return 'calendar_solid';
-    if (iconData == FontAwesomeIcons.clock) return 'clock';
-    if (iconData == FontAwesomeIcons.solidClock) return 'clock_solid';
-    if (iconData == FontAwesomeIcons.locationDot) return 'map_marker';
-    if (iconData == FontAwesomeIcons.globe) return 'globe';
-    if (iconData == FontAwesomeIcons.gear) return 'cog';
-    if (iconData == FontAwesomeIcons.bars) return 'bars';
-    if (iconData == FontAwesomeIcons.xmark) return 'times';
-    if (iconData == FontAwesomeIcons.check) return 'check';
-    if (iconData == FontAwesomeIcons.plus) return 'plus';
-    if (iconData == FontAwesomeIcons.minus) return 'minus';
-    if (iconData == FontAwesomeIcons.magnifyingGlass) return 'search';
-    if (iconData == FontAwesomeIcons.penToSquare) return 'edit';
-    if (iconData == FontAwesomeIcons.trash) return 'trash';
-    if (iconData == FontAwesomeIcons.download) return 'download';
-    if (iconData == FontAwesomeIcons.upload) return 'upload';
-    if (iconData == FontAwesomeIcons.share) return 'share';
-    if (iconData == FontAwesomeIcons.eye) return 'eye';
-    if (iconData == FontAwesomeIcons.eyeSlash) return 'eye_slash';
-    if (iconData == FontAwesomeIcons.lock) return 'lock';
-    if (iconData == FontAwesomeIcons.unlock) return 'unlock';
-    if (iconData == FontAwesomeIcons.key) return 'key';
-    if (iconData == FontAwesomeIcons.shieldHalved) return 'shield_alt';
-    if (iconData == FontAwesomeIcons.star) return 'star';
-    if (iconData == FontAwesomeIcons.solidStar) return 'star_solid';
-    if (iconData == FontAwesomeIcons.thumbsUp) return 'thumbs_up';
-    if (iconData == FontAwesomeIcons.thumbsDown) return 'thumbs_down';
-    if (iconData == FontAwesomeIcons.comment) return 'comment';
-    if (iconData == FontAwesomeIcons.solidComment) return 'comment_solid';
-    if (iconData == FontAwesomeIcons.bell) return 'bell';
-    if (iconData == FontAwesomeIcons.solidBell) return 'bell_solid';
-    if (iconData == FontAwesomeIcons.house) return 'home';
-    if (iconData == FontAwesomeIcons.chartBar) return 'chart_bar';
-    if (iconData == FontAwesomeIcons.chartLine) return 'chart_line';
-    if (iconData == FontAwesomeIcons.chartPie) return 'chart_pie';
-    if (iconData == FontAwesomeIcons.database) return 'database';
-    if (iconData == FontAwesomeIcons.server) return 'server';
-    if (iconData == FontAwesomeIcons.wifi) return 'wifi';
-    if (iconData == FontAwesomeIcons.bluetooth) return 'bluetooth';
-    if (iconData == FontAwesomeIcons.usb) return 'usb';
-    if (iconData == FontAwesomeIcons.plug) return 'plug';
-    if (iconData == FontAwesomeIcons.batteryFull) return 'battery_full';
-    if (iconData == FontAwesomeIcons.batteryHalf) return 'battery_half';
-    if (iconData == FontAwesomeIcons.batteryEmpty) return 'battery_empty';
-    if (iconData == FontAwesomeIcons.bolt) return 'bolt';
-    if (iconData == FontAwesomeIcons.fire) return 'fire';
-    if (iconData == FontAwesomeIcons.snowflake) return 'snowflake';
-    if (iconData == FontAwesomeIcons.sun) return 'sun';
-    if (iconData == FontAwesomeIcons.moon) return 'moon';
-    if (iconData == FontAwesomeIcons.cloud) return 'cloud';
-    if (iconData == FontAwesomeIcons.cloudRain) return 'cloud_rain';
-    if (iconData == FontAwesomeIcons.temperatureHalf) return 'thermometer';
-    if (iconData == FontAwesomeIcons.gaugeHigh) return 'tachometer';
-    if (iconData == FontAwesomeIcons.wrench) return 'wrench';
-    if (iconData == FontAwesomeIcons.hammer) return 'hammer';
-    if (iconData == FontAwesomeIcons.screwdriver) return 'screwdriver';
-    if (iconData == FontAwesomeIcons.toolbox) return 'toolbox';
-    if (iconData == FontAwesomeIcons.industry) return 'industry';
-    if (iconData == FontAwesomeIcons.warehouse) return 'warehouse_fa';
+    if (iconData == FontAwesomeIcons.heart.data) return 'heart';
+    if (iconData == FontAwesomeIcons.solidHeart.data) return 'heart_solid';
+    if (iconData == FontAwesomeIcons.user.data) return 'user';
+    if (iconData == FontAwesomeIcons.solidUser.data) return 'user_solid';
+    if (iconData == FontAwesomeIcons.envelope.data) return 'envelope';
+    if (iconData == FontAwesomeIcons.solidEnvelope.data) return 'envelope_solid';
+    if (iconData == FontAwesomeIcons.phone.data) return 'fa_phone';
+    if (iconData == FontAwesomeIcons.calendar.data) return 'calendar';
+    if (iconData == FontAwesomeIcons.solidCalendar.data) return 'calendar_solid';
+    if (iconData == FontAwesomeIcons.clock.data) return 'clock';
+    if (iconData == FontAwesomeIcons.solidClock.data) return 'clock_solid';
+    if (iconData == FontAwesomeIcons.locationDot.data) return 'map_marker';
+    if (iconData == FontAwesomeIcons.globe.data) return 'globe';
+    if (iconData == FontAwesomeIcons.gear.data) return 'cog';
+    if (iconData == FontAwesomeIcons.bars.data) return 'bars';
+    if (iconData == FontAwesomeIcons.xmark.data) return 'times';
+    if (iconData == FontAwesomeIcons.check.data) return 'check';
+    if (iconData == FontAwesomeIcons.plus.data) return 'plus';
+    if (iconData == FontAwesomeIcons.minus.data) return 'minus';
+    if (iconData == FontAwesomeIcons.magnifyingGlass.data) return 'search';
+    if (iconData == FontAwesomeIcons.penToSquare.data) return 'edit';
+    if (iconData == FontAwesomeIcons.trash.data) return 'trash';
+    if (iconData == FontAwesomeIcons.download.data) return 'download';
+    if (iconData == FontAwesomeIcons.upload.data) return 'upload';
+    if (iconData == FontAwesomeIcons.share.data) return 'share';
+    if (iconData == FontAwesomeIcons.eye.data) return 'eye';
+    if (iconData == FontAwesomeIcons.eyeSlash.data) return 'eye_slash';
+    if (iconData == FontAwesomeIcons.lock.data) return 'lock';
+    if (iconData == FontAwesomeIcons.unlock.data) return 'unlock';
+    if (iconData == FontAwesomeIcons.key.data) return 'key';
+    if (iconData == FontAwesomeIcons.shieldHalved.data) return 'shield_alt';
+    if (iconData == FontAwesomeIcons.star.data) return 'star';
+    if (iconData == FontAwesomeIcons.solidStar.data) return 'star_solid';
+    if (iconData == FontAwesomeIcons.thumbsUp.data) return 'thumbs_up';
+    if (iconData == FontAwesomeIcons.thumbsDown.data) return 'thumbs_down';
+    if (iconData == FontAwesomeIcons.comment.data) return 'comment';
+    if (iconData == FontAwesomeIcons.solidComment.data) return 'comment_solid';
+    if (iconData == FontAwesomeIcons.bell.data) return 'bell';
+    if (iconData == FontAwesomeIcons.solidBell.data) return 'bell_solid';
+    if (iconData == FontAwesomeIcons.house.data) return 'home';
+    if (iconData == FontAwesomeIcons.chartBar.data) return 'chart_bar';
+    if (iconData == FontAwesomeIcons.chartLine.data) return 'chart_line';
+    if (iconData == FontAwesomeIcons.chartPie.data) return 'chart_pie';
+    if (iconData == FontAwesomeIcons.database.data) return 'database';
+    if (iconData == FontAwesomeIcons.server.data) return 'server';
+    if (iconData == FontAwesomeIcons.wifi.data) return 'wifi';
+    if (iconData == FontAwesomeIcons.bluetooth.data) return 'bluetooth';
+    if (iconData == FontAwesomeIcons.usb.data) return 'usb';
+    if (iconData == FontAwesomeIcons.plug.data) return 'plug';
+    if (iconData == FontAwesomeIcons.batteryFull.data) return 'battery_full';
+    if (iconData == FontAwesomeIcons.batteryHalf.data) return 'battery_half';
+    if (iconData == FontAwesomeIcons.batteryEmpty.data) return 'battery_empty';
+    if (iconData == FontAwesomeIcons.bolt.data) return 'bolt';
+    if (iconData == FontAwesomeIcons.fire.data) return 'fire';
+    if (iconData == FontAwesomeIcons.snowflake.data) return 'snowflake';
+    if (iconData == FontAwesomeIcons.sun.data) return 'sun';
+    if (iconData == FontAwesomeIcons.moon.data) return 'moon';
+    if (iconData == FontAwesomeIcons.cloud.data) return 'cloud';
+    if (iconData == FontAwesomeIcons.cloudRain.data) return 'cloud_rain';
+    if (iconData == FontAwesomeIcons.temperatureHalf.data) return 'thermometer';
+    if (iconData == FontAwesomeIcons.gaugeHigh.data) return 'tachometer';
+    if (iconData == FontAwesomeIcons.wrench.data) return 'wrench';
+    if (iconData == FontAwesomeIcons.hammer.data) return 'hammer';
+    if (iconData == FontAwesomeIcons.screwdriver.data) return 'screwdriver';
+    if (iconData == FontAwesomeIcons.toolbox.data) return 'toolbox';
+    if (iconData == FontAwesomeIcons.industry.data) return 'industry';
+    if (iconData == FontAwesomeIcons.warehouse.data) return 'warehouse_fa';
     if (iconData == warehouse_open) return 'warehouse_open';
     if (iconData == warehouse_open1) return 'warehouse_open1';
     if (iconData == warehouse_open2) return 'warehouse_open2';
     if (iconData == warehouse_closed) return 'warehouse_closed';
-    if (iconData == FontAwesomeIcons.truck) return 'truck';
-    if (iconData == FontAwesomeIcons.truckFast) return 'shipping_fast';
-    if (iconData == FontAwesomeIcons.box) return 'box';
-    if (iconData == FontAwesomeIcons.boxesStacked) return 'boxes';
-    if (iconData == FontAwesomeIcons.clipboard) return 'clipboard';
-    if (iconData == FontAwesomeIcons.clipboardList) return 'clipboard_list';
-    if (iconData == FontAwesomeIcons.listCheck) return 'tasks';
-    if (iconData == FontAwesomeIcons.diagramProject) return 'project_diagram';
-    if (iconData == FontAwesomeIcons.sitemap) return 'sitemap';
-    if (iconData == FontAwesomeIcons.networkWired) return 'network_wired';
-    if (iconData == FontAwesomeIcons.microchip) return 'microchip';
-    if (iconData == FontAwesomeIcons.memory) return 'memory';
-    if (iconData == FontAwesomeIcons.hardDrive) return 'hdd';
-    if (iconData == FontAwesomeIcons.laptop) return 'laptop';
-    if (iconData == FontAwesomeIcons.mobileScreenButton) return 'mobile_alt';
-    if (iconData == FontAwesomeIcons.tablet) return 'tablet';
-    if (iconData == FontAwesomeIcons.desktop) return 'desktop';
-    if (iconData == FontAwesomeIcons.tv) return 'tv';
+    if (iconData == FontAwesomeIcons.truck.data) return 'truck';
+    if (iconData == FontAwesomeIcons.truckFast.data) return 'shipping_fast';
+    if (iconData == FontAwesomeIcons.box.data) return 'box';
+    if (iconData == FontAwesomeIcons.boxesStacked.data) return 'boxes';
+    if (iconData == FontAwesomeIcons.clipboard.data) return 'clipboard';
+    if (iconData == FontAwesomeIcons.clipboardList.data) return 'clipboard_list';
+    if (iconData == FontAwesomeIcons.listCheck.data) return 'tasks';
+    if (iconData == FontAwesomeIcons.diagramProject.data) return 'project_diagram';
+    if (iconData == FontAwesomeIcons.sitemap.data) return 'sitemap';
+    if (iconData == FontAwesomeIcons.networkWired.data) return 'network_wired';
+    if (iconData == FontAwesomeIcons.microchip.data) return 'microchip';
+    if (iconData == FontAwesomeIcons.memory.data) return 'memory';
+    if (iconData == FontAwesomeIcons.hardDrive.data) return 'hdd';
+    if (iconData == FontAwesomeIcons.laptop.data) return 'laptop';
+    if (iconData == FontAwesomeIcons.mobileScreenButton.data) return 'mobile_alt';
+    if (iconData == FontAwesomeIcons.tablet.data) return 'tablet';
+    if (iconData == FontAwesomeIcons.desktop.data) return 'desktop';
+    if (iconData == FontAwesomeIcons.tv.data) return 'tv';
 
     // Custom Icon
     if (iconData == baadericon) return 'baader';
@@ -1308,7 +1308,7 @@ class IconDataConverter implements JsonConverter<IconData, String> {
   }
 }
 
-const List<IconData> iconList = [
+final List<IconData> iconList = <IconData>[
   // Navigation & Basic UI
   Icons.home,
   Icons.settings,
@@ -1650,107 +1650,107 @@ const List<IconData> iconList = [
   Icons.settings_voice,
 
   // FontAwesome Icons
-  FontAwesomeIcons.weightScale,
-  FontAwesomeIcons.scaleBalanced,
-  FontAwesomeIcons.weightHanging,
-  FontAwesomeIcons.bullseye,
-  FontAwesomeIcons.ruler,
-  FontAwesomeIcons.anchor,
-  FontAwesomeIcons.magnifyingGlassLocation,
-  FontAwesomeIcons.slash,
-  FontAwesomeIcons.dumbbell,
-  FontAwesomeIcons.play,
-  FontAwesomeIcons.pause,
-  FontAwesomeIcons.stop,
-  FontAwesomeIcons.car,
-  FontAwesomeIcons.droplet,
+  FontAwesomeIcons.weightScale.data,
+  FontAwesomeIcons.scaleBalanced.data,
+  FontAwesomeIcons.weightHanging.data,
+  FontAwesomeIcons.bullseye.data,
+  FontAwesomeIcons.ruler.data,
+  FontAwesomeIcons.anchor.data,
+  FontAwesomeIcons.magnifyingGlassLocation.data,
+  FontAwesomeIcons.slash.data,
+  FontAwesomeIcons.dumbbell.data,
+  FontAwesomeIcons.play.data,
+  FontAwesomeIcons.pause.data,
+  FontAwesomeIcons.stop.data,
+  FontAwesomeIcons.car.data,
+  FontAwesomeIcons.droplet.data,
 
   // Additional commonly used FontAwesome icons
-  FontAwesomeIcons.heart,
-  FontAwesomeIcons.solidHeart,
-  FontAwesomeIcons.user,
-  FontAwesomeIcons.solidUser,
-  FontAwesomeIcons.envelope,
-  FontAwesomeIcons.solidEnvelope,
-  FontAwesomeIcons.phone,
-  FontAwesomeIcons.calendar,
-  FontAwesomeIcons.solidCalendar,
-  FontAwesomeIcons.clock,
-  FontAwesomeIcons.solidClock,
-  FontAwesomeIcons.locationDot,
-  FontAwesomeIcons.globe,
-  FontAwesomeIcons.gear,
-  FontAwesomeIcons.bars,
-  FontAwesomeIcons.xmark,
-  FontAwesomeIcons.check,
-  FontAwesomeIcons.plus,
-  FontAwesomeIcons.minus,
-  FontAwesomeIcons.magnifyingGlass,
-  FontAwesomeIcons.penToSquare,
-  FontAwesomeIcons.trash,
-  FontAwesomeIcons.download,
-  FontAwesomeIcons.upload,
-  FontAwesomeIcons.share,
-  FontAwesomeIcons.eye,
-  FontAwesomeIcons.eyeSlash,
-  FontAwesomeIcons.lock,
-  FontAwesomeIcons.unlock,
-  FontAwesomeIcons.key,
-  FontAwesomeIcons.shieldHalved,
-  FontAwesomeIcons.star,
-  FontAwesomeIcons.solidStar,
-  FontAwesomeIcons.thumbsUp,
-  FontAwesomeIcons.thumbsDown,
-  FontAwesomeIcons.comment,
-  FontAwesomeIcons.solidComment,
-  FontAwesomeIcons.bell,
-  FontAwesomeIcons.solidBell,
-  FontAwesomeIcons.house,
-  FontAwesomeIcons.chartBar,
-  FontAwesomeIcons.chartLine,
-  FontAwesomeIcons.chartPie,
-  FontAwesomeIcons.database,
-  FontAwesomeIcons.server,
-  FontAwesomeIcons.wifi,
-  FontAwesomeIcons.bluetooth,
-  FontAwesomeIcons.usb,
-  FontAwesomeIcons.plug,
-  FontAwesomeIcons.batteryFull,
-  FontAwesomeIcons.batteryHalf,
-  FontAwesomeIcons.batteryEmpty,
-  FontAwesomeIcons.bolt,
-  FontAwesomeIcons.fire,
-  FontAwesomeIcons.snowflake,
-  FontAwesomeIcons.sun,
-  FontAwesomeIcons.moon,
-  FontAwesomeIcons.cloud,
-  FontAwesomeIcons.cloudRain,
-  FontAwesomeIcons.temperatureHalf,
-  FontAwesomeIcons.gaugeHigh,
-  FontAwesomeIcons.wrench,
-  FontAwesomeIcons.hammer,
-  FontAwesomeIcons.screwdriver,
-  FontAwesomeIcons.toolbox,
-  FontAwesomeIcons.industry,
-  FontAwesomeIcons.warehouse,
-  FontAwesomeIcons.truck,
-  FontAwesomeIcons.truckFast,
-  FontAwesomeIcons.box,
-  FontAwesomeIcons.boxesStacked,
-  FontAwesomeIcons.clipboard,
-  FontAwesomeIcons.clipboardList,
-  FontAwesomeIcons.listCheck,
-  FontAwesomeIcons.diagramProject,
-  FontAwesomeIcons.sitemap,
-  FontAwesomeIcons.networkWired,
-  FontAwesomeIcons.microchip,
-  FontAwesomeIcons.memory,
-  FontAwesomeIcons.hardDrive,
-  FontAwesomeIcons.laptop,
-  FontAwesomeIcons.mobileScreenButton,
-  FontAwesomeIcons.tablet,
-  FontAwesomeIcons.desktop,
-  FontAwesomeIcons.tv,
+  FontAwesomeIcons.heart.data,
+  FontAwesomeIcons.solidHeart.data,
+  FontAwesomeIcons.user.data,
+  FontAwesomeIcons.solidUser.data,
+  FontAwesomeIcons.envelope.data,
+  FontAwesomeIcons.solidEnvelope.data,
+  FontAwesomeIcons.phone.data,
+  FontAwesomeIcons.calendar.data,
+  FontAwesomeIcons.solidCalendar.data,
+  FontAwesomeIcons.clock.data,
+  FontAwesomeIcons.solidClock.data,
+  FontAwesomeIcons.locationDot.data,
+  FontAwesomeIcons.globe.data,
+  FontAwesomeIcons.gear.data,
+  FontAwesomeIcons.bars.data,
+  FontAwesomeIcons.xmark.data,
+  FontAwesomeIcons.check.data,
+  FontAwesomeIcons.plus.data,
+  FontAwesomeIcons.minus.data,
+  FontAwesomeIcons.magnifyingGlass.data,
+  FontAwesomeIcons.penToSquare.data,
+  FontAwesomeIcons.trash.data,
+  FontAwesomeIcons.download.data,
+  FontAwesomeIcons.upload.data,
+  FontAwesomeIcons.share.data,
+  FontAwesomeIcons.eye.data,
+  FontAwesomeIcons.eyeSlash.data,
+  FontAwesomeIcons.lock.data,
+  FontAwesomeIcons.unlock.data,
+  FontAwesomeIcons.key.data,
+  FontAwesomeIcons.shieldHalved.data,
+  FontAwesomeIcons.star.data,
+  FontAwesomeIcons.solidStar.data,
+  FontAwesomeIcons.thumbsUp.data,
+  FontAwesomeIcons.thumbsDown.data,
+  FontAwesomeIcons.comment.data,
+  FontAwesomeIcons.solidComment.data,
+  FontAwesomeIcons.bell.data,
+  FontAwesomeIcons.solidBell.data,
+  FontAwesomeIcons.house.data,
+  FontAwesomeIcons.chartBar.data,
+  FontAwesomeIcons.chartLine.data,
+  FontAwesomeIcons.chartPie.data,
+  FontAwesomeIcons.database.data,
+  FontAwesomeIcons.server.data,
+  FontAwesomeIcons.wifi.data,
+  FontAwesomeIcons.bluetooth.data,
+  FontAwesomeIcons.usb.data,
+  FontAwesomeIcons.plug.data,
+  FontAwesomeIcons.batteryFull.data,
+  FontAwesomeIcons.batteryHalf.data,
+  FontAwesomeIcons.batteryEmpty.data,
+  FontAwesomeIcons.bolt.data,
+  FontAwesomeIcons.fire.data,
+  FontAwesomeIcons.snowflake.data,
+  FontAwesomeIcons.sun.data,
+  FontAwesomeIcons.moon.data,
+  FontAwesomeIcons.cloud.data,
+  FontAwesomeIcons.cloudRain.data,
+  FontAwesomeIcons.temperatureHalf.data,
+  FontAwesomeIcons.gaugeHigh.data,
+  FontAwesomeIcons.wrench.data,
+  FontAwesomeIcons.hammer.data,
+  FontAwesomeIcons.screwdriver.data,
+  FontAwesomeIcons.toolbox.data,
+  FontAwesomeIcons.industry.data,
+  FontAwesomeIcons.warehouse.data,
+  FontAwesomeIcons.truck.data,
+  FontAwesomeIcons.truckFast.data,
+  FontAwesomeIcons.box.data,
+  FontAwesomeIcons.boxesStacked.data,
+  FontAwesomeIcons.clipboard.data,
+  FontAwesomeIcons.clipboardList.data,
+  FontAwesomeIcons.listCheck.data,
+  FontAwesomeIcons.diagramProject.data,
+  FontAwesomeIcons.sitemap.data,
+  FontAwesomeIcons.networkWired.data,
+  FontAwesomeIcons.microchip.data,
+  FontAwesomeIcons.memory.data,
+  FontAwesomeIcons.hardDrive.data,
+  FontAwesomeIcons.laptop.data,
+  FontAwesomeIcons.mobileScreenButton.data,
+  FontAwesomeIcons.tablet.data,
+  FontAwesomeIcons.desktop.data,
+  FontAwesomeIcons.tv.data,
 
   // Custom Icon
   baadericon,
