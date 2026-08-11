@@ -26,6 +26,8 @@ import 'package:tfc/page_creator/assets/conveyor.dart'
     show conveyorTrendColors, kConveyorFreqSeries, kConveyorCurrentSeries;
 import 'package:open62541/open62541.dart' show DynamicValue;
 import 'package:tfc/page_creator/assets/io_pane.dart';
+import 'package:tfc/page_creator/assets/sensor.dart'
+    show SensorConfig, SensorFbPane, SensorFbState, SensorKind;
 import 'package:tfc/painter/beckhoff/io8.dart' show IOState;
 import 'package:tfc/theme.dart';
 import 'package:tfc/widgets/graph.dart';
@@ -777,7 +779,38 @@ SidePane _drivePane(BuildContext context) {
   );
 }
 
-/// A sensor's read-only details.
+/// A sensor bound to an `FB_Sensor` — the REAL [SensorFbPane], not a
+/// stand-in, fed a canned `ST_Sensor_HMI` snapshot instead of a PLC.
+///
+/// This is the surface under review: an operator watching a photo eye can read
+/// how long it has been blocked and retune the debounce without a download.
+/// [fault] swaps in the case the FB flags when it sees neither the NO nor the
+/// NC contact — the state is unknowable, so the chip must not say "Clear".
+Widget _sensorFbPane(BuildContext context, {bool fault = false}) {
+  return SensorFbPane(
+    config: SensorConfig(
+      kind: SensorKind.opticField,
+      detectionKey: 'sensors.CVS01_CN04_PX01.HMI',
+      tag: 'CN04-S1',
+    ),
+    state: SensorFbState(
+      output: !fault,
+      rawNO: !fault,
+      rawNC: false,
+      fault: fault,
+      hasNC: true,
+      blockedFor: fault ? Duration.zero : const Duration(milliseconds: 4200),
+      clearFor: fault ? const Duration(minutes: 5, seconds: 3) : Duration.zero,
+      onDelay: const Duration(milliseconds: 50),
+      offDelay: const Duration(milliseconds: 20),
+    ),
+    // Goldens never write; the pane is rendered, not driven.
+    onWrite: (_, __) {},
+  );
+}
+
+/// A sensor's read-only details — the fallback shape, shown when the key is a
+/// plain BOOL node with no `FB_Sensor` behind it.
 SidePane _sensorPane(BuildContext context) {
   return const SidePane(
     title: 'Sensor',
@@ -1075,11 +1108,32 @@ void main() {
       );
     });
 
-    testWidgets('sensor — dark', (tester) async {
+    testWidgets('sensor — plain BOOL fallback — dark', (tester) async {
       await _pumpWithPane(tester, theme: dark, pane: _sensorPane);
       await expectLater(
         find.byType(MaterialApp),
         matchesGoldenFile('goldens/side_pane_sensor_dark.png'),
+      );
+    });
+
+    // The FB_Sensor binding, running the real `SensorFbPane`.
+    testWidgets('sensor — FB_Sensor — dark', (tester) async {
+      await _pumpWithPane(tester, theme: dark, pane: _sensorFbPane);
+      await expectLater(
+        find.byType(MaterialApp),
+        matchesGoldenFile('goldens/side_pane_sensor_fb_dark.png'),
+      );
+    });
+
+    testWidgets('sensor — FB_Sensor signal fault — dark', (tester) async {
+      await _pumpWithPane(
+        tester,
+        theme: dark,
+        pane: (context) => _sensorFbPane(context, fault: true),
+      );
+      await expectLater(
+        find.byType(MaterialApp),
+        matchesGoldenFile('goldens/side_pane_sensor_fb_fault_dark.png'),
       );
     });
 
