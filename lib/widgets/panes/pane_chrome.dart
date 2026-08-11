@@ -588,8 +588,10 @@ class PaneTileRow extends StatelessWidget {
 /// dialog shows the real graph, and because the dialog floats it can be
 /// dragged aside and left open next to the live plant view.
 class PaneGraphTile extends StatelessWidget {
-  /// Caption under/over the preview.
-  final String label;
+  /// Caption above the preview. Omit it when the chart's own legend and axes
+  /// already say what the lines are — a caption repeating them is noise in a
+  /// tile this small.
+  final String? label;
 
   /// The compact preview drawn inside the pane (sparkline, gauge, mini bar).
   final Widget preview;
@@ -610,7 +612,7 @@ class PaneGraphTile extends StatelessWidget {
 
   const PaneGraphTile({
     super.key,
-    required this.label,
+    this.label,
     required this.preview,
     required this.expandedBuilder,
     this.expandedTitle,
@@ -628,10 +630,12 @@ class PaneGraphTile extends StatelessWidget {
         borderRadius: BorderRadius.circular(10),
         onTap: () => showFloatingDialog(
           context: context,
-          id: 'graph:$label',
-          title: expandedTitle ?? label,
+          id: 'graph:${expandedTitle ?? label}',
+          title: expandedTitle ?? label ?? 'Trend',
           icon: Icons.show_chart,
           size: expandedSize,
+          // A chart fills the window; it must not sit in a scroll view.
+          scrollable: false,
           builder: expandedBuilder,
         ),
         child: Padding(
@@ -642,13 +646,16 @@ class PaneGraphTile extends StatelessWidget {
             children: [
               Row(
                 children: [
-                  Expanded(
-                    child: Text(
-                      label,
-                      style: theme.textTheme.labelSmall,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
+                  if (label != null)
+                    Expanded(
+                      child: Text(
+                        label!,
+                        style: theme.textTheme.labelSmall,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    )
+                  else
+                    const Spacer(),
                   Icon(
                     Icons.open_in_full,
                     size: 14,
@@ -656,7 +663,7 @@ class PaneGraphTile extends StatelessWidget {
                   ),
                 ],
               ),
-              const SizedBox(height: 6),
+              const SizedBox(height: 4),
               SizedBox(height: height, child: preview),
             ],
           ),

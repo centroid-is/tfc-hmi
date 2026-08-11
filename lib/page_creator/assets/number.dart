@@ -370,6 +370,7 @@ class NumberWidget extends ConsumerWidget {
       title: config.graphConfig?.headerText ?? config.text ?? config.key,
       icon: Icons.show_chart,
       size: Size(size.width * 0.7, size.height * 0.7),
+      scrollable: false,
       builder: (_) => _NumberGraphBody(config: config),
     );
   }

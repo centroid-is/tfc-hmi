@@ -1321,17 +1321,21 @@ class _ConveyorState extends ConsumerState<Conveyor>
                             ),
                           ],
                         ),
-                        const SizedBox(height: 4),
-                        // Compact row rather than a SwitchListTile: the pane
-                        // has one screen of height and this is a mode flag,
-                        // not a headline.
+                        // Room for the field's floating label, which would
+                        // otherwise ride up into the jog button captions.
+                        const SizedBox(height: 14),
+                        // Mode flag and the speed it jogs at, on one row:
+                        // both belong to the buttons above, and neither is a
+                        // headline worth its own line of a one-screen pane.
                         Row(
+                          crossAxisAlignment: CrossAxisAlignment.center,
                           children: [
                             Expanded(
                               child: Text(
-                                stopOnRelease
-                                    ? 'Runs only while held'
-                                    : 'Tap latches the belt on',
+                                // Short enough to stay on one line next to
+                                // the switch and the field; wrapping here
+                                // pushed the field into the jog labels.
+                                stopOnRelease ? 'Hold to run' : 'Tap to latch',
                                 style: Theme.of(context).textTheme.bodySmall,
                               ),
                             ),
@@ -1340,16 +1344,18 @@ class _ConveyorState extends ConsumerState<Conveyor>
                               onChanged: (_) =>
                                   write('p_cmd_ManualStopOnRelease', true),
                             ),
+                            const SizedBox(width: 8),
+                            SizedBox(
+                              width: 132,
+                              child: _FrequencyField(
+                                fieldKey: 'manual_freq_field',
+                                label: 'Manual',
+                                value: dynValue['p_cfg_ManualFreq'],
+                                onSubmitted: (v) =>
+                                    write('p_cfg_ManualFreq', v),
+                              ),
+                            ),
                           ],
-                        ),
-                        const SizedBox(height: 6),
-                        // The speed those buttons jog at — it belongs with
-                        // them, not with the auto/cleaning setpoints.
-                        _FrequencyField(
-                          fieldKey: 'manual_freq_field',
-                          label: 'Manual frequency',
-                          value: dynValue['p_cfg_ManualFreq'],
-                          onSubmitted: (v) => write('p_cfg_ManualFreq', v),
                         ),
                       ],
                     ),
@@ -1413,7 +1419,6 @@ class _ConveyorState extends ConsumerState<Conveyor>
                   PaneSection(
                     title: 'Trend',
                     child: PaneGraphTile(
-                      label: 'Frequency (Hz) · Current (A)',
                       // Tall enough for a two-axis line chart to be readable
                       // rather than decorative, and no taller — the setpoint
                       // fields below it have to fit on the same screen.
@@ -1439,8 +1444,7 @@ class _ConveyorState extends ConsumerState<Conveyor>
                   // Inline, not behind a dialog: there are only two of them
                   // and an operator changing a frequency wants to see the
                   // belt while doing it. Manual frequency is not here — it
-                  // belongs to jogging, so it sits in the Jog section next to
-                  // the buttons that use it.
+                  // belongs to jogging, so it sits beside the jog toggle.
                   //
                   // Committed on submit (Enter / focus-out), never per
                   // keystroke — a half-typed frequency must not reach the
@@ -1448,22 +1452,29 @@ class _ConveyorState extends ConsumerState<Conveyor>
                   // the PLC reports a different one.
                   PaneSection(
                     title: 'Setpoints',
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      mainAxisSize: MainAxisSize.min,
+                    // Side by side — two short numbers read better as a pair
+                    // than as a stack, and it costs one row instead of two.
+                    child: Row(
+                      // Top-aligned: a field showing a validation or helper
+                      // line below it must not shove its neighbour down.
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        _FrequencyField(
-                          fieldKey: 'auto_freq_field',
-                          label: 'Auto frequency',
-                          value: dynValue['p_cfg_AutoFreq'],
-                          onSubmitted: (v) => write('p_cfg_AutoFreq', v),
+                        Expanded(
+                          child: _FrequencyField(
+                            fieldKey: 'auto_freq_field',
+                            label: 'Auto',
+                            value: dynValue['p_cfg_AutoFreq'],
+                            onSubmitted: (v) => write('p_cfg_AutoFreq', v),
+                          ),
                         ),
-                        const SizedBox(height: 10),
-                        _FrequencyField(
-                          fieldKey: 'cleaning_freq_field',
-                          label: 'Cleaning frequency',
-                          value: dynValue['p_cfg_CleaningFreq'],
-                          onSubmitted: (v) => write('p_cfg_CleaningFreq', v),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: _FrequencyField(
+                            fieldKey: 'cleaning_freq_field',
+                            label: 'Cleaning',
+                            value: dynValue['p_cfg_CleaningFreq'],
+                            onSubmitted: (v) => write('p_cfg_CleaningFreq', v),
+                          ),
                         ),
                       ],
                     ),
@@ -1880,9 +1891,13 @@ class ConveyorPainter extends CustomPainter {
 
 /// Series colours for the conveyor trend, fixed so the small preview in the
 /// pane and the full chart in the floating dialog read as the same chart.
+/// The legend carries the units, so the tile needs no caption repeating them.
+const String kConveyorFreqSeries = 'Frequency (Hz)';
+const String kConveyorCurrentSeries = 'Current (A)';
+
 const Map<String, Color> conveyorTrendColors = {
-  'Frequency': Colors.blue,
-  'Current': Colors.orange,
+  kConveyorFreqSeries: Colors.blue,
+  kConveyorCurrentSeries: Colors.orange,
 };
 
 class ConveyorStatsGraph extends ConsumerStatefulWidget {
@@ -2001,10 +2016,10 @@ class _ConveyorStatsGraphState extends ConsumerState<ConveyorStatsGraph> {
         );
 
         final List<Map<String, dynamic>> data = [];
-        data.addAll(
-            freqData.map((e) => {'x': e[0], 'y': e[1], 's': 'Frequency'}));
-        data.addAll(
-            currentData.map((e) => {'x': e[0], 'y2': e[1], 's': 'Current'}));
+        data.addAll(freqData
+            .map((e) => {'x': e[0], 'y': e[1], 's': kConveyorFreqSeries}));
+        data.addAll(currentData
+            .map((e) => {'x': e[0], 'y2': e[1], 's': kConveyorCurrentSeries}));
 
         // The compact preview needs its own gutters: at 130px tall the
         // default padding lets tick labels print over the tile caption and

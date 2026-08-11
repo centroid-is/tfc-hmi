@@ -411,6 +411,7 @@ class _BpmWidgetState extends ConsumerState<BpmWidget>
       title: widget.config.graphHeader ?? widget.config.text ?? 'BPM Counter',
       icon: Icons.speed,
       size: Size(size.width * 0.7, size.height * 0.7),
+      scrollable: false,
       builder: (context) => _BpmChartView(
         config: widget.config,
         initialInterval: activeInterval,

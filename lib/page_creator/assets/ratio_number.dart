@@ -520,6 +520,7 @@ class _RatioNumberWidgetState extends ConsumerState<RatioNumberWidget>
           widget.config.graphHeader ?? widget.config.text ?? 'Ratio Analysis',
       icon: Icons.percent,
       size: Size(size.width * 0.7, size.height * 0.7),
+      scrollable: false,
       builder: (context) => RatioAnalysisView(
         config: widget.config,
         key1Queue: key1Queue,

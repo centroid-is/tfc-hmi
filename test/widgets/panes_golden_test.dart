@@ -22,7 +22,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:tfc/page_creator/assets/conveyor.dart' show conveyorTrendColors;
+import 'package:tfc/page_creator/assets/conveyor.dart'
+    show conveyorTrendColors, kConveyorFreqSeries, kConveyorCurrentSeries;
 import 'package:open62541/open62541.dart' show DynamicValue;
 import 'package:tfc/page_creator/assets/io_pane.dart';
 import 'package:tfc/painter/beckhoff/io8.dart' show IOState;
@@ -225,13 +226,13 @@ class _TrendChart extends StatelessWidget {
         {
           'x': (_t0 + i * _step).toDouble(),
           'y': _frequency[i],
-          's': 'Frequency',
+          's': kConveyorFreqSeries,
         },
       for (var i = 0; i < _current.length; i++)
         {
           'x': (_t0 + i * _step).toDouble(),
           'y2': _current[i],
-          's': 'Current',
+          's': kConveyorCurrentSeries,
         },
     ];
     // An explicit xRange, not xSpan: the live chart windows on
@@ -279,7 +280,7 @@ Widget _freqField(String label, String value, {bool focused = false}) {
         labelText: label,
         suffixText: 'Hz',
         isDense: true,
-        helperText: focused ? 'Enter to send to the drive' : null,
+        helperText: focused ? 'Enter to send' : null,
         enabledBorder: focused
             ? OutlineInputBorder(
                 borderSide: BorderSide(
@@ -346,20 +347,21 @@ SidePane _conveyorPane(BuildContext context) {
                       active: true),
                 ],
               ),
-              const SizedBox(height: 4),
+              const SizedBox(height: 14),
               Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
                   Expanded(
                     child: Text(
-                      'Runs only while held',
+                      'Hold to run',
                       style: Theme.of(context).textTheme.bodySmall,
                     ),
                   ),
                   Switch(value: true, onChanged: (_) {}),
+                  const SizedBox(width: 8),
+                  SizedBox(width: 132, child: _freqField('Manual', '30.00')),
                 ],
               ),
-              const SizedBox(height: 6),
-              _freqField('Manual frequency', '30.00'),
             ],
           ),
         ),
@@ -399,7 +401,6 @@ SidePane _conveyorPane(BuildContext context) {
         PaneSection(
           title: 'Trend',
           child: PaneGraphTile(
-            label: 'Frequency (Hz) · Current (A)',
             height: 100,
             preview: const _TrendChart(compact: true),
             expandedBuilder: (_) => const _TrendChart(showButtons: true),
@@ -408,13 +409,12 @@ SidePane _conveyorPane(BuildContext context) {
         const Divider(height: 1),
         PaneSection(
           title: 'Setpoints',
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            mainAxisSize: MainAxisSize.min,
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              _freqField('Auto frequency', '50.00'),
-              const SizedBox(height: 10),
-              _freqField('Cleaning frequency', '27.50', focused: true),
+              Expanded(child: _freqField('Auto', '50.00')),
+              const SizedBox(width: 8),
+              Expanded(child: _freqField('Cleaning', '27.50', focused: true)),
             ],
           ),
         ),
@@ -1051,6 +1051,35 @@ void main() {
       await expectLater(
         find.byType(MaterialApp),
         matchesGoldenFile('goldens/side_pane_gate_dark.png'),
+      );
+    });
+  });
+
+  group('Chart popup golden', () {
+    // What the trend tile opens: the same chart full size with pan/zoom, in a
+    // window the operator can drag off the pane and leave running.
+    testWidgets('conveyor trend — floating chart over the pane',
+        (tester) async {
+      await _pumpWithPane(
+        tester,
+        theme: dark,
+        pane: _conveyorPane,
+        afterOpen: (context) => showFloatingDialog(
+          context: context,
+          id: 'golden-trend',
+          title: 'CN-04 — trend',
+          subtitle: 'Last 30 minutes',
+          icon: Icons.show_chart,
+          size: const Size(820, 460),
+          position: const Offset(120, 200),
+          scrollable: false,
+          builder: (_) => const _TrendChart(showButtons: true),
+        ),
+      );
+      addTearDown(() => closeFloatingDialog('golden-trend'));
+      await expectLater(
+        find.byType(MaterialApp),
+        matchesGoldenFile('goldens/conveyor_trend_popup_dark.png'),
       );
     });
   });

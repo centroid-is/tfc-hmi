@@ -294,6 +294,11 @@ void showFloatingDialog({
   Offset? position,
   String closeLabel = 'Close',
   VoidCallback? onClosed,
+
+  /// Set false for content that fills the window itself — a chart with an
+  /// `Expanded` inside cannot lay out against a scroll view's unbounded
+  /// height, and a chart wants the whole window anyway.
+  bool scrollable = true,
 }) {
   FloatingDialogs._show(
     context: context,
@@ -308,6 +313,7 @@ void showFloatingDialog({
     position: position,
     closeLabel: closeLabel,
     onClosed: onClosed,
+    scrollable: scrollable,
   );
 }
 
@@ -343,6 +349,7 @@ abstract final class FloatingDialogs {
     Offset? position,
     String closeLabel = 'Close',
     VoidCallback? onClosed,
+    bool scrollable = true,
   }) {
     if (_entries.containsKey(id)) return;
 
@@ -361,6 +368,7 @@ abstract final class FloatingDialogs {
         initialSize: size,
         initialPosition: position,
         cascade: cascade,
+        scrollable: scrollable,
         builder: builder,
       ),
     );
@@ -409,6 +417,7 @@ class _FloatingDialogShell extends StatefulWidget {
   final Size initialSize;
   final Offset? initialPosition;
   final double cascade;
+  final bool scrollable;
   final WidgetBuilder builder;
 
   const _FloatingDialogShell({
@@ -419,6 +428,7 @@ class _FloatingDialogShell extends StatefulWidget {
     required this.initialSize,
     required this.cascade,
     required this.builder,
+    this.scrollable = true,
     this.subtitle,
     this.icon,
     this.status,
@@ -528,6 +538,7 @@ class _FloatingDialogShellState extends State<_FloatingDialogShell> {
               status: widget.status,
               actions: widget.actions,
               closeLabel: widget.closeLabel,
+              scrollable: widget.scrollable,
               onClose: () => FloatingDialogs.close(widget.id),
               // The header doubles as the window's title bar.
               headerWrap: (context, header) => GestureDetector(

@@ -442,6 +442,7 @@ class _RateValueWidgetState extends ConsumerState<RateValueWidget>
       title: widget.config.graphHeader ?? widget.config.text ?? 'Rate Value',
       icon: Icons.show_chart,
       size: Size(size.width * 0.7, size.height * 0.7),
+      scrollable: false,
       builder: (context) => _RateValueChartView(
         config: widget.config,
         initialInterval: activeInterval,
