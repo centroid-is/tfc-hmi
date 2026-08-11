@@ -427,6 +427,80 @@ void main() {
           ['/packing/weigher', '/packing/lines']);
     });
 
+    testWidgets('the drag handle still reorders within a level',
+        (tester) async {
+      // The row was hoisted out of _buildTreeNode and wrapped in the drag
+      // widgets; the handle's ReorderableDragStartListener must still win.
+      tester.view.physicalSize = const Size(1400, 1000);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      final manager = _manager();
+      await tester.pumpWidget(_buildEditor(manager));
+      await tester.pumpAndSettle();
+      await _openPagesDialog(tester);
+
+      final handle = find.descendant(
+        of: _treeNode('Home'),
+        matching: find.byIcon(Icons.drag_handle),
+      );
+      final gesture = await tester.startGesture(tester.getCenter(handle));
+      await tester.pump(const Duration(milliseconds: 100));
+      await gesture.moveTo(tester.getCenter(_treeNode('Freezer')));
+      await tester.pump(const Duration(milliseconds: 100));
+      await gesture.up();
+      await tester.pumpAndSettle();
+
+      await _closeAndSave(tester);
+
+      // Dropped onto the third slot, which ReorderableListView resolves to
+      // index 1 for a downward move — the pre-existing convention.
+      expect(manager.getRootMenuItems().map((r) => r.label).toList(),
+          ['Packing', 'Home', 'Freezer']);
+      // Reordering must not re-parent anything.
+      expect(_childrenOf(manager, '/packing'),
+          ['/packing/weigher', '/packing/lines']);
+    });
+
+    testWidgets('holding a row does not stop the list from scrolling',
+        (tester) async {
+      // LongPressDraggable was chosen over Draggable precisely so a plain
+      // vertical drag on a row still scrolls the tree.
+      tester.view.physicalSize = const Size(1400, 700);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      final manager = PageManager(
+        prefs: _FakePreferences(),
+        pages: {
+          for (var i = 0; i < 25; i++)
+            '/p$i': _page('Page $i', '/p$i', priority: i),
+        },
+      );
+      await tester.pumpWidget(_buildEditor(manager));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Page 0').first);
+      await tester.pumpAndSettle();
+      expect(find.text('Pages'), findsOneWidget);
+
+      // Read the scroll offset rather than a row's position: rows that leave
+      // the viewport are unmounted by the lazy list.
+      final list = find
+          .descendant(
+            of: find.byType(ReorderableListView),
+            matching: find.byType(Scrollable),
+          )
+          .first;
+      final before = tester.state<ScrollableState>(list).position.pixels;
+
+      await tester.drag(_treeNode('Page 1'), const Offset(0, -200));
+      await tester.pumpAndSettle();
+
+      expect(tester.state<ScrollableState>(list).position.pixels,
+          greaterThan(before),
+          reason: 'dragging a row vertically must scroll the tree');
+    });
+
     testWidgets('a move can be undone', (tester) async {
       tester.view.physicalSize = const Size(1400, 1000);
       tester.view.devicePixelRatio = 1.0;
