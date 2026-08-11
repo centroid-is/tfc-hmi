@@ -7,8 +7,10 @@ project(runner LANGUAGES CXX)
 #
 # Any new source files that you add to the application should be added here.
 add_executable(${BINARY_NAME} WIN32
+  "crash_handler.cpp"
   "flutter_window.cpp"
   "gpu_watchdog.cpp"
+  "log_rotation.cpp"
   "main.cpp"
   "utils.cpp"
   "win32_window.cpp"
@@ -38,6 +40,9 @@ target_link_libraries(${BINARY_NAME} PRIVATE "dwmapi.lib")
 # WTSRegisterSessionNotification — the GPU watchdog uses RDP session changes as
 # a hint that the display adapter (and with it the D3D device) was swapped.
 target_link_libraries(${BINARY_NAME} PRIVATE "wtsapi32.lib")
+# MiniDumpWriteDump — linked rather than LoadLibrary'd, so the crash handler
+# needs no loader activity at the moment it runs.
+target_link_libraries(${BINARY_NAME} PRIVATE "dbghelp.lib")
 target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")
 
 # Run the Flutter tool portions of the build. This must not be removed.

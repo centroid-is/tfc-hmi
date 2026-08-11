@@ -1,12 +1,16 @@
 #include "utils.h"
 
+#include "log_rotation.h"
+
 #include <flutter_windows.h>
 #include <fcntl.h>
 #include <io.h>
 #include <stdio.h>
 #include <windows.h>
 
+#include <cstdlib>  // free, _wdupenv_s
 #include <iostream>
+#include <string>
 #include <vector>
 
 void CreateAndAttachConsole() {
@@ -117,4 +121,77 @@ std::string Utf8FromUtf16(const wchar_t* utf16_string) {
     return std::string();
   }
   return utf8_string;
+}
+
+namespace {
+
+std::wstring Utf16FromUtf8(const std::string& utf8) {
+  if (utf8.empty()) return std::wstring();
+  int len = ::MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), -1, nullptr, 0);
+  if (len <= 0) return std::wstring();
+  std::wstring wide(static_cast<size_t>(len) - 1, L'\0');
+  ::MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), -1, &wide[0], len);
+  return wide;
+}
+
+std::string Utf8FromUtf16Str(const std::wstring& utf16) {
+  if (utf16.empty()) return std::string();
+  int len = ::WideCharToMultiByte(CP_UTF8, 0, utf16.c_str(), -1, nullptr, 0,
+                                  nullptr, nullptr);
+  if (len <= 0) return std::string();
+  std::string utf8(static_cast<size_t>(len) - 1, '\0');
+  ::WideCharToMultiByte(CP_UTF8, 0, utf16.c_str(), -1, &utf8[0], len, nullptr,
+                        nullptr);
+  return utf8;
+}
+
+}  // namespace
+
+std::string DirectoryOf(const std::string& path) {
+  std::string::size_type slash = path.find_last_of("/\\");
+  if (slash == std::string::npos) return std::string();
+  return path.substr(0, slash);
+}
+
+std::string DefaultLogPath() {
+  wchar_t* local_app_data = nullptr;
+  size_t len = 0;
+  if (_wdupenv_s(&local_app_data, &len, L"LOCALAPPDATA") != 0 ||
+      local_app_data == nullptr) {
+    return std::string();
+  }
+  std::wstring dir(local_app_data);
+  free(local_app_data);
+
+  // CreateDirectoryW does not create intermediate levels, so build the two
+  // levels we need in order. Both may already exist; that is not an error.
+  dir += L"\\centroid-hmi";
+  ::CreateDirectoryW(dir.c_str(), nullptr);
+  dir += L"\\logs";
+  ::CreateDirectoryW(dir.c_str(), nullptr);
+
+  DWORD attributes = ::GetFileAttributesW(dir.c_str());
+  if (attributes == INVALID_FILE_ATTRIBUTES ||
+      !(attributes & FILE_ATTRIBUTE_DIRECTORY)) {
+    return std::string();
+  }
+
+  return Utf8FromUtf16Str(dir + L"\\hmi.log");
+}
+
+void RotateLogs(const std::string& path, int max_archives) {
+  if (path.empty()) return;
+
+  tfc::LogRotationPlan plan = tfc::PlanRotation(path, max_archives);
+
+  for (const std::string& doomed : plan.deletes) {
+    ::DeleteFileW(Utf16FromUtf8(doomed).c_str());
+  }
+  for (const auto& rename : plan.renames) {
+    // MOVEFILE_REPLACE_EXISTING for safety: a leftover destination from an
+    // interrupted rotation must not stop the chain.
+    ::MoveFileExW(Utf16FromUtf8(rename.first).c_str(),
+                  Utf16FromUtf8(rename.second).c_str(),
+                  MOVEFILE_REPLACE_EXISTING);
+  }
 }
