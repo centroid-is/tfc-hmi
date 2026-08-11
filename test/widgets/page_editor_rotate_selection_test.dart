@@ -24,7 +24,6 @@ void main() {
 
   /// Marquee-selects the whole row.
   Future<void> selectRow(WidgetTester tester) async {
-    await enterSelectMode(tester);
     await marquee(tester, 0.15, 0.3, 0.85, 0.7);
   }
 

@@ -178,6 +178,23 @@ Offset _rotationFactors(double degrees) {
 /// to fit is aligned to the top/left edge and may overhang; as a last resort
 /// centres are clamped into 0..1 so no asset ends up unreachable off-canvas.
 ///
+/// Half-extents of an asset's axis-aligned bounding box once its own rotation
+/// is applied — the same formula `AssetStack` uses to size the Positioned that
+/// holds a rotated visual. In units of canvas height, so [aspect] scales the
+/// width in and the caller divides x back out.
+///
+/// Uses the exact quarter-turn factors rather than raw trig for the same
+/// reason the orbit in [rotateGroup] does: the box decides where the group
+/// centre sits, so noise here would drift the whole selection.
+Offset _halfExtents(double width, double height, double? angle, double aspect) {
+  final factors = _rotationFactors(angle ?? 0.0);
+  final cosA = factors.dx.abs();
+  final sinA = factors.dy.abs();
+  final halfW = width * aspect / 2;
+  final halfH = height / 2;
+  return Offset(halfW * cosA + halfH * sinA, halfW * sinA + halfH * cosA);
+}
+
 /// Returns a new list positionally matching [placements]; nothing is mutated.
 @visibleForTesting
 List<AssetPlacement> rotateGroup({
@@ -190,19 +207,8 @@ List<AssetPlacement> rotateGroup({
   // than producing NaN coordinates.
   final aspect = (aspectRatio.isFinite && aspectRatio > 0) ? aspectRatio : 1.0;
 
-  // Half-extents of an asset's axis-aligned bounding box once its own
-  // rotation is applied — the same formula AssetStack uses to size the
-  // Positioned that holds a rotated visual. Uses the exact quarter-turn
-  // factors for the same reason the orbit below does: the box decides where
-  // the group centre sits, so trig noise here would drift the whole selection.
-  Offset halfExtents(double width, double height, double? angle) {
-    final factors = _rotationFactors(angle ?? 0.0);
-    final cosA = factors.dx.abs();
-    final sinA = factors.dy.abs();
-    final halfW = width * aspect / 2;
-    final halfH = height / 2;
-    return Offset(halfW * cosA + halfH * sinA, halfW * sinA + halfH * cosA);
-  }
+  Offset halfExtents(double width, double height, double? angle) =>
+      _halfExtents(width, height, angle, aspect);
 
   // 1) Bounding box of the selection, in canvas-height units.
   var minX = double.infinity;
@@ -271,6 +277,96 @@ List<AssetPlacement> rotateGroup({
         height: p.height,
         angle: p.angle,
       ),
+  ];
+}
+
+/// Which way a selection is flipped.
+enum MirrorAxis {
+  /// Left becomes right: assets swap sides across a vertical line through the
+  /// selection's centre.
+  horizontal,
+
+  /// Top becomes bottom: assets swap across a horizontal line through it.
+  vertical,
+}
+
+/// Reflects [placements] about the centre of their combined bounding box.
+///
+/// Both the layout and each asset's own orientation are reflected, the way a
+/// selection flips in a drawing tool: a line of assets comes back in the
+/// opposite order, and one that was leaning right leans left.
+///
+/// The angle is reflected rather than the artwork, because an asset has no
+/// per-asset mirror flag to set — only the page-wide one in `AssetStackConfig`.
+/// For the equipment these pages are made of, whose glyphs are symmetric about
+/// their own long axis, reflecting the angle is the same picture. It is not
+/// for a chiral glyph, which comes back rotated rather than mirrored.
+///
+/// One consequence worth knowing before reaching for this: a horizontal flip
+/// maps angle 0 to 180, so assets that were never rotated come back explicitly
+/// upside down. A vertical flip maps 0 to 0 and leaves them alone.
+///
+/// [aspectRatio] is the canvas's width / height, needed for the same reason
+/// [rotateGroup] needs it — x and y are normalized against a canvas that is
+/// not square, so a rotated asset's bounding box cannot be measured without
+/// it. The reflection itself acts on one axis at a time and so cannot shear.
+///
+/// Nothing can leave the canvas: reflecting an angle leaves |cos| and |sin|
+/// unchanged, so every asset's bounding box keeps its size and the group's box
+/// maps exactly onto itself.
+///
+/// Returns a new list positionally matching [placements]; nothing is mutated.
+@visibleForTesting
+List<AssetPlacement> mirrorGroup({
+  required List<AssetPlacement> placements,
+  required MirrorAxis axis,
+  required double aspectRatio,
+}) {
+  if (placements.isEmpty) return const [];
+  final aspect = (aspectRatio.isFinite && aspectRatio > 0) ? aspectRatio : 1.0;
+
+  // Bounding box of the selection, in canvas-height units — the same box
+  // rotateGroup turns about.
+  var minX = double.infinity;
+  var minY = double.infinity;
+  var maxX = double.negativeInfinity;
+  var maxY = double.negativeInfinity;
+  for (final p in placements) {
+    final half = _halfExtents(p.width, p.height, p.angle, aspect);
+    minX = math.min(minX, p.x * aspect - half.dx);
+    maxX = math.max(maxX, p.x * aspect + half.dx);
+    minY = math.min(minY, p.y - half.dy);
+    maxY = math.max(maxY, p.y + half.dy);
+  }
+  final centreX = (minX + maxX) / 2;
+  final centreY = (minY + maxY) / 2;
+
+  return [
+    for (final p in placements)
+      () {
+        final angle = p.angle ?? 0.0;
+        // Screen axes: x right, y down, angle clockwise, so an asset points
+        // along (cos a, sin a). Reflecting x gives (-cos a, sin a), which is
+        // the direction at 180 - a; reflecting y gives (cos a, -sin a), which
+        // is -a.
+        final newAngle = _normalizeAngle(
+          axis == MirrorAxis.horizontal ? 180 - angle : -angle,
+        );
+        return AssetPlacement(
+          x: axis == MirrorAxis.horizontal
+              ? ((2 * centreX - p.x * aspect) / aspect).clamp(0.0, 1.0)
+              : p.x,
+          y: axis == MirrorAxis.vertical
+              ? (2 * centreY - p.y).clamp(0.0, 1.0)
+              : p.y,
+          width: p.width,
+          height: p.height,
+          // Back at zero means back to null, for the reason spelled out in
+          // rotateGroup: AssetStack skips the page's mirror transform for a
+          // null angle, so a round trip has to restore it.
+          angle: newAngle == 0 ? null : newAngle,
+        );
+      }(),
   ];
 }
 
@@ -378,11 +474,29 @@ class PageEditor extends ConsumerStatefulWidget {
 class _PageEditorState extends ConsumerState<PageEditor> {
   final List<Map<String, AssetPage>> _undoHistory = [];
   bool _showPalette = false;
-  bool _isSelectMode = false;
+
+  /// True while the pan key is held. The editor has one mode: a drag on empty
+  /// canvas rubber-bands a selection, and this is what temporarily turns that
+  /// drag back into a canvas pan.
+  ///
+  /// There is nothing to pan at 1:1 — `ZoomableCanvas` has `minScale: 1.0` and
+  /// no boundary margin, so the child exactly fills the viewport — which is
+  /// why panning can afford to be the held-key gesture and marquee the plain
+  /// one, rather than the other way round.
+  bool _isPanKeyHeld = false;
+
   Offset? _selectionStart;
   Offset? _selectionCurrent;
   Set<Asset> _selectedAssets = {};
+
+  /// True between an asset's pan start and the following pointer up, so a drag
+  /// that began on an asset cannot also grow a marquee behind it.
   bool _isDraggingAsset = false;
+
+  /// The canvas's last laid-out constraints. The keyboard handler sits above
+  /// the `LayoutBuilder`, and [_rotateAssets] needs the aspect ratio, so the
+  /// builder leaves it here on the way past.
+  BoxConstraints? _canvasConstraints;
   String? _copiedAssets;
   Map<String, AssetPage> _temporaryPages = {};
   String? _currentPage;
@@ -812,12 +926,30 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   void _handleDelete() {
     if (_selectedAssets.isEmpty) return;
 
+    // The pane would otherwise stay up over an asset that no longer exists
+    // until the next `_syncConfigEdits` tick noticed and shut it.
+    final configAsset = _configAsset;
+    if (configAsset != null && _selectedAssets.contains(configAsset)) {
+      closeSidePane(id: _configPaneId(configAsset));
+    }
+
     _saveToHistory();
     setState(() {
       assets.removeWhere((asset) => _selectedAssets.contains(asset));
       _selectedAssets.clear();
       _updateCurrentJson();
     });
+  }
+
+  /// Rotates the current selection a quarter turn from the keyboard.
+  ///
+  /// The same group rotation the context menu offers — a single selected asset
+  /// spins in place, several turn as one rigid group. Silently does nothing
+  /// with an empty selection, so the key is harmless when nothing is picked.
+  void _handleRotateShortcut(double degrees) {
+    final constraints = _canvasConstraints;
+    if (constraints == null || _selectedAssets.isEmpty) return;
+    _rotateAssets(_selectedAssets.toList(), degrees, constraints);
   }
 
   /// Menu values for the editing actions; AI entries use their own list index,
@@ -827,6 +959,9 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   static const int _rotateCounterClockwiseAction = -3;
   static const int _alignHorizontalAction = -4;
   static const int _alignVerticalAction = -5;
+  static const int _editAction = -6;
+  static const int _mirrorHorizontalAction = -7;
+  static const int _mirrorVerticalAction = -8;
 
   /// Assets a canvas action applies to: the whole selection when the asset
   /// acted on is part of it, otherwise just that asset. Mirrors [_moveAsset].
@@ -916,6 +1051,27 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     );
   }
 
+  /// Flips [targets] about the centre of their combined bounding box.
+  ///
+  /// [constraints] supplies the canvas aspect ratio, for the same reason
+  /// [_rotateAssets] needs it. See [mirrorGroup].
+  void _mirrorAssets(
+    List<Asset> targets,
+    MirrorAxis axis,
+    BoxConstraints constraints,
+  ) {
+    if (targets.isEmpty) return;
+
+    _applyPlacements(
+      targets,
+      mirrorGroup(
+        placements: _placements(targets),
+        axis: axis,
+        aspectRatio: constraints.maxWidth / constraints.maxHeight,
+      ),
+    );
+  }
+
   /// Right-click menu for an asset on the canvas.
   ///
   /// Editing actions are always available; the AI entries are appended only
@@ -947,6 +1103,19 @@ class _PageEditorState extends ConsumerState<PageEditor> {
         globalPosition.dy,
       ),
       items: [
+        // First, and on its own: this is how the configuration editor is
+        // reached now that a tap selects instead of opening it. Unlike the
+        // entries below it acts on the asset under the cursor rather than on
+        // the whole selection — the pane configures one asset.
+        PopupMenuItem<int>(
+          value: _editAction,
+          child: const ListTile(
+            leading: Icon(Icons.tune),
+            title: Text('Edit'),
+            dense: true,
+          ),
+        ),
+        const PopupMenuDivider(),
         PopupMenuItem<int>(
           value: _rotateClockwiseAction,
           child: ListTile(
@@ -964,6 +1133,29 @@ class _PageEditorState extends ConsumerState<PageEditor> {
             title: Text(targets.length > 1
                 ? 'Rotate ${targets.length} assets 90° counter-clockwise'
                 : 'Rotate 90° counter-clockwise'),
+            dense: true,
+          ),
+        ),
+        // Named for the direction things move, not the line they reflect
+        // about: "horizontally" swaps left for right. Matches how a drawing
+        // tool's Flip Horizontal reads, and how the rotate pair above it does.
+        PopupMenuItem<int>(
+          value: _mirrorHorizontalAction,
+          child: ListTile(
+            leading: const Icon(Icons.swap_horiz),
+            title: Text(targets.length > 1
+                ? 'Mirror ${targets.length} assets horizontally'
+                : 'Mirror horizontally'),
+            dense: true,
+          ),
+        ),
+        PopupMenuItem<int>(
+          value: _mirrorVerticalAction,
+          child: ListTile(
+            leading: const Icon(Icons.swap_vert),
+            title: Text(targets.length > 1
+                ? 'Mirror ${targets.length} assets vertically'
+                : 'Mirror vertically'),
             dense: true,
           ),
         ),
@@ -1026,12 +1218,21 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     // State (setState / ref) that is invalid after dispose.
     if (!mounted) return;
 
-    if (choice == _sendToBackAction) {
+    if (choice == _editAction) {
+      // `_openConfigPane` toggles, which from a menu entry reading "Edit"
+      // would read as the pane refusing to open. Already showing this asset
+      // is already the wanted end state.
+      if (!identical(_configAsset, asset)) _openConfigPane(asset);
+    } else if (choice == _sendToBackAction) {
       _sendToBack(targets);
     } else if (choice == _rotateClockwiseAction) {
       _rotateAssets(targets, 90, constraints);
     } else if (choice == _rotateCounterClockwiseAction) {
       _rotateAssets(targets, -90, constraints);
+    } else if (choice == _mirrorHorizontalAction) {
+      _mirrorAssets(targets, MirrorAxis.horizontal, constraints);
+    } else if (choice == _mirrorVerticalAction) {
+      _mirrorAssets(targets, MirrorAxis.vertical, constraints);
     } else if (choice == _alignHorizontalAction) {
       _alignAssets(targets, AlignAxis.horizontal);
     } else if (choice == _alignVerticalAction) {
@@ -1060,12 +1261,30 @@ class _PageEditorState extends ConsumerState<PageEditor> {
 
     return Focus(
       autofocus: true,
+      // A window switch or a click into the palette can swallow the key up,
+      // which would otherwise leave the canvas stuck in pan.
+      onFocusChange: (hasFocus) {
+        if (!hasFocus && _isPanKeyHeld) {
+          setState(() => _isPanKeyHeld = false);
+        }
+      },
       onKeyEvent: (node, event) {
         // Don't intercept keys when a text field has focus
         final primaryFocus = FocusManager.instance.primaryFocus;
         if (primaryFocus != null &&
             primaryFocus.context?.widget is EditableText) {
           return KeyEventResult.ignored;
+        }
+        // Space is held, not pressed: it is the only thing that turns a drag
+        // on empty canvas from a marquee back into a canvas pan, so both
+        // edges matter. KeyRepeatEvent arrives while it is down and must not
+        // be read as a release.
+        if (event.logicalKey == LogicalKeyboardKey.space) {
+          final held = event is! KeyUpEvent;
+          if (held != _isPanKeyHeld) {
+            setState(() => _isPanKeyHeld = held);
+          }
+          return KeyEventResult.handled;
         }
         if (event is KeyDownEvent) {
           if (_isModifierPressed(
@@ -1083,6 +1302,12 @@ class _PageEditorState extends ConsumerState<PageEditor> {
           } else if (event.logicalKey == LogicalKeyboardKey.delete ||
               event.logicalKey == LogicalKeyboardKey.backspace) {
             _handleDelete();
+            return KeyEventResult.handled;
+          } else if (event.logicalKey == LogicalKeyboardKey.keyR) {
+            // Shift reverses it, the way the two menu entries pair up.
+            _handleRotateShortcut(
+              HardwareKeyboard.instance.isShiftPressed ? -90 : 90,
+            );
             return KeyEventResult.handled;
           }
         }
@@ -1150,15 +1375,29 @@ class _PageEditorState extends ConsumerState<PageEditor> {
             Expanded(
                 child: ZoomableCanvas(
               scaleEnabled: !_showPalette,
-              panEnabled: !_isSelectMode,
+              panEnabled: _isPanKeyHeld,
               child: LayoutBuilder(
                 builder: (context, constraints) {
+                  // Stashed for the keyboard handler, which is above this
+                  // builder and cannot see the canvas box. Plain assignment:
+                  // calling setState during build is not allowed, and nothing
+                  // here needs a repaint — the next rotate simply reads it.
+                  _canvasConstraints = constraints;
                   return Stack(
                     fit: StackFit.expand,
                     children: [
                       Container(
                         color: Theme.of(context).colorScheme.surface,
                       ),
+                      // The only feedback that the held pan key has
+                      // changed what a drag will do. A MouseRegion
+                      // only tracks hover — it joins no gesture arena
+                      // — so it can sit in the stack rather than
+                      // wrapping the canvas and re-indenting it.
+                      if (_isPanKeyHeld)
+                        const Positioned.fill(
+                          child: MouseRegion(cursor: SystemMouseCursors.grab),
+                        ),
                       DragTarget<Type>(
                         onAcceptWithDetails: (details) {
                           final RenderBox box =
@@ -1185,13 +1424,21 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                           return AssetStack(
                             assets: assets,
                             constraints: constraints,
+                            // A tap selects, always. Configuring used to be
+                            // what a tap did, in the mode where selecting was
+                            // not; with one mode there is room for only one
+                            // meaning, and the config pane is reachable from
+                            // the right-click menu instead. The pane is not
+                            // modal, so it can follow the selection: with one
+                            // already open, selecting another asset re-points
+                            // it rather than leaving stale config on screen.
                             onTap: (asset) {
-                              if (_isSelectMode) {
-                                _handleAssetSelection(
-                                  asset,
-                                  HardwareKeyboard.instance.logicalKeysPressed,
-                                );
-                              } else {
+                              final keys =
+                                  HardwareKeyboard.instance.logicalKeysPressed;
+                              _handleAssetSelection(asset, keys);
+                              if (_configAsset != null &&
+                                  !identical(_configAsset, asset) &&
+                                  !_isModifierPressed(keys)) {
                                 _openConfigPane(asset);
                               }
                             },
@@ -1199,6 +1446,9 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                               _moveAsset(asset, details, constraints);
                             },
                             onPanStart: (asset, details) {
+                              // Claims the drag for the asset so the marquee
+                              // listener below stands down for its duration.
+                              _isDraggingAsset = true;
                               _saveToHistory();
                             },
                             onSecondaryTap: (asset, globalPosition) =>
@@ -1213,7 +1463,10 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                           );
                         },
                       ),
-                      if (_isSelectMode)
+                      // Always live now, rather than only in a select mode.
+                      // It stands down while the pan key is held, which is the
+                      // one gesture it would otherwise take over.
+                      if (!_isPanKeyHeld)
                         Listener(
                           behavior: HitTestBehavior.translucent,
                           onPointerDown: (pointerEvent) {
@@ -1399,6 +1652,10 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                         curve: Curves.easeOutCubic,
                         right: 16 + _rightChromeInset,
                         bottom: 16,
+                        // The mode toggle used to live at the bottom of this
+                        // column. There is only one mode now, so what is left
+                        // is the size pair, and it appears only when there is
+                        // a selection to resize.
                         child: Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
@@ -1406,6 +1663,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                               FloatingActionButton(
                                 mini: true,
                                 heroTag: 'increase',
+                                tooltip: 'Grow selection',
                                 onPressed: () => _adjustSelectedAssetsSize(1.1),
                                 child:
                                     const Icon(Icons.add, color: Colors.white),
@@ -1414,31 +1672,12 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                               FloatingActionButton(
                                 mini: true,
                                 heroTag: 'decrease',
+                                tooltip: 'Shrink selection',
                                 onPressed: () => _adjustSelectedAssetsSize(0.9),
                                 child: const Icon(Icons.remove,
                                     color: Colors.white),
                               ),
-                              const SizedBox(height: 8),
                             ],
-                            FloatingActionButton(
-                              mini: true,
-                              heroTag: 'mode',
-                              backgroundColor: _isSelectMode
-                                  ? Colors.orange
-                                  : Theme.of(context).colorScheme.primary,
-                              onPressed: () => setState(() {
-                                _isSelectMode = !_isSelectMode;
-                                if (!_isSelectMode) {
-                                  _selectedAssets.clear();
-                                }
-                              }),
-                              child: Icon(
-                                _isSelectMode
-                                    ? Icons.select_all
-                                    : Icons.pan_tool,
-                                color: Colors.white,
-                              ),
-                            ),
                           ],
                         ),
                       ),

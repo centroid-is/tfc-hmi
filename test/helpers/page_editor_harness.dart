@@ -165,10 +165,14 @@ void setUpEditorEnvironment() {
       label: 'Advanced', path: '/advanced', icon: Icons.settings));
 }
 
-/// Pumps the editor at a fixed 1400x1000 with [assets] on the home page.
+/// Pumps the editor with [assets] on the home page, at 1400x1000 unless
+/// [size] says otherwise — the goldens use a real 1080p panel instead.
 Future<FakeEditorPreferences> pumpEditorWith(
-    WidgetTester tester, List<Asset> assets) async {
-  tester.view.physicalSize = const Size(1400, 1000);
+  WidgetTester tester,
+  List<Asset> assets, {
+  Size size = const Size(1400, 1000),
+}) async {
+  tester.view.physicalSize = size;
   tester.view.devicePixelRatio = 1.0;
   addTearDown(tester.view.reset);
 
@@ -191,15 +195,10 @@ double canvasAspect(WidgetTester tester) {
   return r.width / r.height;
 }
 
-/// Switches the editor from pan mode into marquee-select mode.
-Future<void> enterSelectMode(WidgetTester tester) async {
-  await tester.tap(find.byIcon(Icons.pan_tool));
-  await tester.pumpAndSettle();
-  expect(find.byIcon(Icons.select_all), findsOneWidget,
-      reason: 'the mode button should now show select mode');
-}
-
 /// Rubber-bands from ([x1], [y1]) to ([x2], [y2]) in canvas-relative units.
+///
+/// No mode to enter first: the editor rubber-bands on any drag that starts on
+/// empty canvas.
 Future<void> marquee(
     WidgetTester tester, double x1, double y1, double x2, double y2) async {
   final gesture = await tester.startGesture(onCanvas(tester, x1, y1));
@@ -225,17 +224,66 @@ Future<void> chooseFromAssetMenu(
   await tester.pumpAndSettle();
 }
 
-/// Presses the editor's undo shortcut. It is keyboard-only, and the editor
-/// picks the modifier from `Platform`, so the test has to match.
+/// The multi-select / shortcut modifier, which the editor picks from
+/// `Platform` — Cmd on macOS, Ctrl elsewhere — so the test has to match.
+LogicalKeyboardKey get editorModifier => Platform.isMacOS
+    ? LogicalKeyboardKey.metaLeft
+    : LogicalKeyboardKey.controlLeft;
+
+/// Presses the editor's undo shortcut.
 Future<void> pressUndo(WidgetTester tester) async {
-  final modifier = Platform.isMacOS
-      ? LogicalKeyboardKey.metaLeft
-      : LogicalKeyboardKey.controlLeft;
-  await tester.sendKeyDownEvent(modifier);
+  await tester.sendKeyDownEvent(editorModifier);
   await tester.sendKeyDownEvent(LogicalKeyboardKey.keyZ);
   await tester.sendKeyUpEvent(LogicalKeyboardKey.keyZ);
-  await tester.sendKeyUpEvent(modifier);
+  await tester.sendKeyUpEvent(editorModifier);
   await tester.pumpAndSettle();
+}
+
+/// Taps [key] on the canvas, optionally with Shift held.
+Future<void> pressEditorKey(
+  WidgetTester tester,
+  LogicalKeyboardKey key, {
+  bool shift = false,
+}) async {
+  if (shift) await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+  await tester.sendKeyDownEvent(key);
+  await tester.sendKeyUpEvent(key);
+  if (shift) await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+  await tester.pumpAndSettle();
+}
+
+/// Rotates the selection a quarter turn from the keyboard.
+Future<void> pressRotate(WidgetTester tester,
+        {bool counterClockwise = false}) =>
+    pressEditorKey(tester, LogicalKeyboardKey.keyR, shift: counterClockwise);
+
+/// Clicks the asset at relative ([fx], [fy]) to select it. With
+/// [addToSelection] the modifier is held, which toggles it into or out of the
+/// existing selection instead of replacing it.
+Future<void> tapAsset(
+  WidgetTester tester,
+  double fx,
+  double fy, {
+  bool addToSelection = false,
+}) async {
+  if (addToSelection) await tester.sendKeyDownEvent(editorModifier);
+  await tester.tapAt(onCanvas(tester, fx, fy));
+  if (addToSelection) await tester.sendKeyUpEvent(editorModifier);
+  await tester.pumpAndSettle();
+}
+
+/// How many assets the editor currently has selected, counted off the
+/// selection borders the canvas paints. `AssetStack` wraps exactly the
+/// selected assets in a bordered container, so this reads the same state the
+/// operator sees.
+int selectedCount(WidgetTester tester) {
+  return find
+      .descendant(
+        of: find.byType(AssetStack),
+        matching: find.byKey(selectionBorderKey),
+      )
+      .evaluate()
+      .length;
 }
 
 /// Saves, then returns the persisted assets of the home page in page order.

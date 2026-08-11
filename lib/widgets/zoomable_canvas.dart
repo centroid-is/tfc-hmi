@@ -76,10 +76,16 @@ class _ZoomableCanvasState extends State<ZoomableCanvas> {
                     return FloatingActionButton(
                       mini: true,
                       heroTag: null,
+                      // Zoomed in is the only state where panning is possible
+                      // — at 1:1 the child exactly fills the viewport — so
+                      // this is where the page editor's pan key is worth
+                      // mentioning, and this button is the only chrome that
+                      // appears exactly then.
+                      tooltip: 'Reset zoom — hold Space and drag to pan',
                       backgroundColor: colorScheme.primary,
                       onPressed: _resetZoom,
-                      child: const Icon(Icons.zoom_out_map,
-                          color: Colors.white),
+                      child:
+                          const Icon(Icons.zoom_out_map, color: Colors.white),
                     );
                   },
                 ),

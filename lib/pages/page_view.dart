@@ -58,12 +58,18 @@ Widget _wrapWithSelectionBorder({
 }) {
   if (!isSelected) return child;
   return Container(
+    // Keyed so tests can count the selection off what is actually painted
+    // rather than reaching into editor state.
+    key: selectionBorderKey,
     decoration: BoxDecoration(
       border: Border.all(color: Colors.blue, width: 2),
     ),
     child: child,
   );
 }
+
+/// Marks the border drawn around a selected asset. One per selected asset.
+const Key selectionBorderKey = ValueKey('asset-selection-border');
 
 /// Computes the top-left offset for the label given the asset center, its size,
 /// the label size, and the desired position.

@@ -5,14 +5,18 @@
 /// review is how the surface sits on a real screen rather than a widget in
 /// isolation.
 ///
-/// Two things are being reviewed here:
+/// Three things are being reviewed here:
 ///
 ///   * **The asset config pane.** It replaced a modal dialog, so the thing to
 ///     look at is what stays visible and reachable beside it: the canvas, the
-///     asset being edited, the page selector and the mode buttons.
+///     asset being edited and the page selector.
 ///   * **Unpublished pages.** A draft has to be obvious in two places — the
 ///     Pages dialog where it is toggled, and the canvas where the page is
 ///     built — or it gets left switched off.
+///   * **One editing mode.** The pan/select toggle is gone, so a tap selects
+///     and configuring moved into the right-click menu. What to look at is
+///     the canvas chrome where the toggle used to sit, and the menu that
+///     took over from it.
 ///
 /// The dense-editor golden is deliberately a Beckhoff bus coupler: a
 /// two-column subdevice manager is the widest config editor there is, and it
@@ -24,16 +28,17 @@ library;
 
 import 'dart:io';
 
+import 'package:flutter/gestures.dart' show kSecondaryButton;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:tfc/models/menu_item.dart';
 import 'package:tfc/page_creator/assets/beckhoff.dart';
+import 'package:tfc/page_creator/assets/drawn_box.dart';
 import 'package:tfc/page_creator/assets/common.dart';
 import 'package:tfc/page_creator/assets/text.dart';
 import 'package:tfc/page_creator/page.dart';
-import 'package:tfc/pages/page_view.dart';
 import 'package:tfc/theme.dart';
 
 import '../helpers/page_editor_harness.dart';
@@ -80,7 +85,8 @@ Map<String, AssetPage> _onePage(List<Asset> assets) => {
 /// both states side by side.
 Map<String, AssetPage> _pagesWithADraft() => {
       '/': AssetPage(
-        menuItem: const MenuItem(label: 'Overview', path: '/', icon: Icons.home),
+        menuItem:
+            const MenuItem(label: 'Overview', path: '/', icon: Icons.home),
         assets: [],
         mirroringDisabled: true,
         navigationPriority: 0,
@@ -92,8 +98,10 @@ Map<String, AssetPage> _pagesWithADraft() => {
           icon: Icons.account_tree,
           isSection: true,
           children: [
-            MenuItem(label: 'Line 1', path: '/lines/one', icon: Icons.conveyor_belt),
-            MenuItem(label: 'Chiller', path: '/lines/chiller', icon: Icons.ac_unit),
+            MenuItem(
+                label: 'Line 1', path: '/lines/one', icon: Icons.conveyor_belt),
+            MenuItem(
+                label: 'Chiller', path: '/lines/chiller', icon: Icons.ac_unit),
           ],
         ),
         assets: [],
@@ -118,11 +126,12 @@ Map<String, AssetPage> _pagesWithADraft() => {
     };
 
 /// Opens the config pane for the asset drawn at canvas-relative ([fx], [fy]).
-Future<void> _openConfigPane(
-    WidgetTester tester, double fx, double fy) async {
-  await tester.tapAt(onCanvas(tester, fx, fy));
-  await tester.pumpAndSettle();
-}
+///
+/// Right-click, then "Edit". A plain tap used to do this, back when the editor
+/// had a mode in which tapping selected instead; with one mode a tap always
+/// selects, so configuring lives in the menu.
+Future<void> _openConfigPane(WidgetTester tester, double fx, double fy) =>
+    chooseFromAssetMenu(tester, fx, fy, 'Edit');
 
 Asset _textAsset() => TextAssetConfig.preview()
   ..coordinates = Coordinates(x: 0.22, y: 0.35)
@@ -132,6 +141,25 @@ Asset _textAsset() => TextAssetConfig.preview()
 Asset _busCoupler() => BeckhoffEK1100Config()
   ..coordinates = Coordinates(x: 0.22, y: 0.4)
   ..size = const RelativeSize(width: 0.22, height: 0.28);
+
+/// A labelled box at ([x], [y]).
+Asset _labelledBox(double x, double y, String label, {double? angle}) =>
+    DrawnBoxConfig.preview()
+      ..coordinates = Coordinates(x: x, y: y, angle: angle)
+      ..size = const RelativeSize(width: 0.13, height: 0.09)
+      ..text = label
+      ..textPos = TextPos.inside;
+
+/// A short conveyor line — enough assets to select several of, and the shape
+/// of page the selection actions exist for.
+List<Asset> _line() => [
+      _labelledBox(0.16, 0.30, 'CN01'),
+      _labelledBox(0.36, 0.30, 'CN02'),
+      _labelledBox(0.56, 0.30, 'CN03'),
+      _labelledBox(0.16, 0.62, 'ST101'),
+      _labelledBox(0.36, 0.62, 'ST201', angle: 45),
+      _labelledBox(0.56, 0.62, 'ST301'),
+    ];
 
 void main() {
   final (light, dark) = solarized();
@@ -232,6 +260,41 @@ void main() {
         find.byType(MaterialApp),
         matchesGoldenFile('goldens/page_editor_draft_badge_dark.png'),
       );
+    });
+  });
+
+  group('one editing mode', () {
+    testWidgets('a marquee selection, with no mode to enter first',
+        (tester) async {
+      await _pumpEditor(tester, theme: dark, pages: _onePage(_line()));
+
+      // This same drag would have panned the canvas before. The bottom-right
+      // chrome, where the pan/select toggle used to sit, now holds only the
+      // grow/shrink pair — and only while something is selected.
+      await marquee(tester, 0.05, 0.12, 0.68, 0.45);
+
+      await expectLater(
+        find.byType(MaterialApp),
+        matchesGoldenFile('goldens/page_editor_selection_dark.png'),
+      );
+    });
+
+    testWidgets('the asset context menu', (tester) async {
+      await _pumpEditor(tester, theme: dark, pages: _onePage(_line()));
+      await marquee(tester, 0.05, 0.12, 0.68, 0.45);
+
+      await tester.tapAt(onCanvas(tester, 0.36, 0.30),
+          buttons: kSecondaryButton);
+      await tester.pumpAndSettle();
+
+      await expectLater(
+        find.byType(MaterialApp),
+        matchesGoldenFile('goldens/page_editor_context_menu_dark.png'),
+      );
+
+      // Dismiss, so no route outlives the test.
+      await tester.tapAt(const Offset(20, 20));
+      await tester.pumpAndSettle();
     });
   });
 }
