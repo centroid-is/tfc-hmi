@@ -271,6 +271,71 @@ List<AssetPlacement> rotateGroup({
   ];
 }
 
+/// The axis a selection is lined up along.
+enum AlignAxis {
+  /// Assets end up in a horizontal row: one shared y, x untouched.
+  horizontal,
+
+  /// Assets end up in a vertical column: one shared x, y untouched.
+  vertical,
+}
+
+/// The coordinate [axis] alignment moves, for each of [placements].
+Iterable<double> _alignedCoordinates(
+        List<AssetPlacement> placements, AlignAxis axis) =>
+    placements.map((p) => axis == AlignAxis.horizontal ? p.y : p.x);
+
+/// Lines [placements] up on [axis], moving every asset's centre onto the
+/// midpoint between the two outermost centres.
+///
+/// Centres, not edges: assets of different sizes end up with their middles on
+/// one line and their edges ragged. That is what makes this the one selection
+/// action that needs no canvas aspect ratio — it writes a constant into a
+/// single normalized axis and leaves the other alone, so there is no
+/// cross-axis maths to get wrong.
+///
+/// The line is the midpoint of the extremes rather than the mean, matching
+/// what a drawing tool does: the two outermost assets move symmetrically
+/// toward each other instead of the line being dragged around by whichever
+/// side happens to be crowded.
+///
+/// Returns a new list positionally matching [placements]; nothing is mutated.
+@visibleForTesting
+List<AssetPlacement> alignGroup({
+  required List<AssetPlacement> placements,
+  required AlignAxis axis,
+}) {
+  if (placements.isEmpty) return const [];
+
+  final coordinates = _alignedCoordinates(placements, axis);
+  final line =
+      (coordinates.reduce(math.min) + coordinates.reduce(math.max)) / 2;
+
+  return [
+    for (final p in placements)
+      AssetPlacement(
+        x: axis == AlignAxis.vertical ? line : p.x,
+        y: axis == AlignAxis.horizontal ? line : p.y,
+        width: p.width,
+        height: p.height,
+        angle: p.angle,
+      ),
+  ];
+}
+
+/// Whether [placements] already sit on one line along [axis], so the menu
+/// entry can be disabled rather than pushing a no-op onto the undo history.
+///
+/// Exact equality is the right test, not a tolerance: [alignGroup] writes the
+/// identical value into every asset, so a selection it has just aligned reads
+/// back as aligned. Fewer than two assets have nothing to line up.
+@visibleForTesting
+bool isAlreadyAligned(List<AssetPlacement> placements, AlignAxis axis) {
+  if (placements.length < 2) return true;
+  final coordinates = _alignedCoordinates(placements, axis);
+  return coordinates.every((c) => c == coordinates.first);
+}
+
 /// Projects a drag delta from the rotated GestureDetector's local frame
 /// back into the canvas (parent) frame. The editor's per-asset
 /// GestureDetector lives inside `Transform.rotate(angleRadians)` (so the
@@ -701,6 +766,8 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   static const int _sendToBackAction = -1;
   static const int _rotateClockwiseAction = -2;
   static const int _rotateCounterClockwiseAction = -3;
+  static const int _alignHorizontalAction = -4;
+  static const int _alignVerticalAction = -5;
 
   /// Assets a canvas action applies to: the whole selection when the asset
   /// acted on is part of it, otherwise just that asset. Mirrors [_moveAsset].
@@ -728,6 +795,45 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     });
   }
 
+  /// [targets] as placements, for the geometry helpers.
+  List<AssetPlacement> _placements(List<Asset> targets) => [
+        for (final asset in targets)
+          AssetPlacement(
+            x: asset.coordinates.x,
+            y: asset.coordinates.y,
+            width: asset.size.width,
+            height: asset.size.height,
+            angle: asset.coordinates.angle,
+          ),
+      ];
+
+  /// Writes [placements] back onto [targets], which must line up positionally.
+  void _applyPlacements(List<Asset> targets, List<AssetPlacement> placements) {
+    _saveToHistory();
+    _updateState(() {
+      for (var i = 0; i < targets.length; i++) {
+        targets[i].coordinates = Coordinates(
+          x: placements[i].x,
+          y: placements[i].y,
+          angle: placements[i].angle,
+        );
+      }
+    });
+  }
+
+  /// False when [targets] already sit on one line along [axis], so the menu
+  /// entry can be disabled. Mirrors [_canSendToBack].
+  bool _canAlign(List<Asset> targets, AlignAxis axis) =>
+      !isAlreadyAligned(_placements(targets), axis);
+
+  /// Lines [targets] up on [axis], centre points onto the selection's middle.
+  void _alignAssets(List<Asset> targets, AlignAxis axis) {
+    final placements = _placements(targets);
+    if (isAlreadyAligned(placements, axis)) return;
+
+    _applyPlacements(targets, alignGroup(placements: placements, axis: axis));
+  }
+
   /// Rotates [targets] a quarter turn as one rigid group about the centre of
   /// their combined bounding box. A single asset is just the degenerate case:
   /// its own centre is the group centre, so it spins in place.
@@ -741,31 +847,14 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   ) {
     if (targets.isEmpty) return;
 
-    final rotated = rotateGroup(
-      placements: [
-        for (final asset in targets)
-          AssetPlacement(
-            x: asset.coordinates.x,
-            y: asset.coordinates.y,
-            width: asset.size.width,
-            height: asset.size.height,
-            angle: asset.coordinates.angle,
-          ),
-      ],
-      degrees: degrees,
-      aspectRatio: constraints.maxWidth / constraints.maxHeight,
+    _applyPlacements(
+      targets,
+      rotateGroup(
+        placements: _placements(targets),
+        degrees: degrees,
+        aspectRatio: constraints.maxWidth / constraints.maxHeight,
+      ),
     );
-
-    _saveToHistory();
-    _updateState(() {
-      for (var i = 0; i < targets.length; i++) {
-        targets[i].coordinates = Coordinates(
-          x: rotated[i].x,
-          y: rotated[i].y,
-          angle: rotated[i].angle,
-        );
-      }
-    });
   }
 
   /// Right-click menu for an asset on the canvas.
@@ -785,6 +874,8 @@ class _PageEditorState extends ConsumerState<PageEditor> {
 
     final targets = _actionTargets(asset);
     final canSendToBack = _canSendToBack(targets);
+    final canAlignHorizontal = _canAlign(targets, AlignAxis.horizontal);
+    final canAlignVertical = _canAlign(targets, AlignAxis.vertical);
 
     final choice = await showMenu<int>(
       context: context,
@@ -815,6 +906,34 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                 ? 'Rotate ${targets.length} assets 90° counter-clockwise'
                 : 'Rotate 90° counter-clockwise'),
             dense: true,
+          ),
+        ),
+        // The icon names read backwards: `align_vertical_center` draws a
+        // horizontal reference line, which is what lining assets up into a
+        // row looks like. Pair each entry with the line it produces, not with
+        // the word in the icon name.
+        PopupMenuItem<int>(
+          value: _alignHorizontalAction,
+          enabled: canAlignHorizontal,
+          child: ListTile(
+            leading: const Icon(Icons.align_vertical_center),
+            title: Text(targets.length > 1
+                ? 'Align ${targets.length} assets horizontally'
+                : 'Align horizontally'),
+            dense: true,
+            enabled: canAlignHorizontal,
+          ),
+        ),
+        PopupMenuItem<int>(
+          value: _alignVerticalAction,
+          enabled: canAlignVertical,
+          child: ListTile(
+            leading: const Icon(Icons.align_horizontal_center),
+            title: Text(targets.length > 1
+                ? 'Align ${targets.length} assets vertically'
+                : 'Align vertically'),
+            dense: true,
+            enabled: canAlignVertical,
           ),
         ),
         PopupMenuItem<int>(
@@ -854,6 +973,10 @@ class _PageEditorState extends ConsumerState<PageEditor> {
       _rotateAssets(targets, 90, constraints);
     } else if (choice == _rotateCounterClockwiseAction) {
       _rotateAssets(targets, -90, constraints);
+    } else if (choice == _alignHorizontalAction) {
+      _alignAssets(targets, AlignAxis.horizontal);
+    } else if (choice == _alignVerticalAction) {
+      _alignAssets(targets, AlignAxis.vertical);
     } else {
       await AiContextAction.runMenuItem(ref: ref, item: aiItems[choice]);
     }
