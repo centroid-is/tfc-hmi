@@ -66,6 +66,16 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
     RotateLogs(log_path, max_archives);
     RedirectIOToFile(log_path.c_str());
 
+    // Tell the Dart side where the log went. It previously discovered this
+    // only from CENTROID_LOG_FILE being set by hand, so when the runner
+    // started picking a default path the Dart half went back to having no
+    // destination at all.
+    ::SetEnvironmentVariableA("CENTROID_LOG_FILE", log_path.c_str());
+    // ...and that the redirect above already carries its stdout, so it must
+    // not also open and write the same file itself — that would duplicate
+    // every line.
+    ::SetEnvironmentVariableA("CENTROID_LOG_REDIRECTED", "1");
+
     // Only now can crash records actually be written somewhere.
     tfc::InstallCrashHandlers(DirectoryOf(log_path));
     std::cerr << "[startup] logging to " << log_path << " (keeping "

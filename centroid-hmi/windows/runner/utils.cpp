@@ -78,6 +78,14 @@ void RedirectIOToFile(const char* path) {
   // Force std::cout/cerr to re-associate with the redirected CRT streams.
   std::ios::sync_with_stdio(false);
   std::ios::sync_with_stdio(true);
+
+  // Point the *engine's* stdout/stderr at the new streams as well. Without
+  // this, everything the Dart side writes through print() — which is every
+  // logger package line, via ConsoleOutput — keeps going to the streams the
+  // engine captured at startup, i.e. nowhere in a windowed app. The two
+  // console paths above have always called this; the file path never did,
+  // which is why file logging captured the C++ side only.
+  FlutterDesktopResyncOutputStreams();
 }
 
 std::vector<std::string> GetCommandLineArguments() {
