@@ -418,6 +418,38 @@ void main() {
       expect(shrunk.height, closeTo(320, 2));
     });
 
+    testWidgets('resizes by its corner grip', (tester) async {
+      // The grip is the touch-sized, visible way to resize — 44px square in
+      // the bottom-right corner, where the invisible 6px frame edges are
+      // unusable with a finger.
+      await tester.pumpWidget(host(
+        onOpen: (context) => showFloatingDialog(
+          context: context,
+          id: 'trend',
+          title: 'Trend',
+          size: const Size(400, 300),
+          position: const Offset(100, 100),
+          builder: (_) => const Text('chart'),
+        ),
+      ));
+      await tester.tap(find.text('open'));
+      await tester.pumpAndSettle();
+      expect(tester.getSize(find.byType(StandardDialog)), const Size(400, 300));
+
+      final grip = find.byType(CustomPaint).last;
+      await tester.drag(grip, const Offset(90, 50));
+      await tester.pumpAndSettle();
+      final grown = tester.getSize(find.byType(StandardDialog));
+      expect(grown.width, closeTo(490, 2));
+      expect(grown.height, closeTo(350, 2));
+
+      await tester.drag(find.byType(CustomPaint).last, const Offset(-60, -30));
+      await tester.pumpAndSettle();
+      final shrunk = tester.getSize(find.byType(StandardDialog));
+      expect(shrunk.width, closeTo(430, 2));
+      expect(shrunk.height, closeTo(320, 2));
+    });
+
     testWidgets('the same id does not open twice', (tester) async {
       await tester.pumpWidget(host(
         onOpen: (context) => showFloatingDialog(

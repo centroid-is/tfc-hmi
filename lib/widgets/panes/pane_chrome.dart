@@ -341,18 +341,23 @@ class PaneActionBar extends StatelessWidget {
   final VoidCallback? onClose;
   final String closeLabel;
 
+  /// Extra space at the trailing end. A floating dialog reserves room here
+  /// so its corner resize grip cannot swallow taps meant for Close.
+  final double endInset;
+
   const PaneActionBar({
     super.key,
     this.actions = const [],
     this.onClose,
     this.closeLabel = 'Close',
+    this.endInset = 0,
   });
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      padding: EdgeInsets.fromLTRB(12, 8, 12 + endInset, 8),
       decoration: BoxDecoration(
         color: theme.colorScheme.surfaceContainerHighest,
         border: Border(

@@ -40,6 +40,9 @@ class StandardDialog extends StatelessWidget {
   /// Whether the body scrolls when it does not fit.
   final bool scrollable;
 
+  /// Trailing space in the action bar — see [PaneActionBar.endInset].
+  final double actionBarEndInset;
+
   const StandardDialog({
     super.key,
     required this.title,
@@ -53,6 +56,7 @@ class StandardDialog extends StatelessWidget {
     this.headerTrailing,
     this.headerWrap,
     this.scrollable = true,
+    this.actionBarEndInset = 0,
   });
 
   @override
@@ -83,6 +87,7 @@ class StandardDialog extends StatelessWidget {
           actions: actions,
           onClose: onClose,
           closeLabel: closeLabel,
+          endInset: actionBarEndInset,
         ),
       ],
     );
@@ -520,43 +525,131 @@ class _FloatingDialogShellState extends State<_FloatingDialogShell> {
             _position = newPosition;
             _size = newSize;
           }),
-          child: Material(
-            // Matches SidePane: outline, not shadow (see side_pane.dart). A
-            // floating window keeps a touch of elevation so it reads as
-            // sitting above the pane it came from.
-            elevation: 2,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(8),
-              side: BorderSide(color: Theme.of(context).dividerColor),
-            ),
-            color: Theme.of(context).colorScheme.surface,
-            clipBehavior: Clip.antiAlias,
-            child: StandardDialog(
-              title: widget.title,
-              subtitle: widget.subtitle,
-              icon: widget.icon,
-              status: widget.status,
-              actions: widget.actions,
-              closeLabel: widget.closeLabel,
-              scrollable: widget.scrollable,
-              onClose: () => FloatingDialogs.close(widget.id),
-              // The header doubles as the window's title bar.
-              headerWrap: (context, header) => GestureDetector(
-                behavior: HitTestBehavior.translucent,
-                onPanUpdate: (d) => setState(() {
-                  _position = _position! + d.delta;
-                  _clamp();
+          child: Stack(children: [
+            Positioned.fill(child: _dialogSurface(context)),
+            // The frame's own handles are 6px of invisible edge — fine with a
+            // mouse, unusable with a finger and undiscoverable either way.
+            // This corner grip is visible and 44px square.
+            Positioned(
+              right: 0,
+              bottom: 0,
+              child: _ResizeGrip(
+                onDrag: (delta) => setState(() {
+                  _size = Size(
+                    (_size.width + delta.dx).clamp(
+                      _minSize.width,
+                      _screen.width - _position!.dx,
+                    ),
+                    (_size.height + delta.dy).clamp(
+                      _minSize.height,
+                      _screen.height - _position!.dy,
+                    ),
+                  );
                 }),
-                child: MouseRegion(
-                  cursor: SystemMouseCursors.move,
-                  child: header,
-                ),
               ),
-              child: widget.builder(context),
+            ),
+          ]),
+        ),
+      ),
+    );
+  }
+
+  Widget _dialogSurface(BuildContext context) {
+    return Material(
+      // Matches SidePane: outline, not shadow (see side_pane.dart). A
+      // floating window keeps a touch of elevation so it reads as
+      // sitting above the pane it came from.
+      elevation: 2,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(8),
+        side: BorderSide(color: Theme.of(context).dividerColor),
+      ),
+      color: Theme.of(context).colorScheme.surface,
+      clipBehavior: Clip.antiAlias,
+      child: StandardDialog(
+        title: widget.title,
+        subtitle: widget.subtitle,
+        icon: widget.icon,
+        status: widget.status,
+        actions: widget.actions,
+        closeLabel: widget.closeLabel,
+        scrollable: widget.scrollable,
+        onClose: () => FloatingDialogs.close(widget.id),
+        // The header doubles as the window's title bar.
+        headerWrap: (context, header) => GestureDetector(
+          behavior: HitTestBehavior.translucent,
+          onPanUpdate: (d) => setState(() {
+            _position = _position! + d.delta;
+            _clamp();
+          }),
+          child: MouseRegion(
+            cursor: SystemMouseCursors.move,
+            child: header,
+          ),
+        ),
+        child: widget.builder(context),
+      ),
+    );
+  }
+}
+
+/// The visible corner grip that resizes a floating dialog.
+///
+/// 44px square — a finger target, not a mouse one — with the diagonal rules
+/// that say "drag me" on every desktop, drawn into the corner radius so it
+/// reads as part of the window rather than as content.
+class _ResizeGrip extends StatelessWidget {
+  final ValueChanged<Offset> onDrag;
+
+  const _ResizeGrip({required this.onDrag});
+
+  static const double _size = 44;
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      cursor: SystemMouseCursors.resizeDownRight,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onPanUpdate: (d) => onDrag(d.delta),
+        child: SizedBox(
+          width: _size,
+          height: _size,
+          child: CustomPaint(
+            painter: _ResizeGripPainter(
+              color:
+                  Theme.of(context).colorScheme.primary.withValues(alpha: 0.55),
             ),
           ),
         ),
       ),
     );
   }
+}
+
+class _ResizeGripPainter extends CustomPainter {
+  final Color color;
+
+  const _ResizeGripPainter({required this.color});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..strokeWidth = 2
+      ..strokeCap = StrokeCap.round;
+    // Three rules stepping out of the corner, longest innermost.
+    const inset = 8.0;
+    for (final offset in const [6.0, 13.0, 20.0]) {
+      canvas.drawLine(
+        Offset(size.width - inset, size.height - inset - offset),
+        Offset(size.width - inset - offset, size.height - inset),
+        paint,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(_ResizeGripPainter oldDelegate) =>
+      oldDelegate.color != color;
 }
