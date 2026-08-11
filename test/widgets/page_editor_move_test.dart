@@ -204,6 +204,10 @@ Finder _topLevelDropZone() => find.byIcon(Icons.north);
 Future<void> _closeAndSave(WidgetTester tester) async {
   await tester.tap(find.widgetWithText(TextButton, 'Close'));
   await tester.pumpAndSettle();
+  // The "Moved ..." SnackBar can sit over the save button; let it expire.
+  if (find.byType(SnackBar).evaluate().isNotEmpty) {
+    await tester.pumpAndSettle(const Duration(seconds: 1));
+  }
   await tester.tap(find.byIcon(Icons.save));
   await tester.pumpAndSettle();
 }
@@ -499,6 +503,164 @@ void main() {
       expect(tester.state<ScrollableState>(list).position.pixels,
           greaterThan(before),
           reason: 'dragging a row vertically must scroll the tree');
+    });
+
+    testWidgets('dragging to the bottom edge scrolls the tree', (tester) async {
+      // Draggable does not scroll its parent list, so a destination below the
+      // fold would otherwise be unreachable by drag.
+      tester.view.physicalSize = const Size(1400, 700);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      final manager = PageManager(
+        prefs: _FakePreferences(),
+        pages: {
+          for (var i = 0; i < 25; i++)
+            '/p$i': _page('Page $i', '/p$i', priority: i),
+        },
+      );
+      await tester.pumpWidget(_buildEditor(manager));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Page 0').first);
+      await tester.pumpAndSettle();
+
+      final list = find
+          .descendant(
+            of: find.byType(ReorderableListView),
+            matching: find.byType(Scrollable),
+          )
+          .first;
+      final before = tester.state<ScrollableState>(list).position.pixels;
+
+      final gesture =
+          await tester.startGesture(tester.getCenter(_treeNode('Page 1')));
+      await tester.pump(kLongPressTimeout + const Duration(milliseconds: 50));
+
+      // Hold the row against the bottom edge of the tree viewport.
+      final viewport = tester.getRect(find.byType(ReorderableListView));
+      await gesture
+          .moveTo(Offset(viewport.center.dx, viewport.bottom - 8));
+      await tester.pump();
+      for (var i = 0; i < 20; i++) {
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+
+      expect(tester.state<ScrollableState>(list).position.pixels,
+          greaterThan(before),
+          reason: 'holding a row at the edge must scroll the tree');
+
+      // Releasing must stop the ticker; pumpAndSettle would time out if not.
+      await gesture.up();
+      await tester.pumpAndSettle();
+    });
+
+    testWidgets('a row can be dragged onto a section that starts off screen',
+        (tester) async {
+      // The Pages dialog is a fixed 550x550, so the tree still overflows at
+      // this window size; a taller window keeps the save button reachable.
+      tester.view.physicalSize = const Size(1400, 1000);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      final manager = PageManager(
+        prefs: _FakePreferences(),
+        pages: {
+          for (var i = 0; i < 20; i++)
+            '/p$i': _page('Page $i', '/p$i', priority: i),
+          '/cold': _page('Cold Store', '/cold', isSection: true, priority: 20),
+        },
+      );
+      await tester.pumpWidget(_buildEditor(manager));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Page 0').first);
+      await tester.pumpAndSettle();
+
+      expect(_treeNode('Cold Store'), findsNothing,
+          reason: 'the destination must start below the fold');
+
+      final list = find
+          .descendant(
+            of: find.byType(ReorderableListView),
+            matching: find.byType(Scrollable),
+          )
+          .first;
+      final gesture =
+          await tester.startGesture(tester.getCenter(_treeNode('Page 1')));
+      await tester.pump(kLongPressTimeout + const Duration(milliseconds: 50));
+
+      final viewport = tester.getRect(find.byType(ReorderableListView));
+      await gesture
+          .moveTo(Offset(viewport.center.dx, viewport.bottom - 8));
+      await tester.pump();
+
+      // Hold at the edge until the tree has scrolled to the end.
+      final position = tester.state<ScrollableState>(list).position;
+      for (var i = 0; i < 200 && position.pixels < position.maxScrollExtent; i++) {
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+
+      expect(_treeNode('Cold Store'), findsOneWidget,
+          reason: 'auto-scroll must bring the destination into view');
+
+      await gesture.moveTo(tester.getCenter(_treeNode('Cold Store')));
+      await tester.pump();
+      await gesture.up();
+      await tester.pumpAndSettle();
+
+      await _closeAndSave(tester);
+
+      expect(_childrenOf(manager, '/cold'), ['/p1']);
+    });
+
+    testWidgets('auto-scroll stops when the pointer leaves the edge band',
+        (tester) async {
+      tester.view.physicalSize = const Size(1400, 700);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      final manager = PageManager(
+        prefs: _FakePreferences(),
+        pages: {
+          for (var i = 0; i < 25; i++)
+            '/p$i': _page('Page $i', '/p$i', priority: i),
+        },
+      );
+      await tester.pumpWidget(_buildEditor(manager));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Page 0').first);
+      await tester.pumpAndSettle();
+
+      final list = find
+          .descendant(
+            of: find.byType(ReorderableListView),
+            matching: find.byType(Scrollable),
+          )
+          .first;
+
+      final gesture =
+          await tester.startGesture(tester.getCenter(_treeNode('Page 1')));
+      await tester.pump(kLongPressTimeout + const Duration(milliseconds: 50));
+
+      final viewport = tester.getRect(find.byType(ReorderableListView));
+      await gesture
+          .moveTo(Offset(viewport.center.dx, viewport.bottom - 8));
+      await tester.pump();
+      for (var i = 0; i < 10; i++) {
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+
+      // Back to the middle: scrolling must stop where it is.
+      await gesture.moveTo(viewport.center);
+      await tester.pump();
+      final settled = tester.state<ScrollableState>(list).position.pixels;
+      for (var i = 0; i < 10; i++) {
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+
+      expect(tester.state<ScrollableState>(list).position.pixels, settled);
+
+      await gesture.up();
+      await tester.pumpAndSettle();
     });
 
     testWidgets('a move can be undone', (tester) async {

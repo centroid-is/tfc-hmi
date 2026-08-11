@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:tfc/widgets/panes/standard_dialog.dart';
 import 'dart:io' show Platform;
@@ -326,6 +327,14 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   /// drop zones can show whether they would take it.
   String? _dragPagePath;
 
+  /// The Pages dialog's scrolling tree, driven directly while a row is dragged
+  /// near an edge — Draggable does not scroll its parent list on its own, so
+  /// without this a destination off screen could not be reached.
+  final ScrollController _treeScrollController = ScrollController();
+  final GlobalKey _treeViewportKey = GlobalKey();
+  Timer? _autoScrollTimer;
+  double _autoScrollStep = 0;
+
   /// True when the editor was opened with AI proposal data that has not yet
   /// been saved by the operator.
   bool _isProposal = false;
@@ -364,6 +373,13 @@ class _PageEditorState extends ConsumerState<PageEditor> {
             _isProposal ? '' : _currentJson; // Mark unsaved if proposal
       });
     });
+  }
+
+  @override
+  void dispose() {
+    _stopAutoScroll();
+    _treeScrollController.dispose();
+    super.dispose();
   }
 
   /// Parses proposal JSON and merges it into [_temporaryPages].
@@ -1629,6 +1645,8 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                   const SizedBox(height: 8),
                   Expanded(
                     child: ReorderableListView(
+                      key: _treeViewportKey,
+                      scrollController: _treeScrollController,
                       buildDefaultDragHandles: false,
                       onReorder: (oldIndex, newIndex) {
                         _onReorderRoots(
@@ -2090,6 +2108,62 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   /// the "Add Page / Add Section" buttons already enforce.
   static const int _maxSectionDepth = 3;
 
+  /// How close to the tree's edge a dragged row must get before the list
+  /// starts scrolling, and the most it scrolls per frame at the very edge.
+  static const double _autoScrollBand = 56;
+  static const double _autoScrollMaxStep = 12;
+
+  /// Scrolls the tree while a dragged row sits in the top or bottom band, so
+  /// a section below the fold can still be reached. Speed ramps with how far
+  /// into the band the pointer is.
+  void _updateAutoScroll(Offset globalPosition) {
+    final box =
+        _treeViewportKey.currentContext?.findRenderObject() as RenderBox?;
+    if (box == null || !_treeScrollController.hasClients) {
+      _stopAutoScroll();
+      return;
+    }
+
+    final top = box.localToGlobal(Offset.zero).dy;
+    final bottom = top + box.size.height;
+    final y = globalPosition.dy;
+
+    double ratio = 0;
+    if (y < top + _autoScrollBand) {
+      ratio = -(top + _autoScrollBand - y) / _autoScrollBand;
+    } else if (y > bottom - _autoScrollBand) {
+      ratio = (y - (bottom - _autoScrollBand)) / _autoScrollBand;
+    }
+    _autoScrollStep = ratio.clamp(-1.0, 1.0) * _autoScrollMaxStep;
+
+    if (_autoScrollStep == 0) {
+      _stopAutoScroll();
+    } else {
+      _autoScrollTimer ??= Timer.periodic(
+        const Duration(milliseconds: 16),
+        (_) => _autoScrollTick(),
+      );
+    }
+  }
+
+  void _autoScrollTick() {
+    if (!_treeScrollController.hasClients) {
+      _stopAutoScroll();
+      return;
+    }
+    final position = _treeScrollController.position;
+    final target = (position.pixels + _autoScrollStep)
+        .clamp(position.minScrollExtent, position.maxScrollExtent);
+    if (target == position.pixels) return; // Already against the end.
+    _treeScrollController.jumpTo(target);
+  }
+
+  void _stopAutoScroll() {
+    _autoScrollTimer?.cancel();
+    _autoScrollTimer = null;
+    _autoScrollStep = 0;
+  }
+
   /// Makes a tree row draggable onto another section, and — when the row is a
   /// section — a drop target for other rows.
   ///
@@ -2106,6 +2180,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     required StateSetter dialogSetState,
   }) {
     void setDragging(String? path) {
+      if (path == null) _stopAutoScroll();
       setState(() => _dragPagePath = path);
       dialogSetState(() {});
     }
@@ -2113,6 +2188,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     final draggable = LongPressDraggable<String>(
       data: pageName,
       onDragStarted: () => setDragging(pageName),
+      onDragUpdate: (details) => _updateAutoScroll(details.globalPosition),
       onDragEnd: (_) => setDragging(null),
       onDraggableCanceled: (_, __) => setDragging(null),
       feedback: Material(
