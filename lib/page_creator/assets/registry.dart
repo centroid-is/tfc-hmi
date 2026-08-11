@@ -30,6 +30,7 @@ import 'conveyor_gate.dart';
 import 'elevator.dart';
 import 'sensor.dart';
 import 'drawing_viewer.dart';
+import 'third_party.dart';
 
 class AssetRegistry {
   static final Logger _log = Logger();
@@ -78,6 +79,7 @@ class AssetRegistry {
     SpeedBatcherConfig: SpeedBatcherConfig.fromJson,
     GateStatusConfig: GateStatusConfig.fromJson,
     DrawingViewerConfig: DrawingViewerConfig.fromJson,
+    ThirdPartyEquipmentConfig: ThirdPartyEquipmentConfig.fromJson,
   };
 
   static final Map<Type, Asset Function()> defaultFactories = {
@@ -123,6 +125,7 @@ class AssetRegistry {
     SpeedBatcherConfig: SpeedBatcherConfig.preview,
     GateStatusConfig: GateStatusConfig.preview,
     DrawingViewerConfig: DrawingViewerConfig.preview,
+    ThirdPartyEquipmentConfig: ThirdPartyEquipmentConfig.preview,
   };
 
   static void registerFromJsonFactory<T extends Asset>(
