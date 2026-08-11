@@ -471,17 +471,23 @@ List<ThirdPartyChildEntry> buildSpeedBatcherStationChildren({
         size: RelativeSize(width: deck.width, height: deck.height),
       ),
     ));
+    // Readout slots. `NumberWidget` scales its text with BoxFit.contain, so
+    // slot width sets the font size and a long units string shrinks the
+    // number to a smear — which is why the averaging window is NOT spelled
+    // out here. `% 30m` is the longest suffix that stays legible; the full
+    // wording lives in the side pane, where there is room for it.
+    final slot = RelativeSize(width: 0.23, height: frame.height * 0.7);
+
     entries.add(ThirdPartyChildEntry(
       offsetX: accept.dx,
       offsetY: accept.dy,
       keepUpright: true,
       child: thirdPartyNumber(
-        // The window rides along with the value: a bare "97.3 %" beside a
-        // running belt reads as "this pack", when it is really the last half
-        // hour.
-        units: '% / $acceptWindowMinutes min',
+        // Still not a bare "%": a percentage beside a running belt otherwise
+        // reads as "this pack" when it is really a rolling figure.
+        units: '% ${acceptWindowMinutes}m',
         decimalPlaces: 1,
-        size: RelativeSize(width: 0.20, height: frame.height * 0.55),
+        size: slot,
       ),
     ));
     entries.add(ThirdPartyChildEntry(
@@ -491,7 +497,7 @@ List<ThirdPartyChildEntry> buildSpeedBatcherStationChildren({
       child: thirdPartyNumber(
         units: 'g',
         decimalPlaces: 0,
-        size: RelativeSize(width: 0.20, height: frame.height * 0.55),
+        size: slot,
       ),
     ));
   }
@@ -682,6 +688,14 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
                   PaneDetailRow(
                     label: 'Strapping heads',
                     value: '${config.strapHeads}',
+                  ),
+                if (config.kind == ThirdPartyEquipmentKind.speedBatcher)
+                  // Spelled out here because the mimic only has room for the
+                  // short `% 30m` suffix beside the number.
+                  PaneDetailRow(
+                    label: 'Accept rate',
+                    value: 'rolling average over the last '
+                        '${config.acceptWindowMinutes} minutes',
                   ),
               ],
             ),

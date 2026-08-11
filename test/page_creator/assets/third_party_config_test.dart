@@ -281,13 +281,13 @@ void main() {
           .map((e) => e.child)
           .whereType<NumberConfig>()
           .firstWhere((n) => n.units!.contains('%'));
-      expect(accept.units, '% / 30 min');
+      expect(accept.units, '% 30m');
 
       final custom = buildSpeedBatcherStationChildren(acceptWindowMinutes: 15)
           .map((e) => e.child)
           .whereType<NumberConfig>()
           .firstWhere((n) => n.units!.contains('%'));
-      expect(custom.units, '% / 15 min');
+      expect(custom.units, '% 15m');
     });
 
     test('load cells sit clear of the belt centre', () {

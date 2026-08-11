@@ -481,24 +481,28 @@ class SpeedBatcherPainter extends ThirdPartyMachinePainter {
   /// Unit rect of the infeed flat conveyor lane — where a live Conveyor child
   /// is meant to sit. Exposed so the editor can offer a one-tap "drop a
   /// conveyor on this lane" without duplicating the geometry.
-  static const Rect infeedLane = Rect.fromLTRB(0.02, 0.46, 0.47, 0.84);
+  static const Rect infeedLane = Rect.fromLTRB(0.02, 0.36, 0.47, 0.82);
 
   /// Unit rect of the step-up conveyor lane.
-  static const Rect stepUpLane = Rect.fromLTRB(0.53, 0.46, 0.98, 0.84);
+  static const Rect stepUpLane = Rect.fromLTRB(0.53, 0.36, 0.98, 0.82);
 
   /// Unit frame of checkweigher 1 (the first one product reaches).
-  static const Rect checkweigher1Frame = Rect.fromLTRB(0.02, 0.21, 0.98, 0.38);
+  static const Rect checkweigher1Frame = Rect.fromLTRB(0.02, 0.185, 0.98, 0.315);
 
   /// Unit frame of checkweigher 2 (the last station before discharge).
-  static const Rect checkweigher2Frame = Rect.fromLTRB(0.02, 0.03, 0.98, 0.17);
+  static const Rect checkweigher2Frame = Rect.fromLTRB(0.02, 0.03, 0.98, 0.16);
 
   /// The weigh-belt bed inside a checkweigher frame.
   ///
   /// Narrower than the frame so the two readouts have somewhere to live: the
   /// accept rate to the left of the belt, the weight to the right. This is the
   /// rect a live Conveyor child fills.
+  ///
+  /// The vertical inset is small — the belt should nearly fill its frame. A
+  /// generous inset left the checkweighers reading as two mostly-empty boxes,
+  /// which is dead space on a mimic where the lanes below want the room.
   static Rect deckOf(Rect frame) {
-    final inset = frame.height * 0.22;
+    final inset = frame.height * 0.12;
     return Rect.fromLTRB(0.27, frame.top + inset, 0.73, frame.bottom - inset);
   }
 
@@ -544,12 +548,12 @@ class SpeedBatcherPainter extends ThirdPartyMachinePainter {
     // Flow chevrons: DOWN the infeed lane, UP the step-up lane. This is the
     // U-turn, and it is the one thing a reader cannot infer from the boxes.
     _chevrons(canvas, u, stroke,
-        cx: infeedLane.center.dx, top: 0.54, bottom: 0.78, pointingDown: true);
+        cx: infeedLane.center.dx, top: 0.44, bottom: 0.74, pointingDown: true);
     _chevrons(canvas, u, stroke,
-        cx: stepUpLane.center.dx, top: 0.54, bottom: 0.78, pointingDown: false);
+        cx: stepUpLane.center.dx, top: 0.44, bottom: 0.74, pointingDown: false);
 
     // -- Buffers across the infeed end --
-    const bufTop = 0.87;
+    const bufTop = 0.85;
     const bufBottom = 0.99;
     const bufLeft = 0.02;
     const bufRight = 0.98;
