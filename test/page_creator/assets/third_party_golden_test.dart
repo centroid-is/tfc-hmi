@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io' show File, Platform;
 
 import 'package:flutter/material.dart';
@@ -6,6 +7,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:tfc/page_creator/assets/conveyor.dart';
 import 'package:tfc/page_creator/assets/number.dart';
+import 'package:tfc/page_creator/assets/ratio_number.dart';
+import 'package:tfc/providers/database.dart';
+import 'package:tfc_dart/core/database.dart' show Database;
 import 'package:tfc/page_creator/assets/third_party.dart';
 import 'package:tfc/page_creator/assets/third_party_painter.dart';
 
@@ -96,18 +100,18 @@ Future<void> loadRealFont() async {
 Widget buildRunningStation({double frequency = 50.0}) {
   final children = buildSpeedBatcherStationChildren(acceptWindowMinutes: 30);
 
-  // Weight readouts go in as real children, on their real anchors, switched
-  // to NumberWidget's preview key so they show a value without a PLC.
-  //
-  // The accept ratio does NOT. `RatioNumberConfig` counts events out of a
-  // timeseries database through `timeseries_notify_mixin`, which arms timers
-  // off `databaseProvider` — a widget test has no database to give it, and
-  // the binding then fails the test on a pending timer. Its placement, type
-  // and window are covered by unit tests in third_party_config_test.dart
-  // instead; only the picture is missing it.
-  final readouts = children.where((e) => e.child is NumberConfig).toList();
+  // Both readouts go in as real children, on their real anchors, each
+  // switched to its own asset's preview keys so it shows a value with no PLC
+  // behind it: NumberWidget renders its sample weight, RatioNumber its
+  // sample percentage.
+  final readouts = children.where((e) => e.child is! ConveyorConfig).toList();
   for (final entry in readouts) {
-    (entry.child as NumberConfig).key = 'Number preview';
+    final child = entry.child;
+    if (child is NumberConfig) child.key = 'Number preview';
+    if (child is RatioNumberConfig) {
+      child.key1 = 'key1';
+      child.key2 = 'key2';
+    }
   }
 
   final size = _canvasFor(ThirdPartyEquipmentKind.speedBatcher);
@@ -144,6 +148,14 @@ Widget buildRunningStation({double frequency = 50.0}) {
   }
 
   return ProviderScope(
+    overrides: [
+      // RatioNumber's timeseries mixin arms its refresh timer only after
+      // `databaseProvider` resolves. A widget test has no database, and a
+      // timer left running fails the binding at teardown. Handing it a
+      // future that never completes parks the mixin at its first await —
+      // the widget still builds and paints, which is all a golden needs.
+      databaseProvider.overrideWith((ref) => Completer<Database?>().future),
+    ],
     child: MaterialApp(
       home: Scaffold(
         backgroundColor: Colors.white,
