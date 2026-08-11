@@ -120,6 +120,37 @@ class SidePane extends StatelessWidget {
   }
 }
 
+/// Closes [paneId] when its subtree leaves the tree.
+///
+/// A docked pane lives in the root overlay, so nothing tears it down when the
+/// page that opened it goes away. Assets with their own `State` close their
+/// pane from `dispose()`; wrap this around a stateless asset body to get the
+/// same guarantee without turning it into a `StatefulWidget`.
+class SidePaneOwner extends StatefulWidget {
+  final String paneId;
+  final Widget child;
+
+  const SidePaneOwner({
+    super.key,
+    required this.paneId,
+    required this.child,
+  });
+
+  @override
+  State<SidePaneOwner> createState() => _SidePaneOwnerState();
+}
+
+class _SidePaneOwnerState extends State<SidePaneOwner> {
+  @override
+  void dispose() {
+    closeSidePane(id: widget.paneId);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
+}
+
 /// Tunables shared by every docked pane. An app can set these once at
 /// start-up instead of passing them at each call site.
 abstract final class SidePaneDefaults {

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:tfc/widgets/panes/standard_dialog.dart';
 import 'package:json_annotation/json_annotation.dart';
 
 import 'package:tfc/page_creator/assets/button.dart';
@@ -18,9 +19,11 @@ class ChecklistsConfig extends BaseAsset {
   List<LEDConfig> line2;
   List<LEDConfig> line3;
 
-  ChecklistsConfig({required this.line1, required this.line2, required this.line3});
+  ChecklistsConfig(
+      {required this.line1, required this.line2, required this.line3});
 
-  factory ChecklistsConfig.fromJson(Map<String, dynamic> json) => _$ChecklistsConfigFromJson(json);
+  factory ChecklistsConfig.fromJson(Map<String, dynamic> json) =>
+      _$ChecklistsConfigFromJson(json);
   @override
   Map<String, dynamic> toJson() => _$ChecklistsConfigToJson(this);
 
@@ -48,7 +51,8 @@ class _ChecklistsConfigEditor extends StatefulWidget {
   const _ChecklistsConfigEditor({required this.config});
 
   @override
-  State<_ChecklistsConfigEditor> createState() => _ChecklistsConfigEditorState();
+  State<_ChecklistsConfigEditor> createState() =>
+      _ChecklistsConfigEditorState();
 }
 
 class _ChecklistsConfigEditorState extends State<_ChecklistsConfigEditor> {
@@ -67,7 +71,9 @@ class _ChecklistsConfigEditorState extends State<_ChecklistsConfigEditor> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          SizeField(initialValue: widget.config.size, onChanged: (size) => setState(() => widget.config.size = size)),
+          SizeField(
+              initialValue: widget.config.size,
+              onChanged: (size) => setState(() => widget.config.size = size)),
           Expanded(
             child: SingleChildScrollView(
               scrollDirection: Axis.horizontal,
@@ -77,7 +83,8 @@ class _ChecklistsConfigEditorState extends State<_ChecklistsConfigEditor> {
                 children: List.generate(3, (lineIdx) {
                   return Container(
                     width: 400,
-                    margin: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
+                    margin:
+                        const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
                     child: Card(
                       child: Padding(
                         padding: const EdgeInsets.all(12.0),
@@ -87,11 +94,16 @@ class _ChecklistsConfigEditorState extends State<_ChecklistsConfigEditor> {
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Text('Line ${lineIdx + 1}', style: Theme.of(context).textTheme.titleMedium),
-                                ...List.generate(lines[lineIdx].length, (ledIdx) {
+                                Text('Line ${lineIdx + 1}',
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .titleMedium),
+                                ...List.generate(lines[lineIdx].length,
+                                    (ledIdx) {
                                   final ledConfig = lines[lineIdx][ledIdx];
                                   return Column(
-                                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.stretch,
                                     children: [
                                       ledConfig.configure(context),
                                       Align(
@@ -145,96 +157,95 @@ class Checklists extends StatefulWidget {
 }
 
 class _ChecklistsState extends State<Checklists> {
+  String get _dialogId => 'checklists:${identityHashCode(widget)}';
+
+  /// Three columns of checklist state — too wide for a pane, and something an
+  /// operator works through while watching the line, so it floats.
   void _showChecklistDialog(BuildContext context) {
-    showDialog(
+    showFloatingDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        content: ConstrainedBox(
-          constraints: const BoxConstraints(
-            maxWidth: 1200,
-            maxHeight: 500,
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              // ─── Title ───
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 8.0),
-                child: Text(
-                  "Checklists",
-                  style: Theme.of(context).textTheme.headlineMedium,
-                  textAlign: TextAlign.center,
-                ),
-              ),
+      id: _dialogId,
+      title: 'Checklists',
+      icon: Icons.checklist,
+      size: const Size(1200, 560),
+      builder: (context) => ConstrainedBox(
+        constraints: const BoxConstraints(
+          maxWidth: 1200,
+          maxHeight: 500,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // ─── Three‐column area ───
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: List.generate(3, (lineIdx) {
+                final List<LEDConfig> line = [
+                  widget.config.line1,
+                  widget.config.line2,
+                  widget.config.line3,
+                ][lineIdx];
 
-              const SizedBox(height: 16),
+                return Expanded(
+                  child: Container(
+                    margin: const EdgeInsets.symmetric(horizontal: 8.0),
+                    child: SingleChildScrollView(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          // ─── "Line X" header ───
+                          Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 8.0),
+                            child: Text(
+                              'Line ${lineIdx + 1}',
+                              style: Theme.of(context).textTheme.titleMedium,
+                            ),
+                          ),
 
-              // ─── Three‐column area ───
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: List.generate(3, (lineIdx) {
-                  final List<LEDConfig> line = [
-                    widget.config.line1,
-                    widget.config.line2,
-                    widget.config.line3,
-                  ][lineIdx];
-
-                  return Expanded(
-                    child: Container(
-                      margin: const EdgeInsets.symmetric(horizontal: 8.0),
-                      child: SingleChildScrollView(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            // ─── "Line X" header ───
+                          // ─── Each LED row ───
+                          for (final ledConfig in line)
                             Padding(
-                              padding: const EdgeInsets.symmetric(vertical: 8.0),
-                              child: Text(
-                                'Line ${lineIdx + 1}',
-                                style: Theme.of(context).textTheme.titleMedium,
+                              padding: const EdgeInsets.symmetric(
+                                  vertical: 8.0, horizontal: 12.0),
+                              child: Row(
+                                children: [
+                                  // LED icon, with a relative size
+                                  Expanded(
+                                    flex: 1,
+                                    child: AspectRatio(
+                                      aspectRatio: 1, // Make it square
+                                      child: Led(
+                                        ledConfig
+                                          ..size = RelativeSize(
+                                              width: 0.03, height: 0.03),
+                                      ),
+                                    ),
+                                  ),
+
+                                  const SizedBox(width: 8),
+
+                                  // LED text
+                                  Expanded(
+                                    flex: 6,
+                                    child: Text(
+                                      ledConfig.text ?? '',
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .bodyMedium,
+                                    ),
+                                  ),
+                                ],
                               ),
                             ),
-
-                            // ─── Each LED row ───
-                            for (final ledConfig in line)
-                              Padding(
-                                padding: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 12.0),
-                                child: Row(
-                                  children: [
-                                    // LED icon, with a relative size
-                                    Expanded(
-                                      flex: 1,
-                                      child: AspectRatio(
-                                        aspectRatio: 1, // Make it square
-                                        child: Led(
-                                          ledConfig..size = RelativeSize(width: 0.03, height: 0.03),
-                                        ),
-                                      ),
-                                    ),
-
-                                    const SizedBox(width: 8),
-
-                                    // LED text
-                                    Expanded(
-                                      flex: 6,
-                                      child: Text(
-                                        ledConfig.text ?? '',
-                                        style: Theme.of(context).textTheme.bodyMedium,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                          ],
-                        ),
+                        ],
                       ),
                     ),
-                  );
-                }),
-              ),
-            ],
-          ),
+                  ),
+                );
+              }),
+            ),
+          ],
         ),
       ),
     );

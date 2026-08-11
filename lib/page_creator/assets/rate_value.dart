@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:tfc/widgets/panes/standard_dialog.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -250,7 +251,8 @@ class _RateValueConfigEditorState
           const SizedBox(height: 16),
           SwitchListTile(
             title: const Text('Calculate Per Hour'),
-            subtitle: const Text('Off = divide by minutes, On = multiply to hourly'),
+            subtitle:
+                const Text('Off = divide by minutes, On = multiply to hourly'),
             value: widget.config.showPerHour,
             onChanged: (value) =>
                 setState(() => widget.config.showPerHour = value),
@@ -427,46 +429,23 @@ class _RateValueWidgetState extends ConsumerState<RateValueWidget>
     return displayWidget;
   }
 
+  String get _chartDialogId => 'chart:${identityHashCode(widget.config)}';
+
+  /// A trend belongs next to the thing it describes, not on top of it — so
+  /// the chart opens in a free-floating window the operator can drag off the
+  /// live value and leave running.
   void _showChartDialog(BuildContext context, int activeInterval) {
-    final navigator = Navigator.of(context);
-    showDialog(
-      context: navigator.context,
-      builder: (context) {
-        final size = MediaQuery.of(context).size;
-        return Dialog(
-          child: Container(
-            width: size.width * 0.8,
-            height: size.height * 0.8,
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(
-                      widget.config.graphHeader ??
-                          widget.config.text ??
-                          'Rate Value',
-                      style: Theme.of(context).textTheme.titleLarge,
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.close),
-                      onPressed: () => Navigator.of(context).pop(),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 16),
-                Expanded(
-                  child: _RateValueChartView(
-                    config: widget.config,
-                    initialInterval: activeInterval,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
+    final size = MediaQuery.of(context).size;
+    showFloatingDialog(
+      context: context,
+      id: _chartDialogId,
+      title: widget.config.graphHeader ?? widget.config.text ?? 'Rate Value',
+      icon: Icons.show_chart,
+      size: Size(size.width * 0.7, size.height * 0.7),
+      builder: (context) => _RateValueChartView(
+        config: widget.config,
+        initialInterval: activeInterval,
+      ),
     );
   }
 }
@@ -618,8 +597,7 @@ class _RateValueChartViewState extends ConsumerState<_RateValueChartView> {
       if (openMs > prevOpenMs) {
         var fill = prevOpenMs;
         while (fill < openMs) {
-          cache.add(
-              (fill, fill == prevOpenMs ? (_openSum[minutes] ?? 0) : 0));
+          cache.add((fill, fill == prevOpenMs ? (_openSum[minutes] ?? 0) : 0));
           fill += intervalMs;
         }
         _openSum[minutes] = 0;
@@ -639,9 +617,8 @@ class _RateValueChartViewState extends ConsumerState<_RateValueChartView> {
     final cache = _bucketCache[minutes];
     if (cache == null) return;
     final perHour = widget.config.showPerHour;
-    final rateUnit = perHour
-        ? '${widget.config.unit}/h'
-        : '${widget.config.unit}/min';
+    final rateUnit =
+        perHour ? '${widget.config.unit}/h' : '${widget.config.unit}/min';
     final data = <Map<String, dynamic>>[];
     for (final (ms, sum) in cache) {
       data.add({
@@ -677,13 +654,11 @@ class _RateValueChartViewState extends ConsumerState<_RateValueChartView> {
     try {
       if (_db == null || !mounted) return;
       final maxMinutes = widget.config.intervalPresets.reduce(math.max);
-      final totalWindow =
-          Duration(minutes: maxMinutes * widget.config.howMany);
+      final totalWindow = Duration(minutes: maxMinutes * widget.config.howMany);
       _dataStart = DateTime.now().subtract(totalWindow);
       _dataEnd = DateTime.now();
 
-      final rows = await _db!.queryTimeseriesData(
-          widget.config.key, _dataStart,
+      final rows = await _db!.queryTimeseriesData(widget.config.key, _dataStart,
           orderBy: 'time ASC');
       if (!mounted) return;
 
@@ -734,7 +709,8 @@ class _RateValueChartViewState extends ConsumerState<_RateValueChartView> {
     if (!_realTimeActive || _db == null || !mounted) return;
     try {
       final rows = await _db!.queryTimeseriesData(
-        widget.config.key, _dataEnd,
+        widget.config.key,
+        _dataEnd,
         orderBy: 'time ASC',
       );
       if (!mounted) return;
@@ -769,8 +745,10 @@ class _RateValueChartViewState extends ConsumerState<_RateValueChartView> {
       final fetchStart =
           newStart.subtract(_selectedInterval * widget.config.howMany);
       final rows = await _db!.queryTimeseriesData(
-        widget.config.key, _dataStart,
-        from: fetchStart, orderBy: 'time ASC',
+        widget.config.key,
+        _dataStart,
+        from: fetchStart,
+        orderBy: 'time ASC',
       );
       if (!mounted) return;
       if (rows.isNotEmpty) {
@@ -869,8 +847,7 @@ class _RateValueChartViewState extends ConsumerState<_RateValueChartView> {
                 onPressed: (i) =>
                     _changeChartInterval(Duration(minutes: presets[i])),
                 borderRadius: BorderRadius.circular(8),
-                constraints:
-                    const BoxConstraints(minHeight: 36, minWidth: 48),
+                constraints: const BoxConstraints(minHeight: 36, minWidth: 48),
                 children: presets
                     .map((m) => Padding(
                           padding: const EdgeInsets.symmetric(
@@ -903,13 +880,11 @@ class _RateValueChartViewState extends ConsumerState<_RateValueChartView> {
     return Row(
       children: presets.map((minutes) {
         final sum = _rateSum(minutes);
-        final r =
-            _valueRate(sum, minutes, perHour: widget.config.showPerHour);
+        final r = _valueRate(sum, minutes, perHour: widget.config.showPerHour);
         return Expanded(
           child: Card(
             child: Padding(
-              padding:
-                  const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+              padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
               child: Column(
                 children: [
                   Text(

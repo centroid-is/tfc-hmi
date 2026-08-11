@@ -4,9 +4,12 @@ import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:rxdart/rxdart.dart';
-import 'package:open62541/open62541.dart' show AttributeId, DynamicValue, LocalizedText, NodeId;
+import 'package:open62541/open62541.dart'
+    show AttributeId, DynamicValue, LocalizedText, NodeId;
 
 import 'common.dart';
+import '../../widgets/panes/pane_chrome.dart';
+import '../../widgets/panes/side_pane.dart';
 import '../../painter/schneider/atv320.dart';
 import 'package:tfc_dart/core/state_man.dart';
 import '../../providers/state_man.dart';
@@ -54,7 +57,8 @@ class SchneiderATV320Config extends BaseAsset {
         ),
         child: Material(
           borderRadius: BorderRadius.circular(24),
-          color: DialogTheme.of(context).backgroundColor ?? Theme.of(context).colorScheme.surface,
+          color: DialogTheme.of(context).backgroundColor ??
+              Theme.of(context).colorScheme.surface,
           child: Padding(
             padding: const EdgeInsets.all(20),
             child: SingleChildScrollView(
@@ -177,9 +181,13 @@ class _SchneiderATV320 extends ConsumerWidget {
               behavior: HitTestBehavior.opaque,
               onTap: () {
                 if (stateMan == null || config.configKey == null) return;
-                showDialog(
+                showSidePane(
                   context: context,
-                  builder: (_) => _configDialog(context, stateMan),
+                  id: 'atv320:${identityHashCode(config)}',
+                  builder: (_) => _ATV320ConfigPane(
+                    configKey: config.configKey!,
+                    stateMan: stateMan,
+                  ),
                 );
               },
               child: ATV320Widget(
@@ -193,30 +201,30 @@ class _SchneiderATV320 extends ConsumerWidget {
       },
     );
   }
-
-  Widget _configDialog(BuildContext context, StateMan stateMan) {
-    return _ATV320ConfigDialog(
-      configKey: config.configKey!,
-      stateMan: stateMan,
-    );
-  }
 }
 
-class _ATV320ConfigDialog extends StatefulWidget {
+/// The drive's parameter surface.
+///
+/// A docked pane rather than a dialog: commissioning an ATV320 means reading
+/// a parameter, watching what the motor does, then reading the next one — and
+/// the old modal covered the very mimic that shows it. `Write` stays pinned
+/// in the footer so it cannot scroll out of reach of a long parameter list.
+class _ATV320ConfigPane extends StatefulWidget {
   final String configKey;
   final StateMan stateMan;
 
-  const _ATV320ConfigDialog({
+  const _ATV320ConfigPane({
     required this.configKey,
     required this.stateMan,
   });
 
   @override
-  State<_ATV320ConfigDialog> createState() => _ATV320ConfigDialogState();
+  State<_ATV320ConfigPane> createState() => _ATV320ConfigPaneState();
 }
 
-class _ATV320ConfigDialogState extends State<_ATV320ConfigDialog> {
+class _ATV320ConfigPaneState extends State<_ATV320ConfigPane> {
   DynamicValue? _pendingConfigValue;
+
   /// browseName -> {displayName, description} from OPC UA browse
   Map<String, ({String? displayName, String? description})>? _fieldMeta;
 
@@ -286,82 +294,63 @@ class _ATV320ConfigDialogState extends State<_ATV320ConfigDialog> {
     return enriched;
   }
 
+  Future<void> _write() async {
+    final pending = _pendingConfigValue;
+    if (pending == null) return;
+    try {
+      await widget.stateMan.write(widget.configKey, pending);
+      if (!mounted) return;
+      setState(() => _pendingConfigValue = null);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Configuration updated successfully')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error updating configuration: $e')),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Text('ATV320 Configuration'),
-      content: SizedBox(
-        width: 600,
-        height: 400,
-        child: StreamBuilder<DynamicValue>(
-          stream: widget.stateMan
-              .subscribe(widget.configKey)
-              .asStream()
-              .asyncExpand((s) => s),
-          builder: (context, snapshot) {
-            if (!snapshot.hasData || snapshot.hasError) {
-              return const Center(
-                  child: Text('No configuration data available'));
-            }
-
-            final configValue = _enrichWithDescriptions(snapshot.data!);
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Expanded(
-                  child: SingleChildScrollView(
-                    child: DynamicValueWidget(
-                      value: configValue,
-                      onSubmitted: (newValue) {
-                        setState(() {
-                          _pendingConfigValue = newValue;
-                        });
-                      },
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 16),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  children: [
-                    TextButton(
-                      onPressed: () => Navigator.of(context).pop(),
-                      child: const Text('Cancel'),
-                    ),
-                    const SizedBox(width: 8),
-                    FilledButton(
-                      onPressed: _pendingConfigValue != null
-                          ? () async {
-                              try {
-                                await widget.stateMan.write(
-                                    widget.configKey, _pendingConfigValue!);
-                                if (context.mounted) {
-                                  Navigator.of(context).pop();
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(
-                                        content: Text(
-                                            'Configuration updated successfully')),
-                                  );
-                                }
-                              } catch (e) {
-                                if (context.mounted) {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(
-                                        content: Text(
-                                            'Error updating configuration: $e')),
-                                  );
-                                }
-                              }
-                            }
-                          : null,
-                      child: const Text('Write'),
-                    ),
-                  ],
-                ),
-              ],
-            );
-          },
+    return SidePane(
+      title: 'ATV320',
+      subtitle: widget.configKey,
+      icon: Icons.settings_input_component,
+      status: _pendingConfigValue != null
+          ? const PaneStatus.warning('Unwritten changes')
+          : const PaneStatus.running('Live'),
+      actions: [
+        PaneAction.primary(
+          label: 'Write',
+          icon: Icons.upload,
+          // Disabled until something is actually edited — the drive should
+          // never take a write the operator did not ask for.
+          onPressed: _pendingConfigValue != null ? _write : null,
         ),
+      ],
+      child: StreamBuilder<DynamicValue>(
+        stream: widget.stateMan
+            .subscribe(widget.configKey)
+            .asStream()
+            .asyncExpand((s) => s),
+        builder: (context, snapshot) {
+          if (!snapshot.hasData || snapshot.hasError) {
+            return const PaneSection(
+              child: Text('No configuration data available'),
+            );
+          }
+          return PaneSection(
+            title: 'Parameters',
+            child: DynamicValueWidget(
+              value: _enrichWithDescriptions(snapshot.data!),
+              onSubmitted: (newValue) {
+                setState(() => _pendingConfigValue = newValue);
+              },
+            ),
+          );
+        },
       ),
     );
   }

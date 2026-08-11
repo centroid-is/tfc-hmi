@@ -12,6 +12,9 @@ import '../../painter/beckhoff/ek1100.dart';
 import '../../painter/beckhoff/io8.dart';
 import 'package:tfc_dart/core/state_man.dart';
 import '../../providers/state_man.dart';
+import '../../widgets/panes/pane_chrome.dart';
+import '../../widgets/panes/side_pane.dart';
+import 'io_pane.dart';
 import '../page.dart';
 import '../../page_creator/assets/graph.dart';
 import '../../widgets/graph.dart';
@@ -792,6 +795,9 @@ class _BeckhoffEL2008 extends ConsumerWidget {
 
   const _BeckhoffEL2008({required this.config});
 
+  /// Identity of this module's docked pane — tapping it again toggles it.
+  String get _paneId => 'el2008:${identityHashCode(config)}';
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     return FutureBuilder<StateMan>(
@@ -824,16 +830,39 @@ class _BeckhoffEL2008 extends ConsumerWidget {
           builder: (context, s) {
             final data = (s.hasData && !s.hasError) ? s.data! : null;
 
-            return GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onTap: () {
-                if (stateMan == null) return;
-                showDialog(
-                  context: context,
-                  builder: (_) => _statusDialog(context, stateMan),
-                );
-              },
-              child: buildBody(data),
+            // The pane lives in the root overlay, so it must be closed when
+            // this module leaves the page — see [SidePaneOwner].
+            return SidePaneOwner(
+              paneId: _paneId,
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () {
+                  if (stateMan == null) return;
+                  showIoModulePane(
+                    context: context,
+                    id: _paneId,
+                    title: config.nameOrId,
+                    subtitle: 'Beckhoff · 8 DO',
+                    highLabel: 'On',
+                    summaryStream: _combinedStream(
+                      LinkedHashMap.fromEntries([
+                        MapEntry("raw", config.rawStateKey),
+                        MapEntry("force", config.forceValuesKey),
+                      ]),
+                      stateMan,
+                    ),
+                    statesOf: (data) => data == null
+                        ? List.filled(8, IOState.low)
+                        : _ledStates(data),
+                    gridSummary: 'Force and descriptions for all 8 channels',
+                    gridSize: const Size(940, 460),
+                    gridBuilder: (_) => IoGridViewport(
+                      child: _channelGrid(context, stateMan),
+                    ),
+                  );
+                },
+                child: buildBody(data),
+              ),
             );
           },
         );
@@ -841,64 +870,63 @@ class _BeckhoffEL2008 extends ConsumerWidget {
     );
   }
 
-  Widget _statusDialog(BuildContext context, StateMan stateMan) {
-    return AlertDialog(
-      title: Text(config.nameOrId),
-      content: StreamBuilder<Map<String, DynamicValue>>(
-        stream: _combinedStream(
-          LinkedHashMap.fromEntries([
-            MapEntry("raw", config.rawStateKey),
-            MapEntry("force", config.forceValuesKey),
-            MapEntry("descriptions", config.descriptionsKey),
-          ]),
-          stateMan,
-        ),
-        builder: (context, snapshot) {
-          if (!snapshot.hasData || snapshot.hasError) {
-            return const SizedBox.shrink();
-          }
-          final map = snapshot.data!;
-          List<bool>? rawStates = map["raw"] != null
-              ? List.generate(8, (i) => (map["raw"]!.asInt & (1 << i)) != 0)
-              : null;
-
-          return Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              for (int i = 0; i < 8; i = i + 2)
-                Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    RowIOView(
-                      leftRaw: rawStates?[i] ?? false,
-                      rightRaw: rawStates?[i + 1] ?? false,
-                      leftProcessed: null,
-                      rightProcessed: null,
-                      leftSelected: map["force"]?[i].asInt ?? 0,
-                      rightSelected: map["force"]?[i + 1].asInt ?? 0,
-                      animationValue: animation,
-                      leftOnChanged: (value) async {
-                        map["force"]![i].value = value;
-                        await stateMan.write(
-                            config.forceValuesKey!, map["force"]!);
-                      },
-                      rightOnChanged: (value) async {
-                        map["force"]![i + 1].value = value;
-                        await stateMan.write(
-                            config.forceValuesKey!, map["force"]!);
-                      },
-                      leftDescription: map["descriptions"]?[i].asString,
-                      rightDescription: map["descriptions"]?[i + 1].asString,
-                      leftFilterEdit: null,
-                      rightFilterEdit: null,
-                    ),
-                    const SizedBox(height: 6),
-                  ],
-                ),
-            ],
-          );
-        },
+  /// The per-channel grid, lifted out of the `AlertDialog` this used to be.
+  /// Force writes and descriptions are unchanged — only the host moved.
+  Widget _channelGrid(BuildContext context, StateMan stateMan) {
+    return StreamBuilder<Map<String, DynamicValue>>(
+      stream: _combinedStream(
+        LinkedHashMap.fromEntries([
+          MapEntry("raw", config.rawStateKey),
+          MapEntry("force", config.forceValuesKey),
+          MapEntry("descriptions", config.descriptionsKey),
+        ]),
+        stateMan,
       ),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData || snapshot.hasError) {
+          return const SizedBox.shrink();
+        }
+        final map = snapshot.data!;
+        List<bool>? rawStates = map["raw"] != null
+            ? List.generate(8, (i) => (map["raw"]!.asInt & (1 << i)) != 0)
+            : null;
+
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (int i = 0; i < 8; i = i + 2)
+              Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  RowIOView(
+                    leftRaw: rawStates?[i] ?? false,
+                    rightRaw: rawStates?[i + 1] ?? false,
+                    leftProcessed: null,
+                    rightProcessed: null,
+                    leftSelected: map["force"]?[i].asInt ?? 0,
+                    rightSelected: map["force"]?[i + 1].asInt ?? 0,
+                    animationValue: animation,
+                    leftOnChanged: (value) async {
+                      map["force"]![i].value = value;
+                      await stateMan.write(
+                          config.forceValuesKey!, map["force"]!);
+                    },
+                    rightOnChanged: (value) async {
+                      map["force"]![i + 1].value = value;
+                      await stateMan.write(
+                          config.forceValuesKey!, map["force"]!);
+                    },
+                    leftDescription: map["descriptions"]?[i].asString,
+                    rightDescription: map["descriptions"]?[i + 1].asString,
+                    leftFilterEdit: null,
+                    rightFilterEdit: null,
+                  ),
+                  const SizedBox(height: 6),
+                ],
+              ),
+          ],
+        );
+      },
     );
   }
 }
@@ -1306,6 +1334,9 @@ class _BeckhoffEL1008 extends ConsumerWidget {
 
   const _BeckhoffEL1008({required this.config});
 
+  /// Identity of this module's docked pane — tapping it again toggles it.
+  String get _paneId => 'el1008:${identityHashCode(config)}';
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     return FutureBuilder<StateMan>(
@@ -1333,16 +1364,39 @@ class _BeckhoffEL1008 extends ConsumerWidget {
           builder: (context, s) {
             final data = (s.hasData && !s.hasError) ? s.data! : null;
 
-            return GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onTap: () {
-                if (stateMan == null) return;
-                showDialog(
-                  context: context,
-                  builder: (_) => _statusDialog(context, stateMan),
-                );
-              },
-              child: buildBody(data),
+            // The pane lives in the root overlay, so it must be closed when
+            // this module leaves the page — see [SidePaneOwner].
+            return SidePaneOwner(
+              paneId: _paneId,
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () {
+                  if (stateMan == null) return;
+                  showIoModulePane(
+                    context: context,
+                    id: _paneId,
+                    title: config.nameOrId,
+                    subtitle: 'Beckhoff · 8 DI',
+                    highLabel: 'High',
+                    summaryStream: _combinedStream(
+                      LinkedHashMap.fromEntries([
+                        MapEntry("raw", config.rawStateKey),
+                        MapEntry("force", config.forceValuesKey),
+                      ]),
+                      stateMan,
+                    ),
+                    statesOf: (data) => data == null
+                        ? List.filled(8, IOState.low)
+                        : _ledStates(data),
+                    gridSummary: 'Force and descriptions for all 8 channels',
+                    gridSize: const Size(940, 460),
+                    gridBuilder: (_) => IoGridViewport(
+                      child: _channelGrid(context, stateMan),
+                    ),
+                  );
+                },
+                child: buildBody(data),
+              ),
             );
           },
         );
@@ -1350,102 +1404,98 @@ class _BeckhoffEL1008 extends ConsumerWidget {
     );
   }
 
-  Widget _statusDialog(BuildContext context, StateMan stateMan) {
-    return AlertDialog(
-      title: Text(config.nameOrId),
-      content: StreamBuilder<Map<String, DynamicValue>>(
-        stream: _combinedStream(
-          LinkedHashMap.fromEntries([
-            MapEntry("raw", config.rawStateKey),
-            MapEntry("processed", config.processedStateKey),
-            MapEntry("force", config.forceValuesKey),
-            MapEntry("descriptions", config.descriptionsKey),
-            MapEntry("on_filters", config.onFiltersKey),
-            MapEntry("off_filters", config.offFiltersKey),
-          ]),
-          stateMan,
-        ),
-        builder: (context, snapshot) {
-          if (!snapshot.hasData || snapshot.hasError) {
-            return const SizedBox.shrink();
-          }
-          final map = snapshot.data!;
-          List<bool>? rawStates = map["raw"] != null
-              ? List.generate(8, (i) => (map["raw"]!.asInt & (1 << i)) != 0)
-              : null;
-          List<bool>? processedStates = map["processed"] != null
-              ? List.generate(
-                  8, (i) => (map["processed"]!.asInt & (1 << i)) != 0)
-              : null;
-
-          return Column(
-            children: [
-              for (int i = 0; i < 8; i = i + 2)
-                Padding(
-                  padding: EdgeInsets.only(
-                      bottom: i < 6
-                          ? 2.0
-                          : 0.0), // Reduced spacing, no padding on last item
-                  child: RowIOView(
-                    leftRaw: rawStates?[i] ?? false,
-                    rightRaw: rawStates?[i + 1] ?? false,
-                    leftProcessed: null,
-                    rightProcessed: null,
-                    leftSelected: map["force"]?[i].asInt ?? 0,
-                    rightSelected: map["force"]?[i + 1].asInt ?? 0,
-                    animationValue: animation,
-                    leftOnChanged: (value) async {
-                      map["force"]![i].value = value;
-                      await stateMan.write(
-                          config.forceValuesKey!, map["force"]!);
-                    },
-                    rightOnChanged: (value) async {
-                      map["force"]![i + 1].value = value;
-                      await stateMan.write(
-                          config.forceValuesKey!, map["force"]!);
-                    },
-                    leftDescription: map["descriptions"]?[i].asString,
-                    rightDescription: map["descriptions"]?[i + 1].asString,
-                    leftFilterEdit: map.containsKey("on_filters") &&
-                            map.containsKey("off_filters")
-                        ? FilterEdit(
-                            onFilter: map["on_filters"]?[i].asInt ?? 0,
-                            offFilter: map["off_filters"]?[i].asInt ?? 0,
-                            onChangedOnFilter: (value) async {
-                              map["on_filters"]![i].value = value;
-                              await stateMan.write(
-                                  config.onFiltersKey!, map["on_filters"]!);
-                            },
-                            onChangedOffFilter: (value) async {
-                              map["off_filters"]![i].value = value;
-                              await stateMan.write(
-                                  config.offFiltersKey!, map["off_filters"]!);
-                            },
-                          )
-                        : null,
-                    rightFilterEdit: map.containsKey("on_filters") &&
-                            map.containsKey("off_filters")
-                        ? FilterEdit(
-                            onFilter: map["on_filters"]?[i + 1].asInt ?? 0,
-                            offFilter: map["off_filters"]?[i + 1].asInt ?? 0,
-                            onChangedOnFilter: (value) async {
-                              map["on_filters"]![i + 1].value = value;
-                              await stateMan.write(
-                                  config.onFiltersKey!, map["on_filters"]!);
-                            },
-                            onChangedOffFilter: (value) async {
-                              map["off_filters"]![i + 1].value = value;
-                              await stateMan.write(
-                                  config.offFiltersKey!, map["off_filters"]!);
-                            },
-                          )
-                        : null,
-                  ),
-                ),
-            ],
-          );
-        },
+  /// The per-channel grid, lifted out of the `AlertDialog` this used to be.
+  /// Force writes and descriptions are unchanged — only the host moved.
+  Widget _channelGrid(BuildContext context, StateMan stateMan) {
+    return StreamBuilder<Map<String, DynamicValue>>(
+      stream: _combinedStream(
+        LinkedHashMap.fromEntries([
+          MapEntry("raw", config.rawStateKey),
+          MapEntry("processed", config.processedStateKey),
+          MapEntry("force", config.forceValuesKey),
+          MapEntry("descriptions", config.descriptionsKey),
+          MapEntry("on_filters", config.onFiltersKey),
+          MapEntry("off_filters", config.offFiltersKey),
+        ]),
+        stateMan,
       ),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData || snapshot.hasError) {
+          return const SizedBox.shrink();
+        }
+        final map = snapshot.data!;
+        List<bool>? rawStates = map["raw"] != null
+            ? List.generate(8, (i) => (map["raw"]!.asInt & (1 << i)) != 0)
+            : null;
+        List<bool>? processedStates = map["processed"] != null
+            ? List.generate(8, (i) => (map["processed"]!.asInt & (1 << i)) != 0)
+            : null;
+
+        return Column(
+          children: [
+            for (int i = 0; i < 8; i = i + 2)
+              Padding(
+                padding: EdgeInsets.only(
+                    bottom: i < 6
+                        ? 2.0
+                        : 0.0), // Reduced spacing, no padding on last item
+                child: RowIOView(
+                  leftRaw: rawStates?[i] ?? false,
+                  rightRaw: rawStates?[i + 1] ?? false,
+                  leftProcessed: null,
+                  rightProcessed: null,
+                  leftSelected: map["force"]?[i].asInt ?? 0,
+                  rightSelected: map["force"]?[i + 1].asInt ?? 0,
+                  animationValue: animation,
+                  leftOnChanged: (value) async {
+                    map["force"]![i].value = value;
+                    await stateMan.write(config.forceValuesKey!, map["force"]!);
+                  },
+                  rightOnChanged: (value) async {
+                    map["force"]![i + 1].value = value;
+                    await stateMan.write(config.forceValuesKey!, map["force"]!);
+                  },
+                  leftDescription: map["descriptions"]?[i].asString,
+                  rightDescription: map["descriptions"]?[i + 1].asString,
+                  leftFilterEdit: map.containsKey("on_filters") &&
+                          map.containsKey("off_filters")
+                      ? FilterEdit(
+                          onFilter: map["on_filters"]?[i].asInt ?? 0,
+                          offFilter: map["off_filters"]?[i].asInt ?? 0,
+                          onChangedOnFilter: (value) async {
+                            map["on_filters"]![i].value = value;
+                            await stateMan.write(
+                                config.onFiltersKey!, map["on_filters"]!);
+                          },
+                          onChangedOffFilter: (value) async {
+                            map["off_filters"]![i].value = value;
+                            await stateMan.write(
+                                config.offFiltersKey!, map["off_filters"]!);
+                          },
+                        )
+                      : null,
+                  rightFilterEdit: map.containsKey("on_filters") &&
+                          map.containsKey("off_filters")
+                      ? FilterEdit(
+                          onFilter: map["on_filters"]?[i + 1].asInt ?? 0,
+                          offFilter: map["off_filters"]?[i + 1].asInt ?? 0,
+                          onChangedOnFilter: (value) async {
+                            map["on_filters"]![i + 1].value = value;
+                            await stateMan.write(
+                                config.onFiltersKey!, map["on_filters"]!);
+                          },
+                          onChangedOffFilter: (value) async {
+                            map["off_filters"]![i + 1].value = value;
+                            await stateMan.write(
+                                config.offFiltersKey!, map["off_filters"]!);
+                          },
+                        )
+                      : null,
+                ),
+              ),
+          ],
+        );
+      },
     );
   }
 }
@@ -1869,6 +1919,9 @@ class _BeckhoffEL3054 extends ConsumerWidget {
 
   const _BeckhoffEL3054({required this.config});
 
+  /// Identity of this module's docked pane — tapping it again toggles it.
+  String get _paneId => 'el3054:${identityHashCode(config)}';
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     return FutureBuilder<StateMan>(
@@ -1911,16 +1964,18 @@ class _BeckhoffEL3054 extends ConsumerWidget {
           builder: (context, s) {
             final data = (s.hasData && !s.hasError) ? s.data! : null;
 
-            return GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onTap: () {
-                if (stateMan == null) return;
-                showDialog(
-                  context: context,
-                  builder: (_) => _el3054StatusDialog(context, stateMan),
-                );
-              },
-              child: buildBody(data),
+            // The pane lives in the root overlay, so it must be closed when
+            // this module leaves the page — see [SidePaneOwner].
+            return SidePaneOwner(
+              paneId: _paneId,
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () {
+                  if (stateMan == null) return;
+                  _showEl3054Pane(context, stateMan);
+                },
+                child: buildBody(data),
+              ),
             );
           },
         );
@@ -1946,253 +2001,93 @@ class _BeckhoffEL3054 extends ConsumerWidget {
     });
   }
 
-  Widget _el3054StatusDialog(BuildContext context, StateMan stateMan) {
-    // todo - parse errors
-// hmi.errors[1].0 := raw_input.MDP5001_300_AI_Standard_Channel_1_Status.Error;
-// hmi.errors[1].1 := raw_input.MDP5001_300_AI_Standard_Channel_1_Status.Limit_1_Bit0;
-// hmi.errors[1].2 := raw_input.MDP5001_300_AI_Standard_Channel_1_Status.Limit_1_Bit1;
-// hmi.errors[1].3 := raw_input.MDP5001_300_AI_Standard_Channel_1_Status.Limit_2_Bit0;
-// hmi.errors[1].4 := raw_input.MDP5001_300_AI_Standard_Channel_1_Status.Limit_2_Bit1;
-// hmi.errors[1].5 := raw_input.MDP5001_300_AI_Standard_Channel_1_Status.Overrange;
-// hmi.errors[1].6 := raw_input.MDP5001_300_AI_Standard_Channel_1_Status.Underrange;
-    final screenSize = MediaQuery.of(context).size;
-    return AlertDialog(
-      title: Text(config.nameOrId),
-      content: SizedBox(
-        width: screenSize.width * 0.7,
-        height: screenSize.height * 0.75,
-        child: Column(
-        children: [
-          // Current values (rebuilds on OPC UA changes)
-          StreamBuilder<Map<String, DynamicValue>>(
-            stream: _combinedStream(
-              LinkedHashMap.fromEntries([
-                MapEntry("states", config.stateKey),
-                MapEntry("descriptions", config.descriptionsKey),
-              ]),
-              stateMan,
-            ),
-            builder: (context, snapshot) {
-              if (!snapshot.hasData || snapshot.hasError) {
-                return const SizedBox.shrink();
-              }
-              final map = snapshot.data!;
-
-              // Extract analog values for each input
-              List<double?> analogValues = [];
-              final states = map["states"];
-              if (states != null) {
-                if (states.isArray) {
-                  analogValues = List.generate(4, (i) {
-                    final val = states[i];
-                    if (val.isDouble || val.isInteger) {
-                      return val.asDouble;
-                    }
-                    return null;
-                  });
-                } else if (states.isInteger) {
-                  analogValues = List.filled(4, null);
-                }
-              }
-
-              return Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Icon(Icons.input,
-                              color: Theme.of(context).primaryColor),
-                          const SizedBox(width: 8),
-                          Text(
-                            'Current Values',
-                            style: Theme.of(context)
-                                .textTheme
-                                .titleSmall
-                                ?.copyWith(
-                                  fontWeight: FontWeight.bold,
-                                ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 12),
-                      Column(
-                        children: [
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                            children: [
-                              SizedBox(
-                                width: 200,
-                                child: _InputValueCard(
-                                  inputNumber: 1,
-                                  value: analogValues[0],
-                                  description: map["descriptions"]?[0].asString,
-                                ),
-                              ),
-                              SizedBox(
-                                width: 200,
-                                child: _InputValueCard(
-                                  inputNumber: 2,
-                                  value: analogValues[1],
-                                  description: map["descriptions"]?[1].asString,
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 12),
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                            children: [
-                              SizedBox(
-                                width: 200,
-                                child: _InputValueCard(
-                                  inputNumber: 3,
-                                  value: analogValues[2],
-                                  description: map["descriptions"]?[2].asString,
-                                ),
-                              ),
-                              SizedBox(
-                                width: 200,
-                                child: _InputValueCard(
-                                  inputNumber: 4,
-                                  value: analogValues[3],
-                                  description: map["descriptions"]?[3].asString,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-              );
-            },
-          ),
-          const SizedBox(height: 16),
-          // Graph (outside StreamBuilder — has its own data pipeline)
-          if (config.stateKey != null)
-            Expanded(
-              child: Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Icon(Icons.show_chart,
-                              color: Theme.of(context).primaryColor),
-                          const SizedBox(width: 8),
-                          Text(
-                            'Historical Data',
-                            style: Theme.of(context)
-                                .textTheme
-                                .titleSmall
-                                ?.copyWith(
-                                  fontWeight: FontWeight.bold,
-                                ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 12),
-                      Expanded(
-                        child: GraphAsset(
-                          GraphAssetConfig(
-                            graphType: GraphType.timeseries,
-                            primarySeries: [
-                              GraphSeriesConfig(
-                                key: config.stateKey!,
-                                label: 'Analog Input',
-                              ),
-                            ],
-                            yAxis: GraphAxisConfig(
-                              title: 'Value',
-                              unit: 'relative',
-                            ),
-                            timeWindowMinutes: Duration(minutes: 10),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-        ],
-      ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('Close'),
+  /// The EL3054's operator pane: the four analog readings as tiles, with the
+  /// history behind a chart tile.
+  ///
+  /// The old dialog was 70%×75% of the screen and put the trend *inside* it,
+  /// so reading a value meant covering the plant view with a window that was
+  /// mostly chart. Split the pane way round: numbers at a glance, the chart
+  /// in a floating window that can be dragged aside and left running.
+  void _showEl3054Pane(BuildContext context, StateMan stateMan) {
+    showSidePane(
+      context: context,
+      id: _paneId,
+      builder: (paneContext) => StreamBuilder<Map<String, DynamicValue>>(
+        stream: _combinedStream(
+          LinkedHashMap.fromEntries([
+            MapEntry("states", config.stateKey),
+            MapEntry("descriptions", config.descriptionsKey),
+          ]),
+          stateMan,
         ),
-      ],
-    );
-  }
-}
+        builder: (context, snapshot) {
+          final map =
+              (snapshot.hasData && !snapshot.hasError) ? snapshot.data : null;
 
-class _InputValueCard extends StatelessWidget {
-  final int inputNumber;
-  final double? value;
-  final String? description;
+          // The state key carries either an array of four readings or a
+          // single integer (nothing useful yet) — same parse as before.
+          final states = map?["states"];
+          final values = List<double?>.generate(4, (i) {
+            if (states == null || !states.isArray) return null;
+            final v = states[i];
+            return (v.isDouble || v.isInteger) ? v.asDouble : null;
+          });
 
-  const _InputValueCard({
-    required this.inputNumber,
-    required this.value,
-    this.description,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Row(
+          return SidePane(
+            title: config.nameOrId,
+            subtitle: 'Beckhoff · 4 AI',
+            icon: Icons.linear_scale,
+            status: map == null
+                ? const PaneStatus.stale('No data')
+                : const PaneStatus.running('Live'),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               mainAxisSize: MainAxisSize.min,
               children: [
-                Icon(
-                  Icons.input,
-                  color: Theme.of(context).primaryColor,
-                  size: 20,
+                PaneSection(
+                  title: 'Inputs',
+                  child: PaneTileRow(
+                    children: [
+                      for (int i = 0; i < 4; i++)
+                        PaneMetricTile(
+                          label:
+                              map?["descriptions"]?[i].asString ?? 'I${i + 1}',
+                          value: values[i]?.toStringAsFixed(2) ?? '—',
+                          icon: Icons.input,
+                        ),
+                    ],
+                  ),
                 ),
-                const SizedBox(width: 8),
-                Text(
-                  'I$inputNumber',
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.bold,
-                      ),
-                ),
+                if (config.stateKey != null) ...[
+                  const Divider(height: 1),
+                  PaneSection(
+                    title: 'Trend',
+                    child: PaneGraphTile(
+                      label: 'Analog inputs',
+                      height: 130,
+                      preview: _el3054Graph(),
+                      expandedTitle: '${config.nameOrId} — history',
+                      expandedSize: const Size(820, 520),
+                      expandedBuilder: (_) => _el3054Graph(),
+                    ),
+                  ),
+                ],
               ],
             ),
-            const SizedBox(height: 8),
-            Text(
-              value != null ? value!.toStringAsFixed(3) : '---',
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: value != null ? Colors.green : Colors.grey,
-                    fontWeight: FontWeight.w500,
-                  ),
-            ),
-            if (description != null && description!.isNotEmpty) ...[
-              const SizedBox(height: 8),
-              Text(
-                description!,
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: Theme.of(context).colorScheme.tertiary,
-                    ),
-                textAlign: TextAlign.center,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ],
-          ],
-        ),
+          );
+        },
       ),
     );
   }
+
+  Widget _el3054Graph() => GraphAsset(
+        GraphAssetConfig(
+          graphType: GraphType.timeseries,
+          primarySeries: [
+            GraphSeriesConfig(key: config.stateKey!, label: 'Analog Input'),
+          ],
+          yAxis: GraphAxisConfig(title: 'Value', unit: 'relative'),
+          timeWindowMinutes: const Duration(minutes: 10),
+        ),
+      );
 }

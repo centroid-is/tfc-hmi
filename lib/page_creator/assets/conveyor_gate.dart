@@ -8,6 +8,8 @@ import 'package:json_annotation/json_annotation.dart';
 import 'package:open62541/open62541.dart' show DynamicValue, NodeId;
 import 'package:rxdart/rxdart.dart';
 import 'package:tfc_dart/core/state_man.dart';
+import '../../widgets/panes/pane_chrome.dart';
+import '../../widgets/panes/side_pane.dart';
 
 import 'package:tfc/page_creator/assets/common.dart';
 import 'package:tfc/page_creator/assets/conveyor_gate_painter.dart';
@@ -212,6 +214,8 @@ class _ConveyorGateState extends ConsumerState<ConveyorGate>
 
   @override
   void dispose() {
+    // The pane outlives this widget's route otherwise.
+    closeSidePane(id: _paneId);
     _controller.dispose();
     _progress.dispose();
     super.dispose();
@@ -224,13 +228,11 @@ class _ConveyorGateState extends ConsumerState<ConveyorGate>
   /// reconnects, ensuring the visual always matches the live state.
   void _onStateChanged(bool isOpen) {
     if (isOpen) {
-      _controller.duration =
-          Duration(milliseconds: widget.config.openTimeMs);
+      _controller.duration = Duration(milliseconds: widget.config.openTimeMs);
       _controller.forward();
     } else {
       _controller.duration = Duration(
-        milliseconds:
-            widget.config.closeTimeMs ?? widget.config.openTimeMs,
+        milliseconds: widget.config.closeTimeMs ?? widget.config.openTimeMs,
       );
       _controller.reverse();
     }
@@ -301,15 +303,28 @@ class _ConveyorGateState extends ConsumerState<ConveyorGate>
     }
   }
 
-  /// Show the force-control dialog (INT-02).
-  void _showForceDialog(BuildContext context) {
-    showDialog(
+  String get _paneId => 'gate:${identityHashCode(widget.config)}';
+
+  /// Show the force-control pane (INT-02).
+  ///
+  /// Forcing a gate is a watch-the-gate operation, so the pane leaves the
+  /// mimic visible instead of covering it the way the old dialog did.
+  void _showForcePane(BuildContext context) {
+    showSidePane(
       context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Force Gate'),
-        content: _ForceDialogContent(
-          config: widget.config,
-          writeForce: _writeForce,
+      id: _paneId,
+      builder: (_) => SidePane(
+        title: 'Gate',
+        subtitle: widget.config.stateKey.isEmpty
+            ? 'no state key'
+            : widget.config.stateKey,
+        icon: Icons.swap_horiz,
+        child: PaneSection(
+          title: 'Force',
+          child: _ForceDialogContent(
+            config: widget.config,
+            writeForce: _writeForce,
+          ),
         ),
       ),
     );
@@ -324,14 +339,13 @@ class _ConveyorGateState extends ConsumerState<ConveyorGate>
     if (widget.config.stateKey.isEmpty) {
       final gate = _buildGate(Colors.grey);
       return isInteractive
-          ? GestureDetector(onTap: () => _showForceDialog(context), child: gate)
+          ? GestureDetector(onTap: () => _showForcePane(context), child: gate)
           : gate;
     }
 
     final forcedColor = Theme.of(context).colorScheme.tertiary;
-    final hasForceFeedback =
-        widget.config.forceOpenFeedbackKey.isNotEmpty ||
-            widget.config.forceCloseFeedbackKey.isNotEmpty;
+    final hasForceFeedback = widget.config.forceOpenFeedbackKey.isNotEmpty ||
+        widget.config.forceCloseFeedbackKey.isNotEmpty;
 
     return StreamBuilder<DynamicValue>(
       stream: ref.watch(stateManProvider.future).asStream().asyncExpand(
@@ -358,8 +372,7 @@ class _ConveyorGateState extends ConsumerState<ConveyorGate>
         // that overrides color when any force feedback is active (VIS-03).
         if (hasForceFeedback) {
           return StreamBuilder<bool>(
-            stream:
-                ref.watch(stateManProvider.future).asStream().asyncExpand(
+            stream: ref.watch(stateManProvider.future).asStream().asyncExpand(
               (sm) {
                 return Rx.combineLatest2(
                   _boolFeedback(sm, widget.config.forceOpenFeedbackKey),
@@ -374,7 +387,7 @@ class _ConveyorGateState extends ConsumerState<ConveyorGate>
               final gate = _buildGate(displayColor);
               return isInteractive
                   ? GestureDetector(
-                      onTap: () => _showForceDialog(context), child: gate)
+                      onTap: () => _showForcePane(context), child: gate)
                   : gate;
             },
           );
@@ -383,8 +396,7 @@ class _ConveyorGateState extends ConsumerState<ConveyorGate>
         // No force feedback -- use base color directly.
         final gate = _buildGate(baseColor);
         return isInteractive
-            ? GestureDetector(
-                onTap: () => _showForceDialog(context), child: gate)
+            ? GestureDetector(onTap: () => _showForcePane(context), child: gate)
             : gate;
       },
     );
@@ -487,8 +499,8 @@ class _ForceDialogContent extends ConsumerWidget {
   }) {
     return StreamBuilder<bool>(
       stream: ref.watch(stateManProvider.future).asStream().asyncExpand(
-        (sm) => _boolFeedback(sm, feedbackKey),
-      ),
+            (sm) => _boolFeedback(sm, feedbackKey),
+          ),
       builder: (context, fbSnapshot) {
         final isActive = fbSnapshot.data ?? false;
         return Row(
@@ -673,9 +685,7 @@ class _ConveyorGateConfigEditorState extends State<_ConveyorGateConfigEditor>
                 ),
                 IconButton(
                   icon: Icon(
-                    _animController.isAnimating
-                        ? Icons.stop
-                        : Icons.play_arrow,
+                    _animController.isAnimating ? Icons.stop : Icons.play_arrow,
                   ),
                   tooltip: 'Play open/close animation',
                   onPressed: _playPreview,
@@ -686,17 +696,14 @@ class _ConveyorGateConfigEditorState extends State<_ConveyorGateConfigEditor>
           const Divider(),
 
           // -- Gate Variant --
-          Text('Gate Variant',
-              style: Theme.of(context).textTheme.bodySmall),
+          Text('Gate Variant', style: Theme.of(context).textTheme.bodySmall),
           const SizedBox(height: 4),
           SegmentedButton<GateVariant>(
             segments: const [
               ButtonSegment(
                   value: GateVariant.pneumatic, label: Text('Diverter')),
-              ButtonSegment(
-                  value: GateVariant.slider, label: Text('Slider')),
-              ButtonSegment(
-                  value: GateVariant.pusher, label: Text('Pusher')),
+              ButtonSegment(value: GateVariant.slider, label: Text('Slider')),
+              ButtonSegment(value: GateVariant.pusher, label: Text('Pusher')),
             ],
             selected: {config.gateVariant},
             onSelectionChanged: (selection) {
@@ -764,8 +771,7 @@ class _ConveyorGateConfigEditorState extends State<_ConveyorGateConfigEditor>
               divisions: 18,
               value: config.sliderLidLength,
               label: '${(config.sliderLidLength * 100).round()}%',
-              onChanged: (v) =>
-                  setState(() => config.sliderLidLength = v),
+              onChanged: (v) => setState(() => config.sliderLidLength = v),
             ),
             const SizedBox(height: 8),
             Text(
@@ -870,8 +876,7 @@ class _ConveyorGateConfigEditorState extends State<_ConveyorGateConfigEditor>
           const SizedBox(height: 16),
 
           // -- Force Controls --
-          Text('Force Controls',
-              style: Theme.of(context).textTheme.titleSmall),
+          Text('Force Controls', style: Theme.of(context).textTheme.titleSmall),
           const SizedBox(height: 8),
           KeyField(
             label: 'Force Open Key',
@@ -882,8 +887,7 @@ class _ConveyorGateConfigEditorState extends State<_ConveyorGateConfigEditor>
           KeyField(
             label: 'Force Open Feedback Key',
             initialValue: config.forceOpenFeedbackKey,
-            onChanged: (v) =>
-                setState(() => config.forceOpenFeedbackKey = v),
+            onChanged: (v) => setState(() => config.forceOpenFeedbackKey = v),
           ),
           const SizedBox(height: 8),
           KeyField(
@@ -895,8 +899,7 @@ class _ConveyorGateConfigEditorState extends State<_ConveyorGateConfigEditor>
           KeyField(
             label: 'Force Close Feedback Key',
             initialValue: config.forceCloseFeedbackKey,
-            onChanged: (v) =>
-                setState(() => config.forceCloseFeedbackKey = v),
+            onChanged: (v) => setState(() => config.forceCloseFeedbackKey = v),
           ),
           const SizedBox(height: 16),
 

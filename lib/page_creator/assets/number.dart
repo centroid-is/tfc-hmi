@@ -6,6 +6,7 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:tfc/widgets/panes/standard_dialog.dart';
 import 'package:flutter/services.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -235,8 +236,7 @@ class _NumberConfigEditorState extends State<_NumberConfigEditor> {
                         widget.config.writable = false; // enforce exclusivity
                         if (widget.config.graphConfig == null) {
                           widget.config.graphConfig =
-                              GraphAssetConfig.preview(
-                                  key: widget.config.key);
+                              GraphAssetConfig.preview(key: widget.config.key);
                         }
                       } else {
                         widget.config.graphConfig = null;
@@ -356,14 +356,26 @@ class NumberWidget extends ConsumerWidget {
     return displayWidget;
   }
 
+  /// The number's trend, in a free-floating window.
+  ///
+  /// This is the case the floating variant exists for: the operator wants the
+  /// chart AND the live number on the mimic behind it, so the window can be
+  /// dragged off the value it belongs to and left open.
   void _showGraphDialog(BuildContext context) {
     if (config.graphConfig == null) return;
-    showDialog(
+    final size = MediaQuery.of(context).size;
+    showFloatingDialog(
       context: context,
-      builder: (_) => _NumberGraphDialog(config: config),
+      id: 'number-graph:${identityHashCode(config)}',
+      title: config.graphConfig?.headerText ?? config.text ?? config.key,
+      icon: Icons.show_chart,
+      size: Size(size.width * 0.7, size.height * 0.7),
+      builder: (_) => _NumberGraphBody(config: config),
     );
   }
 
+  /// Writing a value stays MODAL: the operator is answering a question and
+  /// the answer must land before anything else happens.
   void _showWriteDialog(BuildContext context, WidgetRef ref) {
     if (config.key == "Number preview") return;
 
@@ -627,15 +639,15 @@ class _NumberWriteDialogState extends ConsumerState<_NumberWriteDialog> {
   }
 }
 
-class _NumberGraphDialog extends StatefulWidget {
+class _NumberGraphBody extends StatefulWidget {
   final NumberConfig config;
-  const _NumberGraphDialog({required this.config});
+  const _NumberGraphBody({required this.config});
 
   @override
-  State<_NumberGraphDialog> createState() => _NumberGraphDialogState();
+  State<_NumberGraphBody> createState() => _NumberGraphBodyState();
 }
 
-class _NumberGraphDialogState extends State<_NumberGraphDialog> {
+class _NumberGraphBodyState extends State<_NumberGraphBody> {
   Widget? _cachedGraph;
 
   Widget _buildGraph() {
@@ -650,36 +662,7 @@ class _NumberGraphDialogState extends State<_NumberGraphDialog> {
     return _cachedGraph!;
   }
 
+  // Title bar and close button come from the floating dialog now.
   @override
-  Widget build(BuildContext context) {
-    final size = MediaQuery.of(context).size;
-    return Dialog(
-      child: Container(
-        width: size.width * 0.8,
-        height: size.height * 0.8,
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(
-                  widget.config.graphConfig?.headerText ??
-                      widget.config.text ??
-                      widget.config.key,
-                  style: Theme.of(context).textTheme.titleLarge,
-                ),
-                IconButton(
-                  icon: const Icon(Icons.close),
-                  onPressed: () => Navigator.of(context).pop(),
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            Expanded(child: _buildGraph()),
-          ],
-        ),
-      ),
-    );
-  }
+  Widget build(BuildContext context) => _buildGraph();
 }

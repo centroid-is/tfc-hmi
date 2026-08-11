@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:tfc/page_creator/assets/common.dart';
 import 'package:tfc/page_creator/assets/sensor.dart';
 import 'package:tfc/page_creator/assets/sensor_painter.dart';
+import 'package:tfc/widgets/panes/side_pane.dart';
 
 void main() {
   // Wraps a widget in ProviderScope + MaterialApp so showDialog has a
@@ -28,7 +29,12 @@ void main() {
     // (kind, detection key, polarity, edge-delay keys, tag) but must
     // never mutate page configuration via runtime taps.
 
-    testWidgets('tap on sensor opens details dialog (NOT config dialog)',
+    // Plan 260811 moved this surface from an `AlertDialog` to the non-modal
+    // `SidePane`; the SENS-01 contract (read-only, never the editor) is
+    // unchanged, so these tests assert on `SidePane` and the same labels.
+    tearDown(closeSidePane);
+
+    testWidgets('tap on sensor opens details pane (NOT config dialog)',
         (tester) async {
       final config = SensorConfig(
         detectionKey: 'sensor/01/det',
@@ -41,17 +47,16 @@ void main() {
       await tester.tap(find.byType(Sensor));
       await tester.pumpAndSettle();
 
-      // Details dialog is an AlertDialog with read-only labels.
-      expect(find.byType(AlertDialog), findsOneWidget,
-          reason: 'Tap must open an AlertDialog (the details dialog).');
+      expect(find.byType(SidePane), findsOneWidget,
+          reason: 'Tap must open the docked details pane.');
       // Locked field labels — these identify the dialog without coupling
       // to private widget types.
       expect(find.text('Detection key'), findsOneWidget,
-          reason: 'Details dialog must show "Detection key" label.');
+          reason: 'Details pane must show "Detection key" label.');
       expect(find.text('Kind'), findsOneWidget,
-          reason: 'Details dialog must show "Kind" label.');
+          reason: 'Details pane must show "Kind" label.');
 
-      // Negative locks — no editor controls in the runtime details dialog.
+      // Negative locks — no editor controls in the runtime details pane.
       expect(find.byType(SegmentedButton<SensorKind>), findsNothing,
           reason: 'Runtime tap must NOT open the config editor '
               '(no SensorKind SegmentedButton).');
@@ -61,7 +66,7 @@ void main() {
           reason: 'Runtime tap must NOT render the editor KeyField label.');
     });
 
-    testWidgets('details dialog has Close button that dismisses it',
+    testWidgets('details pane has Close button that dismisses it',
         (tester) async {
       final config = SensorConfig(detectionKey: '');
       await tester.pumpWidget(wrap(
@@ -71,19 +76,19 @@ void main() {
       await tester.tap(find.byType(Sensor));
       await tester.pumpAndSettle();
 
-      expect(find.byType(AlertDialog), findsOneWidget);
+      expect(find.byType(SidePane), findsOneWidget);
       // The Close action — locked copy.
       final closeBtn = find.widgetWithText(TextButton, 'Close');
       expect(closeBtn, findsOneWidget,
-          reason: 'Details dialog must have a TextButton labelled "Close".');
+          reason: 'Details pane must have a TextButton labelled "Close".');
 
       await tester.tap(closeBtn);
       await tester.pumpAndSettle();
-      expect(find.byType(AlertDialog), findsNothing,
-          reason: 'Tapping Close must dismiss the details dialog.');
+      expect(find.byType(SidePane), findsNothing,
+          reason: 'Tapping Close must dismiss the details pane.');
     });
 
-    testWidgets('details dialog does NOT contain editable fields',
+    testWidgets('details pane does NOT contain editable fields',
         (tester) async {
       final config = SensorConfig(detectionKey: 'sensor/01/det');
       await tester.pumpWidget(wrap(
@@ -139,12 +144,12 @@ void main() {
       // is dispatched at the translated position because Transform.translate
       // sets transformHitTests=true by default (UI-SPEC §Interaction Contract).
       // ELEV-19 lock: hit-test geometry survives translation. Plan 04-05
-      // changes WHAT the gesture does (details dialog), not WHETHER it
+      // changes WHAT the gesture does (details pane), not WHETHER it
       // works through translation.
       await tester.tap(find.byType(Sensor));
       await tester.pumpAndSettle();
 
-      expect(find.byType(AlertDialog), findsOneWidget);
+      expect(find.byType(SidePane), findsOneWidget);
       expect(find.text('Detection key'), findsOneWidget);
     });
   });

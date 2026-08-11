@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:tfc/widgets/panes/standard_dialog.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -397,46 +398,23 @@ class _BpmWidgetState extends ConsumerState<BpmWidget>
     return displayWidget;
   }
 
+  String get _chartDialogId => 'chart:${identityHashCode(widget.config)}';
+
+  /// A trend belongs next to the thing it describes, not on top of it — so
+  /// the chart opens in a free-floating window the operator can drag off the
+  /// live value and leave running.
   void _showChartDialog(BuildContext context, int activeInterval) {
-    final navigator = Navigator.of(context);
-    showDialog(
-      context: navigator.context,
-      builder: (context) {
-        final size = MediaQuery.of(context).size;
-        return Dialog(
-          child: Container(
-            width: size.width * 0.8,
-            height: size.height * 0.8,
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(
-                      widget.config.graphHeader ??
-                          widget.config.text ??
-                          'BPM Counter',
-                      style: Theme.of(context).textTheme.titleLarge,
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.close),
-                      onPressed: () => Navigator.of(context).pop(),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 16),
-                Expanded(
-                  child: _BpmChartView(
-                    config: widget.config,
-                    initialInterval: activeInterval,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
+    final size = MediaQuery.of(context).size;
+    showFloatingDialog(
+      context: context,
+      id: _chartDialogId,
+      title: widget.config.graphHeader ?? widget.config.text ?? 'BPM Counter',
+      icon: Icons.speed,
+      size: Size(size.width * 0.7, size.height * 0.7),
+      builder: (context) => _BpmChartView(
+        config: widget.config,
+        initialInterval: activeInterval,
+      ),
     );
   }
 }
@@ -541,8 +519,8 @@ class _BpmChartViewState extends ConsumerState<_BpmChartView> {
     // Effective start: include older data if user panned into the past
     int startMs = viewStartMs;
     if (_rawTimestamps.isNotEmpty) {
-      final dataMs = _bucketStart(
-          _rawTimestamps.first.millisecondsSinceEpoch, intervalMs);
+      final dataMs =
+          _bucketStart(_rawTimestamps.first.millisecondsSinceEpoch, intervalMs);
       if (dataMs < startMs) startMs = dataMs;
     }
 
@@ -586,7 +564,8 @@ class _BpmChartViewState extends ConsumerState<_BpmChartView> {
       if (openMs > prevOpenMs) {
         var fill = prevOpenMs;
         while (fill < openMs) {
-          cache.add((fill, fill == prevOpenMs ? (_openCount[minutes] ?? 0) : 0));
+          cache
+              .add((fill, fill == prevOpenMs ? (_openCount[minutes] ?? 0) : 0));
           fill += intervalMs;
         }
         _openCount[minutes] = 0;
@@ -701,7 +680,8 @@ class _BpmChartViewState extends ConsumerState<_BpmChartView> {
     if (!_realTimeActive || _db == null || !mounted) return;
     try {
       final rows = await _db!.queryTimeseriesData(
-        widget.config.key, _dataEnd,
+        widget.config.key,
+        _dataEnd,
         orderBy: 'time ASC',
       );
       if (!mounted) return;
@@ -736,8 +716,10 @@ class _BpmChartViewState extends ConsumerState<_BpmChartView> {
       final fetchStart =
           newStart.subtract(_selectedInterval * widget.config.howMany);
       final rows = await _db!.queryTimeseriesData(
-        widget.config.key, _dataStart,
-        from: fetchStart, orderBy: 'time ASC',
+        widget.config.key,
+        _dataStart,
+        from: fetchStart,
+        orderBy: 'time ASC',
       );
       if (!mounted) return;
       if (rows.isNotEmpty) {
@@ -796,13 +778,22 @@ class _BpmChartViewState extends ConsumerState<_BpmChartView> {
     int lo = 0, hi = _rawTimestamps.length;
     while (lo < hi) {
       final mid = (lo + hi) >> 1;
-      if (_rawTimestamps[mid].isBefore(start)) { lo = mid + 1; } else { hi = mid; }
+      if (_rawTimestamps[mid].isBefore(start)) {
+        lo = mid + 1;
+      } else {
+        hi = mid;
+      }
     }
     final loIdx = lo;
-    lo = 0; hi = _rawTimestamps.length;
+    lo = 0;
+    hi = _rawTimestamps.length;
     while (lo < hi) {
       final mid = (lo + hi) >> 1;
-      if (_rawTimestamps[mid].isBefore(now)) { lo = mid + 1; } else { hi = mid; }
+      if (_rawTimestamps[mid].isBefore(now)) {
+        lo = mid + 1;
+      } else {
+        hi = mid;
+      }
     }
     return lo - loIdx;
   }
