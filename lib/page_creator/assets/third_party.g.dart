@@ -12,6 +12,7 @@ ThirdPartyChildEntry _$ThirdPartyChildEntryFromJson(
       id: json['id'] as String?,
       offsetX: (json['offsetX'] as num?)?.toDouble() ?? 0.5,
       offsetY: (json['offsetY'] as num?)?.toDouble() ?? 0.5,
+      keepUpright: json['keepUpright'] as bool? ?? false,
       child: _childFromJson(json['child'] as Map<String, dynamic>),
     );
 
@@ -21,6 +22,7 @@ Map<String, dynamic> _$ThirdPartyChildEntryToJson(
       'id': instance.id,
       'offsetX': instance.offsetX,
       'offsetY': instance.offsetY,
+      'keepUpright': instance.keepUpright,
       'child': _childToJson(instance.child),
     };
 
@@ -42,6 +44,8 @@ ThirdPartyEquipmentConfig _$ThirdPartyEquipmentConfigFromJson(
       tag: json['tag'] as String?,
       notes: json['notes'] as String?,
       strapHeads: (json['strapHeads'] as num?)?.toInt() ?? 3,
+      childTextAngle: (json['childTextAngle'] as num?)?.toDouble() ?? 0.0,
+      acceptWindowMinutes: (json['acceptWindowMinutes'] as num?)?.toInt() ?? 30,
       children: _childrenFromJson(json['children'] as List?),
     )
       ..variant = json['asset_name'] as String
@@ -73,6 +77,8 @@ Map<String, dynamic> _$ThirdPartyEquipmentConfigToJson(
       'notes': instance.notes,
       'strapHeads': instance.strapHeads,
       'children': _childrenToJson(instance.children),
+      'childTextAngle': instance.childTextAngle,
+      'acceptWindowMinutes': instance.acceptWindowMinutes,
       'text': instance.text,
     };
 

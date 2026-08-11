@@ -486,16 +486,36 @@ class SpeedBatcherPainter extends ThirdPartyMachinePainter {
   /// Unit rect of the step-up conveyor lane.
   static const Rect stepUpLane = Rect.fromLTRB(0.53, 0.46, 0.98, 0.84);
 
+  /// Unit frame of checkweigher 1 (the first one product reaches).
+  static const Rect checkweigher1Frame = Rect.fromLTRB(0.02, 0.21, 0.98, 0.38);
+
+  /// Unit frame of checkweigher 2 (the last station before discharge).
+  static const Rect checkweigher2Frame = Rect.fromLTRB(0.02, 0.03, 0.98, 0.17);
+
+  /// The weigh-belt bed inside a checkweigher frame.
+  ///
+  /// Narrower than the frame so the two readouts have somewhere to live: the
+  /// accept rate to the left of the belt, the weight to the right. This is the
+  /// rect a live Conveyor child fills.
+  static Rect deckOf(Rect frame) {
+    final inset = frame.height * 0.22;
+    return Rect.fromLTRB(0.27, frame.top + inset, 0.73, frame.bottom - inset);
+  }
+
+  /// Centre of the accept-rate readout, left of the weigh belt.
+  static Offset acceptAnchorOf(Rect frame) => Offset(0.145, frame.center.dy);
+
+  /// Centre of the weight readout, right of the weigh belt.
+  static Offset weightAnchorOf(Rect frame) => Offset(0.855, frame.center.dy);
+
   @override
   void paintMachine(Canvas canvas, UnitSpace u, Paint stroke, Paint detail) {
     // Station frame.
     canvas.drawRRect(u.rr(0.0, 0.0, 1.0, 1.0, 0.03), stroke);
 
-    // -- Checkweigher 2 (final station, at the discharge end) --
-    _checkweigher(canvas, u, stroke, detail, top: 0.03, bottom: 0.17);
-
-    // -- Checkweigher 1 --
-    _checkweigher(canvas, u, stroke, detail, top: 0.21, bottom: 0.38);
+    // -- Checkweighers, discharge end first --
+    _checkweigher(canvas, u, stroke, detail, checkweigher2Frame);
+    _checkweigher(canvas, u, stroke, detail, checkweigher1Frame);
 
     // The buffer between the step-up drop and checkweigher 1 is deliberately
     // NOT drawn. It is really there on the machine, but as a full-width band
@@ -556,30 +576,35 @@ class SpeedBatcherPainter extends ThirdPartyMachinePainter {
     }
   }
 
-  /// One checkweigher: frame, weigh deck with its belt rollers, load cell and
-  /// the reject pusher on the side.
+  /// One checkweigher: the frame, the weigh-belt bed, and the load cell.
+  ///
+  /// The belt itself is NOT drawn as machinery — only its bed. A live
+  /// bidirectional `ConveyorConfig` child is meant to sit in it and animate
+  /// off the real drive frequency, and a painted belt underneath a real one
+  /// just reads as a double image. Same treatment as the two conveyor lanes.
+  ///
+  /// The space either side of the bed is left clear for the two readouts the
+  /// scaffold drops in: accept rate on the left, weight on the right.
   void _checkweigher(
     Canvas canvas,
     UnitSpace u,
     Paint stroke,
-    Paint detail, {
-    required double top,
-    required double bottom,
-  }) {
-    canvas.drawRect(u.r(0.02, top, 0.98, bottom), stroke);
-
-    final deckTop = top + (bottom - top) * 0.22;
-    final deckBottom = bottom - (bottom - top) * 0.22;
-    canvas.drawRect(u.r(0.12, deckTop, 0.88, deckBottom), detail);
-    _lengthwiseTicks(canvas, u, detail,
-        ul: 0.12, ur: 0.88, ut: deckTop, ub: deckBottom, count: 3);
-
-    // Load cell under the deck centre.
+    Paint detail,
+    Rect frame,
+  ) {
     canvas.drawRect(
-        u.r(0.46, deckTop - 0.012, 0.54, deckTop + 0.012), detail);
+        u.r(frame.left, frame.top, frame.right, frame.bottom), stroke);
 
-    // Reject pusher alongside the deck.
-    canvas.drawRect(u.r(0.03, deckTop, 0.10, deckBottom), detail);
+    final deck = deckOf(frame);
+    canvas.drawRect(u.r(deck.left, deck.top, deck.right, deck.bottom), detail);
+
+    // Load cells at the belt's two ends, NOT under its centre. A live
+    // Conveyor draws its run-direction arrow in the middle of the belt, and a
+    // painted block there sits right under it.
+    for (final x in [deck.left + 0.05, deck.right - 0.05]) {
+      canvas.drawRect(
+          u.r(x - 0.02, deck.top - 0.012, x + 0.02, deck.top + 0.012), detail);
+    }
   }
 }
 

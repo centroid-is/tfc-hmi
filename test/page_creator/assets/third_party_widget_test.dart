@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tfc/page_creator/assets/conveyor.dart';
 import 'package:tfc/page_creator/assets/led.dart';
+import 'package:tfc/page_creator/assets/number.dart';
 import 'package:tfc/page_creator/assets/sensor.dart';
 import 'package:tfc/page_creator/assets/third_party.dart';
 import 'package:tfc/page_creator/assets/third_party_painter.dart';
@@ -292,6 +293,61 @@ void main() {
 
       expect(find.byType(Conveyor), findsOneWidget,
           reason: 'A live Conveyor must render inside the dotted box.');
+    });
+
+    testWidgets('an upright readout stays level when the machine is rotated',
+        (tester) async {
+      // The machine gets rotated to match the plant layout; the numbers must
+      // not follow it round.
+      const paintSize = Size(320, 600);
+      await tester.pumpWidget(wrap(ThirdPartyEquipmentBody(
+        painter: thirdPartyPainterFor(ThirdPartyEquipmentKind.speedBatcher,
+            color: Colors.blueGrey, strokeWidth: 2),
+        paintSize: paintSize,
+        ledColor: Colors.green,
+        parentAngleDegrees: 90,
+        children: [
+          ThirdPartyChildEntry(
+            keepUpright: true,
+            child: NumberConfig(key: ''),
+          ),
+        ],
+      )));
+      await tester.pump();
+
+      final rotations = tester
+          .widgetList<Transform>(find.byType(Transform))
+          .map((t) => t.transform)
+          .toList();
+      // Somewhere in the subtree the readout is turned back by -90 degrees.
+      expect(
+        rotations.any((m) => (m.getRotation().entry(0, 1) - 1.0).abs() < 1e-6),
+        isTrue,
+        reason: 'A parent at 90 degrees must counter-rotate its readouts.',
+      );
+    });
+
+    testWidgets('machinery children are NOT counter-rotated', (tester) async {
+      const paintSize = Size(320, 600);
+      await tester.pumpWidget(wrap(ThirdPartyEquipmentBody(
+        painter: thirdPartyPainterFor(ThirdPartyEquipmentKind.speedBatcher,
+            color: Colors.blueGrey, strokeWidth: 2),
+        paintSize: paintSize,
+        ledColor: Colors.green,
+        parentAngleDegrees: 90,
+        children: [
+          ThirdPartyChildEntry(child: SensorConfig.preview()),
+        ],
+      )));
+      await tester.pump();
+
+      // A sensor belongs to the machine and must turn with it, so the body
+      // adds no counter-rotation of its own.
+      final counterRotations = tester
+          .widgetList<Transform>(find.byType(Transform))
+          .where((t) =>
+              (t.transform.getRotation().entry(0, 1) - 1.0).abs() < 1e-6);
+      expect(counterRotations, isEmpty);
     });
 
     testWidgets('the child sits within the drawing, clear of the LED header',

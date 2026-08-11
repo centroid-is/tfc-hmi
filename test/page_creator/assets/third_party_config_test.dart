@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:tfc/page_creator/assets/common.dart';
 import 'package:tfc/page_creator/assets/conveyor.dart';
 import 'package:tfc/page_creator/assets/registry.dart';
+import 'package:tfc/page_creator/assets/number.dart';
 import 'package:tfc/page_creator/assets/sensor.dart';
 import 'package:tfc/page_creator/assets/third_party.dart';
 import 'package:tfc/page_creator/assets/third_party_painter.dart';
@@ -172,6 +173,187 @@ void main() {
       final json = ThirdPartyEquipmentConfig.preview().toJson();
       json.remove('children');
       expect(ThirdPartyEquipmentConfig.fromJson(json).children, isEmpty);
+    });
+  });
+
+  group('SpeedBatcher station scaffold', () {
+    List<ThirdPartyChildEntry> scaffold() =>
+        buildSpeedBatcherStationChildren();
+
+    test('builds a conveyor and two readouts per checkweigher', () {
+      final children = scaffold();
+      expect(children.whereType<ThirdPartyChildEntry>(), hasLength(6));
+      expect(children.where((e) => e.child is ConveyorConfig), hasLength(2));
+      expect(children.where((e) => e.child is NumberConfig), hasLength(4));
+    });
+
+    test('the weigh-belt conveyors are bidirectional', () {
+      // These belts get jogged both ways. A one-way belt would draw an arrow
+      // that contradicts what the operator can see happening.
+      for (final conveyor in scaffold()
+          .map((e) => e.child)
+          .whereType<ConveyorConfig>()) {
+        expect(conveyor.bidirectional, isTrue);
+        expect(conveyor.reverseDirection ?? false, isFalse,
+            reason: 'Arrow direction comes from the sign of the live '
+                'frequency, not a static flag.');
+      }
+    });
+
+    test('weight sits right of the belt, accept rate left', () {
+      final children = scaffold();
+      final belts = children.where((e) => e.child is ConveyorConfig).toList();
+
+      for (final belt in belts) {
+        final row = children
+            .where((e) =>
+                e.child is NumberConfig && (e.offsetY - belt.offsetY).abs() < 0.02)
+            .toList();
+        expect(row, hasLength(2),
+            reason: 'Each weigh belt gets exactly two readouts on its row.');
+
+        final left = row.reduce((a, b) => a.offsetX < b.offsetX ? a : b);
+        final right = row.reduce((a, b) => a.offsetX > b.offsetX ? a : b);
+
+        expect(left.offsetX, lessThan(belt.offsetX));
+        expect(right.offsetX, greaterThan(belt.offsetX));
+        expect((left.child as NumberConfig).units, startsWith('%'),
+            reason: 'Accept rate goes on the left.');
+        expect((right.child as NumberConfig).units, 'g',
+            reason: 'Weight goes on the right.');
+      }
+    });
+
+    test('every scaffolded child lands inside the machine area', () {
+      for (final entry in scaffold()) {
+        expect(entry.offsetX, inInclusiveRange(0.0, 1.0));
+        expect(entry.offsetY, inInclusiveRange(0.0, 1.0));
+      }
+    });
+
+    test('the belts land on the painted weigh-belt beds', () {
+      // The scaffold and the painter must agree on where the belt goes, or a
+      // live conveyor floats off its bed.
+      final belts = scaffold()
+          .where((e) => e.child is ConveyorConfig)
+          .map((e) => Offset(e.offsetX, e.offsetY))
+          .toList();
+      final decks = [
+        SpeedBatcherPainter.deckOf(SpeedBatcherPainter.checkweigher1Frame),
+        SpeedBatcherPainter.deckOf(SpeedBatcherPainter.checkweigher2Frame),
+      ].map((r) => r.center).toList();
+
+      for (final deck in decks) {
+        expect(belts.any((b) => (b - deck).distance < 1e-9), isTrue,
+            reason: 'A belt must sit at $deck.');
+      }
+    });
+
+    test('readouts carry no graph, and no key to start with', () {
+      for (final number in scaffold()
+          .map((e) => e.child)
+          .whereType<NumberConfig>()) {
+        expect(number.key, isEmpty,
+            reason: 'The operator points each readout at its own tag.');
+        expect(number.graphConfig, isNull,
+            reason: 'A tap-through to a trend from a nested child is a '
+                'surprise.');
+      }
+    });
+
+    test('readouts are marked upright, the belts are not', () {
+      for (final entry in scaffold()) {
+        if (entry.child is NumberConfig) {
+          expect(entry.keepUpright, isTrue,
+              reason: 'A weight you have to tilt your head to read is '
+                  'useless.');
+        } else {
+          expect(entry.keepUpright, isFalse,
+              reason: 'Machinery must turn with the machine it belongs to.');
+        }
+      }
+    });
+
+    test('the accept readout carries its averaging window in the units', () {
+      // A bare "97.3 %" beside a running belt reads as "this pack" when it is
+      // really the last half hour.
+      final accept = buildSpeedBatcherStationChildren(acceptWindowMinutes: 30)
+          .map((e) => e.child)
+          .whereType<NumberConfig>()
+          .firstWhere((n) => n.units!.contains('%'));
+      expect(accept.units, '% / 30 min');
+
+      final custom = buildSpeedBatcherStationChildren(acceptWindowMinutes: 15)
+          .map((e) => e.child)
+          .whereType<NumberConfig>()
+          .firstWhere((n) => n.units!.contains('%'));
+      expect(custom.units, '% / 15 min');
+    });
+
+    test('load cells sit clear of the belt centre', () {
+      // The live Conveyor draws its run-direction arrow in the middle of the
+      // belt; a painted block there sits right under it.
+      final deck =
+          SpeedBatcherPainter.deckOf(SpeedBatcherPainter.checkweigher1Frame);
+      for (final x in [deck.left + 0.05, deck.right - 0.05]) {
+        expect((x - deck.center.dx).abs(), greaterThan(0.1),
+            reason: 'Load cell marks must not land under the arrow.');
+      }
+    });
+
+    test('keepUpright and the text angle round-trip', () {
+      final config = ThirdPartyEquipmentConfig(
+        kind: ThirdPartyEquipmentKind.speedBatcher,
+        childTextAngle: 15,
+        acceptWindowMinutes: 45,
+        children: [
+          ThirdPartyChildEntry(
+              keepUpright: true, child: NumberConfig(key: 'w')),
+        ],
+      );
+      final restored = ThirdPartyEquipmentConfig.fromJson(
+          jsonDecode(jsonEncode(config.toJson())) as Map<String, dynamic>);
+
+      expect(restored.childTextAngle, 15);
+      expect(restored.acceptWindowMinutes, 45);
+      expect(restored.children.single.keepUpright, isTrue);
+    });
+
+    test('legacy JSON without the new fields still loads', () {
+      // Encode for real before mutating: a child's `toJson()` can leave
+      // nested objects (Coordinates, RelativeSize) as live instances rather
+      // than maps, and only jsonEncode flattens them. This mirrors the page
+      // save path, which always goes through JSON.
+      final json = jsonDecode(jsonEncode(ThirdPartyEquipmentConfig(
+        children: [ThirdPartyChildEntry(child: NumberConfig(key: 'w'))],
+      ).toJson())) as Map<String, dynamic>;
+
+      json.remove('childTextAngle');
+      json.remove('acceptWindowMinutes');
+      (json['children'] as List).first.remove('keepUpright');
+
+      final restored = ThirdPartyEquipmentConfig.fromJson(json);
+      expect(restored.childTextAngle, 0);
+      expect(restored.acceptWindowMinutes, 30);
+      expect(restored.children.single.keepUpright, isFalse);
+    });
+
+    test('the scaffold survives a JSON round-trip intact', () {
+      final config = ThirdPartyEquipmentConfig(
+        kind: ThirdPartyEquipmentKind.speedBatcher,
+        children: buildSpeedBatcherStationChildren(),
+      );
+      final restored = ThirdPartyEquipmentConfig.fromJson(
+          jsonDecode(jsonEncode(config.toJson())) as Map<String, dynamic>);
+
+      expect(restored.children, hasLength(6));
+      expect(restored.children.where((e) => e.child is ConveyorConfig),
+          hasLength(2));
+      for (final conveyor in restored.children
+          .map((e) => e.child)
+          .whereType<ConveyorConfig>()) {
+        expect(conveyor.bidirectional, isTrue);
+      }
     });
   });
 

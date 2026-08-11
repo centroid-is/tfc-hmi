@@ -13,6 +13,7 @@ import '../../widgets/panes/side_pane.dart';
 import 'common.dart';
 import 'conveyor.dart' show ConveyorConfig;
 import 'led.dart' show LEDPainter, LEDType;
+import 'number.dart' show NumberConfig;
 import 'registry.dart';
 import 'sensor.dart' show SensorConfig;
 import 'third_party_painter.dart';
@@ -180,6 +181,15 @@ class ThirdPartyChildEntry {
   /// Centre Y within the machine area: 0.0 = top edge, 1.0 = bottom edge.
   double offsetY;
 
+  /// Keep this child level on screen no matter how the parent is rotated.
+  ///
+  /// Readouts want this — a weight you have to tilt your head to read is
+  /// useless, and the machine gets rotated to match the plant layout, not to
+  /// suit the numbers. Machinery (conveyors, sensors) wants the opposite: it
+  /// must turn with the machine it belongs to.
+  @JsonKey(defaultValue: false)
+  bool keepUpright;
+
   /// Polymorphic child asset. Its own `size` is resolved against the machine
   /// area rather than the screen, so it scales with the parent.
   @JsonKey(fromJson: _childFromJson, toJson: _childToJson)
@@ -189,6 +199,7 @@ class ThirdPartyChildEntry {
     String? id,
     this.offsetX = 0.5,
     this.offsetY = 0.5,
+    this.keepUpright = false,
     required this.child,
   }) : id = id ??
             '${DateTime.now().microsecondsSinceEpoch}-'
@@ -263,9 +274,27 @@ class ThirdPartyEquipmentConfig extends BaseAsset {
   int strapHeads;
 
   /// Live assets placed inside the dotted box (conveyors driven by real drive
-  /// frequencies, sensors, and so on).
+  /// frequencies, sensors, readouts, and so on).
   @JsonKey(fromJson: _childrenFromJson, toJson: _childrenToJson)
   List<ThirdPartyChildEntry> children;
+
+  /// Extra rotation, in degrees, for every child marked
+  /// [ThirdPartyChildEntry.keepUpright].
+  ///
+  /// One angle for the lot, because the readouts inside a machine are always
+  /// read from the same place. Zero — the default — means level on screen
+  /// whatever `coordinates.angle` the machine is placed at: the parent's
+  /// rotation is cancelled out first, then this is applied on top. Use it to
+  /// tilt the whole set when the operator reads the panel from an angle.
+  double childTextAngle;
+
+  /// Averaging window, in minutes, behind the accept-rate readout.
+  ///
+  /// The accept rate is a rolling figure, not an instant one, and a bare
+  /// percentage invites being read as "right now". The scaffold folds this
+  /// number into the readout's units — `% / 30 min` — so the window travels
+  /// with the value instead of living in someone's head.
+  int acceptWindowMinutes;
 
   /// `Asset.text` is what `AssetStack` (in `lib/pages/page_view.dart`) reads to
   /// paint the label OUTSIDE the asset's rotated subtree. Aliasing `text` onto
@@ -293,6 +322,8 @@ class ThirdPartyEquipmentConfig extends BaseAsset {
     this.tag,
     this.notes,
     this.strapHeads = 3,
+    this.childTextAngle = 0.0,
+    this.acceptWindowMinutes = 30,
     List<ThirdPartyChildEntry>? children,
   })  : children =
             children != null ? List<ThirdPartyChildEntry>.of(children) : [],
@@ -371,6 +402,104 @@ ThirdPartyMachinePainter thirdPartyPainterFor(
         heads: strapHeads.clamp(1, StrappingLinePainter.maxHeads),
       );
   }
+}
+
+// ---------------------------------------------------------------------------
+// Station scaffolding
+// ---------------------------------------------------------------------------
+
+/// A conveyor for use inside the box.
+///
+/// Bidirectional by default: on this station the belts are jogged both ways,
+/// and a one-way belt would draw an arrow that contradicts what the operator
+/// can see happening. `reverseDirection` stays off — the painter picks the
+/// arrow direction from the sign of the live frequency.
+ConveyorConfig thirdPartyConveyor({RelativeSize? size}) {
+  final conveyor = ConveyorConfig(bidirectional: true);
+  if (size != null) conveyor.size = size;
+  return conveyor;
+}
+
+/// A readout for use inside the box, sized to sit beside a weigh belt.
+NumberConfig thirdPartyNumber({
+  required String units,
+  required int decimalPlaces,
+  RelativeSize? size,
+}) {
+  final number = NumberConfig(
+    key: '',
+    units: units,
+    decimalPlaces: decimalPlaces,
+    // No graph: these sit inside another asset's box, and a tap-through to a
+    // trend from a nested child is a surprise. The operator gets trends from
+    // the number's own page placement.
+    graphConfig: null,
+  );
+  if (size != null) number.size = size;
+  return number;
+}
+
+/// Builds the standard set of live assets for the SpeedBatcher station.
+///
+/// One bidirectional conveyor on each checkweigher's weigh belt, with its
+/// weight readout to the right and its accept rate to the left — the layout
+/// Jón asked for. Keys are left empty on purpose: the scaffold places and
+/// sizes everything, then the operator points each child at its tag through
+/// the per-child Configure button.
+///
+/// The two conveyor LANES are not scaffolded. They run up the page, so a
+/// conveyor there needs a 90-degree angle and a thickness that depends on the
+/// asset's pixel aspect — guessing that would place them wrong more often
+/// than right. Use "Conveyor" and the position sliders for those.
+///
+/// [acceptWindowMinutes] is folded into the accept readout's units so the
+/// averaging window is visible on the mimic rather than assumed.
+List<ThirdPartyChildEntry> buildSpeedBatcherStationChildren({
+  int acceptWindowMinutes = 30,
+}) {
+  final entries = <ThirdPartyChildEntry>[];
+
+  void addCheckweigher(String name, Rect frame) {
+    final deck = SpeedBatcherPainter.deckOf(frame);
+    final accept = SpeedBatcherPainter.acceptAnchorOf(frame);
+    final weight = SpeedBatcherPainter.weightAnchorOf(frame);
+
+    entries.add(ThirdPartyChildEntry(
+      offsetX: deck.center.dx,
+      offsetY: deck.center.dy,
+      child: thirdPartyConveyor(
+        size: RelativeSize(width: deck.width, height: deck.height),
+      ),
+    ));
+    entries.add(ThirdPartyChildEntry(
+      offsetX: accept.dx,
+      offsetY: accept.dy,
+      keepUpright: true,
+      child: thirdPartyNumber(
+        // The window rides along with the value: a bare "97.3 %" beside a
+        // running belt reads as "this pack", when it is really the last half
+        // hour.
+        units: '% / $acceptWindowMinutes min',
+        decimalPlaces: 1,
+        size: RelativeSize(width: 0.20, height: frame.height * 0.55),
+      ),
+    ));
+    entries.add(ThirdPartyChildEntry(
+      offsetX: weight.dx,
+      offsetY: weight.dy,
+      keepUpright: true,
+      child: thirdPartyNumber(
+        units: 'g',
+        decimalPlaces: 0,
+        size: RelativeSize(width: 0.20, height: frame.height * 0.55),
+      ),
+    ));
+  }
+
+  // Product order: checkweigher 1 first, then 2.
+  addCheckweigher('CW1', SpeedBatcherPainter.checkweigher1Frame);
+  addCheckweigher('CW2', SpeedBatcherPainter.checkweigher2Frame);
+  return entries;
 }
 
 // ---------------------------------------------------------------------------
@@ -635,6 +764,8 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
               paintSize: paintSize,
               ledColor: ledColor,
               children: config.children,
+              parentAngleDegrees: config.coordinates.angle ?? 0.0,
+              childTextAngle: config.childTextAngle,
             );
           },
         ),
@@ -669,6 +800,8 @@ class ThirdPartyEquipmentBody extends StatelessWidget {
     required this.paintSize,
     required this.ledColor,
     this.children = const [],
+    this.parentAngleDegrees = 0.0,
+    this.childTextAngle = 0.0,
   });
 
   final ThirdPartyMachinePainter painter;
@@ -680,28 +813,49 @@ class ThirdPartyEquipmentBody extends StatelessWidget {
   /// Live assets composited over the drawing, inside the machine area.
   final List<ThirdPartyChildEntry> children;
 
+  /// Rotation already applied to this body by the parent's `LayoutRotatedBox`.
+  /// Upright children are turned back by this much.
+  final double parentAngleDegrees;
+
+  /// Extra rotation for upright children, on top of the counter-rotation.
+  final double childTextAngle;
+
   /// Positions one child by its centre within the machine area.
   ///
   /// The child's own `RelativeSize` is resolved against the MACHINE AREA, not
   /// the screen — same convention as `Elevator._buildPositionedChild` — so a
   /// conveyor sized to half a lane stays half a lane at any asset size.
+  ///
+  /// A child marked [ThirdPartyChildEntry.keepUpright] is counter-rotated out
+  /// of the parent's rotation and then turned by [childTextAngle], so
+  /// readouts stay level however the machine is placed. The rotation is
+  /// visual only — the layout box does not turn — which is what keeps a
+  /// readout inside the slot the scaffold gave it.
   Widget _positionedChild(
       BuildContext context, ThirdPartyChildEntry entry, Rect area) {
     final intrinsic = entry.child.size.toSize(area.size);
     final w = intrinsic.width <= 0 ? area.shortestSide / 4 : intrinsic.width;
     final h = intrinsic.height <= 0 ? area.shortestSide / 4 : intrinsic.height;
+
+    // KeyedSubtree on the stable entry id: without it, reordering or editing
+    // the list re-creates the child's State and re-subscribes its stream.
+    Widget built = KeyedSubtree(
+      key: ValueKey<String>(entry.id),
+      child: entry.child.build(context),
+    );
+    if (entry.keepUpright) {
+      built = Transform.rotate(
+        angle: (childTextAngle - parentAngleDegrees) * pi / 180,
+        child: built,
+      );
+    }
+
     return Positioned(
       left: area.left + entry.offsetX * area.width - w / 2,
       top: area.top + entry.offsetY * area.height - h / 2,
       width: w,
       height: h,
-      // KeyedSubtree on the stable entry id: without it, reordering or
-      // editing the list re-creates the child's State and re-subscribes its
-      // stream.
-      child: KeyedSubtree(
-        key: ValueKey<String>(entry.id),
-        child: entry.child.build(context),
-      ),
+      child: built,
     );
   }
 
@@ -1058,9 +1212,23 @@ class _ThirdPartyEquipmentConfigEditorState
             const SizedBox(height: 8),
             Wrap(
               spacing: 8,
+              runSpacing: 8,
               children: [
-                FilledButton.icon(
-                  onPressed: () => _addChild(ConveyorConfig.preview()),
+                if (config.kind == ThirdPartyEquipmentKind.speedBatcher)
+                  FilledButton.icon(
+                    onPressed: _addStationScaffold,
+                    icon: const Icon(Icons.auto_awesome_motion, size: 18),
+                    label: const Text('Build checkweighers'),
+                  ),
+                FilledButton.tonalIcon(
+                  onPressed: () => _addChild(
+                      thirdPartyNumber(units: '', decimalPlaces: 1),
+                      keepUpright: true),
+                  icon: const Icon(Icons.add, size: 18),
+                  label: const Text('Readout'),
+                ),
+                FilledButton.tonalIcon(
+                  onPressed: () => _addChild(thirdPartyConveyor()),
                   icon: const Icon(Icons.add, size: 18),
                   label: const Text('Conveyor'),
                 ),
@@ -1071,6 +1239,64 @@ class _ThirdPartyEquipmentConfigEditorState
                 ),
               ],
             ),
+            const SizedBox(height: 8),
+
+            // One angle for every readout in the box. Zero keeps them level
+            // on screen whatever angle the machine is placed at.
+            Row(
+              children: [
+                const Expanded(child: Text('Readout angle')),
+                SizedBox(
+                  width: 90,
+                  child: TextFormField(
+                    initialValue: config.childTextAngle.toStringAsFixed(0),
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(
+                      suffixText: '°',
+                      isDense: true,
+                      helperText: '0 = level',
+                    ),
+                    onChanged: (v) {
+                      final parsed = double.tryParse(v);
+                      if (parsed != null) {
+                        setState(() => config.childTextAngle = parsed);
+                      }
+                    },
+                  ),
+                ),
+              ],
+            ),
+            if (config.kind == ThirdPartyEquipmentKind.speedBatcher) ...[
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  const Expanded(child: Text('Accept rate window')),
+                  SizedBox(
+                    width: 90,
+                    child: TextFormField(
+                      initialValue: '${config.acceptWindowMinutes}',
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(
+                        suffixText: 'min',
+                        isDense: true,
+                      ),
+                      onChanged: (v) {
+                        final parsed = int.tryParse(v);
+                        if (parsed != null && parsed > 0) {
+                          setState(() => config.acceptWindowMinutes = parsed);
+                        }
+                      },
+                    ),
+                  ),
+                ],
+              ),
+              Text(
+                'Shown in the readout units, so nobody reads a rolling '
+                'average as the last pack. Change it before building the '
+                'checkweighers.',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ],
             const SizedBox(height: 8),
             if (config.children.isEmpty)
               Text('Nothing placed inside',
@@ -1090,9 +1316,22 @@ class _ThirdPartyEquipmentConfigEditorState
     );
   }
 
-  void _addChild(BaseAsset child) {
+  void _addChild(BaseAsset child, {bool keepUpright = false}) {
     setState(() {
-      widget.config.children.add(ThirdPartyChildEntry(child: child));
+      widget.config.children.add(
+          ThirdPartyChildEntry(child: child, keepUpright: keepUpright));
+    });
+  }
+
+  /// Drops in a bidirectional conveyor plus weight and accept-rate readouts
+  /// for each checkweigher, positioned on the drawing. Additive — pressing it
+  /// twice stacks a second set rather than silently replacing what is there,
+  /// so nothing an operator configured gets thrown away by a stray tap.
+  void _addStationScaffold() {
+    setState(() {
+      widget.config.children.addAll(buildSpeedBatcherStationChildren(
+        acceptWindowMinutes: widget.config.acceptWindowMinutes,
+      ));
     });
   }
 }
@@ -1162,6 +1401,18 @@ class _ChildRow extends StatelessWidget {
               value: entry.offsetY,
               onChanged: (v) {
                 entry.offsetY = v;
+                onChanged();
+              },
+            ),
+            // Readouts stay level; machinery turns with the machine.
+            CheckboxListTile(
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              controlAffinity: ListTileControlAffinity.leading,
+              title: const Text('Keep level when the machine is rotated'),
+              value: entry.keepUpright,
+              onChanged: (v) {
+                entry.keepUpright = v ?? false;
                 onChanged();
               },
             ),
