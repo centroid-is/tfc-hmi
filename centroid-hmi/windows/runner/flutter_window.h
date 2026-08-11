@@ -43,6 +43,24 @@ class FlutterWindow : public Win32Window {
   // translates window messages and engine callbacks into watchdog events, and
   // carries out whatever the watchdog asks for.
 
+  // The events the watchdog understands, so every one of them reaches it
+  // through the single guarded path in Dispatch.
+  enum class WatchdogEvent {
+    kStarted,
+    kTick,
+    kFramePresented,
+    kDeviceLossHint,
+  };
+
+  // The only place the watchdog is driven from. Swallows exceptions and
+  // disables the watchdog rather than letting anything escape: this runs
+  // inside a noexcept window procedure and inside the engine's frame
+  // callback, where an escaping exception is std::terminate.
+  void Dispatch(WatchdogEvent event);
+
+  // Stop watching and cancel the tick timer.
+  void DisableWatchdog();
+
   void ApplyAction(const tfc::GpuWatchdog::Action& action);
 
   // Asks the engine for a frame and re-arms the next-frame callback.

@@ -7,6 +7,7 @@
 #include <iostream>
 #include <optional>
 #include <string>
+#include <typeinfo>
 
 #include "flutter/generated_plugin_registrant.h"
 
@@ -48,8 +49,12 @@ tfc::GpuWatchdog::Config WatchdogConfigFromEnvironment() {
 }
 
 bool WatchdogEnabledFromEnvironment() {
+  // Opt-in. The watchdog restarts the Flutter engine, and therefore the Dart
+  // app, on a judgement call about whether the renderer is alive. Until that
+  // judgement has been seen to be right on real hardware losing a real device,
+  // machines that have not asked for it should not get it.
   return tfc::ParseWatchdogEnabled(
-      CStrOrNull(GetEnvVar("CENTROID_GPU_WATCHDOG")), true);
+      CStrOrNull(GetEnvVar("CENTROID_GPU_WATCHDOG")), false);
 }
 
 void LogWatchdog(const std::string& message) {
@@ -130,7 +135,7 @@ bool FlutterWindow::OnCreate() {
                 "); relying on the periodic probe only");
   }
 
-  ApplyAction(watchdog_.OnStarted());
+  Dispatch(WatchdogEvent::kStarted);
   return true;
 }
 
@@ -148,6 +153,47 @@ void FlutterWindow::OnDestroy() {
   DestroyController();
 
   Win32Window::OnDestroy();
+}
+
+void FlutterWindow::Dispatch(WatchdogEvent event) {
+  if (!watchdog_enabled_ || watchdog_.has_given_up()) {
+    return;
+  }
+  try {
+    switch (event) {
+      case WatchdogEvent::kStarted:
+        ApplyAction(watchdog_.OnStarted());
+        break;
+      case WatchdogEvent::kTick:
+        ApplyAction(watchdog_.OnTick());
+        break;
+      case WatchdogEvent::kFramePresented:
+        ApplyAction(watchdog_.OnFramePresented());
+        break;
+      case WatchdogEvent::kDeviceLossHint:
+        ApplyAction(watchdog_.OnDeviceLossHint());
+        break;
+    }
+  } catch (const std::exception& e) {
+    // MessageHandler is noexcept and the frame callback runs inside the
+    // engine's task runner: letting anything escape either one calls
+    // std::terminate, which is an abort with no explanation attached. Failing
+    // safe costs the recovery feature and leaves the app behaving exactly as
+    // it did before the watchdog existed.
+    LogWatchdog(std::string("disabling watchdog — ") + typeid(e).name() + ": " +
+                e.what());
+    DisableWatchdog();
+  } catch (...) {
+    LogWatchdog("disabling watchdog — unknown exception");
+    DisableWatchdog();
+  }
+}
+
+void FlutterWindow::DisableWatchdog() {
+  watchdog_.Disable();
+  if (watchdog_hwnd_ != nullptr) {
+    ::KillTimer(watchdog_hwnd_, kWatchdogTimerId);
+  }
 }
 
 void FlutterWindow::ApplyAction(const tfc::GpuWatchdog::Action& action) {
@@ -191,8 +237,8 @@ void FlutterWindow::StartProbe() {
 
 void FlutterWindow::OnFramePresented() {
   int attempts_before = watchdog_.recovery_attempts();
-  ApplyAction(watchdog_.OnFramePresented());
-  if (attempts_before > 0) {
+  Dispatch(WatchdogEvent::kFramePresented);
+  if (attempts_before > 0 && !watchdog_.has_given_up()) {
     LogWatchdog("renderer healthy again after " +
                 std::to_string(attempts_before) + " recovery attempt(s)");
   }
@@ -210,7 +256,7 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
   // Handled before Flutter sees it — the timer is ours by id, and nothing in
   // the engine should claim it.
   if (message == WM_TIMER && wparam == kWatchdogTimerId) {
-    ApplyAction(watchdog_.OnTick());
+    Dispatch(WatchdogEvent::kTick);
     return 0;
   }
 
@@ -239,7 +285,7 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
       if (wparam == PBT_APMRESUMEAUTOMATIC || wparam == PBT_APMRESUMESUSPEND) {
         if (watchdog_enabled_ && flutter_controller_) {
           LogWatchdog("probing after power resume");
-          ApplyAction(watchdog_.OnDeviceLossHint());
+          Dispatch(WatchdogEvent::kDeviceLossHint);
         }
       }
       break;
@@ -247,7 +293,7 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
     case WM_DISPLAYCHANGE:
       if (watchdog_enabled_ && flutter_controller_) {
         LogWatchdog("probing after display change");
-        ApplyAction(watchdog_.OnDeviceLossHint());
+        Dispatch(WatchdogEvent::kDeviceLossHint);
       }
       break;
 
@@ -262,7 +308,7 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
         case WTS_SESSION_UNLOCK:
           if (watchdog_enabled_ && flutter_controller_) {
             LogWatchdog("probing after session change");
-            ApplyAction(watchdog_.OnDeviceLossHint());
+            Dispatch(WatchdogEvent::kDeviceLossHint);
           }
           break;
         default:
