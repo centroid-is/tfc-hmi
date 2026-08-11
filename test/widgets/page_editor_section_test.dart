@@ -36,6 +36,7 @@ import 'package:tfc/providers/alarm.dart';
 import 'package:tfc/providers/database.dart';
 import 'package:tfc/providers/page_manager.dart';
 import 'package:tfc/route_registry.dart';
+import 'package:tfc/widgets/panes/standard_dialog.dart';
 
 /// Minimal in-memory [PreferencesApi] so the editor can load and save.
 class _FakePreferences implements PreferencesApi {
@@ -201,7 +202,7 @@ void main() {
 
       await tester.tap(find.widgetWithText(TextButton, 'Section'));
       await tester.pumpAndSettle();
-      expect(find.text('Add Section'), findsOneWidget);
+      expect(find.text('Add section'), findsOneWidget);
       await _fillCreateDialog(tester, 'Diagnostics');
 
       // The section is labelled as one...
@@ -226,7 +227,7 @@ void main() {
       );
 
       await expectLater(
-        find.byType(AlertDialog),
+        find.byType(StandardDialogFrame),
         matchesGoldenFile('goldens/page_editor_empty_section.png'),
       );
     });
@@ -258,19 +259,25 @@ void main() {
       expect(_treeNode('IOs'), findsOneWidget);
 
       await expectLater(
-        find.byType(AlertDialog),
+        find.byType(StandardDialogFrame),
         matchesGoldenFile('goldens/page_editor_page_under_section.png'),
       );
     });
 
     testWidgets('a plain page is not treated as a section', (tester) async {
+      // The dialog sizes itself off the screen; the default 800x600 test
+      // surface is smaller than any panel this ships on.
+      tester.view.physicalSize = const Size(1400, 1000);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
       await tester.pumpWidget(_buildEditor(_managerWithHome()));
       await tester.pumpAndSettle();
       await _openPagesDialog(tester);
 
       await tester.tap(find.widgetWithText(TextButton, 'Page'));
       await tester.pumpAndSettle();
-      expect(find.text('Add Page'), findsOneWidget);
+      expect(find.text('Add page'), findsOneWidget);
       await _fillCreateDialog(tester, 'Overview');
 
       expect(

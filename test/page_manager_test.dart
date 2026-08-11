@@ -499,4 +499,249 @@ void main() {
       expect(mgr.pages.containsKey('/section-a/fish-roe'), isTrue);
     });
   });
+
+  group('movePage', () {
+    AssetPage section(String label, String path,
+        {List<MenuItem> children = const [], int? priority}) {
+      return AssetPage(
+        menuItem: MenuItem(
+          label: label,
+          path: path,
+          icon: Icons.folder,
+          children: children,
+          isSection: true,
+        ),
+        assets: [],
+        mirroringDisabled: false,
+        navigationPriority: priority,
+      );
+    }
+
+    /// Paths of the direct children of [path], in render order.
+    List<String> childrenOf(Map<String, AssetPage> pages, String path) =>
+        pages[path]!.menuItem.children.map((c) => c.path!).toList();
+
+    Map<String, AssetPage> twoSections() => {
+          '/a': section('A', '/a', priority: 0, children: [
+            _menuRef('One', '/a/one'),
+            _menuRef('Two', '/a/two'),
+          ]),
+          '/a/one': _page('One', '/a/one', priority: 0),
+          '/a/two': _page('Two', '/a/two', priority: 1),
+          '/b': section('B', '/b', priority: 1),
+        };
+
+    test('moves a page from one section to another', () {
+      final moved = PageManager.movePage(twoSections(),
+          pagePath: '/a/one', newParentPath: '/b');
+
+      expect(childrenOf(moved, '/a'), ['/a/two']);
+      expect(childrenOf(moved, '/b'), ['/a/one']);
+      // The page keeps its address, so links to it stay valid.
+      expect(moved['/a/one']!.menuItem.path, '/a/one');
+      expect(moved.length, 4);
+    });
+
+    test('the moved page lands last among its new siblings', () {
+      var pages = PageManager.movePage(twoSections(),
+          pagePath: '/a/one', newParentPath: '/b');
+      pages = PageManager.movePage(pages,
+          pagePath: '/a/two', newParentPath: '/b');
+
+      expect(childrenOf(pages, '/b'), ['/a/one', '/a/two']);
+      expect(pages['/a/one']!.navigationPriority, 0);
+      expect(pages['/a/two']!.navigationPriority, 1);
+    });
+
+    test('siblings left behind are renumbered without gaps', () {
+      final pages = {
+        '/a': section('A', '/a', priority: 0, children: [
+          _menuRef('One', '/a/one'),
+          _menuRef('Two', '/a/two'),
+          _menuRef('Three', '/a/three'),
+        ]),
+        '/a/one': _page('One', '/a/one', priority: 0),
+        '/a/two': _page('Two', '/a/two', priority: 1),
+        '/a/three': _page('Three', '/a/three', priority: 2),
+        '/b': section('B', '/b', priority: 1),
+      };
+
+      final moved =
+          PageManager.movePage(pages, pagePath: '/a/one', newParentPath: '/b');
+
+      expect(moved['/a/two']!.navigationPriority, 0);
+      expect(moved['/a/three']!.navigationPriority, 1);
+    });
+
+    test('moving to the top level makes the page a root, listed last', () {
+      final moved = PageManager.movePage(twoSections(),
+          pagePath: '/a/one', newParentPath: null);
+
+      final mgr = _manager(pages: moved);
+      expect(mgr.getRootMenuItems().map((r) => r.label).toList(),
+          ['A', 'B', 'One']);
+      expect(childrenOf(moved, '/a'), ['/a/two']);
+    });
+
+    test('a section moves with its whole subtree', () {
+      final pages = {
+        '/a': section('A', '/a', priority: 0, children: [
+          _menuRef('Sub', '/a/sub'),
+        ]),
+        '/a/sub': section('Sub', '/a/sub', children: [
+          _menuRef('Leaf', '/a/sub/leaf'),
+        ]),
+        '/a/sub/leaf': _page('Leaf', '/a/sub/leaf'),
+        '/b': section('B', '/b', priority: 1),
+      };
+
+      final moved =
+          PageManager.movePage(pages, pagePath: '/a/sub', newParentPath: '/b');
+
+      expect(childrenOf(moved, '/a'), isEmpty);
+      expect(childrenOf(moved, '/b'), ['/a/sub']);
+      expect(childrenOf(moved, '/a/sub'), ['/a/sub/leaf']);
+
+      final roots = _manager(pages: moved).getRootMenuItems();
+      expect(roots.map((r) => r.label).toList(), ['A', 'B']);
+      expect(roots[1].children.single.children.single.label, 'Leaf');
+    });
+
+    test('refuses to move a section into its own subtree', () {
+      final pages = {
+        '/a': section('A', '/a', children: [_menuRef('Sub', '/a/sub')]),
+        '/a/sub': section('Sub', '/a/sub'),
+      };
+
+      expect(
+        PageManager.movePage(pages, pagePath: '/a', newParentPath: '/a/sub'),
+        same(pages),
+      );
+      expect(
+        PageManager.movePage(pages, pagePath: '/a', newParentPath: '/a'),
+        same(pages),
+      );
+    });
+
+    test('refuses a destination that is a page, not a section', () {
+      final pages = twoSections();
+      expect(
+        PageManager.movePage(pages, pagePath: '/a/two', newParentPath: '/a/one'),
+        same(pages),
+      );
+    });
+
+    test('refuses an unknown page or destination', () {
+      final pages = twoSections();
+      expect(
+        PageManager.movePage(pages, pagePath: '/nope', newParentPath: '/b'),
+        same(pages),
+      );
+      expect(
+        PageManager.movePage(pages, pagePath: '/a/one', newParentPath: '/nope'),
+        same(pages),
+      );
+    });
+
+    test('leaves the input map and its pages untouched', () {
+      final pages = twoSections();
+      PageManager.movePage(pages, pagePath: '/a/one', newParentPath: '/b');
+
+      expect(childrenOf(pages, '/a'), ['/a/one', '/a/two']);
+      expect(childrenOf(pages, '/b'), isEmpty);
+      expect(pages['/a/one']!.navigationPriority, 0);
+    });
+
+    test('keeps a section self-reference when the section itself moves', () {
+      // The "IOs under Diagnostics" shape: the section lists itself as a child
+      // so it has a landing page of its own.
+      final pages = {
+        '/a': section('A', '/a', children: [_menuRef('Diag', '/diag')]),
+        '/diag': section('Diagnostics', '/diag', children: [
+          _menuRef('IOs', '/diag'),
+        ]),
+        '/b': section('B', '/b'),
+      };
+
+      final moved =
+          PageManager.movePage(pages, pagePath: '/diag', newParentPath: '/b');
+
+      expect(childrenOf(moved, '/a'), isEmpty);
+      expect(childrenOf(moved, '/b'), ['/diag']);
+      expect(childrenOf(moved, '/diag'), ['/diag'],
+          reason: 'the self-reference is the page itself, not a parent link');
+    });
+
+    test('a page listed under two sections ends up in exactly one', () {
+      final pages = {
+        '/a': section('A', '/a', children: [_menuRef('One', '/one')]),
+        '/b': section('B', '/b', children: [_menuRef('One', '/one')]),
+        '/c': section('C', '/c'),
+        '/one': _page('One', '/one'),
+      };
+
+      final moved =
+          PageManager.movePage(pages, pagePath: '/one', newParentPath: '/c');
+
+      expect(childrenOf(moved, '/a'), isEmpty);
+      expect(childrenOf(moved, '/b'), isEmpty);
+      expect(childrenOf(moved, '/c'), ['/one']);
+    });
+
+    test('survives a round trip through JSON', () {
+      final moved = PageManager.movePage(twoSections(),
+          pagePath: '/a/one', newParentPath: '/b');
+
+      final reloaded = _manager(pages: PageManager.copyPages(moved));
+      final roots = reloaded.getRootMenuItems();
+      expect(roots.map((r) => r.label).toList(), ['A', 'B']);
+      expect(roots[0].children.single.label, 'Two');
+      expect(roots[1].children.single.label, 'One');
+    });
+  });
+
+  group('isDescendantOf', () {
+    final pages = {
+      '/a': _page('A', '/a', children: [_menuRef('Sub', '/a/sub')]),
+      '/a/sub': _page('Sub', '/a/sub', children: [
+        _menuRef('Leaf', '/a/sub/leaf'),
+      ]),
+      '/a/sub/leaf': _page('Leaf', '/a/sub/leaf'),
+      '/b': _page('B', '/b'),
+    };
+
+    test('finds direct and indirect descendants', () {
+      expect(
+          PageManager.isDescendantOf(pages,
+              ancestor: '/a', candidate: '/a/sub'),
+          isTrue);
+      expect(
+          PageManager.isDescendantOf(pages,
+              ancestor: '/a', candidate: '/a/sub/leaf'),
+          isTrue);
+    });
+
+    test('is false for unrelated pages and for the ancestor itself', () {
+      expect(
+          PageManager.isDescendantOf(pages, ancestor: '/a', candidate: '/b'),
+          isFalse);
+      expect(
+          PageManager.isDescendantOf(pages, ancestor: '/a', candidate: '/a'),
+          isFalse);
+      expect(
+          PageManager.isDescendantOf(pages,
+              ancestor: '/a/sub', candidate: '/a'),
+          isFalse);
+    });
+
+    test('terminates on a cycle in the stored children', () {
+      final cyclic = {
+        '/x': _page('X', '/x', children: [_menuRef('Y', '/y')]),
+        '/y': _page('Y', '/y', children: [_menuRef('X', '/x')]),
+      };
+      expect(
+          PageManager.isDescendantOf(cyclic, ancestor: '/x', candidate: '/z'),
+          isFalse);
+    });
+  });
 }
