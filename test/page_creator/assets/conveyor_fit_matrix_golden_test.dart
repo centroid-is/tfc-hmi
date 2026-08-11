@@ -118,12 +118,13 @@ void main() {
     // Reference geometry from a CAD drawing: a belt that runs out along the
     // top, flares outward, U-turns, and returns along the bottom. It enters
     // heading right and leaves heading left, so the sweeps must total 180.
-    // The drawing is symmetric about the horizontal axis, which pins the
-    // flare/loop split: -30 + 120 + 120 - 30 = 180.
+    // The drawing is symmetric about the horizontal axis, which pins both the
+    // flare/loop split (-30 + 120 + 120 - 30 = 180) and the positions, which
+    // mirror about 0.5 so the entry and exit runs come out equal.
     List<ConveyorTurnEntry> uTurn({double loopRadius = 1.2}) => [
           ConveyorTurnEntry(position: 0.15, angle: -30, radius: 1.0),
           ConveyorTurnEntry(position: 0.35, angle: 120, radius: loopRadius),
-          ConveyorTurnEntry(position: 0.62, angle: 120, radius: loopRadius),
+          ConveyorTurnEntry(position: 0.65, angle: 120, radius: loopRadius),
           ConveyorTurnEntry(position: 0.85, angle: -30, radius: 1.0),
         ];
 
