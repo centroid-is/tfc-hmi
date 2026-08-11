@@ -1,0 +1,105 @@
+name: Main Prerelease
+
+# Rebuilds the desktop apps on every push to main and republishes them under a
+# single rolling prerelease tag, so the README can link to stable URLs that
+# always serve the tip of main. Unlike Actions artifacts these need no GitHub
+# login to download and never expire.
+#
+# The tag is `main-latest`, not `main` — a tag sharing a name with a branch
+# makes every `git <cmd> main` ambiguous, and tag.yml would treat it as a
+# version tag (it explicitly ignores this one).
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  packages: write
+
+concurrency:
+  group: main-prerelease
+  cancel-in-progress: true
+
+jobs:
+  windows-build:
+    uses: ./.github/workflows/windows.yml
+    secrets: inherit
+
+  macos-build:
+    uses: ./.github/workflows/macos.yml
+    secrets: inherit
+
+  linux-build:
+    uses: ./.github/workflows/linux.yml
+    secrets: inherit
+
+  publish:
+    needs: [windows-build, macos-build, linux-build]
+    runs-on: ubuntu-latest
+    steps:
+      # Downloaded by name — the windows job also publishes an MSIX artifact,
+      # which the rolling prerelease deliberately does not ship.
+      - name: Download Windows portable build
+        uses: actions/download-artifact@v4
+        with:
+          name: centroid-hmi-windows-portable
+          path: centroidx-windows-x64/
+
+      - name: Download macOS DMG
+        uses: actions/download-artifact@v4
+        with:
+          name: centroidx_darwin_arm64.dmg
+          path: release/
+
+      - name: Download Linux bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: centroidx_linux_x64.tar.gz
+          path: release/
+
+      - name: Assemble release assets
+        run: |
+          set -euo pipefail
+
+          # Zipped with a top-level directory so it does not explode into the
+          # user's Downloads folder. Contents are the portable Release folder:
+          # centroidx.exe plus the Flutter and VC++ runtime DLLs and data/.
+          zip -qr release/centroidx_windows_x64.zip centroidx-windows-x64
+
+          cd release
+          sha256sum centroidx_windows_x64.zip centroidx_darwin_arm64.dmg \
+                    centroidx_linux_x64.tar.gz > SHA256SUMS.txt
+          ls -lh
+          cat SHA256SUMS.txt
+
+      # Recreated rather than edited: gh cannot move an existing tag, and a
+      # stale tag would leave the release pointing at the wrong commit.
+      - name: Republish rolling prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release delete main-latest --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag || true
+          gh release create main-latest \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --prerelease \
+            --title "Latest main build" \
+            --notes "Automatically built from the tip of \`main\` (\`${GITHUB_SHA:0:7}\`).
+
+          These are development builds, not a release — they have had no release testing and are replaced on every merge to \`main\`. For production use the [latest release](https://github.com/${GITHUB_REPOSITORY}/releases/latest).
+
+          | Platform | Asset |
+          |----------|-------|
+          | macOS (Apple Silicon) | \`centroidx_darwin_arm64.dmg\` — signed and notarized |
+          | Windows (x64) | \`centroidx_windows_x64.zip\` — portable exe + libs, no installer |
+          | Linux (x64) | \`centroidx_linux_x64.tar.gz\` — GTK3 desktop bundle |
+
+          Checksums in \`SHA256SUMS.txt\`." \
+            release/centroidx_windows_x64.zip \
+            release/centroidx_darwin_arm64.dmg \
+            release/centroidx_linux_x64.tar.gz \
+            release/SHA256SUMS.txt

@@ -5,6 +5,8 @@ on:
   push:
     tags:
       - '*'
+      # Rolling tag republished by main-prerelease.yml — not a version tag.
+      - '!main-latest'
 
 permissions:
   contents: write

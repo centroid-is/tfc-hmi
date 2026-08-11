@@ -1,0 +1,61 @@
+name: Linux Build
+
+on:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      ref:
+        description: 'Git ref to checkout (commit SHA, branch, tag)'
+        type: string
+        default: ''
+  # Unfiltered: every PR must prove it does not break the desktop build that
+  # main-prerelease.yml publishes.
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      # GTK for the desktop shell, libsecret/jsoncpp for
+      # flutter_secure_storage_linux, liblzma for the Flutter toolchain.
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            clang cmake ninja-build pkg-config \
+            libgtk-3-dev liblzma-dev libsecret-1-dev libjsoncpp-dev
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.44.9'
+
+      - name: Get Flutter packages
+        working-directory: centroid-hmi
+        run: flutter pub get
+
+      - name: Build Linux
+        working-directory: centroid-hmi
+        run: flutter build linux --release
+
+      # The bundle is already relocatable — the runner has an $ORIGIN/lib
+      # rpath — so a plain tarball of the directory runs anywhere with GTK3.
+      - name: Package portable bundle
+        working-directory: centroid-hmi/build/linux/x64/release
+        run: |
+          mv bundle centroidx-linux-x64
+          tar -czf "$GITHUB_WORKSPACE/centroidx_linux_x64.tar.gz" centroidx-linux-x64
+          ls -lh "$GITHUB_WORKSPACE/centroidx_linux_x64.tar.gz"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: centroidx_linux_x64.tar.gz
+          path: centroidx_linux_x64.tar.gz

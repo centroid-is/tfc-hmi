@@ -8,17 +8,17 @@ on:
         description: 'Git ref to checkout (commit SHA, branch, tag)'
         type: string
         default: ''
+  # No push trigger for main — main-prerelease.yml calls this workflow so the
+  # build happens once and its artifacts get published.
   push:
     branches:
-      - main
       - 'feat/centroidx-manager'
     paths:
       - 'centroid-hmi/**'
       - '.github/workflows/macos.yml'
+  # Unfiltered: every PR must prove it does not break the desktop build that
+  # main-prerelease.yml publishes.
   pull_request:
-    paths:
-      - 'centroid-hmi/**'
-      - '.github/workflows/macos.yml'
 
 permissions:
   contents: write
