@@ -1427,7 +1427,9 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     final isSelected = _currentPage == pageName;
     final displayName = page.menuItem.label;
     final hasChildren = page.menuItem.children.isNotEmpty;
-    final isSection = hasChildren;
+    // An empty section is still a section — otherwise a freshly created one
+    // would render as a page and could never receive children.
+    final isSection = page.menuItem.isNavigationSection;
 
     return Padding(
       key: ValueKey(pageName),
@@ -1689,12 +1691,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
       final moved = children.removeAt(oldIndex);
       children.insert(newIndex, moved);
       _temporaryPages[parentName] = AssetPage(
-        menuItem: MenuItem(
-          label: parent.menuItem.label,
-          path: parent.menuItem.path,
-          icon: parent.menuItem.icon,
-          children: children,
-        ),
+        menuItem: parent.menuItem.copyWith(children: children),
         assets: parent.assets,
         mirroringDisabled: parent.mirroringDisabled,
         navigationPriority: parent.navigationPriority,
@@ -1749,20 +1746,16 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                 final parentPage = _temporaryPages[mapKey]!;
                 final updatedChildren = parentPage.menuItem.children.map((c) {
                   if (c.path == childItem.path) {
-                    return MenuItem(
+                    return c.copyWith(
                       label: updatedPage.menuItem.label,
                       path: updatedPage.menuItem.path,
                       icon: updatedPage.menuItem.icon,
-                      children: c.children,
                     );
                   }
                   return c;
                 }).toList();
                 _temporaryPages[mapKey] = AssetPage(
-                  menuItem: MenuItem(
-                    label: parentPage.menuItem.label,
-                    path: parentPage.menuItem.path,
-                    icon: parentPage.menuItem.icon,
+                  menuItem: parentPage.menuItem.copyWith(
                     children: updatedChildren,
                   ),
                   assets: parentPage.assets,
@@ -1882,12 +1875,8 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                         List<MenuItem>.from(parent.menuItem.children)
                           ..add(pageWithPriority.menuItem);
                     _temporaryPages[parentName] = AssetPage(
-                      menuItem: MenuItem(
-                        label: parent.menuItem.label,
-                        path: parent.menuItem.path,
-                        icon: parent.menuItem.icon,
-                        children: updatedChildren,
-                      ),
+                      menuItem:
+                          parent.menuItem.copyWith(children: updatedChildren),
                       assets: parent.assets,
                       mirroringDisabled: parent.mirroringDisabled,
                       navigationPriority: parent.navigationPriority,
@@ -1913,7 +1902,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     StateSetter dialogSetState,
     BuildContext dialogContext,
   ) {
-    final isSection = page.menuItem.children.isNotEmpty;
+    final isSection = page.menuItem.isNavigationSection;
     showDialog(
       context: dialogContext,
       builder: (ctx) => AlertDialog(
@@ -1965,12 +1954,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
           page.menuItem.children, oldPath, newPath, newMenuItem);
       if (updated != null) {
         updates[entry.key] = AssetPage(
-          menuItem: MenuItem(
-            label: page.menuItem.label,
-            path: page.menuItem.path,
-            icon: page.menuItem.icon,
-            children: updated,
-          ),
+          menuItem: page.menuItem.copyWith(children: updated),
           assets: page.assets,
           mirroringDisabled: page.mirroringDisabled,
           navigationPriority: page.navigationPriority,
@@ -1987,23 +1971,18 @@ class _PageEditorState extends ConsumerState<PageEditor> {
       MenuItem updated = child;
       if (child.path == oldPath) {
         changed = true;
-        updated = MenuItem(
+        updated = child.copyWith(
           label: newMenuItem.label,
           path: newPath,
           icon: newMenuItem.icon,
-          children: child.children,
+          isSection: newMenuItem.isSection,
         );
       }
       final subUpdated = _updatePathInChildren(
           updated.children, oldPath, newPath, newMenuItem);
       if (subUpdated != null) {
         changed = true;
-        updated = MenuItem(
-          label: updated.label,
-          path: updated.path,
-          icon: updated.icon,
-          children: subUpdated,
-        );
+        updated = updated.copyWith(children: subUpdated);
       }
       return updated;
     }).toList();
@@ -2055,12 +2034,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
       final updated = _removeFromChildren(page.menuItem.children, path);
       if (updated != null) {
         updates[entry.key] = AssetPage(
-          menuItem: MenuItem(
-            label: page.menuItem.label,
-            path: page.menuItem.path,
-            icon: page.menuItem.icon,
-            children: updated,
-          ),
+          menuItem: page.menuItem.copyWith(children: updated),
           assets: page.assets,
           mirroringDisabled: page.mirroringDisabled,
           navigationPriority: page.navigationPriority,
@@ -2081,12 +2055,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
       final subUpdated = _removeFromChildren(child.children, path);
       if (subUpdated != null) {
         changed = true;
-        result.add(MenuItem(
-          label: child.label,
-          path: child.path,
-          icon: child.icon,
-          children: subUpdated,
-        ));
+        result.add(child.copyWith(children: subUpdated));
       } else {
         result.add(child);
       }

@@ -14,6 +14,7 @@ MenuItem _$MenuItemFromJson(Map<String, dynamic> json) => MenuItem(
               .toList() ??
           const [],
       path: json['path'] as String?,
+      isSection: json['is_section'] as bool? ?? false,
     );
 
 Map<String, dynamic> _$MenuItemToJson(MenuItem instance) => <String, dynamic>{
@@ -21,4 +22,5 @@ Map<String, dynamic> _$MenuItemToJson(MenuItem instance) => <String, dynamic>{
       'path': instance.path,
       'icon': const IconDataConverter().toJson(instance.icon),
       'children': instance.children,
+      'is_section': instance.isSection,
     };

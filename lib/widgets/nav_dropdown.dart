@@ -77,8 +77,8 @@ class NavDropdownState extends State<NavDropdown> {
   }
 
   /// Flattens the menu tree into indented PopupMenuItems.
-  /// Sections (items with children) appear as disabled headers;
-  /// leaf pages are clickable.
+  /// Sections (flagged as such, or legacy items with children) appear as
+  /// disabled headers; leaf pages are clickable.
   ///
   /// Navigation is performed in [PopupMenuItem.onTap] (which fires before
   /// Flutter's internal `Navigator.pop(null)`), so the pop value is always
@@ -88,7 +88,7 @@ class NavDropdownState extends State<NavDropdown> {
     final items = <PopupMenuEntry<void>>[];
     for (final child in root.children) {
       final indent = EdgeInsets.only(left: depth * 16.0);
-      if (child.children.isNotEmpty) {
+      if (child.isNavigationSection) {
         // Section header (not clickable)
         items.add(PopupMenuItem<void>(
           enabled: false,
