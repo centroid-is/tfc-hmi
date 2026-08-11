@@ -16,10 +16,10 @@ const _key = Key('third_party_golden');
 /// Fitted into a 720 x 820 box rather than fixed-width, because the kinds run
 /// from a 5.4:1 Multivac strip to a PORTRAIT SpeedBatcher — pinning the width
 /// would run the SpeedBatcher off the bottom of the golden.
-Size _canvasFor(ThirdPartyEquipmentKind kind, {int strapHeads = 3}) {
+Size _canvasFor(ThirdPartyEquipmentKind kind, {int strapMachines = 3}) {
   const maxW = 720.0;
   const maxH = 820.0;
-  final aspect = kind.aspectRatio(strapHeads: strapHeads);
+  final aspect = kind.aspectRatio(strapMachines: strapMachines);
   double w = maxW;
   double h = maxW / aspect;
   if (h > maxH) {
@@ -39,9 +39,9 @@ Widget buildBody({
   Color? ledColor = Colors.green,
   Color outlineColor = const Color(0xFF37474F),
   double strokeWidth = 2.5,
-  int strapHeads = 3,
+  int strapMachines = 3,
 }) {
-  final size = _canvasFor(kind, strapHeads: strapHeads);
+  final size = _canvasFor(kind, strapMachines: strapMachines);
   return MaterialApp(
     home: Scaffold(
       backgroundColor: Colors.white,
@@ -53,7 +53,7 @@ Widget buildBody({
               kind,
               color: outlineColor,
               strokeWidth: strokeWidth,
-              strapHeads: strapHeads,
+              strapMachines: strapMachines,
             ),
             paintSize: size,
             ledColor: ledColor,
@@ -233,18 +233,18 @@ void main() {
     // the number of arches and the machine's proportions, so each variant
     // gets its own golden. (-3 is covered by the per-kind loop above.)
     for (final heads in const [1, 2]) {
-      testWidgets('strappingLine — $heads head(s)', (tester) async {
+      testWidgets('strappingLine — $heads strapper(s)', (tester) async {
         tester.view.physicalSize = const Size(1400, 1400);
         tester.view.devicePixelRatio = 1.0;
         addTearDown(tester.view.reset);
 
         await tester.pumpWidget(buildBody(
           kind: ThirdPartyEquipmentKind.strappingLine,
-          strapHeads: heads,
+          strapMachines: heads,
         ));
         await expectLater(
           find.byKey(_key),
-          matchesGoldenFile('goldens/third_party_strappingLine_${heads}head.png'),
+          matchesGoldenFile('goldens/third_party_strappingLine_${heads}x.png'),
         );
       });
     }

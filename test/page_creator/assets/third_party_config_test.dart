@@ -361,20 +361,20 @@ void main() {
     test('head count round-trips', () {
       final json = ThirdPartyEquipmentConfig(
         kind: ThirdPartyEquipmentKind.strappingLine,
-        strapHeads: 2,
+        strapMachines: 2,
       ).toJson();
-      expect(ThirdPartyEquipmentConfig.fromJson(json).strapHeads, 2);
+      expect(ThirdPartyEquipmentConfig.fromJson(json).strapMachines, 2);
     });
 
     test('the painter draws one arch per head', () {
       for (final heads in const [1, 2, 3]) {
-        expect(StrappingLinePainter.archCentresFor(heads), hasLength(heads));
+        expect(StrappingLinePainter.machineCentresFor(heads), hasLength(heads));
       }
     });
 
     test('arch centres stay inside the machine and in order', () {
       for (final heads in const [1, 2, 3]) {
-        final centres = StrappingLinePainter.archCentresFor(heads);
+        final centres = StrappingLinePainter.machineCentresFor(heads);
         expect(centres.first, greaterThan(0.05));
         expect(centres.last, lessThan(0.95));
         for (int i = 1; i < centres.length; i++) {
@@ -383,33 +383,33 @@ void main() {
       }
     });
 
-    test('label and footprint follow the head count into a real model number',
-        () {
+    test('label and footprint follow the strapper count', () {
       const kind = ThirdPartyEquipmentKind.strappingLine;
-      expect(kind.labelFor(strapHeads: 1), contains('SL-15-1'));
-      expect(kind.labelFor(strapHeads: 3), contains('SL-15-3'));
-      // Only the SL-15-3 length is published; the others must say so.
-      expect(kind.footprint(strapHeads: 3), isNot(contains('estimated')));
-      expect(kind.footprint(strapHeads: 2), contains('estimated'));
+      expect(kind.labelFor(strapMachines: 1), contains('1 x Strapex'));
+      expect(kind.labelFor(strapMachines: 3), contains('3 x Strapex'));
+      // Only the 3-strapper length is published; the others must say so.
+      expect(kind.footprint(strapMachines: 3), isNot(contains('estimated')));
+      expect(kind.footprint(strapMachines: 2), contains('estimated'));
+      expect(kind.footprint(strapMachines: 2), contains('2 strappers'));
     });
 
-    test('fewer heads means a shorter machine', () {
+    test('fewer strappers means a shorter line', () {
       const kind = ThirdPartyEquipmentKind.strappingLine;
-      expect(kind.aspectRatio(strapHeads: 1),
-          lessThan(kind.aspectRatio(strapHeads: 2)));
-      expect(kind.aspectRatio(strapHeads: 2),
-          lessThan(kind.aspectRatio(strapHeads: 3)));
+      expect(kind.aspectRatio(strapMachines: 1),
+          lessThan(kind.aspectRatio(strapMachines: 2)));
+      expect(kind.aspectRatio(strapMachines: 2),
+          lessThan(kind.aspectRatio(strapMachines: 3)));
     });
 
     test('an out-of-range head count is clamped, not asserted on', () {
       // Persisted pages are not trusted input.
       expect(
           () => thirdPartyPainterFor(ThirdPartyEquipmentKind.strappingLine,
-              color: Colors.black, strokeWidth: 2, strapHeads: 99),
+              color: Colors.black, strokeWidth: 2, strapMachines: 99),
           returnsNormally);
       expect(
           () => thirdPartyPainterFor(ThirdPartyEquipmentKind.strappingLine,
-              color: Colors.black, strokeWidth: 2, strapHeads: 0),
+              color: Colors.black, strokeWidth: 2, strapMachines: 0),
           returnsNormally);
     });
   });
@@ -529,7 +529,10 @@ void main() {
       for (final kind in ThirdPartyEquipmentKind.values) {
         expect(kind.label, isNotEmpty);
         expect(kind.footprint(), isNotEmpty);
-        expect(kind.aspectRatio(), greaterThan(0.5));
+        // Two kinds are portrait (SpeedBatcher, box erector) and the Multivac
+        // is 5.4:1, so the band has to be wide — it is only guarding against
+        // a degenerate or absurd value.
+        expect(kind.aspectRatio(), greaterThan(0.2));
         expect(kind.aspectRatio(), lessThan(10.0));
       }
     });

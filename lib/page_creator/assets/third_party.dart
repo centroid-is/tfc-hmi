@@ -58,31 +58,32 @@ extension ThirdPartyEquipmentKindInfo on ThirdPartyEquipmentKind {
 
   /// Label including the model variant, where the head count picks a real
   /// model number. Used for the side-pane title.
-  String labelFor({int strapHeads = 3}) => this == ThirdPartyEquipmentKind
-          .strappingLine
-      ? 'Afak SL-15-${strapHeads.clamp(1, 3)} / Strapex strapping line'
-      : label;
+  String labelFor({int strapMachines = 3}) =>
+      this == ThirdPartyEquipmentKind.strappingLine
+          ? 'Strapping line — ${strapMachines.clamp(1, 3)} x Strapex'
+          : label;
 
   /// Real machine footprint, shown in the side pane. See the source notes at
   /// the top of `third_party_painter.dart` for where each figure comes from.
   ///
-  /// [strapHeads] only affects the strapping line.
-  String footprint({int strapHeads = 3}) {
+  /// [strapMachines] only affects the strapping line.
+  String footprint({int strapMachines = 3}) {
     switch (this) {
       case ThirdPartyEquipmentKind.multivac:
         return '~5437 x 1002 mm (R 245)';
       case ThirdPartyEquipmentKind.speedBatcher:
         return 'station layout — per site sketch';
       case ThirdPartyEquipmentKind.boxErector:
-        return '~2395 x 2083 mm (generic RSC erector)';
+        return 'tall and narrow — per site CAD';
       case ThirdPartyEquipmentKind.strappingLine:
-        // Only the SL-15-3 length is published. The shorter models are the
-        // same machine with arches removed, so their length is estimated at
-        // one arch pitch each and labelled as such rather than quoted as
+        // Only the 3-strapper line length is published. A shorter line is the
+        // same line with strappers removed, so its length is estimated at one
+        // strapper pitch each and labelled as such rather than quoted as
         // fact.
-        if (strapHeads >= 3) return '~2665 x 1815 mm (SL-15-3)';
-        final estimated = 2665 - (3 - strapHeads) * 640;
-        return '~$estimated x 1815 mm (SL-15-$strapHeads, length estimated)';
+        if (strapMachines >= 3) return '~2665 x 1815 mm (3 strappers)';
+        final estimated = 2665 - (3 - strapMachines) * 640;
+        return '~$estimated x 1815 mm '
+            '($strapMachines strappers, length estimated)';
     }
   }
 
@@ -96,7 +97,7 @@ extension ThirdPartyEquipmentKindInfo on ThirdPartyEquipmentKind {
   /// Sizing an asset well away from its kind's ratio squashes the layout — the
   /// Multivac especially, at 5.4:1. Used for the editor preview and for the
   /// "match proportions" button.
-  double aspectRatio({int strapHeads = 3}) {
+  double aspectRatio({int strapMachines = 3}) {
     switch (this) {
       case ThirdPartyEquipmentKind.multivac:
         return 5437 / 1002;
@@ -105,14 +106,16 @@ extension ThirdPartyEquipmentKindInfo on ThirdPartyEquipmentKind {
         // up the page.
         return 0.53;
       case ThirdPartyEquipmentKind.boxErector:
-        return 2395 / 2083;
+        // Portrait, and markedly so — the site CAD shows a long narrow
+        // machine with the blank magazine running most of its length.
+        return 0.35;
       case ThirdPartyEquipmentKind.strappingLine:
-        return (2665 - (3 - strapHeads.clamp(1, 3)) * 640) / 1815;
+        return (2665 - (3 - strapMachines.clamp(1, 3)) * 640) / 1815;
     }
   }
 
   /// Whether the head-count control applies to this kind.
-  bool get hasStrapHeads => this == ThirdPartyEquipmentKind.strappingLine;
+  bool get hasStrapMachines => this == ThirdPartyEquipmentKind.strappingLine;
 }
 
 // ---------------------------------------------------------------------------
@@ -271,7 +274,7 @@ class ThirdPartyEquipmentConfig extends BaseAsset {
 
   /// Strapex arches on the strapping line — the `-N` in SL-15-N. Ignored by
   /// the other kinds.
-  int strapHeads;
+  int strapMachines;
 
   /// Live assets placed inside the dotted box (conveyors driven by real drive
   /// frequencies, sensors, readouts, and so on).
@@ -321,7 +324,7 @@ class ThirdPartyEquipmentConfig extends BaseAsset {
     this.strokeWidth = 2.0,
     this.tag,
     this.notes,
-    this.strapHeads = 3,
+    this.strapMachines = 3,
     this.childTextAngle = 0.0,
     this.acceptWindowMinutes = 30,
     List<ThirdPartyChildEntry>? children,
@@ -386,7 +389,7 @@ ThirdPartyMachinePainter thirdPartyPainterFor(
   ThirdPartyEquipmentKind kind, {
   required Color color,
   required double strokeWidth,
-  int strapHeads = 3,
+  int strapMachines = 3,
 }) {
   switch (kind) {
     case ThirdPartyEquipmentKind.multivac:
@@ -399,7 +402,7 @@ ThirdPartyMachinePainter thirdPartyPainterFor(
       return StrappingLinePainter(
         color: color,
         strokeWidth: strokeWidth,
-        heads: strapHeads.clamp(1, StrappingLinePainter.maxHeads),
+        machines: strapMachines.clamp(1, StrappingLinePainter.maxMachines),
       );
   }
 }
@@ -667,9 +670,9 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
     return SidePane(
       title: config.tag?.isNotEmpty == true
           ? config.tag!
-          : config.kind.labelFor(strapHeads: config.strapHeads),
+          : config.kind.labelFor(strapMachines: config.strapMachines),
       subtitle: config.tag?.isNotEmpty == true
-          ? config.kind.labelFor(strapHeads: config.strapHeads)
+          ? config.kind.labelFor(strapMachines: config.strapMachines)
           : 'Third-party equipment',
       icon: Icons.precision_manufacturing,
       status: status,
@@ -682,16 +685,16 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
               children: [
                 PaneDetailRow(
                   label: 'Machine',
-                  value: config.kind.labelFor(strapHeads: config.strapHeads),
+                  value: config.kind.labelFor(strapMachines: config.strapMachines),
                 ),
                 PaneDetailRow(
                   label: 'Footprint',
-                  value: config.kind.footprint(strapHeads: config.strapHeads),
+                  value: config.kind.footprint(strapMachines: config.strapMachines),
                 ),
-                if (config.kind.hasStrapHeads)
+                if (config.kind.hasStrapMachines)
                   PaneDetailRow(
-                    label: 'Strapping heads',
-                    value: '${config.strapHeads}',
+                    label: 'Strappers on the line',
+                    value: '${config.strapMachines}',
                   ),
                 if (config.kind == ThirdPartyEquipmentKind.speedBatcher)
                   // Spelled out here because the mimic only has room for the
@@ -777,7 +780,7 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
                 config.kind,
                 color: config.outlineColor,
                 strokeWidth: config.strokeWidth,
-                strapHeads: config.strapHeads,
+                strapMachines: config.strapMachines,
               ),
               paintSize: paintSize,
               ledColor: ledColor,
@@ -1036,7 +1039,7 @@ class _ThirdPartyEquipmentConfigEditorState
     // to a portrait SpeedBatcher, and clamping either axis would squash one
     // of them — which is exactly the distortion this preview exists to avoid.
     final previewSize = _fitPreview(
-      config.kind.aspectRatio(strapHeads: config.strapHeads),
+      config.kind.aspectRatio(strapMachines: config.strapMachines),
     );
 
     return Container(
@@ -1052,7 +1055,7 @@ class _ThirdPartyEquipmentConfigEditorState
                   config.kind,
                   color: config.outlineColor,
                   strokeWidth: config.strokeWidth,
-                  strapHeads: config.strapHeads,
+                  strapMachines: config.strapMachines,
                 ),
                 paintSize: previewSize,
                 // Preview always shows the running colour — the operator is
@@ -1081,9 +1084,9 @@ class _ThirdPartyEquipmentConfigEditorState
             ),
             const SizedBox(height: 16),
 
-            // -- Strapping heads (SL-15-1 / -2 / -3) --
-            if (config.kind.hasStrapHeads) ...[
-              Text('Strapping heads',
+            // -- Strappers standing on the line --
+            if (config.kind.hasStrapMachines) ...[
+              Text('Strappers on the line',
                   style: Theme.of(context).textTheme.bodySmall),
               const SizedBox(height: 4),
               SegmentedButton<int>(
@@ -1092,9 +1095,9 @@ class _ThirdPartyEquipmentConfigEditorState
                   ButtonSegment(value: 2, label: Text('2')),
                   ButtonSegment(value: 3, label: Text('3')),
                 ],
-                selected: {config.strapHeads.clamp(1, 3)},
+                selected: {config.strapMachines.clamp(1, 3)},
                 onSelectionChanged: (selection) =>
-                    setState(() => config.strapHeads = selection.first),
+                    setState(() => config.strapMachines = selection.first),
               ),
               const SizedBox(height: 16),
             ],
@@ -1201,7 +1204,7 @@ class _ThirdPartyEquipmentConfigEditorState
                 onPressed: () {
                   final screen = MediaQuery.of(context).size;
                   final aspect =
-                      config.kind.aspectRatio(strapHeads: config.strapHeads);
+                      config.kind.aspectRatio(strapMachines: config.strapMachines);
                   final height =
                       config.size.width * screen.width / (aspect * screen.height);
                   setState(() {

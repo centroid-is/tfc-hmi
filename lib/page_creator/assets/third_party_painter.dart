@@ -623,77 +623,83 @@ class SpeedBatcherPainter extends ThirdPartyMachinePainter {
 // Box erector
 // ---------------------------------------------------------------------------
 
-/// Plan view of an automatic RSC case erector, product flowing left to right.
+/// Plan view of the box erector, blanks flowing DOWN the page.
 ///
-/// Blank magazine holding the flat-packed stack on edge, a vacuum pick head
-/// that peels the leading blank open and squares it, the erecting station
-/// where the minor then major bottom flaps fold in, the bottom centre-seal
-/// tape head, and the side belts that grip the case and drive it out.
+/// Drawn from the site CAD, which shows a tall, narrow machine — nothing like
+/// the square side-loading erectors in the catalogues. The blank magazine
+/// runs most of its length between two long guide rails, the forming station
+/// sits in a wider bulge below it, and the erected case leaves at the bottom.
 ///
-/// TODO(product-name): the make/model of the erector on this line has not been
-/// identified yet. Geometry here follows a generic RSC erector of the Eastey
-/// ERX-15 class (~2395 x 2083 mm). Once the real machine is known, redraw
-/// against its own layout and rename this painter and the
-/// `ThirdPartyEquipmentKind.boxErector` label — every other kind is named
-/// after its manufacturer.
+/// This one is PORTRAIT: at roughly 0.35 wide for its height, placing it in a
+/// landscape box squashes the magazine into nothing.
+///
+/// TODO(product-name): the make/model is still unidentified. The layout now
+/// comes from the site CAD rather than a generic catalogue machine, but the
+/// nameplate is still needed for the label and for ordering spares.
 class BoxErectorPainter extends ThirdPartyMachinePainter {
   const BoxErectorPainter({required super.color, required super.strokeWidth});
 
   /// Flat blanks drawn in the magazine stack. Cosmetic — the real hopper holds
   /// a couple of hundred.
-  static const int magazineBlanks = 9;
+  static const int magazineBlanks = 12;
+
+  /// The two long guide rails run nearly the whole machine, at these x.
+  static const double railLeft = 0.24;
+  static const double railRight = 0.76;
+  static const double railHalfWidth = 0.06;
 
   @override
   void paintMachine(Canvas canvas, UnitSpace u, Paint stroke, Paint detail) {
     // Machine frame.
-    canvas.drawRRect(u.rr(0.0, 0.0, 1.0, 1.0, 0.03), stroke);
+    canvas.drawRRect(u.rr(0.06, 0.02, 0.94, 0.98, 0.02), stroke);
 
-    // Blank magazine — the stack of flat cases seen on edge from above,
-    // between two adjustable side guides with their handles.
-    canvas.drawRect(u.r(0.02, 0.20, 0.30, 0.84), stroke);
-    _crossTicks(canvas, u, detail,
-        ul: 0.02, ur: 0.30, ut: 0.20, ub: 0.84, count: magazineBlanks);
-    canvas.drawLine(u.p(0.02, 0.17), u.p(0.30, 0.17), detail);
-    canvas.drawLine(u.p(0.02, 0.87), u.p(0.30, 0.87), detail);
-    canvas.drawLine(u.p(0.06, 0.17), u.p(0.06, 0.12), detail);
-    canvas.drawLine(u.p(0.06, 0.87), u.p(0.06, 0.92), detail);
-
-    // Vacuum pick head — suction cups that peel the leading blank open.
-    canvas.drawRect(u.r(0.32, 0.36, 0.40, 0.68), stroke);
-    for (final cy in [0.44, 0.60]) {
-      for (final cx in [0.343, 0.377]) {
-        canvas.drawCircle(u.p(cx, cy), u.rad(0.022), detail);
-      }
+    // -- Blank magazine: the stack of flat cases on edge, running down
+    //    between two long guide rails. This is most of the machine.
+    const magTop = 0.04;
+    const magBottom = 0.40;
+    for (final cx in [railLeft, railRight]) {
+      canvas.drawRect(
+          u.r(cx - railHalfWidth, magTop, cx + railHalfWidth, magBottom),
+          stroke);
+    }
+    // The blanks themselves, seen edge-on between the rails.
+    _lengthwiseTicks(canvas, u, detail,
+        ul: railLeft + railHalfWidth,
+        ur: railRight - railHalfWidth,
+        ut: magTop,
+        ub: magBottom,
+        count: magazineBlanks);
+    // Cross members tying the rails together.
+    for (final y in [0.05, 0.12]) {
+      canvas.drawLine(u.p(railLeft, y), u.p(railRight, y), detail);
     }
 
-    // Erecting station — the squared case with its four bottom flaps folded
-    // in. The inner rectangle is the closed bottom; the diagonals are the
-    // flap folds meeting it.
-    canvas.drawRect(u.r(0.42, 0.14, 0.66, 0.90), stroke);
-    final caseRect = u.r(0.46, 0.26, 0.62, 0.78);
-    canvas.drawRect(caseRect, stroke);
-    final inner = u.r(0.495, 0.36, 0.585, 0.68);
-    canvas.drawRect(inner, detail);
-    canvas.drawLine(caseRect.topLeft, inner.topLeft, detail);
-    canvas.drawLine(caseRect.topRight, inner.topRight, detail);
-    canvas.drawLine(caseRect.bottomLeft, inner.bottomLeft, detail);
-    canvas.drawLine(caseRect.bottomRight, inner.bottomRight, detail);
+    // -- Forming station: the wider bulge, with a housing either side --
+    const formTop = 0.40;
+    const formBottom = 0.62;
+    canvas.drawRect(u.r(0.06, formTop, 0.94, formBottom), stroke);
+    canvas.drawRect(u.r(0.08, 0.45, 0.22, 0.58), detail);
+    canvas.drawRect(u.r(0.78, 0.45, 0.92, 0.58), detail);
+    // The case being squared, in the middle of the station.
+    canvas.drawRRect(u.rr(0.38, 0.46, 0.62, 0.57, 0.015), stroke);
 
-    // Side belts that grip the erected case and drive it out.
-    canvas.drawRect(u.r(0.66, 0.26, 1.0, 0.33), stroke);
-    canvas.drawRect(u.r(0.66, 0.71, 1.0, 0.78), stroke);
+    // The rails continue past the forming station, carrying the case down.
+    for (final cx in [railLeft, railRight]) {
+      canvas.drawRect(
+          u.r(cx - railHalfWidth * 0.7, formBottom, cx + railHalfWidth * 0.7,
+              0.76),
+          stroke);
+    }
+
+    // -- Flap folding / vacuum head: the rounded form the CAD shows low down,
+    //    spanning most of the width.
+    canvas.drawOval(u.r(0.14, 0.66, 0.86, 0.86), stroke);
+    canvas.drawRect(u.r(0.36, 0.68, 0.64, 0.84), detail);
+
+    // -- Outfeed across the bottom, where the erected case leaves --
+    canvas.drawRect(u.r(0.06, 0.88, 0.94, 0.98), stroke);
     _crossTicks(canvas, u, detail,
-        ul: 0.66, ur: 1.0, ut: 0.26, ub: 0.33, count: 4);
-    _crossTicks(canvas, u, detail,
-        ul: 0.66, ur: 1.0, ut: 0.71, ub: 0.78, count: 4);
-
-    // Bottom tape head, centred under the case path, with its tape roll. It
-    // sits below the case so it is drawn as detail, not as a hard outline.
-    canvas.drawRect(u.r(0.73, 0.44, 0.91, 0.60), detail);
-    canvas.drawCircle(u.p(0.82, 0.52), u.rad(0.055), detail);
-
-    // Control panel at the rear.
-    canvas.drawRect(u.r(0.42, 0.02, 0.60, 0.10), stroke);
+        ul: 0.06, ur: 0.94, ut: 0.88, ub: 0.98, count: 3);
   }
 }
 
@@ -701,99 +707,146 @@ class BoxErectorPainter extends ThirdPartyMachinePainter {
 // Afak SL-15-3 strapping line (Strapex heads)
 // ---------------------------------------------------------------------------
 
-/// Plan view of the Afak SL-15-N strapping line, boxes flowing left to right.
+/// Plan view of the strapping line, boxes flowing left to right.
 ///
-/// One belt runs the length of the machine under [heads] Strapex arches in
-/// series — the box is strapped once per arch as it indexes through, rather
-/// than being strapped once and turned. Each arch has its own strap coil
-/// dispenser on the rear gantry directly behind it. Cabinets run along the
-/// front, and the control cabinet with the stack light sits at the discharge
-/// end.
+/// This is a LINE, not a single machine: one conveyor runs the whole length
+/// and [machines] discrete Strapex strappers stand on it, each strapping the
+/// box once as it indexes through. Each strapper is its own unit — own frame,
+/// own feet, own coil dispenser on its own bracket, own cabinet — which is
+/// what the site CAD shows and what tells this apart from one machine with
+/// several heads under a shared gantry.
 ///
-/// Afak sells the head count as separate models — SL-15-1, SL-15-2 and
-/// SL-15-3 — and the real machines get shorter as heads come off. The drawing
-/// still fills its box whatever the count (leaving whitespace inside the
-/// dotted boundary would read as a rendering bug); the true proportions are
-/// carried by `ThirdPartyEquipmentKind.aspectRatio`, which the editor's
-/// "match proportions" button applies.
+/// The belt runs past both ends of the drawing, because the line continues
+/// beyond the strappers.
 ///
-/// SL-15-3 footprint ~2665 x 1815 mm, 15 boxes/min, ~530 mm boxes.
+/// The line gets longer as strappers are added, so the kind's aspect ratio
+/// follows [machines] (see `ThirdPartyEquipmentKind.aspectRatio`). The drawing
+/// itself always fills its box — leaving whitespace inside the dotted boundary
+/// would read as a rendering bug — and the strappers spread to suit.
+///
+/// A 3-strapper line is ~2665 x 1815 mm, 15 boxes/min, ~530 mm boxes.
 class StrappingLinePainter extends ThirdPartyMachinePainter {
   const StrappingLinePainter({
     required super.color,
     required super.strokeWidth,
-    this.heads = maxHeads,
-  }) : assert(heads >= 1 && heads <= maxHeads);
+    this.machines = maxMachines,
+  }) : assert(machines >= 1 && machines <= maxMachines);
 
-  /// Largest model Afak lists in the SL-15 family.
-  static const int maxHeads = 3;
+  /// Most strappers the line is built for.
+  static const int maxMachines = 3;
 
-  /// Number of Strapex arches — the `-N` in the SL-15-N model number.
-  final int heads;
+  /// Strapex machines standing on the line.
+  final int machines;
 
-  /// Unit x-centre of each arch, spread evenly with a margin at both ends so
-  /// the outermost arch never collides with the infeed or the cabinet.
-  static List<double> archCentresFor(int heads) {
-    const margin = 0.13;
-    final span = 1.0 - margin * 2;
+  /// Belt band, front to back. The line runs the full width of the drawing.
+  static const double beltTop = 0.44;
+  static const double beltBottom = 0.66;
+
+  /// Span the strappers are distributed across. Stops short of the right edge
+  /// so the line's control cabinet has somewhere to sit.
+  static const double _zoneLeft = 0.03;
+  static const double _zoneRight = 0.85;
+
+  /// Unit x-centre of each strapper, spread evenly along the line.
+  static List<double> machineCentresFor(int machines) {
+    const span = _zoneRight - _zoneLeft;
     return [
-      for (int i = 0; i < heads; i++) margin + span * (i + 0.5) / heads,
+      for (int i = 0; i < machines; i++)
+        _zoneLeft + span * (i + 0.5) / machines,
     ];
+  }
+
+  /// Half-width of one strapper's footprint. Narrows as machines are added so
+  /// three still stand clear of one another.
+  static double halfWidthFor(int machines) {
+    const span = _zoneRight - _zoneLeft;
+    return (span / machines * 0.40).clamp(0.05, 0.15);
   }
 
   @override
   bool shouldRepaint(covariant ThirdPartyMachinePainter oldDelegate) =>
       super.shouldRepaint(oldDelegate) ||
-      (oldDelegate is StrappingLinePainter && oldDelegate.heads != heads);
+      (oldDelegate is StrappingLinePainter &&
+          oldDelegate.machines != machines);
 
   @override
   void paintMachine(Canvas canvas, UnitSpace u, Paint stroke, Paint detail) {
-    // Machine frame.
-    canvas.drawRRect(u.rr(0.0, 0.10, 1.0, 1.0, 0.03), stroke);
-
-    // Rear gantry beam carrying the coil dispensers, on its two posts.
-    canvas.drawLine(u.p(0.06, 0.05), u.p(0.94, 0.05), stroke);
-    canvas.drawRect(u.r(0.05, 0.03, 0.09, 0.08), detail);
-    canvas.drawRect(u.r(0.91, 0.03, 0.95, 0.08), detail);
-
-    // Belt through the machine, with rollers. A ~530 mm box lane in a 1815 mm
-    // deep machine, so the belt is a narrow band down the middle.
-    canvas.drawRect(u.r(0.0, 0.42, 1.0, 0.68), stroke);
+    // -- The line itself: one belt the full length, past both ends --
+    canvas.drawRect(u.r(0.0, beltTop, 1.0, beltBottom), stroke);
     _crossTicks(canvas, u, detail,
-        ul: 0.0, ur: 1.0, ut: 0.42, ub: 0.68, count: 9);
+        ul: 0.0, ur: 1.0, ut: beltTop, ub: beltBottom, count: 11);
 
-    final centres = archCentresFor(heads);
-    // Arch width shrinks a little as heads are added so three still breathe.
-    final halfArch = (0.105 / heads).clamp(0.030, 0.055);
-
-    for (final cx in centres) {
-      // Strapex arch straddling the belt: the top crossbar spans the full
-      // depth, with a heavier footprint where each upright lands.
-      canvas.drawRect(u.r(cx - halfArch, 0.26, cx + halfArch, 0.84), stroke);
-      canvas.drawRect(u.r(cx - halfArch, 0.26, cx + halfArch, 0.42), stroke);
-      canvas.drawRect(u.r(cx - halfArch, 0.68, cx + halfArch, 0.84), stroke);
-
-      // Strap coil dispenser on the gantry behind this arch, with its hub and
-      // the strap feed running down to the arch.
-      canvas.drawCircle(u.p(cx, 0.15), u.rad(0.085), stroke);
-      canvas.drawCircle(u.p(cx, 0.15), u.rad(0.028), detail);
-      canvas.drawLine(u.p(cx, 0.24), u.p(cx, 0.26), detail);
+    // Heavier end rollers where the line enters and leaves.
+    for (final x in [0.012, 0.988]) {
+      canvas.drawLine(u.p(x, beltTop), u.p(x, beltBottom), stroke);
     }
 
-    // Pneumatic pushers that stop and hold the box at the first arch. They
-    // ride just ahead of it, so they follow the first arch rather than
-    // sitting at a fixed spot that a 1-head machine would put them past.
-    final pusherX = (centres.first - halfArch - 0.09).clamp(0.02, 0.90);
-    canvas.drawRect(u.r(pusherX, 0.70, pusherX + 0.05, 0.76), detail);
-    canvas.drawRect(u.r(pusherX, 0.34, pusherX + 0.05, 0.40), detail);
+    final centres = machineCentresFor(machines);
+    final half = halfWidthFor(machines);
 
-    // Cabinets along the front of the machine.
-    canvas.drawRect(u.r(0.06, 0.88, 0.86, 1.0), stroke);
-    canvas.drawLine(u.p(0.33, 0.88), u.p(0.33, 1.0), detail);
-    canvas.drawLine(u.p(0.60, 0.88), u.p(0.60, 1.0), detail);
+    for (final cx in centres) {
+      _strapper(canvas, u, stroke, detail, cx: cx, half: half);
+    }
 
-    // Control cabinet at the discharge end, with the stack light.
-    canvas.drawRect(u.r(0.90, 0.72, 1.0, 1.0), stroke);
-    canvas.drawCircle(u.p(0.95, 0.78), u.rad(0.035), detail);
+    // Pneumatic pushers that stop and hold the box at the first strapper,
+    // riding just ahead of it rather than at a fixed spot that a one-strapper
+    // line would put them past.
+    final pusherX = (centres.first - half - 0.055).clamp(0.015, 0.90);
+    canvas.drawRect(
+        u.r(pusherX, beltBottom + 0.03, pusherX + 0.04, beltBottom + 0.09),
+        detail);
+    canvas.drawRect(
+        u.r(pusherX, beltTop - 0.09, pusherX + 0.04, beltTop - 0.03), detail);
+
+    // Line control cabinet at the discharge end, with the stack light.
+    canvas.drawRect(u.r(0.89, 0.70, 1.0, 0.96), stroke);
+    canvas.drawCircle(u.p(0.945, 0.76), u.rad(0.032), detail);
+  }
+
+  /// One Strapex strapper standing on the line.
+  ///
+  /// Frame around the whole unit with a foot at each corner, the arch
+  /// straddling the belt, the coil dispenser on its bracket behind, and the
+  /// unit's own cabinet in front.
+  void _strapper(
+    Canvas canvas,
+    UnitSpace u,
+    Paint stroke,
+    Paint detail, {
+    required double cx,
+    required double half,
+  }) {
+    const frameTop = 0.17;
+    const frameBottom = 0.95;
+
+    // Unit frame.
+    canvas.drawRect(u.r(cx - half, frameTop, cx + half, frameBottom), stroke);
+
+    // Adjustable feet at the four corners.
+    const foot = 0.016;
+    for (final fx in [cx - half + foot, cx + half - foot]) {
+      for (final fy in [frameTop + 0.03, frameBottom - 0.03]) {
+        canvas.drawRect(
+            u.r(fx - foot, fy - 0.014, fx + foot, fy + 0.014), detail);
+      }
+    }
+
+    // Strapex arch straddling the belt: the crossbar spans the depth, with a
+    // heavier footprint where each upright lands either side of the belt.
+    final aw = half * 0.42;
+    canvas.drawRect(u.r(cx - aw, 0.25, cx + aw, 0.85), stroke);
+    canvas.drawRect(u.r(cx - aw, 0.25, cx + aw, beltTop), stroke);
+    canvas.drawRect(u.r(cx - aw, beltBottom, cx + aw, 0.85), stroke);
+
+    // Strap coil dispenser on its bracket behind the unit, with the strap
+    // feed running down to the arch.
+    canvas.drawCircle(u.p(cx, 0.08), u.rad(0.06), stroke);
+    canvas.drawCircle(u.p(cx, 0.08), u.rad(0.02), detail);
+    canvas.drawLine(u.p(cx, 0.135), u.p(cx, frameTop), detail);
+
+    // This unit's cabinet, in front of the belt.
+    canvas.drawRect(
+        u.r(cx - half * 0.8, 0.87, cx + half * 0.8, frameBottom - 0.01),
+        detail);
   }
 }

@@ -146,7 +146,7 @@ void main() {
     testWidgets('tap opens a read-only pane, not the editor', (tester) async {
       final config = ThirdPartyEquipmentConfig(
         kind: ThirdPartyEquipmentKind.strappingLine,
-        strapHeads: 2,
+        strapMachines: 2,
         runKey: 'ST301.PK01.STRAP01.Running',
         tag: 'STRAP-01',
         notes: 'Two Strapex heads in series.',
@@ -168,8 +168,8 @@ void main() {
       // into a real model number.
       expect(find.text('STRAP-01'), findsOneWidget);
       expect(
-          find.textContaining('SL-15-2'), findsWidgets,
-          reason: 'Head count must reach the pane title.');
+          find.textContaining('2 x Strapex'), findsWidgets,
+          reason: 'Strapper count must reach the pane title.');
       expect(find.text('NOTES'), findsOneWidget);
 
       // Negative locks — the runtime tap must never expose editor controls.
