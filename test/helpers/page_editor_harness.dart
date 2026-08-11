@@ -121,7 +121,11 @@ class _EditorLocation extends BeamLocation<BeamState> {
 }
 
 /// The real [PageEditor], wired up enough to pump.
-Widget buildEditorUnderTest(PageManager manager) {
+///
+/// [theme] is only worth passing for goldens, where the point is to review the
+/// editor as the plant sees it; behaviour tests leave it null and get the
+/// Material default.
+Widget buildEditorUnderTest(PageManager manager, {ThemeData? theme}) {
   final routerDelegate = BeamerDelegate(
     locationBuilder: (routeInformation, _) => _EditorLocation(),
   );
@@ -137,6 +141,7 @@ Widget buildEditorUnderTest(PageManager manager) {
     child: BeamerProvider(
       routerDelegate: routerDelegate,
       child: MaterialApp.router(
+        theme: theme,
         routerDelegate: routerDelegate,
         routeInformationParser: BeamerParser(),
       ),

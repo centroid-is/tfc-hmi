@@ -181,6 +181,13 @@ abstract final class SidePaneDefaults {
 ///
 /// Returns `true` if a pane is showing after the call, `false` if the call
 /// toggled it shut.
+///
+/// [resizable] adds a drag handle to the pane's left edge. Equipment panes
+/// leave it off — they are a fixed strip and their content is built to fit.
+/// Turn it on where the content is not: the page editor's asset config forms
+/// range from a colour swatch to a two-column subdevice manager, and no single
+/// width suits both. [onWidthChanged] reports each new width so the caller can
+/// hand the same one back the next time it opens the pane.
 bool showSidePane({
   required BuildContext context,
   required String id,
@@ -188,6 +195,8 @@ bool showSidePane({
   double? width,
   EdgeInsets? insets,
   VoidCallback? onClosed,
+  bool resizable = false,
+  ValueChanged<double>? onWidthChanged,
 }) {
   if (SidePaneHost.openId == id) {
     closeSidePane();
@@ -200,6 +209,8 @@ bool showSidePane({
     width: width,
     insets: insets,
     onClosed: onClosed,
+    resizable: resizable,
+    onWidthChanged: onWidthChanged,
   );
   return true;
 }
@@ -228,7 +239,9 @@ abstract final class SidePaneHost {
   /// The id of the pane currently showing, or null.
   static String? get openId => _openId;
 
-  /// Width carried over between opens within a session.
+  /// Width of the pane currently showing. Set per open, so a wide pane (the
+  /// page editor's asset config) does not leave every equipment pane opened
+  /// afterwards stretched to its width.
   static double _width = SidePaneDefaults.width;
 
   static void _show({
@@ -238,13 +251,15 @@ abstract final class SidePaneHost {
     double? width,
     EdgeInsets? insets,
     VoidCallback? onClosed,
+    bool resizable = false,
+    ValueChanged<double>? onWidthChanged,
   }) {
     // Replacing an open pane: drop the old one without its exit animation so
     // the two never overlap.
     _removeNow();
 
     final overlay = Overlay.of(context, rootOverlay: true);
-    if (width != null) _width = width;
+    _width = width ?? SidePaneDefaults.width;
     final key = GlobalKey<_SidePaneShellState>();
     _shellKey = key;
     _openId = id;
@@ -254,6 +269,8 @@ abstract final class SidePaneHost {
         key: key,
         insets: insets ?? SidePaneDefaults.insets,
         builder: builder,
+        resizable: resizable,
+        onWidthChanged: onWidthChanged,
       ),
     );
     overlay.insert(_entry!);
@@ -302,11 +319,15 @@ abstract final class SidePaneHost {
 class _SidePaneShell extends StatefulWidget {
   final EdgeInsets insets;
   final WidgetBuilder builder;
+  final bool resizable;
+  final ValueChanged<double>? onWidthChanged;
 
   const _SidePaneShell({
     super.key,
     required this.insets,
     required this.builder,
+    this.resizable = false,
+    this.onWidthChanged,
   });
 
   @override
@@ -373,12 +394,52 @@ class _SidePaneShellState extends State<_SidePaneShell>
         : 1.0;
     final top = chrome.top * scale + margin;
     final bottom = chrome.bottom * scale + margin;
-    final width = SidePaneHost._width.clamp(
-      SidePaneDefaults.minWidth,
-      screen.width - margin * 2 < SidePaneDefaults.minWidth
-          ? SidePaneDefaults.minWidth
-          : screen.width - margin * 2,
+    final maxWidth = screen.width - margin * 2 < SidePaneDefaults.minWidth
+        ? SidePaneDefaults.minWidth
+        : screen.width - margin * 2;
+    final width = SidePaneHost._width.clamp(SidePaneDefaults.minWidth, maxWidth);
+
+    // No shadow at all: on the dark solarized theme even a small elevation
+    // renders as a black halo, which reads like a warning frame around the
+    // pane rather than depth. A hairline outline is enough to separate it
+    // from the plant view.
+    Widget pane = Material(
+      elevation: 0,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(8),
+        side: BorderSide(color: Theme.of(context).dividerColor),
+      ),
+      color: Theme.of(context).colorScheme.surface,
+      clipBehavior: Clip.antiAlias,
+      child: widget.builder(context),
     );
+
+    if (widget.resizable) {
+      pane = Stack(
+        children: [
+          Positioned.fill(child: pane),
+          Positioned(
+            left: 0,
+            top: 0,
+            bottom: 0,
+            width: 10,
+            child: MouseRegion(
+              cursor: SystemMouseCursors.resizeLeftRight,
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                // Dragging the handle left widens the pane: it is pinned to
+                // the right edge, so the left edge is the only one that moves.
+                onHorizontalDragUpdate: (details) => _resizeBy(
+                  -details.delta.dx,
+                  SidePaneDefaults.minWidth,
+                  maxWidth,
+                ),
+              ),
+            ),
+          ),
+        ],
+      );
+    }
 
     return Positioned(
       right: margin,
@@ -391,24 +452,15 @@ class _SidePaneShellState extends State<_SidePaneShell>
           offset: Offset((1 - _slide.value) * (width + margin), 0),
           child: Opacity(opacity: _slide.value.clamp(0.0, 1.0), child: child),
         ),
-        child: Material(
-          // No shadow at all: on the dark solarized theme even a small
-          // elevation renders as a black halo, which reads like a warning
-          // frame around the pane rather than depth. A hairline outline is
-          // enough to separate it from the plant view.
-          elevation: 0,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(8),
-            side: BorderSide(color: Theme.of(context).dividerColor),
-          ),
-          color: Theme.of(context).colorScheme.surface,
-          clipBehavior: Clip.antiAlias,
-          // Not resizable: the pane is a fixed strip of the screen, and its
-          // content is built to fit that width. Only floating dialogs — which
-          // hold charts and grids sized to their content — resize.
-          child: widget.builder(context),
-        ),
+        child: pane,
       ),
     );
+  }
+
+  void _resizeBy(double delta, double minWidth, double maxWidth) {
+    final next = (SidePaneHost._width + delta).clamp(minWidth, maxWidth);
+    if (next == SidePaneHost._width) return;
+    setState(() => SidePaneHost._width = next);
+    widget.onWidthChanged?.call(next);
   }
 }

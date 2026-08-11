@@ -12,6 +12,8 @@ import '../page_creator/assets/registry.dart';
 import '../widgets/base_scaffold.dart';
 import 'page_view.dart';
 import '../widgets/zoomable_canvas.dart';
+import '../widgets/panes/pane_chrome.dart' show PaneAction;
+import '../widgets/panes/side_pane.dart';
 import '../page_creator/page.dart';
 import '../models/menu_item.dart';
 import '../providers/current_page_assets.dart';
@@ -412,6 +414,37 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   /// Snapshot of pages before proposal was applied (for reject/revert).
   Map<String, AssetPage>? _preProposalPages;
 
+  /// The asset whose configuration pane is docked open, if any. The pane is
+  /// non-modal, so the canvas keeps taking taps and drags while it is up and
+  /// tapping another asset just re-points the pane at it.
+  Asset? _configAsset;
+
+  /// Drives [_syncConfigEdits]. Config editors mutate their asset in place and
+  /// rebuild only themselves, so this is the editor's only general signal that
+  /// something in the pane changed — see [_assetSnapshot].
+  Timer? _configWatch;
+  String? _configSnapshot;
+
+  /// How often the open pane is compared against the canvas. Short enough that
+  /// typing reads as live; pointer events sync straight away regardless.
+  static const Duration _configWatchInterval = Duration(milliseconds: 100);
+
+  /// Wider than an equipment pane: asset config editors are dense forms, and
+  /// several were written against a full-screen dialog. The pane carries a
+  /// resize handle, and this follows it — a composite device (a Beckhoff bus
+  /// coupler, an Advantys head) wants a lot more room than an LED, and the
+  /// width you drag it to is the one the next asset opens at.
+  double _configPaneWidth = 520;
+
+  /// Matches the pane's own slide, so the canvas chrome moves with it rather
+  /// than jumping ahead of it.
+  static const Duration _configPaneSlide = Duration(milliseconds: 220);
+
+  /// How far the canvas's right-hand chrome — the page selector and the mode
+  /// buttons — steps aside so the open pane does not sit on top of it.
+  double get _rightChromeInset =>
+      _configAsset == null ? 0 : _configPaneWidth + SidePaneDefaults.margin;
+
   List<Asset> get assets {
     if (_currentPage == null) {
       return [];
@@ -443,6 +476,12 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   @override
   void dispose() {
     _stopAutoScroll();
+    // The pane lives in the root overlay, so nothing else tears it down when
+    // the editor goes away (an MCP proposal can navigate out from under it).
+    _configWatch?.cancel();
+    _configWatch = null;
+    final configAsset = _configAsset;
+    if (configAsset != null) closeSidePane(id: _configPaneId(configAsset));
     _treeScrollController.dispose();
     super.dispose();
   }
@@ -1153,7 +1192,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                                   HardwareKeyboard.instance.logicalKeysPressed,
                                 );
                               } else {
-                                _showConfigDialog(asset);
+                                _openConfigPane(asset);
                               }
                             },
                             onPanUpdate: (asset, details) {
@@ -1274,9 +1313,11 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                             current: _selectionCurrent!,
                           ),
                         ),
-                      Positioned(
+                      AnimatedPositioned(
+                        duration: _configPaneSlide,
+                        curve: Curves.easeOutCubic,
                         top: 16,
-                        right: 16,
+                        right: 16 + _rightChromeInset,
                         child: _buildPageSelector(),
                       ),
                       Positioned(
@@ -1353,8 +1394,10 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                             ),
                           ),
                         ),
-                      Positioned(
-                        right: 16,
+                      AnimatedPositioned(
+                        duration: _configPaneSlide,
+                        curve: Curves.easeOutCubic,
+                        right: 16 + _rightChromeInset,
                         bottom: 16,
                         child: Column(
                           mainAxisSize: MainAxisSize.min,
@@ -1464,67 +1507,150 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     );
   }
 
-  void _showConfigDialog(Asset asset) {
+  /// Identifies one asset's pane. Assets have no stable id of their own, and
+  /// two of the same type are equal only by identity, so that is what the id
+  /// is built from — enough for `showSidePane` to tell "same asset, toggle
+  /// shut" from "different asset, swap the contents".
+  String _configPaneId(Asset asset) =>
+      'page-editor-config:${identityHashCode(asset)}';
+
+  /// Docks [asset]'s configuration editor to the right of the canvas.
+  ///
+  /// This used to be a `showDialog`, which put a barrier over the canvas: the
+  /// operator had to close it to see what a change did, and again to move the
+  /// asset. The pane is non-modal, so the canvas underneath keeps taking
+  /// drags, marquee selection and taps on other assets while it is open, and
+  /// [_syncConfigEdits] mirrors edits onto the canvas as they are made.
+  void _openConfigPane(Asset asset) {
     ref.read(currentPageAssetsProvider.notifier).state = assets;
-    showDialog(
+
+    // Tapping the asset whose pane is already open closes it; `showSidePane`
+    // has already run `_onConfigPaneClosed` for us by then.
+    final opened = showSidePane(
       context: context,
-      builder: (context) => Dialog(
-        child: IntrinsicWidth(
-          child: Padding(
-            padding: const EdgeInsets.all(16.0),
-            child: Column(
-              children: [
-                Expanded(
-                  child: Column(
-                    children: [
-                      Expanded(child: asset.configure(context)),
-                      if (asset is BaseAsset)
-                        Padding(
-                          padding: const EdgeInsets.only(top: 8.0),
-                          child: TechDocPicker(
-                            selectedDocId: asset.techDocId,
-                            onChanged: (id) {
-                              asset.techDocId = id;
-                            },
-                          ),
-                        ),
-                    ],
+      id: _configPaneId(asset),
+      width: _configPaneWidth,
+      resizable: true,
+      onWidthChanged: (width) => setState(() => _configPaneWidth = width),
+      builder: (paneContext) => _buildConfigPane(paneContext, asset),
+      onClosed: _onConfigPaneClosed,
+    );
+    if (!opened) return;
+
+    setState(() {
+      _configAsset = asset;
+      _configSnapshot = _assetSnapshot(asset);
+    });
+    _configWatch?.cancel();
+    _configWatch =
+        Timer.periodic(_configWatchInterval, (_) => _syncConfigEdits());
+  }
+
+  /// Runs when the pane goes away for any reason — its Close button, Escape,
+  /// a swap to another asset, or the editor being torn down.
+  void _onConfigPaneClosed() {
+    _configWatch?.cancel();
+    _configWatch = null;
+    _configSnapshot = null;
+    if (!mounted) {
+      _configAsset = null;
+      return;
+    }
+    setState(() {
+      _configAsset = null;
+      // A last pass, in case the closing interaction itself was the edit.
+      _updateCurrentJson();
+    });
+  }
+
+  Widget _buildConfigPane(BuildContext paneContext, Asset asset) {
+    final label = asset.text;
+    return Listener(
+      // Sync on the pointer event itself so slider drags and colour taps reach
+      // the canvas in the same frame; the timer only has to cover edits that
+      // arrive without one (typing, nested pickers, async key lookups).
+      behavior: HitTestBehavior.translucent,
+      onPointerDown: (_) => _syncConfigEdits(),
+      onPointerMove: (_) => _syncConfigEdits(),
+      onPointerUp: (_) => _syncConfigEdits(),
+      child: SidePane(
+        title: asset.displayName,
+        subtitle: label != null && label.isNotEmpty ? label : null,
+        icon: Icons.tune,
+        // Every config editor brings its own scrolling and sizing; wrapping
+        // them in another scroll view would leave the ones that use `Expanded`
+        // with an unbounded height.
+        scrollable: false,
+        actions: [
+          PaneAction.destructive(
+            label: 'Delete',
+            icon: Icons.delete,
+            onPressed: () => _deleteConfiguredAsset(asset),
+          ),
+        ],
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+          child: Column(
+            children: [
+              Expanded(child: asset.configure(paneContext)),
+              if (asset is BaseAsset)
+                Padding(
+                  padding: const EdgeInsets.only(top: 8.0),
+                  child: TechDocPicker(
+                    selectedDocId: asset.techDocId,
+                    onChanged: (id) {
+                      asset.techDocId = id;
+                    },
                   ),
                 ),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    TextButton.icon(
-                      onPressed: () {
-                        _saveToHistory();
-                        _updateState(() {
-                          assets.remove(asset);
-                        });
-                        Navigator.pop(context);
-                      },
-                      icon: const Icon(Icons.delete, color: Colors.red),
-                      label: const Text(
-                        'Delete',
-                        style: TextStyle(color: Colors.red),
-                      ),
-                    ),
-                    TextButton(
-                      onPressed: () {
-                        Navigator.pop(context);
-                      },
-                      child: const Text('Close'),
-                    ),
-                  ],
-                ),
-              ],
-            ),
+            ],
           ),
         ),
       ),
-    ).then((_) {
-      setState(() {
-        _updateCurrentJson();
-      });
+    );
+  }
+
+  /// Repaints the canvas when the open pane has changed its asset.
+  ///
+  /// Config editors write straight into the asset they were handed and call
+  /// `setState` on themselves, so there is no callback to hook. Comparing the
+  /// asset's own serialization catches every one of them without touching the
+  /// ~45 editors, and costs one small `jsonEncode` per check.
+  void _syncConfigEdits() {
+    final asset = _configAsset;
+    if (asset == null) return;
+
+    // The asset can leave the canvas while its pane is up: deleted with the
+    // keyboard, undone, or left behind by a page change.
+    if (!assets.contains(asset)) {
+      closeSidePane(id: _configPaneId(asset));
+      return;
+    }
+
+    final snapshot = _assetSnapshot(asset);
+    if (snapshot == null || snapshot == _configSnapshot) return;
+    setState(() {
+      _configSnapshot = snapshot;
+      _updateCurrentJson();
+    });
+  }
+
+  /// [asset] as JSON, or null if it will not serialize — in which case the
+  /// pane simply falls back to updating the canvas when it closes.
+  String? _assetSnapshot(Asset asset) {
+    try {
+      return jsonEncode(asset.toJson());
+    } catch (_) {
+      return null;
+    }
+  }
+
+  void _deleteConfiguredAsset(Asset asset) {
+    closeSidePane(id: _configPaneId(asset));
+    _saveToHistory();
+    _updateState(() {
+      assets.remove(asset);
+      _selectedAssets.remove(asset);
     });
   }
 
@@ -1595,6 +1721,31 @@ class _PageEditorState extends ConsumerState<PageEditor> {
           mainAxisSize: MainAxisSize.min,
           children: [
             Text(displayName),
+            // Which page you are on is obvious; that operators cannot see it
+            // is not, and it is the kind of thing that gets left switched off
+            // once the page is finished.
+            if (currentPage != null && !currentPage.published) ...[
+              const SizedBox(width: 8),
+              Tooltip(
+                message: 'Draft — not published to the navigation menu',
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.visibility_off,
+                        size: 16,
+                        color: Theme.of(context).colorScheme.error),
+                    const SizedBox(width: 4),
+                    Text(
+                      'Draft',
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.error,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
             const SizedBox(width: 8),
             const Icon(Icons.arrow_drop_down),
           ],
@@ -1804,6 +1955,38 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     );
   }
 
+  /// The row's second line: what the entry is, and whether operators can see
+  /// it. Null when there is nothing to say (a plain, published page).
+  Widget? _treeNodeSubtitle({required bool isSection, required bool isDraft}) {
+    final parts = [
+      if (isSection) 'Section',
+      if (isDraft) 'Draft — not published',
+    ];
+    if (parts.isEmpty) return null;
+    return Text(parts.join(' · '));
+  }
+
+  /// Publishes or unpublishes [pagePath].
+  ///
+  /// Nothing about the page itself changes — it keeps its path, its assets and
+  /// its place in the tree, and stays editable here. Only whether
+  /// `getRootMenuItems` hands it to the app's menu and router does, which the
+  /// running app picks up on its next start (as the dialog's subtitle warns).
+  void _setPagePublished(
+    String pagePath,
+    bool published,
+    StateSetter dialogSetState,
+  ) {
+    final page = _temporaryPages[pagePath];
+    if (page == null || page.published == published) return;
+    _saveToHistory();
+    setState(() {
+      _temporaryPages[pagePath] = page.copyWith(published: published);
+      _updateCurrentJson();
+    });
+    dialogSetState(() {});
+  }
+
   Widget _buildTreeNode(
     String pageName,
     StateSetter dialogSetState,
@@ -1820,6 +2003,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     // An empty section is still a section — otherwise a freshly created one
     // would render as a page and could never receive children.
     final isSection = page.menuItem.isNavigationSection;
+    final isDraft = !page.published;
 
     final row = AiContextMenuWrapper(
       menuItems: [
@@ -1869,7 +2053,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                 : null,
           ),
         ),
-        subtitle: isSection ? const Text('Section') : null,
+        subtitle: _treeNodeSubtitle(isSection: isSection, isDraft: isDraft),
         selected: isSelected && !isSection,
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
@@ -1908,6 +2092,22 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                   dialogContext: dialogContext,
                 ),
               ),
+            IconButton(
+              icon: Icon(
+                isDraft ? Icons.visibility_off : Icons.visibility,
+                size: 18,
+                color: isDraft ? Theme.of(dialogContext).colorScheme.error : null,
+              ),
+              onPressed: () =>
+                  _setPagePublished(pageName, isDraft, dialogSetState),
+              tooltip: isDraft
+                  ? (isSection
+                      ? 'Publish section'
+                      : 'Publish — operators can reach it')
+                  : (isSection
+                      ? 'Unpublish section and everything in it'
+                      : 'Unpublish — keep editing, hide from operators'),
+            ),
             IconButton(
               icon: const Icon(Icons.drive_file_move_outline, size: 18),
               onPressed: () =>
@@ -2071,12 +2271,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
       roots.insert(newIndex, movedName);
       for (int i = 0; i < roots.length; i++) {
         final page = _temporaryPages[roots[i]]!;
-        _temporaryPages[roots[i]] = AssetPage(
-          menuItem: page.menuItem,
-          assets: page.assets,
-          mirroringDisabled: page.mirroringDisabled,
-          navigationPriority: i,
-        );
+        _temporaryPages[roots[i]] = page.copyWith(navigationPriority: i);
       }
       _updateCurrentJson();
     });
@@ -2095,23 +2290,14 @@ class _PageEditorState extends ConsumerState<PageEditor> {
       final children = List<MenuItem>.from(parent.menuItem.children);
       final moved = children.removeAt(oldIndex);
       children.insert(newIndex, moved);
-      _temporaryPages[parentName] = AssetPage(
-        menuItem: parent.menuItem.copyWith(children: children),
-        assets: parent.assets,
-        mirroringDisabled: parent.mirroringDisabled,
-        navigationPriority: parent.navigationPriority,
-      );
+      _temporaryPages[parentName] =
+          parent.copyWith(menuItem: parent.menuItem.copyWith(children: children));
       // Update navigationPriority on each child page
       for (int i = 0; i < children.length; i++) {
         final childPath = children[i].path ?? '';
         final childPage = _temporaryPages[childPath];
         if (childPage != null) {
-          _temporaryPages[childPath] = AssetPage(
-            menuItem: childPage.menuItem,
-            assets: childPage.assets,
-            mirroringDisabled: childPage.mirroringDisabled,
-            navigationPriority: i,
-          );
+          _temporaryPages[childPath] = childPage.copyWith(navigationPriority: i);
         }
       }
       _updateCurrentJson();
@@ -2129,12 +2315,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   ) {
     final page = _temporaryPages[mapKey]!;
     // Create a temporary AssetPage with the child's MenuItem for editing
-    final childPage = AssetPage(
-      menuItem: childItem,
-      assets: page.assets,
-      mirroringDisabled: page.mirroringDisabled,
-      navigationPriority: page.navigationPriority,
-    );
+    final childPage = page.copyWith(menuItem: childItem);
 
     showDialog(
       context: dialogContext,
@@ -2161,13 +2342,13 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                   }
                   return c;
                 }).toList();
-                _temporaryPages[mapKey] = AssetPage(
+                _temporaryPages[mapKey] = parentPage.copyWith(
                   menuItem: parentPage.menuItem.copyWith(
                     children: updatedChildren,
                   ),
-                  assets: parentPage.assets,
                   mirroringDisabled: updatedPage.mirroringDisabled,
                   navigationPriority: updatedPage.navigationPriority,
+                  published: updatedPage.published,
                 );
                 _updateCurrentJson();
               });
@@ -2603,12 +2784,8 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                 } else {
                   priority = _getRootPageNames().length;
                 }
-                final pageWithPriority = AssetPage(
-                  menuItem: page.menuItem,
-                  assets: page.assets,
-                  mirroringDisabled: page.mirroringDisabled,
-                  navigationPriority: priority,
-                );
+                final pageWithPriority =
+                    page.copyWith(navigationPriority: priority);
                 _temporaryPages[newPath] = pageWithPriority;
                 // Add as child of parent if specified
                 if (parentName != null) {
@@ -2617,12 +2794,9 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                     final updatedChildren =
                         List<MenuItem>.from(parent.menuItem.children)
                           ..add(pageWithPriority.menuItem);
-                    _temporaryPages[parentName] = AssetPage(
+                    _temporaryPages[parentName] = parent.copyWith(
                       menuItem:
                           parent.menuItem.copyWith(children: updatedChildren),
-                      assets: parent.assets,
-                      mirroringDisabled: parent.mirroringDisabled,
-                      navigationPriority: parent.navigationPriority,
                     );
                   }
                 }
@@ -2698,12 +2872,8 @@ class _PageEditorState extends ConsumerState<PageEditor> {
       final updated = _updatePathInChildren(
           page.menuItem.children, oldPath, newPath, newMenuItem);
       if (updated != null) {
-        updates[entry.key] = AssetPage(
-          menuItem: page.menuItem.copyWith(children: updated),
-          assets: page.assets,
-          mirroringDisabled: page.mirroringDisabled,
-          navigationPriority: page.navigationPriority,
-        );
+        updates[entry.key] =
+            page.copyWith(menuItem: page.menuItem.copyWith(children: updated));
       }
     }
     _temporaryPages.addAll(updates);
@@ -2767,12 +2937,8 @@ class _PageEditorState extends ConsumerState<PageEditor> {
       final page = entry.value;
       final updated = _removeFromChildren(page.menuItem.children, path);
       if (updated != null) {
-        updates[entry.key] = AssetPage(
-          menuItem: page.menuItem.copyWith(children: updated),
-          assets: page.assets,
-          mirroringDisabled: page.mirroringDisabled,
-          navigationPriority: page.navigationPriority,
-        );
+        updates[entry.key] =
+            page.copyWith(menuItem: page.menuItem.copyWith(children: updated));
       }
     }
     _temporaryPages.addAll(updates);

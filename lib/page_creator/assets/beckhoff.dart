@@ -185,26 +185,26 @@ class _CXxxxxConfigContentState extends State<_CXxxxxConfigContent> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
-                  children: [
-                    Text('Subdevices',
-                        style: Theme.of(context).textTheme.titleMedium),
-                    const Spacer(),
-                    FilledButton.icon(
-                      onPressed: () => Navigator.of(context).maybePop(),
-                      icon: const Icon(Icons.check),
-                      label: const Text('Done'),
-                    ),
-                  ],
-                ),
+                // No "Done" button here. It used to pop the navigator, which
+                // dismissed the config dialog this editor was shown in; the
+                // editor now embeds it in a side pane that is not a route, so
+                // the same tap would navigate out of the page editor
+                // altogether. The pane's own action bar owns dismissal.
+                Text('Subdevices',
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.titleMedium),
                 const SizedBox(height: 8),
                 DropdownButtonFormField<String>(
+                  // Long subdevice names must ellipsize, not push the field
+                  // wider than the column it sits in.
+                  isExpanded: true,
                   decoration: const InputDecoration(
                     border: OutlineInputBorder(),
                     labelText: 'Add Subdevice',
                   ),
                   value: null,
-                  hint: const Text('Select a subdevice to add'),
+                  hint: const Text('Select a subdevice to add',
+                      overflow: TextOverflow.ellipsis),
                   items: _availableSubdevices.keys
                       .map((k) => DropdownMenuItem(value: k, child: Text(k)))
                       .toList(),
@@ -407,26 +407,26 @@ class _EK1100ConfigContentState extends State<_EK1100ConfigContent> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
-                  children: [
-                    Text('Subdevices',
-                        style: Theme.of(context).textTheme.titleMedium),
-                    const Spacer(),
-                    FilledButton.icon(
-                      onPressed: () => Navigator.of(context).maybePop(),
-                      icon: const Icon(Icons.check),
-                      label: const Text('Done'),
-                    ),
-                  ],
-                ),
+                // No "Done" button here. It used to pop the navigator, which
+                // dismissed the config dialog this editor was shown in; the
+                // editor now embeds it in a side pane that is not a route, so
+                // the same tap would navigate out of the page editor
+                // altogether. The pane's own action bar owns dismissal.
+                Text('Subdevices',
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.titleMedium),
                 const SizedBox(height: 8),
                 DropdownButtonFormField<String>(
+                  // Long subdevice names must ellipsize, not push the field
+                  // wider than the column it sits in.
+                  isExpanded: true,
                   decoration: const InputDecoration(
                     border: OutlineInputBorder(),
                     labelText: 'Add Subdevice',
                   ),
                   value: null,
-                  hint: const Text('Select a subdevice to add'),
+                  hint: const Text('Select a subdevice to add',
+                      overflow: TextOverflow.ellipsis),
                   items: _availableSubdevices.keys
                       .map((k) => DropdownMenuItem(value: k, child: Text(k)))
                       .toList(),

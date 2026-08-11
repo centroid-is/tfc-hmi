@@ -443,8 +443,7 @@ class GraphContentConfigState extends State<GraphContentConfig> {
         Row(
           spacing: 8,
           children: [
-            SizedBox(
-              width: 120,
+            Expanded(
               child: TextFormField(
                 initialValue: axis.unit,
                 decoration: const InputDecoration(labelText: 'Unit'),
@@ -460,8 +459,7 @@ class GraphContentConfigState extends State<GraphContentConfig> {
                 },
               ),
             ),
-            SizedBox(
-              width: 120,
+            Expanded(
               child: TextFormField(
                 initialValue: axis.min?.toString() ?? '',
                 decoration: const InputDecoration(labelText: 'Min'),
@@ -478,8 +476,7 @@ class GraphContentConfigState extends State<GraphContentConfig> {
                 },
               ),
             ),
-            SizedBox(
-              width: 120,
+            Expanded(
               child: TextFormField(
                 initialValue: axis.max?.toString() ?? '',
                 decoration: const InputDecoration(labelText: 'Max'),
@@ -502,7 +499,7 @@ class GraphContentConfigState extends State<GraphContentConfig> {
         if (showBoolean)
           Row(
             children: [
-              const Text('Boolean'),
+              const Expanded(child: Text('Boolean')),
               const SizedBox(width: 16),
               Switch(
                 value: axis.boolean,
@@ -522,7 +519,7 @@ class GraphContentConfigState extends State<GraphContentConfig> {
         if (showBoolean)
           Row(
             children: [
-              const Text('Integers Only'),
+              const Expanded(child: Text('Integers Only')),
               const SizedBox(width: 16),
               Checkbox(
                 value: axis.integersOnly,
