@@ -108,8 +108,22 @@ class Base64Converter implements JsonConverter<Uint8List?, String?> {
   }
 }
 
+/// Common shape of a single server entry inside [StateManConfig].
+///
+/// Implemented by [OpcUAConfig], [M2400Config] and [ModbusConfig] so
+/// [StateManConfig] can reason about "which aliases are switched off"
+/// without caring which protocol the entry speaks.
+abstract interface class ServerConfigEntry {
+  /// When false the server is never connected to, and every key routed
+  /// to it fails fast instead of retrying. See [StateManConfig.isServerEnabled].
+  bool get enabled;
+
+  /// The alias keys reference in their `server_alias` node field.
+  String? get serverAlias;
+}
+
 @JsonSerializable(explicitToJson: true)
-class OpcUAConfig {
+class OpcUAConfig implements ServerConfigEntry {
   String endpoint = "opc.tcp://localhost:4840";
   String? username;
   String? password;
@@ -122,11 +136,21 @@ class OpcUAConfig {
   @JsonKey(name: 'server_alias')
   String? serverAlias;
 
+  /// Whether this server takes part in data acquisition.
+  ///
+  /// Disabling a server stops the connect/reconnect loop entirely — an
+  /// unreachable PLC otherwise emits a connect failure, a channel-state
+  /// transition and a subscription retry line every second, which buries
+  /// the rest of the log. Defaults to true so existing configs (which have
+  /// no `enabled` field) keep working untouched.
+  @JsonKey(defaultValue: true)
+  bool enabled = true;
+
   OpcUAConfig();
 
   @override
   String toString() {
-    return 'OpcUAConfig(endpoint: $endpoint, username: $username, password: $password, sslCert: $sslCert, sslKey: $sslKey)';
+    return 'OpcUAConfig(endpoint: $endpoint, username: $username, password: $password, sslCert: $sslCert, sslKey: $sslKey, enabled: $enabled)';
   }
 
   factory OpcUAConfig.fromJson(Map<String, dynamic> json) =>
@@ -135,7 +159,7 @@ class OpcUAConfig {
 }
 
 @JsonSerializable(explicitToJson: true)
-class M2400Config {
+class M2400Config implements ServerConfigEntry {
   @JsonKey(defaultValue: 'm2400')
   String type;
   String host;
@@ -143,7 +167,15 @@ class M2400Config {
   @JsonKey(name: 'server_alias')
   String? serverAlias;
 
-  M2400Config({this.type = 'm2400', this.host = '', this.port = 52211});
+  /// See [OpcUAConfig.enabled].
+  @JsonKey(defaultValue: true)
+  bool enabled;
+
+  M2400Config(
+      {this.type = 'm2400',
+      this.host = '',
+      this.port = 52211,
+      this.enabled = true});
 
   factory M2400Config.fromJson(Map<String, dynamic> json) =>
       _$M2400ConfigFromJson(json);
@@ -151,7 +183,7 @@ class M2400Config {
 
   @override
   String toString() =>
-      'M2400Config(type: $type, host: $host, port: $port, alias: $serverAlias)';
+      'M2400Config(type: $type, host: $host, port: $port, alias: $serverAlias, enabled: $enabled)';
 }
 
 @JsonSerializable(explicitToJson: true)
@@ -257,13 +289,17 @@ class ModbusPollGroupConfig {
 ///
 /// Parallels [M2400Config] and [OpcUAConfig] in the config hierarchy.
 @JsonSerializable(explicitToJson: true)
-class ModbusConfig {
+class ModbusConfig implements ServerConfigEntry {
   String host;
   int port;
   @JsonKey(name: 'unit_id')
   int unitId;
   @JsonKey(name: 'server_alias')
   String? serverAlias;
+
+  /// See [OpcUAConfig.enabled].
+  @JsonKey(defaultValue: true)
+  bool enabled;
   @JsonKey(name: 'poll_groups', defaultValue: [])
   List<ModbusPollGroupConfig> pollGroups;
   @JsonKey(name: 'umas_enabled', defaultValue: false)
@@ -282,6 +318,7 @@ class ModbusConfig {
     this.umasEnabled = false,
     this.endianness = ModbusEndianness.ABCD,
     this.addressBase = 0,
+    this.enabled = true,
   }) : unitId = unitId.clamp(0, 255);
 
   factory ModbusConfig.fromJson(Map<String, dynamic> json) =>
@@ -290,7 +327,7 @@ class ModbusConfig {
 
   @override
   String toString() =>
-      'ModbusConfig(host: $host, port: $port, unitId: $unitId, alias: $serverAlias, pollGroups: $pollGroups)';
+      'ModbusConfig(host: $host, port: $port, unitId: $unitId, alias: $serverAlias, pollGroups: $pollGroups, enabled: $enabled)';
 }
 
 /// Per-key configuration that describes which Modbus register a key maps to.
@@ -336,6 +373,41 @@ class StateManConfig {
   StateManConfig({required this.opcua, this.jbtm = const [], this.modbus = const []});
 
   StateManConfig copy() => StateManConfig.fromJson(toJson());
+
+  /// Every configured server, regardless of protocol or enabled state.
+  List<ServerConfigEntry> get allServers => [...opcua, ...jbtm, ...modbus];
+
+  /// Only the servers that should actually be connected to.
+  List<OpcUAConfig> get enabledOpcua =>
+      opcua.where((c) => c.enabled).toList();
+  List<M2400Config> get enabledJbtm => jbtm.where((c) => c.enabled).toList();
+  List<ModbusConfig> get enabledModbus =>
+      modbus.where((c) => c.enabled).toList();
+
+  /// Normalises an alias so a missing alias and an empty one are the same
+  /// bucket — the UI writes `null` for a cleared alias field but imported
+  /// JSON often carries `""`.
+  static String? normalizeAlias(String? alias) =>
+      (alias == null || alias.isEmpty) ? null : alias;
+
+  /// Aliases that resolve to nothing but disabled servers.
+  ///
+  /// An alias shared by a disabled and an enabled entry is *not* disabled —
+  /// the enabled one still serves its keys. `null` in the returned set means
+  /// the unnamed (aliasless) server is off.
+  Set<String?> get disabledServerAliases {
+    final enabled = <String?>{};
+    final disabled = <String?>{};
+    for (final server in allServers) {
+      final alias = normalizeAlias(server.serverAlias);
+      (server.enabled ? enabled : disabled).add(alias);
+    }
+    return disabled.difference(enabled);
+  }
+
+  /// Whether keys pointing at [alias] should be acquired at all.
+  bool isServerEnabled(String? alias) =>
+      !disabledServerAliases.contains(normalizeAlias(alias));
 
   @override
   String toString() {
@@ -558,6 +630,25 @@ class StateManException implements Exception {
   StateManException(this.message);
   @override
   String toString() => 'StateManException: $message';
+}
+
+/// Thrown when a key is routed to a server the operator switched off.
+///
+/// Distinct from a plain [StateManException] so callers can tell "this key
+/// is parked on purpose" from "this key is broken" — the key repository
+/// renders it as a grey Disabled badge rather than a red Error one. Raised
+/// without logging: an offline PLC with hundreds of keys would otherwise
+/// reproduce the very log flood disabling it is meant to stop.
+class ServerDisabledException extends StateManException {
+  /// The alias that is switched off (`null` for the unnamed server).
+  final String? serverAlias;
+
+  ServerDisabledException(String key, this.serverAlias)
+      : super('Key "$key" belongs to disabled server '
+            '"${serverAlias ?? '<unnamed>'}"');
+
+  @override
+  String toString() => 'ServerDisabledException: $message';
 }
 
 class SingleWorker {
@@ -863,8 +954,11 @@ class M2400DeviceClientAdapter implements DeviceClient {
 /// Each M2400Config produces one [M2400DeviceClientAdapter] wrapping an
 /// [M2400ClientWrapper]. The caller is responsible for calling [connect()]
 /// and [dispose()] on the returned clients.
+///
+/// Servers with `enabled == false` are skipped — no wrapper, no socket, no
+/// reconnect chatter in the log.
 List<DeviceClient> createM2400DeviceClients(List<M2400Config> configs) {
-  return configs.map((config) {
+  return configs.where((config) => config.enabled).map((config) {
     final wrapper = M2400ClientWrapper(config.host, config.port);
     return M2400DeviceClientAdapter(wrapper, serverAlias: config.serverAlias);
   }).toList();
@@ -1076,7 +1170,9 @@ class StateMan {
   }) async {
     // Example directory: /Users/jonb/Library/Containers/is.centroid.sildarvinnsla.skammtalina/Data/Documents/certs
     List<ClientWrapper> clients = [];
-    for (final opcuaConfig in config.opcua) {
+    // Disabled servers get no client at all: no connect loop, no
+    // SecureChannel state logging, no subscription retries.
+    for (final opcuaConfig in config.enabledOpcua) {
       Uint8List? cert;
       Uint8List? key;
       MessageSecurityMode securityMode =
@@ -1132,6 +1228,30 @@ class StateMan {
     }
 
     return stateMan;
+  }
+
+  /// Aliases switched off in [config], resolved once.
+  ///
+  /// [read]/[write]/[subscribe] consult this on every call, and a
+  /// [StateMan]'s config never changes after [create] — only the key
+  /// mappings do — so there is nothing to invalidate.
+  late final Set<String?> _disabledAliases = config.disabledServerAliases;
+
+  bool _isAliasDisabled(String? alias) =>
+      _disabledAliases.contains(StateManConfig.normalizeAlias(alias));
+
+  /// Whether [key] is routed to a server the operator switched off.
+  bool isKeyDisabled(String key) =>
+      _isAliasDisabled(keyMappings.lookupServerAlias(resolveKey(key)));
+
+  /// Throws [ServerDisabledException] if [key] belongs to a disabled server.
+  ///
+  /// Deliberately silent — the whole point of disabling a server is that its
+  /// keys stop talking, including to the log.
+  void _throwIfDisabled(String key) {
+    final alias = keyMappings.lookupServerAlias(key);
+    if (!_isAliasDisabled(alias)) return;
+    throw ServerDisabledException(key, alias);
   }
 
   ClientWrapper _getClientWrapper(String key) {
@@ -1252,6 +1372,7 @@ class StateMan {
   /// Example: read("myKey")
   Future<DynamicValue> read(String key) async {
     key = resolveKey(key);
+    _throwIfDisabled(key);
 
     // Check M2400 key mappings first
     final m2400 = _resolveM2400Key(key);
@@ -1328,6 +1449,10 @@ class StateMan {
     final opcuaKeys = <String>[];
     for (final keyToResolve in keys) {
       final key = resolveKey(keyToResolve);
+
+      // Keys on a disabled server are simply absent from the result, the
+      // same as a key whose value has not been polled yet.
+      if (_isAliasDisabled(keyMappings.lookupServerAlias(key))) continue;
 
       // Check Modbus
       final modbusDc = _resolveModbusDeviceClient(key);
@@ -1418,6 +1543,7 @@ class StateMan {
   /// Example: write("myKey", DynamicValue(value: 42, typeId: NodeId.int16))
   Future<void> write(String key, DynamicValue value) async {
     key = resolveKey(key);
+    _throwIfDisabled(key);
 
     // Check Modbus (and other DeviceClient protocols)
     final modbusDc = _resolveModbusDeviceClient(key);
@@ -1473,6 +1599,7 @@ class StateMan {
   /// Example: subscribe("myIntKey") or subscribe("BATCH.weight")
   Future<Stream<DynamicValue>> subscribe(String key) async {
     key = resolveKey(key);
+    _throwIfDisabled(key);
 
     // Check M2400 key mappings first
     final m2400 = _resolveM2400Key(key);
@@ -1573,6 +1700,11 @@ class StateMan {
     if (_subscriptions.containsKey(key) && !resub) {
       return _subscriptions[key]!.stream;
     }
+
+    // Guard the retry loop below: without a client wrapper it would spin
+    // once a second forever, which is exactly the log flood a disabled
+    // server is supposed to prevent.
+    _throwIfDisabled(key);
 
     logger.d(
         '[$alias] _monitor($key, resub=$resub) hasExisting=${_subscriptions.containsKey(key)}');

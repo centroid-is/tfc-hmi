@@ -20,14 +20,23 @@ class ConnectionStatusChip extends StatelessWidget {
   final EffectiveDeviceStatus? effectiveStatus;
   final bool stateManLoading;
 
+  /// The operator switched this server off in the server config.
+  ///
+  /// Wins over every other state: a disabled server has no client, so any
+  /// status it might still carry is stale. Rendered grey so it reads as
+  /// "parked on purpose", never red like a genuine outage.
+  final bool disabled;
+
   const ConnectionStatusChip({
     super.key,
     required this.status,
     this.effectiveStatus,
     this.stateManLoading = false,
+    this.disabled = false,
   });
 
   Color _color() {
+    if (disabled) return Colors.grey;
     if (effectiveStatus != null) {
       return switch (effectiveStatus!) {
         EffectiveDeviceStatus.connected => Colors.green,
@@ -51,6 +60,7 @@ class ConnectionStatusChip extends StatelessWidget {
   }
 
   String _label() {
+    if (disabled) return 'Disabled';
     if (effectiveStatus != null) {
       return switch (effectiveStatus!) {
         EffectiveDeviceStatus.connected => 'Connected',
@@ -70,6 +80,10 @@ class ConnectionStatusChip extends StatelessWidget {
   }
 
   String? _tooltip() {
+    if (disabled) {
+      return 'Server is disabled — it is not connected to and its keys\n'
+          'are not read, written or collected.';
+    }
     if (effectiveStatus == EffectiveDeviceStatus.umasUnhealthy) {
       return 'TCP is up but the UMAS session is not paired.\n'
           'Likely causes:\n'

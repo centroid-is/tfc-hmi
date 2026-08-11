@@ -996,6 +996,34 @@ class _ServerSectionHeader extends StatelessWidget {
   }
 }
 
+/// Compact enable/disable checkbox shown in a server card's header.
+///
+/// Disabling a server is the operator's escape hatch for a PLC that is off
+/// the network: [StateMan] then never creates a client for it, so the
+/// connect/reconnect loop and the per-key subscription retries — the two
+/// things that flood the log with a machine down — never start. Keys that
+/// point at the server fail fast with a `ServerDisabledException` instead.
+class _ServerEnabledToggle extends StatelessWidget {
+  final bool enabled;
+  final ValueChanged<bool> onChanged;
+
+  const _ServerEnabledToggle({required this.enabled, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: enabled
+          ? 'Server is enabled — untick to disable it and stop all\n'
+              'connection attempts and key traffic for it.'
+          : 'Server is disabled — tick to enable it again.',
+      child: Checkbox(
+        value: enabled,
+        onChanged: (value) => onChanged(value ?? false),
+      ),
+    );
+  }
+}
+
 /// Save/saved-state button for server config sections.
 ///
 /// Shows "Save Configuration" (enabled, themed) when there are unsaved changes,
@@ -1312,10 +1340,11 @@ class _JbtmServerConfigCardState extends State<_JbtmServerConfigCard> {
     super.dispose();
   }
 
-  void _updateServer() {
+  void _updateServer({bool? enabled}) {
     final updated = M2400Config(
       host: _hostController.text,
       port: int.tryParse(_portController.text) ?? 52211,
+      enabled: enabled ?? widget.server.enabled,
     )..serverAlias =
         _aliasController.text.isEmpty ? null : _aliasController.text;
     widget.onUpdate(updated);
@@ -1333,7 +1362,10 @@ class _JbtmServerConfigCardState extends State<_JbtmServerConfigCard> {
         title: Text(
           widget.server.serverAlias ??
               '${widget.server.host}:${widget.server.port}',
-          style: const TextStyle(fontWeight: FontWeight.bold),
+          style: TextStyle(
+            fontWeight: FontWeight.bold,
+            color: widget.server.enabled ? null : Colors.grey,
+          ),
           overflow: TextOverflow.ellipsis,
           maxLines: 1,
         ),
@@ -1349,8 +1381,13 @@ class _JbtmServerConfigCardState extends State<_JbtmServerConfigCard> {
             ConnectionStatusChip(
               status: _connectionStatus,
               stateManLoading: widget.stateManLoading,
+              disabled: !widget.server.enabled,
             ),
-            const SizedBox(width: 8),
+            const SizedBox(width: 4),
+            _ServerEnabledToggle(
+              enabled: widget.server.enabled,
+              onChanged: (value) => _updateServer(enabled: value),
+            ),
             IconButton(
               icon: const FaIcon(FontAwesomeIcons.trash, size: 16),
               onPressed: () {
@@ -1818,7 +1855,8 @@ class _ModbusServerConfigCardState extends State<_ModbusServerConfigCard> {
   }
 
   /// Builds a [ModbusConfig] from the current controller/field state.
-  ModbusConfig _buildConfig({List<ModbusPollGroupConfig>? pollGroups}) {
+  ModbusConfig _buildConfig(
+      {List<ModbusPollGroupConfig>? pollGroups, bool? enabled}) {
     return ModbusConfig(
       host: _hostController.text,
       port: (int.tryParse(_portController.text) ?? 502).clamp(1, 65535),
@@ -1827,6 +1865,7 @@ class _ModbusServerConfigCardState extends State<_ModbusServerConfigCard> {
       umasEnabled: _umasEnabled,
       endianness: _endianness,
       addressBase: _addressBase,
+      enabled: enabled ?? widget.server.enabled,
     )..serverAlias =
         _aliasController.text.isEmpty ? null : _aliasController.text;
   }
@@ -1900,7 +1939,10 @@ class _ModbusServerConfigCardState extends State<_ModbusServerConfigCard> {
         title: Text(
           widget.server.serverAlias ??
               '${widget.server.host}:${widget.server.port}',
-          style: const TextStyle(fontWeight: FontWeight.bold),
+          style: TextStyle(
+            fontWeight: FontWeight.bold,
+            color: widget.server.enabled ? null : Colors.grey,
+          ),
           overflow: TextOverflow.ellipsis,
           maxLines: 1,
         ),
@@ -1919,8 +1961,14 @@ class _ModbusServerConfigCardState extends State<_ModbusServerConfigCard> {
               status: _connectionStatus,
               effectiveStatus: _umasEnabled ? _effectiveStatus : null,
               stateManLoading: widget.stateManLoading,
+              disabled: !widget.server.enabled,
             ),
-            const SizedBox(width: 8),
+            const SizedBox(width: 4),
+            _ServerEnabledToggle(
+              enabled: widget.server.enabled,
+              onChanged: (value) =>
+                  widget.onUpdate(_buildConfig(enabled: value)),
+            ),
             IconButton(
               icon: const FaIcon(FontAwesomeIcons.trash, size: 16),
               onPressed: () {
@@ -2307,7 +2355,7 @@ class _ServerConfigCardState extends State<_ServerConfigCard> {
     super.dispose();
   }
 
-  void _updateServer() {
+  void _updateServer({bool? enabled}) {
     final updatedServer = OpcUAConfig()
       ..endpoint = _endpointController.text
       ..username =
@@ -2318,7 +2366,8 @@ class _ServerConfigCardState extends State<_ServerConfigCard> {
           ? null
           : _serverAliasController.text
       ..sslCert = widget.server.sslCert
-      ..sslKey = widget.server.sslKey;
+      ..sslKey = widget.server.sslKey
+      ..enabled = enabled ?? widget.server.enabled;
 
     widget.onUpdate(updatedServer);
   }
@@ -2438,7 +2487,10 @@ class _ServerConfigCardState extends State<_ServerConfigCard> {
         ),
         title: Text(
           widget.server.serverAlias ?? widget.server.endpoint,
-          style: const TextStyle(fontWeight: FontWeight.bold),
+          style: TextStyle(
+            fontWeight: FontWeight.bold,
+            color: widget.server.enabled ? null : Colors.grey,
+          ),
           overflow: TextOverflow.ellipsis,
           maxLines: 1,
         ),
@@ -2452,8 +2504,13 @@ class _ServerConfigCardState extends State<_ServerConfigCard> {
             ConnectionStatusChip(
               status: _connectionStatus,
               stateManLoading: widget.stateManLoading,
+              disabled: !widget.server.enabled,
             ),
-            const SizedBox(width: 8),
+            const SizedBox(width: 4),
+            _ServerEnabledToggle(
+              enabled: widget.server.enabled,
+              onChanged: (value) => _updateServer(enabled: value),
+            ),
             IconButton(
               icon: const FaIcon(FontAwesomeIcons.trash, size: 16),
               onPressed: () {

@@ -56,12 +56,26 @@ void main() async {
     historyToDb: true,
   );
 
-  logger.i('Spawning ${smConfig.opcua.length} OPC UA + '
-      '${smConfig.jbtm.isEmpty ? 0 : 1} M2400 + '
-      '${smConfig.modbus.isEmpty ? 0 : 1} Modbus DataAcquisition isolate(s)');
+  // Disabled servers are skipped entirely — no isolate, no connect loop.
+  final opcuaServersToSpawn = smConfig.enabledOpcua;
+  final jbtmServersToSpawn = smConfig.enabledJbtm;
+  final modbusServersToSpawn = smConfig.enabledModbus;
+
+  final disabledCount = smConfig.allServers.where((s) => !s.enabled).length;
+  if (disabledCount > 0) {
+    final names = smConfig.allServers
+        .where((s) => !s.enabled)
+        .map((s) => s.serverAlias ?? '<unnamed>')
+        .join(', ');
+    logger.i('Skipping $disabledCount disabled server(s): $names');
+  }
+
+  logger.i('Spawning ${opcuaServersToSpawn.length} OPC UA + '
+      '${jbtmServersToSpawn.isEmpty ? 0 : 1} M2400 + '
+      '${modbusServersToSpawn.isEmpty ? 0 : 1} Modbus DataAcquisition isolate(s)');
 
   // Spawn one isolate per OPC UA server
-  for (final server in smConfig.opcua) {
+  for (final server in opcuaServersToSpawn) {
     final filtered = keyMappings.filterByServer(server.serverAlias);
     final collectedKeys = filtered.nodes.entries
         .where((e) => e.value.collect != null)
@@ -77,7 +91,7 @@ void main() async {
   }
 
   // Spawn one isolate for all M2400 servers
-  if (smConfig.jbtm.isNotEmpty) {
+  if (jbtmServersToSpawn.isNotEmpty) {
     // Collect key mappings for all M2400 servers
     final m2400KeyMappings = KeyMappings(nodes: Map.fromEntries(
       keyMappings.nodes.entries.where((e) => e.value.m2400Node != null),
@@ -85,31 +99,33 @@ void main() async {
     final collectedKeys = m2400KeyMappings.nodes.entries
         .where((e) => e.value.collect != null)
         .map((e) => e.key);
-    final aliases = smConfig.jbtm.map((s) => s.serverAlias ?? s.host).join(', ');
+    final aliases =
+        jbtmServersToSpawn.map((s) => s.serverAlias ?? s.host).join(', ');
     logger.i(
         'Spawning M2400 isolate for [$aliases] with ${m2400KeyMappings.nodes.length} keys (${collectedKeys.length} collected):\n${collectedKeys.map((k) => '  - $k').join('\n')}');
 
     await spawnM2400DataAcquisitionIsolate(
-      servers: smConfig.jbtm,
+      servers: jbtmServersToSpawn,
       dbConfig: dbConfig,
       keyMappings: m2400KeyMappings,
     );
   }
 
   // Spawn one isolate for all Modbus servers
-  if (smConfig.modbus.isNotEmpty) {
+  if (modbusServersToSpawn.isNotEmpty) {
     final modbusKeyMappings = KeyMappings(nodes: Map.fromEntries(
       keyMappings.nodes.entries.where((e) => e.value.modbusNode != null),
     ));
     final collectedKeys = modbusKeyMappings.nodes.entries
         .where((e) => e.value.collect != null)
         .map((e) => e.key);
-    final aliases = smConfig.modbus.map((s) => s.serverAlias ?? s.host).join(', ');
+    final aliases =
+        modbusServersToSpawn.map((s) => s.serverAlias ?? s.host).join(', ');
     logger.i(
         'Spawning Modbus isolate for [$aliases] with ${modbusKeyMappings.nodes.length} keys (${collectedKeys.length} collected):\n${collectedKeys.map((k) => '  - $k').join('\n')}');
 
     await spawnModbusDataAcquisitionIsolate(
-      servers: smConfig.modbus,
+      servers: modbusServersToSpawn,
       dbConfig: dbConfig,
       keyMappings: modbusKeyMappings,
     );

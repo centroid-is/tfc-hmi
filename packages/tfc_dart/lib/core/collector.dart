@@ -100,10 +100,21 @@ class Collector {
     _uptime.start();
     _lastStatsReset = DateTime.now();
     final keyMappings = stateMan.keyMappings;
+    var skipped = 0;
     for (var value in keyMappings.nodes.values) {
-      if (value.collect != null) {
-        collectEntry(value.collect!);
+      if (value.collect == null) continue;
+      // A key on a disabled server has no client to subscribe to. Counting
+      // them and logging once keeps the startup log to a single line instead
+      // of one failure per key.
+      if (stateMan.isKeyDisabled(value.collect!.key)) {
+        skipped++;
+        continue;
       }
+      collectEntry(value.collect!);
+    }
+    if (skipped > 0) {
+      logger.i('[collector] Skipped $skipped collected key(s) on disabled '
+          'server(s)');
     }
   }
 
