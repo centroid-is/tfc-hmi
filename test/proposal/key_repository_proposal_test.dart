@@ -118,27 +118,15 @@ void main() {
       expect(source, contains('acceptProposal(_proposalId!)'));
     });
 
-    test('sets _newlyAddedKey before nullifying _proposedMapping', () {
-      // Regression test: _newlyAddedKey must be assigned to `key` (the
-      // captured local variable), NOT read from _proposedMapping after it has
-      // been set to null. The old buggy pattern was:
+    test('reveals the accepted key using the captured `key` local', () {
+      // Regression test: the accepted key must be expanded and scrolled to
+      // via `key` (the captured local variable), NOT read back from
+      // _proposedMapping after it has been set to null. The old buggy
+      // pattern was:
       //   _proposedMapping = null;
-      //   _newlyAddedKey = _proposedMapping?['key']; // always null!
-      //
-      // Correct pattern: _newlyAddedKey = key; before or after nullification.
-      final stateBlock = RegExp(
-        r'setState\(\(\)\s*\{[^}]*_newlyAddedKey[^}]*_proposedMapping\s*=\s*null',
-        dotAll: true,
-      );
-      expect(
-        source,
-        matches(stateBlock),
-        reason:
-            '_newlyAddedKey must be assigned before _proposedMapping = null '
-            'inside the same setState block',
-      );
-      // Also verify it uses the captured `key` variable, not _proposedMapping
-      expect(source, contains('_newlyAddedKey = key;'));
+      //   ... = _proposedMapping?['key']; // always null!
+      expect(source, contains('_expandedKeys.add(key)'));
+      expect(source, contains('if (key != null) _revealKey(key);'));
     });
   });
 

@@ -81,20 +81,16 @@ void main() {
       await tester.tap(find.text('Add Key'));
       await tester.pumpAndSettle();
 
-      // Scroll back to Add Key button (first card is now expanded)
-      await tester.scrollUntilVisible(
-        find.text('Add Key'),
-        -200,
-        scrollable: find.byType(Scrollable).first,
-      );
-      await tester.pumpAndSettle();
-
+      // The Add Key button lives in the pinned header, so it stays tappable.
       await tester.tap(find.text('Add Key'));
       await tester.pumpAndSettle();
 
-      // Verify both keys exist: new_key and new_key_1
-      expect(find.text('new_key'), findsAtLeastNWidgets(1));
-      expect(find.text('new_key_1'), findsAtLeastNWidgets(1));
+      // Verify both keys exist: new_key and new_key_1. The list is lazy, so
+      // walk down from the top revealing each in turn.
+      await scrollKeyListToTop(tester);
+      for (final name in ['new_key', 'new_key_1']) {
+        await revealKeyCard(tester, name);
+      }
     });
   });
 
@@ -118,6 +114,10 @@ void main() {
       expect(copyButtons, findsOneWidget);
       await tester.tap(copyButtons.first);
       await tester.pumpAndSettle();
+
+      // The copy is expanded and scrolled into view, so go back to the top —
+      // the list is lazy, off-screen cards aren't built.
+      await scrollKeyListToTop(tester);
 
       // Should now have 2 key cards
       expect(find.text('original_key'), findsOneWidget);
@@ -299,8 +299,11 @@ void main() {
       ));
       await tester.pumpAndSettle();
 
-      // Copy twice — scroll back to the original's copy button each time
+      // Copy twice — scroll back to the original's copy button each time.
+      // The list is lazy, so going back to the top is what makes the
+      // original the first built card again.
       for (var i = 0; i < 2; i++) {
+        await scrollKeyListToTop(tester);
         final copyButtons = find.byWidgetPredicate(
             (w) => w is FaIcon && w.icon == FontAwesomeIcons.copy.data);
         await tester.ensureVisible(copyButtons.first);
@@ -309,10 +312,12 @@ void main() {
         await tester.pumpAndSettle();
       }
 
-      // Should have 3 keys: my_key, my_key_copy, my_key_copy_1
-      expect(find.text('my_key'), findsAtLeastNWidgets(1));
-      expect(find.text('my_key_copy'), findsAtLeastNWidgets(1));
-      expect(find.text('my_key_copy_1'), findsAtLeastNWidgets(1));
+      // Should have 3 keys: my_key, my_key_copy, my_key_copy_1. The list is
+      // lazy, so walk down from the top revealing each in turn.
+      await scrollKeyListToTop(tester);
+      for (final name in ['my_key', 'my_key_copy', 'my_key_copy_1']) {
+        await revealKeyCard(tester, name);
+      }
     });
   });
 
@@ -532,6 +537,8 @@ void main() {
       final dropdown = find.byType(DropdownButtonFormField<String>);
       expect(dropdown, findsOneWidget);
 
+      await tester.ensureVisible(dropdown);
+      await tester.pumpAndSettle();
       await tester.tap(dropdown);
       await tester.pumpAndSettle();
 
@@ -1033,6 +1040,8 @@ void main() {
       final regTypeDropdown =
           find.byType(DropdownButtonFormField<ModbusRegisterType>);
       expect(regTypeDropdown, findsOneWidget);
+      await tester.ensureVisible(regTypeDropdown);
+      await tester.pumpAndSettle();
       await tester.tap(regTypeDropdown);
       await tester.pumpAndSettle();
 
@@ -1571,6 +1580,82 @@ void main() {
       expect(find.byType(ReorderableListView), findsNothing);
       // Drag handles hidden because cards don't get a reorderIndex.
       expect(find.byIcon(Icons.drag_indicator), findsNothing);
+    });
+  });
+
+  // ==================== Group: Large repositories ====================
+  //
+  // The page used to render every key card up front (a shrink-wrapped list
+  // inside a page-level scroll view), which made a few thousand keys
+  // unusable — seconds per keystroke in the search box.
+  group('Large repositories', () {
+    KeyMappings manyKeys(int count) => KeyMappings(nodes: {
+          for (var i = 0; i < count; i++)
+            'area${i % 4}_dev${i}_temperature': KeyMappingEntry(
+              opcuaNode: OpcUANodeConfig(namespace: 2, identifier: 'Node$i')
+                ..serverAlias = 'main_server',
+            ),
+        });
+
+    testWidgets('builds only the cards on screen, not all of them',
+        (tester) async {
+      await tester.pumpWidget(buildTestableKeyRepository(
+        keyMappings: manyKeys(500),
+        stateManConfig: sampleStateManConfig(),
+      ));
+      await tester.pumpAndSettle();
+
+      final built = find.byType(ExpansionTile).evaluate().length;
+      expect(built, lessThan(30),
+          reason: 'the key list must build lazily; got $built cards for 500 '
+              'keys');
+      expect(built, greaterThan(0));
+    });
+
+    testWidgets('searching still builds only a screenful', (tester) async {
+      await tester.pumpWidget(buildTestableKeyRepository(
+        keyMappings: manyKeys(500),
+        stateManConfig: sampleStateManConfig(),
+      ));
+      await tester.pumpAndSettle();
+
+      // 'area1' matches a quarter of the keys.
+      await tester.enterText(
+          find.widgetWithText(TextField, 'Search keys...'), 'area1');
+      await tester.pumpAndSettle();
+
+      expect(find.byType(ReorderableListView), findsNothing);
+      final built = find.byType(ExpansionTile).evaluate().length;
+      expect(built, lessThan(30),
+          reason: 'filtered results must build lazily too; got $built');
+      // The filter did narrow the list: 'area3_...' keys can't fuzzy-match
+      // 'area1' (no '1' left to consume after 'area'... in a 'dev3' key).
+      expect(find.textContaining('area3_dev3_'), findsNothing);
+    });
+
+    testWidgets('an expanded card is still expanded after scrolling away '
+        'and back', (tester) async {
+      await tester.pumpWidget(buildTestableKeyRepository(
+        keyMappings: manyKeys(100),
+        stateManConfig: sampleStateManConfig(),
+      ));
+      await tester.pumpAndSettle();
+
+      // Expand the first card.
+      const first = 'area0_dev0_temperature';
+      await tester.tap(find.text(first));
+      await tester.pumpAndSettle();
+      expect(find.widgetWithText(TextField, 'Key Name'), findsOneWidget);
+
+      // Scroll far past it so the lazy list destroys the card, then back.
+      await tester.drag(keyListScrollable, const Offset(0, -3000));
+      await tester.pumpAndSettle();
+      expect(find.text(first), findsNothing,
+          reason: 'card should have been disposed while off screen');
+      await scrollKeyListToTop(tester);
+
+      // Still expanded: the name field is showing again.
+      expect(find.widgetWithText(TextField, 'Key Name'), findsOneWidget);
     });
   });
 }

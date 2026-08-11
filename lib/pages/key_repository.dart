@@ -63,23 +63,38 @@ class KeyRepositoryContent extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final dbAsync = ref.watch(databaseProvider);
 
-    return SingleChildScrollView(
-      child: Column(
-        children: [
-          // Database status indicator
-          dbAsync.when(
-            data: (db) {
-              if (db != null) return const SizedBox.shrink();
-              return _DatabaseStatusBanner(connected: false);
-            },
-            loading: () => _DatabaseStatusBanner(connected: false, loading: true),
-            error: (_, __) => _DatabaseStatusBanner(connected: false),
-          ),
-          _KeyMappingsSection(proposalData: proposalData),
-          const SizedBox(height: 16),
-          _KeyMappingsImportExportCard(),
-        ],
-      ),
+    // The key list scrolls on its own (see [_KeyMappingsSection]) instead of
+    // the whole page living in a SingleChildScrollView. A scroll view with a
+    // shrink-wrapped list inside builds *every* key card up front, which is
+    // what made a repository with thousands of keys crawl.
+    final content = Column(
+      children: [
+        // Database status indicator
+        dbAsync.when(
+          data: (db) {
+            if (db != null) return const SizedBox.shrink();
+            return _DatabaseStatusBanner(connected: false);
+          },
+          loading: () => _DatabaseStatusBanner(connected: false, loading: true),
+          error: (_, __) => _DatabaseStatusBanner(connected: false),
+        ),
+        Expanded(child: _KeyMappingsSection(proposalData: proposalData)),
+        const SizedBox(height: 16),
+        _KeyMappingsImportExportCard(),
+      ],
+    );
+
+    // Header, save button and import/export are fixed height; below this the
+    // key list has no room left and the column would overflow. Fall back to
+    // scrolling the page as a whole (the key list itself stays lazy).
+    const minContentHeight = 320.0;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        if (constraints.maxHeight >= minContentHeight) return content;
+        return SingleChildScrollView(
+          child: SizedBox(height: minContentHeight, child: content),
+        );
+      },
     );
   }
 }
@@ -147,15 +162,51 @@ class _KeyMappingsSection extends ConsumerStatefulWidget {
       _KeyMappingsSectionState();
 }
 
+/// One row of the key list with its search fields pre-lowercased.
+///
+/// Lowercasing every key/identifier/alias on each keystroke was a large part
+/// of the search lag; the index is built once per mutation instead.
+class _KeyRow {
+  final String key;
+  final KeyMappingEntry entry;
+  final List<String> searchFields;
+
+  const _KeyRow(this.key, this.entry, this.searchFields);
+}
+
 class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
   KeyMappings? _keyMappings;
-  KeyMappings? _savedKeyMappings;
+
+  /// Encoded snapshot of the last persisted mappings, used for the unsaved
+  /// check. Kept as a string so the comparison is one cached encode instead
+  /// of re-serialising both sides on every build.
+  String? _savedJson;
   StateManConfig? _stateManConfig;
   bool _isLoading = true;
   String? _error;
   String _searchQuery = '';
-  String? _newlyAddedKey;
-  Map<String, _KeyStatus> _keyStatuses = {};
+  final Map<String, _KeyStatus> _keyStatuses = {};
+
+  /// Expansion state lives here rather than in the cards: the list is lazy,
+  /// so a card scrolled out of view is destroyed and would otherwise forget
+  /// that the operator had it open.
+  final Set<String> _expandedKeys = {};
+
+  final ScrollController _listController = ScrollController();
+
+  // ---- Derived caches, all invalidated by [_invalidateDerived] ----
+  String? _currentJsonCache;
+  List<_KeyRow>? _rowsCache;
+  String? _filterCacheQuery;
+  List<_KeyRow>? _filterCache;
+  List<String> _serverAliases = const [];
+  List<String> _jbtmServerAliases = const [];
+  List<String> _modbusServerAliases = const [];
+
+  /// Coalesces the per-key status updates produced by [_probeKeys] into at
+  /// most one rebuild per 250 ms.
+  Timer? _statusFlushTimer;
+  bool _statusDirty = false;
 
   /// Proposal state
   Map<String, dynamic>? _proposedMapping;
@@ -167,6 +218,22 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
     super.initState();
     _loadKeyMappings();
     _parseKeyMappingProposal(widget.proposalData);
+  }
+
+  @override
+  void dispose() {
+    _statusFlushTimer?.cancel();
+    _listController.dispose();
+    super.dispose();
+  }
+
+  /// Drops every cache derived from [_keyMappings]. Call from anything that
+  /// mutates the mappings.
+  void _invalidateDerived() {
+    _currentJsonCache = null;
+    _rowsCache = null;
+    _filterCache = null;
+    _filterCacheQuery = null;
   }
 
   /// Parses key mapping proposal JSON.
@@ -210,9 +277,10 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
     try {
       final prefs = await ref.read(preferencesProvider.future);
       _keyMappings = await KeyMappings.fromPrefs(prefs);
-      _savedKeyMappings =
-          KeyMappings.fromJson(jsonDecode(jsonEncode(_keyMappings!.toJson())));
+      _invalidateDerived();
+      _savedJson = _currentJson();
       _stateManConfig = await StateManConfig.fromPrefs(prefs);
+      _rebuildAliasLists();
     } catch (e) {
       _error = e.toString();
     } finally {
@@ -223,10 +291,12 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
     }
   }
 
+  String _currentJson() =>
+      _currentJsonCache ??= jsonEncode(_keyMappings!.toJson());
+
   bool get _hasUnsavedChanges {
-    if (_keyMappings == null || _savedKeyMappings == null) return false;
-    return jsonEncode(_keyMappings!.toJson()) !=
-        jsonEncode(_savedKeyMappings!.toJson());
+    if (_keyMappings == null || _savedJson == null) return false;
+    return _currentJson() != _savedJson;
   }
 
   Future<void> _saveKeyMappings() async {
@@ -235,9 +305,11 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
     FocusManager.instance.primaryFocus?.unfocus();
     try {
       final prefs = await ref.read(preferencesProvider.future);
-      await prefs.setString('key_mappings', jsonEncode(_keyMappings!.toJson()));
-      _savedKeyMappings =
-          KeyMappings.fromJson(jsonDecode(jsonEncode(_keyMappings!.toJson())));
+      // Unfocusing above may have committed a rename, so re-encode.
+      _invalidateDerived();
+      final json = _currentJson();
+      await prefs.setString('key_mappings', json);
+      _savedJson = json;
       ref.invalidate(stateManProvider);
       if (!mounted) return;
       setState(() {});
@@ -259,6 +331,33 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
 
   final Map<String, GlobalKey> _cardKeys = {};
 
+  /// Scrolls the newly added/duplicated [name] into view once it is laid out.
+  ///
+  /// The list is lazy, so a card appended past the bottom of the viewport has
+  /// no element yet and [Scrollable.ensureVisible] has nothing to target. When
+  /// the key is the last one — which is where [_addKey] puts it — jump to the
+  /// end of the list and retry on the following frame. A key inserted mid-list
+  /// (a duplicate) sits next to its original, which is on screen, so its card
+  /// is already built; jumping to the end for that case would scroll the
+  /// operator somewhere they didn't ask to go.
+  void _revealKey(String name) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final keyContext = _cardKeys[name]?.currentContext;
+      if (keyContext != null) {
+        Scrollable.ensureVisible(keyContext,
+            duration: const Duration(milliseconds: 300));
+        return;
+      }
+      final isLast = _keyMappings?.nodes.keys.lastOrNull == name;
+      if (!isLast || !_listController.hasClients) return;
+      _listController.jumpTo(_listController.position.maxScrollExtent);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        final ctx = _cardKeys[name]?.currentContext;
+        if (ctx != null) Scrollable.ensureVisible(ctx);
+      });
+    });
+  }
+
   void _addKey() {
     final baseName = 'new_key';
     var name = baseName;
@@ -268,20 +367,14 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
       i++;
     }
     _cardKeys[name] = GlobalKey();
+    _expandedKeys.add(name);
     setState(() {
       _keyMappings!.nodes[name] = KeyMappingEntry(
         opcuaNode: OpcUANodeConfig(namespace: 0, identifier: ''),
       );
-      _newlyAddedKey = name;
+      _invalidateDerived();
     });
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      final keyContext = _cardKeys[name]?.currentContext;
-      if (keyContext != null) {
-        Scrollable.ensureVisible(keyContext,
-            duration: const Duration(milliseconds: 300));
-      }
-      _newlyAddedKey = null;
-    });
+    _revealKey(name);
   }
 
   void _duplicateKey(String key) {
@@ -299,6 +392,7 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
       copy.collect!.key = newName;
     }
     _cardKeys[newName] = GlobalKey();
+    _expandedKeys.add(newName);
     // Insert copy right after the original, preserving order
     final newNodes = <String, KeyMappingEntry>{};
     for (final kv in _keyMappings!.nodes.entries) {
@@ -309,23 +403,33 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
     }
     setState(() {
       _keyMappings!.nodes = newNodes;
-      _newlyAddedKey = newName;
+      _invalidateDerived();
     });
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      final keyContext = _cardKeys[newName]?.currentContext;
-      if (keyContext != null) {
-        Scrollable.ensureVisible(keyContext,
-            duration: const Duration(milliseconds: 300));
-      }
-      _newlyAddedKey = null;
-    });
+    _revealKey(newName);
   }
 
   void _removeKey(String key) {
     _cardKeys.remove(key);
     _keyStatuses.remove(key);
+    _expandedKeys.remove(key);
     setState(() {
       _keyMappings!.nodes.remove(key);
+      _invalidateDerived();
+    });
+  }
+
+  /// Requests a rebuild for freshly probed statuses, at most once per 250 ms.
+  ///
+  /// Probing thousands of keys used to rebuild the whole page per key (and
+  /// copy the status map each time, making it quadratic).
+  void _scheduleStatusFlush() {
+    _statusDirty = true;
+    if (_statusFlushTimer != null) return;
+    _statusFlushTimer = Timer(const Duration(milliseconds: 250), () {
+      _statusFlushTimer = null;
+      if (!mounted || !_statusDirty) return;
+      _statusDirty = false;
+      setState(() {});
     });
   }
 
@@ -336,24 +440,31 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
     final stateMan = stateManAsync.valueOrNull;
     if (stateMan == null) return;
 
-    final newStatuses = <String, _KeyStatus>{};
     final keys = _keyMappings!.nodes.keys.toList();
     for (final key in keys) {
+      if (!mounted) return;
+      // The operator can rename or delete keys while a long probe runs.
+      // Statuses are written in place now, so skip keys that are gone —
+      // otherwise the map keeps entries no card will ever read, and a key
+      // later given that same name inherits a stale status.
+      if (!_keyMappings!.nodes.containsKey(key)) {
+        _keyStatuses.remove(key);
+        continue;
+      }
       try {
         await stateMan.read(key).timeout(const Duration(seconds: 5));
-        newStatuses[key] = _KeyStatus.ok;
+        _keyStatuses[key] = _KeyStatus.ok;
       } on TimeoutException {
-        newStatuses[key] = _KeyStatus.serverDisconnected;
+        _keyStatuses[key] = _KeyStatus.serverDisconnected;
       } catch (e) {
         final msg = e.toString().toLowerCase();
         if (msg.contains('not found') || msg.contains('connect')) {
-          newStatuses[key] = _KeyStatus.serverDisconnected;
+          _keyStatuses[key] = _KeyStatus.serverDisconnected;
         } else {
-          newStatuses[key] = _KeyStatus.error;
+          _keyStatuses[key] = _KeyStatus.error;
         }
       }
-      // Update UI incrementally
-      if (mounted) setState(() => _keyStatuses = Map.of(newStatuses));
+      _scheduleStatusFlush();
     }
   }
 
@@ -369,6 +480,7 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
     if (cardKey != null) _cardKeys[newKey] = cardKey;
     final status = _keyStatuses.remove(oldKey);
     if (status != null) _keyStatuses[newKey] = status;
+    if (_expandedKeys.remove(oldKey)) _expandedKeys.add(newKey);
     // Rebuild map preserving insertion order
     final newNodes = <String, KeyMappingEntry>{};
     for (final kv in _keyMappings!.nodes.entries) {
@@ -376,12 +488,14 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
     }
     setState(() {
       _keyMappings!.nodes = newNodes;
+      _invalidateDerived();
     });
   }
 
   void _updateEntry(String key, KeyMappingEntry entry) {
     setState(() {
       _keyMappings!.nodes[key] = entry;
+      _invalidateDerived();
     });
   }
 
@@ -415,42 +529,63 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
     }
     setState(() {
       _keyMappings!.nodes = newNodes;
+      _invalidateDerived();
     });
   }
 
-  List<MapEntry<String, KeyMappingEntry>> get _filteredEntries {
-    if (_keyMappings == null) return [];
-    final entries = _keyMappings!.nodes.entries.toList();
-    return fuzzyFilter(entries, _searchQuery, [
-      (e) => e.key,
-      (e) => e.value.opcuaNode?.identifier ?? '',
-      (e) => e.value.opcuaNode?.serverAlias ?? e.value.m2400Node?.serverAlias ?? e.value.modbusNode?.serverAlias ?? '',
-    ]);
+  /// The key list with search fields pre-lowercased. Rebuilt only when the
+  /// mappings change, not on every keystroke.
+  List<_KeyRow> get _rows {
+    if (_keyMappings == null) return const [];
+    return _rowsCache ??= [
+      for (final e in _keyMappings!.nodes.entries)
+        _KeyRow(e.key, e.value, [
+          e.key.toLowerCase(),
+          (e.value.opcuaNode?.identifier ?? '').toLowerCase(),
+          (e.value.opcuaNode?.serverAlias ??
+                  e.value.m2400Node?.serverAlias ??
+                  e.value.modbusNode?.serverAlias ??
+                  '')
+              .toLowerCase(),
+        ]),
+    ];
   }
 
-  List<String> get _serverAliases {
-    if (_stateManConfig == null) return [];
-    return _stateManConfig!.opcua
-        .where((c) => c.serverAlias != null && c.serverAlias!.isNotEmpty)
-        .map((c) => c.serverAlias!)
-        .toList();
+  List<_KeyRow> get _filteredEntries {
+    final rows = _rows;
+    if (_searchQuery.isEmpty) return rows;
+    if (_filterCache != null && _filterCacheQuery == _searchQuery) {
+      return _filterCache!;
+    }
+    final q = _searchQuery.toLowerCase();
+    final matched = <_KeyRow>[];
+    for (final row in rows) {
+      for (final field in row.searchFields) {
+        if (fuzzyMatch(field, q)) {
+          matched.add(row);
+          break;
+        }
+      }
+    }
+    _filterCacheQuery = _searchQuery;
+    return _filterCache = matched;
   }
 
-  List<String> get _jbtmServerAliases {
-    if (_stateManConfig == null) return [];
-    return _stateManConfig!.jbtm
-        .where((c) => c.serverAlias != null && c.serverAlias!.isNotEmpty)
-        .map((c) => c.serverAlias!)
-        .toList();
+  /// The three server-alias lists used to be getters that rebuilt on every
+  /// build and were handed to every card. They only change when the config
+  /// is (re)loaded.
+  void _rebuildAliasLists() {
+    final cfg = _stateManConfig;
+    _serverAliases = _nonEmptyAliases(cfg?.opcua.map((c) => c.serverAlias));
+    _jbtmServerAliases = _nonEmptyAliases(cfg?.jbtm.map((c) => c.serverAlias));
+    _modbusServerAliases =
+        _nonEmptyAliases(cfg?.modbus.map((c) => c.serverAlias));
   }
 
-  List<String> get _modbusServerAliases {
-    if (_stateManConfig == null) return [];
-    return _stateManConfig!.modbus
-        .where((c) => c.serverAlias != null && c.serverAlias!.isNotEmpty)
-        .map((c) => c.serverAlias!)
-        .toList();
-  }
+  static List<String> _nonEmptyAliases(Iterable<String?>? aliases) => [
+        for (final a in aliases ?? const <String?>[])
+          if (a != null && a.isNotEmpty) a,
+      ];
 
   @override
   Widget build(BuildContext context) {
@@ -521,6 +656,11 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
                         mapping.opcuaNode = OpcUANodeConfig.fromJson(opcuaNode);
                       }
                       _keyMappings!.nodes[key] = mapping;
+                      _expandedKeys.add(key);
+                      // _saveKeyMappings() invalidates too, but only after
+                      // its first await — the setState below would otherwise
+                      // rebuild the list from a cache that predates this key.
+                      _invalidateDerived();
                       _saveKeyMappings();
                     }
                     if (_proposalId != null) {
@@ -530,10 +670,10 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
                       } catch (_) {}
                     }
                     setState(() {
-                      _newlyAddedKey = key;
                       _isProposal = false;
                       _proposedMapping = null;
                     });
+                    if (key != null) _revealKey(key);
                   },
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.green,
@@ -575,7 +715,8 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
               subtitle: Text('AI Proposed key mapping'),
             ),
           ),
-        Card(
+        Expanded(
+          child: Card(
       child: Padding(
         padding: const EdgeInsets.all(16.0),
         child: Column(
@@ -686,75 +827,28 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
               },
             ),
             const SizedBox(height: 16),
-            // Key list
-            filtered.isEmpty
-                ? const SizedBox(
-                    height: 200,
-                    child: _EmptyKeysWidget(),
-                  )
-                : _searchQuery.isEmpty
-                    ? ReorderableListView.builder(
-                        shrinkWrap: true,
-                        physics: const NeverScrollableScrollPhysics(),
-                        buildDefaultDragHandles: false,
-                        itemCount: filtered.length,
-                        onReorder: _reorderKey,
-                        itemBuilder: (context, index) {
-                          final entry = filtered[index];
-                          final isNew = entry.key == _newlyAddedKey;
-                          // Every card gets a stable GlobalKey keyed by entry name,
-                          // not just newly-added ones. _renameKey and _reorderKey
-                          // both keep the GlobalKey associated with the entry's
-                          // current name, so ExpansionTile expansion state survives
-                          // reorders and renames alike.
-                          _cardKeys.putIfAbsent(entry.key, () => GlobalKey());
-                          return _KeyMappingCard(
-                            key: _cardKeys[entry.key],
-                            keyName: entry.key,
-                            entry: entry.value,
-                            serverAliases: _serverAliases,
-                            jbtmServerAliases: _jbtmServerAliases,
-                            modbusServerAliases: _modbusServerAliases,
-                            modbusConfigs: _stateManConfig?.modbus ?? [],
-                            onUpdate: (updated) =>
-                                _updateEntry(entry.key, updated),
-                            onRename: (newName) =>
-                                _renameKey(entry.key, newName),
-                            onCopy: () => _duplicateKey(entry.key),
-                            onRemove: () => _showDeleteDialog(entry.key),
-                            initiallyExpanded: isNew,
-                            status: _keyStatuses[entry.key],
-                            reorderIndex: index,
-                          );
-                        },
-                      )
-                    : ListView.builder(
-                        shrinkWrap: true,
-                        physics: const NeverScrollableScrollPhysics(),
-                        itemCount: filtered.length,
-                        itemBuilder: (context, index) {
-                          final entry = filtered[index];
-                          final isNew = entry.key == _newlyAddedKey;
-                          _cardKeys.putIfAbsent(entry.key, () => GlobalKey());
-                          return _KeyMappingCard(
-                            key: _cardKeys[entry.key],
-                            keyName: entry.key,
-                            entry: entry.value,
-                            serverAliases: _serverAliases,
-                            jbtmServerAliases: _jbtmServerAliases,
-                            modbusServerAliases: _modbusServerAliases,
-                            modbusConfigs: _stateManConfig?.modbus ?? [],
-                            onUpdate: (updated) =>
-                                _updateEntry(entry.key, updated),
-                            onRename: (newName) =>
-                                _renameKey(entry.key, newName),
-                            onCopy: () => _duplicateKey(entry.key),
-                            onRemove: () => _showDeleteDialog(entry.key),
-                            initiallyExpanded: isNew,
-                            status: _keyStatuses[entry.key],
-                          );
-                        },
-                      ),
+            // Key list. Both branches scroll themselves and build lazily —
+            // only the cards on screen exist, so a repository with thousands
+            // of keys costs the same to render as one with ten.
+            Expanded(
+              child: filtered.isEmpty
+                  ? const _EmptyKeysWidget()
+                  : _searchQuery.isEmpty
+                      ? ReorderableListView.builder(
+                          scrollController: _listController,
+                          buildDefaultDragHandles: false,
+                          itemCount: filtered.length,
+                          onReorder: _reorderKey,
+                          itemBuilder: (context, index) =>
+                              _buildCard(filtered[index], reorderIndex: index),
+                        )
+                      : ListView.builder(
+                          controller: _listController,
+                          itemCount: filtered.length,
+                          itemBuilder: (context, index) =>
+                              _buildCard(filtered[index]),
+                        ),
+            ),
             const SizedBox(height: 16),
             // Save button
             Row(
@@ -781,7 +875,43 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
         ),
       ),
     ),
+        ),
       ],
+    );
+  }
+
+  /// Builds one key card. [reorderIndex] is non-null only in the
+  /// reorderable (unfiltered) list.
+  Widget _buildCard(_KeyRow row, {int? reorderIndex}) {
+    // Every card gets a stable GlobalKey keyed by entry name, not just
+    // newly-added ones. _renameKey and _reorderKey both keep the GlobalKey
+    // associated with the entry's current name, so it survives reorders and
+    // renames alike.
+    final cardKey = _cardKeys.putIfAbsent(row.key, () => GlobalKey());
+    return _KeyMappingCard(
+      key: cardKey,
+      keyName: row.key,
+      entry: row.entry,
+      serverAliases: _serverAliases,
+      jbtmServerAliases: _jbtmServerAliases,
+      modbusServerAliases: _modbusServerAliases,
+      modbusConfigs: _stateManConfig?.modbus ?? const [],
+      onUpdate: (updated) => _updateEntry(row.key, updated),
+      onRename: (newName) => _renameKey(row.key, newName),
+      onCopy: () => _duplicateKey(row.key),
+      onRemove: () => _showDeleteDialog(row.key),
+      initiallyExpanded: _expandedKeys.contains(row.key),
+      onExpansionChanged: (expanded) {
+        // No setState: the tile animates itself, and this only needs to be
+        // remembered for when the lazy list rebuilds the card.
+        if (expanded) {
+          _expandedKeys.add(row.key);
+        } else {
+          _expandedKeys.remove(row.key);
+        }
+      },
+      status: _keyStatuses[row.key],
+      reorderIndex: reorderIndex,
     );
   }
 
@@ -847,6 +977,10 @@ class _KeyMappingCard extends StatefulWidget {
   final VoidCallback onCopy;
   final VoidCallback onRemove;
   final bool initiallyExpanded;
+
+  /// Reported so the parent can remember expansion across the lazy list
+  /// destroying and rebuilding this card as it scrolls.
+  final ValueChanged<bool>? onExpansionChanged;
   final _KeyStatus? status;
 
   /// When non-null, this card is rendered inside a [ReorderableListView]
@@ -868,6 +1002,7 @@ class _KeyMappingCard extends StatefulWidget {
     required this.onCopy,
     required this.onRemove,
     this.initiallyExpanded = false,
+    this.onExpansionChanged,
     this.status,
     this.reorderIndex,
   });
@@ -1116,6 +1251,7 @@ class _KeyMappingCardState extends State<_KeyMappingCard> {
       margin: const EdgeInsets.only(bottom: 8),
       child: ExpansionTile(
         initiallyExpanded: widget.initiallyExpanded,
+        onExpansionChanged: widget.onExpansionChanged,
         leading: widget.reorderIndex != null
             ? Row(
                 mainAxisSize: MainAxisSize.min,
