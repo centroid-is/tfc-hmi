@@ -81,7 +81,8 @@ ConveyorConfig _$ConveyorConfigFromJson(Map<String, dynamic> json) =>
       ..text = json['text'] as String?
       ..textPos = $enumDecodeNullable(_$TextPosEnumMap, json['textPos'])
       ..techDocId = (json['techDocId'] as num?)?.toInt()
-      ..plcAssetKey = json['plcAssetKey'] as String?;
+      ..plcAssetKey = json['plcAssetKey'] as String?
+      ..beltWidthRelative = (json['beltWidthRelative'] as num?)?.toDouble();
 
 Map<String, dynamic> _$ConveyorConfigToJson(ConveyorConfig instance) =>
     <String, dynamic>{
@@ -106,6 +107,7 @@ Map<String, dynamic> _$ConveyorConfigToJson(ConveyorConfig instance) =>
       'gates': _gatesToJson(instance.gates),
       'turns': instance.turns.map((e) => e.toJson()).toList(),
       'beltThickness': instance.beltThickness,
+      'beltWidthRelative': instance.beltWidthRelative,
     };
 
 const _$AugerOpenEndEnumMap = {
