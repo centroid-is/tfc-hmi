@@ -87,6 +87,7 @@ const _$ThirdPartyEquipmentKindEnumMap = {
   ThirdPartyEquipmentKind.speedBatcher: 'speedBatcher',
   ThirdPartyEquipmentKind.boxErector: 'boxErector',
   ThirdPartyEquipmentKind.strappingLine: 'strappingLine',
+  ThirdPartyEquipmentKind.fishAligner: 'fishAligner',
 };
 
 Value? _$JsonConverterFromJson<Json, Value>(

@@ -95,8 +95,16 @@ Future<void> loadRealFont() async {
 /// run-direction arrow visible here.
 Widget buildRunningStation({double frequency = 50.0}) {
   final children = buildSpeedBatcherStationChildren(acceptWindowMinutes: 30);
-  // Readouts stay as real children; the belts are painted below so they can
-  // be shown running.
+
+  // Weight readouts go in as real children, on their real anchors, switched
+  // to NumberWidget's preview key so they show a value without a PLC.
+  //
+  // The accept ratio does NOT. `RatioNumberConfig` counts events out of a
+  // timeseries database through `timeseries_notify_mixin`, which arms timers
+  // off `databaseProvider` — a widget test has no database to give it, and
+  // the binding then fails the test on a pending timer. Its placement, type
+  // and window are covered by unit tests in third_party_config_test.dart
+  // instead; only the picture is missing it.
   final readouts = children.where((e) => e.child is NumberConfig).toList();
   for (final entry in readouts) {
     (entry.child as NumberConfig).key = 'Number preview';
@@ -227,6 +235,8 @@ void main() {
         find.byKey(_key),
         matchesGoldenFile('goldens/third_party_speedBatcher_populated.png'),
       );
+
+
     });
 
     // The strapping line ships as SL-15-1, -2 and -3. Head count changes both

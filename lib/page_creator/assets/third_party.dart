@@ -14,6 +14,7 @@ import 'common.dart';
 import 'conveyor.dart' show ConveyorConfig;
 import 'led.dart' show LEDPainter, LEDType;
 import 'number.dart' show NumberConfig;
+import 'ratio_number.dart' show RatioNumberConfig;
 import 'registry.dart';
 import 'sensor.dart' show SensorConfig;
 import 'third_party_painter.dart';
@@ -36,6 +37,12 @@ enum ThirdPartyEquipmentKind {
   boxErector,
 
   strappingLine,
+
+  /// The vodlari — Icelandic for the fish aligning buffer. Stored under an
+  /// English-ish identifier because the persisted JSON should not depend on
+  /// non-ASCII, but it is called the vodlari on the plant floor and the label
+  /// says so.
+  fishAligner,
 }
 
 /// Operator-facing metadata for each kind. Kept out of the enum so the
@@ -53,6 +60,8 @@ extension ThirdPartyEquipmentKindInfo on ThirdPartyEquipmentKind {
         return 'Box erector (TODO: product name)';
       case ThirdPartyEquipmentKind.strappingLine:
         return 'Afak / Strapex strapping line';
+      case ThirdPartyEquipmentKind.fishAligner:
+        return 'Vöðlari (fish aligning buffer)';
     }
   }
 
@@ -75,6 +84,8 @@ extension ThirdPartyEquipmentKindInfo on ThirdPartyEquipmentKind {
         return 'station layout — per site sketch';
       case ThirdPartyEquipmentKind.boxErector:
         return 'tall and narrow — per site CAD';
+      case ThirdPartyEquipmentKind.fishAligner:
+        return 'near square — per site CAD';
       case ThirdPartyEquipmentKind.strappingLine:
         // Only the 3-strapper line length is published. A shorter line is the
         // same line with strappers removed, so its length is estimated at one
@@ -111,6 +122,9 @@ extension ThirdPartyEquipmentKindInfo on ThirdPartyEquipmentKind {
         return 0.35;
       case ThirdPartyEquipmentKind.strappingLine:
         return (2665 - (3 - strapMachines.clamp(1, 3)) * 640) / 1815;
+      case ThirdPartyEquipmentKind.fishAligner:
+        // Close to square in the site CAD.
+        return 0.93;
     }
   }
 
@@ -340,7 +354,27 @@ class ThirdPartyEquipmentConfig extends BaseAsset {
     size = const RelativeSize(width: 0.16, height: 0.10);
   }
 
+  /// Palette preview. Multivac by default, so no children are built — a
+  /// SpeedBatcher picked from the dropdown gets its station scaffolded there.
   ThirdPartyEquipmentConfig.preview() : this();
+
+  /// A SpeedBatcher complete with its two conveyors and their readouts.
+  ///
+  /// The station is only meaningful with them: each checkweigher IS a
+  /// conveyor, and the weight and accept rate are why it is on the mimic at
+  /// all. Keys start empty for the operator to fill in.
+  factory ThirdPartyEquipmentConfig.speedBatcherStation({
+    int acceptWindowMinutes = 30,
+  }) {
+    final config = ThirdPartyEquipmentConfig(
+      kind: ThirdPartyEquipmentKind.speedBatcher,
+      acceptWindowMinutes: acceptWindowMinutes,
+    );
+    config.children
+        .addAll(buildSpeedBatcherStationChildren(
+            acceptWindowMinutes: acceptWindowMinutes));
+    return config;
+  }
 
   factory ThirdPartyEquipmentConfig.fromJson(Map<String, dynamic> json) =>
       _$ThirdPartyEquipmentConfigFromJson(json);
@@ -404,6 +438,8 @@ ThirdPartyMachinePainter thirdPartyPainterFor(
         strokeWidth: strokeWidth,
         machines: strapMachines.clamp(1, StrappingLinePainter.maxMachines),
       );
+    case ThirdPartyEquipmentKind.fishAligner:
+      return FishAlignerPainter(color: color, strokeWidth: strokeWidth);
   }
 }
 
@@ -440,6 +476,30 @@ NumberConfig thirdPartyNumber({
   );
   if (size != null) number.size = size;
   return number;
+}
+
+/// The accept-rate readout for a checkweigher.
+///
+/// A `RatioNumberConfig`, not a plain number with a `%` suffix: accept rate is
+/// accepted-over-total across a rolling window, which is precisely what this
+/// asset models. Its `sinceMinutes` carries the window natively, so the figure
+/// cannot be mistaken for an instantaneous reading and nothing has to be
+/// smuggled into a units string.
+RatioNumberConfig thirdPartyAcceptRatio({
+  required int windowMinutes,
+  RelativeSize? size,
+}) {
+  final ratio = RatioNumberConfig(
+    // Operator points these at accepted-count and total-count.
+    key1: '',
+    key2: '',
+    key1Label: 'accepted',
+    key2Label: 'total',
+    sinceMinutes: Duration(minutes: windowMinutes),
+    decimalPlaces: 1,
+  );
+  if (size != null) ratio.size = size;
+  return ratio;
 }
 
 /// Builds the standard set of live assets for the SpeedBatcher station.
@@ -489,11 +549,8 @@ List<ThirdPartyChildEntry> buildSpeedBatcherStationChildren({
       offsetX: accept.dx,
       offsetY: accept.dy,
       keepUpright: true,
-      child: thirdPartyNumber(
-        // Still not a bare "%": a percentage beside a running belt otherwise
-        // reads as "this pack" when it is really a rolling figure.
-        units: '% ${acceptWindowMinutes}m',
-        decimalPlaces: 1,
+      child: thirdPartyAcceptRatio(
+        windowMinutes: acceptWindowMinutes,
         size: slot,
       ),
     ));
@@ -1074,7 +1131,22 @@ class _ThirdPartyEquipmentConfigEditorState
             DropdownButton<ThirdPartyEquipmentKind>(
               value: config.kind,
               isExpanded: true,
-              onChanged: (value) => setState(() => config.kind = value!),
+              onChanged: (value) => setState(() {
+                config.kind = value!;
+                // A SpeedBatcher without its belts and readouts is not a
+                // useful asset — the checkweighers ARE conveyors, and the
+                // weight and accept rate are the reason the station is on the
+                // mimic. Build them on selection so the operator gets a
+                // working station and only has to point the keys at tags.
+                // Only when empty, so switching away and back cannot discard
+                // configured children.
+                if (config.kind == ThirdPartyEquipmentKind.speedBatcher &&
+                    config.children.isEmpty) {
+                  config.children.addAll(buildSpeedBatcherStationChildren(
+                    acceptWindowMinutes: config.acceptWindowMinutes,
+                  ));
+                }
+              }),
               items: ThirdPartyEquipmentKind.values
                   .map((e) => DropdownMenuItem<ThirdPartyEquipmentKind>(
                         value: e,

@@ -620,6 +620,123 @@ class SpeedBatcherPainter extends ThirdPartyMachinePainter {
 }
 
 // ---------------------------------------------------------------------------
+// Vodlari — fish aligning buffer
+// ---------------------------------------------------------------------------
+
+/// Plan view of the vodlari (Icelandic; a fish aligning buffer), fish flowing
+/// left to right.
+///
+/// It buffers incoming fish and turns them so they leave in line: the fish is
+/// caught in the nip between two belt runs, which rotate it into alignment
+/// before it goes on. The belts are the machine — it is not a conveyor that
+/// happens to have belts, the belts ARE how it works.
+///
+/// Drawn from the site CAD. What that drawing settles: the machine is close
+/// to square, symmetric top to bottom, with a belt run either side of a
+/// central lane, a drive unit on each belt, and a large drum across the
+/// discharge end carrying a bearing housing at each end. Finer internals are
+/// not resolvable from the screenshot, so they are not invented here.
+class FishAlignerPainter extends ThirdPartyMachinePainter {
+  const FishAlignerPainter({required super.color, required super.strokeWidth});
+
+  /// The two belt runs, either side of the lane the fish travels down.
+  static const Rect upperBelt = Rect.fromLTRB(0.02, 0.06, 0.72, 0.34);
+  static const Rect lowerBelt = Rect.fromLTRB(0.02, 0.66, 0.72, 0.94);
+
+  /// The nip between them, where the fish is caught and turned.
+  static const Rect lane = Rect.fromLTRB(0.02, 0.36, 0.72, 0.64);
+
+  @override
+  void paintMachine(Canvas canvas, UnitSpace u, Paint stroke, Paint detail) {
+    // Machine frame.
+    canvas.drawRRect(u.rr(0.0, 0.0, 1.0, 1.0, 0.03), stroke);
+
+    // -- The two belt runs, with their rollers --
+    for (final belt in [upperBelt, lowerBelt]) {
+      canvas.drawRect(
+          u.r(belt.left, belt.top, belt.right, belt.bottom), stroke);
+      _crossTicks(canvas, u, detail,
+          ul: belt.left,
+          ur: belt.right,
+          ut: belt.top,
+          ub: belt.bottom,
+          count: 7);
+      // Drive unit on the belt: housing plus motor.
+      final cy = belt.center.dy;
+      canvas.drawRect(u.r(0.08, cy - 0.075, 0.26, cy + 0.075), stroke);
+      canvas.drawCircle(u.p(0.125, cy), u.rad(0.032), detail);
+    }
+
+    // -- The lane between the belts --
+    canvas.drawRect(u.r(lane.left, lane.top, lane.right, lane.bottom), detail);
+
+    // Fish travel right along the lane...
+    _chevronsAcross(canvas, u, stroke,
+        cy: lane.center.dy, left: 0.10, right: 0.36, count: 2);
+    // ...and are turned into line on the way. This glyph is the machine's
+    // whole purpose, so it is drawn at full stroke.
+    _rotationGlyph(canvas, u, stroke, cx: 0.52, cy: lane.center.dy);
+
+    // -- Large drum across the discharge end, with a bearing housing at each
+    //    end projecting clear of the frame.
+    canvas.drawRect(u.r(0.76, 0.08, 0.94, 0.92), stroke);
+    _lengthwiseTicks(canvas, u, detail,
+        ul: 0.76, ur: 0.94, ut: 0.08, ub: 0.92, count: 5);
+    canvas.drawRect(u.r(0.94, 0.12, 1.0, 0.22), detail);
+    canvas.drawRect(u.r(0.94, 0.78, 1.0, 0.88), detail);
+  }
+}
+
+/// Flow chevrons pointing RIGHT along a horizontal lane.
+void _chevronsAcross(
+  Canvas canvas,
+  UnitSpace u,
+  Paint paint, {
+  required double cy,
+  required double left,
+  required double right,
+  int count = 2,
+}) {
+  const halfHeight = 0.05;
+  final span = right - left;
+  final width = span / (count * 1.8);
+  for (int i = 0; i < count; i++) {
+    final base = left + span * (i + 0.5) / count - width / 2;
+    final path = Path()
+      ..moveTo(u.p(base, cy - halfHeight).dx, u.p(base, cy - halfHeight).dy)
+      ..lineTo(u.p(base + width, cy).dx, u.p(base + width, cy).dy)
+      ..lineTo(u.p(base, cy + halfHeight).dx, u.p(base, cy + halfHeight).dy);
+    canvas.drawPath(path, paint);
+  }
+}
+
+/// A three-quarter arc with an arrowhead — "the product is turned here".
+void _rotationGlyph(
+  Canvas canvas,
+  UnitSpace u,
+  Paint paint, {
+  required double cx,
+  required double cy,
+}) {
+  final centre = u.p(cx, cy);
+  final r = u.rad(0.075);
+  canvas.drawArc(
+    Rect.fromCircle(center: centre, radius: r),
+    -2.6,
+    4.4,
+    false,
+    paint,
+  );
+  // Arrowhead on the open end of the arc.
+  final tip = Offset(centre.dx + r * 0.72, centre.dy - r * 0.72);
+  final head = Path()
+    ..moveTo(tip.dx - r * 0.42, tip.dy - r * 0.10)
+    ..lineTo(tip.dx, tip.dy)
+    ..lineTo(tip.dx + r * 0.10, tip.dy + r * 0.42);
+  canvas.drawPath(head, paint);
+}
+
+// ---------------------------------------------------------------------------
 // Box erector
 // ---------------------------------------------------------------------------
 

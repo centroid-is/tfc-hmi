@@ -7,6 +7,7 @@ import 'package:tfc/page_creator/assets/common.dart';
 import 'package:tfc/page_creator/assets/conveyor.dart';
 import 'package:tfc/page_creator/assets/registry.dart';
 import 'package:tfc/page_creator/assets/number.dart';
+import 'package:tfc/page_creator/assets/ratio_number.dart';
 import 'package:tfc/page_creator/assets/sensor.dart';
 import 'package:tfc/page_creator/assets/third_party.dart';
 import 'package:tfc/page_creator/assets/third_party_painter.dart';
@@ -180,11 +181,14 @@ void main() {
     List<ThirdPartyChildEntry> scaffold() =>
         buildSpeedBatcherStationChildren();
 
-    test('builds a conveyor and two readouts per checkweigher', () {
+    test('builds 2 conveyors, 2 weights and 2 accept ratios', () {
+      // Exactly what the station is: each checkweigher is a conveyor, with a
+      // weight and an accept rate on it.
       final children = scaffold();
-      expect(children.whereType<ThirdPartyChildEntry>(), hasLength(6));
+      expect(children, hasLength(6));
       expect(children.where((e) => e.child is ConveyorConfig), hasLength(2));
-      expect(children.where((e) => e.child is NumberConfig), hasLength(4));
+      expect(children.where((e) => e.child is NumberConfig), hasLength(2));
+      expect(children.where((e) => e.child is RatioNumberConfig), hasLength(2));
     });
 
     test('the weigh-belt conveyors are bidirectional', () {
@@ -207,7 +211,8 @@ void main() {
       for (final belt in belts) {
         final row = children
             .where((e) =>
-                e.child is NumberConfig && (e.offsetY - belt.offsetY).abs() < 0.02)
+                e.child is! ConveyorConfig &&
+                (e.offsetY - belt.offsetY).abs() < 0.02)
             .toList();
         expect(row, hasLength(2),
             reason: 'Each weigh belt gets exactly two readouts on its row.');
@@ -217,7 +222,7 @@ void main() {
 
         expect(left.offsetX, lessThan(belt.offsetX));
         expect(right.offsetX, greaterThan(belt.offsetX));
-        expect((left.child as NumberConfig).units, startsWith('%'),
+        expect(left.child, isA<RatioNumberConfig>(),
             reason: 'Accept rate goes on the left.');
         expect((right.child as NumberConfig).units, 'g',
             reason: 'Weight goes on the right.');
@@ -259,35 +264,68 @@ void main() {
             reason: 'A tap-through to a trend from a nested child is a '
                 'surprise.');
       }
+      for (final ratio in scaffold()
+          .map((e) => e.child)
+          .whereType<RatioNumberConfig>()) {
+        expect(ratio.key1, isEmpty);
+        expect(ratio.key2, isEmpty);
+      }
+    });
+
+    test('the station factory builds a ready-to-wire SpeedBatcher', () {
+      // A SpeedBatcher without its belts and readouts is not a useful asset,
+      // so it must not be possible to get one by accident.
+      final config = ThirdPartyEquipmentConfig.speedBatcherStation();
+      expect(config.kind, ThirdPartyEquipmentKind.speedBatcher);
+      expect(config.children.where((e) => e.child is ConveyorConfig),
+          hasLength(2));
+      expect(config.children.where((e) => e.child is NumberConfig),
+          hasLength(2));
+      expect(config.children.where((e) => e.child is RatioNumberConfig),
+          hasLength(2));
+    });
+
+    test('the whole station survives a JSON round-trip', () {
+      final config = ThirdPartyEquipmentConfig.speedBatcherStation(
+          acceptWindowMinutes: 20);
+      final restored = ThirdPartyEquipmentConfig.fromJson(
+          jsonDecode(jsonEncode(config.toJson())) as Map<String, dynamic>);
+
+      expect(restored.children, hasLength(6));
+      expect(
+          restored.children
+              .map((e) => e.child)
+              .whereType<RatioNumberConfig>()
+              .first
+              .sinceMinutes,
+          const Duration(minutes: 20));
     });
 
     test('readouts are marked upright, the belts are not', () {
       for (final entry in scaffold()) {
-        if (entry.child is NumberConfig) {
-          expect(entry.keepUpright, isTrue,
-              reason: 'A weight you have to tilt your head to read is '
-                  'useless.');
-        } else {
+        if (entry.child is ConveyorConfig) {
           expect(entry.keepUpright, isFalse,
               reason: 'Machinery must turn with the machine it belongs to.');
+        } else {
+          expect(entry.keepUpright, isTrue,
+              reason: 'A weight or ratio you have to tilt your head to read '
+                  'is useless.');
         }
       }
     });
 
-    test('the accept readout carries its averaging window in the units', () {
-      // A bare "97.3 %" beside a running belt reads as "this pack" when it is
-      // really the last half hour.
-      final accept = buildSpeedBatcherStationChildren(acceptWindowMinutes: 30)
-          .map((e) => e.child)
-          .whereType<NumberConfig>()
-          .firstWhere((n) => n.units!.contains('%'));
-      expect(accept.units, '% 30m');
+    test('the accept ratio carries its averaging window natively', () {
+      // RatioNumberConfig models accepted-over-total across a rolling window,
+      // so the window is a real field rather than text smuggled into a units
+      // string — it cannot be read as an instantaneous figure.
+      RatioNumberConfig ratioFor(int minutes) =>
+          buildSpeedBatcherStationChildren(acceptWindowMinutes: minutes)
+              .map((e) => e.child)
+              .whereType<RatioNumberConfig>()
+              .first;
 
-      final custom = buildSpeedBatcherStationChildren(acceptWindowMinutes: 15)
-          .map((e) => e.child)
-          .whereType<NumberConfig>()
-          .firstWhere((n) => n.units!.contains('%'));
-      expect(custom.units, '% 15m');
+      expect(ratioFor(30).sinceMinutes, const Duration(minutes: 30));
+      expect(ratioFor(15).sinceMinutes, const Duration(minutes: 15));
     });
 
     test('load cells sit clear of the belt centre', () {
