@@ -25,7 +25,13 @@ add_executable(log_rotation_test
 )
 target_include_directories(log_rotation_test PRIVATE "..")
 
-foreach(target gpu_watchdog_test log_rotation_test)
+add_executable(output_target_test
+  "output_target_test.cpp"
+  "../output_target.cpp"
+)
+target_include_directories(output_target_test PRIVATE "..")
+
+foreach(target gpu_watchdog_test log_rotation_test output_target_test)
   if(MSVC)
     target_compile_options(${target} PRIVATE /W4)
   else()
@@ -35,3 +41,4 @@ endforeach()
 
 add_test(NAME gpu_watchdog COMMAND gpu_watchdog_test)
 add_test(NAME log_rotation COMMAND log_rotation_test)
+add_test(NAME output_target COMMAND output_target_test)

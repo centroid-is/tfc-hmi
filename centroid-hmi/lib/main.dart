@@ -97,7 +97,15 @@ void main() {
       Platform.environment['CENTROID_STDOUT'] == 'true' ||
       logFilePath != null;
 
-  if (debugMode && logFilePath != null) {
+  // The Windows runner sets CENTROID_LOG_REDIRECTED once it has pointed
+  // stdout/stderr at the log file *and* resynced the engine's streams to
+  // match, at which point print() already reaches the file on its own.
+  // Opening it here as well would write every line twice, so this direct
+  // write is now only a fallback for runners that do not redirect.
+  final runnerRedirectsOutput =
+      Platform.environment['CENTROID_LOG_REDIRECTED'] == '1';
+
+  if (debugMode && logFilePath != null && !runnerRedirectsOutput) {
     try {
       _logFile = File(logFilePath).openSync(mode: FileMode.append);
     } catch (_) {}

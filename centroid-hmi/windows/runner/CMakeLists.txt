@@ -12,6 +12,7 @@ add_executable(${BINARY_NAME} WIN32
   "gpu_watchdog.cpp"
   "log_rotation.cpp"
   "main.cpp"
+  "output_target.cpp"
   "utils.cpp"
   "win32_window.cpp"
   "${FLUTTER_MANAGED_DIR}/generated_plugin_registrant.cc"

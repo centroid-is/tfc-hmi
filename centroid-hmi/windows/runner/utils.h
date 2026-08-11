@@ -23,6 +23,12 @@ void RedirectIOToFile(const char* path);
 // stdout/stderr — including crash records — goes nowhere at all.
 std::string DefaultLogPath();
 
+// True when stdout is already a valid handle — a console, or a pipe from a
+// parent process such as the flutter tool. `flutter run` (and so the VS Code
+// debugger) gives the app pipes and no console, so this, not the presence of a
+// console, is what decides whether anything is listening.
+bool StdoutIsConnected();
+
 // Directory part of |path|, empty if it has none.
 std::string DirectoryOf(const std::string& path);
 
